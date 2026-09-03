@@ -38,12 +38,10 @@ function withHookLock(fn) {
   return run;
 }
 
-// Fan-out bounds (the wider-goal review's unbounded-fan-out finding): a model
-// must not be able to register an unbounded number of subscriptions, an
-// unbounded template, or arbitrary recipeIds — each would let a single event
-// enqueue unbounded paid runs. These are the registry ceilings.
-const MAX_SUBSCRIPTIONS = 200;
-const MAX_TEMPLATE_BYTES = 64 * 1024; // 64 KiB per prompt template
+// Fan-out SAFETY (the wider-goal review's unbounded-fan-out finding) is carried
+// by the KNOWN-recipe validation below — an arbitrary recipeId still cannot
+// create a fan-out row. dptw: there are deliberately no subscription-count or
+// template-size caps; a single event enqueues one run per VALID subscription.
 
 /** One chrome.* event an agent can listen to + respond to. */
 export const HOOKS = [
@@ -456,9 +454,6 @@ export async function subscribeHook(
     }
   }
   const template = typeof promptTemplate === "string" ? promptTemplate : "";
-  if (new TextEncoder().encode(template).length > MAX_TEMPLATE_BYTES) {
-    return { ok: false, error: "prompt template too large" };
-  }
   // The read-modify-write is SERIALIZED under the hook mutex (the wider-goal
   // review's finding: subscription RMW was unlocked, so concurrent subscribes
   // could last-write-wins one of them out).
@@ -468,9 +463,6 @@ export async function subscribeHook(
     const existing = list.find(
       (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
     );
-    if (!existing && list.length >= MAX_SUBSCRIPTIONS) {
-      return { ok: false, error: "subscription limit reached" };
-    }
     const entry = {
       hookId,
       recipeId: recipeId ?? null,

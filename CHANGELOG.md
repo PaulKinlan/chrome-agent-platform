@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.30] — 2026-09-03
+- MCP servers and hooks run uncapped: a 16 KiB bearer token, long server names/ids/urls, and more than 32 MCP servers all save whole (URLs and header names are still validated for shape — that's safety), and hook subscriptions have no 200-count or 64 KiB template limit (recipes are still validated as known — that's what stops arbitrary fan-out)
+
 ## [0.3.29] — 2026-09-03
 - Run history and idempotency run uncapped: reopening a thread or agent shows every run and every log row the store kept (no 50-run / 250-row windows), a 257th idempotency key no longer fails the operation (expired keys still clean up), and a local text file over 1 MiB now attaches as text instead of an unread reference
 

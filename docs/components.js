@@ -70,7 +70,6 @@ import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "
 import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 import {
   isTextLikeAttachment,
-  MAX_LOCAL_TEXT_BYTES,
   textToDataUrl,
 } from "./attachments.js";
 
@@ -6841,7 +6840,9 @@ class AgentComposer extends Component {
       return;
     }
     const textLike = isTextLikeAttachment(file);
-    let attachAsText = textLike && Number(file.size) <= MAX_LOCAL_TEXT_BYTES;
+    // dptw: text files attach as text at ANY size — no 1 MiB gate. If the read
+    // fails (permissions, transport), the honest status below says why.
+    let attachAsText = textLike;
     let dataURL = "";
     let type = String(file.type || (textLike ? "text/plain" : "application/octet-stream"));
     if (attachAsText) {
@@ -6850,7 +6851,6 @@ class AgentComposer extends Component {
           grantId: file.grantId,
           relativePath: file.relativePath,
           asText: true,
-          maxBytes: MAX_LOCAL_TEXT_BYTES,
         }).catch((err) => ({ ok: false, error: String(err?.message ?? err) }))
         : { ok: false, error: "extension runtime unavailable" };
       if (read?.error === "fs_file_not_text") {
@@ -6876,7 +6876,7 @@ class AgentComposer extends Component {
     });
     this.setStatus(attachAsText
       ? `Attached ${file.name} from ${file.folderName} as text context.`
-      : `Attached ${file.name} as a reference (${textLike && Number(file.size) > MAX_LOCAL_TEXT_BYTES ? "over 1 MiB" : "binary"}; contents weren't read).`);
+      : `Attached ${file.name} as a reference (binary; contents weren't read).`);
   }
 
   // /folder — a granted FOLDER attaches as a REFERENCE ONLY: never read or
