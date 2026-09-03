@@ -3210,6 +3210,8 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         openedWindows: stillOpenWindows,
         closedTabIds: lifecycleSnapshot.closedTabIds,
         closedWindowIds: lifecycleSnapshot.closedWindowIds,
+        restoredTabIds: lifecycleSnapshot.restoredTabIds,
+        restoredWindowIds: lifecycleSnapshot.restoredWindowIds,
         restoredSessions: lifecycleSnapshot.restoredSessions,
       };
       let autoClosedTabIds = [];

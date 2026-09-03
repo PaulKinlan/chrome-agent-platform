@@ -26,16 +26,17 @@ The run-end summary is the enforcement point: when a task finishes, the
 runtime appends a note to the final summary naming the tabs/windows that run
 opened and left open — so cleanup is one obvious step — and the default-off
 **Auto-close run tabs** owner setting (Settings → Browser control) removes
-exactly those tabs at run end.
+exactly those tabs at run end, leaving the tabs the run opened with
+`keep:true` (its deliberate results, e.g. "open this article for me") open.
 
 ## What each lifecycle tool leaves behind
 
 | Tool | Opens / leaves | Release path | Auto-closeable? |
 |---|---|---|---|
-| `open_tab` | a NEW tab (reports `tabId`) | `close_tab` (Act — the run opened it) | yes — by its `tabId` |
-| `duplicate_tab` | a NEW copy tab (reports `newTabId`) | `close_tab` (Act — the copy is a new tab the run created) | yes — by `newTabId` |
+| `open_tab` | a NEW tab (reports `tabId`) | `close_tab` (Act — the run opened it) | yes — by its `tabId`; pass `keep:true` to flag the tab as the task's result so auto-close leaves it |
+| `duplicate_tab` | a NEW copy tab (reports `newTabId`; the echoed source `tabId` is never the run's surface) | `close_tab` (Act — the copy is a new tab the run created) | yes — by `newTabId` only; pass `keep:true` to protect the copy |
 | `create_window` | a NEW window (reports `windowId`) | `close_window` (always owner-approved — it closes every tab in the window) | never — closing a window is Destructive by policy |
-| `restore_closed` | re-opens a recently closed tab/window (reports no ids — the sessions API does not return them) | `close_tab` / `close_window` when it was scratch | never — no ids are reported |
+| `restore_closed` | re-opens a recently closed tab/window (reports the restored ids: `restoredTabId` / `restoredWindowId` + `restoredWindowTabIds`) | `close_tab` / `close_window` when it was scratch | never — re-opening is the deliberate act |
 
 ### Lifecycle-adjacent tools (no new surface; listed for the audit)
 
@@ -61,19 +62,21 @@ exactly those tabs at run end.
 - **Auto-close run tabs (owner setting, DEFAULT OFF).** When on, at the same
   terminal settle the service worker removes exactly the tabs in
   `autoCloseTabPlan` — the run's opened tabs minus the ones the run already
-  closed itself — and the summary note reports which ids were auto-closed.
-  Windows and restored sessions are never auto-closed.
-  ponytail ceiling: the issue's "except ones the agent flagged as keepers"
-  needs a flag channel that does not exist yet; with the setting on, the model
-  should close nothing it must keep — tell the user in the summary, and the
-  owner re-opens from there (or keeps the setting off).
+  closed itself minus the ones the run flagged as keepers — and the summary
+  note reports which ids were auto-closed and which were kept. A tab opened
+  with `keep:true` (the task's result, e.g. "open this article for me") is
+  never auto-closed. Windows and restored sessions are never auto-closed.
+  The keeper signal is run-scoped: it rides the opening tool's own result
+  (`open_tab` / `duplicate_tab` echo `keep:true`), so it can never protect a
+  tab a different run opened.
 
 ## Falsification
 
 - Every name in `LIFECYCLE_OPEN_TOOLS` has a shipped `browserToolset()`
   description carrying `Cleanup:`, `close`, and `deliberate choice`
   (tests/lifecycle-cleanup.test.ts walks the list).
-- The run-end summary lists the ids the run opened (`runEndCleanupNote`).
-- `autoCloseTabPlan` returns exactly the run's still-open opened tabs —
-  nothing foreign can enter the plan, nothing the run closed itself is
-  re-closed.
+- The run-end summary lists the ids the run opened (`runEndCleanupNote`),
+  names restored tab/window ids instead of a bare count, and marks kept tabs.
+- `autoCloseTabPlan` returns exactly the run's still-open opened tabs that
+  were not flagged as keepers — nothing foreign can enter the plan, nothing
+  the run closed itself is re-closed, and a `keep:true` result tab survives.

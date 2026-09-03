@@ -18,26 +18,35 @@
 //     window THIS run opened) removes the id from the still-open set, so the
 //     summary only lists what is genuinely still around and auto-close never
 //     re-closes what the run already closed itself.
-//   - restore_closed cannot report the ids it re-opened (the sessions API
-//     does not return them), so it is counted ("restored sessions") in the
-//     summary but is never auto-closeable.
+//   - Which ids a tool result reports is read ONLY through that tool's
+//     declared refKeys (LIFECYCLE_OPEN_TOOLS / LIFECYCLE_RELEASE_TOOLS):
+//     duplicate_tab therefore consumes newTabId alone and never the source
+//     tabId it echoes — a user's pre-existing tab can never be attributed to
+//     the run as "opened" (r5 finding 1).
+//   - restore_closed reports the ids Chrome actually re-opened
+//     (restoredTabId / restoredWindowId / restoredWindowTabIds in its result)
+//     so the run summary names them instead of a generic count (r5 finding
+//     3). Restored surface is never auto-closeable: re-opening is the
+//     deliberate act and the setting must not undo it.
+//   - Keepers: open_tab / duplicate_tab accept keep:true (echoed in their
+//     result), the tracker marks that id kept, and autoCloseTabPlan leaves
+//     kept tabs open — "open this article for me" survives a run that also
+//     opened scratch tabs (r5 finding 2).
 //   - Auto-close targets TABS only, never windows: closing a window closes
 //     every tab in it, which stays owner-approved (Destructive class) — the
 //     setting must never silently wipe a window the run opened around other
 //     work.
-//   ponytail: keepers — the issue's "except ones the agent flagged as
-//     keepers" needs a flag channel that does not exist yet, so auto-close
-//     (default OFF) closes every still-open tab the run opened and the
-//     summary names them; add an explicit keep flag when one exists.
 
 /** The tools whose description must carry cleanup guidance + what each
  *  leaves open. Every name here exists in browserToolset() and the
- *  falsification test walks this exact list. */
+ *  falsification test walks this exact list. `refKeys` are the ONLY result
+ *  keys that count as ids for that tool — duplicate_tab echoes its source
+ *  tabId but only newTabId is this run's surface. */
 export const LIFECYCLE_OPEN_TOOLS = Object.freeze({
   open_tab: { opens: "tab", refKeys: ["tabId"] },
   duplicate_tab: { opens: "tab", refKeys: ["newTabId"] },
   create_window: { opens: "window", refKeys: ["windowId"] },
-  restore_closed: { opens: "session", refKeys: [] },
+  restore_closed: { opens: "session", refKeys: ["restoredTabId", "restoredWindowId", "restoredWindowTabIds"] },
 });
 
 /** Tools that RELEASE surface a lifecycle tool opened (used by the tracker to
@@ -81,15 +90,20 @@ export function isLifecycleOpenTool(name) {
 
 /**
  * Decode a tool result payload (the retained full result: a JSON string of
- * the decoded result, or an object) and pull the TOP-LEVEL tab/window ids it
- * reports. Only top-level keys count — a nested copy of the same result (an
- * args echo, an error excerpt) must never double-count or invent a surface.
- * Pure; never throws.
- * @returns {{ tabIds: number[], windowIds: number[] }}
+ * the decoded result, or an object) and pull the TOP-LEVEL ids it reports
+ * through the tool's OWN declared refKeys. Only top-level keys count — a
+ * nested copy of the same result (an args echo, an error excerpt) must never
+ * double-count or invent a surface. When `toolName` names a lifecycle tool,
+ * only that tool's refKeys are read (duplicate_tab's echoed source tabId is
+ * NOT its opened surface); an unknown/empty name keeps the legacy read-every
+ * tab/window key behaviour for direct callers. Pure; never throws.
+ * @returns {{ tabIds: number[], windowIds: number[], restoredTabIds: number[], restoredWindowIds: number[] }}
  */
-export function lifecycleIdsInResult(payload) {
+export function lifecycleIdsInResult(payload, toolName) {
   const tabIds = [];
   const windowIds = [];
+  const restoredTabIds = [];
+  const restoredWindowIds = [];
   let d = payload;
   if (typeof d === "string") {
     const s = d.trim();
@@ -105,20 +119,39 @@ export function lifecycleIdsInResult(payload) {
     const candidates = [d];
     const nested = d && typeof d === "object" ? d.result : null;
     if (nested && typeof nested === "object" && !Array.isArray(nested)) candidates.push(nested);
+    const entry = Object.hasOwn(LIFECYCLE_OPEN_TOOLS, toolName ?? "")
+      ? LIFECYCLE_OPEN_TOOLS[toolName]
+      : Object.hasOwn(LIFECYCLE_RELEASE_TOOLS, toolName ?? "")
+        ? LIFECYCLE_RELEASE_TOOLS[toolName]
+        : null;
+    const refKeys = entry ? entry.refKeys : null; // null → legacy all-keys read
+    const want = (key) => (refKeys ? refKeys.includes(key) : true);
+    const isTabKey = (key) => key === "tabId" || key === "newTabId";
+    const isWindowKey = (key) => key === "windowId";
     for (const c of candidates) {
-      const o = c;
-      for (const key of ["tabId", "newTabId"]) {
-        const v = o[key];
-        if (Number.isInteger(v) && v > 0 && !tabIds.includes(v)) tabIds.push(v);
+      for (const key of Object.keys(c)) {
+        if (!want(key)) continue;
+        const v = c[key];
+        if (isTabKey(key)) {
+          if (Number.isInteger(v) && v > 0 && !tabIds.includes(v)) tabIds.push(v);
+        } else if (isWindowKey(key)) {
+          if (Number.isInteger(v) && v > 0 && !windowIds.includes(v)) windowIds.push(v);
+        }
       }
-      for (const key of ["windowId"]) {
-        const v = o[key];
-        if (Number.isInteger(v) && v > 0 && !windowIds.includes(v)) windowIds.push(v);
+      // restore_closed: restoredTabId / restoredWindowId are single ids;
+      // restoredWindowTabIds is an array of the window's tab ids.
+      const rt = c.restoredTabId;
+      if (want("restoredTabId") && Number.isInteger(rt) && rt > 0 && !restoredTabIds.includes(rt)) restoredTabIds.push(rt);
+      const rw = c.restoredWindowId;
+      if (want("restoredWindowId") && Number.isInteger(rw) && rw > 0 && !restoredWindowIds.includes(rw)) restoredWindowIds.push(rw);
+      if (want("restoredWindowTabIds") && Array.isArray(c.restoredWindowTabIds)) {
+        for (const id of c.restoredWindowTabIds) {
+          if (Number.isInteger(id) && id > 0 && !restoredTabIds.includes(id)) restoredTabIds.push(id);
+        }
       }
-      if (tabIds.length && windowIds.length) break;
     }
   }
-  return { tabIds, windowIds };
+  return { tabIds, windowIds, restoredTabIds, restoredWindowIds };
 }
 
 /**
@@ -128,12 +161,28 @@ export function lifecycleIdsInResult(payload) {
  * exact to THIS run.
  */
 export function createLifecycleTracker() {
-  const openedTabs = new Map(); // tabId -> { url }
+  const openedTabs = new Map(); // tabId -> { url, kept }
   const openedWindows = new Map(); // windowId -> { url }
   const closedTabIds = new Set(); // ids the RUN already closed itself
   const closedWindowIds = new Set();
-  let restoredSessions = 0;
+  const restoredTabIds = new Set(); // ids restore_closed actually re-opened
+  const restoredWindowIds = new Set();
+  let restoredSessions = 0; // restores whose ids Chrome did not report
 
+  /** Is `payload` (JSON string or object, lazy envelope allowed) marked keep? */
+  const keptOf = (payload) => {
+    let d = payload;
+    if (typeof d === "string") {
+      const s = d.trim();
+      if (s.startsWith("{")) { try { d = JSON.parse(s); } catch { d = null; } } else d = null;
+    }
+    if (d && typeof d === "object") {
+      if (d.keep === true) return true;
+      const nested = d.result && typeof d.result === "object" ? d.result : null;
+      return nested?.keep === true;
+    }
+    return false;
+  };
   const urlOf = (payload) => {
     let d = payload;
     if (typeof d === "string") {
@@ -154,14 +203,20 @@ export function createLifecycleTracker() {
       if (ok !== true) return;
       if (Object.hasOwn(LIFECYCLE_OPEN_TOOLS, name)) {
         if (name === "restore_closed") {
-          const d = typeof payload === "string" ? (() => { try { return JSON.parse(payload); } catch { return null; } })() : payload;
-          if (d?.ok === true || payload == null) restoredSessions += 1;
+          const { restoredTabIds: rts, restoredWindowIds: rws } = lifecycleIdsInResult(payload ?? {}, name);
+          for (const id of rts) restoredTabIds.add(id);
+          for (const id of rws) restoredWindowIds.add(id);
+          if (rts.length === 0 && rws.length === 0) {
+            const d = typeof payload === "string" ? (() => { try { return JSON.parse(payload); } catch { return null; } })() : payload;
+            if (d?.ok === true || payload == null) restoredSessions += 1;
+          }
           return;
         }
-        const { tabIds, windowIds } = lifecycleIdsInResult(payload ?? {});
+        const { tabIds, windowIds } = lifecycleIdsInResult(payload ?? {}, name);
         const url = urlOf(payload);
+        const kept = keptOf(payload);
         for (const id of tabIds) {
-          openedTabs.set(id, { id, url });
+          openedTabs.set(id, { id, url, ...(kept ? { kept: true } : {}) });
           closedTabIds.delete(id);
         }
         for (const id of windowIds) {
@@ -171,18 +226,20 @@ export function createLifecycleTracker() {
         return;
       }
       if (Object.hasOwn(LIFECYCLE_RELEASE_TOOLS, name)) {
-        const { tabIds, windowIds } = lifecycleIdsInResult(payload ?? {});
+        const { tabIds, windowIds } = lifecycleIdsInResult(payload ?? {}, name);
         for (const id of tabIds) {
           if (openedTabs.has(id)) {
             openedTabs.delete(id);
             closedTabIds.add(id);
           }
+          restoredTabIds.delete(id);
         }
         for (const id of windowIds) {
           if (openedWindows.has(id)) {
             openedWindows.delete(id);
             closedWindowIds.add(id);
           }
+          restoredWindowIds.delete(id);
         }
       }
     },
@@ -194,6 +251,8 @@ export function createLifecycleTracker() {
         openedWindows: [...openedWindows.values()],
         closedTabIds: [...closedTabIds],
         closedWindowIds: [...closedWindowIds],
+        restoredTabIds: [...restoredTabIds],
+        restoredWindowIds: [...restoredWindowIds],
         restoredSessions,
       };
     },
@@ -202,18 +261,21 @@ export function createLifecycleTracker() {
 
 /**
  * Which of the run's still-open opened tabs auto-close should remove: exactly
- * `openedTabs` minus the tabs the run already closed itself. Nothing else can
- * ever enter the plan — it is a pure filter over the run's own ids.
+ * `openedTabs` minus the tabs the run already closed itself minus the tabs
+ * the run deliberately KEPT (keep:true — "open this article for me" must
+ * survive). Nothing else can ever enter the plan — it is a pure filter over
+ * the run's own ids.
  */
 export function autoCloseTabPlan(snapshot) {
   const closed = new Set(snapshot?.closedTabIds ?? []);
   return (snapshot?.openedTabs ?? [])
-    .map((t) => t?.id)
-    .filter((id) => Number.isInteger(id) && !closed.has(id));
+    .filter((t) => Number.isInteger(t?.id) && !closed.has(t.id) && t.kept !== true)
+    .map((t) => t.id);
 }
 
-const TAB_IDS = (list) => list.map((t) => `#${t.id}`).join(", ");
+const TAB_IDS = (list) => list.map((t) => `#${t.id}${t.kept === true ? " (kept)" : ""}`).join(", ");
 const WINDOW_IDS = (list) => list.map((w) => `#${w.id}`).join(", ");
+const ID_LIST = (list) => list.map((id) => `#${id}`).join(", ");
 
 /**
  * The run-end cleanup summary: a short, deterministic, runtime-written note
@@ -227,27 +289,40 @@ export function runEndCleanupNote(snapshot, autoClosedTabIds = []) {
   const s = snapshot ?? {};
   const openedTabs = Array.isArray(s.openedTabs) ? s.openedTabs : [];
   const openedWindows = Array.isArray(s.openedWindows) ? s.openedWindows : [];
+  const restoredTabIds = Array.isArray(s.restoredTabIds) ? s.restoredTabIds : [];
+  const restoredWindowIds = Array.isArray(s.restoredWindowIds) ? s.restoredWindowIds : [];
   const restored = Number(s.restoredSessions) || 0;
-  if (openedTabs.length === 0 && openedWindows.length === 0 && restored === 0) return null;
+  if (openedTabs.length === 0 && openedWindows.length === 0 && restoredTabIds.length === 0 && restoredWindowIds.length === 0 && restored === 0) return null;
   const autoClosed = new Set((Array.isArray(autoClosedTabIds) ? autoClosedTabIds : []).filter(Number.isInteger));
   const lines = [];
   if (openedTabs.length > 0) {
     const stillOpen = openedTabs.filter((t) => !autoClosed.has(t.id));
+    const keptOpen = stillOpen.filter((t) => t.kept === true);
     const state = stillOpen.length === 0
       ? "closed (auto-close was on)"
       : autoClosed.size > 0
         ? `${stillOpen.length} still open (${autoClosed.size} auto-closed)`
         : `${stillOpen.length} still open`;
     lines.push(`Tabs this run opened: ${TAB_IDS(openedTabs)} — ${state}.`);
-    if (stillOpen.length > 0 && autoClosed.size === 0) {
+    if (keptOpen.length > 0) {
+      lines.push(`Kept ${ID_LIST(keptOpen.map((t) => t.id))} open for the user as the task's result.`);
+    }
+    const closeable = stillOpen.filter((t) => t.kept !== true);
+    if (closeable.length > 0 && autoClosed.size === 0) {
       lines.push("Close any you no longer need with close_tab; say which tab you are keeping for the user and why.");
     }
   }
   if (openedWindows.length > 0) {
     lines.push(`Windows this run opened: ${WINDOW_IDS(openedWindows)} — still open (windows are never auto-closed). Close with close_window if the task is done.`);
   }
-  if (restored > 0) {
-    lines.push(`Restored ${restored} recently closed ${restored === 1 ? "session" : "sessions"} (the sessions API reports no ids) — close it again if it was scratch.`);
+  if (restoredTabIds.length > 0) {
+    lines.push(`Restored recently closed tab${restoredTabIds.length === 1 ? "" : "s"}: ${ID_LIST(restoredTabIds)} — close it again if it was scratch.`);
+  }
+  if (restoredWindowIds.length > 0) {
+    lines.push(`Restored recently closed window${restoredWindowIds.length === 1 ? "" : "s"}: ${ID_LIST(restoredWindowIds)} — close it again if it was scratch.`);
+  }
+  if (restored > 0 && restoredTabIds.length === 0 && restoredWindowIds.length === 0) {
+    lines.push(`Restored ${restored} recently closed ${restored === 1 ? "session" : "sessions"} — close it again if it was scratch.`);
   }
   return lines.join(" ");
 }

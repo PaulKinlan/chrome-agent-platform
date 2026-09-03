@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.20] — 2026-09-03
+- agents tidy-up r5: duplicate_tab never counts its source tab, keep:true tabs survive auto-close, and restore_closed reports the real ids it re-opened
+
 ## [0.3.19] — 2026-09-03
 - agents tidy up after themselves — every tab/window-opening tool carries cleanup guidance, the run summary names the tabs/windows a task opened, and a default-off Auto-close run tabs setting closes exactly those tabs
 
