@@ -95,7 +95,7 @@ Deno.test("full response: an OVER-budget message (beyond the cap) is never silen
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
   assert(last.content.includes("truncated to 240 KiB"), "the truncation marker is present (never silent)");
-  assert(last.content.includes("complete text is in the run log"), "the reader is told where the full text lives");
+  assert(last.content.includes("remainder was not retained"), "a row with no durable copy says honestly that the tail is lost (kmpq)");
 });
 
 Deno.test("full response: the cap is UTF-8 BYTES, not chars — multi-byte content cannot bust the store bound (r1 B2)", async () => {

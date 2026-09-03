@@ -19,7 +19,7 @@ import {
 } from "./memory.js";
 import { REPLAY_MUTATING, perCallIdempotencyKey, worstSafety } from "./tool-replay-safety.js";
 import { newId, redactSecretText } from "./pure.js";
-import { commitThreadCancellation, commitThreadTerminal } from "./threads.js";
+import { commitThreadCancellation, commitThreadTerminal, boundResponseDigest, boundTerminalEnvelope } from "./threads.js";
 import { isNativeQuotaExceededError } from "./storage-errors.js";
 import {
   appendRecords as walAppend,
@@ -154,49 +154,6 @@ function knownRetentionVersion(version) {
 function bounded(value, max = MAX_PREVIEW_CHARS) {
   const s = String(value ?? "");
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
-}
-
-/** Byte-aware bounded slice (the store bound is UTF-8 bytes — multi-byte
- * content would otherwise blow it at fewer chars). Binary-search the largest
- * char prefix that fits the byte budget (CAP-FB-20260831-TASK-VIEW-FULL-
- * RESPONSE-01 r1 B2, r2 B5).
- * - `escaped`: measure the JSON-escaped size (JSON.stringify expands control
- *   chars — a pre-escape byte cap can overflow post-escape; r2 B2).
- * - `marker`: append the never-silent truncation marker (r2 B1).
- * The cut NEVER splits a UTF-16 surrogate pair (r2 B5). */
-function boundedBytes(value, maxBytes, opts = {}) {
-  const s = String(value ?? "");
-  const measure = opts.escaped
-    ? (t) => utf8Bytes(JSON.stringify(t))
-    : (t) => utf8Bytes(t);
-  if (measure(s) <= maxBytes) return s;
-  // The marker label is DYNAMIC — it states the ACTUAL cap applied to this
-  // copy, so a backstop shrink is never dishonest about what was stored
-  // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r4 P1b: a fixed "240 KiB"
-  // claim is false after a smaller backstop target).
-  const marker = opts.marker
-    ? `\n\n…(response truncated to ${(maxBytes / 1024).toFixed(0)} KiB — the complete text is in the run log)`
-    : "";
-  // r4 P2: reserve the marker's TRUE storage cost — when measuring escaped
-  // bytes, the marker itself will be JSON-escaped inside the stored string, so
-  // reserve its escaped length (reserving the raw length under-reserves for
-  // the newlines, which escape to two characters each).
-  const markerBytes = opts.escaped ? utf8Bytes(JSON.stringify(marker)) : utf8Bytes(marker);
-  const budget = Math.max(0, maxBytes - markerBytes);
-  let lo = 0;
-  let hi = s.length;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (measure(s.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
-  }
-  // r2 B5: a cut landing between a surrogate pair leaves a lone high
-  // surrogate — back off to the pair boundary.
-  while (lo > 0) {
-    const c = s.charCodeAt(lo - 1);
-    if (c >= 0xD800 && c <= 0xDBFF) { lo -= 1; continue; }
-    break;
-  }
-  return opts.marker ? `${s.slice(0, lo)}${marker}` : s.slice(0, lo);
 }
 
 function utf8Bytes(str) {
@@ -1285,8 +1242,23 @@ export function createDurableRunRegistry({
     await boundary(cancelling ? "after-cancel-journal" : "after-journal", executionId);
 
     if (outbox.threadId && outbox.threadTerminal) {
-      if (cancelling) await replaceCancellationThread(outbox.threadId, executionId, outbox.threadTerminal);
-      else await commitThread(outbox.threadId, executionId, outbox.threadTerminal);
+      // kmpq redesign: the outbox record carries only the bounded digest + the
+      // retainedPayloadRef (payloads by reference). The thread COMMIT resolves
+      // the complete text from the durable payload so the memory row is
+      // byte-complete when it fits the per-row bound — the digest is only the
+      // crash-recovery fallback. Idempotent: commitThreadTerminal dedupes by
+      // executionId, so a replay re-resolving the same payload commits once.
+      let terminal = outbox.threadTerminal;
+      if (!cancelling && outbox.threadTerminal.retainedPayloadRef && outbox.retainedPayloadRef) {
+        try {
+          const resolved = await readJsonPayload(executionId, outbox.retainedPayloadRef);
+          if (resolved && typeof resolved.result === "string") {
+            terminal = { ...outbox.threadTerminal, content: resolved.result };
+          }
+        } catch { /* keep the digest fallback; the marker stays honest */ }
+      }
+      if (cancelling) await replaceCancellationThread(outbox.threadId, executionId, terminal);
+      else await commitThread(outbox.threadId, executionId, terminal);
     }
     await boundary(cancelling ? "after-cancel-thread" : "after-thread", executionId);
 
@@ -1824,15 +1796,30 @@ export function createDurableRunRegistry({
         });
         // ONE authoritative full copy: the retainedPayloadRef payload (chunked
         // at 64 KiB per key, unbounded total). The terminal's `result` is a
-        // SMALL journal preview (list surfaces stay bounded); the thread back-
-        // fill (threadTerminal.content) is the only other copy and is byte-
-        // capped so the whole serialized outbox stays under the store's
-        // 256 KiB per-value bound even for a near-bound response
-        // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B1). r2 B1: the
-        // truncation carries the same never-silent marker as the thread path.
-        // r2 B2: the cap measures the JSON-ESCAPED size (control chars expand
-        // under JSON.stringify), so the serialized outbox stays in budget.
-        const result = boundedBytes(fullResult, 240 * 1024, { marker: true, escaped: true });
+        // SMALL journal preview (list surfaces stay bounded). kmpq redesign:
+        // the outbox record itself never embeds the payload text — the thread
+        // back-fill below is a bounded digest + the retainedPayloadRef, and
+        // processOutbox RESOLVES the full result from the durable payload at
+        // commit time. The serialized outbox therefore stays small BY DESIGN
+        // for any result size; no serialized-size shrink loop is needed.
+        const resultPreview = bounded(fullResult);
+        const digest = boundResponseDigest(fullResult);
+        const threadTerminalBase = record.threadId
+          ? {
+            role: ok ? "assistant" : "error",
+            content: digest,
+            status: ok ? "done" : "error",
+            retainedPayloadRef,
+            ...(ok
+              ? {}
+              : {
+                category: payload?.errorCategory ?? "error",
+                reason: bounded(payload?.errorReason, 2 * 1024) || null,
+                action: bounded(payload?.errorAction, 2 * 1024) || null,
+                tool: bounded(payload?.failedTool, 200) || null,
+              }),
+          }
+          : null;
         const outbox = {
           executionId,
           createdAt: at,
@@ -1843,12 +1830,11 @@ export function createDurableRunRegistry({
             ok,
             at,
             retainedPayloadRef,
-            summary: bounded(payload?.summary ?? result),
+            summary: bounded(payload?.summary ?? resultPreview),
             // The journal/registry terminal result is a BOUNDED PREVIEW — the
             // byte-complete text lives only in the retainedPayloadRef payload
-            // and the thread back-fill (CAP-FB-20260830-RUN-LOG-COMPACTION-01;
-            // r1 B1 de-duplicated the full copy from here).
-            result: bounded(fullResult),
+            // (CAP-FB-20260830-RUN-LOG-COMPACTION-01).
+            result: resultPreview,
             ...(payload?.aborted === true ? { aborted: true } : {}),
             // The failure classification rides the registry record too, so a
             // reopened surface can offer the right recovery (Fix in Settings,
@@ -1868,88 +1854,38 @@ export function createDurableRunRegistry({
             type: "result",
             id: payload?.logicalId ?? record.scheduleName ?? record.threadId ?? record.clientCorrelationId ?? executionId,
             // The LEGACY compatibility journal keeps a small bounded preview
-            // (the full bytes live in the retainedPayloadRef + the thread
-            // back-fill — CAP-FB-20260830-RUN-LOG-COMPACTION-01).
-            result: bounded(fullResult),
+            // (the full bytes live in the retainedPayloadRef —
+            // CAP-FB-20260830-RUN-LOG-COMPACTION-01).
+            result: resultPreview,
             ok,
             ...(payload?.aborted === true ? { aborted: true } : {}),
           },
-          threadTerminal: record.threadId
-            ? ok
-              ? {
-                role: "assistant",
-                content: result,
-                status: "done",
-                // Provider-server grounding (Gemini google_search): citations +
-                // executed queries, bounded, render-only — never a tool result
-                // the agent loop answers.
-                ...(Array.isArray(payload?.citations) && payload.citations.length > 0
-                  ? { citations: payload.citations.slice(0, 32) }
-                  : {}),
-                ...(Array.isArray(payload?.serverToolEvents) && payload.serverToolEvents.length > 0
-                  ? { serverToolEvents: payload.serverToolEvents.slice(0, 16) }
-                  : {}),
-                // Continuation fidelity (CAP slice): the compact tool summary,
-                // resolved skill ids, and composed-prompt hash ride the
-                // terminal row (bounded in threads.js at commit time).
-                ...(Array.isArray(payload?.toolCalls) && payload.toolCalls.length > 0
-                  ? { toolCalls: payload.toolCalls }
-                  : {}),
-                ...(Array.isArray(payload?.skills) && payload.skills.length > 0
-                  ? { skills: payload.skills }
-                  : {}),
-                ...(typeof payload?.promptHash === "string" && payload.promptHash
-                  ? { promptHash: payload.promptHash }
-                  : {}),
-              }
-              : {
-                role: "error",
-                content: result || "run failed",
-                status: "error",
-                category: payload?.errorCategory ?? "error",
-                reason: bounded(payload?.errorReason, 2 * 1024) || null,
-                action: bounded(payload?.errorAction, 2 * 1024) || null,
-                tool: bounded(payload?.failedTool, 200) || null,
-              }
+          // The thread back-fill: a bounded digest + the retainedPayloadRef,
+          // envelope (citations/skills/toolCalls/…) bounded at build with the
+          // same caps commitThreadTerminal applies — the outbox record can
+          // never approach the memory-store bound.
+          threadTerminal: threadTerminalBase
+            ? {
+              ...threadTerminalBase,
+              ...(ok
+                ? {
+                  ...boundTerminalEnvelope({
+                    citations: Array.isArray(payload?.citations) ? payload.citations : null,
+                    serverToolEvents: Array.isArray(payload?.serverToolEvents) ? payload.serverToolEvents : null,
+                    toolCalls: Array.isArray(payload?.toolCalls) ? payload.toolCalls : null,
+                    skills: Array.isArray(payload?.skills) ? payload.skills : null,
+                    promptHash: typeof payload?.promptHash === "string" ? payload.promptHash : null,
+                  }, "assistant"),
+                }
+                : {}),
+            }
             : null,
         };
         // The full recoverable payload is durable before journal, thread, or
-        // registry terminal state is changed. r2 B2 backstop: JSON escaping
-        // can still expand the SERIALIZED outbox past the store's per-value
-        // bound in pathological cases (e.g. control-char floods) — verify the
-        // serialized size and shrink the full copy until it fits. r3 P1: the
-        // shrink re-runs boundedBytes (not a blind slice) so the truncation
-        // MARKER always survives and cuts stay on code-point boundaries.
-        // r4 P1a: the target is the serialized-overflow DELTA directly (so the
-        // loop strictly converges on the bound) and the loop terminates the
-        // moment the content stops shrinking (an envelope that alone exceeds
-        // the bound cannot be fixed by giving up content — fail loudly via the
-        // store write's own bound error instead of spinning).
-        let serializedOutbox = utf8Bytes(JSON.stringify(outbox));
-        let shrinkGuard = 0;
-        while (serializedOutbox > 256 * 1024 && outbox.threadTerminal?.content && shrinkGuard++ < 32) {
-          const overflow = serializedOutbox - 256 * 1024;
-          const contentEscaped = utf8Bytes(JSON.stringify(outbox.threadTerminal.content));
-          // Remove the full overflow delta from the content's escaped size
-          // (plus a small margin for the envelope) — one step toward the bound.
-          const target = Math.max(0, contentEscaped - overflow - 256);
-          const before = contentEscaped;
-          outbox.threadTerminal.content = boundedBytes(
-            outbox.threadTerminal.content,
-            target,
-            // The marker label is dynamic — it states the ACTUAL cap applied
-            // to this copy (r4 P1b).
-            { marker: true, escaped: true },
-          );
-          const after = utf8Bytes(JSON.stringify(outbox.threadTerminal.content));
-          serializedOutbox = utf8Bytes(JSON.stringify(outbox));
-          // Strict termination: once the content stops shrinking (it is at the
-          // marker floor — only the marker remains), further iterations make no
-          // progress. If the outbox still exceeds the bound, the ENVELOPE is
-          // the overflow source and cannot be fixed by giving up content — the
-          // store write below throws its own honest bound error.
-          if (after >= before) break;
-        }
+        // registry terminal state is changed. The outbox is small by design
+        // (digest + bounded envelope by reference), so no serialized-size
+        // shrink loop is needed; the store's own bound error is the backstop
+        // if an envelope field ever grows past its cap.
         await store.setTrusted(outboxKey, outbox);
       }
       await boundary("after-outbox", executionId);

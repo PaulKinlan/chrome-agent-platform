@@ -150,7 +150,18 @@ export async function buildThreadRunView(thread, deps) {
     // The full result wins over the 240-char summary preview: the back-fill
     // COMMITS this string as the thread's terminal message, so a preview here
     // would clip the answer permanently (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01).
-    const content = terminal?.result ?? terminal?.summary ?? terminal?.reason ?? (role === "assistant" ? "" : "run failed");
+    // kmpq: prefer the run-log terminal payload (already hydrated into
+    // withLogs) so a recovered huge answer is never clipped to the preview;
+    // the memory row keeps only a bounded digest + ref (commitThreadTerminal).
+    const execLogs = withLogs.find((e) => e.executionId === missing.executionId)?.logs ?? [];
+    const terminalRow = execLogs
+      .filter((r) => r && (r.type === "terminal" || r.type === "compacted") && r.payload && typeof r.payload.result === "string")
+      .at(-1);
+    const fullResult = terminalRow?.payload?.result ?? null;
+    const content = typeof fullResult === "string" && fullResult.length > 0
+      ? fullResult
+      : (terminal?.result ?? terminal?.summary ?? terminal?.reason ?? (role === "assistant" ? "" : "run failed"));
+    const ref = typeof terminal?.retainedPayloadRef === "string" ? terminal.retainedPayloadRef : undefined;
     const derivedMarker = {
       role,
       content: String(content ?? ""),
@@ -167,6 +178,7 @@ export async function buildThreadRunView(thread, deps) {
           content: derivedMarker.content,
           category: terminal?.cancelled ? "cancelled" : "error",
           reason: terminal?.reason ?? undefined,
+          ...(ref ? { retainedPayloadRef: ref } : {}),
         });
         repaired = Boolean(repairedThread);
       } catch (e) {
@@ -200,6 +212,46 @@ export async function buildThreadRunView(thread, deps) {
       });
     }
   }
+
+  // kmpq redesign — the memory row keeps a bounded index/summary + ref; the
+  // COMPLETE response hydrates from the run-log terminal payload at open. The
+  // listLogs reads above already hydrate each viewed execution's terminal
+  // payload (row.payload.result), so replacing a digest/marker'd terminal row
+  // with the full text costs no extra I/O. Rows whose content already equals
+  // the payload (byte-complete ≤ the per-row bound) are untouched. Runs this
+  // pass at the END so reconciliation-derived markers (back-filled terminals)
+  // hydrate too.
+  const payloadByExec = new Map();
+  for (const e of withLogs) {
+    const terminalRow = (Array.isArray(e.logs) ? e.logs : [])
+      .filter((r) => r && (r.type === "terminal" || r.type === "compacted") && r.payload && typeof r.payload.result === "string")
+      .at(-1);
+    const full = terminalRow?.payload?.result ?? null;
+    if (typeof full === "string" && full.length > 0) payloadByExec.set(e.executionId, full);
+  }
+  const hydrateTerminals = (list) => {
+    const out = [];
+    for (const m of list) {
+      if (!m || typeof m !== "object") { out.push(m); continue; }
+      // A terminal assistant/error row carries executionId and no step index;
+      // interim per-step rows keep their own content.
+      if (
+        (m.role === "assistant" || m.role === "error") &&
+        typeof m.executionId === "string" &&
+        !Number.isInteger(m.step) &&
+        typeof m.content === "string"
+      ) {
+        const full = payloadByExec.get(m.executionId);
+        if (typeof full === "string" && full.length > m.content.length) {
+          out.push({ ...m, content: full });
+          continue;
+        }
+      }
+      out.push(m);
+    }
+    return out;
+  };
+  messages.splice(0, messages.length, ...hydrateTerminals(messages));
 
   return {
     ...thread,

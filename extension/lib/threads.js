@@ -24,8 +24,14 @@ import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-
 const INDEX_KEY = "threads";
 const MAX_THREADS = 200; // the index cap
 const MAX_MESSAGES = 500; // per-thread message cap
-const MAX_MESSAGE_BYTES = 240 * 1024; // per-message text cap in UTF-8 BYTES — raised from 16 KiB (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the task view must hold the COMPLETE agent response). 240 KiB leaves headroom for the JSON envelope + truncation marker under the memory store's 256 KiB per-value bound (memory.js MAX_VALUE_BYTES), so any response up to ~100 pages stores byte-complete; a pathological longer message is sliced with an explicit marker (never silent) and the complete text stays in the durable run journal (retainedPayloadRef).
+const MAX_MESSAGE_BYTES = 240 * 1024; // per-message ROW summary bound in UTF-8 BYTES — the most text a single message row may carry in the thread body (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 raised it from 16 KiB so the task view holds the COMPLETE agent response for every response that fits; the 256 KiB per-value bound memory.js MAX_VALUE_BYTES is physical, so a response beyond the per-row bound is NOT sliced into the row — the durable run journal (retainedPayloadRef) is the complete store and the row keeps a bounded digest + the ref (kmpq redesign).
 const MAX_THREAD_BYTES = 248 * 1024; // per-thread serialized budget (below the memory store's 256 KiB per-value bound so a full-size response + envelope still stores; the tail is protected from eviction)
+// kmpq redesign: the memory row for a durable terminal keeps only a bounded
+// index/summary + retainedPayloadRef, never a giant slice. The digest bound is
+// small so a thread holds many turns of large answers, and the complete text
+// hydrates from the run log on open.
+const MAX_ROW_DIGEST_BYTES = 16 * 1024;
+const ROW_DIGEST_MARKER = "\n\n…(this view keeps a summary — the complete response is in the run log and opens in full)";
 const MAX_NAME_CHARS = 80;
 // Continuation-fidelity bounds: the journaled per-run tool summary and skill
 // list are deliberately TINY (names + ok only — never args, results, or page
@@ -106,6 +112,58 @@ function previewOf(text) {
 // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: a response was cut to 300 chars
 // at commit). The message-content cap is applied HERE, not inside the redactor.
 import { newId, redactSecretText } from "./pure.js";
+/** Byte-aware digest for an over-budget durable response stored in a thread
+ * row: keep the head up to `maxBytes` and append the never-silent affordance.
+ * The cut never splits a UTF-16 surrogate pair. Pure — testable without OPFS.
+ * Exported so the durable outbox builds the SAME digest text by reference. */
+export function boundResponseDigest(text, maxBytes = MAX_ROW_DIGEST_BYTES) {
+  const s = redactSecretText(String(text ?? ""));
+  if (utf8Bytes(s) <= maxBytes) return s;
+  const budget = Math.max(0, maxBytes - utf8Bytes(ROW_DIGEST_MARKER));
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (utf8Bytes(s.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
+  }
+  while (lo > 0) {
+    const c = s.charCodeAt(lo - 1);
+    if (c >= 0xD800 && c <= 0xDBFF) { lo -= 1; continue; }
+    break;
+  }
+  return `${s.slice(0, lo)}${ROW_DIGEST_MARKER}`;
+}
+
+/** Bounded provider-server grounding (citations + executed queries): the SAME
+ * caps commitThreadTerminal applies, shared so the durable outbox builds an
+ * envelope that can never approach the memory-store bound. Pure. */
+export function boundTerminalEnvelope(terminal, role = "assistant") {
+  const out = {};
+  const citations = Array.isArray(terminal?.citations)
+    ? terminal.citations.slice(0, 32).map((c) => ({
+      url: boundText(c?.url ?? "", 1024),
+      title: boundText(c?.title ?? "", 256),
+      ...(Number.isInteger(c?.startIndex) ? { startIndex: c.startIndex } : {}),
+      ...(Number.isInteger(c?.endIndex) ? { endIndex: c.endIndex } : {}),
+      ...(typeof c?.citedText === "string" ? { citedText: boundText(c.citedText, 512) } : {}),
+      provider: boundText(c?.provider ?? "", 32),
+    })).filter((c) => /^https:\/\//u.test(c.url))
+    : null;
+  if (citations && citations.length > 0) out.citations = citations;
+  const serverToolEvents = Array.isArray(terminal?.serverToolEvents)
+    ? terminal.serverToolEvents.slice(0, 16).map((e) => ({
+      kind: boundText(e?.kind ?? "", 64),
+      query: boundText(e?.query ?? "", 512),
+    })).filter((e) => e.kind && e.query)
+    : null;
+  if (serverToolEvents && serverToolEvents.length > 0) out.serverToolEvents = serverToolEvents;
+  if (role === "assistant") {
+    if (Array.isArray(terminal?.toolCalls) && terminal.toolCalls.length > 0) out.toolCalls = boundToolCalls(terminal.toolCalls);
+    if (Array.isArray(terminal?.skills) && terminal.skills.length > 0) out.skills = boundSkillIds(terminal.skills);
+    if (typeof terminal?.promptHash === "string" && terminal.promptHash) out.promptHash = boundPromptHash(terminal.promptHash);
+  }
+  return out;
+}
 function boundText(text, max = MAX_MESSAGE_BYTES) {
   const s = redactSecretText(String(text ?? ""));
   // The cap is UTF-8 BYTES (the memory store bound is byte-based): multi-byte
@@ -114,8 +172,12 @@ function boundText(text, max = MAX_MESSAGE_BYTES) {
   // for the truncation marker so slice + marker stay within the cap.
   if (utf8Bytes(s) <= max) return s;
   const isMessage = max === MAX_MESSAGE_BYTES;
+  // Honest by construction (kmpq): boundText is reached only for content with
+  // NO durable run copy (a durable terminal takes the digest path above and
+  // names the retained payload). Claiming the complete text is in a run log
+  // would be a lie for a plain appended row — say what is actually lost.
   const marker = isMessage
-    ? `\n\n…(response truncated to ${(max / 1024).toFixed(0)} KiB — the complete text is in the run log)`
+    ? `\n\n…(response truncated to ${(max / 1024).toFixed(0)} KiB — the remainder was not retained)`
     : "";
   const budget = Math.max(0, max - utf8Bytes(marker));
   let lo = 0;
@@ -489,51 +551,38 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     const existing = thread.messages.find(isTerminalRow);
     if (!existing) {
       const role = terminal?.role === "assistant" ? "assistant" : "error";
-      const content = boundText(terminal?.content ?? (role === "error" ? "run failed" : ""));
+      const rawContent = String(terminal?.content ?? (role === "error" ? "run failed" : ""));
+      const ref = typeof terminal?.retainedPayloadRef === "string" && terminal.retainedPayloadRef
+        ? terminal.retainedPayloadRef
+        : null;
+      // kmpq redesign: when the durable run journal holds the complete copy
+      // (retainedPayloadRef), a response beyond the per-row bound keeps a
+      // bounded digest in the row — never a giant slice. Where no durable copy
+      // exists the per-row bound stays the honest ceiling (boundText marker).
+      const content = ref && utf8Bytes(rawContent) > MAX_MESSAGE_BYTES
+        ? boundResponseDigest(rawContent)
+        : boundText(rawContent);
       // The answer appears ONCE: an interim row whose text equals the terminal
-      // (the step that already answered) is replaced by the terminal row.
+      // (the step that already answered) is replaced by the terminal row. The
+      // durable terminal may arrive as a digest (over the per-row bound), so a
+      // matching byte-capped interim of the SAME answer is replaced too — the
+      // interim row is a live-stream slice of the same response and must not
+      // duplicate the terminal bubble. boundText(rawContent) over a huge
+      // response is costly, so it runs only when such an interim row exists.
+      const interimCandidate = thread.messages.find((m) =>
+        m?.executionId === executionId && Number.isInteger(m?.step) && m.role === "assistant" && m.content !== content);
+      const interimTextForDedupe = interimCandidate ? boundText(rawContent) : content;
       thread.messages = thread.messages.filter((message) =>
-        !(message?.executionId === executionId && Number.isInteger(message?.step) && message.role === "assistant" && message.content === content));
-      // Provider-server grounding rows (render-only): citations are bounded
-      // {url,title,startIndex,endIndex} records; serverToolEvents are the
-      // executed provider-side queries ("🔎 Searched: …" cards). NEVER routed
-      // back to the model — historyFromThread projects content text only.
-      const citations = Array.isArray(terminal?.citations)
-        ? terminal.citations.slice(0, 32).map((c) => ({
-          url: boundText(c?.url ?? "", 1024),
-          title: boundText(c?.title ?? "", 256),
-          ...(Number.isInteger(c?.startIndex) ? { startIndex: c.startIndex } : {}),
-          ...(Number.isInteger(c?.endIndex) ? { endIndex: c.endIndex } : {}),
-          ...(typeof c?.citedText === "string" ? { citedText: boundText(c.citedText, 512) } : {}),
-          provider: boundText(c?.provider ?? "", 32),
-        })).filter((c) => /^https:\/\//u.test(c.url))
-        : null;
-      const serverToolEvents = Array.isArray(terminal?.serverToolEvents)
-        ? terminal.serverToolEvents.slice(0, 16).map((e) => ({
-          kind: boundText(e?.kind ?? "", 64),
-          query: boundText(e?.query ?? "", 512),
-        })).filter((e) => e.kind && e.query)
-        : null;
+        !(message?.executionId === executionId && Number.isInteger(message?.step) && message.role === "assistant" &&
+          (message.content === content || message.content === interimTextForDedupe)));
+      const envelope = boundTerminalEnvelope(terminal, role);
       thread.messages.push({
         role,
         content,
         executionId,
+        ...(ref ? { retainedPayloadRef: ref } : {}),
         ts: Date.now(),
-        ...(citations && citations.length > 0 ? { citations } : {}),
-        ...(serverToolEvents && serverToolEvents.length > 0 ? { serverToolEvents } : {}),
-        // Continuation fidelity (CAP slice): the compact per-run tool summary,
-        // the resolved skill ids, and the composed-prompt hash ride the
-        // terminal row so a resumed run knows which tools ran, which skills
-        // were active, and which prompt was composed. NEVER args/results.
-        ...(role === "assistant" && Array.isArray(terminal?.toolCalls)
-          ? { toolCalls: boundToolCalls(terminal.toolCalls) }
-          : {}),
-        ...(role === "assistant" && Array.isArray(terminal?.skills)
-          ? { skills: boundSkillIds(terminal.skills) }
-          : {}),
-        ...(role === "assistant" && typeof terminal?.promptHash === "string" && terminal.promptHash
-          ? { promptHash: boundPromptHash(terminal.promptHash) }
-          : {}),
+        ...envelope,
         ...(role === "error"
           ? {
             tool: terminal?.tool ?? undefined,

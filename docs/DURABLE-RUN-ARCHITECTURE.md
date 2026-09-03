@@ -163,17 +163,26 @@ rather than answering about runs that no longer exist.
 `settle` and `processOutbox` serialize terminal work under the registry mutex.
 The actual write order is:
 
-1. Persist the full terminal body under `run-payload:<executionId>:terminal:*`.
+1. Persist the full terminal body under `run-payload:<executionId>:terminal:*`
+   (chunked at 64 KiB per key, unbounded total — the COMPLETE response).
 2. Write `run-outbox:<executionId>` with the payload reference, the terminal
-   (`summary`: a 240-character preview for lists; `result`: the full answer
-   bounded to 16 KB — the thread back-fill in `thread-run-view.js` commits
-   `result`, never the preview), the journal row, and the optional thread
-   projection.
+   (`summary`/`result`: bounded previews for list surfaces), the journal row,
+   and the optional thread projection. The outbox's thread projection carries
+   a bounded DIGEST + the retained payload reference, never a near-bound copy
+   of the response — the serialized outbox stays small by design at any
+   response size (kmpq: OPFS/journal is the complete store; the memory row
+   keeps only index/summary + ref).
 3. Move a still-`running` record to `settling` with revision CAS.
 4. Append the terminal journal row once by `executionId`, or replace it with the
    cancellation row when a cancellation tombstone won.
 5. Commit the thread terminal once by `executionId`, or replace it with the
-   cancellation projection.
+   cancellation projection. processOutbox RESOLVES the complete response from
+   the retained payload before the thread commit, so the memory row is
+   byte-complete when the response fits the per-row bound and keeps a bounded
+   digest + ref beyond it (commitThreadTerminal in `extension/lib/threads.js`).
+   Reopened threads hydrate the COMPLETE response from the run-log terminal
+   payload at view build (`buildThreadRunView`), and legacy truncated rows
+   back-fill from the journal where the complete text exists.
 6. CAS the run record to `terminal` or `cancelled` and remove it from the
    same-boot active set.
 7. Write the retained terminal log, rewrite the outbox with `acknowledgedAt`,

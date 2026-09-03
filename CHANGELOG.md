@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.15] — 2026-09-03
+- Agent responses are stored complete in the run journal — reopened tasks show the full answer, never a memory-store slice
+
+## [0.3.14] — 2026-09-03
+- Agent responses are stored complete in the run journal — reopened tasks show the full answer, never a memory-store slice
+
 ## [0.3.13] — 2026-09-03
 - the model picker gains Gemini 3.8 Flash and Fable 5.1, with every price audited against published sources
 
