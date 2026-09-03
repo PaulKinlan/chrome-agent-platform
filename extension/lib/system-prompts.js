@@ -189,7 +189,11 @@ export const PROMPT_REGISTRY = [
     title: "Protected safety constraints (the runtime policy)",
     // 1.1.0: generated from lib/runtime-policy.js; now the FINAL layer (after
     // skills) and carries the secret/origin/permission rules.
-    version: "1.1.0",
+    // 1.2.0: sandboxed-artifacts rule — generated html artifacts run in an
+    // origin-opaque sandbox (no storage/cookies/network/permission-gated
+    // APIs), so their code must keep state in-memory or store it with the
+    // platform (chrome-agent-platform-np64).
+    version: "1.2.0",
     release: "0.2.74",
     protected: true,
     content: PROTECTED_CONSTRAINTS,

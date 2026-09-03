@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.23] — 2026-09-03
+- sandbox rules lead tool discovery, teaching errors fire in the real sandbox, and the persistence recommendation is recorded
+
 ## [0.3.22] — 2026-09-03
 - site-tool errors carry the real cause — tool, phase, redacted message/stack, realm, and origin instead of a bare UnknownError
 
