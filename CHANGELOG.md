@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.42] — 2026-09-03
+- cap-beads-3cb6
+
 ## [0.3.41] — 2026-09-03
 - cap-beads-afiu
 
