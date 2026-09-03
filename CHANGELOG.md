@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.27] — 2026-09-03
+- dptw phase 2 (storage): profile-store, artifact version bytes, system-prompt override caps (S11, S12-bytes, S19)
+
 ## [0.3.26] — 2026-09-03
 - dptw phase 2 (storage): journal field clips + jwt token/output limits removed (S9, S20)
 
