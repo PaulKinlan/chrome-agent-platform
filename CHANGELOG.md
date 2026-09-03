@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.25] — 2026-09-03
+- Site tools that fail now say why: the page's error name, a short redacted excerpt, where it happened (realm + origin), and which stage failed replace the bare 'DOMException: UnknownError'; a result the bridge cannot carry reports itself instead of looking like the handler failed
+
+## [0.3.24] — 2026-09-03
+- Site tools that fail now say why: the page's error name, a short redacted excerpt, where it happened (realm + origin), and which stage failed replace the bare 'DOMException: UnknownError'; a result the bridge cannot carry reports itself instead of looking like the handler failed
+
+## [0.3.23] — 2026-09-03
+- Site tools that fail now say why: the page's error name, a short redacted excerpt, where it happened (realm + origin), and which stage failed replace the bare 'DOMException: UnknownError'; a result the bridge cannot carry reports itself instead of looking like the handler failed
+
+## [0.3.22] — 2026-09-03
+- site tools that fail now say why — the page's error name, a short redacted excerpt, where it happened, and which stage failed replace the bare 'DOMException: UnknownError'; a result the bridge cannot carry reports itself instead of looking like the handler failed
+
 ## [0.3.21] — 2026-09-03
 - the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
 

@@ -241,7 +241,16 @@ function onWindowMessage(event) {
     const send = pending.get(msg.requestId);
     if (send) {
       pending.delete(msg.requestId);
-      send(msg.ok ? { ok: true, result: msg.result } : { ok: false, error: msg.error });
+      // errorDetail is the honest page-side failure description
+      // (chrome-agent-platform-ajcc). Realm + origin are STAMPED HERE — the
+      // isolated world knows which document this bridge serves; a page
+      // script's self-reported origin over the broadcast channel is never
+      // trusted (the same rule as the tools snapshot above).
+      let errorDetail = null;
+      if (!msg.ok && msg.errorDetail && typeof msg.errorDetail === "object") {
+        errorDetail = { ...msg.errorDetail, realm: "main", origin: location.origin };
+      }
+      send(msg.ok ? { ok: true, result: msg.result } : { ok: false, error: msg.error, errorDetail });
     }
   }
 }

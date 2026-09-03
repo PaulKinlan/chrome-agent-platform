@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebMCP Honest-Errors Fixture</title>
+  <script>
+    // The same realistic WebMCP polyfill shape as webmcp-fixture.html, hosting
+    // the FAILURE-MODE tools for chrome-agent-platform-ajcc: the agent-visible
+    // error must carry the underlying cause (name + bounded redacted message +
+    // stack excerpt + phase + realm + origin), a non-cloneable result must
+    // fail honestly instead of timing out, and page text carrying credential
+    // shapes must stay redacted even while the cause is surfaced.
+    (function installModelContext() {
+      const tools = new Map();
+      function define(name, description, inputSchema, execute) {
+        tools.set(name, { name, description, inputSchema, execute });
+      }
+
+      // The happy path — proves the honest-error change leaves the success
+      // round-trip byte-identical.
+      define("happy_echo", "Echo the query back", { type: "object", properties: { query: { type: "string" } } },
+        (args) => ({ echo: args?.query ?? "" }));
+
+      // A handler that throws a SPECIFIC DOMException — the agent-visible
+      // error must name QuotaExceededError and carry the message excerpt.
+      define("fail_named", "Throws a named DOMException", { type: "object", properties: {} }, () => {
+        throw new DOMException("search index quota exceeded for workspace ws_42", "QuotaExceededError");
+      });
+
+      // A handler that throws a BARE DOMException — no message at all. The
+      // agent-visible error must say exactly that (never invent detail).
+      define("fail_bare", "Throws a bare DOMException", { type: "object", properties: {} }, () => {
+        throw new DOMException();
+      });
+
+      // A plain JS error — the common failure shape of real page code.
+      define("fail_typeerror", "Throws a TypeError", { type: "object", properties: {} }, () => {
+        const docs = undefined;
+        return docs.documents;
+      });
+
+      // A handler whose message embeds credential SHAPES — the honest error
+      // must surface the cause while STILL redacting the credential (the
+      // round-30 protection is preserved, not removed).
+      define("fail_leaky", "Throws an error containing credential shapes", { type: "object", properties: {} }, () => {
+        throw new Error("request to https://api.internal.example/search?token=sk-live-abcdef123456 failed; sent Authorization: Bearer sk-live-abcdef123456");
+      });
+
+      // A handler whose RESULT cannot cross the bridge — structured cloning
+      // rejects functions and DOM nodes. Pre-fix the postMessage DataCloneError
+      // was mislabeled as a handler failure ("tool failed (DOMException:
+      // DataCloneError)"); it must now report its real phase honestly.
+      define("return_noncloneable", "Returns a non-cloneable value", { type: "object", properties: {} }, () => {
+        return { node: document.body, callback: () => 1, ok: true };
+      });
+
+      document.modelContext = {
+        getTools: async () => Array.from(tools.values()).map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: JSON.stringify(t.inputSchema ?? { type: "object", properties: {} }),
+          execute: t.execute,
+        })),
+        registerTool: async (t) => {
+          tools.set(t.name, { name: t.name, description: t.description, inputSchema: t.inputSchema ?? {}, execute: t.execute ?? (() => null) });
+          return t;
+        },
+        executeTool: async (tool, args) => {
+          if (tool?.execute) return tool.execute(args);
+          return "executed";
+        },
+      };
+    })();
+  </script>
+</head>
+<body>
+  <h1>WebMCP Honest-Errors Fixture</h1>
+  <p id="msg">errors fixture loaded</p>
+</body>
+</html>

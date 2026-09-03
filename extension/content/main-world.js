@@ -314,56 +314,87 @@
   }
 
   // Page-thrown exception text is attacker-controlled and may embed secrets —
-  // never surface it to the bridge/SW/model, not even in the DIAGNOSTICS log
-  // (the round-30 redaction finding: the gated log used to mirror the raw page
-  // exception text). Report only a bounded, allowlisted error NAME.
-  const SAFE_ERROR_NAMES = new Set([
-    "Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError",
-    "EvalError", "URIError", "AggregateError", "DOMException",
-  ]);
-  // The spec-defined DOMException names (WebIDL §3.11 + the legacy code
-  // names). A genuine DOMException's `.name` is drawn from THIS bounded set in
-  // practice, but `new DOMException(msg, name)` accepts ANY string — so the
-  // name is only surfaced when it is allowlisted here. The `.message` is
-  // attacker-controlled free text and NEVER crosses the bridge.
-  const SAFE_DOMEXCEPTION_NAMES = new Set([
-    "IndexSizeError", "HierarchyRequestError", "WrongDocumentError",
-    "InvalidCharacterError", "NoModificationAllowedError", "NotFoundError",
-    "NotSupportedError", "InUseAttributeError", "InvalidStateError",
-    "SyntaxError", "InvalidModificationError", "NamespaceError",
-    "InvalidAccessError", "TypeMismatchError", "SecurityError",
-    "NetworkError", "AbortError", "URLMismatchError", "QuotaExceededError",
-    "TimeoutError", "InvalidNodeTypeError", "DataCloneError",
-    "EncodingError", "NotReadableError", "UnknownError", "ConstraintError",
-    "DataError", "TransactionInactiveError", "ReadOnlyError", "VersionError",
-    "OperationError", "NotAllowedError",
-  ]);
-  function redactError(e) {
-    // A GENUINE DOMException (native constructor, captured before page code
-    // runs) may report its bounded spec-defined NAME — e.g. "NotAllowedError"
-    // tells the owner WHAT failed without leaking attacker text. A crafted
-    // name (DOMException accepts arbitrary name strings) falls back to the
-    // bare type; the message NEVER surfaces.
-    if (
-      typeof NativeDOMException === "function" &&
-      e instanceof NativeDOMException
-    ) {
-      const n = typeof e?.name === "string" ? e.name : "";
-      return SAFE_DOMEXCEPTION_NAMES.has(n) ? `DOMException: ${n}` : "DOMException";
+  // so it is redacted (URL query strings, Bearer/Basic values, well-known
+  // credential shapes — the same classes lib/pure.js redactSecretText and
+  // lib/error-report.js maskCredentialShapes mask; this file is a plain
+  // injected script and cannot import them) and BOUNDED before it crosses the
+  // bridge. But a bare "DOMException: UnknownError" is a defect
+  // (chrome-agent-platform-ajcc: the owner's search_docs failure was
+  // undiagnosable by construction): the agent-visible error now carries the
+  // REAL error name, a bounded redacted message excerpt, a bounded stack
+  // excerpt, the phase that failed (dispatch vs result-serialization), and —
+  // stamped by the content-script, never self-reported — the realm + origin.
+  // errorDetail.pageControlled marks the text as untrusted page data, exactly
+  // like any tool RESULT the page returns.
+  function redactBridgeText(text, max = 300) {
+    let out = String(text ?? "");
+    // URL query strings can hide reflected credentials — strip them.
+    out = out.replace(/(https?:\/\/[^\s)"'`]+)\?[^\s)"'`]*/gi, "$1?…");
+    // Bearer/Basic header values.
+    out = out.replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi, "$1 [REDACTED]");
+    // Well-known credential shapes standing alone (mirrors maskCredentialShapes).
+    out = out.replace(/\b(?:sk|rk|pk|xai|gsk|ghp|gho|xox[a-z]?|AIza|sk-ant|sk-proj)[-_][A-Za-z0-9_*.-]{6,}/g, "[REDACTED]");
+    out = out.trim();
+    return out.length > max ? out.slice(0, max) + "…" : out;
+  }
+  // Read a field defensively: a hostile page object can throw from a getter,
+  // and the error path must NEVER throw (a throwing error path is the
+  // silent-timeout failure mode this fix removes).
+  function safeField(e, key) {
+    try {
+      const v = e?.[key];
+      return typeof v === "string" ? v : "";
+    } catch {
+      return "";
     }
-    const name = e && typeof e === "object" ? e.constructor?.name : null;
-    return SAFE_ERROR_NAMES.has(name) ? name : "Error";
+  }
+  // Describe a page-thrown error honestly + boundedly. Never throws.
+  function describePageError(e, tool, phase) {
+    let isDomEx = false;
+    try {
+      isDomEx = typeof NativeDOMException === "function" && e instanceof NativeDOMException;
+    } catch { isDomEx = false; }
+    let ctorName = "";
+    try { ctorName = (e && typeof e === "object" ? e.constructor?.name : "") || ""; } catch { ctorName = ""; }
+    const rawName = isDomEx
+      ? (safeField(e, "name") || "DOMException")
+      : (ctorName || (e === null ? "null" : typeof e));
+    const name = redactBridgeText(rawName, 64) || "Error";
+    const message = redactBridgeText(safeField(e, "message"), 300);
+    const stack = redactBridgeText(safeField(e, "stack"), 600);
+    const type = isDomEx ? `DOMException: ${name}` : name;
+    const detail = {
+      tool: String(tool ?? "").slice(0, 128),
+      phase,
+      pageControlled: phase === "dispatch",
+      errorType: isDomEx ? "DOMException" : name,
+      name,
+      message,
+      stack,
+    };
+    let text;
+    if (message) {
+      text = `tool ${detail.tool} failed (${type}): ${message}`;
+    } else {
+      // The honest answer when the page gives us nothing: say exactly that,
+      // plus everything the boundary captured (chrome-agent-platform-ajcc).
+      text = `tool ${detail.tool} failed (${type}) — the page's handler threw ${isDomEx ? "a DOMException" : "an error"} with no message${stack ? "; a stack excerpt is in errorDetail" : " and no stack was captured"}`;
+    }
+    return { error: text, errorDetail: detail };
   }
   // Errors WE throw (cancellation, dispatch, unknown tool) carry safe static
-  // messages and may cross the bridge; page-thrown errors are redacted.
+  // messages and may cross the bridge; page-thrown errors are described
+  // honestly (bounded + credential-redacted) by describePageError.
   function internalError(message) {
     const e = new Error(message);
     e.__capInternal = true;
     return e;
   }
-  function resultError(e) {
-    if (e && e.__capInternal === true) return String(e.message).slice(0, 200);
-    return `tool failed (${redactError(e)})`;
+  function resultError(e, tool) {
+    if (e && e.__capInternal === true) {
+      return { error: String(e.message).slice(0, 200), errorDetail: null };
+    }
+    return describePageError(e, tool, "dispatch");
   }
 
   async function invoke(isStale, name, args, source) {
@@ -577,17 +608,49 @@
               return;
             }
             log("result", JSON.stringify({ name: msg.name, requestId, ok: true }));
-            post({ type: "result", requestId, ok: true, result });
+            // A page result that structured cloning cannot carry (functions,
+            // DOM nodes, symbols, a throwing getter) makes postMessage throw
+            // DataCloneError — WITHOUT this catch that throw fell into the
+            // .catch below and was MISLABELED as a handler failure ("tool
+            // failed (DOMException: DataCloneError)", phase indistinguishable
+            // from the page throwing — observed on the pre-fix RED run). Report
+            // the serialization failure honestly instead: name, bounded
+            // message, the phase.
+            try {
+              post({ type: "result", requestId, ok: true, result });
+            } catch (ser) {
+              warnToolFailure(msg.name, msg.args, ser);
+              const name = redactBridgeText(safeField(ser, "name") || "DataCloneError", 64);
+              const message = redactBridgeText(safeField(ser, "message"), 300);
+              const error = `tool ${msg.name} succeeded on the page but its result could not cross the bridge (${name}${message ? `: ${message}` : ""}) — the page returned a value structured cloning cannot carry (a function, DOM node, symbol, or a throwing getter)`;
+              try {
+                post({
+                  type: "result", requestId, ok: false, error,
+                  errorDetail: {
+                    tool: String(msg.name ?? "").slice(0, 128),
+                    phase: "result-serialization",
+                    pageControlled: false,
+                    errorType: name,
+                    name,
+                    message,
+                    stack: "",
+                  },
+                });
+              } catch { /* nothing more can cross — the content-script timeout is the last resort */ }
+            }
           })
           .catch((e) => {
             inFlight.delete(requestId);
             // The page owner can inspect the original error in their own
-            // DevTools. Only the redacted value may cross the bridge or enter
-            // the extension/model diagnostics path.
+            // DevTools. The bridge carries the bounded honest description
+            // (name + redacted message/stack excerpt + phase), never the raw
+            // object.
             warnToolFailure(msg.name, msg.args, e);
-            const safe = isStale() ? "invocation cancelled" : resultError(e);
-            log("result", JSON.stringify({ name: msg.name, requestId, ok: false, error: safe }));
-            post({ type: "result", requestId, ok: false, error: safe });
+            const r = isStale()
+              ? { error: "invocation cancelled", errorDetail: null }
+              : resultError(e, msg.name);
+            log("result", JSON.stringify({ name: msg.name, requestId, ok: false, error: r.error }));
+            post({ type: "result", requestId, ok: false, error: r.error, errorDetail: r.errorDetail });
           });
       }, 0));
     }

@@ -70,6 +70,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "sidebar-parity.ts": { class: "named", npm: "test:sidebar", reason: "18/2 at the re-inventory (two sidebar parity checks red); promote once green" },
   "ui-integration.ts": { class: "named", npm: "test:ui", reason: "25/1 at the re-inventory and then a crash: #run-log is no longer on the hub (step 5 dereferences null) and 'ViewTransition.finished awaited' fails; promote once green" },
   "webmcp-acceptance.ts": { class: "named", npm: "test:webmcp", reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof" },
+  "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
 
   // ── KATs (npm run test:kat via scripts/kat-runner.ts) ───────────────────
   "kat-activity-explorer.ts": { class: "kat", ...RED("7/5", "the backend 'ok' scenario renders 1 row with options ['', 'master']") },
@@ -116,6 +117,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-tool-call-clarity.ts": { class: "kat" },
   "kat-ui-repair.ts": { class: "kat", ...RED("crash", "'Settings restores one compact background-agent add section' fails and the KAT then throws on a null select") },
   "kat-usage-viz.ts": { class: "kat" },
+  "kat-webmcp-honest-errors.ts": { class: "kat" },
   "kat-ux-lows.ts": { class: "kat", ...RED("9/1", "UX-010: the wide form-factor two-column grid is not active") },
   "kat-wasi-tranche2.ts": { class: "kat", ...RED("1/9", "tool.preview.run answers 'offscreen unavailable: Could not establish connection'") },
 
