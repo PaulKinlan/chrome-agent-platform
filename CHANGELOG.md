@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.54] — 2026-09-03
+- The release notes read in plain language again — one entry no longer uses an internal term
+
 ## [0.3.53] — 2026-09-03
 - Running the whole unit suite the slow way is no longer possible: the repo points you at the fast npm commands instead
 
@@ -19,7 +22,7 @@
 - No self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
 
 ## [0.3.47] — 2026-09-03
-- The hub's own worktree and directory entries are durable — not wiped by tmpfs cleanup
+- The hub's own working copy and directory entries survive temporary-file cleanup
 
 ## [0.3.46] — 2026-09-03
 - The task view shows long responses in full, exactly as they were generated — byte-true bounds, escapes handled, no broken characters
