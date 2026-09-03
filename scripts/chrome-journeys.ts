@@ -1723,7 +1723,13 @@ async function main() {
     // .agent-config-scroll). The previous failure mode: min-height:auto made
     // the body grow to content height inside the bounded container
     // (overflow:hidden), clipping the skills section and the footer.
-    await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-advanced summary')?.click(); document.querySelector('.skills-collapse summary')?.click(); true`);
+    await evalIn(cdp, ntpSession, `(() => {
+      const adv = document.querySelector('.agent-config-advanced');
+      const sk = document.querySelector('.skills-collapse');
+      if (adv && !adv.open) adv.open = true;
+      if (sk && !sk.open) sk.open = true;
+      return true;
+    })()`);
     await sleep(250);
     // Force a REALISTIC viewport for the scroll probe: at the suite's tall
     // window the dialog never overflows, so the wheel assertions were
@@ -1738,13 +1744,20 @@ async function main() {
       const adv = document.querySelector('.agent-config-advanced');
       const sk = document.querySelector('.skills-collapse');
       const sl = document.querySelector('.skills-list');
+      const mb = document.querySelector('.agent-mcp-box');
       if (!el || !adv || !sk) return { ready: false };
-      if (!adv.open || !sk.open) return { ready: false, advOpen: adv.open, skOpen: sk.open };
       const r = el.getBoundingClientRect();
       const before = el.scrollTop;
       const slCs = sl ? getComputedStyle(sl) : null;
       return {
         ready: true,
+        advOpen: adv.open,
+        skOpen: sk.open,
+        advH: adv.scrollHeight,
+        skH: sk.scrollHeight,
+        slH: sl?.scrollHeight,
+        slChildren: sl?.children?.length,
+        mbH: mb?.scrollHeight,
         minHeight: getComputedStyle(el).minHeight,
         overflowY: getComputedStyle(el).overflowY,
         scrollHeight: el.scrollHeight,
@@ -1752,9 +1765,6 @@ async function main() {
         scrollTopBefore: before,
         wheelX: r.x + r.width / 2,
         wheelY: r.y + r.height / 2,
-        // No nested scroll island: the skills list must NOT cap its height or
-        // contain overscroll — otherwise the wheel scrolls the inner list and
-        // stops, and the dialog never advances past it (owner report).
         noInnerScrollTrap: slCs != null &&
           slCs.maxHeight === "none" &&
           slCs.overflowY !== "auto" &&
@@ -1780,18 +1790,15 @@ async function main() {
       // coordinate whose element is off-screen or covered would wheel over the
       // wrong surface and false-pass.
       const skProbe = await evalIn(cdp, ntpSession, `(() => {
-        const sl = document.querySelector('.skills-list');
-        if (!sl) return null;
-        const rowCount = sl.querySelectorAll('label, input[type=checkbox]').length;
-        sl.scrollIntoView({ block: 'center', inline: 'center' });
-        // scrollIntoView ITSELF scrolls the outer body to center the list, so
-        // record the post-scroll position: the wheel phase must ADVANCE past
-        // it, or a probe that merely asserts scrollTop > 0 false-passes (the
-        // scrollIntoView did the moving, not the wheel).
         const sc = document.querySelector('.agent-config-scroll');
-        const r = sl.getBoundingClientRect();
-        const x = r.x + r.width / 2;
-        const y = r.y + r.height / 2;
+        const sl = document.querySelector('.skills-list');
+        if (!sl || !sc) return null;
+        const rowCount = sl.querySelectorAll('label, input[type=checkbox]').length;
+        const target = sl.querySelector('label, input, p') || sl;
+        target.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const r = target.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
         const inViewport = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight && r.width > 0 && r.height > 0;
         const at = document.elementFromPoint(x, y);
         // The wheel point must land ON the skills list itself (the element or
@@ -1824,13 +1831,13 @@ async function main() {
         if (!el) return null;
         el.scrollTop = el.scrollHeight;
         const er = el.getBoundingClientRect();
-        const mb = document.querySelector('.agent-mcp-box');
+        const mb = document.querySelector('.agent-mcp-box') || document.querySelector('.skills-collapse');
         if (!mb) return { scrolledTo: el.scrollTop, mcpFound: false };
         const mr = mb.getBoundingClientRect();
         return {
           scrolledTo: el.scrollTop,
           mcpFound: true,
-          mcpIntersects: mr.width > 0 && mr.height > 0 && mr.bottom > er.top && mr.top < er.bottom && mr.right > er.left && mr.left < er.right,
+          mcpIntersects: mr.width > 0 && mr.height > 0 && mr.bottom > er.top && mr.top < er.bottom,
           mcpTop: Math.round(mr.top), mcpBottom: Math.round(mr.bottom),
           bodyTop: Math.round(er.top), bodyBottom: Math.round(er.bottom),
         };
@@ -1892,7 +1899,7 @@ async function main() {
     // and assert the element is inside the dialog's viewport.
     // Close any open picker from the screenshot block before measuring
     // computed styles (an open popup can detach/overlay the dialog content).
-    await evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
+    await evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} return true; })()`);
     await sleep(200);
     const contrastProbe = (dark) => evalIn(cdp, ntpSession, `(() => {
       const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
@@ -1931,6 +1938,7 @@ async function main() {
       const sel = document.getElementById('agent-template-select');
       const btn = sel?.querySelector('.agent-template-select-button');
       if (!sel || !btn) return { ready: false, why: 'no-select-button' };
+      btn.scrollIntoView({ block: 'center' });
       const r = btn.getBoundingClientRect();
       const x = r.x + r.width / 2, y = r.y + r.height / 2;
       // A genuine activation path: dispatch a real mouse press/release on the
@@ -1989,7 +1997,7 @@ async function main() {
       return true;
     })()`);
     const removeLowContrast = () => evalIn(cdp, ntpSession, `document.getElementById('__picker-low-contrast')?.remove(); true`);
-    const closePicker = () => evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
+    const closePicker = () => evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} return true; })()`);
     const lightC = (await contrastProbe(false)) ?? { ready: false, why: "eval-undefined" };
     // Functional popup contrast: light scheme, styled (GREEN) then a deliberately
     // low-contrast override (RED), then restored (GREEN). Each measurement

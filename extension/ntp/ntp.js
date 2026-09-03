@@ -2945,7 +2945,6 @@ async function buildAgentConfigDialog(opts) {
   advancedDetails.style.background = "var(--panel,#ffffff)";
   advancedDetails.style.minWidth = "0";
   advancedDetails.style.maxWidth = "100%";
-  advancedDetails.style.overflow = "hidden";
   const advancedSummary = document.createElement("summary");
   advancedSummary.textContent = "Advanced";
   advancedSummary.style.cssText = "cursor:pointer;font-size:13px;font-weight:600;padding:10px 12px;";
@@ -2966,7 +2965,6 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.style.background = "var(--panel,#ffffff)";
   skillsDetails.style.minWidth = "0";
   skillsDetails.style.maxWidth = "100%";
-  skillsDetails.style.overflow = "hidden";
 
   const skillsSummary = document.createElement("summary");
   skillsSummary.style.padding = "10px 12px";
