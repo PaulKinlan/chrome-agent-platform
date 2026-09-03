@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.30] — 2026-09-03
+- cap-beads-dptw-tr
+
 ## [0.3.29] — 2026-09-03
 - cap-beads-60be
 
