@@ -753,9 +753,10 @@ function effectiveModel(card) {
   return card.querySelector(".model")?.value || "";
 }
 
-// Build ONE provider card — a role=radio in a radiogroup. The recommended and
-// alternative cards LEAD; the rest sit under "More providers". The four-click
-// flow lives here: paste the key, Test connection (which gates), Use.
+// Build ONE provider card — a role=radio in its family's radiogroup. Cards
+// live in their family's tabpanel (recommended/alternative order preserved
+// inside a family). The four-click flow lives here: paste the key, Test
+// connection (which gates), Use.
 function buildProviderCard(p, cfg) {
   const isActive = cfg.provider === p.id;
   const badge = p.recommended

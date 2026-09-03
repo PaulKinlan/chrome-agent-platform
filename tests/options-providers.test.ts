@@ -8,8 +8,6 @@ import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   hubStripText,
   keyPageFor,
-  leadingProviders,
-  moreProviders,
   prefilledModelFor,
   recommendedProvider,
   useEnabled,
@@ -32,20 +30,6 @@ Deno.test("the recommended card is OpenAI with model gpt-5.6-luna pre-filled", (
   // A fresh profile (demo provider active, no stored model): the model field
   // pre-fills the catalogue default, never blank.
   assertEquals(prefilledModelFor(rec, { provider: "demo", model: "" }), "gpt-5.6-luna");
-});
-
-Deno.test("the alternative leads second and points at Gemini gemini-3.7-flash", () => {
-  const lead = leadingProviders(PRESETS);
-  assertEquals(lead.map((p) => p.id), ["openai", "gemini"]);
-  const gemini = lead[1];
-  assertEquals(prefilledModelFor(gemini, { provider: "demo", model: "" }), "gemini-3.7-flash");
-});
-
-Deno.test("the other presets sit under More providers", () => {
-  assertEquals(
-    moreProviders(PRESETS).map((p) => p.id),
-    ["anthropic", "deepseek", "openai-compatible", "ollama"],
-  );
 });
 
 Deno.test("Use is disabled until Test passed (for a fresh keyed provider)", () => {

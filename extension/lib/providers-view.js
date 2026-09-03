@@ -96,27 +96,6 @@ export function defaultFamilyId(providers, currentProviderId) {
   return families[0].id;
 }
 
-/** The documented alternative (Gemini). */
-export function alternativeProvider(providers) {
-  return (Array.isArray(providers) ? providers : []).find((p) => p?.alternative === true) ?? null;
-}
-
-/** The providers that LEAD the panel: recommended first, alternative second,
- * in that fixed order. */
-export function leadingProviders(providers) {
-  const rec = recommendedProvider(providers);
-  const alt = alternativeProvider(providers);
-  return [rec, alt].filter(Boolean);
-}
-
-/** Everything under the "More providers" disclosure — neither recommended nor
- * the alternative, in their original order. */
-export function moreProviders(providers) {
-  return (Array.isArray(providers) ? providers : []).filter(
-    (p) => p && !p.recommended && !p.alternative,
-  );
-}
-
 /** The model id that PRE-FILLS a provider's model field: the stored model when
  * this provider is the active one, else the provider's catalogue default. Never
  * blank for a provider that HAS a catalogue default, so a fresh user can never

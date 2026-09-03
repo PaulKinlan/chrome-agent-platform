@@ -1,13 +1,14 @@
 // kat-providers-recommended.ts — owner feature KAT (real browser).
 // CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01: the Settings → Providers
-// panel LEADS with a recommended card (OpenAI, gpt-5.6-luna pre-filled) and an
-// alternative (Gemini), the rest under a "More providers" disclosure; the flow
-// is pick → paste key → Test → Use, with Use disabled until Test passes.
+// panel LEADS with a recommended card (OpenAI, gpt-5.6-luna pre-filled) in its
+// family tab and an alternative (Gemini) in the Gemini family tab
+// (CAP-FB-20260902-PROVIDERS-TABBED-UI-01); the flow is pick → paste key →
+// Test → Use, with Use disabled until Test passes.
 //
 // This harness drives the REAL extension options page and captures:
 //   providers-recommended-after.png  — the recommended card block (key field,
-//                                        Test/Use, More providers disclosure)
-//   providers-more-open.png           — the disclosure expanded
+//                                        Test/Use)
+//   providers-family-tabs.png        — the family tab strip
 //   hub-strip-no-model.png            — the hub strip on a fresh profile
 //
 //   deno run -A scripts/kat-providers-recommended.ts <path-to-extension> [<out-dir>]
