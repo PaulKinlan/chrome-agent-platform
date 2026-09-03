@@ -467,7 +467,9 @@ Three properties make it safe to compose tools this way:
   (chrome-agent-platform-3cb6). A management/destructive step raises its own
   in-route card via `requireOwnerApproval` exactly as a model-initiated call does.
   Deny or expiry fails the step closed naming the tool and the requirement, and
-  the pipeline halts. The fence is preserved as data flows forward (a bound value
+  the pipeline halts. A pipeline is NOT transactional: steps that already ran and
+  committed before the denial stay done — there is no rollback, and the halted
+  pipeline's result says exactly which step stopped it. The fence is preserved as data flows forward (a bound value
   that was fenced stays fenced).
 - **It fails closed.** `$ref` may reference only an EARLIER step (a linear pipe, no
   cycles by construction); a binding whose path does not resolve halts the

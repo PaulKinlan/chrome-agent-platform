@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.39] — 2026-09-03
+- a denied pipeline step stops the workflow, but the steps that already ran stay done — pipelines do not roll back
+
 ## [0.3.38] — 2026-09-03
 - Prove the pipeline approval path end to end: a real agent run whose saved pipeline hits a gated step shows the owner card, and Allow re-executes the step through the runtime's resume path (the step ran twice — paused once, approved once — and its real result reached the model); Not now stops the workflow at that step with the tool and reason named, and the step never runs again.
 
