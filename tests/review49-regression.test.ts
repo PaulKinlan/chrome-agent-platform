@@ -3,6 +3,13 @@
 // as REGRESSION assertions: each asserts the DEFECT IS ABSENT on the fixed
 // code (the external harness reproduced the defects; this suite proves they
 // are closed). @ts-nocheck — untyped harness by design.
+//
+// The probed modules (extension/lib/{memory,artifacts}.js) are pinned at the
+// exact artifact-tx commit these regressions were verified against (4eaf0d34),
+// re-homed as a durable worktree under ~/worktrees (tmpfs snapshots get
+// cleaned; the current modules have evolved past these shapes).
+// Re-materialize if ever missing: git worktree add \
+//   /home/paulkinlan/worktrees/cap-artifact-tx-snapshot 4eaf0d34
 import { assert, assertEquals } from "jsr:@std/assert@1";
 function dirNode(){return {kind:"directory",children:new Map()};}
 function fileNode(c){return {kind:"file",content:c};}
@@ -10,8 +17,8 @@ class W{constructor(n){this.n=n;this.p=[];} async write(s){this.p.push(String(s)
 class F{constructor(n){this.n=n;this.name=null;} get kind(){return "file";} async getFile(){const n=this.n;return {size:(n.content??"").length,async text(){return n.content??"";}};} async createWritable(){const nth=globalThis.failNth?.get(this.name);if(typeof nth==="number"){if(nth<=1){globalThis.failNth.delete(this.name);throw new Error("createWritable failed");}globalThis.failNth.set(this.name,nth-1);}const w=new W(this.n);w.n.name=this.name;return w;}}
 class D{constructor(n){this.n=n;}get kind(){return "directory";}async getDirectoryHandle(name,o={}){if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,dirNode());}return new D(this.n.children.get(name));}async getFileHandle(name,o={}){if(globalThis.failGet?.has(name))throw new Error("I/O read failure");if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,fileNode(""));}const f=new F(this.n.children.get(name));f.name=name;return f;}async removeEntry(name){this.n.children.delete(name);}async *entries(){for(const [name,n] of this.n.children){const h=n.kind==="file"?new F(n):new D(n);if(h instanceof F)h.name=name;yield [name,h];}}}
 const root=dirNode();Object.defineProperty(globalThis,"navigator",{value:{storage:{async getDirectory(){return new D(root);}}},configurable:true});
-const memUrl="file:///tmp/cap-artifact-tx-current-main/extension/lib/memory.js";
-const artUrl="file:///tmp/cap-artifact-tx-current-main/extension/lib/artifacts.js";
+const memUrl="file:///home/paulkinlan/worktrees/cap-artifact-tx-snapshot/extension/lib/memory.js";
+const artUrl="file:///home/paulkinlan/worktrees/cap-artifact-tx-snapshot/extension/lib/artifacts.js";
 function reset(){root.children.clear();globalThis.failClose=new Set();globalThis.failNth=new Map();globalThis.failGet=new Set();}
 function md(){return root.children.get("memory")?.children?.get("master");}
 function bodies(){return [...(md()?.children.keys()??[])].filter(n=>n.startsWith("asset:")&&n.endsWith(".json")).length;}
