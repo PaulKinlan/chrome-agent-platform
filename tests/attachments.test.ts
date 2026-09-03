@@ -8,15 +8,14 @@ import {
   attachmentContext,
   buildMultimodalTask,
   isTextLikeAttachment,
-  MAX_LOCAL_TEXT_BYTES,
   sanitizeAttachments,
   textToDataUrl,
+  validateRunAttachments,
 } from "../extension/lib/attachments.js";
 
 const IMG = "data:image/png;base64,iVBORw0KGgo=";
 
 Deno.test("local file attachments: text detection and UTF-8 data URLs are bounded inputs", () => {
-  assertEquals(MAX_LOCAL_TEXT_BYTES, 1024 * 1024);
   assert(isTextLikeAttachment({ name: "report.md", type: "" }));
   assert(isTextLikeAttachment({ name: "data", type: "application/json" }));
   assertEquals(isTextLikeAttachment({ name: "photo.png", type: "image/png" }), false);
@@ -84,10 +83,11 @@ Deno.test("sanitizeAttachments: keeps metadata + dataURL, drops the live File, b
   assertEquals(r[0].name, "pic.png");
   assertEquals(r[0].dataURL, IMG);
   assertEquals("file" in r[0], false);
-  // A >2MB dataURL is dropped (bounded), the metadata survives.
+  // dptw: no size cap — a >2MiB dataURL survives persistence whole (the OPFS
+  // quota, not a self-imposed bound, is the honest limit).
   const huge = "data:image/png;base64," + "A".repeat(2 * 1024 * 1024 + 10);
   const r2 = sanitizeAttachments([{ name: "big.png", type: "image/png", size: 1, dataURL: huge }]);
-  assertEquals(r2[0].dataURL, "");
+  assertEquals(r2[0].dataURL, huge);
   assertEquals(r2[0].name, "big.png");
 });
 
@@ -187,4 +187,53 @@ Deno.test("ntp: the cap:attach-artifact handler is ONE canonical attachment — 
   const body = fn[0];
   assert(/kind: "artifact"/.test(body), 'attachArtifactToComposer does not emit kind:"artifact"');
   assert(/artifactId:/.test(body) && /artifactOrigin:/.test(body) && /artifactType:/.test(body), "attachArtifactToComposer missing the artifact identity fields");
+});
+
+// ── dptw (R1/R2): agent.run attachment size/count caps removed — only the
+// dataURL SHAPE is still enforced; text attachments inline whole. ──────────
+
+Deno.test("attachmentContext inlines a text attachment past the old 4000-char slice", () => {
+  const body = "line-✓\n".repeat(2000); // ~14k chars — well past the old slice
+  const bytes = new TextEncoder().encode(body);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const context = attachmentContext([{
+    name: "big.txt",
+    type: "text/plain",
+    size: bytes.length,
+    kind: "file",
+    dataURL: `data:text/plain;base64,${btoa(binary)}`,
+  }]);
+  assert(context.includes(body), "the full text body must reach the model-facing context (no 4000-char slice)");
+});
+
+Deno.test("validateRunAttachments: a 20 MiB attachment and 12 attachments are all kept (old caps: 8 MiB item / 8 count)", () => {
+  const payload = "A".repeat(20 * 1024 * 1024); // 20 MiB base64 payload — past the old 8 MiB item cap
+  const big = { name: "huge.png", type: "image/png", kind: "file", dataURL: `data:image/png;base64,${payload}` };
+  const many = Array.from({ length: 12 }, (_, i) => ({ name: `f${i}.png`, type: "image/png", kind: "file", dataURL: IMG }));
+  const { kept, dropped } = validateRunAttachments([big, ...many]);
+  assertEquals(kept.length, 13, "every well-formed attachment is kept — no item/total/count caps");
+  assertEquals(dropped.length, 0);
+  assertEquals(kept[0].dataURL.length, big.dataURL.length, "the dataURL is not truncated");
+});
+
+Deno.test("validateRunAttachments: malformed dataURL and type/MIME mismatch are still dropped + reported (shape validation is security)", () => {
+  const { kept, dropped } = validateRunAttachments([
+    { name: "bad.png", type: "image/png", dataURL: "not-a-data-url" },
+    { name: "relabel.png", type: "text/plain", dataURL: "data:image/png;base64,iVBORw0KGgo=" },
+    { name: "odd.png", type: "image/png", dataURL: "data:image/png;base64,ABC" }, // base64 length not % 4
+    { name: "fine.png", type: "image/png", dataURL: IMG },
+    { name: "no-url.txt", type: "text/plain" }, // no dataURL → nothing to validate
+  ]);
+  assertEquals(kept.length, 2);
+  assertEquals(dropped.length, 3);
+  assert(dropped.every((d) => typeof d.reason === "string" && d.reason.length > 0), "every drop is reported with a reason");
+});
+
+Deno.test("validateRunAttachments: declared type with parameters matches the parsed MIME essence", () => {
+  const { kept, dropped } = validateRunAttachments([
+    { name: "a.webm", type: "audio/webm;codecs=opus", dataURL: "data:audio/webm;base64,AAAA" },
+  ]);
+  assertEquals(kept.length, 1);
+  assertEquals(dropped.length, 0);
 });

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.25] — 2026-09-03
+- Attachments run uncapped: agent.run no longer drops items past 8 MiB/8-count (malformed dataURLs and type mismatches are still dropped and reported — that's safety, not size), text attachments reach the model whole instead of sliced at 4000 chars, and saved attachments keep their full data instead of going blank past 2 MiB
+
 ## [0.3.24] — 2026-09-03
 - agents tidy up after themselves — restored-window lifecycle tracking, keeper exclusions, and honest run-end notes
 
