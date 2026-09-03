@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.32] — 2026-09-03
+- Flip the hook fan-out security test to the dptw contract: the guard against arbitrary fan-out is known-recipe validation (kept), not a template byte cap (removed) — a large template on a known recipe now subscribes
+
 ## [0.3.31] — 2026-09-03
 - File attachments have no 8 MiB select-time refuse: any file you pick is read and attached — if the read or the send genuinely fails, the attachment still lands labelled with an honest error instead of a silent size rejection
 
