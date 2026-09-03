@@ -662,6 +662,13 @@
 
     /* ── activity overview sections ── */
     section { margin-bottom: 32px; }
+    /* The hub's left rail (#side) is a flex column whose own gap (4px) is the
+       ONLY spacing between its <section> children — the bare section margin
+       above must not stack 32px gaps onto them (owner report
+       chrome-agent-platform-suw3: a gap between flex elements that loses
+       space). Scoped to the rail: the main column's grid sections keep their
+       32px rhythm. */
+    #side section { margin-bottom: 0; }
     .runlog { display: flex; flex-direction: column; gap: 4px; }
     .runlog .empty { padding: 8px 14px; color: var(--muted); font-size: 13px; }
     .rl { display: flex; gap: 10px; align-items: baseline; padding: 6px 14px; border-bottom: 1px solid var(--border); }
