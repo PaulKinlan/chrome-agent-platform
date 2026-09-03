@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.41] — 2026-09-03
+- Running the whole unit suite the slow way is no longer possible: the repo points you at the fast npm commands instead
+
 ## [0.3.40] — 2026-09-03
 - The unit test suite finishes in about a quarter of the time: test files run in parallel, and very long text no longer stalls secret redaction
 

@@ -165,7 +165,8 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
 - **Test quickly while iterating; test fully once before pushing (Paul,
   2026-09-03).** The full unit suite is the PRE-PUSH gate, not the per-edit
   loop. Agents were running `deno test --allow-all tests/` (minutes, serial)
-  after every change; that is the wrong tool for iteration. The ladder:
+  after every change; that command is now refused by the repo (see Testing).
+  The ladder:
   1. `npm run test:file -- tests/<name>.test.ts` — the one file you are
      working in (seconds).
   2. `npm run test:changed` — every test that transitively imports what you
@@ -174,8 +175,8 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
      executable/config file has no reachable test, so a green subset is
      never a silent skip. `--base <ref>` compares against another ref.
   3. `npm test` — the full unit suite, once, before you push or report done.
-     Always go through the npm script rather than a raw `deno test tests/`,
-     so the suite runs with the repo's current gate configuration.
+     It is the only way to run the whole suite: a raw `deno test tests/` is
+     refused, and a raw single-file run finds no modules.
   Never weaken or skip a test to make a subset pass; the subset differs from
   the gate only in WHICH files run.
 - **Visual verification.** UI work is verified by driving the real UI in headless
@@ -234,8 +235,14 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
 
 ## Testing
 - npm test — the full pure/unit suite (two-phase: build/artifact tests serial,
-  everything else parallel; vj4s). `deno test -A tests/` still runs the same
-  files serially.
+  everything else parallel; vj4s, ~90 s). **A raw `deno test tests/` sweep is
+  refused** (Paul, 2026-09-04): `deno.jsonc` hides `tests/*.test.ts` from
+  discovery, so the sweep loads only `tests/00-use-npm-test_test.ts`, which
+  prints the runner commands and fails in under a second. The runners pass
+  `--config deno.runner.jsonc` and see every file. A raw
+  `deno test tests/x.test.ts` reports "No test modules found" — use
+  `npm run test:file -- tests/x.test.ts`. Do not add `--config deno.runner.jsonc`
+  to a sweep by hand; that is the runner's job.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
 - **Never name a debugging port.** Every harness in `scripts/` launches its

@@ -6,7 +6,7 @@
 //   node scripts/select-tests.mjs --base <ref>   compare against <ref> instead of origin/main
 //
 // WHY: the full suite (321 files) is the merge gate and stays exactly as it is
-// (`deno test -A tests/`). This is ADDITIVE tooling so a per-commit gate can run
+// (`npm test`, scripts/run-tests.mjs). This is ADDITIVE tooling so a per-commit gate can run
 // in well under a minute: a changed file (git diff vs origin/main) selects the
 // test files that transitively import it (static import graph), plus the always-on
 // core (security + vocabulary). FAIL CLOSED: a changed code/config file with no
@@ -211,13 +211,18 @@ function runDeno(files) {
   // regenerate shared build artifacts, spawn the Chrome-lock-bound security
   // runner, or materialize /tmp trees race under concurrency and produce false
   // reds). A subset must differ from the gate only in WHICH files run, never in
-  // how they run. The full suite stays `deno test -A tests/`.
-  const r = spawnSync("deno", ["test", "-A", ...files], { stdio: "inherit", cwd: ROOT });
+  // how they run. The full suite stays `npm test`.
+  const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...files], {
+    stdio: "inherit",
+    cwd: ROOT,
+    env: { ...process.env, CAP_TEST_RUNNER: "1" },
+  });
   process.exit(r.status ?? 1);
 }
 
 function runFullSuite() {
-  const r = spawnSync("deno", ["test", "-A", "tests/"], { stdio: "inherit", cwd: ROOT });
+  // The full suite is the two-phase runner (npm test), never a bare sweep.
+  const r = spawnSync(process.execPath, [join(ROOT, "scripts/run-tests.mjs")], { stdio: "inherit", cwd: ROOT });
   process.exit(r.status ?? 1);
 }
 
@@ -240,7 +245,7 @@ function main() {
   const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
   if (uncovered.length) {
     console.error(
-      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:\n  ${uncovered.join("\n  ")}\nRunning the FULL suite (deno test -A tests/) instead.`,
+      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:\n  ${uncovered.join("\n  ")}\nRunning the FULL suite (npm test) instead.`,
     );
     if (list) console.log("FULL_SUITE");
     else runFullSuite();

@@ -14,8 +14,11 @@
 // the parallel set (the safe default — a new build-artifact test that races
 // fails loudly and belongs in SERIAL with its reason).
 //
-// `deno test -A tests/` still works unchanged (serial, slower). Both commands
-// run the identical file set; this script is the merge gate via `npm test`.
+// A bare `deno test -A tests/` sweep is REFUSED (deno.jsonc excludes
+// tests/*.test.ts; tests/00-use-npm-test_test.ts prints the commands): agents
+// kept running the serial sweep per edit (Paul, 2026-09-04). The runner passes
+// --config deno.runner.jsonc to see every file.
+// This script is the merge gate via `npm test`; explicit files still run directly.
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
@@ -44,7 +47,11 @@ const parallel = all.filter((f) => !SERIAL.has(f));
 
 function run(files, flags, label) {
   const t0 = Date.now();
-  const r = spawnSync("deno", ["test", "-A", ...flags, ...files], { stdio: "inherit" });
+  const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
+    stdio: "inherit",
+    // The marker tests/00-use-npm-test_test.ts checks for.
+    env: { ...process.env, CAP_TEST_RUNNER: "1" },
+  });
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   console.log(`\nrun-tests: ${label} ${r.status === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
   return r.status ?? 1;
