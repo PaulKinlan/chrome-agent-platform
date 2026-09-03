@@ -277,20 +277,25 @@ Deno.test("r7 P1-1: an abort naming a run this worker is NOT running is REFUSED 
 
   // A DIFFERENT run is live: refuse the stale id AND leave the live run alone.
   // The mismatched abort is emitted in the SAME synchronous turn as the run
-  // kick (handleRun assigns activeRun before its first await), so the refusal
-  // deterministically exercises the WRONG-LIVE guard. Awaiting run-started
-  // first would yield while the fast demo settles and clears activeRun — the
-  // refusal would then pass through the no-live branch and prove nothing
-  // about the wrong-live case (review r8 P1-1).
+  // kick (handleRun assigns activeRun before its first await), and BOTH the
+  // run-started ack and the abort-refused reply are asserted SYNCHRONOUSLY —
+  // before the test's first await — pinning the refusal to the WRONG-LIVE
+  // guard rather than the no-active branch a yield would settle the fast demo
+  // into (review r9 P1-1: awaiting before the refusal check let a mutation
+  // moving the abort below an await pass through the no-live branch with the
+  // identical reply shape and every assertion still green — the synchronous
+  // assertions below are the direct RED guard on that ordering).
   port.emit({ type: "agent-worker:run", runId: RUN_ID, task: "say hello", modelKind: "demo", maxIterations: 2 });
   port.emit({ type: "agent-worker:abort", runId: OTHER_RUN_ID });
-  assert(await until(() => find(port.sent, "agent-worker:run-started")), "run must start");
-  const refused2 = await until(() => [...port.sent].reverse().find((m) => m?.type === "agent-worker:abort-refused" && m?.runId === OTHER_RUN_ID));
-  assert(refused2, "an abort naming the wrong runId must be refused while another run is live (r6: it aborted the WRONG run)");
+  assert(find(port.sent, "agent-worker:run-started"), "the run kick must ack run-started synchronously, before the test's first await");
+  const refused2 = [...port.sent].reverse().find((m) => m?.type === "agent-worker:abort-refused" && m?.runId === OTHER_RUN_ID);
+  assert(refused2, "the wrong-run abort must be refused SYNCHRONOUSLY while the run is still live (r6: it aborted the WRONG run)");
   assertEquals(refused2.runId, OTHER_RUN_ID);
   assertEquals(refused2.error, "run_not_live");
-  const aborted = [...port.sent].find((m) => m?.type === "agent-worker:aborted");
-  assert(!aborted, "the wrong-run abort must never be acknowledged as aborted");
+  assert(!find(port.sent, "agent-worker:aborted"), "the wrong-run abort must never be acknowledged as aborted");
+  // Only run completion is awaited now — the wrong-live refusal was already
+  // asserted without yielding, so moving the abort emission below an await
+  // can no longer route the refusal through the no-active branch unnoticed.
   const done = await until(() => find(port.sent, "agent-worker:run-done"));
   assert(done, "the live run must still settle");
   assertEquals(done.ok, true, "the live run must COMPLETE — the refused abort must not have cancelled it");

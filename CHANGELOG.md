@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.24] — 2026-09-03
+- The wrong-run abort test now asserts the refusal in the same instant the run starts, before any pause, so it always exercises the guard against the run that is still live
+
+## [0.3.23] — 2026-09-03
+- The wrong-run abort test now asserts the refusal in the same instant the run starts, before any pause, so it always exercises the guard against the run that is still live
+
 ## [0.3.22] — 2026-09-03
 - Make the wrong-run abort test deterministically exercise the wrong-live guard
 
