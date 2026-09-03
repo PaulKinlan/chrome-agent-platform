@@ -88,40 +88,29 @@ Deno.test("full response: the terminal commit path also stores the complete text
   assert(last.content.endsWith("foxtrot. "), "the final characters of the response are present");
 });
 
-Deno.test("full response: an OVER-budget message (beyond the cap) is never silently truncated", async () => {
+Deno.test("full response (dptw): a message past the removed 240 KiB cap is stored WHOLE", async () => {
   const huge = "x".repeat((240 * 1024) + 2000);
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content: huge });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  assert(last.content.includes("truncated to 240 KiB"), "the truncation marker is present (never silent)");
-  assert(last.content.includes("remainder was not retained"), "a row with no durable copy says honestly that the tail is lost (kmpq)");
+  assertEquals(last.content, huge, "dptw: no truncation, no marker — the whole response persists");
 });
 
-Deno.test("full response: the cap is UTF-8 BYTES, not chars — multi-byte content cannot bust the store bound (r1 B2)", async () => {
-  // 90,000 emoji = 180,000 UTF-16 units = 360,000 UTF-8 bytes (4 bytes each) —
-  // over the 240 KiB byte cap but far under it in CHAR count. The store must
-  // hold a byte-fit slice, and the stored value must stay under the memory
-  // store's 256 KiB per-value bound.
-  const emoji = "\u{1F600}".repeat(90_000); // 360,000 bytes
+Deno.test("full response (dptw): multi-byte content of ANY byte size stores whole", async () => {
+  // 90,000 emoji = 360,000 UTF-8 bytes — past the removed 240 KiB cap.
+  const emoji = "\u{1F600}".repeat(90_000);
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content: emoji });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  const bytes = new TextEncoder().encode(last.content).byteLength;
-  assert(bytes <= 240 * 1024, `multi-byte content must be capped in UTF-8 bytes (stored ${bytes} bytes > 240 KiB)`);
-  assert(last.content.includes("truncated to 240 KiB"), "the multi-byte over-cap response carries the never-silent marker");
-  // The stored thread value must be under the store's 256 KiB per-value bound.
-  const serialized = new TextEncoder().encode(JSON.stringify(stored.messages)).byteLength;
-  assert(serialized <= 256 * 1024, `thread messages must stay under the store bound (${serialized} bytes)`);
-  // A multi-byte response BELOW the cap stores byte-complete.
-  const okEmoji = "\u{1F600}".repeat(45_000); // 90,000 UTF-16 units = 180,000 bytes < 240 KiB
+  assertEquals(last.content, emoji, "dptw: 360 KiB of emoji persists whole — no byte cap, no surrogate-split clip");
+  // A smaller multi-byte response stores byte-complete too.
+  const okEmoji = "\u{1F600}".repeat(45_000);
   const t2 = await createThread("seed");
   await appendThreadMessage(t2.id, { role: "assistant", content: okEmoji });
   const stored2 = await getThread(t2.id);
-  const last2 = stored2.messages.at(-1);
-  const bytes2 = new TextEncoder().encode(last2.content).byteLength;
-  assertEquals(bytes2, 180_000, "a below-cap multi-byte response stores byte-complete");
+  assertEquals(stored2.messages.at(-1).content, okEmoji, "byte-complete");
 });
 
 Deno.test("full response: the SIDEBAR error preview stays a small bounded preview (r1 B3)", async () => {

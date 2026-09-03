@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.30] — 2026-09-03
+- dptw phase 2 (storage): full-suite fixture fallout fixes
+
 ## [0.3.29] — 2026-09-03
 - dptw phase 2 (storage): usage ledger + quarantine caps removed (S17); S16 verified not-a-cap
 

@@ -255,14 +255,13 @@ Deno.test("P1-b: audit fail-closed & rollback compensation on delete/clear/set f
   assert(delIoRes.error.includes("injected deletion IO error"));
 });
 
-Deno.test("P1-a: validateProfileGrants strictly validates array bounds, non-arrays, and null", () => {
-  // Array over MAX_PROFILE_GRANTS_INPUT (32) is rejected
+Deno.test("P1-a (dptw): validateProfileGrants validates shape (non-arrays, null) but has NO count bound", () => {
+  // dptw: a 35-entry grant list is accepted (the 32 input cap is gone).
   const hugeGrants = Array.from({ length: 35 }, () => "profile:basic");
   const rHuge = validateProfileGrants(hugeGrants);
-  assertEquals(rHuge.ok, false);
-  assert(rHuge.error.includes("exceeds maximum allowed length"));
+  assertEquals(rHuge.ok, true, "dptw: no input count cap");
 
-  // null and primitives rejected
+  // null and primitives rejected (shape validation stays)
   assertEquals(validateProfileGrants(null).ok, false);
   assertEquals(validateProfileGrants("profile:basic").ok, false);
   assertEquals(validateProfileGrants(12345).ok, false);

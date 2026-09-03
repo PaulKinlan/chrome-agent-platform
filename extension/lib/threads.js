@@ -84,6 +84,13 @@ function utf8Bytes(str) {
 }
 
 /** A short preview for the index (first line, bounded). */
+/** The sidebar's error snippet: a derived UI affordance clipped for display.
+ * The FULL error text is always in the thread body — nothing is lost. */
+function sidebarErrorSnippet(text) {
+  const s = boundText(text); // redacted, whole
+  return s.length > 1024 ? s.slice(0, 1023) + "…" : s; // marker included in the 1024 budget
+}
+
 function previewOf(text) {
   // A leading "[… model]" transport tag (the demo model's marker) is never
   // something a person should read in the sidebar; a person's own bracketed
@@ -562,7 +569,7 @@ export async function commitThreadTerminal(id, executionId, terminal) {
       // The SIDEBAR error preview stays a small bounded preview (a list
       // surface) — the durable/terminal-commit path is covered too, like the
       // recordThreadError path (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
-      else row.error = boundText(committedTerminal.content, 1024);
+      else row.error = sidebarErrorSnippet(committedTerminal.content);
       await writeIndex(index);
     }
     return thread;
@@ -680,7 +687,7 @@ export async function recordThreadError(id, detail) {
       row.status = "error";
       // The SIDEBAR preview stays a small bounded preview (a list surface) —
       // never the full message text (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B3).
-      const sidebarPreview = boundText(message, 1024);
+      const sidebarPreview = sidebarErrorSnippet(message);
       row.error = sidebarPreview;
       row.preview = sidebarPreview;
       row.updatedAt = thread.updatedAt;

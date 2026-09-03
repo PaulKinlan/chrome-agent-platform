@@ -147,15 +147,14 @@ Deno.test("named-agent.set-provider ROUTE: blank same-provider Save preserves th
   assert(rCreateObj?.error?.includes("must be a string"));
   assertEquals(await getPendingCount(), initialPending, "malformed create creates NO pending approval");
 
-  // (b) CREATE with 33 grant entries (> 32 bound) -> fails closed, NO pending approval
+  // (b) dptw: 33 grant entries (past the removed 32 bound) are ACCEPTED — the
+  // approval flow proceeds (the grant membership validation is unchanged).
   const rCreateHuge = await dispatch({
     type: "named-agent.create",
-    name: "Invalid Grants Huge",
+    name: "Valid Grants Huge",
     profileGrants: Array.from({ length: 33 }, () => "profile:basic"),
   });
-  assertEquals(rCreateHuge?.ok, false);
-  assert(rCreateHuge?.error?.includes("exceeds maximum allowed length"));
-  assertEquals(await getPendingCount(), initialPending, "oversized create creates NO pending approval");
+  assertEquals(rCreateHuge?.ok === false, false, `dptw: no grant-count refusal (${JSON.stringify(rCreateHuge).slice(0, 120)})`);
 
   // (c) CREATE with null profileGrants -> fails closed, NO pending approval
   const rCreateNull = await dispatch({
@@ -187,15 +186,21 @@ Deno.test("named-agent.set-provider ROUTE: blank same-provider Save preserves th
   assert(rUpdateObj?.error?.includes("must be a string"));
   assertEquals(await getPendingCount(), initialPending, "malformed update creates NO pending approval");
 
-  // (f) UPDATE with 33 grant entries -> fails closed, NO pending approval
+  // (f) dptw: UPDATE with 33 grant entries (past the removed 32 bound) is
+  // NOT refused on size (it may still route through the approval flow).
   const rUpdateHuge = await dispatch({
     type: "named-agent.update",
     id: "route-test-agent",
     profileGrants: Array.from({ length: 33 }, () => "profile:basic"),
   });
-  assertEquals(rUpdateHuge?.ok, false);
-  assert(rUpdateHuge?.error?.includes("exceeds maximum allowed length"));
-  assertEquals(await getPendingCount(), initialPending, "oversized update creates NO pending approval");
+  assert(!(rUpdateHuge?.ok === false && rUpdateHuge?.error?.includes("exceeds maximum allowed length")),
+    `dptw: no grant-count refusal (${JSON.stringify(rUpdateHuge).slice(0, 120)})`);
+  // The accepted huge update went through the approval flow — drain WHATEVER
+  // is pending so the null-case pending-count pin below stays relative.
+  const pendingAfterHuge = await dispatch({ type: "management.pending-approvals" });
+  for (const ap of pendingAfterHuge?.approvals ?? []) {
+    await dispatch({ type: "management.resolve-approval", approvalId: ap.approvalId, approve: false });
+  }
 
   // (g) UPDATE with null profileGrants -> fails closed, NO pending approval
   const rUpdateNull = await dispatch({
