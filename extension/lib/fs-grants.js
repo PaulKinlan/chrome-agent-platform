@@ -25,9 +25,9 @@ import { newId } from "./pure.js";
 // dptw (2026-09-03): no size/count ceilings on granted-folder operations —
 // reads, writes, listings, searches and grep all carry complete data at any
 // size. The path TRAVERSAL guard (cleanRelativePath) is security and stays.
-// grep bounds: a recursive content search over a granted directory has to stay
-// cheap and terminate. Matches, files scanned, per-file size, and line length
-// are all capped; oversized/binary files are skipped, never decoded as garbage.
+// grep: no match/file/line caps — matches of any size and count are returned
+// whole. Only BINARY files are skipped (never decoded as garbage); that skip
+// is content correctness, not a size bound.
 
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;

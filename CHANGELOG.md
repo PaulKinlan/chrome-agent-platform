@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.31] — 2026-09-03
+- dptw review P2s: fs-grants grep comment, lastError preview honesty, surrogate test flip
+
 ## [0.3.30] — 2026-09-03
 - dptw phase 2 (storage): full-suite fixture fallout fixes
 

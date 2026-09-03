@@ -142,32 +142,30 @@ Deno.test("full response: the durable/terminal-commit path also bounds the SIDEB
   assert(row.preview.length <= 165, "the durable-error sidebar preview stays a preview");
 });
 
-Deno.test("full response: the byte-cap cut never splits a UTF-16 surrogate pair (r2 B5)", async () => {
-  // Content whose UTF-8 bytes slightly exceed the 240 KiB cap, with emoji
-  // (surrogate pairs) deliberately placed where the byte boundary lands. The
-  // stored slice must not end with a lone high surrogate.
+Deno.test("full response (dptw): content past the removed 240 KiB cap stores WHOLE with surrogate pairs intact", async () => {
+  // dptw: there is no byte-cap cut anymore — the whole string persists. The
+  // fixture keeps emoji (surrogate pairs) straddling where the old 240 KiB
+  // boundary fell, so a regression to any cut would split a pair and fail.
   const base = "The quick brown fox jumps over the lazy dog. ";
-  const filler = "a".repeat(240 * 1024 - 30); // just under the cap in bytes
-  const emojiTail = "\u{1F600}".repeat(40) + "z"; // 4-byte emoji straddling the boundary
-  const content = filler + emojiTail;
+  const filler = "a".repeat(240 * 1024 - 30); // where the removed cap used to land
+  const emojiTail = "\u{1F600}".repeat(40) + "z"; // 4-byte emoji straddling that boundary
+  const content = base + filler + emojiTail;
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  // The slice must be a valid code-point boundary: no lone high surrogate at
-  // the end (the cut can fall inside a surrogate pair).
+  assertEquals(last.content, content, "dptw: the whole response persists past the removed cap — no cut at all");
   const lastChar = last.content.charCodeAt(last.content.length - 1);
   assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
-    `the cut left a lone high surrogate (last code unit 0x${lastChar.toString(16)})`);
-  // Every code point decodes cleanly (no replacement chars from split pairs).
+    `a lone high surrogate survived (last code unit 0x${lastChar.toString(16)})`);
   const decoded = new TextDecoder().decode(new TextEncoder().encode(last.content));
-  assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair survived");
-  // A below-cap response with the same emoji stores byte-complete and whole.
+  assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair");
+  // A smaller emoji response stores byte-complete and whole too.
   const small = "\u{1F600}".repeat(100);
   const t2 = await createThread("seed");
   await appendThreadMessage(t2.id, { role: "assistant", content: small });
   const stored2 = await getThread(t2.id);
   const last2 = stored2.messages.at(-1);
-  assertEquals(last2.content.length, 200, "below-cap emoji stores whole (200 UTF-16 units)");
+  assertEquals(last2.content.length, 200, "emoji stores whole (200 UTF-16 units)");
   assertEquals(last2.content.charCodeAt(199), 0xDE00, "the pair's low surrogate is intact at the end");
 });

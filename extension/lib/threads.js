@@ -541,13 +541,16 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     if (thread.status === "done") {
       delete thread.lastError;
     } else {
-      // lastError is a DIAGNOSTIC summary surface, not the reader: it must
-      // stay a small bounded preview so the full error text (in the message
-      // row, the task view's source) is not stored twice and the thread value
-      // cannot blow the memory store's per-value bound
+      // lastError is a DIAGNOSTIC summary surface, not the reader: it holds a
+      // bounded 4 KiB preview (redacted, ellipsis-marked) — the FULL error
+      // text lives in the thread's message row, so nothing is lost and the
+      // duplicate stays small
       // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
       thread.lastError = {
-        message: boundText(committedTerminal.content, 4 * 1024),
+        message: (() => {
+          const s = boundText(committedTerminal.content); // redacted, whole
+          return s.length > 4096 ? s.slice(0, 4095) + "…" : s; // marker included in the 4 KiB budget
+        })(),
         tool: committedTerminal.tool ?? null,
         category: committedTerminal.category ?? "error",
         reason: committedTerminal.reason ?? null,
