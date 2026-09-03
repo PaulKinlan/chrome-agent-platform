@@ -46,6 +46,19 @@
         throw new Error("request to https://api.internal.example/search?token=sk-live-abcdef123456 failed; sent Authorization: Bearer sk-live-abcdef123456");
       });
 
+      // The ajcc review P1 cases — redaction parity with lib/pure.js
+      // redactSecretText: keyword-adjacent assignments, and URL userinfo +
+      // query + fragment.
+      define("fail_kw_assignment", "Throws an error with a keyword-assigned token", { type: "object", properties: {} }, () => {
+        throw new Error("upstream rejected the write: token=hunter2hunter2");
+      });
+      define("fail_kw_password", "Throws an error with a keyword-assigned password", { type: "object", properties: {} }, () => {
+        throw new Error("login failed for the account: password=hunter2 retry later");
+      });
+      define("fail_userinfo_url", "Throws an error with a userinfo URL carrying query and fragment", { type: "object", properties: {} }, () => {
+        throw new Error("fetch https://user:hunter2@example.com/x?y=1#frag failed with 401");
+      });
+
       // A handler whose RESULT cannot cross the bridge — structured cloning
       // rejects functions and DOM nodes. Pre-fix the postMessage DataCloneError
       // was mislabeled as a handler failure ("tool failed (DOMException:

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.27] — 2026-09-03
+- Site-tool error redaction reaches parity with the provider-error redaction — keyword-assigned secrets, URL passwords, and URL fragments can no longer leak through an honest page error (review P1; focused gates only — contained redaction+fixture change per reviewer)
+
+## [0.3.26] — 2026-09-03
+- site-tool error redaction reaches parity with the provider-error redaction — keyword-assigned secrets, URL passwords, and URL fragments can no longer leak through an honest page error (review P1; focused gates only — contained redaction+fixture change per reviewer)
+
 ## [0.3.25] — 2026-09-03
 - Site tools that fail now say why: the page's error name, a short redacted excerpt, where it happened (realm + origin), and which stage failed replace the bare 'DOMException: UnknownError'; a result the bridge cannot carry reports itself instead of looking like the handler failed
 

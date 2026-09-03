@@ -207,6 +207,40 @@ try {
     typeof te?.errorDetail?.stack === "string" && te.errorDetail.stack.includes("/errors"),
     String(te?.errorDetail?.stack ?? "").slice(0, 200));
 
+  // 8b. The ajcc review-P1 redaction-parity cases: keyword-adjacent
+  //     assignments and userinfo URLs must not leak either.
+  const kwToken = await invoke("fail_kw_assignment");
+  evidence.fail_kw_assignment = kwToken;
+  check("fail_kw_assignment: keyword-assigned token is masked, the cause still surfaces",
+    typeof kwToken?.error === "string" &&
+    !kwToken.error.includes("hunter2hunter2") &&
+    kwToken.error.includes("token=[REDACTED]") &&
+    kwToken.error.includes("upstream rejected"),
+    kwToken?.error);
+  const kwPass = await invoke("fail_kw_password");
+  evidence.fail_kw_password = kwPass;
+  check("fail_kw_password: keyword-assigned password is masked, surrounding prose intact",
+    typeof kwPass?.error === "string" &&
+    !kwPass.error.includes("hunter2") &&
+    kwPass.error.includes("password=[REDACTED]") &&
+    kwPass.error.includes("retry later"),
+    kwPass?.error);
+  const userinfo = await invoke("fail_userinfo_url");
+  evidence.fail_userinfo_url = userinfo;
+  check("fail_userinfo_url: userinfo password masked AND query and fragment stripped",
+    typeof userinfo?.error === "string" &&
+    !userinfo.error.includes("hunter2") &&
+    userinfo.error.includes("[REDACTED]@") &&
+    !userinfo.error.includes("y=1") &&
+    !userinfo.error.includes("#frag") &&
+    userinfo.error.includes("…[query redacted]") &&
+    userinfo.error.includes("401"),
+    userinfo?.error);
+  check("P1 cases: errorDetail messages carry no leaked value either",
+    ![kwToken, kwPass, userinfo].some((r) =>
+      String(r?.errorDetail?.message ?? "").includes("hunter2") ||
+      String(r?.errorDetail?.stack ?? "").includes("hunter2")),
+    [kwToken?.errorDetail?.message, kwPass?.errorDetail?.message, userinfo?.errorDetail?.message]);
   // 8. Credential shapes in a page error stay redacted (round-30 preserved).
   const leaky = await invoke("fail_leaky");
   evidence.fail_leaky = leaky;

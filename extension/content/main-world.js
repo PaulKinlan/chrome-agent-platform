@@ -314,11 +314,16 @@
   }
 
   // Page-thrown exception text is attacker-controlled and may embed secrets —
-  // so it is redacted (URL query strings, Bearer/Basic values, well-known
-  // credential shapes — the same classes lib/pure.js redactSecretText and
-  // lib/error-report.js maskCredentialShapes mask; this file is a plain
-  // injected script and cannot import them) and BOUNDED before it crosses the
-  // bridge. But a bare "DOMException: UnknownError" is a defect
+  // so it is redacted and BOUNDED before it crosses the bridge. The redaction
+  // below is a FAITHFUL PORT of lib/pure.js redactSecretText (NFKC; URL query
+  // AND fragment strip; Bearer/Basic values; URL userinfo passwords;
+  // keyword-adjacent credential shapes; generic keyword assignment) plus
+  // lib/error-report.js maskCredentialShapes (standalone well-known key
+  // shapes) — this file is a plain injected script (chrome.scripting
+  // executeScript `files:`) and cannot import either module, so the logic is
+  // duplicated. KEEP IN SYNC: extension/lib/pure.js redactSecretText carries
+  // the reverse pointer; a change to the passes must land in both places.
+  // But a bare "DOMException: UnknownError" is a defect
   // (chrome-agent-platform-ajcc: the owner's search_docs failure was
   // undiagnosable by construction): the agent-visible error now carries the
   // REAL error name, a bounded redacted message excerpt, a bounded stack
@@ -327,12 +332,31 @@
   // errorDetail.pageControlled marks the text as untrusted page data, exactly
   // like any tool RESULT the page returns.
   function redactBridgeText(text, max = 300) {
-    let out = String(text ?? "");
-    // URL query strings can hide reflected credentials — strip them.
-    out = out.replace(/(https?:\/\/[^\s)"'`]+)\?[^\s)"'`]*/gi, "$1?…");
-    // Bearer/Basic header values.
-    out = out.replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{6,}/gi, "$1 [REDACTED]");
-    // Well-known credential shapes standing alone (mirrors maskCredentialShapes).
+    let out = String(text ?? "").normalize("NFKC");
+    // Embedded URL queries AND fragments: strip wholesale (any unrecognized
+    // credential param) — BEFORE the shape passes so URL tails never hide a
+    // match (the pure.js _stripUrlQueries pass).
+    out = out.replace(/https?:\/\/[^\s"'<>)]+/gi, (m) => {
+      const cut = m.search(/[?#]/);
+      return cut >= 0 ? m.slice(0, cut) + "…[query redacted]" : m;
+    });
+    // Bearer/Basic credentials in text + URL userinfo passwords.
+    out = out.replace(/(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [REDACTED]");
+    out = out.replace(/([a-z][a-z0-9+.-]*:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
+    // A bounded keyword followed by a credential SHAPE (colon/quote OR bare
+    // whitespace): `api_key=…`, `bad key sk-…`, `key: ghp_…`.
+    out = out.replace(
+      /((?<![a-z0-9])(?:api[_-]?key|access[_-]?key|key|token|secret|password|authorization|credential|bearer)(?![a-z0-9])["'`]?\s*[:=]?\s*["'`]?\s*)((?:sk|rk|pk|key|tok|ghp|gho|xox|AIza|sig)[A-Za-z0-9_-]{3,}|Bearer\s+\S{8,})/gi,
+      "$1[REDACTED]",
+    );
+    // Generic assignment redaction (keyword + separator + any 6+ char value):
+    // `token=hunter2hunter2`, `password: hunter2`.
+    out = out.replace(
+      /((?<![a-z0-9])(?:api[_-]?key|token|secret|password|authorization|credential|access[_-]?key)(?![a-z0-9])["'`]?\s*[:=]\s*["'`]?)([^\s"'`,;}]{6,})/gi,
+      "$1[REDACTED]",
+    );
+    // Standalone well-known credential SHAPES with no keyword context (the
+    // lib/error-report.js maskCredentialShapes pass).
     out = out.replace(/\b(?:sk|rk|pk|xai|gsk|ghp|gho|xox[a-z]?|AIza|sk-ant|sk-proj)[-_][A-Za-z0-9_*.-]{6,}/g, "[REDACTED]");
     out = out.trim();
     return out.length > max ? out.slice(0, max) + "…" : out;

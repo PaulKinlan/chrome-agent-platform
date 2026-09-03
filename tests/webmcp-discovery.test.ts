@@ -278,7 +278,7 @@ Deno.test("webmcp invoke: page exception bodies are REDACTED from the result", a
   assertEquals(results.length, 1);
   assertEquals(results[0].ok, false);
   assert(!String(results[0].error).includes("sk-secret"), "the page-thrown secret never crosses the bridge");
-  assert(String(results[0].error).includes("Error"), "an allowlisted error name is reported");
+  assert(String(results[0].error).includes("Error"), "the thrown error's real name is reported honestly");
 });
 
 Deno.test("webmcp cancellation: disenroll while a promise tool runs discards the result (inFlight regression)", async () => {
@@ -405,7 +405,7 @@ Deno.test("webmcp invoke: a genuine DOMException surfaces its name AND a bounded
   assert(err.includes("quota exceeded"), `message excerpt crosses: ${err}`);
   assert(!err.includes("sk-live-999999"), `credential shape redacted: ${err}`);
   assert(err.includes("[REDACTED]"), `redaction marker present: ${err}`);
-  assert(err.includes("?…"), `URL query stripped: ${err}`);
+  assert(err.includes("…[query redacted]"), `URL query stripped: ${err}`);
   const d = results[0].errorDetail;
   assertEquals(d?.phase, "dispatch");
   assertEquals(d?.pageControlled, true);
@@ -446,6 +446,29 @@ Deno.test("webmcp invoke: UnknownError now carries the cause honestly; page diag
   assertEquals(world.warnings[0][0], "[WebMCP:main]");
   assertEquals(world.warnings[0][2], { tool: "lookup", argsShape: "{ accountId, options }" });
   assertEquals(world.warnings[0][3], thrown, "the page's original error object preserves message and stack detail page-locally");
+});
+
+Deno.test("webmcp invoke: redaction parity with pure.js — keyword assignments, userinfo URLs, fragments (ajcc review P1)", async () => {
+  // The bridge redaction is a faithful port of lib/pure.js redactSecretText:
+  // keyword-adjacent assignments and userinfo/query/fragment URL credentials
+  // must never cross, while the honest cause does.
+  function kw() { throw new Error("upstream rejected the write: token=hunter2hunter2"); }
+  function pw() { throw new Error("login failed for the account: password=hunter2 retry later"); }
+  function url() { throw new Error("fetch https://user:hunter2@example.com/x?y=1#frag failed with 401"); }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [kw, pw, url], DOMException: globalThis.DOMException } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  const [rKw] = await invokeTool(world, { name: "kw", source: "inferred" });
+  const eKw = String(rKw.error);
+  assert(!eKw.includes("hunter2hunter2") && eKw.includes("token=[REDACTED]") && eKw.includes("upstream rejected"), `keyword-assigned token masked: ${eKw}`);
+  const [rPw] = await invokeTool(world, { name: "pw", source: "inferred", requestId: "r2" });
+  const ePw = String(rPw.error);
+  assert(!ePw.includes("hunter2") && ePw.includes("password=[REDACTED]") && ePw.includes("retry later"), `keyword-assigned password masked: ${ePw}`);
+  const [rUrl] = await invokeTool(world, { name: "url", source: "inferred", requestId: "r3" });
+  const eUrl = String(rUrl.error);
+  assert(!eUrl.includes("hunter2") && eUrl.includes("[REDACTED]@"), `userinfo password masked: ${eUrl}`);
+  assert(!eUrl.includes("y=1") && !eUrl.includes("#frag") && eUrl.includes("…[query redacted]"), `query AND fragment stripped: ${eUrl}`);
+  assert(eUrl.includes("401"), `the honest cause survives: ${eUrl}`);
 });
 
 Deno.test("webmcp invoke: a crafted DOMException name crosses as bounded inert TEXT (ajcc — honesty over name-allowlisting)", async () => {

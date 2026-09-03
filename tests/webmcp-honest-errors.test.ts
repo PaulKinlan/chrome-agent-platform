@@ -23,11 +23,14 @@ Deno.test("honest errors: the bridge composes a bounded honest description, not 
   assert(MAIN.includes("with no message"), "a messageless page error is reported as exactly that");
 });
 
-Deno.test("honest errors: page text is still credential-redacted before it crosses (round-30 preserved)", () => {
+Deno.test("honest errors: page text is still credential-redacted before it crosses (round-30 preserved + ajcc-P1 parity)", () => {
   assert(MAIN.includes("function redactBridgeText("), "the redaction choke point exists");
-  assert(MAIN.includes("?…"), "URL query strings are stripped (reflected credentials)");
+  assert(MAIN.includes("…[query redacted]") && MAIN.includes("/[?#]/"), "URL queries AND fragments are stripped (reflected credentials)");
   assert(MAIN.includes("bearer|basic"), "Bearer/Basic values are masked");
+  assert(MAIN.includes(":\\/\\/[^:\\/\\s]+:"), "URL userinfo passwords are masked");
+  assert(MAIN.includes("api[_-]?key|token|secret|password"), "generic keyword assignment is masked (token=hunter2hunter2)");
   assert(MAIN.includes("sk-ant"), "well-known credential shapes are masked");
+  assert(MAIN.includes("redactSecretText"), "the port declares its source of truth (keep-in-sync pointer)");
   // The old strip-everything posture is gone BY OWNER DIRECTIVE (ajcc) —
   // replaced by redact-and-carry, not by carry-everything.
   assert(!MAIN.includes("SAFE_DOMEXCEPTION_NAMES"), "the allowlist-name-only redaction is superseded");
@@ -63,10 +66,17 @@ Deno.test("honest errors: the tools.invoke route forwards errorDetail + reason +
   assert(route.includes("out.detail = res.detail"), "the route forwards the SW's own detail");
 });
 
-Deno.test("honest errors: the failure-mode fixture declares all six tools", () => {
-  for (const name of ["happy_echo", "fail_named", "fail_bare", "fail_typeerror", "fail_leaky", "return_noncloneable"]) {
+Deno.test("honest errors: the failure-mode fixture declares all nine tools", () => {
+  for (const name of ["happy_echo", "fail_named", "fail_bare", "fail_typeerror", "fail_leaky", "fail_kw_assignment", "fail_kw_password", "fail_userinfo_url", "return_noncloneable"]) {
     assert(FIXTURE.includes(`"${name}"`), `fixture declares ${name}`);
   }
   assert(FIXTURE.includes('"QuotaExceededError"'), "the named-DOMException fixture uses QuotaExceededError");
   assert(FIXTURE.includes("sk-live-abcdef123456"), "the leaky fixture embeds a credential shape the redaction must catch");
+  assert(FIXTURE.includes("token=hunter2hunter2") && FIXTURE.includes("password=hunter2"), "the P1 keyword-assignment fixtures embed plain values the redaction must catch");
+  assert(FIXTURE.includes("user:hunter2@example.com/x?y=1#frag"), "the P1 userinfo fixture embeds the URL credential the redaction must catch");
+});
+
+Deno.test("honest errors: pure.js carries the reverse keep-in-sync pointer", async () => {
+  const PURE = await Deno.readTextFile(new URL("../extension/lib/pure.js", import.meta.url));
+  assert(PURE.includes("redactBridgeText"), "redactSecretText names its content-script port so the two stay in sync");
 });
