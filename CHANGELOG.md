@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.28] — 2026-09-03
+- dptw phase 2 (storage): named-agent + agent-card limits removed (S18)
+
 ## [0.3.27] — 2026-09-03
 - dptw phase 2 (storage): profile-store, artifact version bytes, system-prompt override caps (S11, S12-bytes, S19)
 
