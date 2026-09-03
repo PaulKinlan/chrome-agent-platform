@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.18] — 2026-09-03
+- AGENTS.md: beads is the only task tracker — the rewrite re-lands (it was lost in a merge with the other coordinator's line), with the fleet mandate, beads best practices, and the beads-flow skill reference
+
 ## [0.3.17] — 2026-09-03
 - The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
 
