@@ -1,26 +1,27 @@
 // tests/workflows-revise.test.ts — the R2 falsification gates for the
-// workflows-to-memory review (chrome-agent-platform-9ve7, REVISE round). One
-// finding per test family:
+// workflows-to-memory review (chrome-agent-platform-9ve7, REVISE round), with
+// the dptw de-cap inversions (9ve7-land): one finding per test family:
 //   1. workflow.run is approvable + source-disclosing, and the REAL approval
 //      path (pending card → owner approves → sandbox executes) works.
 //   2. a NESTED tool-result failure ({ok:false}/{error} inside the lazy
 //      outer-ok envelope) fails the step and BLOCKS later pipeline steps.
 //   3. an owner-approval-gated step fails closed PRE-dispatch (zero tool
 //      execution, zero approval events), never raising a mid-pipeline card.
-//   4. the workflows: namespace is reserved from memory_set and stored records
-//      are revalidated against WORKFLOW_BOUNDS before approval/sandboxing.
+//   4. the workflows: namespace is reserved from memory_set; stored records
+//      are revalidated for SHAPE before approval/sandbox — never for SIZE
+//      (dptw: a large shape-valid record plans and runs whole).
 //   5. save_workflow mirrors memory_set's POST-write ownership fence with
 //      version-scoped restore/delete compensation.
-//   6. the declared 128-workflow per-origin bound is enforced on save: NEW-key
-//      saves are refused past the bound, count+create are atomic per store
-//      under concurrency, and an unprovable count (store cannot enumerate)
-//      FAILS CLOSED. Overwrites never count and still work at the bound.
+//   6. NO per-origin workflow count (dptw): the 129th+ workflow saves,
+//      concurrent new-key saves both commit, and a store that cannot
+//      enumerate its keys still saves (enumeration is not a precondition).
 //
-// FALSIFICATION: every test below is RED on the pre-fix code — the module
-// import fails (new exports), workflow.run is refused by createPendingApproval
-// ("operation is not approvable"), nested step failures return ok:true, gated
-// steps dispatch, memory_set writes workflows: keys, an aborted save keeps its
-// write, and the 129th workflow saves.
+// FALSIFICATION: every test below is RED on the tree it gates against — the
+// module import fails pre-feature, workflow.run is refused by
+// createPendingApproval ("operation is not approvable"), nested step failures
+// return ok:true, gated steps dispatch, memory_set writes workflows: keys, an
+// aborted save keeps its write — and on the CAPPED 9ve7 tree every dptw
+// past-bound test is RED ("exceeds" / "limit reached" refusals).
 // @ts-nocheck — shims + toolset composition are intentionally dynamic.
 
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
@@ -49,7 +50,6 @@ import {
   workflowRunPlan,
   createWorkflowPipelineDispatcher,
   PIPELINE_STEP_OWNER_APPROVAL_TOOLS,
-  WORKFLOW_BOUNDS,
 } from "../extension/lib/workflows.js";
 import { workflowsToolset, memoryToolset } from "../extension/lib/agent.js";
 
@@ -339,7 +339,7 @@ Deno.test("REVISE-3: a gated step inside a REAL pipeline halts it with zero late
   assertEquals(calls.length, 0, "no step after the gated one (or the gated one) may execute");
 });
 
-// ── 4. workflows: namespace reserved from memory_set; records revalidated ────
+// ── 4. workflows: namespace reserved from memory_set; shape revalidated ─────
 
 Deno.test("REVISE-4: memory_set REFUSES the workflows: namespace (honest error)", async () => {
   const mem = makeMemory();
@@ -354,38 +354,44 @@ Deno.test("REVISE-4: memory_set REFUSES the workflows: namespace (honest error)"
   assert(ok.ok);
 });
 
-Deno.test("REVISE-4: an oversized forged record fails the run plan BEFORE approval/sandbox", async () => {
-  // workflowRunPlan is the choke point both run paths consume first.
-  const forged = workflowRunPlan({ name: "evil", kind: "script-js", content: "x".repeat(200 * 1024) });
-  assert(!forged.ok, "a >64 KiB forged script body must fail closed at plan time");
-  assertStringIncludes(String(forged.error), "exceeds");
-  const forgedPipe = workflowRunPlan({ name: "evil", kind: "pipeline", content: "{\"steps\":[]}" + " ".repeat(200 * 1024) });
-  assert(!forgedPipe.ok, "a >64 KiB forged pipeline body must fail closed at plan time");
-  // The SW route path: the gate (approval) and sandbox never see the oversized body.
+Deno.test("REVISE-4 (dptw): a large shape-valid record PLANS and RUNS whole — size is never a refusal reason", async () => {
+  // workflowRunPlan is the choke point both run paths consume first. Pre-decap
+  // a >64 KiB record failed here as "corrupt or forged"; post-dptw only SHAPE
+  // (unknown kind, broken pipeline JSON) fails closed.
+  const bigJs = "// " + "x".repeat(200 * 1024) + "\nreturn 1;";
+  const plan = workflowRunPlan({ name: "big", kind: "script-js", content: bigJs });
+  assert(plan.ok && plan.mode === "script-js", "a 200 KiB script body must plan, got " + JSON.stringify(plan).slice(0, 200));
+  const bigPipe = JSON.stringify({ steps: [{ id: "s1", tool: "memory_get", args: { key: "x" } }], comment: "z".repeat(200 * 1024) });
+  const planPipe = workflowRunPlan({ name: "big-p", kind: "pipeline", content: bigPipe });
+  assert(planPipe.ok && planPipe.mode === "pipeline", "a 200 KiB pipeline body must plan, got " + JSON.stringify(planPipe).slice(0, 200));
+  // The SW route path: gate (approval) and sandbox receive the WHOLE body.
   let gateCalled = 0;
-  let sandboxCalled = 0;
+  let sandboxSource = null;
   const route = await runWorkflowRoute({
-    name: "evil",
+    name: "big",
     kind: "script-js",
-    source: "x".repeat(200 * 1024),
+    source: bigJs,
     gate: async () => { gateCalled += 1; return { ok: true }; },
-    runSandboxed: async () => { sandboxCalled += 1; return { ok: true, result: 1 }; },
+    runSandboxed: async (src) => { sandboxSource = src; return { ok: true, result: 1 }; },
   });
-  assert(!route.ok, "the route must fail closed on an oversized body");
-  assertEquals(gateCalled, 0, "no approval card for a forged oversized record");
-  assertEquals(sandboxCalled, 0, "the sandbox never runs a forged oversized record");
+  assert(route.ok, "the route must run a large shape-valid body, got " + JSON.stringify(route).slice(0, 200));
+  assertEquals(gateCalled, 1, "the owner card still gates the run (approval is untouched by de-capping)");
+  assertEquals(sandboxSource, bigJs, "the sandbox received the WHOLE source — no clip");
+  // Shape still fails closed: unknown kinds and broken pipeline JSON refuse.
+  assert(!workflowRunPlan({ name: "b", kind: "nope", content: bigJs }).ok, "unknown kind still fails closed");
+  assert(!workflowRunPlan({ name: "b", kind: "pipeline", content: "not json" + " ".repeat(100 * 1024) }).ok, "broken pipeline JSON still fails closed");
 });
 
-Deno.test("REVISE-4: workflow_run refuses a forged oversized stored record (route never invoked)", async () => {
+Deno.test("REVISE-4 (dptw): workflow_run dispatches a large shape-valid stored record (route reached with full content)", async () => {
+  const bigContent = "// " + "x".repeat(200 * 1024) + "\nreturn 7;";
   const mem = makeMemory();
-  // Forge the record directly in the store (what a pre-fix memory_set could do).
-  mem._map.set(workflowKey("evil"), { name: "evil", kind: "script-js", content: "x".repeat(200 * 1024) });
-  let dispatched = 0;
-  const t = workflowsToolset({ memory: mem, runRoute: async () => { dispatched += 1; return { ok: true }; } });
-  const r = await t.workflow_run.execute({ name: "evil" });
-  assert(!r.ok, "a forged oversized record must never dispatch, got " + JSON.stringify(r));
-  assertStringIncludes(String(r.error), "exceeds");
-  assertEquals(dispatched, 0, "the SW workflow.run route (approval + sandbox) must never be reached");
+  // Seed the record directly in the store (the shape save_workflow writes).
+  mem._map.set(workflowKey("big"), { name: "big", kind: "script-js", content: bigContent });
+  let dispatched = null;
+  const t = workflowsToolset({ memory: mem, runRoute: async (args) => { dispatched = args; return { ok: true, result: 7 }; } });
+  const r = await t.workflow_run.execute({ name: "big" });
+  assert(r.ok, "a large shape-valid record must dispatch, got " + JSON.stringify(r).slice(0, 200));
+  assertEquals(dispatched.source, bigContent, "the SW workflow.run route receives the WHOLE stored body");
 });
 
 // ── 5. save_workflow post-write ownership fence + compensation ──────────────
@@ -430,36 +436,35 @@ Deno.test("REVISE-5: save_workflow succeeds when no abort lands (fence parity re
   assert(r.ok, "a clean save still succeeds, got " + JSON.stringify(r));
 });
 
-// ── 6. the 128-workflow per-origin bound is enforced on save ────────────────
+// ── 6. NO per-origin workflow count (dptw) — past-bound saves succeed ───────
 
-Deno.test("REVISE-6: save_workflow enforces WORKFLOW_BOUNDS.maxWorkflows at the bound", async () => {
-  const mem = makeMemory();
-  const t = workflowsToolset({ memory: mem });
-  for (let i = 0; i < 127; i++) {
-    const r = await t.save_workflow.execute({ name: `wf-${String(i).padStart(3, "0")}`, kind: "script-js", content: SAMPLE_JS });
-    assert(r.ok, `wf-${i} should save, got ${JSON.stringify(r)}`);
-  }
-  // The 128th fits exactly.
-  const last = await t.save_workflow.execute({ name: "wf-128", kind: "script-js", content: SAMPLE_JS });
-  assert(last.ok, "the 128th workflow saves, got " + JSON.stringify(last));
-  // The 129th (a NEW key) is honestly refused at the bound.
-  const over = await t.save_workflow.execute({ name: "wf-over", kind: "script-js", content: SAMPLE_JS });
-  assert(!over.ok, "a new workflow past the bound must be refused, got " + JSON.stringify(over));
-  assertStringIncludes(String(over.error), "128");
-  assertEquals(mem._map.size, 128, "nothing past the bound was written");
-  // Overwriting an EXISTING workflow at the bound stays allowed.
-  const overwrite = await t.save_workflow.execute({ name: "wf-001", kind: "script-js", content: "return 2;" });
-  assert(overwrite.ok, "updating an existing workflow at the bound is allowed, got " + JSON.stringify(overwrite));
-});
-
-Deno.test("REVISE-6: two CONCURRENT new-key saves at the bound cannot both commit (count+create atomic per store)", async () => {
-  // Seed 127 workflows directly (the shape save_workflow writes).
+Deno.test("REVISE-6 (dptw): the 129th and 200th workflows save — no per-origin count", async () => {
+  // FALSIFICATION: on the capped tree the 129th NEW-key save was refused
+  // ("workflow limit reached (128 per origin)"). Post-dptw the store is the
+  // only ceiling.
   const mem = makeMemory();
   const seed = (i) => mem._map.set(workflowKey(`seed-${String(i).padStart(3, "0")}`), { name: `seed-${String(i).padStart(3, "0")}`, kind: "script-js", description: "", content: SAMPLE_JS });
-  for (let i = 0; i < 127; i++) seed(i);
-  // Delay each durable write by a tick so BOTH concurrent saves finish their
-  // count before either commit lands — the exact interleaving the per-store
-  // lock must prevent (pre-fix: both observe 127 and both write 129).
+  for (let i = 0; i < 128; i++) seed(i);
+  const t = workflowsToolset({ memory: mem });
+  const over129 = await t.save_workflow.execute({ name: "wf-129", kind: "script-js", content: SAMPLE_JS });
+  assert(over129.ok, "the 129th workflow must save, got " + JSON.stringify(over129));
+  for (let i = 130; i <= 200; i++) {
+    const r = await t.save_workflow.execute({ name: `wf-${i}`, kind: "script-js", content: SAMPLE_JS });
+    assert(r.ok, `wf-${i} must save, got ` + JSON.stringify(r));
+  }
+  const wfKeys = [...mem._map.keys()].filter((k) => workflowNameFromKey(String(k)) !== null);
+  assertEquals(wfKeys.length, 200, "every save past the old bound landed whole");
+  // And every one lists (no list truncation).
+  const list = await t.workflow_list.execute({});
+  assert(list.ok);
+  assertEquals(list.workflows.length, 200, "workflow_list returns every saved workflow");
+});
+
+Deno.test("REVISE-6 (dptw): concurrent new-key saves BOTH commit (no count gate to violate)", async () => {
+  // The per-store save lock existed ONLY to make count-then-create atomic at
+  // the 128 bound; with the count gone, concurrent saves are ordinary per-key
+  // writes (each key's own write is atomic in the store contract).
+  const mem = makeMemory();
   const origSet = mem.set.bind(mem);
   mem.set = async (k, v) => { await new Promise((r) => setTimeout(r, 5)); return origSet(k, v); };
   const t = workflowsToolset({ memory: mem });
@@ -467,32 +472,22 @@ Deno.test("REVISE-6: two CONCURRENT new-key saves at the bound cannot both commi
     t.save_workflow.execute({ name: "conc-a", kind: "script-js", content: SAMPLE_JS }),
     t.save_workflow.execute({ name: "conc-b", kind: "script-js", content: SAMPLE_JS }),
   ]);
-  const okCount = results.filter((r) => r?.ok === true).length;
-  assertEquals(okCount, 1, "exactly ONE of two concurrent new-key saves may commit at the bound, got " + JSON.stringify(results));
-  const wfKeys = [...mem._map.keys()].filter((k) => workflowNameFromKey(String(k)) !== null);
-  assertEquals(wfKeys.length, 128, "the store never exceeds 128 workflows under concurrent saves");
+  assert(results.every((r) => r?.ok === true), "BOTH concurrent saves commit, got " + JSON.stringify(results));
+  assert(mem._map.has(workflowKey("conc-a")) && mem._map.has(workflowKey("conc-b")), "both records landed");
 });
 
-Deno.test("REVISE-6: a NEW-key save FAILS CLOSED when the store cannot enumerate (rejected-keys store)", async () => {
-  const boom = new Error("store enumeration unavailable");
+Deno.test("REVISE-6 (dptw): a store that cannot enumerate still saves (enumeration is not a save precondition)", async () => {
+  // The capped code fail-closed a NEW-key save when keys() was unavailable
+  // (capacity unprovable). With no count to prove, enumeration is never on
+  // the save path.
   const mem = makeMemory();
-  mem.keys = async () => { throw boom; };
+  mem.keys = async () => { throw new Error("store enumeration unavailable"); };
   const t = workflowsToolset({ memory: mem });
   const r = await t.save_workflow.execute({ name: "unprovable", kind: "script-js", content: SAMPLE_JS });
-  assert(!r.ok, "a new-key save must fail closed when enumeration cannot prove capacity, got " + JSON.stringify(r));
-  assertStringIncludes(String(r.error), "enumerat");
-  assertEquals([...mem._map.keys()].length, 0, "nothing may be written when capacity is unprovable");
-  // A store without keys() at all is equally unprovable → also fails closed.
+  assert(r.ok, "a new-key save must not need enumeration, got " + JSON.stringify(r));
   const mem2 = makeMemory();
   delete mem2.keys;
   const t2 = workflowsToolset({ memory: mem2 });
   const r2 = await t2.save_workflow.execute({ name: "no-keys-fn", kind: "script-js", content: SAMPLE_JS });
-  assert(!r2.ok, "a new-key save must fail closed when the store has no keys(), got " + JSON.stringify(r2));
-  assertStringIncludes(String(r2.error), "enumerat");
-  // An OVERWRITE of an existing workflow still works without enumeration (it
-  // never counts against the bound) — the fail-closed rule is for NEW keys.
-  mem._map.set(workflowKey("existing"), { name: "existing", kind: "script-js", content: SAMPLE_JS });
-  mem.keys = async () => { throw boom; };
-  const overwrite = await t.save_workflow.execute({ name: "existing", kind: "script-js", content: "return 3;" });
-  assert(overwrite.ok, "an overwrite never counts, so it does not need enumeration, got " + JSON.stringify(overwrite));
+  assert(r2.ok, "a store without keys() still saves, got " + JSON.stringify(r2));
 });

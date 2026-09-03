@@ -35,16 +35,14 @@ import { isToolResultFailure } from "./tool-summary.js";
 export const WORKFLOW_NAMESPACE = "workflows:";
 export const WORKFLOW_KINDS = ["script-js", "script-python", "pipeline", "instructions"];
 
-export const WORKFLOW_BOUNDS = Object.freeze({
-  maxNameLength: 64,
-  maxDescriptionLength: 256,
-  maxContentBytes: 64 * 1024, // 64 KiB
-  maxWorkflows: 128, // per origin
-});
-
-/** A saved workflow record: { name, kind, description, content, createdAt }. */
+/** A saved workflow record: { name, kind, description, content, createdAt }.
+ * Shape validation only (dptw): no name/description/content size ceilings and
+ * no per-origin count — the OPFS store and its quota are the honest ceiling. */
 export function workflowKey(name) {
-  return `${WORKFLOW_NAMESPACE}${String(name ?? "").slice(0, WORKFLOW_BOUNDS.maxNameLength)}`;
+  // The FULL name is the key — never truncated: two names sharing a long
+  // common prefix are distinct workflows, not one silently overwriting the
+  // other.
+  return `${WORKFLOW_NAMESPACE}${String(name ?? "")}`;
 }
 
 export function workflowNameFromKey(key) {
@@ -58,21 +56,11 @@ export function workflowNameFromKey(key) {
 export function validateWorkflow({ name, description, kind, content }) {
   const n = String(name ?? "").trim();
   if (!n) return { error: "workflow name is required" };
-  if (n.length > WORKFLOW_BOUNDS.maxNameLength) {
-    return { error: `workflow name exceeds ${WORKFLOW_BOUNDS.maxNameLength} chars` };
-  }
   if (!WORKFLOW_KINDS.includes(kind)) {
     return { error: `workflow kind must be one of ${WORKFLOW_KINDS.join(", ")}` };
   }
   const d = String(description ?? "").trim();
-  if (d.length > WORKFLOW_BOUNDS.maxDescriptionLength) {
-    return { error: `workflow description exceeds ${WORKFLOW_BOUNDS.maxDescriptionLength} chars` };
-  }
   const c = String(content ?? "");
-  const bytes = new TextEncoder().encode(c).length;
-  if (bytes > WORKFLOW_BOUNDS.maxContentBytes) {
-    return { error: `workflow content exceeds ${WORKFLOW_BOUNDS.maxContentBytes} UTF-8 bytes` };
-  }
   return { ok: true, record: { name: n, description: d, kind, content: c, createdAt: Date.now() } };
 }
 
@@ -83,17 +71,14 @@ export function validateWorkflow({ name, description, kind, content }) {
  * definition, or { ok:false, error } for a kind whose runtime is not present. */
 export function workflowRunPlan(wf) {
   const kind = String(wf?.kind ?? "");
-  const name = String(wf?.name ?? "").slice(0, WORKFLOW_BOUNDS.maxNameLength);
+  const name = String(wf?.name ?? "");
   // The plan is the choke point BOTH run paths (the agent-side workflow_run
   // and the SW `workflow.run` route) consume BEFORE any approval card or
-  // sandbox: revalidate the STORED record against the save-time bounds, so a
-  // forged/oversized record (a memory_set write to the workflows: namespace
-  // used to be able to land up to the store's 256 KiB limit) fails closed
-  // here — never reaching the owner-approval card or the sandbox host.
+  // sandbox: it validates the stored record's SHAPE (kind, pipeline JSON) —
+  // never its size (dptw). A forged record with an unknown kind or a broken
+  // pipeline body fails closed here, never reaching the owner-approval card
+  // or the sandbox host.
   const content = String(wf?.content ?? "");
-  if (new TextEncoder().encode(content).length > WORKFLOW_BOUNDS.maxContentBytes) {
-    return { ok: false, error: `workflow "${name}" content exceeds the ${WORKFLOW_BOUNDS.maxContentBytes} UTF-8 byte bound — the stored record is corrupt or forged; re-save the workflow` };
-  }
   if (kind === "pipeline") {
     let parsed;
     try {
@@ -118,13 +103,14 @@ export function workflowRunPlan(wf) {
 }
 
 /** The production script-js run path: plan → approval gate → sandbox →
- * bounded result. Extracted from the SW route so tests exercise the SAME code.
- * `gate` is the scriptApprovalGate-shaped function (context, action, scope,
- * id, source, extra) → { ok } | { ok:false, error }; `runSandboxed` is the
- * sandbox host. */
-export async function runWorkflowRoute({ name, kind, source, description, gate, runSandboxed, resultBound = 256 * 1024 }) {
+ * whole result (dptw: no result clip — the run envelope downstream owns
+ * retention, and a cut result is a wrong answer). Extracted from the SW route
+ * so tests exercise the SAME code. `gate` is the scriptApprovalGate-shaped
+ * function (context, action, scope, id, source, extra) → { ok } | { ok:false,
+ * error }; `runSandboxed` is the sandbox host. */
+export async function runWorkflowRoute({ name, kind, source, description, gate, runSandboxed }) {
   const src = typeof source === "string" ? source : "";
-  const wfName = String(name ?? "").slice(0, WORKFLOW_BOUNDS.maxNameLength);
+  const wfName = String(name ?? "");
   const plan = workflowRunPlan({ name: wfName, kind, content: src });
   if (!plan.ok) return plan;
   if (plan.mode !== "script-js") {
@@ -136,14 +122,7 @@ export async function runWorkflowRoute({ name, kind, source, description, gate, 
   const gateResult = await gate({ name: wfName, description: String(description ?? "") });
   if (!gateResult.ok) return gateResult;
   const run = await runSandboxed(plan.source);
-  let result = run?.result ?? null;
-  if (result != null) {
-    try {
-      const s = JSON.stringify(result);
-      if (s && s.length > resultBound) result = String(result).slice(0, resultBound);
-    } catch { result = String(result).slice(0, resultBound); }
-  }
-  return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+  return { ok: run?.ok ?? false, result: run?.result ?? null, error: run?.error, logs: run?.logs ?? [] };
 }
 
 /** The exact step-tool names whose model dispatch can RAISE an owner card and
@@ -233,7 +212,9 @@ export function createWorkflowPipelineDispatcher({ search, execute, settle, cont
     ? [...ownerApprovalTools]
     : []);
   return async (toolName, args, stepIndex) => {
-    const want = String(toolName ?? "").slice(0, 200);
+    // The FULL declared name is searched — never truncated: a truncated name
+    // could silently match a different tool than the pipeline declared.
+    const want = String(toolName ?? "");
     // PRE-DISPATCH guard (REVISE P1): an owner-approval-gated step must fail
     // closed BEFORE the executor runs. Model-routed tools (delete_named_agent,
     // run_script, the Destructive browser class, …) AWAIT the owner decision
@@ -316,7 +297,6 @@ export function sanitizePromptText(s) {
 export function buildWorkflowsPrompt(workflows) {
   if (!Array.isArray(workflows) || workflows.length === 0) return "";
   const lines = workflows
-    .slice(0, WORKFLOW_BOUNDS.maxWorkflows)
     .map((w) => `- ${sanitizePromptText(w.name)} (${sanitizePromptText(w.kind)}${w.description ? `: ${sanitizePromptText(w.description)}` : ""})`)
     .join("\n");
   return `\n## Saved workflows\nYou have saved reusable workflows. List them with workflow_list, read one with workflow_get, run one with workflow_run, or save a new one with save_workflow.\n${lines}\n`;

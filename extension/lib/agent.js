@@ -21,7 +21,6 @@ import {
   workflowNameFromKey,
   WORKFLOW_KINDS,
   WORKFLOW_NAMESPACE,
-  WORKFLOW_BOUNDS,
   validateWorkflow,
   workflowRunPlan,
   runPipelineWorkflow,
@@ -337,9 +336,9 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
       execute: async ({ key, value }) => {
         // The workflows: namespace is OWNED by save_workflow (its records carry
         // save-time validation that memory_set cannot reproduce — a forged
-        // oversized workflows:* record would otherwise bypass the 64 KiB
-        // workflow bound up to the store's 256 KiB limit and reach workflow_run).
-        // Refuse honestly instead of silently shadowing save_workflow.
+        // workflows:* record would bypass validateWorkflow's kind/shape checks
+        // and reach workflow_run). Refuse honestly instead of silently
+        // shadowing save_workflow.
         if (String(key ?? "").startsWith(WORKFLOW_NAMESPACE)) {
           return { ok: false, error: `key "${key}" is reserved — save and manage workflows with save_workflow/workflow_get, never memory_set` };
         }
@@ -540,27 +539,6 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
  * with a clear message when absent.
  */
 
-// save_workflow's count-and-create must be atomic PER STORE: the model's tool
-// calls in a single step run with Promise.all, so two concurrent save_workflow
-// calls for the same store could each observe 127 workflows and both commit
-// 129. The store's own write mutex only wraps each individual set, never a
-// count-then-create pair, so the count and the create run under a shared
-// promise-chain lock. The key is the store's ORIGIN (all real stores expose
-// one; every memoryStoreAt instance for the same directory shares it), falling
-// back to the store object identity for anonymous test fakes.
-const workflowSaveChainsByOrigin = new Map(); // origin -> tail promise
-const workflowSaveChainsByIdentity = new WeakMap(); // anonymous store object -> tail promise
-function withWorkflowSaveLock(store, fn) {
-  if (!store || typeof store !== "object") return fn();
-  const origin = typeof store.origin === "string" && store.origin ? store.origin : null;
-  const chains = origin ? workflowSaveChainsByOrigin : workflowSaveChainsByIdentity;
-  const key = origin ?? store;
-  const prev = chains.get(key) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  chains.set(key, run.then(() => {}, () => {}));
-  return run;
-}
-
 export function workflowsToolset({
   memory,
   runRoute = null,
@@ -583,12 +561,12 @@ export function workflowsToolset({
   const tools = {
     save_workflow: tool({
       description:
-        "Save a reusable workflow to YOUR memory so you can run it again later: a JS script body (runs sandboxed, owner-approved), a saved tool pipeline (declarative steps of existing tools), Python source (saving only — the Python runtime is not admitted yet), or step-by-step instructions. Later runs can list (workflow_list), read (workflow_get) and run (workflow_run) it. Bounded: name <=64 chars, content <=64 KiB.",
+        "Save a reusable workflow to YOUR memory so you can run it again later: a JS script body (runs sandboxed, owner-approved), a saved tool pipeline (declarative steps of existing tools), Python source (saving only — the Python runtime is not admitted yet), or step-by-step instructions. Later runs can list (workflow_list), read (workflow_get) and run (workflow_run) it.",
       inputSchema: z.object({
-        name: z.string().min(1).max(64).describe("a short, clear name for the workflow"),
-        description: z.string().max(256).optional().describe("one line about what it does"),
+        name: z.string().min(1).describe("a short, clear name for the workflow"),
+        description: z.string().optional().describe("one line about what it does"),
         kind: z.enum(WORKFLOW_KINDS).describe("script-js | script-python | pipeline | instructions"),
-        content: z.string().max(64 * 1024).describe("the workflow body (JS source, pipeline JSON, Python source, or instructions)"),
+        content: z.string().describe("the workflow body (JS source, pipeline JSON, Python source, or instructions)"),
       }),
       execute: async ({ name, description, kind, content }) => {
         if (readOnly) return { ok: false, error: "workflow save is not available in this context" };
@@ -597,17 +575,10 @@ export function workflowsToolset({
         const key = workflowKey(v.record.name);
         const pre = await enrolledGuard();
         if (pre) return pre;
-        // The declared per-origin bound (WORKFLOW_BOUNDS.maxWorkflows) is
-        // enforced HERE, on save, when the key is NEW: an overwrite of an
-        // existing workflow never counts against the limit. The count and the
-        // create share ONE per-store lock (withWorkflowSaveLock), so two
-        // concurrent new-key saves cannot both observe 127 and commit 129.
-        // The count FAILS CLOSED: when the store cannot enumerate its keys
-        // the capacity is unprovable, so a NEW save is refused rather than
-        // silently passing the bound (the reviewer's r3 fail-open finding).
-        return await withWorkflowSaveLock(memory, async () => {
-          // Durable ownership + generation fencing BEFORE the write, mirroring
-          // memory_set exactly (the round-20/22/23 patterns).
+        // No count ceiling (dptw): the OPFS store and its quota are the honest
+        // capacity. Durable ownership + generation fencing BEFORE the write,
+        // mirroring memory_set exactly (the round-20/22/23 patterns).
+        {
           let prev = undefined;
           let existed = false;
           let committed = false;
@@ -627,27 +598,6 @@ export function workflowsToolset({
               }
               if (runGen != null && (g.gen ?? 0) !== runGen) {
                 return { error: "origin re-enrolled during run — workflow not saved" };
-              }
-            }
-            // NEW-key capacity proof, under the same lock as the write: an
-            // overwrite never counts, so only a new key enumerates. A store
-            // that cannot enumerate (no keys(), a throw, or a non-array
-            // result) cannot prove the bound — fail closed, nothing written.
-            if (!existed) {
-              let keys = null;
-              try {
-                keys = typeof memory.keys === "function" ? await memory.keys() : null;
-              } catch (countError) {
-                return { ok: false, error: `workflow limit cannot be verified — the store could not be enumerated (${countError?.message ?? countError}); no new workflow saved` };
-              }
-              if (!Array.isArray(keys)) {
-                return { ok: false, error: "workflow limit cannot be verified — the store cannot enumerate its keys; no new workflow saved" };
-              }
-              const existing = keys
-                .map((k) => workflowNameFromKey(String(k)))
-                .filter(Boolean).length;
-              if (existing >= WORKFLOW_BOUNDS.maxWorkflows) {
-                return { ok: false, error: `workflow limit reached (${WORKFLOW_BOUNDS.maxWorkflows} per origin) — no new workflow can be saved until an existing one is removed or overwritten` };
               }
             }
             wroteVersion = await memory.set(key, v.record);
@@ -704,7 +654,7 @@ export function workflowsToolset({
               ? { error: String(e?.message ?? e) }
               : { ok: false, error: `workflow save failed: ${e?.message ?? e}` };
           }
-        });
+        }
       },
     }),
     workflow_list: tool({
@@ -720,8 +670,7 @@ export function workflowsToolset({
         } catch { /* best-effort */ }
         const names = (Array.isArray(keys) ? keys : [])
           .map((k) => workflowNameFromKey(String(k)))
-          .filter(Boolean)
-          .slice(0, 128);
+          .filter(Boolean);
         const workflows = [];
         for (const wfName of names) {
           try {
@@ -738,7 +687,7 @@ export function workflowsToolset({
     }),
     workflow_get: tool({
       description: "Read ONE of YOUR saved workflows in full (name, kind, description, content).",
-      inputSchema: z.object({ name: z.string().min(1).max(64) }),
+      inputSchema: z.object({ name: z.string().min(1) }),
       execute: async ({ name }) => {
         const pre = await enrolledGuard();
         if (pre) return pre;
@@ -749,7 +698,7 @@ export function workflowsToolset({
         const post = await enrolledGuard();
         if (post) return post;
         if (!rec || typeof rec !== "object" || typeof rec.name !== "string") {
-          return { ok: false, error: `workflow "${String(name).slice(0, 64)}" not found` };
+          return { ok: false, error: `workflow "${String(name)}" not found` };
         }
         return { ok: true, workflow: rec };
       },
@@ -757,9 +706,9 @@ export function workflowsToolset({
     workflow_run: tool({
       description:
         "Run ONE of YOUR saved workflows NOW. script-js workflows run sandboxed (no DOM/extension/network of its own; fetch is host-listed) and REQUIRE OWNER APPROVAL like run_script. pipeline workflows run their declared steps through your live tools, each step keeping its own gates; a step that would need an owner approval card fails closed naming the tool. script-python/instructions kinds fail closed with a clear message.",
-      inputSchema: z.object({ name: z.string().min(1).max(64) }),
+      inputSchema: z.object({ name: z.string().min(1) }),
       execute: async ({ name }) => {
-        const wfName = String(name ?? "").slice(0, 64);
+        const wfName = String(name ?? "");
         const pre = await enrolledGuard();
         if (pre) return pre;
         let rec = null;

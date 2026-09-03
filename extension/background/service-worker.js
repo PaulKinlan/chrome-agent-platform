@@ -6958,7 +6958,7 @@ const handlers = mergeRouteMaps(
   // through the run's live lazy catalog). The production path lives in
   // lib/workflows.js so tests exercise the SAME code.
   async "workflow.run"({ name, kind, source, description }, context) {
-    const wfName = String(name ?? "").slice(0, 64);
+    const wfName = String(name ?? "");
     if (!wfName) return { ok: false, error: "workflow name is required" };
     const src = typeof source === "string" ? source : "";
     // The approval gate is the script-shaped card (source digest + fetch

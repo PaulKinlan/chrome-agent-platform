@@ -95,23 +95,84 @@ Deno.test("save_workflow: rejects invalid kinds", async () => {
   assertStringIncludes(String(r.error), "kind");
 });
 
-Deno.test("save_workflow: enforces name/content bounds (64 chars / 64 KiB UTF-8)", async () => {
+Deno.test("save_workflow: no size ceilings — a 65+ char name and 64 KiB+ content save whole (dptw de-cap)", async () => {
+  // FALSIFICATION: on the capped tree every one of these saves was refused
+  // ("exceeds 64 chars" / "exceeds 65536 UTF-8 bytes"). Post-dptw the OPFS
+  // store and its quota are the only ceiling — shape is validated, size is not.
   const mem = makeMemory();
-  // name too long
-  const longName = await tools(mem).save_workflow.execute({ name: "n".repeat(65), kind: "script-js", content: SAMPLE_JS });
-  assert(!longName.ok, "over-long name must be refused");
-  // content too big (>64 KiB)
-  const big = await tools(mem).save_workflow.execute({ name: "big", kind: "script-js", content: "x".repeat(64 * 1024 + 1) });
-  assert(!big.ok, "over-big content must be refused");
-  // exactly 64 KiB passes
-  const ok = await tools(mem).save_workflow.execute({ name: "ok", kind: "script-js", content: "x".repeat(64 * 1024) });
-  assert(ok.ok, "64 KiB content should save");
-  // multibyte content is bound in UTF-8 BYTES, not code units: 30k two-byte
-  // chars is < 64k units but ~60 KiB+... 40k two-byte chars ≈ 80 KiB bytes
-  const multi = await tools(mem).save_workflow.execute({ name: "multi", kind: "script-js", content: "\u00e9".repeat(40 * 1024) });
-  assert(!multi.ok, "80 KiB of UTF-8 bytes must be refused even under 64k code units");
-  const multiOk = await tools(mem).save_workflow.execute({ name: "multi-ok", kind: "script-js", content: "\u00e9".repeat(20 * 1024) });
-  assert(multiOk.ok, "40 KiB of UTF-8 bytes should save");
+  const t = tools(mem);
+  // name past the old 64-char bound
+  const longName = "n".repeat(65);
+  const named = await t.save_workflow.execute({ name: longName, kind: "script-js", content: SAMPLE_JS });
+  assert(named.ok, "a 65-char name must save, got " + JSON.stringify(named));
+  // content past the old 64 KiB bound
+  const big = await t.save_workflow.execute({ name: "big", kind: "script-js", content: "x".repeat(64 * 1024 + 1) });
+  assert(big.ok, "64 KiB+1 content must save, got " + JSON.stringify(big));
+  const stored = await mem.get(workflowKey("big"));
+  assertEquals(stored.content.length, 64 * 1024 + 1, "the content is stored WHOLE, not clipped");
+  // multibyte content: 40k two-byte chars ≈ 80 KiB of UTF-8 — past the old
+  // byte bound; the whole string survives.
+  const multi = await t.save_workflow.execute({ name: "multi", kind: "script-js", content: "\u00e9".repeat(40 * 1024) });
+  assert(multi.ok, "80 KiB of UTF-8 must save, got " + JSON.stringify(multi));
+  const storedMulti = await mem.get(workflowKey("multi"));
+  assertEquals(storedMulti.content, "\u00e9".repeat(40 * 1024), "multibyte content stored whole");
+});
+
+Deno.test("save_workflow: long names sharing a 64-char prefix are DISTINCT workflows (no silent key truncation)", async () => {
+  // The old workflowKey sliced names to 64 chars — two workflows whose names
+  // agreed for 64 chars silently shared one key (the second overwrote the
+  // first). The full name is the key now.
+  const prefix = "shared-prefix-".padEnd(64, "x");
+  const mem = makeMemory();
+  const t = tools(mem);
+  const a = await t.save_workflow.execute({ name: prefix + "-alpha", kind: "script-js", content: "return 1;" });
+  const b = await t.save_workflow.execute({ name: prefix + "-beta", kind: "script-js", content: "return 2;" });
+  assert(a.ok && b.ok, "both long-prefixed names save");
+  const ga = await t.workflow_get.execute({ name: prefix + "-alpha" });
+  const gb = await t.workflow_get.execute({ name: prefix + "-beta" });
+  assert(ga.ok && gb.ok, "both read back independently");
+  assertEquals(ga.workflow.content, "return 1;", "alpha was NOT overwritten by beta");
+  assertEquals(gb.workflow.content, "return 2;", "beta kept its own body");
+});
+
+Deno.test("workflow_run: a past-bound (65 KiB+) script-js workflow RUNS end-to-end — gate and sandbox receive the full body", async () => {
+  // FALSIFICATION: pre-decap the plan refused any content past 64 KiB before
+  // the approval card ("content exceeds … — corrupt or forged"). Now a large
+  // shape-valid record runs like any other.
+  const bigSource = "// " + "x".repeat(65 * 1024) + "\nreturn 42;";
+  const mem = makeMemory();
+  await tools(mem).save_workflow.execute({ name: "big-run", kind: "script-js", content: bigSource });
+  let gateSource = null;
+  let sandboxSource = null;
+  const t = workflowsToolset({
+    memory: mem,
+    runRoute: async (args) => {
+      gateSource = args.source;
+      return runWorkflowRoute({
+        ...args,
+        gate: async () => ({ ok: true }),
+        runSandboxed: async (src) => { sandboxSource = src; return { ok: true, result: 42, logs: [] }; },
+      });
+    },
+  });
+  const r = await t.workflow_run.execute({ name: "big-run" });
+  assert(r.ok, "a 65 KiB+ workflow must run, got " + JSON.stringify(r));
+  assertEquals(gateSource, bigSource, "the approval path received the WHOLE source");
+  assertEquals(sandboxSource, bigSource, "the sandbox received the WHOLE source");
+  assertEquals(r.result, 42);
+});
+
+Deno.test("runWorkflowRoute: a past-bound sandbox RESULT returns whole (no 256 KiB clip)", async () => {
+  const bigResult = { data: "y".repeat(300 * 1024) };
+  const res = await runWorkflowRoute({
+    name: "big-result",
+    kind: "script-js",
+    source: "return 1",
+    gate: async () => ({ ok: true }),
+    runSandboxed: async () => ({ ok: true, result: bigResult, logs: [] }),
+  });
+  assert(res.ok);
+  assertEquals(res.result, bigResult, "the result is returned whole — a clipped result is a wrong answer");
 });
 
 Deno.test("workflow_list: returns name/kind/description only", async () => {
@@ -194,13 +255,16 @@ Deno.test("origin isolation: two stores never see each other's workflows", async
   assert(!getB.ok, "agent B must not read agent A's workflow");
 });
 
-Deno.test("validateWorkflow: normalizes and bounds", () => {
+Deno.test("validateWorkflow: normalizes and shape-validates (no size bounds, dptw)", () => {
   const ok = validateWorkflow({ name: " x ", description: " d ", kind: "script-js", content: "y" });
   assert(ok.ok);
   assertEquals(ok.record.name, "x");
   assertEquals(ok.record.description, "d");
   const bad = validateWorkflow({ name: "", kind: "script-js", content: "y" });
-  assert(!bad.ok);
+  assert(!bad.ok, "an empty name is still refused (shape, not size)");
+  // Past every old bound: accepted.
+  const huge = validateWorkflow({ name: "n".repeat(500), description: "d".repeat(1000), kind: "script-js", content: "x".repeat(100 * 1024) });
+  assert(huge.ok, "size is never a refusal reason — only shape is");
 });
 
 Deno.test("buildWorkflowsPrompt: lists name+kind+description, empty → empty string", () => {
@@ -324,6 +388,24 @@ Deno.test("runPipelineWorkflow: runs pipeline steps in order through the dispatc
   // The binding $ref resolved: step 2's args carry step 1's RESULT value.
   assertEquals(calls[1].args.value, "hello", "the $ref binding must be resolved before dispatch");
   assertEquals(res.steps.length, 2);
+});
+
+Deno.test("runPipelineWorkflow: a past-bound (65 KiB+) pipeline body runs (size is not a refusal reason)", async () => {
+  // FALSIFICATION: pre-decap the plan refused any content past 64 KiB. The
+  // padding comment rides INSIDE the JSON so the body is both valid and huge.
+  const bigPipe = JSON.stringify({
+    steps: [{ id: "s1", tool: "memory_get", args: { key: "x" } }],
+    comment: "z".repeat(65 * 1024),
+  });
+  const calls = [];
+  const res = await runPipelineWorkflow({
+    name: "big-pipe",
+    kind: "pipeline",
+    content: bigPipe,
+    dispatchStep: async (tool) => { calls.push(tool); return { ok: true, value: "v" }; },
+  });
+  assert(res.ok, "a 65 KiB+ pipeline body must run, got " + JSON.stringify(res).slice(0, 200));
+  assertEquals(calls, ["memory_get"]);
 });
 
 Deno.test("runPipelineWorkflow: a failing step halts the pipeline with the error", async () => {

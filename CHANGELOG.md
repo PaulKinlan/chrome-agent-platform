@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.29] — 2026-09-03
+- Saved workflows have no size or count ceilings: a workflow of any name length or body size saves and runs whole, and a profile keeps as many workflows as its storage holds — names are never truncated (two long names sharing a prefix stay distinct), and workflow results are no longer clipped. Shape validation (a name, a known kind, parseable pipeline steps) is unchanged, and every approval gate still applies.
+
 ## [0.3.28] — 2026-09-03
 - Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
 
