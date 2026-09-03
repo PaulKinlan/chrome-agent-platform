@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.27] — 2026-09-03
+- Logs and diagnostics keep the whole message: log entries and error details are no longer cut off at 800/1200 characters — secrets are still scrubbed and control characters still stripped, but the full text survives for debugging
+
 ## [0.3.26] — 2026-09-03
 - Run previews and results stop being clipped: a run's preview text is stored whole (still secret-scrubbed), retry summaries show the full text, and a worker result over 64 KiB is no longer cut before it is saved — large results are kept complete by reference, with the transport record staying small by design
 
