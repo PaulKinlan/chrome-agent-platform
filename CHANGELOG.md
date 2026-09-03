@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.22] — 2026-09-03
+- the agent-config dialog scrolls as one body at short viewports — the probe fixes land with it
+
 ## [0.3.21] — 2026-09-03
 - the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
 
