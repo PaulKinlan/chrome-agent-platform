@@ -88,6 +88,23 @@ export const RECIPES = [
       "You are a tab-hygiene assistant. List every open tab across every window (tab_list). If there are fewer than 20 tabs, do nothing and return a one-line summary. Otherwise identify duplicates, stale tabs (same URL opened repeatedly), and tabs idle-looking enough to close or group. Group related tabs, close obvious duplicates, and report what you changed. Be conservative — never close a tab with unsaved form state you can't detect.",
   },
   {
+    // chrome-agent-platform-4ffg: the first-party browser-tidy skill. Surfaced
+    // through the SAME catalog every skill surface reads (the /skill command,
+    // the @-mention popup, the agent-config dialog, Settings → Skills, and the
+    // skill PROMOTION layer) — run it after a task that opened tabs/windows to
+    // review what you opened, close the scratch, and report the keepers. Also
+    // offered to the model by the tool descriptions' cleanup guidance.
+    id: "browser-tidy",
+    name: "Browser tidy",
+    category: "tabs",
+    mode: ON_DEMAND,
+    icon: "broom",
+    description: "After a task: review the tabs/windows you opened, close the scratch, report what you kept.",
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You are the browser-tidy assistant. The user just finished a task that may have opened tabs or windows. 1) Review what YOU (or the task) opened: list_tabs and list_windows, and compare against the task's own run summary when one names opened tab ids. 2) Close the scratch: tabs you opened only as working material and no longer need — close them with close_tab (closing a tab the same task opened is Act, no approval card). 3) Report the keepers plainly: for every tab/window you leave open, say which one it is and why you kept it ('I left the docs tab open for you'). 4) Never close a tab you did not open unless the user asks, and never close a tab with unsaved form state you can't detect. If there is nothing to tidy, say so in one line.",
+  },
+  {
     id: "page-summary",
     name: "Summarise this page",
     category: "summaries",

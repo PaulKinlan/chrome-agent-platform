@@ -72,6 +72,7 @@ import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js"
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
+import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker } from "../lib/lifecycle-cleanup.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -2622,6 +2623,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // EVERY-ITEM-01): {used,total,exhausted}. `exhausted` turns the terminal
     // into a "Budget reached — Continue" stop instead of a silent finish.
     let runBudget = null;
+    // Lifecycle cleanup (chrome-agent-platform-4ffg): what THIS run opened
+    // (tabs/windows) and what it already closed itself, fed from the same
+    // tool-result stream journaled below. The run-end summary names it and
+    // the default-off auto-close setting closes exactly it (never a tab this
+    // run did not open — the plan is a pure filter over the tracker's ids).
+    const lifecycle = createLifecycleTracker();
     const journalingProgress = async (event) => {
       if (event?.type === "budget" && Number.isFinite(event.step) && Number.isFinite(event.total)) {
         runBudget = { used: event.step, total: event.total, exhausted: event.exhausted === true || runBudget?.exhausted === true };
@@ -2634,6 +2641,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           : null;
         runBudget = { used: Number(event.budget.used) || 0, total: Number(event.budget.total) || 0, exhausted: event.budget.exhausted === true, ...(stopped ? { stopped } : {}) };
       }
+      // Lifecycle accounting runs on the UNREDACTED copy (the retained full
+      // result below is already redacted at this chokepoint's own boundary;
+      // the ids this tracker needs are never secret-shaped). Recorded BEFORE
+      // the mutation below so the release/close half of a same-event edit is
+      // never skipped.
+      try {
+        if (event?.type === "tool-result") {
+          lifecycle.onToolResult(
+            event.selectedTool ?? event.toolName ?? "",
+            event.ok === true,
+            typeof event.resultFull === "string" && event.resultFull ? event.resultFull : event.result ?? null,
+          );
+        }
+      } catch { /* lifecycle telemetry never breaks a run */ }
       // Redact credentials at the SINGLE progress chokepoint so BOTH the live
       // broadcast and the persisted journal never carry them (the tool-call
       // clarity finding: raw args/results — including credential-shaped
@@ -3144,6 +3165,68 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         } catch { /* usage telemetry must never fail a settled run */ }
       }
       const serverToolKind = serverToolSpecForProvider(serverGrounding?.provider)?.toolId ?? "google_search";
+      // ── Lifecycle cleanup (chrome-agent-platform-4ffg) ────────────────────────
+      // A terminal SUCCESS is where the run summary gets its teeth: append the
+      // runtime note naming the tabs/windows THIS run opened and left open (the
+      // model's final text is the summary the owner reads, so the note rides
+      // it). When the owner set auto-close on (default OFF), remove exactly the
+      // run's own still-open opened tabs FIRST — tabs the run already closed
+      // itself are never re-closed, and no tab the run did not open can enter
+      // the plan (autoCloseTabPlan is a pure filter over the tracker's ids).
+      // Windows are never auto-closed (closing one closes every tab in it —
+      // that stays an owner-approved Destructive action). Cleanup never breaks
+      // or slows a settled run: every failure is caught.
+      // The summary is only as honest as its "still open" claim: ids the run
+      // opened but the owner closed mid-run (or that vanished) are dropped by
+      // a live re-check before the note is composed — a closed tab is never
+      // reported as open, and auto-close never burns a remove on it.
+      const lifecycleSnapshot = lifecycle.snapshot();
+      const stillOpenTabs = [];
+      if (lifecycleSnapshot.openedTabs.length > 0) {
+        for (const t of lifecycleSnapshot.openedTabs) {
+          try {
+            const live = await chrome.tabs.get(t.id);
+            if (live?.id === t.id) stillOpenTabs.push(t);
+          } catch (error) {
+            if (/no tab with id/i.test(String(error?.message ?? ""))) continue; // gone — dropped
+            stillOpenTabs.push(t); // unreadable state — keep the honest claim
+          }
+        }
+      }
+      const stillOpenWindows = [];
+      if (lifecycleSnapshot.openedWindows.length > 0) {
+        for (const w of lifecycleSnapshot.openedWindows) {
+          try {
+            const live = await chrome.windows.get(w.id);
+            if (live?.id === w.id) stillOpenWindows.push(w);
+          } catch (error) {
+            if (/no window with id/i.test(String(error?.message ?? ""))) continue;
+            stillOpenWindows.push(w);
+          }
+        }
+      }
+      const liveSnapshot = {
+        openedTabs: stillOpenTabs,
+        openedWindows: stillOpenWindows,
+        closedTabIds: lifecycleSnapshot.closedTabIds,
+        closedWindowIds: lifecycleSnapshot.closedWindowIds,
+        restoredSessions: lifecycleSnapshot.restoredSessions,
+      };
+      let autoClosedTabIds = [];
+      if (liveSnapshot.openedTabs.length > 0) {
+        try {
+          const autoCloseSetting = await kvGet("cap:autoCloseRunTabs");
+          if (autoCloseSetting?.["cap:autoCloseRunTabs"] === true) {
+            for (const tabId of autoCloseTabPlan(liveSnapshot)) {
+              try {
+                await chrome.tabs.remove(tabId);
+                autoClosedTabIds.push(tabId);
+              } catch { /* the tab is already gone — nothing to close */ }
+            }
+          }
+        } catch { /* a settings read failure never blocks the summary */ }
+      }
+      result = appendRunEndCleanupNote(result, liveSnapshot, autoClosedTabIds);
       const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId,
         ...(serverGrounding && (serverGrounding.citations.length > 0 || serverGrounding.queryOccurrenceCount > 0)
           ? {

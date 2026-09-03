@@ -27,6 +27,7 @@ import { DEVELOPER_ONLY_TOOL_NAMES, requirementFor } from "./chrome-tool-capabil
 import { permissionPlainName } from "./permission-language.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
+import { cleanupGuidanceFor } from "./lifecycle-cleanup.js";
 
 const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
@@ -2353,7 +2354,8 @@ export function browserToolset(readOnly = false, {
     }),
     open_tab: tool({
       description:
-        "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
+        "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring). " +
+        cleanupGuidanceFor("open_tab"),
       inputSchema: z.object({ url: z.string().url() }),
       execute: async ({ url }) => {
         // Scheme guard FIRST: a chrome:/file:/about:/data: destination can
@@ -2716,7 +2718,8 @@ export function browserToolset(readOnly = false, {
     }),
     create_window: tool({
       description:
-        "Open a new browser window, optionally at a URL. Requires browser-control permission (scoped + expiring); a URL destination must be inside the granted origin(s).",
+        "Open a new browser window, optionally at a URL. Requires browser-control permission (scoped + expiring); a URL destination must be inside the granted origin(s). " +
+        cleanupGuidanceFor("create_window"),
       inputSchema: z.object({
         url: z.string().url().max(2048).optional(),
         focused: z.boolean().optional(),
@@ -3889,11 +3892,16 @@ export function browserToolset(readOnly = false, {
     }),
     duplicate_tab: tool({
       description:
-        "Duplicate a tab (the copy opens next to it). Requires browser-control permission (scoped + expiring) for the tab's origin.",
+        "Duplicate a tab (the copy opens next to it). Requires browser-control permission (scoped + expiring) for the tab's origin. " +
+        cleanupGuidanceFor("duplicate_tab"),
       inputSchema: z.object({ tabId: z.number().int() }),
       execute: async ({ tabId }) =>
         t13MutateTabWithGrant(tabId, "duplicated", async () => {
           const copy = await chrome.tabs.duplicate(tabId);
+          // The copy is a NEW tab this run created — closing it is Act (no
+          // destructive card), exactly like a tab this run opened via open_tab
+          // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+          if (typeof copy?.id === "number") openedTabIds.add(copy.id);
           return { ok: true, tabId, newTabId: copy?.id ?? null };
         }, "duplicate_tab"),
     }),
@@ -4609,7 +4617,8 @@ export function browserToolset(readOnly = false, {
     }),
     restore_closed: tool({
       description:
-        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required.",
+        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required. " +
+        cleanupGuidanceFor("restore_closed"),
       inputSchema: z.object({ sessionId: z.string().min(1).max(128) }),
       execute: async ({ sessionId }) =>
         await withGrantLock(async () => {
