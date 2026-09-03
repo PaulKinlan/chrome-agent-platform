@@ -331,6 +331,39 @@
   // stamped by the content-script, never self-reported — the realm + origin.
   // errorDetail.pageControlled marks the text as untrusted page data, exactly
   // like any tool RESULT the page returns.
+  // Covering pass for the bounded userinfo regex (vj4s review P0) — a scheme
+  // run >64 chars with no letter in its trailing 64 has no in-window match
+  // start and leaked under the naive bound. Linear indexOf("://")-anchored
+  // scan; exact parity with the unbounded pre-vj4s regex. KEEP IN SYNC with
+  // extension/lib/pure.js _maskLongSchemeUserinfo.
+  function maskLongSchemeUserinfo(text) {
+    const s = String(text ?? "");
+    const SCHEME_CHAR = /[a-z0-9+.-]/i;
+    let out = "";
+    let i = 0;
+    for (;;) {
+      const j = s.indexOf("://", i);
+      if (j < 0) return out + s.slice(i);
+      let k = j;
+      while (k > 0 && SCHEME_CHAR.test(s[k - 1])) k--;
+      const run = s.slice(k, j);
+      if (run.length > 64 && !/[a-z]/i.test(run.slice(-64)) && /[a-z]/i.test(run)) {
+        let u = j + 3;
+        while (u < s.length && s[u] !== ":" && s[u] !== "/" && !/\s/.test(s[u])) u++;
+        if (u > j + 3 && s[u] === ":") {
+          let p = u + 1;
+          while (p < s.length && s[p] !== "@" && !/\s/.test(s[p])) p++;
+          if (p - (u + 1) >= 4 && s[p] === "@") {
+            out += s.slice(i, u + 1) + "[REDACTED]@";
+            i = p + 1;
+            continue;
+          }
+        }
+      }
+      out += s.slice(i, j + 3);
+      i = j + 3;
+    }
+  }
   function redactBridgeText(text, max = 300) {
     let out = String(text ?? "").normalize("NFKC");
     // Embedded URL queries AND fragments: strip wholesale (any unrecognized
@@ -343,9 +376,10 @@
     // Bearer/Basic credentials in text + URL userinfo passwords.
     out = out.replace(/(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [REDACTED]");
     // Scheme run bounded ({0,63}) — unbounded * is quadratic on long tokens
-    // (37 s on a 300 KiB token, vj4s). Any scheme length still masks: the
-    // match window slides to a later start position inside the scheme run.
+    // (37 s on a 300 KiB token, vj4s); the covering scan below restores exact
+    // parity for >64-char scheme runs with no letter in the trailing 64.
     out = out.replace(/([a-z][a-z0-9+.-]{0,63}:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
+    out = maskLongSchemeUserinfo(out);
     // A bounded keyword followed by a credential SHAPE (colon/quote OR bare
     // whitespace): `api_key=…`, `bad key sk-…`, `key: ghp_…`.
     out = out.replace(

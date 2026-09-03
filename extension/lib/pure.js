@@ -920,6 +920,51 @@ function _stripUrlQueries(text) {
   });
 }
 
+/** Covering pass for the bounded userinfo regex (vj4s review P0): the {0,63}
+ * scheme bound kills the quadratic, but its match window can only START on a
+ * letter — a scheme run longer than 64 chars with NO letter in its trailing
+ * 64 (e.g. "a"+"0"×64+"://user:pw@host") has no in-window start and leaked
+ * under the naive bound, while the unbounded pre-vj4s regex masked it (any
+ * letter anywhere in the run is a match start). This restores exact parity
+ * for long runs with a LINEAR scan: anchor on "://", walk back over the
+ * scheme-char run (a run can never cross an earlier ':', so runs never
+ * overlap and total work is O(n)), then apply the same user:password@ tail
+ * shape as the regex. Fires only where the bounded pass cannot; every other
+ * case is byte-identical to it. KEEP IN SYNC with the main-world.js port. */
+function _maskLongSchemeUserinfo(text) {
+  const s = String(text ?? "");
+  const SCHEME_CHAR = /[a-z0-9+.-]/i;
+  let out = "";
+  let i = 0;
+  for (;;) {
+    const j = s.indexOf("://", i);
+    if (j < 0) return out + s.slice(i);
+    let k = j;
+    while (k > 0 && SCHEME_CHAR.test(s[k - 1])) k--;
+    const run = s.slice(k, j);
+    // Only the bounded pass's blind spot: run longer than the window, no
+    // letter inside the window, but a letter somewhere earlier in the run
+    // (the old regex's match start). Letter-less runs stay untouched (no
+    // over-redaction — the old regex never masked them either).
+    if (run.length > 64 && !/[a-z]/i.test(run.slice(-64)) && /[a-z]/i.test(run)) {
+      // Tail shape identical to the regex: [^:/\s]+ ":" [^@\s]{4,} "@".
+      let u = j + 3;
+      while (u < s.length && s[u] !== ":" && s[u] !== "/" && !/\s/.test(s[u])) u++;
+      if (u > j + 3 && s[u] === ":") {
+        let p = u + 1;
+        while (p < s.length && s[p] !== "@" && !/\s/.test(s[p])) p++;
+        if (p - (u + 1) >= 4 && s[p] === "@") {
+          out += s.slice(i, u + 1) + "[REDACTED]@";
+          i = p + 1;
+          continue;
+        }
+      }
+    }
+    out += s.slice(i, j + 3);
+    i = j + 3;
+  }
+}
+
 /** A secret VALUE that may appear inside arbitrary error text: a configured
  * key echoed back by a hostile/misbehaving endpoint, a Bearer credential, or
  * credentials embedded in a URL. Exported for unit tests.
@@ -965,10 +1010,11 @@ export function redactSecretText(text, knownSecrets = []) {
   out = out.replace(/(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [REDACTED]");
   // The scheme run is BOUNDED ({0,63}): an unbounded * is quadratic on long
   // alphanumeric tokens (the engine eats the run, fails on ://, backtracks
-  // one char, retries — 37 s on a 300 KiB token, vj4s). Masking holds for
-  // ANY scheme length: the match window slides, so a >64-char scheme still
-  // matches from a later start position (only group-1's span shrinks).
+  // one char, retries — 37 s on a 300 KiB token, vj4s). The bound is safe
+  // whenever a LETTER falls within the last 64 scheme chars (the match window
+  // slides to it); the covering scan below handles the rest.
   out = out.replace(/([a-z][a-z0-9+.-]{0,63}:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
+  out = _maskLongSchemeUserinfo(out);
   // A bounded keyword followed by a credential SHAPE (colon/quote OR bare
   // whitespace): `api_key=…`, `bad key sk-…`, `key: ghp_…`.
   out = out.replace(

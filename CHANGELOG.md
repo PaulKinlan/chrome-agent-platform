@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.41] — 2026-09-03
+- review P0: long-scheme userinfo passwords can never leak — linear covering pass restores exact parity with the unbounded pre-vj4s regex
+
 ## [0.3.40] — 2026-09-03
 - beads export (fixed point)
 

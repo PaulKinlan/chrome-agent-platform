@@ -29,7 +29,9 @@ const SERIAL = new Set([
   "tests/package-extension-freshness.test.ts", // packages dist + writes the dist-complete marker
 ]);
 
-const all = readdirSync("tests")
+// Recursive: `deno test tests/` walks subdirectories, so this walk must too
+// (a non-recursive readdir would silently drop future tests/**/ nested files).
+const all = readdirSync("tests", { recursive: true })
   .filter((f) => f.endsWith(".test.ts"))
   .map((f) => `tests/${f}`)
   .sort();
