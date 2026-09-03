@@ -181,12 +181,26 @@ Deno.test("znx9: thread store capacity (240 KiB UTF-8 bytes) preserves near-cap 
 });
 
 Deno.test("znx9: surrogate-safe code-point slicing never splits surrogate pair at the 240 KiB boundary", async () => {
-  // Construct content where the UTF-8 byte boundary falls precisely inside a 4-byte emoji (\u{1F600}).
-  // In threads.js, budget is (240 * 1024 - markerBytes). We place ASCII up to the boundary, followed by emoji.
-  // A naive byte slice would cut through the 4-byte emoji (splitting the surrogate pair).
-  const prefixLen = 240 * 1024 - 100;
+  // r3 falsification (gpt-5.6-sol): the OLD prefix (240*1024-100) left ~24-26
+  // bytes of budget after the ASCII fill — six whole 4-byte emoji fit and the
+  // seventh needs 4 more bytes than remain, so the naive cut ALWAYS lands on a
+  // code-point boundary and the surrogate backoff is never exercised: removing
+  // it changed nothing and the test stayed green. To make the cut land BETWEEN
+  // a high and low surrogate, the marker's encoded length must be reserved and
+  // the ASCII fill must leave EXACTLY 3 spare bytes after k whole emoji: a
+  // lone high surrogate then measures 3 bytes (encoded as U+FFFD) and fits,
+  // while completing the pair needs a 4th byte and does not — the naive cut
+  // lands inside the pair and only the backoff saves it.
+  const marker = `\n\n…(response truncated to ${(MAX_MESSAGE_BYTES / 1024).toFixed(0)} KiB — the complete text is in the run log)`;
+  const budget = MAX_MESSAGE_BYTES - new TextEncoder().encode(marker).byteLength;
+  const wholeEmoji = 6; // k whole emoji before the straddling one
+  const prefixLen = budget - 3 - wholeEmoji * 4; // EXACTLY 3 spare bytes after k emoji
   const fill = "a".repeat(prefixLen);
-  const emojiStraddle = "\u{1F600}".repeat(40); // 40 * 4 = 160 bytes of emoji
+  const emoji = "\u{1F600}";
+  // Enough emoji that total bytes EXCEED MAX_MESSAGE_BYTES (else boundText
+  // returns content untouched, no cut, no marker): 40 * 4 = 160 bytes over the
+  // fill puts the content past the cap while the (k+1)th emoji still straddles.
+  const emojiStraddle = emoji.repeat(40);
   const content = fill + emojiStraddle;
 
   const thread = await createThread("seed");
@@ -195,11 +209,18 @@ Deno.test("znx9: surrogate-safe code-point slicing never splits surrogate pair a
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
 
-  // The slice must be code-point safe:
-  // 1. The last character must NOT be a lone high surrogate (0xD800..0xDBFF)
-  const lastChar = last.content.charCodeAt(last.content.length - 1);
-  assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
-    `slice left lone high surrogate (0x${lastChar.toString(16)})`);
+  // The cut boundary is the content IMMEDIATELY BEFORE the appended marker
+  // (inspecting the final char of the complete marked string always sees the
+  // marker's ')' and can never fail).
+  const cutEnd = last.content.slice(0, last.content.length - marker.length);
+  const boundary = cutEnd.charCodeAt(cutEnd.length - 1);
+  // 1. With the backoff, the cut backs off to the pair boundary: the stored
+  //    slice ends on the LOW surrogate of a WHOLE emoji (0xDE00), never on a
+  //    lone high surrogate (0xD800..0xDBFF) — the backoff must have removed it.
+  assertEquals(boundary, 0xDE00,
+    `cut must end on a whole emoji's low surrogate (got 0x${boundary.toString(16)}) — the surrogate backoff must keep pairs whole`);
+  assert(!(boundary >= 0xD800 && boundary <= 0xDBFF),
+    `slice left lone high surrogate (0x${boundary.toString(16)})`);
 
   // 2. Decoding the re-encoded slice must produce zero Unicode replacement characters (\uFFFD)
   const reDecoded = new TextDecoder().decode(new TextEncoder().encode(last.content));
@@ -254,6 +275,19 @@ Deno.test("znx9: control-character flood triggers escape-aware sizing to keep ou
 
   const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
   assert(serialized <= 256 * 1024, `control-char outbox must fit in 256 KiB, got ${serialized} bytes`);
+
+  // r3 falsification (gpt-5.6-sol): the serialized-fit assertion alone cannot
+  // fail when escape-aware primary sizing is removed — the backstop shrink
+  // (durable-runs.js ~1928-1945) shrinks content until the serialized size
+  // fits again, masking the regression. The PRIMARY escape-aware cut must be
+  // what truncated this flood: the stored content must carry the PRIMARY
+  // "truncated to 240 KiB" marker. Without {escaped:true} the raw 45 KB flood
+  // fits the raw 240 KiB budget untouched, only the backstop shrinks it, and
+  // the backstop's marker reports a SMALLER dynamic cap — so this assertion
+  // goes RED when escape-aware primary sizing is removed.
+  const storedContent = outbox.threadTerminal?.content ?? "";
+  assert(storedContent.includes("truncated to 240 KiB"),
+    "escape-aware primary sizing must produce the PRIMARY 240 KiB marker (the backstop must not be the shrinker)");
 });
 
 Deno.test("znx9: backstop shrink shrinks content and reports the reduced cap in dynamic marker when envelope is large", async () => {

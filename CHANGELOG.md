@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.6] — 2026-09-03
+- znx9 r3: make the surrogate and escape-aware falsifications actually able to fail
+
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.
 

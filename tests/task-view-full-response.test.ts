@@ -154,22 +154,34 @@ Deno.test("full response: the durable/terminal-commit path also bounds the SIDEB
 });
 
 Deno.test("full response: the byte-cap cut never splits a UTF-16 surrogate pair (r2 B5)", async () => {
-  // Content whose UTF-8 bytes slightly exceed the 240 KiB cap, with emoji
-  // (surrogate pairs) deliberately placed where the byte boundary lands. The
-  // stored slice must not end with a lone high surrogate.
-  const base = "The quick brown fox jumps over the lazy dog. ";
-  const filler = "a".repeat(240 * 1024 - 30); // just under the cap in bytes
-  const emojiTail = "\u{1F600}".repeat(40) + "z"; // 4-byte emoji straddling the boundary
+  // r3 falsification (gpt-5.6-sol): the OLD filler (240*1024-30) already
+  // exceeded the marker-reserved budget, so the binary-search cut landed in the
+  // ASCII fill and the emoji tail was never reached — removing the surrogate
+  // backoff changed nothing. Budget here mirrors boundText exactly: reserve the
+  // marker's real encoded length, then leave EXACTLY 3 spare bytes after k
+  // whole emoji so the naive cut lands between a high and low surrogate.
+  const marker = `\n\n…(response truncated to ${(240 * 1024 / 1024).toFixed(0)} KiB — the complete text is in the run log)`;
+  const budget = 240 * 1024 - new TextEncoder().encode(marker).byteLength;
+  const wholeEmoji = 6;
+  const filler = "a".repeat(budget - 3 - wholeEmoji * 4); // EXACTLY 3 spare bytes after k emoji
+  // Enough emoji that total bytes EXCEED the 240 KiB cap (else boundText
+  // returns content untouched): 40 * 4 = 160 bytes over the fill, and the
+  // (k+1)th emoji straddles the cut.
+  const emojiTail = "\u{1F600}".repeat(40);
   const content = filler + emojiTail;
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  // The slice must be a valid code-point boundary: no lone high surrogate at
-  // the end (the cut can fall inside a surrogate pair).
-  const lastChar = last.content.charCodeAt(last.content.length - 1);
-  assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
-    `the cut left a lone high surrogate (last code unit 0x${lastChar.toString(16)})`);
+  // The cut boundary is the content IMMEDIATELY BEFORE the marker — inspecting
+  // the final char of the complete marked string always sees the marker's ')'
+  // and can never catch a split pair.
+  const cutEnd = last.content.slice(0, last.content.length - marker.length);
+  const boundary = cutEnd.charCodeAt(cutEnd.length - 1);
+  // With the backoff, the cut ends on the LOW surrogate of a WHOLE emoji;
+  // without it, a lone high surrogate (0xD800..0xDBFF) survives.
+  assertEquals(boundary, 0xDE00,
+    `the cut left a lone high surrogate (last code unit 0x${boundary.toString(16)})`);
   // Every code point decodes cleanly (no replacement chars from split pairs).
   const decoded = new TextDecoder().decode(new TextEncoder().encode(last.content));
   assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair survived");
