@@ -266,3 +266,179 @@ Deno.test("slice-2: an approved management step's REAL result is the step value 
   assertEquals(r.value, { ok: true, deleted: "agent-1" });
   assertEquals(rig.calls, ["sel_delete_named_agent"]);
 });
+
+// ── 5. REAL-path integration: a genuine agent run whose pipeline workflow ───
+// ── pauses on a capability, shows the card, and RESUMES through the real ────
+// ── lazy protocol (resumeApprovedCall) — no dispatcher shims ────────────────
+
+import { installFakeIdb, resetFakeIdb } from "./fake-idb.js";
+import { installFakeLocks, resetFakeLocks } from "./fake-locks.js";
+import { resetUsageMigration } from "../extension/lib/usage-store.js";
+import { tool } from "ai";
+import { z } from "zod";
+import { createAgent } from "../extension/lib/agent.js";
+import { executableBrowserToolRecords } from "../extension/lib/lazy-tool-protocol.js";
+import { clearRunFence } from "../extension/lib/run-fence.js";
+import { workflowKey } from "../extension/lib/workflows.js";
+
+function streamOf(parts, finishReason) {
+  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+  return new ReadableStream({
+    start(c) {
+      c.enqueue({ type: "stream-start", warnings: [] });
+      for (const p of parts) {
+        if (p.text != null) {
+          c.enqueue({ type: "text-start", id: "t" });
+          c.enqueue({ type: "text-delta", id: "t", delta: p.text });
+          c.enqueue({ type: "text-end", id: "t" });
+        }
+        if (p.tool) {
+          c.enqueue({ type: "tool-call", toolCallId: p.id, toolName: p.tool, input: JSON.stringify(p.args ?? {}) });
+        }
+      }
+      c.enqueue({ type: "finish", usage, finishReason });
+      c.close();
+    },
+  });
+}
+
+/** A scripted model: search workflow_run, execute it on the found selectionRef,
+ * then answer with whatever the run returned. */
+function workflowRunModel(workflowName, modelOutputs) {
+  let calls = 0;
+  return {
+    specificationVersion: "v2",
+    provider: "test",
+    modelId: "workflow-runner",
+    supportedUrls: {},
+    async doStream(options) {
+      calls += 1;
+      for (const m of options.prompt ?? []) {
+        if (m?.role !== "tool") continue;
+        for (const part of m.content ?? []) modelOutputs.push(JSON.stringify(part.output ?? part));
+      }
+      if (calls === 1) {
+        return { stream: streamOf([{ tool: "search_tools", id: "call_1", args: { query: "workflow_run", limit: 3 } }], "tool-calls") };
+      }
+      if (calls === 2) {
+        const blob = modelOutputs.join("\n");
+        // The search result rides as a JSON-encoded string (modelContent), so
+        // the quotes are escaped in the serialized prompt part.
+        const match = blob.match(/selectionRef\\+":\\+"(sel_[0-9a-f]+)/);
+        if (!match) return { stream: streamOf([{ text: "NO-SELECTION-REF" }], "stop") };
+        return { stream: streamOf([{ tool: "execute_tool", id: "call_2", args: { selectionRef: match[1], arguments: { name: workflowName } } }], "tool-calls") };
+      }
+      return { stream: streamOf([{ text: "Workflow finished." }], "stop") };
+    },
+  };
+}
+
+/** Run a real agent whose saved pipeline workflow has ONE gated step
+ * (`site_report` pauses until the owner's decision flips the grant). */
+async function runPipelineWithCard(decision) {
+  resetFakeIdb(); installFakeIdb(); resetFakeLocks(); installFakeLocks(); resetUsageMigration(); clearRunFence();
+  const store = new Map();
+  globalThis.chrome = {
+    permissions: { contains: async () => true },
+    storage: {
+      local: {
+        get: async (key) => {
+          const out = {};
+          for (const k of (Array.isArray(key) ? key : [key])) if (store.has(k)) out[k] = store.get(k);
+          return out;
+        },
+        set: async (obj) => { for (const [k, v] of Object.entries(obj)) { if (v === undefined) store.delete(k); else store.set(k, v); } },
+        remove: async (keys) => { for (const k of (Array.isArray(keys) ? keys : [keys])) store.delete(k); },
+      },
+    },
+  };
+  let granted = false;
+  const calls = { site_report: 0 };
+  const memoryMap = new Map();
+  // The saved pipeline workflow (the shape save_workflow writes): one step
+  // naming the gated tool.
+  memoryMap.set(workflowKey("wf-card"), {
+    name: "wf-card",
+    kind: "pipeline",
+    description: "",
+    content: JSON.stringify({ steps: [{ id: "s1", tool: "site_report", args: {} }] }),
+    createdAt: 1,
+  });
+  const memory = {
+    origin: "hub",
+    async get(key) { return memoryMap.has(key) ? memoryMap.get(key) : undefined; },
+    async has(key) { return memoryMap.has(key); },
+    async set(key, value) { memoryMap.set(key, value); return 1; },
+    async keys() { return [...memoryMap.keys()]; },
+    async delete(key) { memoryMap.delete(key); },
+  };
+  const grantDigest = () => (granted ? "b".repeat(64) : "a".repeat(64));
+  const tools = {
+    site_report: tool({
+      description: "Report on the current site",
+      inputSchema: z.object({}).strict(),
+      execute: async () => {
+        calls.site_report++;
+        if (!granted) {
+          return {
+            error: "browser control not granted",
+            waitingForPermission: true,
+            permissionRequirement: { reason: "read the current site", permissions: [], grantOrigins: ["https://example.com"], grantGlobal: false },
+          };
+        }
+        return { ok: true, report: "the site report" };
+      },
+    }),
+  };
+  const readLazySources = async () => executableBrowserToolRecords(tools, {
+    version: "1.0.0",
+    sourceGeneration: "extension:test:orchestrator:1",
+    closureGeneration: "extension:test:orchestrator:1:browser:full",
+    packageDigest: "c".repeat(64),
+    permissionDigest: "none",
+    grantDigest: grantDigest(),
+    scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+    capabilities: ["browser.tabs"],
+    authorizationGuard: async () => ({ ok: true, permissionDigest: "none", grantDigest: grantDigest() }),
+  });
+  const modelOutputs = [];
+  const denials = [];
+  const agent = createAgent({
+    model: { model: workflowRunModel("wf-card", modelOutputs), modelId: "workflow-runner", providerName: "test" },
+    id: "hub",
+    name: "hub",
+    memory,
+    taskId: `wf-card-${Math.random().toString(36).slice(2, 8)}`,
+    readLazySources,
+    onProgress: () => {},
+    onPermissionRequest: async (denial) => {
+      denials.push(denial);
+      if (decision === "approved") granted = true;
+      return decision;
+    },
+  });
+  const text = await agent.run("run my saved workflow");
+  return { calls, denials, modelOutputs, text: String(text) };
+}
+
+Deno.test("slice-2 REAL path: a pipeline step's pause surfaces the run's card and Allow re-executes through the real lazy resume", async () => {
+  const { calls, denials, modelOutputs, text } = await runPipelineWithCard("approved");
+  assertEquals(denials.length, 1, "exactly one card, got " + JSON.stringify(denials));
+  assertEquals(denials[0].permissionRequirement.reason, "read the current site", "the card carries the step's requirement");
+  assertEquals(calls.site_report, 2, "the gated step ran once (paused), then re-executed on Allow through the REAL resumeApprovedCall");
+  const joined = modelOutputs.join("\n");
+  assert(joined.includes("the site report"), "the workflow's real result reached the model: " + joined.slice(0, 400));
+  assert(!joined.includes("run this workflow interactively"), "the old fail-closed sentence is gone");
+  assert(!joined.includes("needs owner approval"), "no fail-closed refusal reaches the model");
+  assert(!/NO-SELECTION-REF/.test(text), "the scripted model found workflow_run in the catalog");
+});
+
+Deno.test("slice-2 REAL path: a DENIED pipeline step fails the workflow closed — tool + requirement named, never re-executed", async () => {
+  const { calls, denials, modelOutputs } = await runPipelineWithCard("denied");
+  assertEquals(denials.length, 1, "the card was shown");
+  assertEquals(calls.site_report, 1, "a denied step is NEVER re-executed");
+  const joined = modelOutputs.join("\n");
+  assert(joined.includes("denied"), "the denial reaches the model honestly: " + joined.slice(0, 400));
+  assert(joined.includes("read the current site"), "the requirement is named");
+  assert(joined.includes("site_report"), "the tool is named");
+});

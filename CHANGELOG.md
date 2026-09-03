@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.38] — 2026-09-03
+- Prove the pipeline approval path end to end: a real agent run whose saved pipeline hits a gated step shows the owner card, and Allow re-executes the step through the runtime's resume path (the step ran twice — paused once, approved once — and its real result reached the model); Not now stops the workflow at that step with the tool and reason named, and the step never runs again.
+
 ## [0.3.37] — 2026-09-03
 - Pipeline steps that need your approval now ask: a step needing a capability or a destructive action shows the same approval card a directly-asked tool shows, and Allow runs the step right there (same tool, same checked inputs); Not now stops the pipeline at that step with the reason named. Previously such steps always failed with 'run this workflow interactively'. Only two kinds never run inside a pipeline: a workflow running itself, and remote MCP tools.
 
