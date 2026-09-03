@@ -193,7 +193,7 @@ Deno.test("conversation run status: the Settings route target reveals in place a
   const body = js.slice(start, js.indexOf("function closeView(", start));
   assert(body.includes("viewOverlay.hidden = false;"), "the route reveals the view overlay in context");
   assert(body.includes("viewFocus.open("), "the route moves keyboard focus into the revealed view (Directory view-focus contract)");
-  assert(body.includes("viewFrame"), "the view frame is the focus target of the reveal");
+  assert(body.includes("activePanelFrame"), "the revealed panel frame is the focus target of the reveal");
   // Every other NTP Settings entry uses the same in-context route (no second authority).
   assert(js.includes('openView("options/options.html", "Settings", e.currentTarget)') ||
     js.includes('openView("options/options.html", "Settings", event.currentTarget)'),

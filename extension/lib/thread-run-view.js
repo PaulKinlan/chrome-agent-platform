@@ -48,6 +48,26 @@ export const MAX_VIEW_EXECUTIONS = 50;
 const VIEW_READ_CONCURRENCY = 16;
 const MAX_VIEW_LOG_ROWS = 250;
 
+// kmpq P1 — legacy truncated rows whose journal can no longer be read must not
+// stay dishonest. A pre-kmpq thread row's truncation marker claimed "the
+// complete text is in the run log"; hydration replaces that row only when a
+// full payload actually exists. When NO payload is available (the run log is
+// gone, purged, or unreadable) the old claim is a lie, so the view rewrites the
+// marker to say the remainder was lost — never "in the run log" when it
+// demonstrably is not.
+export function rewriteUnavailablePayloadMarker(content) {
+  const s = String(content ?? "");
+  // Both the legacy pre-kmpq truncation marker ("the complete text is in the
+  // run log") and the kmpq digest marker ("the complete response is in the run
+  // log and opens in full") assert the full text is recoverable from the log.
+  const claimMarker = /\n\n…\([^)]*(?:the complete text|the complete response) is in the run log[^)]*\)/u;
+  if (!claimMarker.test(s)) return s;
+  const idx = s.search(claimMarker);
+  if (idx <= 0) return s;
+  const head = s.slice(0, idx);
+  return `${head}\n\n…(response truncated — the complete response could not be recovered from the run log)`;
+}
+
 /** The in-line notice for runs OUTSIDE the view bound — what is not shown is
  *  stated, never silently dropped. `turnsKept` says whether the surface still
  *  carries the older runs' turns (a task thread persists them in its body). */
@@ -150,7 +170,18 @@ export async function buildThreadRunView(thread, deps) {
     // The full result wins over the 240-char summary preview: the back-fill
     // COMMITS this string as the thread's terminal message, so a preview here
     // would clip the answer permanently (CAP-FB-20260830-TRANSCRIPT-FULL-ANSWER-01).
-    const content = terminal?.result ?? terminal?.summary ?? terminal?.reason ?? (role === "assistant" ? "" : "run failed");
+    // kmpq: prefer the run-log terminal payload (already hydrated into
+    // withLogs) so a recovered huge answer is never clipped to the preview;
+    // the memory row keeps only a bounded digest + ref (commitThreadTerminal).
+    const execLogs = withLogs.find((e) => e.executionId === missing.executionId)?.logs ?? [];
+    const terminalRow = execLogs
+      .filter((r) => r && (r.type === "terminal" || r.type === "compacted") && r.payload && typeof r.payload.result === "string")
+      .at(-1);
+    const fullResult = terminalRow?.payload?.result ?? null;
+    const content = typeof fullResult === "string" && fullResult.length > 0
+      ? fullResult
+      : (terminal?.result ?? terminal?.summary ?? terminal?.reason ?? (role === "assistant" ? "" : "run failed"));
+    const ref = typeof terminal?.retainedPayloadRef === "string" ? terminal.retainedPayloadRef : undefined;
     const derivedMarker = {
       role,
       content: String(content ?? ""),
@@ -167,6 +198,7 @@ export async function buildThreadRunView(thread, deps) {
           content: derivedMarker.content,
           category: terminal?.cancelled ? "cancelled" : "error",
           reason: terminal?.reason ?? undefined,
+          ...(ref ? { retainedPayloadRef: ref } : {}),
         });
         repaired = Boolean(repairedThread);
       } catch (e) {
@@ -200,6 +232,67 @@ export async function buildThreadRunView(thread, deps) {
       });
     }
   }
+
+  // kmpq redesign — the memory row keeps a bounded index/summary + ref; the
+  // COMPLETE response hydrates from the run-log terminal payload at open. The
+  // listLogs reads above already hydrate each viewed execution's terminal
+  // payload (row.payload.result), so replacing a digest/marker'd terminal row
+  // with the full text costs no extra I/O. Rows whose content already equals
+  // the payload (byte-complete ≤ the per-row bound) are untouched. Runs this
+  // pass at the END so reconciliation-derived markers (back-filled terminals)
+  // hydrate too.
+  const payloadByExec = new Map();
+  for (const e of withLogs) {
+    const terminalRow = (Array.isArray(e.logs) ? e.logs : [])
+      .filter((r) => r && (r.type === "terminal" || r.type === "compacted") && r.payload && typeof r.payload.result === "string")
+      .at(-1);
+    const full = terminalRow?.payload?.result ?? null;
+    if (typeof full === "string" && full.length > 0) payloadByExec.set(e.executionId, full);
+  }
+  // Executions READ this pass whose log could not supply the terminal payload
+  // (logFailed, or the log rows carry no retained payload). Only those may
+  // have their legacy/digest marker rewritten — an execution OUTSIDE the read
+  // window still has its payload in the log; claiming loss there would lie the
+  // other way.
+  const readWithoutPayload = new Set(
+    withLogs.filter((e) => !payloadByExec.has(e.executionId)).map((e) => e.executionId),
+  );
+  const hydrateTerminals = (list) => {
+    const out = [];
+    for (const m of list) {
+      if (!m || typeof m !== "object") { out.push(m); continue; }
+      // A terminal assistant/error row carries executionId and no step index;
+      // interim per-step rows keep their own content.
+      if (
+        (m.role === "assistant" || m.role === "error") &&
+        typeof m.executionId === "string" &&
+        !Number.isInteger(m.step) &&
+        typeof m.content === "string"
+      ) {
+        const full = payloadByExec.get(m.executionId);
+        if (typeof full === "string" && full.length > m.content.length) {
+          out.push({ ...m, content: full });
+          continue;
+        }
+        // kmpq P1: this execution WAS read and no payload is available (the
+        // run log is gone or unreadable). A legacy/digest marker that still
+        // claims the complete text is in the run log is a lie — say the
+        // remainder was lost instead of promising content that cannot be
+        // recovered. Rows whose content already admits the loss (the kmpq
+        // boundText "remainder was not retained" marker) are untouched.
+        if (readWithoutPayload.has(m.executionId)) {
+          const honest = rewriteUnavailablePayloadMarker(m.content);
+          if (honest !== m.content) {
+            out.push({ ...m, content: honest });
+            continue;
+          }
+        }
+      }
+      out.push(m);
+    }
+    return out;
+  };
+  messages.splice(0, messages.length, ...hydrateTerminals(messages));
 
   return {
     ...thread,

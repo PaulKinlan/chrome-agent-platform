@@ -1,19 +1,71 @@
 # Changelog
 
-## [0.3.10] — 2026-09-03
-- sync the beads JSONL export
+## [0.3.28] — 2026-09-03
+- Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
 
-## [0.3.9] — 2026-09-03
-- sync the beads JSONL export (r3 candidate comment on chrome-agent-platform-9ve7)
+## [0.3.27] — 2026-09-03
+- no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
 
-## [0.3.8] — 2026-09-03
-- Pipeline steps for patch_asset and disenroll_origin fail closed before dispatch, and workflow saves count toward the 128 limit atomically per store
+## [0.3.26] — 2026-09-03
+- no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
+
+## [0.3.25] — 2026-09-03
+- no self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
+
+## [0.3.24] — 2026-09-03
+- agents tidy up after themselves — restored-window lifecycle tracking, keeper exclusions, and honest run-end notes
+
+## [0.3.23] — 2026-09-03
+- sandbox rules lead tool discovery, teaching errors fire in the real sandbox, and the persistence recommendation is recorded
+
+## [0.3.22] — 2026-09-03
+- site-tool errors carry the real cause — tool, phase, redacted message/stack, realm, and origin instead of a bare UnknownError
+
+## [0.3.21] — 2026-09-03
+- the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
+
+## [0.3.20] — 2026-09-03
+- the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
+
+## [0.3.19] — 2026-09-03
+- the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
+
+## [0.3.18] — 2026-09-03
+
+## [0.3.17] — 2026-09-03
+- The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
+
+## [0.3.16] — 2026-09-03
+- read_file delivers every requested byte — no size-cap refusals in the reader, multibyte-safe windows, transport decides delivery
+
+## [0.3.15] — 2026-09-03
+- targeted test gates — a dependency-aware picker runs only the tests your change exercises, and fails closed to the full suite when coverage can't be proven
+
+## [0.3.14] — 2026-09-03
+- skill promotion — agents with no skills attached get a bounded, fenced pointer at relevant catalog skills, with a falsification-proven eval suite
+
+## [0.3.13] — 2026-09-03
+- the model picker gains Gemini 3.8 Flash and Fable 5.1, with every price audited against published sources
+
+## [0.3.12] — 2026-09-03
+- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
+
+## [0.3.11] — 2026-09-02
+- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
+
+## [0.3.10] — 2026-09-02
+- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
+
+## [0.3.9] — 2026-09-02
+
+## [0.3.8] — 2026-09-02
+- Embedded views keep their owner identity: the boot strips ?embedded=1 after marking the document, so exact-document authorization matches the real Settings surface again
 
 ## [0.3.7] — 2026-09-02
-- Review round 2: workflows approval gates, fail-closed steps, bounds
+- CSP lint: require whitespace before src so data-src cannot smuggle an inline script
 
 ## [0.3.6] — 2026-09-02
-- Agents save, recall, and run reusable workflows from their own memory
+- No shipped page runs an inline script: the embedded boot moves to a shared external file and a lint pins CSP hygiene
 
 ## [0.3.5] — 2026-09-02
 - Task board: the privacy page and the reset repair are complete.

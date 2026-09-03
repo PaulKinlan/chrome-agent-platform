@@ -94,19 +94,18 @@ export const WASI_RIGHTS = Object.freeze({
 });
 
 export const WASI_HOST_HARD_LIMITS = Object.freeze({
+  // dptw (2026-09-03): the BYTE ceilings (args, stdin/stdout/stderr, per-call
+  // IO, file size) are gone — WASI jobs move data of any size. What remains:
+  //   - call/FD COUNTS (runaway guards, not size),
+  //   - path segment/path grammar (the underlying filesystem's real limit),
+  //   - MAX_RANDOM_BYTES_PER_CALL (WebCrypto's getRandomValues quota —
+  //     platform-real; larger requests are filled in chunks by the runtime).
   MAX_ARGS: 64,
-  MAX_ARG_BYTES: 4096,
-  MAX_STDIN_BYTES: 1024 * 1024,
-  MAX_STDOUT_BYTES: 1024 * 1024,
-  MAX_STDERR_BYTES: 256 * 1024,
   MAX_HOST_CALLS: 50_000,
   MAX_PATH_CALLS: 4096,
   MAX_PATH_BYTES: 1024,
   MAX_PATH_SEGMENT_BYTES: 255,
   MAX_IOVECS: 1024,
-  MAX_IO_BYTES_PER_CALL: 1024 * 1024,
-  MAX_FILE_BYTES: 10 * 1024 * 1024,
-  MAX_FILE_IO_BYTES: 10 * 1024 * 1024,
   MAX_RANDOM_BYTES_PER_CALL: 65_536,
   MAX_DYNAMIC_FDS: 256,
 });
@@ -114,11 +113,12 @@ export const WASI_HOST_HARD_LIMITS = Object.freeze({
 export const WASI_HOST_DEFAULT_QUOTA = Object.freeze({
   hostCalls: WASI_HOST_HARD_LIMITS.MAX_HOST_CALLS,
   pathCalls: WASI_HOST_HARD_LIMITS.MAX_PATH_CALLS,
-  stdinBytes: WASI_HOST_HARD_LIMITS.MAX_STDIN_BYTES,
-  stdoutBytes: WASI_HOST_HARD_LIMITS.MAX_STDOUT_BYTES,
-  stderrBytes: WASI_HOST_HARD_LIMITS.MAX_STDERR_BYTES,
-  fileBytes: WASI_HOST_HARD_LIMITS.MAX_FILE_IO_BYTES,
-  fileSize: WASI_HOST_HARD_LIMITS.MAX_FILE_BYTES,
+  // Byte quotas are unbounded (dptw) — data moves whole.
+  stdinBytes: Number.POSITIVE_INFINITY,
+  stdoutBytes: Number.POSITIVE_INFINITY,
+  stderrBytes: Number.POSITIVE_INFINITY,
+  fileBytes: Number.POSITIVE_INFINITY,
+  fileSize: Number.POSITIVE_INFINITY,
   dynamicFds: WASI_HOST_HARD_LIMITS.MAX_DYNAMIC_FDS,
 });
 
@@ -246,7 +246,12 @@ export function createWasiQuota(value = WASI_HOST_DEFAULT_QUOTA) {
       ? Object.getOwnPropertyDescriptor(value, key).value
       : WASI_HOST_DEFAULT_QUOTA[key];
     const hard = WASI_HOST_DEFAULT_QUOTA[key];
-    if (!Number.isSafeInteger(candidate) || candidate < 0 || candidate > hard) {
+    // Byte quotas admit Infinity (no limit, dptw); counts stay safe-integers.
+    const byteQuota = !Number.isSafeInteger(hard);
+    const okValue = byteQuota
+      ? (candidate === Number.POSITIVE_INFINITY || (Number.isSafeInteger(candidate) && candidate >= 0))
+      : (Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= hard);
+    if (!okValue) {
       fail(`quota_${key}`);
     }
     quota[key] = candidate;
@@ -265,17 +270,12 @@ export function createWasiJob(value) {
     !Array.isArray(input.args) ||
     input.args.length > WASI_HOST_HARD_LIMITS.MAX_ARGS
   ) fail("job_args");
-  let argBytes = 0;
   const args = input.args.map((arg) => {
     if (
       typeof arg !== "string" || arg.includes("\0") || !isWellFormedText(arg)
     ) fail("job_args");
-    const bytes = encoder.encode(arg);
-    if (bytes.length > 1024) fail("job_args");
-    argBytes += bytes.length + 1;
     return arg;
   });
-  if (argBytes > WASI_HOST_HARD_LIMITS.MAX_ARG_BYTES) fail("job_args");
   if (
     !(input.stdin instanceof Uint8Array) ||
     input.stdin.byteLength > quota.stdinBytes

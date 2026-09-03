@@ -201,12 +201,9 @@ export function isAbortShape(value) {
   return false;
 }
 
-// One skill_read response carries at most this many bytes of file text — the
-// lazy protocol's per-string projection bound (TOOL_ARGUMENT_LIMITS.
-// maxStringUtf8Bytes, 16KiB) hard-caps what the model can receive in one
-// result, so requesting more would be silently truncated. The tool returns
-// EXACTLY what the model can read, with pagination (`truncated`/`nextOffset`)
-// for larger bodies.
+// The skill_read DEFAULT page size. Pagination (offset/limit +
+// `truncated`/`nextOffset`) is a feature, not a ceiling (dptw): a caller may
+// request any limit and receives exactly that window, whole.
 const SKILL_READ_LIMIT = 16 * 1024;
 
 /**
@@ -232,10 +229,10 @@ export function skillReadToolset(skillStore = null) {
       description:
         "Read an imported skill's SKILL.md body or one of its files. A large skill's body is NOT composed into the system prompt; call this to load the body or a supporting file (scripts/, references/) on demand. Args: skill (the /skill: id), path (default SKILL.md), offset+limit for pagination. Returns the text chunk with totalBytes and nextOffset when more remains.",
       inputSchema: z.object({
-        skill: z.string().min(1).max(64),
-        path: z.string().min(1).max(512).optional(),
+        skill: z.string().min(1),
+        path: z.string().min(1).optional(),
         offset: z.number().int().min(0).optional(),
-        limit: z.number().int().min(1).max(SKILL_READ_LIMIT).optional(),
+        limit: z.number().int().min(1).optional(),
       }),
       execute: async ({ skill, path = "SKILL.md", offset = 0, limit = SKILL_READ_LIMIT }) => {
         const rawKey = String(path ?? "SKILL.md");
@@ -336,7 +333,7 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
     memory_set: tool({
       description:
         "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
-      inputSchema: z.object({ key: z.string().min(1).max(128), value: z.any() }),
+      inputSchema: z.object({ key: z.string().min(1), value: z.any() }),
       execute: async ({ key, value }) => {
         // The workflows: namespace is OWNED by save_workflow (its records carry
         // save-time validation that memory_set cannot reproduce — a forged
@@ -505,7 +502,7 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
       description:
         "Search this agent's own memory (key-value store) AND run history (journal) for a substring. Returns matching keys + a bounded excerpt of each match, never the full store.",
       inputSchema: z.object({
-        query: z.string().min(1).max(200).describe("the substring to search for"),
+        query: z.string().min(1).describe("the substring to search for"),
       }),
       execute: async ({ query }) => {
         const err = await enrolledGuard();
@@ -1747,7 +1744,7 @@ export function createAgent({
     // prompt bodies recompose into the system prompt BEFORE the protected
     // block (a fresh agent for this run), so referenced-skill instructions
     // never sit after the runtime policy.
-    run: async (task, context, history, runGen, runSkills, runIdentity = null) => {
+    run: async (task, context, history, runGen, runSkills, runIdentity = null, runPromotion = null) => {
       // Serialize the run behind any prior run of THIS worker (see runQueue above).
       // `execute` carries the full original body; the queue always advances even
       // if a run rejects, so a failed run can never poison later runs.
@@ -1791,13 +1788,26 @@ export function createAgent({
       // started). The listener is removed in finally so a post-run abort can
       // never leak into a queued next run (the round-16 cross-run abort blocker).
       // A run carrying per-run skills runs on a FRESH agent whose system prompt
-      // recomposes those skills before the protected block.
+      // recomposes those skills before the protected block. `runPromotion`
+      // (chrome-agent-platform-ve67) is the task-relevant catalog promotion
+      // section, composed between the skills block and the policy — it is
+      // deterministic text computed by the caller (the service worker) from
+      // the run's task + the skill catalog, and rides the same fresh-agent
+      // boundary so it can never sit after the protected policy.
       const hasRunSkills = Array.isArray(runSkills) && runSkills.length > 0;
-      const runAgent = hasRunSkills
-        ? makeAgent(appendSkillsLayer(system, [...(skills ?? []), ...runSkills], undefined, untrustedToken))
+      const promotionText = String(runPromotion ?? "").trim() || null;
+      const composeRunPrompt = () => appendSkillsLayer(
+        system,
+        [...(skills ?? []), ...(hasRunSkills ? runSkills : [])],
+        undefined,
+        untrustedToken,
+        promotionText,
+      );
+      const runAgent = (hasRunSkills || promotionText)
+        ? makeAgent(composeRunPrompt())
         : agent;
-      activeSystemPrompt = hasRunSkills
-        ? appendSkillsLayer(system, [...(skills ?? []), ...runSkills], undefined, untrustedToken)
+      activeSystemPrompt = (hasRunSkills || promotionText)
+        ? composeRunPrompt()
         : systemPrompt;
       const onAbort = () => {
         try {
@@ -2133,7 +2143,7 @@ export function createOrchestrator({
   return {
     master,
     workers: workerAgents,
-    async run(task, context, history, runSkills, runIdentity = null) {
+    async run(task, context, history, runSkills, runIdentity = null, runPromotion = null) {
       // Solo/multi-agent runs expose the same two-tool provider surface. The
       // logical/durable identity is held only for this serialized run and is
       // inherited by delegated workers.
@@ -2148,6 +2158,7 @@ export function createOrchestrator({
           undefined,
           runSkills,
           currentRunIdentity,
+          runPromotion,
         );
       } finally {
         currentRunIdentity = null;

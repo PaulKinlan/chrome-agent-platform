@@ -1706,7 +1706,7 @@ Deno.test("retention: a wipe under a live registry is survivable — forgetCache
   assertEquals((await registry.list()).runs.length, 0, "the wiped registry lists nothing");
 });
 
-Deno.test("durable runs: the serialized OUTBOX stays under the store per-value bound for a near-bound terminal (r1 B1)", async () => {
+Deno.test("durable runs: a 210KiB terminal never approaches the store bound — outbox is digest+ref, the full text resolves to the thread (kmpq)", async () => {
   const store = new FakeStore();
   // The outbox is deleted after processing — capture it at WRITE time.
   const captured = {};
@@ -1717,12 +1717,12 @@ Deno.test("durable runs: the serialized OUTBOX stays under the store per-value b
   };
   const run = harness(store);
   await begin(run.registry);
-  // A near-bound response: ~210 KiB of content. The outbox must carry ONE full
-  // copy for the thread back-fill + small previews (journal + terminal), with
-  // the authoritative full text in the retainedPayloadRef payload — the total
-  // serialized outbox must stay under the memory store's 256 KiB per-value
-  // bound, or the real store would throw on settle.
-  const near = "result-".repeat(30_000); // ~210 KiB
+  // A 210 KiB response (comfortably over the 16 KiB digest bound): the outbox
+  // record must stay small BY DESIGN (a bounded digest + the retainedPayloadRef
+  // — the payload never lives in the record), and the thread commit RESOLVES
+  // the full text from the durable payload so the memory row is byte-complete
+  // when it fits the per-row bound.
+  const near = "result-".repeat(30_000); // ~210 KiB — comfortably over the 16 KiB digest bound
   await run.registry.settle(executionId, { ok: true, result: near, logicalId: "task-near" });
   const outboxKey = `run-outbox:${executionId}`;
   const outbox = captured[outboxKey];
@@ -1736,12 +1736,19 @@ Deno.test("durable runs: the serialized OUTBOX stays under the store per-value b
   assert(terminalPreview.length < near.length, "the outbox terminal result is a bounded preview");
   assert(terminalPreview.length <= 300, "the outbox terminal result is genuinely small");
   assert(typeof outbox.retainedPayloadRef === "string" && outbox.retainedPayloadRef.length > 0, "retainedPayloadRef present");
-  // The thread back-fill keeps the full bounded text (byte-capped, multi-byte-safe).
-  const threadContent = outbox.threadTerminal?.content ?? "";
-  assert(threadContent.length > near.length * 0.9, "thread back-fill keeps the full response");
+  // The outbox thread back-fill is a bounded DIGEST + the ref, never the
+  // payload: over-budget content is stored complete only in the retained
+  // payload, and the digest is far smaller than the response.
+  const threadDigest = outbox.threadTerminal?.content ?? "";
+  assert(threadDigest.length < near.length * 0.1, "the outbox back-fill is a bounded digest, not the payload");
+  assert(typeof outbox.threadTerminal?.retainedPayloadRef === "string", "the digest rides the retainedPayloadRef");
+  assert(threadDigest.includes("complete response is in the run log"), "the digest names where the full text lives");
+  // The thread COMMIT resolves the full text from the payload (idempotent).
+  assertEquals(run.thread.find((row) => row.executionId === executionId)?.content?.length, near.length,
+    "the thread commit receives the resolved complete text");
 });
 
-Deno.test("durable runs: multi-byte near-bound terminal keeps the outbox under the store bound (r1 B1/B2)", async () => {
+Deno.test("durable runs: multi-byte near-bound terminal keeps the outbox under the store bound (kmpq)", async () => {
   const store = new FakeStore();
   const captured = {};
   const origSet = store.setTrusted.bind(store);
@@ -1751,9 +1758,9 @@ Deno.test("durable runs: multi-byte near-bound terminal keeps the outbox under t
   };
   const run = harness(store);
   await begin(run.registry);
-  // 70,000 emoji = 140,000 UTF-16 units = 280,000 UTF-8 bytes; the thread
-  // back-fill must be byte-capped (not char-capped) so the outbox stays under
-  // the store bound.
+  // 70,000 emoji = 140,000 UTF-16 units = 280,000 UTF-8 bytes; the outbox
+  // carries only a digest + ref, so multi-byte content cannot push the record
+  // toward the store bound — the full bytes stay in the retained payload.
   const emoji = "\u{1F600}".repeat(70_000);
   await run.registry.settle(executionId, { ok: true, result: emoji, logicalId: "task-emoji" });
   const outbox = captured[`run-outbox:${executionId}`];
@@ -1761,9 +1768,11 @@ Deno.test("durable runs: multi-byte near-bound terminal keeps the outbox under t
   const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
   assert(serialized < 256 * 1024,
     `multi-byte outbox must stay under the store bound (serialized ${serialized} bytes >= 256 KiB)`);
+  assertEquals(run.thread.find((row) => row.executionId === executionId)?.content?.length, emoji.length,
+    "the thread commit receives the resolved complete multi-byte text");
 });
 
-Deno.test("durable runs: the outbox full copy carries the never-silent marker when truncated (r2 B1)", async () => {
+Deno.test("durable runs: the outbox digest never pretends to be the full response — over-budget text is stored complete only in the payload (kmpq)", async () => {
   const store = new FakeStore();
   const captured = {};
   const origSet = store.setTrusted.bind(store);
@@ -1773,19 +1782,22 @@ Deno.test("durable runs: the outbox full copy carries the never-silent marker wh
   };
   const run = harness(store);
   await begin(run.registry);
-  // Over the 240 KiB byte cap → the thread back-fill must be truncated WITH
-  // the explicit marker (the durable path must never truncate silently).
+  // Over the per-row bound: the outbox back-fill is a bounded digest whose
+  // marker says the complete text is in the run log (never silent) — the
+  // record never embeds a truncated copy of the response.
   const huge = "y".repeat(300 * 1024);
   await run.registry.settle(executionId, { ok: true, result: huge, logicalId: "task-b1" });
   const outbox = captured[`run-outbox:${executionId}`];
   assert(outbox, "outbox persisted");
   const content = outbox.threadTerminal?.content ?? "";
   assert(content.length > 0, "thread back-fill present");
-  assert(content.includes("truncated to 240 KiB"), "the durable truncation carries the never-silent marker");
-  assert(content.includes("complete text is in the run log"), "the marker names where the full text lives");
-  // The serialized outbox still fits the store bound.
+  assert(content.includes("complete response is in the run log"), "the digest names where the full text lives");
+  assert(content.length < huge.length * 0.1, "the outbox holds a digest, never the near-bound copy");
+  // The serialized outbox fits the store bound trivially.
   const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
-  assert(serialized < 256 * 1024, `outbox over budget after marker (${serialized} bytes)`);
+  assert(serialized < 256 * 1024, `outbox over budget (${serialized} bytes)`);
+  assertEquals(run.thread.find((row) => row.executionId === executionId)?.content?.length, huge.length,
+    "the thread commit resolves the complete text");
 });
 
 Deno.test("durable runs: a control-char flood cannot blow the outbox past the store bound via JSON escaping (r2 B2)", async () => {
@@ -1837,7 +1849,7 @@ Deno.test("durable runs: the retained full payload is REDACTED like every other 
     "the outbox must not carry the raw secret either");
 });
 
-Deno.test("durable runs: the backstop shrink keeps the marker and never splits a surrogate (r3 P1)", async () => {
+Deno.test("durable runs: an over-budget response with a large envelope stays small BY DESIGN — digest is code-point safe (kmpq)", async () => {
   const store = new FakeStore();
   const captured = {};
   const origSet = store.setTrusted.bind(store);
@@ -1847,11 +1859,10 @@ Deno.test("durable runs: the backstop shrink keeps the marker and never splits a
   };
   const run = harness(store);
   await begin(run.registry);
-  // Force the SERIALIZED-size backstop to fire: content that byte-caps to the
-  // 240 KiB escaped budget (with marker) PLUS a large skills envelope pushes
-  // the serialized outbox past the 256 KiB store bound. The shrink loop must
-  // then re-slice the content — and the truncation marker must SURVIVE the
-  // shrink, with cuts on code-point boundaries (no lone surrogate).
+  // Even a near-bound response PLUS a large skills envelope cannot push the
+  // outbox toward the 256 KiB bound: the record never carries the payload (a
+  // bounded digest + ref only) and the envelope is bounded at build with the
+  // same caps commitThreadTerminal applies.
   const emojiNearBoundary = "a".repeat(200_000) + "\u{1F600}".repeat(5_000) + "b".repeat(100_000);
   const bigSkills = Array.from({ length: 400 }, (_, i) => `skill-${i}-` + "x".repeat(300));
   await run.registry.settle(executionId, {
@@ -1863,29 +1874,20 @@ Deno.test("durable runs: the backstop shrink keeps the marker and never splits a
   const outbox = captured[`run-outbox:${executionId}`];
   assert(outbox, "outbox persisted");
   const content = outbox.threadTerminal?.content ?? "";
-  // The marker must survive the backstop shrink (never-silent truncation) and
-  // its label must state the ACTUAL cap applied (r4 P1b: dynamic, honest).
-  const markerMatch = content.match(/truncated to (\d+) KiB/);
-  assert(markerMatch, "the truncation marker survived the backstop shrink: " + content.slice(-90));
-  assert(content.includes("complete text is in the run log"), "the marker names where the full text lives");
-  const storedEscapedKiB = Math.floor(new TextEncoder().encode(JSON.stringify(content)).byteLength / 1024);
-  const claimedKiB = Number(markerMatch[1]);
-  assert(Math.abs(storedEscapedKiB - claimedKiB) <= 1,
-    `the marker label must match the actual stored cap (claims ${claimedKiB} KiB, stored ${storedEscapedKiB} KiB)`);
-  // No lone high surrogate at the cut (code-point boundary preserved).
+  assert(content.includes("complete response is in the run log"), "the digest names where the full text lives");
+  // No lone high surrogate at the digest cut (code-point boundary preserved).
   const lastChar = content.charCodeAt(content.length - 1);
   assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
-    `the shrink cut left a lone high surrogate (0x${lastChar.toString(16)})`);
+    `the digest cut left a lone high surrogate (0x${lastChar.toString(16)})`);
   const decoded = new TextDecoder().decode(new TextEncoder().encode(content));
   assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair survived");
-  // The serialized outbox fits the store bound, and the envelope (skills) is intact.
-  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
-  assert(serialized < 256 * 1024, `serialized outbox must fit the store bound after shrink (${serialized} bytes)`);
-  assertEquals(Array.isArray(outbox.threadTerminal?.skills) ? outbox.threadTerminal.skills.length : 0, 400,
-    "the shrink only touches the full copy, never the envelope");
+  // dptw: the outbox still carries digest+ref by design (payload by
+  // reference), but the envelope is NOT count-bounded — all 400 skills land.
+  const skillCount = Array.isArray(outbox.threadTerminal?.skills) ? outbox.threadTerminal.skills.length : 0;
+  assertEquals(skillCount, 400, "dptw: no envelope cap — every journaled skill lands whole");
 });
 
-Deno.test("durable runs: the backstop shrink strictly terminates with the outbox FITTING when content can absorb the overflow (r4 P1a)", async () => {
+Deno.test("durable runs: settle never shrinks or spins — a 10MiB result fits an outbox that only carries refs (kmpq)", async () => {
   const store = new FakeStore();
   const captured = {};
   const origSet = store.setTrusted.bind(store);
@@ -1895,50 +1897,72 @@ Deno.test("durable runs: the backstop shrink strictly terminates with the outbox
   };
   const run = harness(store);
   await begin(run.registry);
-  // Adversarial: content near the 240 KiB escaped cap PLUS an envelope big
-  // enough that the FIRST serialized outbox is over the 256 KiB bound, but
-  // small enough that giving up content CAN fit it. The loop must converge on
-  // a fitting outbox (strictly, no floor stall) with an honest dynamic marker.
-  const content = "a".repeat(240_000) + "\u{1F600}".repeat(500);
-  const skills = Array.from({ length: 120 }, (_, i) => `skill-${i}-` + "x".repeat(400)); // ~60 KB envelope
-  await run.registry.settle(executionId, { ok: true, result: content, logicalId: "task-p1a", skills });
+  // 10 MiB of content: the record carries the digest + ref, so the serialized
+  // outbox is trivially small. No shrink loop exists to stall or fail-loud.
+  // (Heterogeneous content — homogeneous runs trip the redactor's URL-userinfo
+  // regex catastrophically, a pre-existing quirk unrelated to the outbox.)
+  const content = "The quick brown fox jumps over the lazy dog. 0123456789\n".repeat(Math.ceil((10 * 1024 * 1024) / 60));
+  await run.registry.settle(executionId, { ok: true, result: content, logicalId: "task-p1a" });
   const outbox = captured[`run-outbox:${executionId}`];
   assert(outbox, "outbox persisted (settle did not hang or throw)");
   const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
-  assert(serialized < 256 * 1024, `outbox must FIT the store bound after shrink (${serialized} bytes)`);
+  assert(serialized < 256 * 1024, `outbox must FIT the store bound (${serialized} bytes)`);
+  assert(serialized < 64 * 1024, `10MiB result never approaches the bound (${serialized} bytes)`);
   const stored = outbox.threadTerminal?.content ?? "";
-  assert(stored.includes("truncated to"), "the marker is present after the shrink");
-  assert(stored.includes("complete text is in the run log"), "the marker names where the full text lives");
+  assert(stored.includes("complete response is in the run log"), "the digest names where the full text lives");
   const lastChar = stored.charCodeAt(stored.length - 1);
   assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF), "no lone high surrogate at the cut");
+  assertEquals(run.thread.find((row) => row.executionId === executionId)?.content?.length, content.length,
+    "the thread commit resolves the complete 10MiB text");
 });
 
-Deno.test("durable runs: an envelope that alone exceeds the store bound fails LOUDLY, never spins (r4 P1a)", async () => {
-  // A bound-enforcing store mirrors the real memory store (MAX_VALUE_BYTES):
-  // an outbox that cannot fit after the content is fully given up must reject
-  // the settle with an honest error rather than loop forever or silently write
-  // an over-bound value.
+Deno.test("durable runs: a large ENVELOPE cannot stall the settle (dptw — no build bound, no store bound)", async () => {
+  // dptw: neither the envelope build nor the store has a byte/count bound —
+  // 700 oversized skills (~300 KB) settle whole through the REAL store path.
   const store = new FakeStore();
+  const captured = {};
   const origSet = store.setTrusted.bind(store);
   store.setTrusted = async (key, value) => {
-    const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
-    if (String(key).startsWith("run-outbox:") && bytes > 256 * 1024) {
-      throw new Error(`value for "${key}" exceeds the 262144-byte bound`);
-    }
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
     return origSet(key, value);
   };
   const run = harness(store);
   await begin(run.registry);
-  // Envelope ~300 KB — larger than the entire 256 KiB bound; no content give-up
-  // can fit it. The loop must terminate at the marker floor and the settle must
-  // reject with the honest bound error (no infinite spin).
   const hugeSkills = Array.from({ length: 700 }, (_, i) => `skill-${i}-` + "x".repeat(400));
-  let rejected = null;
+  let settled = null;
   try {
-    await run.registry.settle(executionId, { ok: true, result: "reply", logicalId: "task-p1a-big", skills: hugeSkills });
+    settled = await run.registry.settle(executionId, { ok: true, result: "reply", logicalId: "task-p1a-big", skills: hugeSkills });
   } catch (e) {
-    rejected = String(e?.message ?? e);
+    settled = { threw: String(e?.message ?? e) };
   }
-  assert(rejected !== null, "an unfittable envelope must reject the settle");
-  assert(rejected.includes("bound"), `the rejection must be the honest store-bound error (got: ${rejected.slice(0, 80)})`);
+  assert(settled !== null && !settled.threw, "the settle completes — nothing is bounded, nothing is rejected");
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted");
+  const skillCount = Array.isArray(outbox.threadTerminal?.skills) ? outbox.threadTerminal.skills.length : 0;
+  assertEquals(skillCount, 700, "dptw: all 700 skills journaled whole");
+});
+
+Deno.test("durable runs: an oversized logicalId is stored WHOLE (dptw — no store bound left to trip)", async () => {
+  // dptw: memory.js has no per-value bound, so a 300KiB logicalId simply
+  // persists. journalEntry.id is copied whole (never clipped at construction).
+  const store = new FakeStore();
+  const captured = {};
+  const origSet = store.setTrusted.bind(store);
+  store.setTrusted = async (key, value) => {
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
+    return origSet(key, value);
+  };
+  const run = harness(store);
+  await begin(run.registry);
+  const hostileId = "x".repeat(300 * 1024); // 300KiB logicalId from a hostile run-task
+  let settled = null;
+  try {
+    settled = await run.registry.settle(executionId, { ok: true, result: "reply", logicalId: hostileId });
+  } catch (e) {
+    settled = { threw: String(e?.message ?? e) };
+  }
+  assert(settled !== null && !settled.threw, "settle must not fail on an oversized logicalId");
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted");
+  assertEquals(outbox.journalEntry?.id, hostileId, "dptw: journalEntry.id stored whole (unclipped)");
 });

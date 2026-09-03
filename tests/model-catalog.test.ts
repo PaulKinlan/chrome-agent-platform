@@ -125,3 +125,32 @@ Deno.test("fetchLiveModels: OpenAI-compatible list, normalised, tiers dropped, n
     globalThis.fetch = realFetch;
   }
 });
+
+// ── beads chrome-agent-platform-pf0k (2026-09-02): the two models launched
+// 2026-09-01/02 must reach the picker, and every catalogue id must be priced.
+// Falsification: drop gemini-3.8-flash from the gemini suggested list (or the
+// price row) and these go RED.
+import { MODEL_PRICING } from "../extension/lib/model-prices.js";
+
+Deno.test("the picker offers gemini-3.8-flash and claude-fable-5-1", () => {
+  assert(suggestedModelsFor("gemini").includes("gemini-3.8-flash"), "gemini suggested lacks gemini-3.8-flash");
+  assert(suggestedModelsFor("anthropic").includes("claude-fable-5-1"), "anthropic suggested lacks claude-fable-5-1");
+  // Newest first: the new Flash sorts ahead of 3.7.
+  const g = suggestedModelsFor("gemini");
+  assert(g.indexOf("gemini-3.8-flash") < g.indexOf("gemini-3.7-flash"), "3.8-flash should sort before 3.7-flash");
+});
+
+Deno.test("every catalogue default/suggested id is priced (positive input/output)", () => {
+  for (const [providerId, entry] of Object.entries(MODEL_CATALOG)) {
+    for (const m of [entry.default, ...entry.suggested].filter(Boolean)) {
+      const p = MODEL_PRICING[m];
+      assert(p, `${providerId}: ${m} has no MODEL_PRICING row (would silently estimate $0)`);
+      assertEquals(typeof p.input, "number", `${m}.input`);
+      assertEquals(typeof p.output, "number", `${m}.output`);
+      assert(p.input > 0, `${providerId}: ${m}.input must be positive`);
+      assert(p.output > 0, `${providerId}: ${m}.output must be positive`);
+      if (p.cacheRead != null) assert(p.cacheRead > 0, `${m}.cacheRead must be positive when present`);
+      if (p.cacheWrite != null) assert(p.cacheWrite > 0, `${m}.cacheWrite must be positive when present`);
+    }
+  }
+});

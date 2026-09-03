@@ -672,34 +672,29 @@ export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
 // current body is not necessarily model-authored. The record is staged in the
 // approval store keyed by approvalId and evicted with the approval row.
 export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update", "fs.write"]);
-export const STAGED_APPROVAL_DETAIL_BOUNDS = Object.freeze({
-  maxContentChars: 1024 * 1024,
-  maxNameChars: 256,
-  maxLabelChars: 256,
-});
-
-/** Bound a staged edit detail ({ kind, name, oldContent, newContent, added,
+/** Validate a staged edit detail ({ kind, name, oldContent, newContent, added,
  * removed, oldLabel, newLabel }). A malformed record (unknown kind, no name)
- * is dropped — the card then falls back to the opaque form. The `added` /
+ * is dropped — the card then falls back to the opaque form. Content is NEVER
+ * clipped (dptw): the owner approves only a diff shown in full. The `added` /
  * `removed` counts are computed by the caller with the diff core over the SAME
  * two bodies stored here, so the card title's `+n -m` can never disagree with
  * the rendered diff. */
 export function boundStagedApprovalDetail(detail) {
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
   if (!STAGED_APPROVAL_DETAIL_KINDS.has(detail.kind)) return null;
-  const str = (value, max) => (typeof value === "string" ? value.slice(0, max) : "");
+  const str = (value) => (typeof value === "string" ? value : "");
   const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
-  const name = str(detail.name, STAGED_APPROVAL_DETAIL_BOUNDS.maxNameChars);
+  const name = str(detail.name);
   if (!name) return null;
   return {
     kind: detail.kind,
     name,
-    oldContent: str(detail.oldContent, STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars),
-    newContent: str(detail.newContent, STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars),
+    oldContent: str(detail.oldContent),
+    newContent: str(detail.newContent),
     added: count(detail.added),
     removed: count(detail.removed),
-    oldLabel: str(detail.oldLabel, STAGED_APPROVAL_DETAIL_BOUNDS.maxLabelChars) || `${name} (current)`,
-    newLabel: str(detail.newLabel, STAGED_APPROVAL_DETAIL_BOUNDS.maxLabelChars) || `${name} (proposed)`,
+    oldLabel: str(detail.oldLabel) || `${name} (current)`,
+    newLabel: str(detail.newLabel) || `${name} (proposed)`,
   };
 }
 

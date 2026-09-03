@@ -49,24 +49,24 @@ Deno.test("pyodide: a failed load degrades to unavailable and the platform still
   assertEquals(run.error, "python_unavailable");
 });
 
-Deno.test("pyodide: runPython enforces the stdin/stdout/timeout bounds + the non-eval entrypoint, fresh per run", async () => {
+Deno.test("pyodide: runPython has NO byte budgets (dptw); the timeout + non-eval entrypoint stay", async () => {
   // A mock with the NON-EVAL interpreter shape (runPythonAsync + setStdout/setStdin).
   const mockRuntime = (behavior) => ({
     runPythonAsync: behavior,
     setStdout: () => {},
     setStdin: () => {},
   });
-  // stdin over budget.
-  const over = await runPython(mockRuntime(async () => {}), { code: "x", stdin: "y".repeat(PYTHON_EXEC_BOUNDS.maxStdinBytes + 1) });
-  assertEquals(over.ok, false);
-  assertEquals(over.error, "python_stdin_over_budget");
+  // stdin past the removed 2 KiB budget runs.
+  const over = await runPython(mockRuntime(async () => {}), { code: "x", stdin: "y".repeat(2048 + 1) });
+  assertEquals(over.ok, true, "stdin past the old budget runs");
   // empty code.
   const empty = await runPython(mockRuntime(async () => {}), { code: "" });
   assertEquals(empty.error, "python_empty_code");
-  // stdout over budget — the interpreter emits via setStdout.batched.
-  const big = await runPython({ runPythonAsync: async () => {}, setStdout: ({ batched }) => batched("z".repeat(PYTHON_EXEC_BOUNDS.maxStdoutBytes + 1)), setStdin: () => {} }, { code: "print()" });
-  assertEquals(big.ok, false);
-  assertEquals(big.error, "python_stdout_over_budget");
+  // stdout past the removed 64 KiB budget arrives whole.
+  const bigOut = "z".repeat(64 * 1024 + 1);
+  const big = await runPython({ runPythonAsync: async () => {}, setStdout: ({ batched }) => batched(bigOut), setStdin: () => {} }, { code: "print()" });
+  assertEquals(big.ok, true, "stdout past the old budget arrives");
+  assertEquals(big.stdout, bigOut, "the whole output is delivered");
   // the timeout fence.
   const slow = await runPython({ runPythonAsync: () => new Promise(() => {}), setStdout: () => {}, setStdin: () => {} }, { code: "sleep", timeoutMs: 5 });
   assertEquals(slow.ok, false);
@@ -115,7 +115,7 @@ Deno.test("pyodide: the python tool fails closed when the runtime is not admitte
   const ok = await pythonTool.execute({ code: "print(6*7)" });
   assertEquals(ok.ok, true);
   assertEquals(ok.stdout, "42\n");
-  // Over-budget code is refused by the schema/exec bounds, not fabricated.
-  const over = await pythonTool.execute({ code: "x".repeat(PYTHON_EXEC_BOUNDS.maxStdinBytes + 1) });
-  assert(over.error, "over-budget code refused");
+  // dptw: code past the removed 2 KiB budget runs (no schema/exec refusal).
+  const over = await pythonTool.execute({ code: "x".repeat(2048 + 1) });
+  assertEquals(over.ok, true, `past the old code budget runs: ${JSON.stringify(over).slice(0, 120)}`);
 });

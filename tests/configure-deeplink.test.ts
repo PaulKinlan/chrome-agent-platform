@@ -36,6 +36,38 @@ Deno.test("isExactOptionsSender: accepts registered #background-agents hash", ()
   assert(!isExactOptionsSender({ ...exact, url: `${url}?param=1#background` }, id, url), "query params must fail closed");
 });
 
+Deno.test("isExactOptionsSender: the EMBEDDED Settings sender shape binds owner-options (P0 pek9)", () => {
+  // The hub's openView boots the embedded Settings frame at its exact
+  // canonical URL (options/options.html or options/options.html#providers) —
+  // no query. Chrome reports that committed URL as sender.url, so these are
+  // the shapes the service worker actually receives from the hub-embedded
+  // Providers panel. Both MUST bind the owner-options principal.
+  const id = "abcdefghijklmnopabcdefghijklmnop";
+  const url = `chrome-extension://${id}/options/options.html`;
+  const base = {
+    id,
+    origin: `chrome-extension://${id}`,
+    frameId: 5,
+    documentLifecycle: "active",
+    documentId: "embedded-doc-1",
+  };
+  assert(
+    isExactOptionsSender({ ...base, url }, id, url),
+    "the embedded bare options.html document must bind owner-options",
+  );
+  assert(
+    isExactOptionsSender({ ...base, url: `${url}#providers` }, id, url),
+    "the embedded options.html#providers document must bind owner-options",
+  );
+  // And the OLD broken embedded shape — the committed URL still carrying
+  // ?embedded=1 — must keep failing closed (a regression to query markers is
+  // exactly the P0 that refused the real Settings document).
+  assert(
+    !isExactOptionsSender({ ...base, url: `${url}?embedded=1#providers` }, id, url),
+    "an embedded=1 query on the committed URL must still fail closed",
+  );
+});
+
 Deno.test("normalizeSettingsSectionId: legacy background links land on unified Agents", () => {
   assertEquals(normalizeSettingsSectionId("#background-agents"), "agents");
   assertEquals(normalizeSettingsSectionId("background-agents"), "agents");
@@ -67,6 +99,17 @@ Deno.test("Configure call sites in ntp.js use exact deep-link hash", async () =>
   assert(
     ntpSource.includes('openView("options/options.html#background-agents"'),
     "data-open-bg click must route to options.html#background-agents",
+  );
+
+  // P0 pek9: openView must boot embedded frames at the canonical URL and strip
+  // legacy ?embedded=1 markers from stored routes (never re-append them).
+  assert(
+    ntpSource.includes('const frameUrl = chrome.runtime.getURL(String(path ?? ""))'),
+    "openView must boot the frame at the canonical path with no query appended",
+  );
+  assert(
+    ntpSource.includes('p !== "embedded=1"'),
+    "openView must strip legacy embedded=1 markers out of stored route paths",
   );
 });
 

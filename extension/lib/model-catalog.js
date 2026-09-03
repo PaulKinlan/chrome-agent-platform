@@ -25,11 +25,11 @@ export const MODEL_CATALOG = Object.freeze({
   },
   gemini: {
     default: "gemini-3.7-flash",
-    suggested: ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview", "gemini-flash-latest"],
+    suggested: ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.1-pro-preview", "gemini-flash-latest"],
   },
   anthropic: {
     default: "claude-sonnet-5",
-    suggested: ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"],
+    suggested: ["claude-sonnet-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5"],
   },
   deepseek: {
     default: "deepseek-v4-flash",
@@ -137,25 +137,51 @@ export async function fetchLiveModels(providerId, { baseURL, apiKey, signal } = 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   if (signal) signal.addEventListener?.("abort", () => controller.abort(), { once: true });
+  // dptw (2026-09-03): complete listings — every page is followed and no id
+  // is dropped for its length. pageSize/limit query params ask for the
+  // provider's largest page; pagination cursors walk the rest.
   let url = `${base}/models`;
   const headers = { Accept: "application/json" };
   let extract = (json) => (Array.isArray(json?.data) ? json.data : []).map((m) => m?.id);
+  let nextUrl = null; // (json) => next page URL or null
   if (providerId === "gemini" && host === GEMINI_NATIVE_HOST) {
-    url = `https://${GEMINI_NATIVE_HOST}/v1beta/models?key=${encodeURIComponent(key)}&pageSize=200`;
+    url = `https://${GEMINI_NATIVE_HOST}/v1beta/models?key=${encodeURIComponent(key)}&pageSize=1000`;
     extract = (json) => (Array.isArray(json?.models) ? json.models : []).map((m) => String(m?.name ?? "").replace(/^models\//, ""));
+    nextUrl = (json) => {
+      const token = typeof json?.nextPageToken === "string" && json.nextPageToken ? json.nextPageToken : null;
+      return token
+        ? `https://${GEMINI_NATIVE_HOST}/v1beta/models?key=${encodeURIComponent(key)}&pageSize=1000&pageToken=${encodeURIComponent(token)}`
+        : null;
+    };
   } else if (providerId === "anthropic" && host === ANTHROPIC_HOST) {
     if (key) headers["x-api-key"] = key;
     headers["anthropic-version"] = "2023-06-01";
-    url = `${base}/models?limit=100`;
+    url = `${base}/models?limit=1000`;
+    // Anthropic models list paginates with after_id (the last id seen) while
+    // has_more is true.
+    nextUrl = (json) => {
+      if (json?.has_more !== true) return null;
+      const last = typeof json?.last_id === "string" && json.last_id
+        ? json.last_id
+        : (Array.isArray(json?.data) && json.data.length ? json.data[json.data.length - 1]?.id : null);
+      return typeof last === "string" && last
+        ? `${base}/models?limit=1000&after_id=${encodeURIComponent(last)}`
+        : null;
+    };
   } else if (key) {
     headers.Authorization = `Bearer ${key}`;
   }
   try {
-    const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
-    if (!res.ok) return [];
-    const json = await res.json();
-    const ids = extract(json)
-      .filter((id) => typeof id === "string" && id.length > 0 && id.length <= 120)
+    const allIds = [];
+    for (let page = 0; page < 100 && url; page++) {
+      const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
+      if (!res.ok) return page === 0 ? [] : [...new Set(allIds)].sort(newestFirst);
+      const json = await res.json();
+      allIds.push(...extract(json));
+      url = nextUrl ? nextUrl(json) : null;
+    }
+    const ids = allIds
+      .filter((id) => typeof id === "string" && id.length > 0)
       .filter((id) => !isPricingTierId(id))
       .filter((id) => !NON_CHAT.test(id));
     return [...new Set(ids)].sort(newestFirst);

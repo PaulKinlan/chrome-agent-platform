@@ -929,6 +929,9 @@ function _stripUrlQueries(text) {
  * (short keys count too); embedded URL queries are stripped WHOLESALE (any
  * unknown credential param, not a keyword list). */
 export function redactSecretText(text, knownSecrets = []) {
+  // KEEP IN SYNC: content/main-world.js redactBridgeText is a faithful port of
+  // this function's passes (plain injected scripts cannot import this module)
+  // — a change here must land there too.
   let out = _nfkc(String(text ?? ""));
   // Known secrets (longest first). COLLISION-SAFE FOR ALL LENGTHS (the
   // successor review): NO global substring masking at any length — every

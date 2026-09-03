@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   describeError,
   formatError,
@@ -63,6 +63,43 @@ Deno.test("error-report: unwraps a RetryError into its underlying lastError", ()
   const d = describeError(e, {});
   assertEquals(d.category, ERROR_CATEGORY.AUTH);
   assertStringIncludes(d.reason.toLowerCase(), "access denied");
+});
+
+Deno.test("error-report: the owner-surface refusal never blames the API key (P0 pek9)", () => {
+  // requireSettingsSender throws "provider credential routes are restricted to
+  // the Settings surface". Its text carries the word "credential", which the
+  // rule-5 heuristics would otherwise read as a provider-AUTH failure and
+  // answer with the "key is missing, invalid, or revoked" action — blaming the
+  // key for a surface problem (the exact misleading copy the owner saw on
+  // every embedded Test connection). The named error must classify as a
+  // PERMISSION/surface refusal with honest copy, never provider-auth.
+  const named = new Error("provider credential routes are restricted to the Settings surface");
+  named.name = "SettingsSurfaceRequiredError";
+  const d = describeError(named, { tool: "provider.test" });
+  assertNotEquals(d.category, ERROR_CATEGORY.AUTH, "the refusal is not a provider-key failure");
+  assert(
+    !/missing, invalid, or revoked/.test(d.action + " " + d.message + " " + d.reason),
+    `the copy must never blame the key: ${d.action} / ${d.reason}`,
+  );
+  assertStringIncludes(d.reason, "Settings surface");
+  assertStringIncludes(d.action.toLowerCase(), "open settings");
+
+  // Even an UNNAMED throw with the same text must not fall into the AUTH trap
+  // (route errors can arrive wrapped/renamed).
+  const plain = new Error("provider credential routes are restricted to the Settings surface");
+  const d2 = describeError(plain, { tool: "provider.set" });
+  assertNotEquals(d2.category, ERROR_CATEGORY.AUTH);
+  assert(!/missing, invalid, or revoked/.test(d2.action));
+});
+
+Deno.test("error-report: a genuine auth error still maps to AUTH with the key action", () => {
+  const e = Object.assign(new Error("[AI_APICallError] 401"), {
+    name: "AI_APICallError",
+    statusCode: 401,
+  });
+  const d = describeError(e, { provider: "openai" });
+  assertEquals(d.category, ERROR_CATEGORY.AUTH);
+  assertStringIncludes(d.action, "missing, invalid, or revoked");
 });
 
 Deno.test("error-report: maps 'Failed to fetch' to network + actionable host-permission hint", () => {

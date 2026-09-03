@@ -22,41 +22,36 @@ import { sanitizeAttachments } from "./attachments.js";
 import { isPromptApiAvailable, createPromptApiModel } from "./models/prompt-api-model.js";
 
 const INDEX_KEY = "threads";
-const MAX_THREADS = 200; // the index cap
-const MAX_MESSAGES = 500; // per-thread message cap
-const MAX_MESSAGE_BYTES = 240 * 1024; // per-message text cap in UTF-8 BYTES — raised from 16 KiB (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the task view must hold the COMPLETE agent response). 240 KiB leaves headroom for the JSON envelope + truncation marker under the memory store's 256 KiB per-value bound (memory.js MAX_VALUE_BYTES), so any response up to ~100 pages stores byte-complete; a pathological longer message is sliced with an explicit marker (never silent) and the complete text stays in the durable run journal (retainedPayloadRef).
-const MAX_THREAD_BYTES = 248 * 1024; // per-thread serialized budget (below the memory store's 256 KiB per-value bound so a full-size response + envelope still stores; the tail is protected from eviction)
-const MAX_NAME_CHARS = 80;
-// Continuation-fidelity bounds: the journaled per-run tool summary and skill
-// list are deliberately TINY (names + ok only — never args, results, or page
-// content) so a long conversation cannot grow the store unbounded and the
-// model on resume sees which tools ran without re-inflating result bodies.
-const MAX_TERMINAL_TOOL_CALLS = 16;
-const MAX_TERMINAL_TOOL_NAME = 64;
-const MAX_TERMINAL_SKILLS = 24;
+// dptw: no thread count, per-thread message count, message-byte, thread-byte,
+// or name-length caps — a thread of any size persists whole (the durable run
+// journal's retainedPayloadRef remains available, but nothing is clipped to
+// fit a budget). Redaction of secrets is kept.
 const MAX_PROMPT_HASH = 16;
 
 /** Bound a run's tool-call summary: {name, ok} entries, newest kept, name
  * truncated. Pure — testable without OPFS. */
 export function boundToolCalls(toolCalls) {
+  // dptw: no count/name-length cap — every call is journaled whole.
   const src = Array.isArray(toolCalls) ? toolCalls : [];
   const out = [];
-  for (let i = src.length - 1; i >= 0 && out.length < MAX_TERMINAL_TOOL_CALLS; i--) {
-    const tc = src[i];
-    const name = String(tc?.name ?? "").slice(0, MAX_TERMINAL_TOOL_NAME);
+  for (const tc of src) {
+    const name = String(tc?.name ?? "");
     if (!name) continue;
-    out.unshift({ name, ok: tc?.ok === true });
+    out.push({ name, ok: tc?.ok === true });
   }
   return out;
 }
 
 /** Bound a run's journaled skill id list (deduped, newest kept). Pure. */
 export function boundSkillIds(skills) {
+  // dptw: no count/id-length cap — every distinct id is journaled. The
+  // newest-first ordering is a consumer contract (continuation re-applies the
+  // most recent skills first), not a size bound — kept.
   const src = Array.isArray(skills) ? skills : [];
   const out = [];
   const seen = new Set();
-  for (let i = src.length - 1; i >= 0 && out.length < MAX_TERMINAL_SKILLS; i--) {
-    const id = String(src[i] ?? "").slice(0, 64);
+  for (let i = src.length - 1; i >= 0; i--) {
+    const id = String(src[i] ?? "");
     if (!id || seen.has(id)) continue;
     seen.add(id);
     out.unshift(id);
@@ -89,6 +84,13 @@ function utf8Bytes(str) {
 }
 
 /** A short preview for the index (first line, bounded). */
+/** The sidebar's error snippet: a derived UI affordance clipped for display.
+ * The FULL error text is always in the thread body — nothing is lost. */
+function sidebarErrorSnippet(text) {
+  const s = boundText(text); // redacted, whole
+  return s.length > 1024 ? s.slice(0, 1023) + "…" : s; // marker included in the 1024 budget
+}
+
 function previewOf(text) {
   // A leading "[… model]" transport tag (the demo model's marker) is never
   // something a person should read in the sidebar; a person's own bracketed
@@ -106,81 +108,82 @@ function previewOf(text) {
 // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: a response was cut to 300 chars
 // at commit). The message-content cap is applied HERE, not inside the redactor.
 import { newId, redactSecretText } from "./pure.js";
-function boundText(text, max = MAX_MESSAGE_BYTES) {
+// kmpq redesign: a thread row may keep a bounded digest + retainedPayloadRef
+// for a large durable response; the complete text hydrates from the run log.
+const MAX_ROW_DIGEST_BYTES = 16 * 1024;
+const ROW_DIGEST_MARKER = "\n\n…(this view keeps a summary — the complete response is in the run log and opens in full)";
+
+/** Byte-aware digest for an over-budget durable response stored in a thread
+ * row: keep the head up to `maxBytes` and append the never-silent affordance.
+ * The cut never splits a UTF-16 surrogate pair. Pure — testable without OPFS.
+ * Exported so the durable outbox builds the SAME digest text by reference. */
+export function boundResponseDigest(text, maxBytes = MAX_ROW_DIGEST_BYTES) {
   const s = redactSecretText(String(text ?? ""));
-  // The cap is UTF-8 BYTES (the memory store bound is byte-based): multi-byte
-  // content (emoji/CJK) would otherwise bust the store at fewer chars. Binary
-  // search the largest char prefix that fits the byte budget, reserving room
-  // for the truncation marker so slice + marker stay within the cap.
-  if (utf8Bytes(s) <= max) return s;
-  const isMessage = max === MAX_MESSAGE_BYTES;
-  const marker = isMessage
-    ? `\n\n…(response truncated to ${(max / 1024).toFixed(0)} KiB — the complete text is in the run log)`
-    : "";
-  const budget = Math.max(0, max - utf8Bytes(marker));
+  if (utf8Bytes(s) <= maxBytes) return s;
+  const budget = Math.max(0, maxBytes - utf8Bytes(ROW_DIGEST_MARKER));
   let lo = 0;
   let hi = s.length;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
     if (utf8Bytes(s.slice(0, mid)) <= budget) lo = mid; else hi = mid - 1;
   }
-  const sliced = s.slice(0, lo);
-  // r2 B5: a cut landing between a UTF-16 surrogate pair leaves a lone high
-  // surrogate — back off to the pair boundary (an emoji straddling the byte
-  // budget must be kept whole or dropped whole, never halved).
   while (lo > 0) {
     const c = s.charCodeAt(lo - 1);
     if (c >= 0xD800 && c <= 0xDBFF) { lo -= 1; continue; }
     break;
   }
-  const slicedFinal = s.slice(0, lo);
-  // Never silently truncate the human-readable content: when the DEFAULT
-  // (message-content) cap is hit, say so — the complete text is kept in the
-  // durable run journal (retainedPayloadRef) and in the run log.
-  return isMessage ? `${slicedFinal}${marker}` : slicedFinal;
+  return `${s.slice(0, lo)}${ROW_DIGEST_MARKER}`;
 }
 
-/** Trim a thread's messages to the count + byte budget (drop the OLDEST),
- * but NEVER evict the final turn's terminal assistant/error row + its
- * triggering user row (a self-embedding tool-row blowout must not drop the
- * question or its answer). */
+/** Bounded provider-server grounding (citations + executed queries): the SAME
+ * caps commitThreadTerminal applies, shared so the durable outbox builds an
+ * envelope that can never approach the memory-store bound. Pure. */
+export function boundTerminalEnvelope(terminal, role = "assistant") {
+  const out = {};
+  const citations = Array.isArray(terminal?.citations)
+    ? terminal.citations.slice(0, 32).map((c) => ({
+      url: boundText(c?.url ?? "", 1024),
+      title: boundText(c?.title ?? "", 256),
+      ...(Number.isInteger(c?.startIndex) ? { startIndex: c.startIndex } : {}),
+      ...(Number.isInteger(c?.endIndex) ? { endIndex: c.endIndex } : {}),
+      ...(typeof c?.citedText === "string" ? { citedText: boundText(c.citedText, 512) } : {}),
+      provider: boundText(c?.provider ?? "", 32),
+    })).filter((c) => /^https:\/\//u.test(c.url))
+    : null;
+  if (citations && citations.length > 0) out.citations = citations;
+  const serverToolEvents = Array.isArray(terminal?.serverToolEvents)
+    ? terminal.serverToolEvents.slice(0, 16).map((e) => ({
+      kind: boundText(e?.kind ?? "", 64),
+      query: boundText(e?.query ?? "", 512),
+    })).filter((e) => e.kind && e.query)
+    : null;
+  if (serverToolEvents && serverToolEvents.length > 0) out.serverToolEvents = serverToolEvents;
+  if (role === "assistant") {
+    if (Array.isArray(terminal?.toolCalls) && terminal.toolCalls.length > 0) out.toolCalls = boundToolCalls(terminal.toolCalls);
+    if (Array.isArray(terminal?.skills) && terminal.skills.length > 0) out.skills = boundSkillIds(terminal.skills);
+    if (typeof terminal?.promptHash === "string" && terminal.promptHash) out.promptHash = boundPromptHash(terminal.promptHash);
+  }
+  return out;
+}
+function boundText(text, max = Infinity) {
+  // dptw: no byte clip — content is redacted for secrets and returned WHOLE.
+  // `max` is accepted for call-site compatibility and intentionally ignored.
+  void max;
+  return redactSecretText(String(text ?? ""));
+}
+
+/** dptw: no message count/byte trim — every message is retained. Kept as a
+ * named seam so the call sites read unchanged. */
 function trimMessages(messages) {
-  const entries = messages.slice(-MAX_MESSAGES);
-  const keepFrom = protectedTailStart(entries);
-  let prefix = entries.slice(0, keepFrom);
-  const tail = entries.slice(keepFrom);
-  while (
-    prefix.length > 0 &&
-    utf8Bytes(JSON.stringify([...prefix, ...tail])) > MAX_THREAD_BYTES
-  ) {
-    prefix = prefix.slice(1);
-  }
-  return [...prefix, ...tail];
+  return messages;
 }
 
-/** The index of the first message that must never be evicted: the user row
- * immediately before the LAST terminal (assistant/error) row. If there is no
- * terminal row, nothing is protected (the count/budget trim applies as before).
- * If there is a terminal but no preceding user, protect just the terminal. */
-function protectedTailStart(entries) {
-  let terminalIdx = -1;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const m = entries[i];
-    if (m && (m.role === "assistant" || m.role === "error")) { terminalIdx = i; break; }
-  }
-  if (terminalIdx < 0) return entries.length;
-  for (let i = terminalIdx - 1; i >= 0; i--) {
-    const m = entries[i];
-    if (m && m.role === "user") return i;
-  }
-  return terminalIdx;
-}
 
 /** The thread index (most-recent-first). */
 export async function listThreads() {
   const mem = masterMemory();
   const index = (await mem.get(INDEX_KEY)) ?? [];
-  return Array.isArray(index) ? index.slice(0, MAX_THREADS) : [];
+  return Array.isArray(index) ? index : [];
 }
 
 /** A full thread, or null. */
@@ -204,21 +207,10 @@ function withThreadLock(fn) {
 }
 
 async function writeIndex(index) {
+  // dptw: no index cap — thread bodies are deleted only by an explicit
+  // deleteThread, never by index eviction.
   const mem = masterMemory();
-  const next = index.slice(0, MAX_THREADS);
-  // Eviction must atomically delete the evicted thread BODIES, not only drop
-  // their index rows — an index-row-only truncation orphaned `thread:<id>`
-  // values that then accumulated (the wider-goal review's retention finding).
-  const old = (await mem.get(INDEX_KEY)) ?? [];
-  const kept = new Set(next.map((r) => r.id));
-  for (const row of old) {
-    if (row?.id && !kept.has(row.id)) {
-      try {
-        await mem.delete(`thread:${row.id}`);
-      } catch { /* absent */ }
-    }
-  }
-  await mem.setTrusted(INDEX_KEY, next);
+  await mem.setTrusted(INDEX_KEY, index);
 }
 
 /**
@@ -244,7 +236,7 @@ export async function generateThreadName(task) {
         }],
       });
       const title = String(res?.content?.[0]?.text ?? "").trim();
-      if (title && title.length <= MAX_NAME_CHARS) {
+      if (title) {
         return title;
       }
     }
@@ -264,7 +256,7 @@ export async function createThread(task, attachments) {
   const mem = masterMemory();
   const id = newThreadId();
   const now = Date.now();
-  const fallbackName = boundText(previewOf(task) || "New task", MAX_NAME_CHARS);
+  const fallbackName = boundText(previewOf(task) || "New task");
   const thread = {
     id,
     name: fallbackName,
@@ -320,7 +312,7 @@ export async function nameThreadAsync(id, task) {
  * index row's name under the per-thread lock. Returns false when absent. */
 export async function renameThread(id, name) {
   if (!id) return false;
-  const trimmed = boundText(String(name ?? "").trim(), MAX_NAME_CHARS);
+  const trimmed = boundText(String(name ?? "").trim());
   if (!trimmed) return false;
   return withThreadLock(async () => {
     const mem = masterMemory();
@@ -489,51 +481,36 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     const existing = thread.messages.find(isTerminalRow);
     if (!existing) {
       const role = terminal?.role === "assistant" ? "assistant" : "error";
-      const content = boundText(terminal?.content ?? (role === "error" ? "run failed" : ""));
+      const rawContent = String(terminal?.content ?? (role === "error" ? "run failed" : ""));
+      const ref = typeof terminal?.retainedPayloadRef === "string" && terminal.retainedPayloadRef
+        ? terminal.retainedPayloadRef
+        : null;
+      // dptw: the response is stored WHOLE in the row (no byte bound, no
+      // digest substitution). The retainedPayloadRef remains recorded for
+      // provenance, but nothing is clipped.
+      void ref;
+      const content = boundText(rawContent);
       // The answer appears ONCE: an interim row whose text equals the terminal
-      // (the step that already answered) is replaced by the terminal row.
+      // (the step that already answered) is replaced by the terminal row. The
+      // durable terminal may arrive as a digest (over the per-row bound), so a
+      // matching byte-capped interim of the SAME answer is replaced too — the
+      // interim row is a live-stream slice of the same response and must not
+      // duplicate the terminal bubble. boundText(rawContent) over a huge
+      // response is costly, so it runs only when such an interim row exists.
+      const interimCandidate = thread.messages.find((m) =>
+        m?.executionId === executionId && Number.isInteger(m?.step) && m.role === "assistant" && m.content !== content);
+      const interimTextForDedupe = interimCandidate ? boundText(rawContent) : content;
       thread.messages = thread.messages.filter((message) =>
-        !(message?.executionId === executionId && Number.isInteger(message?.step) && message.role === "assistant" && message.content === content));
-      // Provider-server grounding rows (render-only): citations are bounded
-      // {url,title,startIndex,endIndex} records; serverToolEvents are the
-      // executed provider-side queries ("🔎 Searched: …" cards). NEVER routed
-      // back to the model — historyFromThread projects content text only.
-      const citations = Array.isArray(terminal?.citations)
-        ? terminal.citations.slice(0, 32).map((c) => ({
-          url: boundText(c?.url ?? "", 1024),
-          title: boundText(c?.title ?? "", 256),
-          ...(Number.isInteger(c?.startIndex) ? { startIndex: c.startIndex } : {}),
-          ...(Number.isInteger(c?.endIndex) ? { endIndex: c.endIndex } : {}),
-          ...(typeof c?.citedText === "string" ? { citedText: boundText(c.citedText, 512) } : {}),
-          provider: boundText(c?.provider ?? "", 32),
-        })).filter((c) => /^https:\/\//u.test(c.url))
-        : null;
-      const serverToolEvents = Array.isArray(terminal?.serverToolEvents)
-        ? terminal.serverToolEvents.slice(0, 16).map((e) => ({
-          kind: boundText(e?.kind ?? "", 64),
-          query: boundText(e?.query ?? "", 512),
-        })).filter((e) => e.kind && e.query)
-        : null;
+        !(message?.executionId === executionId && Number.isInteger(message?.step) && message.role === "assistant" &&
+          (message.content === content || message.content === interimTextForDedupe)));
+      const envelope = boundTerminalEnvelope(terminal, role);
       thread.messages.push({
         role,
         content,
         executionId,
+        ...(ref ? { retainedPayloadRef: ref } : {}),
         ts: Date.now(),
-        ...(citations && citations.length > 0 ? { citations } : {}),
-        ...(serverToolEvents && serverToolEvents.length > 0 ? { serverToolEvents } : {}),
-        // Continuation fidelity (CAP slice): the compact per-run tool summary,
-        // the resolved skill ids, and the composed-prompt hash ride the
-        // terminal row so a resumed run knows which tools ran, which skills
-        // were active, and which prompt was composed. NEVER args/results.
-        ...(role === "assistant" && Array.isArray(terminal?.toolCalls)
-          ? { toolCalls: boundToolCalls(terminal.toolCalls) }
-          : {}),
-        ...(role === "assistant" && Array.isArray(terminal?.skills)
-          ? { skills: boundSkillIds(terminal.skills) }
-          : {}),
-        ...(role === "assistant" && typeof terminal?.promptHash === "string" && terminal.promptHash
-          ? { promptHash: boundPromptHash(terminal.promptHash) }
-          : {}),
+        ...envelope,
         ...(role === "error"
           ? {
             tool: terminal?.tool ?? undefined,
@@ -564,13 +541,16 @@ export async function commitThreadTerminal(id, executionId, terminal) {
     if (thread.status === "done") {
       delete thread.lastError;
     } else {
-      // lastError is a DIAGNOSTIC summary surface, not the reader: it must
-      // stay a small bounded preview so the full error text (in the message
-      // row, the task view's source) is not stored twice and the thread value
-      // cannot blow the memory store's per-value bound
+      // lastError is a DIAGNOSTIC summary surface, not the reader: it holds a
+      // bounded 4 KiB preview (redacted, ellipsis-marked) — the FULL error
+      // text lives in the thread's message row, so nothing is lost and the
+      // duplicate stays small
       // (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
       thread.lastError = {
-        message: boundText(committedTerminal.content, 4 * 1024),
+        message: (() => {
+          const s = boundText(committedTerminal.content); // redacted, whole
+          return s.length > 4096 ? s.slice(0, 4095) + "…" : s; // marker included in the 4 KiB budget
+        })(),
         tool: committedTerminal.tool ?? null,
         category: committedTerminal.category ?? "error",
         reason: committedTerminal.reason ?? null,
@@ -592,7 +572,7 @@ export async function commitThreadTerminal(id, executionId, terminal) {
       // The SIDEBAR error preview stays a small bounded preview (a list
       // surface) — the durable/terminal-commit path is covered too, like the
       // recordThreadError path (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r2 B3).
-      else row.error = boundText(committedTerminal.content, 1024);
+      else row.error = sidebarErrorSnippet(committedTerminal.content);
       await writeIndex(index);
     }
     return thread;
@@ -710,7 +690,7 @@ export async function recordThreadError(id, detail) {
       row.status = "error";
       // The SIDEBAR preview stays a small bounded preview (a list surface) —
       // never the full message text (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01 r1 B3).
-      const sidebarPreview = boundText(message, 1024);
+      const sidebarPreview = sidebarErrorSnippet(message);
       row.error = sidebarPreview;
       row.preview = sidebarPreview;
       row.updatedAt = thread.updatedAt;
@@ -766,7 +746,7 @@ export async function deleteThread(id) {
       try { await mem.delete(`thread:${id}`); } catch { /* absent */ }
     }
     if (next.length !== index.length) {
-      await mem.setTrusted(INDEX_KEY, next.slice(0, MAX_THREADS));
+      await mem.setTrusted(INDEX_KEY, next);
     }
     // Drop the thread's durable reverse index too. Best-effort: losing the
     // thread record already succeeded, and a failed cleanup must not report the

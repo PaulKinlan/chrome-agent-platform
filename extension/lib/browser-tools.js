@@ -19,8 +19,6 @@ import {
   readFsGrantFile,
   scanFsGrantManifest,
   grepFsGrant,
-  MAX_FS_READ_BYTES,
-  MAX_FS_WRITE_BYTES,
 } from "./fs-grants.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { DEVELOPER_ONLY_TOOL_NAMES, requirementFor } from "./chrome-tool-capabilities.js";
@@ -39,7 +37,6 @@ const RAW_ALARM_KEY = "cap:rawAlarms";
 /** T6: MHTML snapshots are returned inline — hard-capped so a hostile page
  * can't flood the run (over-cap pages are REFUSED with the size reported
  * honestly, never silently truncated into an unusable partial file). */
-const MAX_MHTML_BYTES = 8 * 1024 * 1024;
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // only used when an EXPLICIT expiryMs is passed
 
 // A GLOBAL grant mutex serializes the grant CHECK with the destructive Chrome
@@ -2064,7 +2061,7 @@ const FS_ERROR_MESSAGES = {
   directory_path_is_not_file: "That path is a folder, not a file — pass a file path to read.",
   file_grant_cannot_have_subpath: "This grant is a single file; it has no sub-paths.",
   invalid_file_path: "That is not a valid file path within the grant.",
-  fs_file_too_large: "The file is too large to read within the bounded limit.",
+  fs_file_too_large: "The file is too large for this bounded operation (writes carry a size limit); reads are never refused on size — read large files in chunks with offset/length.",
   fs_file_not_text: "The file is not UTF-8 text, so it cannot be read as text.",
   max_depth_exceeded: "The path is nested too deeply to traverse.",
   invalid_path_absolute: "Absolute paths are not allowed — use a path relative to the granted folder.",
@@ -2239,7 +2236,7 @@ export function browserToolset(readOnly = false, {
       inputSchema: z.object({
         grantId: z.string().optional(),
         path: z.string().optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).optional(),
       }),
       execute: async ({ grantId, path, limit }) => {
         const g = await resolveRunGrantId(grantId);
@@ -2254,7 +2251,7 @@ export function browserToolset(readOnly = false, {
       inputSchema: z.object({
         query: z.string(),
         grantId: z.string().optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).optional(),
       }),
       execute: async ({ query, grantId, limit }) => {
         const g = await resolveRunGrantId(grantId);
@@ -2272,16 +2269,21 @@ export function browserToolset(readOnly = false, {
     }),
     read_file: tool({
       description:
-        "Read a text file inside a granted local folder. `path` is relative to the folder. Returns { ok, content, size, sha256 } or a bounded JSON error (file_not_found, fs_file_too_large, fs_file_not_text, …).",
+        "Read a text file inside a granted local folder. `path` is relative to the folder. Reads are NEVER refused and NEVER replaced by a size notice: a whole-file read returns the complete content at any size, and `offset`/`length` read any byte window in full (each window up to 10 MiB; `size` reports the whole file). For text, a window edge that splits a multi-byte UTF-8 character is widened to the whole characters it falls inside, and `start`/`end` report the exact byte span returned — page by following `end`. Returns { ok, content, size, sha256, start?, end? } or a bounded JSON error (file_not_found, fs_file_not_text, …).",
       inputSchema: z.object({
-        path: z.string(),
-        grantId: z.string().optional(),
-        maxBytes: z.number().int().min(1).max(MAX_FS_READ_BYTES).optional(),
+        path: z.string().describe("the file path, relative to the granted folder"),
+        grantId: z.string().optional().describe("which folder, when more than one is available (see list_folders)"),
+        offset: z.number().int().min(0).optional().describe("byte offset of the read window (0 = start of file). Use with `length` to page through a large file in chunks."),
+        length: z.number().int().min(1).optional().describe("byte length of the read window (omitting it reads to the end of the file from `offset`)"),
+        // Legacy transport knob kept for schema compatibility: it no longer
+        // bounds or refuses reads (a 2000-byte default once refused whole
+        // files). Ask for a partial read with offset/length instead.
+        maxBytes: z.number().int().min(1).optional(),
       }),
-      execute: async ({ path, grantId, maxBytes }) => {
+      execute: async ({ path, grantId, maxBytes, offset, length }) => {
         const g = await resolveRunGrantId(grantId);
         if (g.ok === false) return g;
-        const res = await readFsGrantFile(g.grantId, { relativePath: path ?? "", asText: true, maxBytes });
+        const res = await readFsGrantFile(g.grantId, { relativePath: path ?? "", asText: true, maxBytes, offset, length });
         return res?.ok === false ? toFsToolError(res, path ?? "") : res;
       },
     }),
@@ -2294,7 +2296,7 @@ export function browserToolset(readOnly = false, {
         path: z.string().optional(),
         regex: z.boolean().optional(),
         ignoreCase: z.boolean().optional(),
-        maxMatches: z.number().int().min(1).max(200).optional(),
+        maxMatches: z.number().int().min(1).optional(),
       }),
       execute: async ({ query, grantId, path, regex, ignoreCase, maxMatches }) => {
         const g = await resolveRunGrantId(grantId);
@@ -2311,10 +2313,10 @@ export function browserToolset(readOnly = false, {
     }),
     write_file: tool({
       description:
-        "Write a UTF-8 text file inside a granted local folder (the folder must be granted with write access in Settings → Local folders). REQUIRES OWNER APPROVAL: the owner sees the exact diff between the file on disk and your content before anything is written, and a denial leaves the file untouched. Read the file first (read_file) and send the COMPLETE new content, never a fragment. A missing file is created; binary files, files over the size bound, and paths outside the folder are refused. Returns { ok, path, size, sha256, added, removed } or a bounded JSON error.",
+        "Write a UTF-8 text file inside a granted local folder (the folder must be granted with write access in Settings → Local folders). REQUIRES OWNER APPROVAL: the owner sees the exact diff between the file on disk and your content before anything is written, and a denial leaves the file untouched. Read the file first (read_file) and send the COMPLETE new content, never a fragment. A missing file is created; binary files and paths outside the folder are refused. There is no size limit. Returns { ok, path, size, sha256, added, removed } or a bounded JSON error.",
       inputSchema: z.object({
         path: z.string().describe("the file path, relative to the granted folder"),
-        content: z.string().max(MAX_FS_WRITE_BYTES).describe("the COMPLETE new file content (UTF-8 text)"),
+        content: z.string().describe("the COMPLETE new file content (UTF-8 text)"),
         grantId: z.string().optional().describe("which folder, when more than one is available (see list_folders)"),
       }),
       execute: async ({ path, content, grantId }) => {
@@ -2632,7 +2634,7 @@ export function browserToolset(readOnly = false, {
       description:
         "Schedule a future task to run the agent. REQUIRED: pass exactly one of `at` (absolute epoch ms in the future) or `delayMs` (a positive delay in ms) — a call with neither fails. The task runs even if the browser is idle. Pass scriptId (a script you created with create_script) to run that JS directly on the schedule — no model re-invocation.",
       inputSchema: z.object({
-        task: z.string().min(1).max(4000),
+        task: z.string().min(1),
         at: z.number().optional().describe("absolute epoch ms in the future — pass this OR delayMs, exactly one is required"),
         delayMs: z.number().optional().describe("positive delay in ms from now — pass this OR at, exactly one is required"),
         periodInMinutes: z.number().optional(),
@@ -4521,14 +4523,7 @@ export function browserToolset(readOnly = false, {
             return { error: `capture failed: ${e?.message ?? e}` };
           }
           if (!blob) return { error: "capture returned no data" };
-          const size = blob.size ?? 0;
-          if (size > MAX_MHTML_BYTES) {
-            return {
-              error: `page too large to save inline (${size} bytes > ${MAX_MHTML_BYTES} cap) — not saved`,
-              sizeBytes: size,
-              capBytes: MAX_MHTML_BYTES,
-            };
-          }
+          const size = blob.size ?? 0; // honest size metadata (no cap — dptw)
           let mhtml;
           try {
             mhtml = await blob.text();

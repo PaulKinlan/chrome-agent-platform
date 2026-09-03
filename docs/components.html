@@ -180,7 +180,7 @@
           <segmented-control id="segmented-demo" items="Preview,Source,Diff" value="Preview" label="Artifact view"></segmented-control>
         </div>
         <p class="caption">
-          <span id="segmented-demo-value">Preview</span> selected. <code>role="tablist"</code> with <code>role="tab"</code> buttons and roving tabindex; <kbd>←</kbd>/<kbd>→</kbd> (and <kbd>↑</kbd>/<kbd>↓</kbd>) move and select with wrap, <kbd>Home</kbd>/<kbd>End</kbd> jump to the ends. Emits <code>change {value}</code> (never on a no-op re-select). Labels enter via <code>textContent</code>. The artifact viewer mounts one for Preview | Source | Diff.
+          <span id="segmented-demo-value">Preview</span> selected. <code>role="tablist"</code> with <code>role="tab"</code> buttons and roving tabindex; <kbd>←</kbd>/<kbd>→</kbd> (and <kbd>↑</kbd>/<kbd>↓</kbd>) move and select with wrap, <kbd>Home</kbd>/<kbd>End</kbd> jump to the ends. Emits <code>change {value}</code> (never on a no-op re-select). Labels enter via <code>textContent</code>. The artifact viewer mounts one for Preview | Source | Diff. With a <code>controls-prefix</code> attribute each tab also gains a stable id + <code>aria-controls</code> pointing at the host's tabpanel of the same label-slug — the pattern the Settings → Providers family tabs use (the host owns the panels and toggles <code>hidden</code> on <code>change</code>).
         </p>
       </div>
 

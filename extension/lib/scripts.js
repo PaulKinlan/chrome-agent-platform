@@ -18,18 +18,13 @@
 
 import { newId } from "./pure.js";
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
-import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
 
 const INDEX_KEY = "scripts"; // reserved authority key (see memory.js)
 const CONTENT_PREFIX = "script:";
 
-export const SCRIPT_BOUNDS = {
-  maxSourceBytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes,
-  maxNameLength: 200,
-  maxScriptsPerOrigin: 200,
-  maxFetchBytes: 512 * 1024, // a single fetch result the host returns to the script
-  maxResultBytes: 256 * 1024, // the returned result (serialized) is bounded
-};
+// dptw (2026-09-03): no size/count ceilings — script names, sources, fetch
+// results and results are carried complete; a host-side failure surfaces
+// honestly instead of a silent clip.
 
 const utf8Bytes = (s) => new TextEncoder().encode(String(s ?? "")).byteLength;
 
@@ -44,13 +39,7 @@ function boundScript({ name, source }) {
   const n = String(name ?? "").trim();
   const src = String(source ?? "");
   if (!n) throw new Error("script name required");
-  if (n.length > SCRIPT_BOUNDS.maxNameLength) {
-    throw new Error(`script name too long (max ${SCRIPT_BOUNDS.maxNameLength})`);
-  }
   if (!src.trim()) throw new Error("script source required");
-  if (utf8Bytes(src) > SCRIPT_BOUNDS.maxSourceBytes) {
-    throw new Error(`script source too large (max ${SCRIPT_BOUNDS.maxSourceBytes} bytes)`);
-  }
   return { name: n, source: src };
 }
 
@@ -85,9 +74,6 @@ export async function createScript(origin, { name, source }) {
   };
   await store.setTrusted(CONTENT_PREFIX + id, body);
   const index = await readIndex(store);
-  if (index.length >= SCRIPT_BOUNDS.maxScriptsPerOrigin) {
-    return { ok: false, error: `too many scripts (max ${SCRIPT_BOUNDS.maxScriptsPerOrigin})` };
-  }
   index.push({
     id,
     name: meta.name,

@@ -159,27 +159,29 @@ Deno.test("wasm manifest: canonical strict schema accepts one bounded bundled re
 Deno.test("wasm manifest/import policy: only exact WASI P1 is allowlisted; declarations remain bounded, sorted and fail closed", async () => {
   assertEquals(BUNDLED_ALLOWED_IMPORT_MODULES, ["wasi_snapshot_preview1"]);
   assert(Object.isFrozen(BUNDLED_ALLOWED_IMPORT_MODULES));
-  assertEquals(WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULES, 8);
-  assertEquals(WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULE_NAME_BYTES, 64);
+  // dptw: no module count/name-byte ceilings — the ALLOWLIST is the gate.
   const base = await scenario();
   const variants = [
     [{ allowed: ["env"], disallowed: [] }, "import_not_allowed"],
     [{ allowed: ["wasi_snapshot_previewl"], disallowed: [] }, "import_not_allowed"],
     [{ allowed: ["wasi_unstable"], disallowed: [] }, "import_not_allowed"],
     [{ allowed: ["wasí_snapshot_preview1"], disallowed: [] }, "manifest_non_ascii"],
-    [{ allowed: ["a".repeat(65)], disallowed: [] }, "manifest_string_bound"],
+    [{ allowed: ["a".repeat(65)], disallowed: [] }, "import_not_allowed"], // dptw: any length reaches the allowlist, which refuses it
     [{ allowed: ["*"], disallowed: [] }, "import_invalid"],
     [{ allowed: [], disallowed: [".env"] }, "import_invalid"],
     [{ allowed: ["wasi_snapshot_preview1", "wasi_snapshot_preview1"], disallowed: [] }, "import_order"],
     [{ allowed: [], disallowed: ["env", "*"] }, "import_order"],
     [{ allowed: [], disallowed: ["env", "env"] }, "import_order"],
-    [{ allowed: [], disallowed: Array.from({ length: 9 }, (_, index) => `module${index}`) }, "import_bound"],
   ];
   for (const [imports, code] of variants) {
     const object = structuredClone(base.object);
     object.executables[0].imports = imports;
     assertEquals(base.authority.validateManifest(canonicalJson(object)).error, code, JSON.stringify(imports));
   }
+  // dptw: a long disallowed list is accepted (no count ceiling).
+  const manyDisallowed = structuredClone(base.object);
+  manyDisallowed.executables[0].imports = { allowed: ["wasi_snapshot_preview1"], disallowed: Array.from({ length: 20 }, (_, index) => `module${String(index).padStart(2, "0")}`) };
+  assert(base.authority.validateManifest(canonicalJson(manyDisallowed)).ok, "a long disallowed list validates");
   for (const disallowed of [["*"], ["env"], ["a".repeat(64)], ["wasi_snapshot_preview1"]]) {
     const object = structuredClone(base.object);
     object.executables[0].imports = { allowed: ["wasi_snapshot_preview1"], disallowed };
@@ -369,13 +371,12 @@ Deno.test("wasm scanner: memory64/shared/missing-max/multi-memory/measured ceili
   assert((await allowedLarge.authority.admitBundled({ manifest: allowedLarge.raw, files: allowedLarge.admissionFiles })).ok);
 });
 
-Deno.test("wasm scanner: section/custom/total bomb caps and unmanifested static scan are bounded", async () => {
+Deno.test("wasm scanner: no section/custom/binary size caps (dptw); unmanifested static scan still flags", async () => {
   const s = await scenario();
-  const tinyLimits = { ...WASM_PACKAGE_LIMITS, MAX_SECTIONS: 2, MAX_SECTION_BYTES: 8, MAX_CUSTOM_SECTION_BYTES: 2, MAX_BINARY_BYTES: 64, TIERS: WASM_PACKAGE_LIMITS.TIERS };
-  await expectCode(() => Promise.resolve(auditWasmBinary(moduleBytes(section(0, []), section(0, []), memorySection()), s.object.executables[0], { limits: tinyLimits })), "too_many_sections");
-  await expectCode(() => Promise.resolve(auditWasmBinary(moduleBytes(section(0, [1, 2, 3]), memorySection()), s.object.executables[0], { limits: tinyLimits })), "custom_section_over_budget");
-  await expectCode(() => Promise.resolve(auditWasmBinary(moduleBytes(section(1, new Array(9).fill(0)), memorySection()), s.object.executables[0], { limits: tinyLimits })), "section_too_large");
-  await expectCode(() => Promise.resolve(auditWasmBinary(new Uint8Array(65), s.object.executables[0], { limits: tinyLimits })), "binary_too_large");
+  // Every section is measured at any count/size — malformed framing still
+  // fails, size never does.
+  const audited = await auditWasmBinary(moduleBytes(section(0, []), section(0, [1, 2, 3]), memorySection()), s.object.executables[0]);
+  assert(audited && typeof audited === "object", `many/custom sections audit clean: ${JSON.stringify(audited).slice(0, 120)}`);
   const violations = await scanBundledWasmFiles(["fixture.wasm"], { readBytes: async () => s.wasm, manifestByFile: new Map() });
   assertEquals(violations, ["fixture.wasm: unmanifested_binary"]);
 });

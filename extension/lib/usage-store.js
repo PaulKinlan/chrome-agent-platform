@@ -15,16 +15,14 @@ export const STORAGE_KEY = "cap:usage:v2";
 // kvRemove) exists to drain. It must remain readable FOREVER; do not rename.
 export const LEGACY_STORAGE_KEY = "cairn:usage";
 const SCHEMA_VERSION = 2;
-const MAX_RECORDS = 5000;
-const MAX_BYTES = 4 * 1024 * 1024;
-const MAX_AUTH_BYTES = 4 * 1024 * 1024; // preparse bound
+// dptw: no record-count or byte budgets on the usage ledger or its
+// quarantine — rows are never evicted for size. (The 7-day RETENTION_MS
+// freshness window and the id/string field grammars are validation, not
+// size policy; string clips are gone.)
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
-const MAX_STRING = 128;
-const MAX_ID = 64;
+const MAX_STRING = Number.POSITIVE_INFINITY; // dptw: kept for call-site compat; str() no longer clips
 const MAX_COST = 1e9;
 const MAX_GEN = Number.MAX_SAFE_INTEGER;
-const MAX_QUARANTINE = 32;
-const MAX_QUARANTINE_BYTES = 1 * 1024 * 1024;
 
 const DB_NAME = "cap-usage";
 const STORE_AUTHORITY = "authority";
@@ -76,8 +74,8 @@ function withLock(fn) { const run = mutex.then(fn, fn); mutex = run.then(() => {
 
 function isSafeInt(v) { return typeof v === "number" && Number.isFinite(v) && v >= 0 && Number.isSafeInteger(v); }
 function isFiniteNonNeg(v) { return typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= MAX_COST; }
-function str(v, f, m) { return typeof v === "string" ? v.slice(0, m) : f; }
-function canonicalId(v) { return typeof v === "string" && v.length >= 1 && v.length <= MAX_ID && /^[A-Za-z0-9._:-]+$/.test(v) ? v : null; }
+function str(v, f, m) { void m; return typeof v === "string" ? v : f; } // dptw: no clip
+function canonicalId(v) { return typeof v === "string" && v.length >= 1 && /^[A-Za-z0-9._:-]+$/.test(v) ? v : null; } // dptw: charset grammar kept; no length bound
 function isValidTimestamp(s) {
   if (typeof s !== "string" || s.length > 40) return false;
   const t = new Date(s).getTime();
@@ -104,16 +102,15 @@ function envelopeBytes(rows, tombstones) { return new TextEncoder().encode(canon
 function sanitizeRows(rows, { now = Date.now(), tombstones = [] } = {}) {
   const valid = [];
   for (const r of Array.isArray(rows) ? rows : []) { const c = sanitizeRow(r, now); if (c) valid.push(c); }
-  let kept = valid.length > MAX_RECORDS ? valid.slice(-MAX_RECORDS) : valid;
+  // dptw: no count/byte eviction — every valid row and tombstone is kept.
+  const kept = valid;
   const ts = []; const seen = new Set();
-  for (const v of Array.isArray(tombstones) ? tombstones : []) { const c = canonicalId(v); if (c && !seen.has(c)) { seen.add(c); ts.push(c); } if (ts.length >= MAX_RECORDS) break; }
-  while (envelopeBytes(kept, ts) > MAX_BYTES) { if (kept.length) kept = kept.slice(1); else if (ts.length) ts.shift(); else break; }
+  for (const v of Array.isArray(tombstones) ? tombstones : []) { const c = canonicalId(v); if (c && !seen.has(c)) { seen.add(c); ts.push(c); } }
   return { rows: kept, tombstones: ts };
 }
 const ENVELOPE_KEYS = new Set(["v", "gen", "rows", "tombstones"]);
 function parseEnvelope(bytes) {
-  // PREPARSE byte bound (before decode/parse/traversal).
-  if (bytes.byteLength > MAX_AUTH_BYTES) return null;
+  // dptw: no preparse byte bound — the envelope parses whole.
   let text;
   try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { return null; }
   let parsed;
@@ -123,7 +120,6 @@ function parseEnvelope(bytes) {
   if (parsed.v !== SCHEMA_VERSION) return null;
   if (!Number.isSafeInteger(parsed.gen) || parsed.gen < 0 || parsed.gen > MAX_GEN) return null;
   if (!Array.isArray(parsed.rows) || !Array.isArray(parsed.tombstones)) return null;
-  if (parsed.rows.length > MAX_RECORDS || parsed.tombstones.length > MAX_RECORDS) return null;
   if (canonicalJson(parsed) !== text) return null;
   return parsed;
 }
@@ -187,10 +183,7 @@ async function transactAuthority(mutator) {
 async function transactQuarantineAndReplace(bytes, replacement) {
   const db = await openDb();
   const readBytes = new Uint8Array(bytes);
-  // Reject an over-cap corrupt blob outright (fail closed, source preserved).
-  if (readBytes.byteLength > MAX_QUARANTINE_BYTES) {
-    throw new Error("corrupt authority exceeds the quarantine byte cap — fail closed");
-  }
+  // dptw: no quarantine byte cap — the corrupt source is preserved whole.
   return new Promise((resolve, reject) => {
     const tx = db.transaction([STORE_AUTHORITY, STORE_META, STORE_QUARANTINE], "readwrite");
     const store = tx.objectStore(STORE_AUTHORITY);
@@ -213,15 +206,7 @@ async function transactQuarantineAndReplace(bytes, replacement) {
           toDelete.push({ key: cursor.primaryKey, size: new Uint8Array(cursor.value?.bytes ?? new Uint8Array(0)).byteLength });
           cursor.continue();
         } else {
-          let count = toDelete.length;
-          let totalBytes = toDelete.reduce((n, r) => n + r.size, 0);
-          let i = 0;
-          while ((count >= MAX_QUARANTINE || totalBytes + readBytes.byteLength > MAX_QUARANTINE_BYTES) && i < toDelete.length) {
-            qStore.delete(toDelete[i].key);
-            totalBytes -= toDelete[i].size;
-            count -= 1;
-            i += 1;
-          }
+          // dptw: quarantine rows are never evicted for count or bytes.
           const addReq = qStore.add({ ts: Date.now(), bytes: new Uint8Array(readBytes) });
           addReq.onsuccess = () => {
             store.put({ id: AUTHORITY_KEY, bytes: encodeEnvelope(replacement) });

@@ -1,6 +1,6 @@
-const MAX_TOKEN_BYTES = 16_384;
+// dptw: no token/output byte limits. MAX_JSON_DEPTH stays — it bounds parse
+// recursion (a stack-safety grammar bound, not a size cap).
 const MAX_JSON_DEPTH = 32;
-const MAX_OUTPUT_BYTES = 32_768;
 
 const NO_VERIFICATION_WARNING =
   "WARNING: JWT signature was not verified; header and payload claims are untrusted.";
@@ -10,9 +10,9 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export const LIMITS = Object.freeze({
-  maxTokenBytes: MAX_TOKEN_BYTES,
+  maxTokenBytes: Number.POSITIVE_INFINITY,
   maxJsonDepth: MAX_JSON_DEPTH,
-  maxOutputBytes: MAX_OUTPUT_BYTES,
+  maxOutputBytes: Number.POSITIVE_INFINITY,
 });
 
 export class JwtDecodeError extends Error {
@@ -357,7 +357,6 @@ export function validateWorkerRequest(value) {
 export function decodeJwtBounded(token) {
   if (typeof token !== "string") usageError("INPUT_SCHEMA", "jwt: token must be a string");
   const tokenBytes = encoder.encode(token).length;
-  if (tokenBytes > MAX_TOKEN_BYTES) dataError("TOKEN_LIMIT", "jwt: token exceeds 16 KiB limit");
 
   const components = token.split(".");
   if (components.length === 5) dataError("JWE_UNSUPPORTED", "jwt: JWE compact serialization is not supported");
@@ -388,9 +387,6 @@ export function decodeJwtBounded(token) {
     verified: false,
     warnings,
   };
-  const serialized = JSON.stringify(result);
-  if (encoder.encode(serialized).length + 1 > MAX_OUTPUT_BYTES) {
-    dataError("OUTPUT_LIMIT", "jwt: redacted output exceeds 32 KiB limit");
-  }
+  // dptw: no output byte limit — the decoded claims return whole.
   return result;
 }

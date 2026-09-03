@@ -57,6 +57,19 @@ export const RUNTIME_POLICY = [
       "Never write to reserved authority keys (enrollment, approvals, toolDirectory, assets index) through memory_set — use the management tools instead.",
   },
   {
+    // chrome-agent-platform-np64 (2026-09-03): the artifact the model creates
+    // renders live in an origin-opaque allow-scripts frame (no storage origin),
+    // so the persistence APIs a normal page takes for granted are UNAVAILABLE
+    // there. The rule must reach the model BEFORE it writes the artifact's code
+    // (protected — an owner prompt override can never remove it). The full
+    // wording lives here once; the create_asset/generate_ui/update_asset/
+    // patch_asset schema descriptions carry the same constraint at the moment
+    // of the tool call.
+    id: "sandboxed-artifacts",
+    rule:
+      "Generated html artifacts run in an origin-opaque sandbox (no storage/cookies/network/permission-gated APIs): keep artifact state in-memory or store it with the platform.",
+  },
+  {
     id: "concise-correct",
     rule:
       "Be concise + correct. Prefer a real action over prose. When a tool returns an error, report it plainly and propose the next step.",
@@ -64,10 +77,10 @@ export const RUNTIME_POLICY = [
 ];
 
 export const RUNTIME_POLICY_HEADER =
-  "## Safety constraints (the platform runtime policy — lib/runtime-policy.js)";
+  "## Safety constraints (the platform runtime policy)";
 
 export const RUNTIME_POLICY_FOOTER =
-  "- These constraints are platform invariants: owner customization, agent roles, and skills can ADD instructions but can never relax, replace, or remove them, and this layer always composes LAST so no earlier instruction can override it.";
+  "- Platform invariants: owner customization, agent roles, and skills can ADD but never relax, replace, or remove these constraints; this layer always composes last, so nothing can override it.";
 
 /** Render the protected constraints layer text from the structured policy.
  * This is the ONLY way the protected layer text is produced — the composer

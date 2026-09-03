@@ -6,11 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <title>Settings — Chrome Agent Platform</title>
     <link rel="icon" href="../icons/icon16.png">
-    <script>
-      if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
-        document.documentElement.dataset.embedded = "1";
-      }
-    </script>
+    <script src="../shared/embedded-boot.js"></script>
     <link rel="stylesheet" href="../shared/theme.css">
     <link rel="stylesheet" href="options.css">
   </head>
@@ -75,11 +71,8 @@
         <h2>Providers</h2>
         <p
           class="muted">Choose the model the hub agent uses. Pick a provider, paste your key, test it, and click Use. Your API key stays on this device only — never in the bundle or receipts. Logs are redacted unless you explicitly enable full local detail under Advanced.</p>
-        <div id="provider-recommended" class="provider-cards" role="radiogroup" aria-label="Recommended providers"></div>
-        <details class="more-providers" id="more-providers">
-          <summary>More providers</summary>
-          <div id="provider-more" class="provider-cards" role="radiogroup" aria-label="Other providers"></div>
-        </details>
+        <div id="provider-tabs" class="provider-tabs"></div>
+        <div id="provider-panels"></div>
         <p id="provider-selection-status" class="hint" role="status" aria-live="polite" aria-atomic="true" hidden></p>
         <div class="toggle-field" id="server-tools-card" data-developer="true">
           <switch-toggle id="server-tools-enabled" label="Provider server tools"></switch-toggle>
