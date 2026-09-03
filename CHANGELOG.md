@@ -1,10 +1,7 @@
 # Changelog
 
-## [0.3.17] — 2026-09-03
-- the full-response contract tests now falsify — surrogate-straddling cuts and escape-aware primary sizing go RED when the safety nets are removed
-
 ## [0.3.16] — 2026-09-03
-- Merge remote-tracking branch 'origin/cap-beads-kmpq' into merge-batch
+- read_file delivers every requested byte — no size-cap refusals in the reader, multibyte-safe windows, transport decides delivery
 
 ## [0.3.15] — 2026-09-03
 - targeted test gates — a dependency-aware picker runs only the tests your change exercises, and fails closed to the full suite when coverage can't be proven

@@ -24,8 +24,8 @@ import { newId } from "./pure.js";
 
 export const MAX_FS_LIST_ENTRIES = 500;
 export const MAX_FS_PATH_DEPTH = 16;
-export const MAX_FS_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
-export const MAX_FS_TEXT_DECODE_BYTES = 2 * 1024 * 1024; // 2 MiB
+export const MAX_FS_READ_BYTES = 10 * 1024 * 1024; // 10 MiB — largest single offset/length window the read_file transport accepts (transport bound, not a reader ceiling)
+export const MAX_FS_TEXT_DECODE_BYTES = 2 * 1024 * 1024; // 2 MiB — the owner diff-card bound on fs-grant.write-file-approved (transport bound, not a reader ceiling)
 export const MAX_FS_WRITE_BYTES = 5 * 1024 * 1024; // 5 MiB
 export const MAX_FS_SCAN_ENTRIES = 10000;
 export const MAX_FS_SCAN_BYTES = 1024 * 1024; // 1 MiB
@@ -544,13 +544,40 @@ export async function searchFsGrantFiles(
 
 /**
  * Bounded file reading within a granted handle (digest-pinned).
+ *
+ * A handle-backed read is NEVER refused or placeholder-substituted on size
+ * alone. The read is local — the size of the file is irrelevant to reading
+ * it — so a whole-file read returns the complete content and `offset`/`length`
+ * windows read through files of ANY size in chunks (CAP-FB-20260902-NO-SILLY-
+ * READ-CAPS-01: the old fs_file_too_large refusal at a caller-supplied
+ * maxBytes default once refused a 9080-byte README; review r3 removed the
+ * last size ceiling and its guidance placeholder — requested content always
+ * comes back, never a notice in its place, and never truncated:false while
+ * content was withheld). How much of a very large read the model sees inline
+ * is the transport's decision, not a substitution in this read. Text windows
+ * are aligned to whole UTF-8 characters: a window edge that splits a
+ * multi-byte sequence is widened to the characters it falls inside (at most 3
+ * bytes each side) so valid text never fails as fs_file_not_text, and
+ * `start`/`end` report the exact byte span whose text came back. `sha256`
+ * covers that returned span so a caller re-reading the same window can detect
+ * drift.
  * @param {string} grantId
- * @param {{ relativePath?: string, asText?: boolean, maxBytes?: number }} [options]
+ * @param {{ relativePath?: string, asText?: boolean, offset?: number, length?: number, maxBytes?: number }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function readFsGrantFile(
   grantId,
-  { relativePath = "", asText = true, maxBytes = MAX_FS_READ_BYTES } = {},
+  {
+    relativePath = "",
+    asText = true,
+    offset = null,
+    length = null,
+    // Legacy transport knob: the 2000-byte default this bound once carried is
+    // what refused whole files. Reads no longer consult it — a caller that
+    // wants less than the whole file asks for a window with offset/length.
+    // Kept in the signature so older callers do not break.
+    maxBytes = null,
+  } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -611,45 +638,103 @@ export async function readFsGrantFile(
     return { ok: false, error: `get_file_failed: ${err?.message || err}` };
   }
 
-  const effectiveMaxBytes = Math.min(Math.max(1, maxBytes || MAX_FS_READ_BYTES), MAX_FS_READ_BYTES);
   const fileSize = typeof file?.size === "number" ? file.size : 0;
-  if (fileSize > effectiveMaxBytes) {
-    return {
-      ok: false,
-      error: "fs_file_too_large",
-      size: fileSize,
-      maxBytes: effectiveMaxBytes,
-    };
+
+  // Byte window: whole file by default; offset/length pick a window (clamped
+  // to EOF) so ANY file size is readable in chunks. No size bound lives here
+  // and no content is substituted for the requested bytes: the read returns
+  // the complete requested content at any size. Deciding how much of a very
+  // large read the model sees inline is the transport's job (tool-result
+  // bounds, payload-by-reference), never this read's.
+  const hasOffset = Number.isInteger(offset);
+  const hasLength = Number.isInteger(length);
+  const explicitWindow = hasOffset || hasLength;
+  const start = explicitWindow
+    ? Math.min(Math.max(0, hasOffset ? offset : 0), fileSize)
+    : 0;
+  const end = explicitWindow
+    ? Math.min(fileSize, start + (hasLength ? Math.max(0, length) : fileSize - start))
+    : fileSize;
+
+  // UTF-8 text is decoded as whole characters, never per arbitrary byte
+  // window: a window edge that splits a multi-byte sequence would otherwise
+  // fail a fatal decoder with fs_file_not_text on valid text. The span is
+  // widened to the character boundaries the requested window falls inside
+  // (at most 3 bytes each side) and the span actually returned is disclosed
+  // in start/end; the digest covers exactly that span. Binary reads
+  // (asText:false) use the requested window untouched.
+  let spanStart = start;
+  let spanEnd = end;
+  if (asText && fileSize > 0) {
+    spanStart = Math.max(0, start - 3);
+    spanEnd = Math.min(fileSize, end + 3);
   }
 
-  let arrayBuffer = null;
+  let windowBytes = new Uint8Array(0);
   try {
-    arrayBuffer = typeof file.arrayBuffer === "function" ? await file.arrayBuffer() : new ArrayBuffer(0);
+    if (typeof file.slice === "function") {
+      // file.slice bounds the allocation to the span, so a huge file is read
+      // a piece at a time without ever loading the whole file.
+      windowBytes = new Uint8Array(await file.slice(spanStart, spanEnd).arrayBuffer());
+    } else {
+      const whole = typeof file.arrayBuffer === "function" ? await file.arrayBuffer() : new ArrayBuffer(0);
+      const wholeBytes = new Uint8Array(whole);
+      windowBytes = wholeBytes.subarray(spanStart, Math.min(spanEnd, wholeBytes.byteLength));
+    }
   } catch (err) {
     return { ok: false, error: `read_bytes_failed: ${err?.message || err}` };
   }
 
-  const bytes = new Uint8Array(arrayBuffer);
-  const sha256 = await computeSha256(arrayBuffer);
-
-  let textContent = null;
-  if (asText) {
-    if (bytes.byteLength > MAX_FS_TEXT_DECODE_BYTES) {
-      textContent = `[Binary or text content exceeds decode limit (${MAX_FS_TEXT_DECODE_BYTES / (1024 * 1024)} MiB)]`;
-    } else {
-      const hasBinaryControls = bytes.some((byte) =>
-        byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
-      );
-      try {
-        textContent = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      } catch { /* rejected below */ }
-      if (hasBinaryControls || textContent === null) {
-        return { ok: false, error: "fs_file_not_text", grantId, path: segments.join("/"), size: fileSize, sha256 };
+  // Align the requested byte window to whole characters for text reads.
+  let effStart = start;
+  let effEnd = end;
+  if (asText && fileSize > 0 && windowBytes.byteLength > 0) {
+    const isContinuation = (byte) => (byte & 0xc0) === 0x80;
+    const charLengthAt = (byte) =>
+      (byte & 0x80) === 0 ? 1
+        : (byte & 0xe0) === 0xc0 ? 2
+        : (byte & 0xf0) === 0xe0 ? 3
+        : (byte & 0xf8) === 0xf0 ? 4
+        : 0;
+    // Snap start back to the leading byte of the character it falls inside.
+    if (start >= spanStart && start < spanStart + windowBytes.byteLength) {
+      let head = start;
+      while (head > spanStart && isContinuation(windowBytes[head - spanStart])) head -= 1;
+      if (!isContinuation(windowBytes[head - spanStart])) effStart = head;
+      // A continuation at spanStart itself means the region starts mid-
+      // character (invalid bytes): leave start put, the decode rejects below.
+    }
+    // Snap end forward past the character containing the last requested byte.
+    if (end > start && end - 1 >= spanStart && end - 1 < spanStart + windowBytes.byteLength) {
+      let head = end - 1;
+      while (head > spanStart && isContinuation(windowBytes[head - spanStart])) head -= 1;
+      const len = charLengthAt(windowBytes[head - spanStart]);
+      if (len > 0) {
+        const charEnd = Math.min(fileSize, head + len);
+        if (charEnd > effEnd) effEnd = charEnd;
       }
     }
   }
+  if (effEnd - spanStart > windowBytes.byteLength) {
+    effEnd = spanStart + windowBytes.byteLength; // a short read cannot invent bytes
+  }
+  const decodeBytes = windowBytes.subarray(effStart - spanStart, effEnd - spanStart);
+  const sha256 = await computeSha256(decodeBytes);
 
-  return {
+  let textContent = null;
+  if (asText) {
+    const hasBinaryControls = decodeBytes.some((byte) =>
+      byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
+    );
+    try {
+      textContent = new TextDecoder("utf-8", { fatal: true }).decode(decodeBytes);
+    } catch { /* rejected below */ }
+    if (hasBinaryControls || textContent === null) {
+      return { ok: false, error: "fs_file_not_text", grantId, path: segments.join("/"), size: fileSize, sha256 };
+    }
+  }
+
+  const out = {
     ok: true,
     grantId,
     path: segments.join("/"),
@@ -660,6 +745,11 @@ export async function readFsGrantFile(
     content: textContent,
     truncated: false,
   };
+  if (explicitWindow) {
+    out.start = effStart;
+    out.end = effEnd;
+  }
+  return out;
 }
 
 /**
