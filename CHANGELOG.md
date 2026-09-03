@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.32] — 2026-09-03
+- cap-beads-yop8
+
 ## [0.3.31] — 2026-09-03
 - cap-beads-afiu
 
