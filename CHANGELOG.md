@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.26] — 2026-09-03
+- Run previews and results stop being clipped: a run's preview text is stored whole (still secret-scrubbed), retry summaries show the full text, and a worker result over 64 KiB is no longer cut before it is saved — large results are kept complete by reference, with the transport record staying small by design
+
 ## [0.3.25] — 2026-09-03
 - Attachments run uncapped: agent.run no longer drops items past 8 MiB/8-count (malformed dataURLs and type mismatches are still dropped and reported — that's safety, not size), text attachments reach the model whole instead of sliced at 4000 chars, and saved attachments keep their full data instead of going blank past 2 MiB
 

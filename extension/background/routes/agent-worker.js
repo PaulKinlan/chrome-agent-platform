@@ -46,7 +46,6 @@ export async function closeAgentWorkerFor(agentId, { kvGet, kvSet } = {}) {
   return { ok: true, agentId: id, closed: true };
 }
 const WORKER_PATH = "dist/workers/agent-worker.js";
-const MAX_PREVIEW_CHARS = 240;
 
 const log = capLog("agent-workers");
 
@@ -70,12 +69,12 @@ function validExecutionId(value) {
     || /^exec_[a-zA-Z0-9][a-zA-Z0-9_-]{7,194}$/.test(value);
 }
 
-function bounded(value, max = MAX_PREVIEW_CHARS) {
+function bounded(value, max) {
   const s = String(value ?? "");
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-function redactedPreview(value, max = MAX_PREVIEW_CHARS) {
+function redactedPreview(value, max) {
   // The CANONICAL redactor (the local regex missed the bare-whitespace form).
   return redactSecretText(bounded(value, max));
 }
@@ -338,7 +337,11 @@ export function createAgentWorkerRoutes({
       if (!validExecutionId(executionId)) return { ok: false, error: "invalid executionId" };
 
       const ok = m?.ok === true;
-      const result = m?.result !== undefined ? bounded(m.result, 64 * 1024) : undefined;
+      // dptw: the result passes through WHOLE — the old 64 KiB bound here
+      // truncated the result BEFORE settle, so even the retained payload was
+      // clipped. The durable-runs settle path retains large results by
+      // reference (kmpq); the transport record stays small by design there.
+      const result = m?.result !== undefined ? String(m.result) : undefined;
       const error = m?.error ? bounded(m.error, 2048) : undefined;
       const errorCategory = m?.errorCategory ? String(m.errorCategory).slice(0, 64) : undefined;
       const errorReason = m?.errorReason ? bounded(m.errorReason, 512) : undefined;
