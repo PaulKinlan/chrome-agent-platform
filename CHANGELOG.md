@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.29] — 2026-09-03
+- cap-beads-60be
+
 ## [0.3.28] — 2026-09-03
 - cap-beads-4ffg
 
