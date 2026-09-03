@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.14] — 2026-09-03
+- skill promotion — agents with no skills attached get a bounded, fenced pointer at relevant catalog skills, with a falsification-proven eval suite
+
 ## [0.3.13] — 2026-09-03
 - the model picker gains Gemini 3.8 Flash and Fable 5.1, with every price audited against published sources
 
