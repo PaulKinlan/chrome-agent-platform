@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.15] — 2026-09-03
+- targeted test gates — a dependency-aware picker runs only the tests your change exercises, and fails closed to the full suite when coverage can't be proven
+
 ## [0.3.14] — 2026-09-03
 - skill promotion — agents with no skills attached get a bounded, fenced pointer at relevant catalog skills, with a falsification-proven eval suite
 
