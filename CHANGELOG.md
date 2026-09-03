@@ -1,13 +1,9 @@
 # Changelog
 
 ## [0.3.19] — 2026-09-03
-- chrome-agent-platform-4ffg: agents tidy up after themselves — lifecycle cleanup guidance, browser-tidy skill, run-end tab summary, default-off auto-close setting
-
-## [0.3.18] — 2026-09-03
-- chrome-agent-platform-4ffg: agents tidy up after themselves — lifecycle cleanup guidance, browser-tidy skill, run-end tab summary, default-off auto-close setting
+- agents tidy up after themselves — every tab/window-opening tool carries cleanup guidance, the run summary names the tabs/windows a task opened, and a default-off Auto-close run tabs setting closes exactly those tabs
 
 ## [0.3.17] — 2026-09-03
-- agents tidy up after themselves — every tab/window-opening tool carries cleanup guidance, a browser-tidy skill is surfaceable, the run summary names the tabs/windows a run opened, and a default-off Auto-close run tabs setting closes exactly those tabs (docs/LIFECYCLE-CLEANUP.md)
 - The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
 
 ## [0.3.16] — 2026-09-03
