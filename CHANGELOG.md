@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.24] — 2026-09-03
+- agents tidy up after themselves — restored-window lifecycle tracking, keeper exclusions, and honest run-end notes
+
 ## [0.3.23] — 2026-09-03
 - sandbox rules lead tool discovery, teaching errors fire in the real sandbox, and the persistence recommendation is recorded
 
