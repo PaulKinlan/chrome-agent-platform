@@ -176,3 +176,43 @@ Deno.test("withSiteDocsFallback: no discoverable docs → the ORIGINAL honest er
   });
   assertEquals(out, res);
 });
+
+// 922q review P2: fetch follows redirects — a same-origin docs URL that 302s
+// CROSS-ORIGIN must not feed third-party content into the docs answer
+// (sameOriginOnly filters the URL STRINGS discovered, not where they land).
+// The final response URL is verified against the enrolled origin.
+Deno.test("fetchSiteDocs: a docs URL that redirects CROSS-ORIGIN is refused honestly (skipped, not ingested, not a crash)", async () => {
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u === `${ORIGIN}/llms.txt`) return { ok: true, url: u, text: async () => LLMS };
+    if (u === `${ORIGIN}/docs/install`) {
+      // The enrolled origin's page 302s to a third party — must be refused.
+      return { ok: true, url: "https://evil.example.net/harvested", text: async () => PAGE("EVIL-CROSS-ORIGIN-MARKER") };
+    }
+    if (u === `${ORIGIN}/cli-reference`) return { ok: true, url: u, text: async () => PAGE("CLI-MARKER-922q") };
+    return { ok: false, url: u, status: 404, text: async () => "" };
+  };
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assert(docs, "the good page still lands");
+  assertEquals(docs.pagesUsed, 1);
+  assertStringIncludes(docs.content, "CLI-MARKER-922q");
+  assert(!docs.content.includes("EVIL-CROSS-ORIGIN-MARKER"), "cross-origin redirect content must never be ingested");
+  assert(!docs.urls.some((u) => u.includes("evil.example.net")), "the reported page list stays same-origin");
+});
+
+Deno.test("fetchSiteDocs: a docs URL that redirects SAME-ORIGIN still works", async () => {
+  const fetchImpl = async (url) => {
+    const u = String(url);
+    if (u === `${ORIGIN}/llms.txt`) return { ok: true, url: u, text: async () => LLMS };
+    if (u === `${ORIGIN}/docs/install`) {
+      // Same-origin redirect (e.g. trailing-slash canonicalization) — fine.
+      return { ok: true, url: `${ORIGIN}/docs/install/`, text: async () => PAGE("INSTALL-MARKER-922q") };
+    }
+    if (u === `${ORIGIN}/cli-reference`) return { ok: true, url: u, text: async () => PAGE("CLI-MARKER-922q") };
+    return { ok: false, url: u, status: 404, text: async () => "" };
+  };
+  const docs = await fetchSiteDocs({ origin: ORIGIN, queryTerms: [], fetchImpl });
+  assert(docs);
+  assertEquals(docs.pagesUsed, 2);
+  assertStringIncludes(docs.content, "INSTALL-MARKER-922q");
+});

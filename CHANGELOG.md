@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.38] — 2026-09-03
+- 922q review P2: docs-fetch verifies the final response URL stays on the enrolled origin — a same-origin docs page that redirects cross-origin is skipped, never ingested
+
 ## [0.3.37] — 2026-09-03
 - 922q: site tools survive a broken native WebMCP dispatch + agents answer from the site's docs when tools fail
 

@@ -121,12 +121,27 @@ export function htmlToText(html) {
   return s.replace(/\s+/g, " ").trim();
 }
 
-async function fetchText(fetchImpl, url, timeoutMs) {
+// fetchText verifies the FINAL response URL: fetch follows redirects, and a
+// same-origin docs URL that 302s cross-origin must never feed third-party
+// content into the docs answer (922q review P2 — sameOriginOnly filters the
+// discovered URL strings, not where they land). res.url is the post-redirect
+// URL; when the platform doesn't report it (empty string) there is nothing
+// to verify and the enrolled-origin request stands on its own.
+async function fetchText(fetchImpl, url, timeoutMs, origin) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetchImpl(url, { signal: ctrl.signal, credentials: "omit" });
     if (!res || !res.ok) return null;
+    if (origin && typeof res.url === "string" && res.url) {
+      let finalOrigin = null;
+      try {
+        finalOrigin = new URL(res.url).origin;
+      } catch {
+        finalOrigin = null;
+      }
+      if (finalOrigin !== origin) return null; // redirected off-origin — refused
+    }
     return await res.text();
   } catch {
     return null;
@@ -142,14 +157,14 @@ export async function fetchSiteDocs({ origin, queryTerms = [], fetchImpl }) {
   const f = fetchImpl ?? globalThis.fetch?.bind(globalThis);
   if (typeof f !== "function") return null;
   let candidates = [];
-  const llms = await fetchText(f, `${origin}/llms.txt`, PER_FETCH_TIMEOUT_MS);
+  const llms = await fetchText(f, `${origin}/llms.txt`, PER_FETCH_TIMEOUT_MS, origin);
   if (llms) candidates = parseLlmsTxt(llms, origin);
   if (!candidates.length) {
-    const sitemap = await fetchText(f, `${origin}/sitemap.xml`, PER_FETCH_TIMEOUT_MS);
+    const sitemap = await fetchText(f, `${origin}/sitemap.xml`, PER_FETCH_TIMEOUT_MS, origin);
     if (sitemap) candidates = parseSitemapXml(sitemap, origin);
   }
   if (!candidates.length) {
-    const root = await fetchText(f, `${origin}/`, PER_FETCH_TIMEOUT_MS);
+    const root = await fetchText(f, `${origin}/`, PER_FETCH_TIMEOUT_MS, origin);
     if (root) candidates = extractSameOriginHrefs(root, origin);
   }
   if (!candidates.length) return null;
@@ -157,7 +172,7 @@ export async function fetchSiteDocs({ origin, queryTerms = [], fetchImpl }) {
   const window_ = ranked.slice(0, DOCS_FETCH_WINDOW);
   const pages = [];
   for (const url of window_) {
-    const html = await fetchText(f, url, PER_FETCH_TIMEOUT_MS);
+    const html = await fetchText(f, url, PER_FETCH_TIMEOUT_MS, origin);
     if (html == null) continue; // a page that 404s/dies is skipped, not fatal
     const text = htmlToText(html);
     if (!text) continue;
