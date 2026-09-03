@@ -111,9 +111,10 @@ Deno.test("cap-log: values past the old 800/1200-char caps log whole (dptw R5)",
   // String past 800 chars (word-separated so it is not a token run).
   const big = "log line ".repeat(200); // ~1800 chars
   assertEquals(scrubLogValue(big), big);
-  // Object whose JSON form is past the old 1200-char JSON cap.
+  // Object whose JSON form is past the old 1200-char JSON cap (fewer than 20
+  // keys — the descriptor-shape guard for untrusted objects is not a size cap).
   const wide = {};
-  for (let i = 0; i < 30; i++) wide[`field_${i}`] = `value number ${i} with some descriptive text`;
+  for (let i = 0; i < 18; i++) wide[`field_${i}`] = `value number ${i} with some longer descriptive text attached here`;
   const json = JSON.stringify(wide);
   assert(json.length > 1200, "fixture past the old JSON cap");
   const scrubbed = scrubLogValue(wide);

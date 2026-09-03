@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.28] — 2026-09-03
+- Fix the wide-object log test: keep it under the 20-key descriptor guard (that guard stops accessor traps on hostile objects — it is not a size cap) while still exceeding the old 1200-char JSON truncation
+
 ## [0.3.27] — 2026-09-03
 - Logs and diagnostics keep the whole message: log entries and error details are no longer cut off at 800/1200 characters — secrets are still scrubbed and control characters still stripped, but the full text survives for debugging
 
