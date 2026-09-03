@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.3.36",
+  "version": "0.3.37",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -51,9 +51,10 @@
     "@ai-sdk/google": "^4.0.44",
     "@ai-sdk/openai": "^4.0.42",
     "@ai-sdk/openai-compatible": "^3.0.30",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "agent-do": "^0.7.0",
-    "diff": "^9.0.0",
     "ai": "^7.0.66",
+    "diff": "^9.0.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {

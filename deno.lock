@@ -1147,6 +1147,7 @@
         "npm:@ai-sdk/google@^4.0.44",
         "npm:@ai-sdk/openai-compatible@^3.0.30",
         "npm:@ai-sdk/openai@^4.0.42",
+        "npm:@modelcontextprotocol/sdk@^1.30.0",
         "npm:@types/node@^24.13.3",
         "npm:acorn@^8.18.0",
         "npm:agent-do@0.7",

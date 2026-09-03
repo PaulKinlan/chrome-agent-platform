@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.37] — 2026-09-03
+- the MCP client library the extension imports directly is now a declared dependency, so fresh installs can no longer lose it
+
 ## [0.3.36] — 2026-09-03
 - Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
 
