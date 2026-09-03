@@ -4,7 +4,12 @@
 // per-1M-token USD). Plus zero-cost entries for the on-device models
 // (gemini-nano / the Chrome Prompt API).
 //
-// REFRESH: node scripts/refresh-model-prices.mjs
+// Rows may add cacheRead/cacheWrite (per-1M USD) where a published source was
+// verified — additive documentation-in-data; agent-do's cost math reads only
+// {input, output}. Audit trail: docs/MODEL-PRICE-AUDIT-2026-09-02.md.
+//
+// REFRESH: node scripts/refresh-model-prices.mjs (carries cacheRead through;
+// MANUAL_ROWS there preserves picker rows the pricing source does not list).
 // An unknown model falls back to agent-do 0-cost estimate (best-effort).
 import { isPricingTierId, isRetiredModelId } from "./model-catalog.js";
 
@@ -23,8 +28,9 @@ export const MODEL_PRICING = {
   "claude-3.5-haiku": { input: 0.8, output: 4 },
   "claude-3.5-sonnet": { input: 3, output: 15 },
   "claude-3.7-sonnet": { input: 3, output: 15 },
-  "claude-4.5-haiku": { input: 1, output: 5 },
-  "claude-fable-5": { input: 10, output: 50 },
+  "claude-4.5-haiku": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+  "claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+  "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
   "claude-haiku-4-5": { input: 1, output: 5 },
   "claude-mythos-5": { input: 10, output: 50 },
   "claude-opus-4": { input: 15, output: 75 },
@@ -34,21 +40,21 @@ export const MODEL_PRICING = {
   "claude-opus-4-6": { input: 5, output: 25 },
   "claude-opus-4-7": { input: 5, output: 25 },
   "claude-opus-4-8": { input: 5, output: 25 },
-  "claude-opus-5": { input: 5, output: 25 },
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "claude-sonnet-4-0": { input: 3, output: 15 },
   "claude-sonnet-4-5": { input: 3, output: 15 },
   "claude-sonnet-4-6": { input: 3, output: 15 },
   "claude-sonnet-4.5": { input: 3, output: 15 },
   "claude-sonnet-4.5-200k": { input: 6, output: 22.5 },
-  "claude-sonnet-5": { input: 2, output: 10 },
+  "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   "codellama": { input: 0, output: 0 },
   "codestral": { input: 0.3, output: 0.9 },
   "codestral-latest": { input: 0.3, output: 0.9 },
   "deepseek-chat": { input: 0.27, output: 1.1 },
   "deepseek-coder": { input: 0, output: 0 },
   "deepseek-reasoner": { input: 0.55, output: 2.19 },
-  "deepseek-v4-flash": { input: 0.14, output: 0.28 },
-  "deepseek-v4-pro": { input: 1.74, output: 3.48 },
+  "deepseek-v4-flash": { input: 0.14, output: 0.28, cacheRead: 0.028 },
+  "deepseek-v4-pro": { input: 1.74, output: 3.48, cacheRead: 0.145 },
   "demo": { input: 0, output: 0 },
   "demo-local": { input: 0, output: 0 },
   "gemini-1.5-flash": { input: 0.075, output: 0.3 },
@@ -68,17 +74,24 @@ export const MODEL_PRICING = {
   "gemini-2.5-pro-preview-03-25-200k": { input: 2.5, output: 15 },
   "gemini-3-1-pro-preview": { input: 2, output: 12 },
   "gemini-3-1-pro-preview-200k": { input: 4, output: 18 },
-  "gemini-3-flash": { input: 0.5, output: 3 },
+  "gemini-3-flash": { input: 0.5, output: 3, cacheRead: 0.05 },
   "gemini-3-flash-preview": { input: 0.5, output: 3 },
   "gemini-3-pro-preview": { input: 2, output: 12 },
   "gemini-3-pro-preview-200k": { input: 4, output: 18 },
-  "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
+  "gemini-3.1-flash-lite": { input: 0.25, output: 1.5, cacheRead: 0.025 },
   "gemini-3.1-flash-lite-preview": { input: 0.25, output: 1.5 },
-  "gemini-3.1-pro": { input: 2, output: 12 },
+  "gemini-3.1-pro": { input: 2, output: 12, cacheRead: 0.2 },
+  // The picker id (dot style). The dash-style row above prices old usage; the
+  // prefix matcher cannot bridge dot<->dash, so the picker id needs its own row.
+  "gemini-3.1-pro-preview": { input: 2, output: 12, cacheRead: 0.2 },
   "gemini-3.5-flash": { input: 1.5, output: 9 },
   "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
-  "gemini-3.6-flash": { input: 0.75, output: 3.75 },
-  "gemini-3.7-flash": { input: 0.75, output: 3.75 },
+  "gemini-3.6-flash": { input: 0.75, output: 3.75, cacheRead: 0.075 },
+  "gemini-3.7-flash": { input: 0.75, output: 3.75, cacheRead: 0.075 },
+  "gemini-3.8-flash": { input: 0.75, output: 3.75, cacheRead: 0.075 },
+  // Provider alias for the current Flash — resolves to gemini-3.8-flash as of
+  // 2026-09-02 (Google pricing page); re-verify when the alias rolls forward.
+  "gemini-flash-latest": { input: 0.75, output: 3.75, cacheRead: 0.075 },
   "gemini-nano": { input: 0, output: 0 },
   "gemini-nano-prompt-api": { input: 0, output: 0 },
   "gemma-4-e4b-it-qat-q4_0": { input: 0, output: 0 },
@@ -116,20 +129,20 @@ export const MODEL_PRICING = {
   "gpt-5.3": { input: 2.5, output: 15 },
   "gpt-5.4": { input: 2.5, output: 15 },
   "gpt-5.4-272k": { input: 5, output: 22.5 },
-  "gpt-5.4-mini": { input: 0.75, output: 4.5 },
+  "gpt-5.4-mini": { input: 0.75, output: 4.5, cacheRead: 0.075 },
   "gpt-5.4-nano": { input: 0.2, output: 1.25 },
   "gpt-5.4-pro": { input: 30, output: 180 },
   "gpt-5.4-pro-272k": { input: 60, output: 270 },
-  "gpt-5.5": { input: 5, output: 30 },
+  "gpt-5.5": { input: 5, output: 30, cacheRead: 0.5 },
   "gpt-5.5-272k": { input: 10, output: 45 },
   "gpt-5.5-pro": { input: 30, output: 180 },
   "gpt-5.5-pro-272k": { input: 60, output: 270 },
   "gpt-5.6": { input: 5, output: 30 },
-  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02 },
   "gpt-5.6-luna-272k": { input: 0.4, output: 1.8 },
-  "gpt-5.6-sol": { input: 5, output: 30 },
+  "gpt-5.6-sol": { input: 4, output: 20, cacheRead: 0.4 },
   "gpt-5.6-sol-272k": { input: 10, output: 45 },
-  "gpt-5.6-terra": { input: 2, output: 12 },
+  "gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2 },
   "gpt-5.6-terra-272k": { input: 4, output: 18 },
   "gpt-image-1": { input: 10, output: 40 },
   "gpt-image-1-mini": { input: 2, output: 8 },
@@ -153,7 +166,7 @@ export const MODEL_PRICING = {
   "grok-4.3-200k": { input: 2.5, output: 5 },
   "grok-4.5": { input: 2, output: 6 },
   "grok-4.5-200k": { input: 4, output: 12 },
-  "grok-4.6": { input: 2, output: 6 },
+  "grok-4.6": { input: 2, output: 6, cacheRead: 0.5 },
   "grok-4.6-200k": { input: 4, output: 12 },
   "grok-build-0.1": { input: 1, output: 2 },
   "grok-build-0.1-200k": { input: 2, output: 4 },

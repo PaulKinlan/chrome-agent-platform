@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.13] — 2026-09-03
+- the model picker gains Gemini 3.8 Flash and Fable 5.1, with every price audited against published sources
+
 ## [0.3.12] — 2026-09-03
 - embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
 
