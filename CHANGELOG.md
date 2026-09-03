@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.50] — 2026-09-03
+- cap-changelog-copy-60em
+
 ## [0.3.49] — 2026-09-03
 - cap-beads-lhzk
 
