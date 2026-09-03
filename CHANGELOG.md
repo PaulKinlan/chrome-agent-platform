@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.34] — 2026-09-03
+- Attaching a very large file now tells you why it refused: picks over 32 MiB (the base64-in-one-message transport ceiling, documented) are declined with the real size and reason instead of freezing the tab, and a file that cannot be read reports the error instead of attaching nothing silently
+
 ## [0.3.33] — 2026-09-03
 - beads export: file the thread-open perf follow-up (4epo)
 
