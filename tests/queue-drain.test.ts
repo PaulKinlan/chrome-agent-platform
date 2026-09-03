@@ -229,3 +229,106 @@ Deno.test("r5 wake reconcile: crash before durable admission RELEASES the claim 
   assertEquals(outcome3.kept, 1, "a live/resuming run keeps its claim");
   assertEquals(outcome3.released + outcome3.dropped, 0);
 });
+
+// ── review r6 P1-3 falsification gates (gpt-5.6-sol:high, r5) ────────────────
+// On the r5 tree reconcileQueueClaims treated a registry lookup EXCEPTION as
+// absence (it released a claim whose run may be live — double-fire risk) and
+// DROPPED every phase other than running/settling, including RECOVERABLE
+// nonterminal phases (paused-interruption, paused-permission, cancel-requested
+// …): the item was removed while its run was merely paused for resume — either
+// lost entirely or run a second time after the resume. r6: only a GENUINELY
+// absent row releases; unreadable and recoverable rows keep the claim.
+
+Deno.test("r6 wake reconcile: an UNREADABLE registry KEEPS the claim (never reads as absence)", async () => {
+  const kv = kvFake();
+  const queue = createThreadQueue({ kvGet: kv.kvGet, kvSet: kv.kvSet });
+  await queue.enqueue("tUnreadable", "hold me");
+  const claim = await queue.claimHead("tUnreadable", "retry:test:unreadable");
+  assert(claim.ok);
+  const registry = registryFake();
+  registry.add("exec:live-1", { clientCorrelationId: "retry:test:unreadable", phase: "running", ok: undefined });
+
+  // The lookup THROWS (registry mid-recovery / transient fault): r5 released
+  // the claim — potentially double-firing a LIVE run's message.
+  const reports = [];
+  const outcome = await reconcileQueueClaims({
+    queue,
+    rowForClientRunId: async () => { throw new Error("registry not ready"); },
+    report: (level, msg) => reports.push({ level, msg }),
+  });
+  assertEquals(outcome.released, 0, "an unreadable registry must NOT release the claim");
+  assertEquals(outcome.dropped, 0, "an unreadable registry must NOT drop the claim");
+  assertEquals(outcome.kept, 1, "the claim waits while the registry is unreadable");
+  assertEquals((await queue.scanClaims()).length, 1, "the durable claim survives the unreadable reconcile");
+  assert(reports.length >= 1, "the reconcile must surface the unreadable-keep decision");
+});
+
+Deno.test("r6 wake reconcile: RECOVERABLE nonterminal phases KEEP their claim (paused / resuming / cancel-requested)", async () => {
+  const kv = kvFake();
+  const queue = createThreadQueue({ kvGet: kv.kvGet, kvSet: kv.kvSet });
+  await queue.enqueue("tRecover", "resume me later");
+  const claim = await queue.claimHead("tRecover", "retry:test:paused-run");
+  assert(claim.ok);
+  const registry = registryFake();
+  registry.add("exec:paused", { clientCorrelationId: "retry:test:paused-run", phase: "paused-interruption", ok: undefined });
+  registry.add("exec:paused-2", { clientCorrelationId: "retry:test:paused-run-2", phase: "paused-permission", ok: undefined });
+
+  // The claim for the paused run must be kept — the boot sweep resumes it and
+  // its settle resolves the claim. (r5 dropped every non-running phase: the
+  // item was removed while its run was only paused for resume.)
+  let out = await reconcileQueueClaims({ queue, rowForClientRunId: registry.rowForClientRunId, report: () => {} });
+  assertEquals(out.kept, 1, "a paused-interruption run's claim waits for its resume/settle");
+  assertEquals(out.dropped, 0);
+  assertEquals(out.released, 0);
+  // Clean the kept claim so the per-phase loop below starts with an open head.
+  await queue.dropClaim("tRecover", "retry:test:paused-run");
+
+  // Each recoverable phase classification, driven one claim at a time:
+  // paused-interruption / paused-permission / paused-provider-change /
+  // paused-side-effect-uncertain / resume-dispatching / cancel-requested all
+  // WAIT — none is dropped or released.
+  const recoverable = [
+    "paused-interruption",
+    "paused-permission",
+    "paused-provider-change",
+    "paused-side-effect-uncertain",
+    "resume-dispatching",
+    "cancel-requested",
+  ];
+  for (const phase of recoverable) {
+    await queue.enqueue("tRecover", `msg:${phase}`);
+    const claimed = await queue.claimHead("tRecover", `retry:test:${phase}`);
+    assert(claimed.ok, `claim for ${phase} must succeed`);
+    registry.rows.clear();
+    registry.add(`exec:${phase}`, { clientCorrelationId: `retry:test:${phase}`, phase, ok: undefined });
+    const one = await reconcileQueueClaims({ queue, rowForClientRunId: registry.rowForClientRunId, report: () => {} });
+    assertEquals(one.kept, 1, `${phase} is recoverable — its claim must be KEPT`);
+    assertEquals(one.dropped, 0, `${phase} must not be dropped`);
+    assertEquals(one.released, 0, `${phase} must not be released`);
+    assertEquals((await queue.scanClaims()).length, 1, `${phase}: the claim is still durable after the reconcile`);
+    await queue.dropClaim("tRecover", `retry:test:${phase}`); // clean up for the next phase
+  }
+});
+
+Deno.test("r6 wake reconcile: only a GENUINELY absent run releases; terminal-ok still drops + re-drains", async () => {
+  const kv = kvFake();
+  const queue = createThreadQueue({ kvGet: kv.kvGet, kvSet: kv.kvSet });
+  await queue.enqueue("tAbsent", "never admitted");
+  await queue.enqueue("tSettled", "settled while down");
+  await queue.enqueue("tSettled", "survivor");
+  const registry = registryFake();
+
+  // Absent → release (the only classification that releases).
+  assert((await queue.claimHead("tAbsent", "retry:test:absent-1")).ok);
+  // Settled-ok while down → drop + re-drain.
+  assert((await queue.claimHead("tSettled", "retry:test:settled-ok-1")).ok);
+  registry.add("exec:settled-ok", { clientCorrelationId: "retry:test:settled-ok-1", phase: "terminal", ok: true });
+
+  const out = await reconcileQueueClaims({ queue, rowForClientRunId: registry.rowForClientRunId, report: () => {} });
+  assertEquals(out.released, 1, "the never-admitted claim is released");
+  assertEquals(out.dropped, 1, "the settled-while-down claim is dropped");
+  assertEquals(out.kept, 0);
+  assert(out.threadsToRedrain.includes("tAbsent") && out.threadsToRedrain.includes("tSettled"), "released + terminal-ok both re-drain their threads");
+  assertEquals((await queue.list("tAbsent")).map((i) => i.text), ["never admitted"], "the released message is back on the queue for the wake re-drain");
+  assertEquals((await queue.list("tSettled")).map((i) => i.text), ["survivor"], "the executed item is gone; the survivor waits for the re-drain");
+});

@@ -129,10 +129,21 @@ export async function drainQueuedFollowUp({
  *   - no row for the claimed client run id  → RELEASE (never admitted: the
  *     crash hit before the run became durable — the message returns to the
  *     queue and the thread is re-drained);
- *   - row terminal (ok or not)              → DROP (the run settled while the
+ *   - registry lookup THREW (unreadable) → KEEP (review r6 P1-3: an
+ *     unreadable registry may hide a live/resumable run — releasing could
+ *     double-fire its message, dropping could lose it; only a genuinely
+ *     absent row releases);
+ *   - row terminal (ok or not)             → DROP (the run settled while the
  *     SW was down; a terminal-ok run also re-drains the next item);
- *   - row running/settling                  → KEEP (the run is live or being
- *     resumed; its own settle-drain resolves the claim).
+ *   - row running/settling                 → KEEP (the run is live or being
+ *     resumed; its own settle-drain resolves the claim);
+ *   - any other NONTERMINAL phase (paused-interruption, paused-permission,
+ *     paused-provider-change, paused-side-effect-uncertain,
+ *     resume-dispatching, cancel-requested) → KEEP (review r6 P1-3: these
+ *     are RECOVERABLE — the boot sweep / resume path may still settle the
+ *     run, and its settle resolves the claim. Dropping them fired the item
+ *     only for the run to be resumed and run it AGAIN, or lost it if the
+ *     resume never ran).
  *
  * @param {object} deps
  * @param {object} deps.queue
@@ -146,36 +157,55 @@ export async function reconcileQueueClaims({ queue, rowForClientRunId, report = 
   if (claims.length === 0) {
     return { reconciled: 0, released: 0, dropped: 0, kept: 0, threadsToRedrain: [] };
   }
+  // The durable registry's terminal phases (mirrors durable-runs.js).
+  const TERMINAL_PHASES = new Set(["terminal", "cancelled"]);
+  const LIVE_PHASES = new Set(["running", "settling"]);
   let released = 0;
   let dropped = 0;
   let kept = 0;
   const threadsToRedrain = new Set();
   for (const { threadId, runId } of claims) {
     let row = null;
+    let unreadable = false;
     try {
       row = await rowForClientRunId(String(runId));
     } catch {
-      row = null;
+      unreadable = true;
+    }
+    if (unreadable) {
+      // Registry unreadable ≠ absent (review r6 P1-3): the row may belong to
+      // a live or recoverable run — keep the claim and wait.
+      kept += 1;
+      report("warn", `[thread] queue claim ${runId} kept — durable registry unreadable`);
+      continue;
     }
     if (!row) {
-      // Never durably admitted — the crash beat the run's registration.
+      // Genuinely absent — never durably admitted: the crash beat the run's
+      // registration. Release so a later drain re-fires the message.
       await queue.releaseClaim(String(threadId), String(runId)).catch(() => {});
       released += 1;
       threadsToRedrain.add(String(threadId));
       continue;
     }
     const phase = String(row.phase ?? "");
-    if (phase === "running" || phase === "settling") {
+    if (LIVE_PHASES.has(phase)) {
       kept += 1; // live / being resumed — its settle resolves the claim
       continue;
     }
-    // Settled while the SW was down (its finally never ran): drop the item —
-    // the message was executed as that run's turn.
-    await queue.dropClaim(String(threadId), String(runId)).catch(() => {});
-    dropped += 1;
-    if (phase === "terminal" && row.terminal?.ok === true) {
-      threadsToRedrain.add(String(threadId)); // a succeeded turn drains the next
+    if (TERMINAL_PHASES.has(phase)) {
+      // Settled while the SW was down (its finally never ran): drop the item —
+      // the message was executed as that run's turn.
+      await queue.dropClaim(String(threadId), String(runId)).catch(() => {});
+      dropped += 1;
+      if (phase === "terminal" && row.terminal?.ok === true) {
+        threadsToRedrain.add(String(threadId)); // a succeeded turn drains the next
+      }
+      continue;
     }
+    // Recoverable nonterminal phase (review r6 P1-3): the run is NOT over —
+    // the boot sweep may resume it, the cancel may finalize it, and its
+    // settle resolves the claim. Never release or drop while it can settle.
+    kept += 1;
   }
   return {
     reconciled: claims.length,

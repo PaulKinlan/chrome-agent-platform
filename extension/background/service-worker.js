@@ -4662,6 +4662,12 @@ async function drainThreadQueueForThread(threadId, settledExecutionId) {
  * next). Best-effort: reconcile failure surfaces in the log, never crashes
  * boot. */
 async function reconcileThreadQueueClaims() {
+  // Review r6 P1-3: never classify claims against a registry that is not yet
+  // recoverable — an unready durableRuns.list() throws (or returns nothing)
+  // and a lookup failure must NOT read as "the run never existed" (releasing
+  // a live run's claim could double-fire its message). Chain after
+  // durableRecoveryReady exactly like resumeInterruptedRuns.
+  await durableRecoveryReady;
   const outcome = await reconcileQueueClaims({
     queue: threadQueues,
     rowForClientRunId: async (clientRunId) => {

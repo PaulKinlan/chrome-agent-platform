@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.20] — 2026-09-03
+- worker-run review fixes: register before the host post, confirmed steers only, recoverable queue claims wait (chrome-agent-platform-afiu)
+
 ## [0.3.19] — 2026-09-03
 - Worker steer control path works end to end: steers reach a live worker run and queue follow-ups can no longer be lost to a crash or refusal (chrome-agent-platform-afiu)
 

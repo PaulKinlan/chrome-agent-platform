@@ -242,6 +242,9 @@ function handleMessage(port, msg) {
           type: "agent-worker:steer-refused",
           runId: msg?.runId ?? "",
           agentId: AGENT_ID,
+          // Review r6 P1-2: the reply echoes the steer's correlation id so
+          // the host can relay THIS refusal to the SW request that posted it.
+          steerId: msg?.steerId ?? null,
           error: accepted.error,
         });
         break;
@@ -250,7 +253,7 @@ function handleMessage(port, msg) {
       const text = String(msg?.text ?? "").slice(0, 1500);
       // Broadcast so the transcript can render the owner interruption.
       broadcast("steer", { runId: msg?.runId ?? "", mode, text });
-      port.postMessage({ type: "agent-worker:steered", runId: msg?.runId ?? "", agentId: AGENT_ID, mode });
+      port.postMessage({ type: "agent-worker:steered", runId: msg?.runId ?? "", agentId: AGENT_ID, mode, steerId: msg?.steerId ?? null });
       break;
     }
     case "agent-worker:abort":
