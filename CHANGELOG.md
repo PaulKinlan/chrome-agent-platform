@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.39] — 2026-09-03
+- beads export after vj4s evidence comment
+
 ## [0.3.38] — 2026-09-03
 - refresh beads JSONL export
 
