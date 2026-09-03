@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.40] — 2026-09-03
+- beads export (fixed point)
+
 ## [0.3.39] — 2026-09-03
 - beads export after vj4s evidence comment
 
