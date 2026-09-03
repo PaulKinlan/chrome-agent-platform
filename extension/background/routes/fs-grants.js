@@ -193,9 +193,10 @@ export function createFsGrantRoutes({
       //    a creation (empty before); a binary or oversized file is refused —
       //    the card would otherwise show a misleading diff.
       //    readFsGrantFile(asText:true) applies the store's own binary sniff
-      //    (NUL / control bytes / invalid UTF-8 → fs_file_not_text) and its
-      //    read bound; a file over the text-decode bound comes back with a
-      //    placeholder instead of its text, which is refused here.
+      //    (NUL / control bytes / invalid UTF-8 → fs_file_not_text) and always
+      //    returns the complete before-text; THIS route's card bound then
+      //    refuses a file over MAX_FS_TEXT_DECODE_BYTES, because a diff the
+      //    owner cannot read in full is not an approvable diff.
       const readBefore = async () => {
         const res = await readFsGrantFile(id, { relativePath: path, asText: true });
         if (res?.ok === true) {

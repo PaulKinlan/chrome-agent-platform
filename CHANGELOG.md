@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.11] — 2026-09-03
+- read_file returns every requested byte: no size caps or guidance placeholders inside the reader, and byte windows snap to whole UTF-8 characters so valid text never fails as not-text
+
 ## [0.3.10] — 2026-09-02
 - read_file reads any file: no size cap refusal, offset/length chunking
 

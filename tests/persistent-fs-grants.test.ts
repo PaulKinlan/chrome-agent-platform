@@ -685,7 +685,7 @@ Deno.test("readFsGrantFile: reads text with SHA-256 digest — complete content 
     { grantId: "fsg_read_test", handle: mockFileHandle, name: "greeting.txt", kind: "file" },
   );
 
-  const res = await readFsGrantFile("fsg_read_test", { asText: true });
+  const res: any = await readFsGrantFile("fsg_read_test", { asText: true });
   assertEquals(res.ok, true);
   assertEquals(res.name, "greeting.txt");
   assertEquals(res.size, fileBytes.byteLength);
@@ -757,13 +757,18 @@ Deno.test("readFsGrantFile: a multi-MB file reads fully via offset/length chunki
   await saveFsGrant({ grantId: "fsg_read_big", handle: mockFileHandle, name: "big.log", kind: "file" });
 
   const wholeFileRead: any = await readFsGrantFile("fsg_read_big", { asText: true });
-  assertEquals(wholeFileRead.ok, true, "even a whole-file read above the single-read ceiling is not a refusal");
-  assert(
-    typeof wholeFileRead.content === "string" && wholeFileRead.content.includes("offset/length"),
-    "over-ceiling whole reads carry actionable paging guidance",
+  assertEquals(wholeFileRead.ok, true, "a whole-file read above any ceiling is never a refusal or a notice");
+  assertEquals(
+    wholeFileRead.content,
+    "y".repeat(total),
+    "over-ceiling whole reads return the COMPLETE content — no guidance placeholder may ever stand in for requested bytes",
   );
   assertEquals(wholeFileRead.size, total);
-  assertEquals(wholeFileRead.sha256, null);
+  assertEquals(wholeFileRead.truncated, false, "nothing was withheld, so truncated:false is truthful");
+  assert(
+    typeof wholeFileRead.sha256 === "string" && wholeFileRead.sha256.length === 64,
+    "the whole-file read is digest-pinned over its real content",
+  );
 
   const pieces: string[] = [];
   for (let offset = 0; offset < total; offset += chunk) {
@@ -777,6 +782,97 @@ Deno.test("readFsGrantFile: a multi-MB file reads fully via offset/length chunki
     pieces.push(res.content);
   }
   assertEquals(pieces.join("").length, total, "chunked reads reassemble the whole file");
+
+  // A single window larger than the old text-decode ceiling (2 MiB) delivers
+  // its complete content too — the ceiling lived in the reader and is gone;
+  // only the tool's transport cap (MAX_FS_READ_BYTES per window) remains.
+  const wideLen = MAX_FS_TEXT_DECODE_BYTES + 1;
+  const wide: any = await readFsGrantFile("fsg_read_big", { asText: true, offset: 0, length: wideLen });
+  assertEquals(wide.ok, true, `a ${wideLen}-byte window must read: ${JSON.stringify(wide)}`);
+  assertEquals(wide.start, 0);
+  assertEquals(wide.end, wideLen);
+  assertEquals(wide.content, "y".repeat(wideLen), "an over-2 MiB window returns its complete content, never a notice");
+  assertEquals(wide.truncated, false);
+  assert(typeof wide.sha256 === "string" && wide.sha256.length === 64, "the wide window is digest-pinned");
+});
+
+Deno.test("readFsGrantFile: byte windows that split multi-byte UTF-8 characters return whole characters, never fs_file_not_text", async () => {
+  // P1-2 falsification: the old code decoded each arbitrary byte window with a
+  // fatal TextDecoder, so any window edge landing inside a multi-byte sequence
+  // (a continuation byte alone, or a truncated lead) failed valid text as
+  // fs_file_not_text. The reader now aligns windows to whole characters and
+  // reports the actual byte span in start/end; content must byte-exactly match
+  // the disclosed span (whole characters only — no replacement, no dropped
+  // bytes). RED pre-fix: every continuation-byte window returned fs_file_not_text.
+  const fileText = "é€5 — 日本語 ☃\nfin";
+  const bytes = new TextEncoder().encode(fileText);
+  const mockFileHandle = {
+    kind: "file",
+    name: "multibyte.txt",
+    queryPermission: async () => "granted",
+    getFile: async () => ({
+      name: "multibyte.txt",
+      size: bytes.byteLength,
+      lastModified: 1700000000000,
+      arrayBuffer: async () => bytes.subarray(0, bytes.byteLength).slice().buffer,
+      slice: (s: number, e: number) => ({ arrayBuffer: async () => bytes.subarray(s, e).slice().buffer }),
+    }),
+  };
+  await saveFsGrant({ grantId: "fsg_read_mb", handle: mockFileHandle, name: "multibyte.txt", kind: "file" });
+  const eqBytes = (a: Uint8Array, b: Uint8Array) => {
+    if (a.byteLength !== b.byteLength) return false;
+    for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
+    return true;
+  };
+  try {
+    // Every single-byte window in the file must succeed (valid UTF-8 text) and
+    // must come back as exactly the whole characters covering that byte.
+    for (let off = 0; off < bytes.byteLength; off++) {
+      const r: any = await readFsGrantFile("fsg_read_mb", { asText: true, offset: off, length: 1 });
+      assertEquals(r.ok, true, `1-byte window at byte ${off} must not fail valid text: ${JSON.stringify(r)}`);
+      assertEquals(r.size, bytes.byteLength);
+      assert(r.start <= off && r.end > off && r.end <= bytes.byteLength, `span ${r.start}..${r.end} covers byte ${off}`);
+      assert(
+        eqBytes(new TextEncoder().encode(r.content), bytes.subarray(r.start, r.end)),
+        `content at ${r.start}..${r.end} is exactly those whole characters: ${JSON.stringify(r.content)}`,
+      );
+      assert(
+        typeof r.sha256 === "string" && r.sha256.length === 64,
+        "the returned span is digest-pinned",
+      );
+    }
+
+    // A pager that follows res.end walks whole characters: no gaps, no
+    // overlaps, and the pieces reassemble the complete text.
+    const pieces: string[] = [];
+    let pos = 0;
+    while (pos < bytes.byteLength) {
+      const r: any = await readFsGrantFile("fsg_read_mb", { asText: true, offset: pos, length: 5 });
+      assertEquals(r.ok, true, `paged window at ${pos} must read: ${JSON.stringify(r)}`);
+      assertEquals(r.start, pos, "following res.end always lands on a character boundary");
+      assert(eqBytes(new TextEncoder().encode(r.content), bytes.subarray(r.start, r.end)), "each page is whole characters");
+      pieces.push(r.content);
+      if (r.end <= pos) break; // defensive: an empty page must not spin
+      pos = r.end;
+    }
+    assertEquals(pieces.join(""), fileText, "pages reassemble the complete text");
+
+    // Literal split shapes on the leading é (bytes c3 a9): a window that
+    // starts on the continuation byte and one that ends on the lead byte both
+    // resolve to the whole character with the honest span.
+    const tail: any = await readFsGrantFile("fsg_read_mb", { asText: true, offset: 1, length: 1 });
+    assertEquals(tail.ok, true);
+    assertEquals(tail.start, 0);
+    assertEquals(tail.end, 2);
+    assertEquals(tail.content, "é");
+    const leadOnly: any = await readFsGrantFile("fsg_read_mb", { asText: true, offset: 0, length: 1 });
+    assertEquals(leadOnly.ok, true);
+    assertEquals(leadOnly.start, 0);
+    assertEquals(leadOnly.end, 2);
+    assertEquals(leadOnly.content, "é");
+  } finally {
+    await deleteFsGrant("fsg_read_mb");
+  }
 });
 
 Deno.test("readFsGrantFile: mislabelled .txt binary bytes fail closed instead of becoming replacement text", async () => {

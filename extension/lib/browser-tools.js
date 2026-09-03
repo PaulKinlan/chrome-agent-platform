@@ -2272,7 +2272,7 @@ export function browserToolset(readOnly = false, {
     }),
     read_file: tool({
       description:
-        "Read a text file inside a granted local folder. `path` is relative to the folder. Reads are NEVER refused because the file is large: the complete content is returned (or, above the single-read text window, actionable guidance naming the size and the paging path). Large files are read in chunks with `offset`/`length` (byte window; `size` reports the whole file, `start`/`end` the window). Returns { ok, content, size, sha256 } or a bounded JSON error (file_not_found, fs_file_not_text, …).",
+        "Read a text file inside a granted local folder. `path` is relative to the folder. Reads are NEVER refused and NEVER replaced by a size notice: a whole-file read returns the complete content at any size, and `offset`/`length` read any byte window in full (each window up to 10 MiB; `size` reports the whole file). For text, a window edge that splits a multi-byte UTF-8 character is widened to the whole characters it falls inside, and `start`/`end` report the exact byte span returned — page by following `end`. Returns { ok, content, size, sha256, start?, end? } or a bounded JSON error (file_not_found, fs_file_not_text, …).",
       inputSchema: z.object({
         path: z.string().describe("the file path, relative to the granted folder"),
         grantId: z.string().optional().describe("which folder, when more than one is available (see list_folders)"),
