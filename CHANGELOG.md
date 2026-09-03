@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.9] — 2026-09-03
+- sync the beads JSONL export (r3 candidate comment on chrome-agent-platform-9ve7)
+
 ## [0.3.8] — 2026-09-03
 - Pipeline steps for patch_asset and disenroll_origin fail closed before dispatch, and workflow saves count toward the 128 limit atomically per store
 
