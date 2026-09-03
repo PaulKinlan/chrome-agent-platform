@@ -2822,9 +2822,9 @@ const SOURCE_TOKEN_STYLE = `
 
 /* <artifact-inspector> — source/hex inspection and explicit confined HTML play.
  * Content is property-only and enters the DOM via textContent/srcdoc, never an
- * outer HTML parser. Rendering shows the COMPLETE stored content (a truncated
- * source view read as data loss even when Copy was exact — p45y) while Copy
- * preserves exact content. */
+ * outer HTML parser. Rendering shows the COMPLETE stored content at any size
+ * (a truncated source view read as data loss even when Copy was exact — p45y;
+ * no size-based refusal — r5) while Copy preserves exact content. */
 class ArtifactInspector extends Component {
   constructor() { super(); this._asset = null; this._language = ""; this._frameCleanup = null; this._frameDispose = null; }
   set asset(value) { this._asset = value && typeof value === "object" ? value : null; if (this._rendered) this._render(); }
@@ -2856,34 +2856,19 @@ class ArtifactInspector extends Component {
     this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
     const code = this._root.querySelector("code");
     const lang = this.language;
-    const status = this._root.querySelector(".status");
-    const bytes = new TextEncoder().encode(content).byteLength;
-    // The COMPLETE stored body renders — never a slice (chrome-agent-platform-
-    // p45y: the source view showed only the first 64 KiB, so a large artifact
-    // read as truncated even though the store + Copy carried it whole).
-    // Rendering is bounded by the artifact body contract (p45y r4): a VALID
-    // artifact is at most MAX_ARTIFACT_BODY_BYTES (the store's 4 MiB blob
-    // ceiling), and bodies above the 256 KiB single-call bound exist only via
-    // the append path — still valid, but too large to synchronously tokenize.
-    // Highlighting is therefore disabled above the single-call artifact limit,
-    // and a body beyond the 4 MiB valid-artifact ceiling is corrupted or
-    // foreign data: it is REFUSED from DOM mount (no synchronous tokenize of a
-    // multi-MB body, no giant DOM node) instead of rendered.
-    const MAX_ARTIFACT_BODY_BYTES = 4 * 1024 * 1024; // mirrors artifacts.js maxBodySerializedBytes
+    // The COMPLETE stored body renders — never a slice and never size-refused
+    // (chrome-agent-platform-p45y: the source view once showed only the first
+    // 64 KiB, and r4's 4 MiB mount refusal could hide an append-grown body;
+    // owner 2026-09-03: no size caps on rendering — whatever the stored or
+    // staged body is, the source view shows all of it, byte for byte).
+    // textContent mounts the multi-MB case as one text node, so there is no
+    // DOM or tokenize cost that needs a size refusal.
+    // Highlighting is the ONLY bounded step, and only because the tokenizer
+    // runs synchronously: a body above the single-call artifact limit renders
+    // as exact plain text instead (tokenizing a multi-MB body would freeze).
     const MAX_ARTIFACT_HIGHLIGHT_BYTES = 256 * 1024; // the single-call content cap (tool-argument-contract)
-    if (bytes > MAX_ARTIFACT_BODY_BYTES) {
-      code.textContent = "";
-      status.textContent = "This artifact's body is larger than any valid artifact (corrupt or foreign data) — not rendered. Copy is disabled; delete the artifact and regenerate it.";
-      this._root.querySelector(".copy")?.setAttribute("disabled", "true");
-      this._root.querySelector(".play")?.setAttribute("disabled", "true");
-      const note = this._root.querySelector(".note");
-      note.hidden = true;
-      return;
-    }
-    // Highlight when a recognised language is known AND the body is small
-    // enough to tokenize synchronously; otherwise the exact source as one text
-    // node. Both paths are markup-free (textContent / createTextNode).
-    if (lang && lang !== "text" && bytes <= MAX_ARTIFACT_HIGHLIGHT_BYTES) code.replaceChildren(highlightSource(content, lang, document));
+    const rawBytes = new TextEncoder().encode(content).byteLength;
+    if (lang && lang !== "text" && rawBytes <= MAX_ARTIFACT_HIGHLIGHT_BYTES) code.replaceChildren(highlightSource(content, lang, document));
     else code.textContent = content;
     const note = this._root.querySelector(".note");
     note.hidden = true;

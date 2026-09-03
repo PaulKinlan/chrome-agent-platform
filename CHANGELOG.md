@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.17] — 2026-09-03
+- Artifact previews and the source view render at any size: the 300,000-character preview cap and the inspector size refusal are gone, and a browser check proves an append-grown body above the old cap previews and runs
+
+## [0.3.16] — 2026-09-03
+- Artifact previews and the source view render at any size: the 300,000-character preview cap and the inspector size refusal are gone, and a browser check proves an append-grown body above the old cap previews and runs
+
 ## [0.3.15] — 2026-09-03
 - Artifacts can now grow beyond a single message: appending builds one artifact across calls, an artifact at the full 256 KB size always saves completely, and the source view guards oversized or damaged bodies
 

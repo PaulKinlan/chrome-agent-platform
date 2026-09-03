@@ -10,9 +10,13 @@
 //   P1-b  The mandatory append write path: appending across calls grows ONE
 //         artifact past the 256 KiB single-call cap; each call is bounded;
 //         edit/restore still work on the grown body.
-//   P2    The artifact inspector must not synchronously tokenize/render an
-//         oversized or corrupt body: highlighting is disabled above the valid
-//         artifact limit and multi-MB bodies are refused from DOM mount.
+//   P2    The artifact inspector must never size-refuse a body and must never
+//         synchronously tokenize an oversized one: highlighting is disabled
+//         above the single-call artifact limit, and any larger body — whatever
+//         its raw or serialized size (an escaping-heavy body the store could
+//         not even admit is foreign data only on the write path, never a
+//         render refusal) — mounts as the exact plain text (p45y r5, owner
+//         2026-09-03: no self-imposed size caps on rendering).
 //
 // RED on the pre-fix code: the exact-cap creates throw the memory store's
 // "exceeds the 262144-byte bound"; appendAsset does not exist.
@@ -176,20 +180,31 @@ Deno.test("artifact body: edits and version restore still work on an append-grow
   assertEquals(afterRestore.asset.content, base, "the restored head is the original body byte-for-byte");
 });
 
-// ---- P2: the artifact inspector must guard oversized/corrupt bodies ----
-Deno.test("artifact inspector: highlighting is disabled above the valid artifact limit and corrupt multi-MB bodies are refused from DOM mount", () => {
+// ---- P2: the artifact inspector never size-refuses; only tokenizing is bounded ----
+Deno.test("artifact inspector: bodies render complete at any size (no mount refusal), with highlighting bounded to the sync-tokenize budget", () => {
   const raw = Deno.readTextFileSync(new URL("../extension/shared/components.js", import.meta.url));
   const docs = Deno.readTextFileSync(new URL("../docs/components.js", import.meta.url));
   const inspector = raw.slice(raw.indexOf("/* <artifact-inspector>"), raw.indexOf('customElements.define("artifact-inspector"'));
   const docInspector = docs.slice(docs.indexOf("/* <artifact-inspector>"), docs.indexOf('customElements.define("artifact-inspector"'));
   for (const [label, text] of [["components.js", inspector], ["docs/components.js", docInspector]]) {
+    // r5: no size-based mount refusal may return — a body of ANY size (raw or
+    // serialized) renders complete; the old 4 MiB guard refused append-grown
+    // and escaping-heavy bodies outright.
     assert(
-      /byteLength\s*>\s*4\s*\*\s*1024\s*\*\s*1024/.test(text) || /byteLength\s*>\s*4 \* 1024 \* 1024/.test(text) ||
-        /MAX_ARTIFACT_BODY_BYTES/.test(text),
-      `${label}: the inspector must refuse to mount a corrupt multi-MB body (> 4 MiB valid-artifact ceiling)`,
+      !/larger than any valid artifact/.test(text) &&
+      !/MAX_ARTIFACT_BODY_BYTES/.test(text) &&
+      !/refused from DOM mount/.test(text),
+      `${label}: the size-based mount refusal must not return (no self-imposed size caps)`,
     );
+    // The complete body is mounted (whole-content text path), never a slice.
     assert(
-      /highlightSource\(content,\s*lang,\s*document\)/.test(text) === false || /byteLength/.test(text),
+      /code\.textContent = content/.test(text),
+      `${label}: the complete body must render as the text path`,
+    );
+    // Highlighting stays bounded to the synchronous-tokenize budget (a
+    // performance bound, not a render cap: larger bodies take the text path).
+    assert(
+      /MAX_ARTIFACT_HIGHLIGHT_BYTES/.test(text) && /highlightSource\(content, lang, document\)/.test(text),
       `${label}: highlighting must be size-guarded (never an unconditional whole-body tokenize)`,
     );
   }

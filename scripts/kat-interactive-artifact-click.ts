@@ -20,6 +20,13 @@
 //       byte-for-byte (the rendered text's SHA-256 equals the stored body's
 //       SHA-256), and the preview host mounts it. Before the fix the Source tab
 //       showed only the first 65,536 characters — the journey fails.
+//   (C) Append-grown preview: an HTML body ABOVE the old 300,000-char preview
+//       cap is built ACROSS real ≤64 KiB appendAsset calls (the advertised
+//       chunked build path, p45y r5) in the loaded extension, then opened in
+//       the artifact viewer. The nested srcdoc must mount the body's very
+//       last marker — r5 removed the host's 300,000-char cap (owner
+//       2026-09-03), so an append-grown body that large previews and runs
+//       instead of ending in the silent-drop "content never arrived" timeout.
 //
 // Evidence: screenshots (viewer before/after click, hub dialog before/after
 // click, big-artifact Source tab) written to the OUT dir (default
@@ -69,7 +76,8 @@ const GAME_HTML = makeGameHtml("bump", "score");
 const GAME_HTML_B = makeGameHtml("bump-b", "score-b");
 
 /** 90,000 chars — beyond the legacy 64 KiB source-view slice, inside the
- * 256 KiB store/write bound and the 300,000-char preview-host bound. */
+ * 256 KiB single-call store/write bound. (The old 300,000-char preview-host
+ * cap is gone — p45y r5 previews mount HTML of any size.) */
 const BIG_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Big artifact</title>
 <style>body{font-family:monospace;white-space:pre;margin:0;padding:12px}</style></head>
 <body id="big-artifact-body">${"x".repeat(90_000 - 5000)}<p id="big-tail">TAIL-END-${"y".repeat(4000)}</p>
@@ -419,6 +427,64 @@ async function main() {
       { renderedDigest: digestRead?.hex?.slice(0, 16), storedDigest: expectedDigest.slice(0, 16), renderedLength: digestRead?.length });
     await cdp.send("Target.closeTarget", { targetId: bigTarget.result.targetId }).catch(() => {});
     await sleep(500);
+
+    // ── (C) an append-grown HTML body ABOVE 300,000 chars stores complete
+    // and PREVIEWS (the p45y r5 preview-cap removal). The head is created and
+    // the body is grown with real ≤64 KiB appendAsset calls THROUGH THE REAL
+    // STORE in the loaded extension (the extension page imports the same
+    // OPFS-backed store the service-worker routes use — appends carry no
+    // route approval because no agent is involved, so the KAT drives the
+    // store's append path directly), then read back through the real
+    // asset.get route and opened in the artifact viewer: the nested srcdoc
+    // must mount the body's very last marker. Before r5 the host silently
+    // dropped every guarded payload over 300,000 chars and the preview ended
+    // in the misleading 15-second "content never arrived" report.
+    const appendBuilt = await evaluate(ntp, `(async () => {
+      const store = await import(chrome.runtime.getURL('lib/artifacts.js'));
+      const head = '<!doctype html><html><head><meta charset="utf-8"><title>Append-grown big</title></head><body id="append-grown">' + 'a'.repeat(200000);
+      const created = await store.createAsset('master', { type: 'html', name: 'Append-grown p45y r5', content: head });
+      if (!created?.ok) return { ok: false, step: 'create', error: String(created?.error ?? created) };
+      const id = created.asset?.id ?? created.id ?? null;
+      const chunk = 64 * 1024 - 10; // every call stays under the 64 KiB per-append bound
+      const r1 = await store.appendAsset('master', id, 'b'.repeat(chunk));
+      const r2 = await store.appendAsset('master', id, 'c'.repeat(chunk));
+      const r3 = await store.appendAsset('master', id, '<p id="append-tail">TAIL-OVER-300K</p>');
+      const got = await store.getAsset('master', id);
+      return { ok: r1?.ok && r2?.ok && r3?.ok && got?.ok, id, total: typeof got?.asset?.content === 'string' ? got.asset.content.length : null };
+    })()`);
+    check("append-grown: head create + three ≤64 KiB appends grow ONE html artifact past 300,000 chars (real store, real browser)",
+      appendBuilt?.ok === true && typeof appendBuilt?.id === "string" && typeof appendBuilt?.total === "number" && appendBuilt.total > 300_000,
+      appendBuilt);
+    const appendId = appendBuilt?.id;
+    const routeRead = appendBuilt?.ok ? await evaluate(ntp, `(async () => {
+      const r = await chrome.runtime.sendMessage({ type: 'asset.get', origin: 'master', id: ${JSON.stringify(appendId)} });
+      return { ok: r?.ok === true, total: typeof r?.asset?.content === 'string' ? r.asset.content.length : null };
+    })()`) : null;
+    check("append-grown: the service-worker route reads back the SAME append-grown body (store coherence across contexts)",
+      routeRead?.ok === true && routeRead?.total === appendBuilt?.total && routeRead?.total > 300_000,
+      { route: routeRead, built: appendBuilt?.total });
+    const appendTarget = await cdp.send("Target.createTarget", {
+      url: `chrome-extension://${extensionId}/artifact/artifact.html?id=${encodeURIComponent(String(appendId))}&origin=master`,
+    });
+    const appendAttach = await cdp.send("Target.attachToTarget", { targetId: appendTarget.result.targetId, flatten: true });
+    const appendViewer = appendAttach.result.sessionId;
+    surfaceSessions.push(appendViewer);
+    await cdp.send("Runtime.enable", {}, appendViewer);
+    await cdp.send("Page.enable", {}, appendViewer);
+    await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, appendViewer);
+    await waitFor(async () => {
+      const r = await evaluate(appendViewer, `(() => ({ frame: !!document.querySelector('.frame .html-frame iframe') }))()`);
+      return r && r.frame ? r : null;
+    }, 20000, "append-grown: viewer preview frame");
+    const appendMount = await waitFor(async () => {
+      const found = await evalInSrcdoc(`(() => { const t = document.getElementById('append-tail'); return t ? { text: t.textContent } : null; })()`, "append-grown");
+      return found && !found.__exception ? found : null;
+    }, 25000, "append-grown: the body's last marker mounted inside the srcdoc frame");
+    await shot(appendViewer, "viewer-preview-append-grown.png");
+    check("append-grown: the >300,000-char body mounts and RUNS in the preview (last marker present — no silent drop, no 'never arrived' timeout)",
+      appendMount?.text === "TAIL-OVER-300K", appendMount);
+    await cdp.send("Target.closeTarget", { targetId: appendTarget.result.targetId }).catch(() => {});
+    await sleep(400);
 
     // ── (A2) the hub ARTIFACT DIALOG (openArtifactDialog in the NTP) ──────
     const dialogOpen = await evaluate(ntp, `(() => {
