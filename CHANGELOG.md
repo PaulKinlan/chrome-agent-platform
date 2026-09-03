@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.29] — 2026-09-03
+- dptw phase 2 (storage): usage ledger + quarantine caps removed (S17); S16 verified not-a-cap
+
 ## [0.3.28] — 2026-09-03
 - dptw phase 2 (storage): named-agent + agent-card limits removed (S18)
 
