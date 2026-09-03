@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.46] — 2026-09-03
+- cap-beads-znx9
+
 ## [0.3.45] — 2026-09-03
 - cap-beads-yop8
 
