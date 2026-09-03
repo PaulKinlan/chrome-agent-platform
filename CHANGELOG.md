@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.38] — 2026-09-03
+- refresh beads JSONL export
+
 ## [0.3.37] — 2026-09-03
 - test suite 408s -> ~90s: bounded redactor scheme regex (37.6s -> 50ms on long tokens) + two-phase serial/parallel runner
 
