@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.13] — 2026-09-03
+- chrome-agent-platform-p45y: sync the beads JSONL export (claim + discovered-changelog links)
+
 ## [0.3.12] — 2026-09-03
 - chrome-agent-platform-p45y: artifact source view renders the complete stored code — no more 64 KB cut-off — and a new browser check proves generated click-games stay interactive in the artifact tab, the hub dialog, and the library view
 
