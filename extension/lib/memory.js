@@ -1446,10 +1446,10 @@ export async function listOrigins() {
     .sort();
 }
 
-// A small journal abstraction over a store (agent-do's memory pattern). The
-// journal is bounded by BOTH count (500 entries) AND serialized size (a long
-// model result must not blow past the value bound); long result/task text is
-// truncated.
+// A small journal abstraction over a store (agent-do's memory pattern).
+// dptw: no per-entry text clip and no serialized byte budget — every row is
+// stored WHOLE. The live ring still shows the latest 500 entries, but overflow
+// is ARCHIVED (never dropped) into the sibling "journal-archive" key.
 // `guard` (optional) is an async function awaited IMMEDIATELY before the durable
 // `setTrusted` commit — a scheduled run passes its fence so an ownership loss
 // during the preceding `store.get("journal")` await cannot stale-commit a row
@@ -1467,15 +1467,20 @@ function withJournalLock(fn) {
   return run;
 }
 
-const MAX_JOURNAL_ENTRY_TEXT = 16 * 1024;
-const MAX_JOURNAL_BYTES = 200 * 1024;
+// The live journal ring keeps the latest 500 entries; everything older is
+// archived (dptw owner-steer: archive-to-file, never evict).
+const JOURNAL_LIVE_ENTRIES = 500;
+const JOURNAL_ARCHIVE_KEY = "journal-archive";
 
 function boundJournal(entries) {
-  let bounded = entries.slice(-500);
-  while (bounded.length > 1 && utf8Bytes(JSON.stringify(bounded)) > MAX_JOURNAL_BYTES) {
-    bounded = bounded.slice(1);
-  }
-  return bounded;
+  return entries.slice(-JOURNAL_LIVE_ENTRIES);
+}
+
+/** Rows that fall off the live ring, in original order. */
+function journalOverflow(entries) {
+  return entries.length > JOURNAL_LIVE_ENTRIES
+    ? entries.slice(0, entries.length - JOURNAL_LIVE_ENTRIES)
+    : [];
 }
 
 async function exactStoreSnapshot(store, key) {
@@ -1495,7 +1500,6 @@ async function exactStoreSnapshot(store, key) {
 
 async function journalAppendInternal(store, entry, guard, idempotencyExecutionId, receiptCapable) {
   return withJournalLock(async () => {
-  const MAX_ENTRY_TEXT = MAX_JOURNAL_ENTRY_TEXT;
   // Capture the exact value, existence and version as one stable receipt.
   const pre = await exactStoreSnapshot(store, "journal");
   const original = pre.exists ? pre.value : [];
@@ -1512,15 +1516,19 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
       : original;
   }
   const journal = original.slice();
-  const bounded = { ...entry };
-  for (const k of ["result", "task"]) {
-    if (typeof bounded[k] === "string" && bounded[k].length > MAX_ENTRY_TEXT) {
-      bounded[k] = bounded[k].slice(0, MAX_ENTRY_TEXT);
-    }
-  }
-  journal.push({ ts: Date.now(), ...bounded });
-  // The byte budget uses UTF-8 bytes, not UTF-16 `.length`.
+  // dptw: the entry is stored WHOLE — no result/task text clipping.
+  journal.push({ ts: Date.now(), ...entry });
   const entries = boundJournal(journal);
+  // Archive BEFORE the live commit: a failed archive aborts the append with
+  // the live journal untouched (nothing lost); a failed commit after a
+  // successful archive leaves an archive duplicate — harmless, archive rows
+  // are immutable records readers dedupe by executionId/ts.
+  const overflow = journalOverflow(journal);
+  if (overflow.length > 0) {
+    const archive = (await store.get(JOURNAL_ARCHIVE_KEY)) ?? [];
+    if (!Array.isArray(archive)) throw new Error("journal archive is not an array");
+    await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+  }
   // Re-check the caller's fence IMMEDIATELY before the commit (no other await
   // between this check and setTrusted).
   if (guard) await guard();

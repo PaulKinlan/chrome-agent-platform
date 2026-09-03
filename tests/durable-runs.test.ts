@@ -1881,13 +1881,10 @@ Deno.test("durable runs: an over-budget response with a large envelope stays sma
     `the digest cut left a lone high surrogate (0x${lastChar.toString(16)})`);
   const decoded = new TextDecoder().decode(new TextEncoder().encode(content));
   assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair survived");
-  // The outbox record is small by design, and the envelope is BOUNDED (the
-  // boundSkillIds cap), so no serialized-size shrink is ever needed.
-  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
-  assert(serialized < 256 * 1024, `serialized outbox must fit the store bound (${serialized} bytes)`);
-  assert(serialized < 128 * 1024, `outbox stays far below the bound by design (${serialized} bytes)`);
+  // dptw: the outbox still carries digest+ref by design (payload by
+  // reference), but the envelope is NOT count-bounded — all 400 skills land.
   const skillCount = Array.isArray(outbox.threadTerminal?.skills) ? outbox.threadTerminal.skills.length : 0;
-  assert(skillCount <= 24, "the envelope is bounded at build (boundSkillIds), never embedded raw");
+  assertEquals(skillCount, 400, "dptw: no envelope cap — every journaled skill lands whole");
 });
 
 Deno.test("durable runs: settle never shrinks or spins — a 10MiB result fits an outbox that only carries refs (kmpq)", async () => {
@@ -1919,23 +1916,18 @@ Deno.test("durable runs: settle never shrinks or spins — a 10MiB result fits a
     "the thread commit resolves the complete 10MiB text");
 });
 
-Deno.test("durable runs: an unfittable ENVELOPE cannot stall the settle — envelope fields are bounded at build (kmpq)", async () => {
-  // The old contract failed loudly when a raw envelope alone exceeded the
-  // store bound. Under the new contract the envelope NEVER travels raw: it is
-  // bounded at outbox build with the same caps commitThreadTerminal applies,
-  // so a hostile skills/toolCalls list cannot make the record approach 256 KiB.
+Deno.test("durable runs: a large ENVELOPE cannot stall the settle (dptw — no build bound, no store bound)", async () => {
+  // dptw: neither the envelope build nor the store has a byte/count bound —
+  // 700 oversized skills (~300 KB) settle whole through the REAL store path.
   const store = new FakeStore();
+  const captured = {};
   const origSet = store.setTrusted.bind(store);
   store.setTrusted = async (key, value) => {
-    const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
-    if (String(key).startsWith("run-outbox:") && bytes > 256 * 1024) {
-      throw new Error(`value for "${key}" exceeds the 262144-byte bound`);
-    }
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
     return origSet(key, value);
   };
   const run = harness(store);
   await begin(run.registry);
-  // 700 oversized skills would be ~300 KB raw — bounded at build to 24.
   const hugeSkills = Array.from({ length: 700 }, (_, i) => `skill-${i}-` + "x".repeat(400));
   let settled = null;
   try {
@@ -1943,9 +1935,11 @@ Deno.test("durable runs: an unfittable ENVELOPE cannot stall the settle — enve
   } catch (e) {
     settled = { threw: String(e?.message ?? e) };
   }
-  assert(settled !== null && !settled.threw, "the settle completes — the envelope is bounded by design, not rejected");
-  const outboxKey = `run-outbox:${executionId}`;
-  assert(!(await store.has(outboxKey)) || true, "outbox processed");
+  assert(settled !== null && !settled.threw, "the settle completes — nothing is bounded, nothing is rejected");
+  const outbox = captured[`run-outbox:${executionId}`];
+  assert(outbox, "outbox persisted");
+  const skillCount = Array.isArray(outbox.threadTerminal?.skills) ? outbox.threadTerminal.skills.length : 0;
+  assertEquals(skillCount, 700, "dptw: all 700 skills journaled whole");
 });
 
 Deno.test("durable runs: an oversized logicalId cannot blow the outbox past the store bound — journalEntry.id is bounded at construction (r3 P1)", async () => {

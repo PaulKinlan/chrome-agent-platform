@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.25] — 2026-09-03
+- dptw phase 2 (storage): journal byte caps removed + overflow archived; threads.js caps removed (S4, S6)
+
 ## [0.3.24] — 2026-09-03
 - dptw phase 2 (storage): remove memory.js self-imposed caps (S1, S2, S5; S3 verified absent)
 
