@@ -425,8 +425,9 @@ export const ASSET_BOUNDS = {
   // The CEILING for ONE artifact body, measured the way the memory store
   // measures the asset-blob value it is written to (serialized JSON bytes,
   // memory.js MAX_ASSET_BLOB_VALUE_BYTES): append-grown bodies exceed the
-  // 256 KiB single-call bound but never this one. The inspector's DOM-mount
-  // guard mirrors the same 4 MiB ceiling (components.js).
+  // 256 KiB single-call bound but never this one. This is a STORE write-path
+  // ceiling only (p45y r5: the inspector mounts any stored or staged body in
+  // full — rendering has no size cap of its own).
   maxBodySerializedBytes: MAX_ASSET_BLOB_VALUE_BYTES,
   maxNameLength: 200,
   maxAssetsPerOrigin: 200,

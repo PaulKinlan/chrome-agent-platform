@@ -21,7 +21,10 @@
 // message handler, and the real registered inspector class renders real
 // assets through its own _render. RED against the r4 code: the host drops the
 // >300,000-char payload (no frame mounts) and the inspector refuses bodies
-// over the raw 4 MiB ceiling (empty code + "not rendered" status).
+// over the raw 4 MiB ceiling (empty code + "not rendered" status). The
+// escaping-heavy inspector case (raw 3 MiB, under r4's RAW band) is RED only
+// through its source-pin: the inspector source must contain no
+// MAX_ARTIFACT_BODY_BYTES / mount-refusal branch (r4's did).
 // @ts-nocheck
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
@@ -77,14 +80,32 @@ function stubEl() {
 // ---- P2: <artifact-inspector> renders complete bodies at ANY size ----------
 
 Deno.test("artifact inspector: an escaping-heavy body (raw < 4 MiB, serialized > 4 MiB) renders COMPLETE — no size refusal (p45y r5)", async () => {
+  // SOURCE-PIN (the behavioral render below cannot alone prove the guard's
+  // removal: r4's inspector refused on RAW byte count, and this sample's raw
+  // 3 MiB stayed under the old raw 4 MiB band, so r4 rendered it too — only
+  // the source can show the refusal branch is gone). RED on the r4 source
+  // (it defined MAX_ARTIFACT_BODY_BYTES and refused from DOM mount); GREEN
+  // here where the inspector has no size-based mount refusal left.
+  for (const [label, src] of [
+    ["components.js", Deno.readTextFileSync(new URL("../extension/shared/components.js", import.meta.url))],
+    ["docs/components.js", Deno.readTextFileSync(new URL("../docs/components.js", import.meta.url))],
+  ]) {
+    const inspector = src.slice(src.indexOf("/* <artifact-inspector>"), src.indexOf('customElements.define("artifact-inspector"'));
+    assert(
+      !/MAX_ARTIFACT_BODY_BYTES/.test(inspector) && !/refused from DOM mount/.test(inspector) && !/larger than any valid artifact/.test(inspector),
+      `${label}: the inspector must have no size-based mount refusal (the r4 4 MiB raw guard is gone)`,
+    );
+  }
+
   const mod = await import(`../extension/shared/components.js?inspector-escape=${crypto.randomUUID()}`);
   const InspectorClass = globalThis.customElements.get("artifact-inspector");
   if (!InspectorClass) throw new Error("artifact-inspector must be registered");
 
   // '"' escapes to \" in JSON: raw bytes stay under 4 MiB while the store's
   // serialized-byte measure (JSON.stringify) is above the 4 MiB blob ceiling.
-  // The r4 inspector refused exactly this shape ("not rendered"); r5 renders
-  // the whole body byte-for-byte.
+  // The render path has no size refusal of its own (p45y r5): a body whose
+  // serialized size exceeds the STORE ceiling is foreign data only on the
+  // write path — the inspector still renders it whole, byte for byte.
   const content = '"'.repeat(3 * 1024 * 1024);
   const rawBytes = new TextEncoder().encode(content).byteLength;
   const serializedBytes = new TextEncoder().encode(JSON.stringify(content)).byteLength;

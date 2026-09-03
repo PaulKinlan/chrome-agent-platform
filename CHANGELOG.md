@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.18] — 2026-09-03
+- The artifact inspector's size refusal stays gone: the escaping-heavy test pins the removal by source, and the store-ceiling comment no longer claims a rendering cap
+
 ## [0.3.17] — 2026-09-03
 - Artifact previews and the source view render at any size: the 300,000-character preview cap and the inspector size refusal are gone, and a browser check proves an append-grown body above the old cap previews and runs
 
