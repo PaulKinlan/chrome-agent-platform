@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.26] — 2026-09-03
+- dptw phase 2 (storage): journal field clips + jwt token/output limits removed (S9, S20)
+
 ## [0.3.25] — 2026-09-03
 - dptw phase 2 (storage): journal byte caps removed + overflow archived; threads.js caps removed (S4, S6)
 

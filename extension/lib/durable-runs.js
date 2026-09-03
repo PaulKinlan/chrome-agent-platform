@@ -46,16 +46,11 @@ const RESUME_CHUNK_CHARS = 64 * 1024;
 const LOG_READ_CONCURRENCY = 32;
 const MAX_PREVIEW_CHARS = 240;
 const MAX_RESUME_ATTEMPTS = 3;
-// journalEntry.id is copied into the outbox record, which must stay far under
-// the store's per-value bound; a hostile run-task can pass a 256KiB+ logicalId
-// (service-worker run-task → runTask id → settle payload.logicalId). Bound it
-// at construction so an oversized id can never make setTrusted(outbox) fail.
-const MAX_JOURNAL_ENTRY_ID = 200;
-
-/** The legacy-compatibility journal's entry id, bounded so the outbox record
- *  (which embeds journalEntry) stays small by design for ANY caller input. */
+// dptw: journalEntry.id is stored WHOLE — there is no store per-value bound
+// left for an oversized logicalId to trip, so no clip is needed.
+/** The legacy-compatibility journal's entry id, unclipped (dptw). */
 function boundedJournalId(value) {
-  return bounded(String(value ?? ""), MAX_JOURNAL_ENTRY_ID);
+  return String(value ?? "");
 }
 
 // ── run-log retention (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ────────────

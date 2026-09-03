@@ -1942,22 +1942,14 @@ Deno.test("durable runs: a large ENVELOPE cannot stall the settle (dptw — no b
   assertEquals(skillCount, 700, "dptw: all 700 skills journaled whole");
 });
 
-Deno.test("durable runs: an oversized logicalId cannot blow the outbox past the store bound — journalEntry.id is bounded at construction (r3 P1)", async () => {
-  // run-task accepts a caller-supplied m.id and passes it through as logicalId
-  // (service-worker run-task → runTask id → settle payload.logicalId). Before
-  // the bound, journalEntry.id copied that raw value into the outbox, so a
-  // hostile 300KiB id made setTrusted(outboxKey, outbox) exceed the store's
-  // per-value bound and the settle failed. Enforce the REAL store bound here:
-  // the outbox write must reject values over 256KiB exactly like memory.js does.
+Deno.test("durable runs: an oversized logicalId is stored WHOLE (dptw — no store bound left to trip)", async () => {
+  // dptw: memory.js has no per-value bound, so a 300KiB logicalId simply
+  // persists. journalEntry.id is copied whole (never clipped at construction).
   const store = new FakeStore();
   const captured = {};
   const origSet = store.setTrusted.bind(store);
   store.setTrusted = async (key, value) => {
-    if (String(key).startsWith("run-outbox:")) {
-      captured[key] = structuredClone(value);
-      const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
-      if (bytes > 256 * 1024) throw new Error(`value for "${key}" exceeds the 262144-byte bound`);
-    }
+    if (String(key).startsWith("run-outbox:")) captured[key] = structuredClone(value);
     return origSet(key, value);
   };
   const run = harness(store);
@@ -1972,10 +1964,5 @@ Deno.test("durable runs: an oversized logicalId cannot blow the outbox past the 
   assert(settled !== null && !settled.threw, "settle must not fail on an oversized logicalId");
   const outbox = captured[`run-outbox:${executionId}`];
   assert(outbox, "outbox persisted");
-  assert(typeof outbox.journalEntry?.id === "string", "journalEntry.id present");
-  assert(outbox.journalEntry.id.length <= 500,
-    `journalEntry.id is bounded at construction (len ${outbox.journalEntry.id.length}, hostile was ${hostileId.length})`);
-  assert(outbox.journalEntry.id.length < hostileId.length, "the hostile id is truncated, never embedded raw");
-  const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
-  assert(serialized < 256 * 1024, `outbox fits the store bound (${serialized} bytes)`);
+  assertEquals(outbox.journalEntry?.id, hostileId, "dptw: journalEntry.id stored whole (unclipped)");
 });

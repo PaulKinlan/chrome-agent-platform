@@ -104,20 +104,32 @@ function sanitizeProgressEvent(event) {
   return out;
 }
 
+// dptw: the journal stores every field WHOLE — redacted for secrets, never
+// clipped. (The structured renderer parses serialized fields; JSON.stringify
+// keeps them valid, and redaction is the same text-level pass journalJson
+// applies.)
+function journalWhole(value) {
+  try {
+    return redactSecretText(typeof value === "string" ? value : JSON.stringify(value));
+  } catch {
+    return "\"[unserializable value]\"";
+  }
+}
+
 function sanitizeJournalEntry(entry, executionId) {
   if (!entry || typeof entry !== "object") return { type: "task", executionId };
-  const type = String(entry.type ?? "task").slice(0, 64);
-  const id = entry.id ? String(entry.id).slice(0, 200) : String(Date.now());
+  const type = String(entry.type ?? "task");
+  const id = entry.id ? String(entry.id) : String(Date.now());
   const out = { type, id, executionId };
-  if (entry.task != null) out.task = redactedPreview(entry.task, 4096);
+  if (entry.task != null) out.task = redactSecretText(String(entry.task));
   if (entry.result != null) {
-    out.result = journalJson(entry.result, { maxBytes: 65536 });
+    out.result = journalWhole(entry.result);
   }
-  if (entry.tool != null) out.tool = String(entry.tool).slice(0, 128);
-  if (entry.selectedTool != null) out.selectedTool = String(entry.selectedTool).slice(0, 128);
-  if (entry.args != null) out.args = journalJson(entry.args, { maxBytes: 4096 });
-  if (entry.callId != null) out.callId = String(entry.callId).slice(0, 200);
-  if (entry.run != null) out.run = String(entry.run).slice(0, 200);
+  if (entry.tool != null) out.tool = String(entry.tool);
+  if (entry.selectedTool != null) out.selectedTool = String(entry.selectedTool);
+  if (entry.args != null) out.args = journalWhole(entry.args);
+  if (entry.callId != null) out.callId = String(entry.callId);
+  if (entry.run != null) out.run = String(entry.run);
   if (entry.ok !== undefined) out.ok = Boolean(entry.ok);
   if (entry.at != null && Number.isFinite(entry.at)) out.at = entry.at;
   return out;
