@@ -257,8 +257,24 @@ function handleMessage(port, msg) {
       break;
     }
     case "agent-worker:abort":
-      activeRun?.controller?.abort();
-      port.postMessage({ type: "agent-worker:aborted", runId: msg?.runId ?? "", agentId: AGENT_ID });
+      // Review r7 P1-1: an abort is only real when it names the ACTIVE run.
+      // The old unconditional abort+ack (a) confirmed a stop for a run that
+      // had already completed (the ack echoed the REQUESTED id whether or
+      // not anything was aborted) and (b) with a NEWER run live under this
+      // worker, aborted THAT run while still echoing the stale requested id
+      // — the SW then reported ok:true/stopped:true on the lie. Refuse
+      // honestly; the host relays the refusal to the SW request.
+      if (!activeRun || activeRun.runId !== String(msg?.runId ?? "")) {
+        port.postMessage({
+          type: "agent-worker:abort-refused",
+          runId: String(msg?.runId ?? ""),
+          agentId: AGENT_ID,
+          error: "run_not_live",
+        });
+        break;
+      }
+      activeRun.controller.abort();
+      port.postMessage({ type: "agent-worker:aborted", runId: String(msg?.runId ?? ""), agentId: AGENT_ID });
       break;
     case "agent-worker:close":
       activeRun?.controller?.abort();

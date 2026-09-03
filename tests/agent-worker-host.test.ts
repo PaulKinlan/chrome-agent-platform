@@ -349,6 +349,19 @@ Deno.test("r6 P1-2 agent-worker.steer: reports the worker's steered ack, host po
     assertEquals(unstopped.ok, false, "an unconfirmed stop must not be reported stopped");
     assertEquals(unstopped.code, "stop_unconfirmed");
   } finally { globalThis.chrome = prev; }
+
+  // (e) stop-run (r7 P1-1): the worker REFUSED the abort (no live run / a
+  // different run is live) — the refusal must reach the caller as ok:false,
+  // never the fabricated aborted ack the r6 route test handed back.
+  hostReply = { ok: true, posted: true, relayed: { type: "agent-worker:abort-refused", runId: R6_RUN_ID, agentId: "bg:hat", error: "run_not_live" } };
+  prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+  try {
+    const refused = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode: "stop-run" }, { principal: "extension" });
+    assertEquals(refused.ok, false, "a worker abort-refusal must reach the caller as ok:false — never stopped:true");
+    assertEquals(refused.code, "run_not_live");
+  } finally { globalThis.chrome = prev; }
 });
 
 Deno.test("agent-worker-host (host): posts with expectReply resolve with the WORKER's relayed reply", async () => {

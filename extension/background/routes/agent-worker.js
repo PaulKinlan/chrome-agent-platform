@@ -351,14 +351,22 @@ export function createAgentWorkerRoutes({
           // the durable record through agent-worker.result). Review r6 P1-2:
           // the host relays the worker's aborted ack back — the owner is
           // never told "stopped" against a dead host or a missed abort.
+          // Review r7 P1-1: the worker REFUSES (agent-worker:abort-refused)
+          // when no run is live under this id or a DIFFERENT run is — expect
+          // that refusal and report it as ok:false, never a confirmed stop.
           const relayed = await chrome.runtime.sendMessage({
             type: "agent-worker-host:post",
             agentId: identity,
             msg: { type: "agent-worker:abort", runId: executionId },
-            expectReply: { types: ["agent-worker:aborted"], keyField: "runId", timeoutMs: STEER_REPLY_TIMEOUT_MS },
+            expectReply: { types: ["agent-worker:aborted", "agent-worker:abort-refused"], keyField: "runId", timeoutMs: STEER_REPLY_TIMEOUT_MS },
           });
           if (relayed?.ok !== true) {
             return { ok: false, executionId, error: relayed?.error || "worker stop not confirmed", code: "stop_unconfirmed" };
+          }
+          if (relayed.relayed?.type === "agent-worker:abort-refused") {
+            const refused = relayed.relayed;
+            const code = String(refused.error ?? "abort_refused");
+            return { ok: false, executionId, error: code, code };
           }
           return { ok: true, executionId, stopped: true };
         }

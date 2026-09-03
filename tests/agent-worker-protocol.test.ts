@@ -250,3 +250,63 @@ Deno.test("r6 P1-2: the worker's steer replies carry the correlation id (steered
   const done = await until(() => find(port.sent, "agent-worker:run-done"));
   assert(done, "the refused steer must not disturb the active run");
 });
+
+// ── review r7 P1-1 (gpt-5.6-sol:high, r6): the abort path must refuse when
+// the requested run is not THE active run ─────────────────────────────────────
+// On the r6 tree agent-worker:abort unconditionally aborted the single
+// activeRun slot and echoed agent-worker:aborted with the REQUESTED runId —
+// a stop for an already-completed run was falsely confirmed, and stopping
+// run A while run B was live aborted run B while echoing A (the route then
+// treated the unconditional echo as authoritative). The r6 route tests
+// FABRICATED the aborted reply, so they never drove this worker behavior.
+// These tests drive the REAL worker: no-live and wrong-live aborts must both
+// produce agent-worker:abort-refused (never a confirmed stop), and the run
+// actually live must not be disturbed.
+Deno.test("r7 P1-1: an abort naming a run this worker is NOT running is REFUSED (never a confirmed stop)", async () => {
+  const { connect } = await loadWorker();
+  const port = fakePort();
+  connect({ ports: [port] });
+
+  // No run is live at all: refuse, do NOT ack a stop that aborted nothing.
+  port.emit({ type: "agent-worker:abort", runId: RUN_ID });
+  const refused = await until(() => find(port.sent, "agent-worker:abort-refused"));
+  assert(refused, "an abort with no live run must be refused (r6: it was falsely acked as aborted)");
+  assertEquals(refused.runId, RUN_ID, "the refusal echoes the requested runId");
+  assertEquals(refused.error, "run_not_live");
+  assert(!find(port.sent, "agent-worker:aborted"), "a no-live abort must never be acknowledged as aborted");
+
+  // A DIFFERENT run is live: refuse the stale id AND leave the live run alone.
+  port.emit({ type: "agent-worker:run", runId: RUN_ID, task: "say hello", modelKind: "demo", maxIterations: 2 });
+  assert(await until(() => find(port.sent, "agent-worker:run-started")), "run must start");
+  port.emit({ type: "agent-worker:abort", runId: OTHER_RUN_ID });
+  const refused2 = await until(() => [...port.sent].reverse().find((m) => m?.type === "agent-worker:abort-refused" && m?.runId === OTHER_RUN_ID));
+  assert(refused2, "an abort naming the wrong runId must be refused while another run is live (r6: it aborted the WRONG run)");
+  assertEquals(refused2.runId, OTHER_RUN_ID);
+  assertEquals(refused2.error, "run_not_live");
+  const aborted = [...port.sent].find((m) => m?.type === "agent-worker:aborted");
+  assert(!aborted, "the wrong-run abort must never be acknowledged as aborted");
+  const done = await until(() => find(port.sent, "agent-worker:run-done"));
+  assert(done, "the live run must still settle");
+  assertEquals(done.ok, true, "the live run must COMPLETE — the refused abort must not have cancelled it");
+  assertEquals(done.aborted, undefined, "the live run must not carry the aborted terminal");
+});
+
+Deno.test("r7 P1-1: an abort naming the ACTIVE run is still ACKED (the refusal guard does not break the stop path)", async () => {
+  const { connect } = await loadWorker();
+  const port = fakePort();
+  connect({ ports: [port] });
+
+  // Emit the abort in the SAME synchronous turn as the run kick: handleRun
+  // assigns activeRun before its first await, so the matching abort lands on
+  // a live run deterministically (no reliance on the demo's pacing).
+  port.emit({ type: "agent-worker:run", runId: RUN_ID, task: "say hello", modelKind: "demo", maxIterations: 2 });
+  port.emit({ type: "agent-worker:abort", runId: RUN_ID });
+  const aborted = await until(() => find(port.sent, "agent-worker:aborted"));
+  assert(aborted, "an abort naming the ACTIVE run must be acknowledged");
+  assertEquals(aborted.runId, RUN_ID);
+  assert(!find(port.sent, "agent-worker:abort-refused"), "the active-run abort must not be refused");
+  // The run still settles (the abort ack is this guard's contract — whether a
+  // mid-step demo stream honors the signal is the loop's separate concern).
+  const done = await until(() => find(port.sent, "agent-worker:run-done"));
+  assert(done, "the run must still settle — the abort path must never orphan it");
+});

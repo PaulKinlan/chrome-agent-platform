@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.21] — 2026-09-03
+- stop-run requires an exact active-run match and refuses otherwise
+
 ## [0.3.20] — 2026-09-03
 - worker-run review fixes: register before the host post, confirmed steers only, recoverable queue claims wait (chrome-agent-platform-afiu)
 
