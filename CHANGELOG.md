@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.16] — 2026-09-03
+- Merge remote-tracking branch 'origin/cap-beads-kmpq' into merge-batch
+
 ## [0.3.15] — 2026-09-03
 - targeted test gates — a dependency-aware picker runs only the tests your change exercises, and fails closed to the full suite when coverage can't be proven
 

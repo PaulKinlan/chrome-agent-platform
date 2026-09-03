@@ -689,3 +689,59 @@ Deno.test("the per-origin quota rejects at exactly the same write with the same 
   assert(storeWalkBytes(path) <= LIMIT, "the store never exceeds the bound");
   assertEquals(usageLedgerInspector.storeBytes(path), storeWalkBytes(path), "ledger still equals the walk after a rejection");
 });
+
+Deno.test("durable payload family: a 10MiB retained response persists through the REAL durableRunMemory quota path (kmpq P0)", async () => {
+  // kmpq P0 regression: persistJsonPayload writes chunked run-payload keys into
+  // the per-execution store, which is byte-capped at MAX_BYTES_PER_ORIGIN
+  // (8MiB). The lane's earlier tests injected an unlimited FakeStore and missed
+  // that a 10MiB response could never persist in production. Retained payloads
+  // now route to their OWN store family (durable-runs/payloads/<execId>) whose
+  // per-store byte bound is disabled (global budget + native OPFS only). This
+  // test drives the REAL durableRunMemory quota path — write all chunks through
+  // the actual store and read the retained payload back.
+  root.children.clear();
+  usageLedgerInspector.reset();
+  const durable = durableRunMemory();
+  const registry = createDurableRunRegistry({
+    store: durable,
+    logHandleFor: (durable.__logHandles ??= createMemoryRunLogHandles()),
+    bootId: "boot-payload-quota",
+    now: (() => { let n = 50_000; return () => ++n; })(),
+    resolveJournalStore: async () => ({}),
+    appendJournal: async () => {},
+    replaceCancellationJournal: async () => {},
+    commitThread: async () => {},
+    replaceCancellationThread: async () => {},
+  });
+  const executionId = "exec:22222222-2222-4222-8222-222222222222";
+  await registry.start({
+    executionId,
+    kind: "task",
+    taskPreview: "10MiB",
+    journalTarget: "master",
+    resumeRequest: { id: "tenmib", task: "tenmib", route: "runTask", routeArgs: {}, idempotencyKey: executionId },
+  });
+  // 10MiB of ASCII (heterogeneous content trips the redactor's URL-userinfo
+  // regex catastrophically — pre-existing quirk, unrelated to the store path).
+  const unit = "The quick brown fox jumps over the lazy dog. 0123456789\n";
+  const big = unit.repeat(Math.ceil((10 * 1024 * 1024) / unit.length));
+  const terminal = await registry.settle(executionId, { ok: true, result: big, logicalId: "tenmib", at: Date.now() });
+  assertEquals(terminal.phase, "terminal", "a 10MiB response settles through the REAL durable store");
+  // The payload chunks live in the dedicated payload family, NOT the execution
+  // KV store — so the per-execution store stays far under its byte bound while
+  // the retained payload persists in full.
+  const encoded = encodeURIComponent(executionId);
+  const executionStoreBytes = usageLedgerInspector.storeBytes(["memory", "durable-runs", "executions", encoded]);
+  assert(executionStoreBytes < 1024 * 1024,
+    `execution store must not hold the payload chunks (${executionStoreBytes} bytes)`);
+  const payloadStoreBytes = usageLedgerInspector.storeBytes(["memory", "durable-runs", "payloads", encoded]);
+  assert(payloadStoreBytes > 8 * 1024 * 1024,
+    `payload family holds the complete response (${payloadStoreBytes} bytes)`);
+  // Round-trip through the real store: the log row's payloadRef reads back the
+  // full 10MiB text from the payload family.
+  const logs = await registry.listLogs(executionId);
+  const terminalRow = [...logs].reverse().find((r) => r?.type === "terminal" || r?.type === "result");
+  assert(terminalRow, "terminal log row present");
+  const retained = terminalRow?.payload?.result ?? terminalRow?.result ?? "";
+  assertEquals(retained.length, big.length, "the retained payload round-trips complete through the real store");
+});

@@ -696,18 +696,22 @@ async function globalUsage() {
 /** The quota gate shared by setValue and saveScreenshot: the store bound
  * (`storeDir` null skips it) and the global bound, evaluated against the
  * ledger; a failure reseeds from a fresh walk and re-evaluates so the
- * decision is exactly the walk's decision. `grow` is the non-negative growth. */
-async function assertQuota(storeDir, grow) {
+ * decision is exactly the walk's decision. `grow` is the non-negative growth.
+ * `storeBoundBytes` overrides MAX_BYTES_PER_ORIGIN for a store family; null
+ * disables the per-store bound entirely (the durable payload family — its
+ * files still count toward the GLOBAL budget). */
+async function assertQuota(storeDir, grow, storeBoundBytes = MAX_BYTES_PER_ORIGIN) {
   await ledgerEnsure();
   for (let attempt = 0; attempt < 2; attempt++) {
-    const storeOver = storeDir && ledgerStoreBytes(storeDir) + grow > MAX_BYTES_PER_ORIGIN;
+    const storeOver = storeDir && storeBoundBytes !== null &&
+      ledgerStoreBytes(storeDir) + grow > storeBoundBytes;
     const globalOver = ledger.global + grow > MAX_BYTES_GLOBAL;
     if (!storeOver && !globalOver) return;
     if (attempt === 0) { await ledgerSeed(); continue; }
     if (storeOver) {
       throw new MemoryStoreQuotaError(
         "bytes",
-        `store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`,
+        `store exceeds the ${storeBoundBytes}-byte bound`,
       );
     }
     throw new MemoryStoreQuotaError(
@@ -753,7 +757,7 @@ function utf8Bytes(str) {
  * write without re-acquiring the same non-reentrant mutex (the round-19
  * critical deadlock: withWriteLock → setTrusted → setValue → withWriteLock hung
  * forever and poisoned all later OPFS writes). */
-async function setValueInner(path, key, value, { isMaster, trusted = false }) {
+async function setValueInner(path, key, value, { isMaster, trusted = false, storeBoundBytes = MAX_BYTES_PER_ORIGIN }) {
   const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
   const k = String(key);
   // Reserve both exact keys AND the `thread:` PREFIX on the master store: a
@@ -791,13 +795,14 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   // the new write's version is monotonic — a per-key version token that is
   // NEVER reused (the round-27 CAS blocker: value equality is not identity).
   const oldBytes = ledgerFileBytes(dir, `${key}.json`);
-  // Aggregate quotas: a store may not grow past MAX_BYTES_PER_ORIGIN bytes
-  // (and the global tree past MAX_BYTES_GLOBAL).
+  // Aggregate quotas: a store may not grow past its per-store bound bytes
+  // (the durable payload family passes null → global budget only) and the
+  // global tree past MAX_BYTES_GLOBAL).
   // The delta is positive for BOTH new keys AND replacements that grow — a
   // replacement that enlarges an existing value must also be budgeted (the
   // round-16 finding: the global limit was only checked for new keys).
   const delta = newBytes - oldBytes;
-  await assertQuota(dir, Math.max(0, delta));
+  await assertQuota(dir, Math.max(0, delta), storeBoundBytes);
   // Issue the DURABLE generation and write the ENVELOPE. The returned version
   // is the write's durable identity token — callers capture it and pass it to
   // the version-scoped compareAndDelete/compareAndRestore so compensation
@@ -814,8 +819,8 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   return version;
 }
 
-async function setValue(path, key, value, { isMaster, trusted = false }) {
-  return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
+async function setValue(path, key, value, { isMaster, trusted = false, storeBoundBytes = MAX_BYTES_PER_ORIGIN }) {
+  return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted, storeBoundBytes }));
 }
 
 /** Compare-and-swap on a single key, under the global write mutex (atomic with
@@ -884,7 +889,7 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
  * semantics. `memoryStore` (master + site origins) and `namedAgentMemory`
  * (named agents) both build their store through here so every store gets the
  * same bounds, version tokens, and CAS semantics. */
-function memoryStoreAt(path, { isMaster, origin }) {
+function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = MAX_BYTES_PER_ORIGIN }) {
   return {
     isMaster,
     origin,
@@ -956,7 +961,7 @@ function memoryStoreAt(path, { isMaster, origin }) {
       return await currentVersion(dir, key);
     },
     async set(key, value) {
-      return await setValue(path, key, value, { isMaster });
+      return await setValue(path, key, value, { isMaster, storeBoundBytes });
     },
     /** CAS delete: remove `key` ONLY if its current VERSION equals `expectedVersion`
      * (the write being rolled back). Never deletes a concurrent legitimate write
@@ -977,7 +982,7 @@ function memoryStoreAt(path, { isMaster, origin }) {
      * writable ONLY here — never via the model's `memory_set`/`set`. Returns the
      * version token (see `set`). */
     async setTrusted(key, value) {
-      return await setValue(path, key, value, { isMaster, trusted: true });
+      return await setValue(path, key, value, { isMaster, trusted: true, storeBoundBytes });
     },
     async keys() {
       const dir = await openDirOptional(path);
@@ -1108,6 +1113,19 @@ export function durableExecutionDirSegments(executionId) {
   return [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(String(executionId))];
 }
 
+/** The OPFS directory segments for one execution's RETAINED PAYLOAD chunks
+ * (`memory/durable-runs/payloads/<execId>`). kmpq: a retained response can be
+ * many MiB, but a per-execution store is byte-bounded at MAX_BYTES_PER_ORIGIN;
+ * chunking into the same execution store would make any response over that
+ * bound unpersistable (the P0). Payloads live in their OWN store family whose
+ * per-store byte bound is disabled (only the global budget + native OPFS
+ * quota apply), so a complete response persists regardless of size.
+ * Shares the execution's lifecycle: purge/retention remove the execution's
+ * payload dir with its record. */
+export function durablePayloadDirSegments(executionId) {
+  return [ROOT, DURABLE_ROOT, "payloads", encodeURIComponent(String(executionId))];
+}
+
 /** The OPFS directory segments for one thread's reverse-index store. */
 export function durableThreadDirSegments(threadId) {
   return [ROOT, DURABLE_ROOT, "threads", encodeURIComponent(String(threadId))];
@@ -1129,6 +1147,19 @@ function durableStoreForKey(key) {
       [ROOT, DURABLE_ROOT, "threads", encodeURIComponent(threadId)],
       { isMaster: false, origin: `durable-thread:${threadId}` },
     );
+  }
+  // kmpq P0: retained run payload chunks get their OWN store family. They are
+  // large BY DESIGN (a complete agent response, no per-row cap) and would blow
+  // a per-execution store's MAX_BYTES_PER_ORIGIN byte bound; `payloads` stores
+  // are created with that bound disabled (global budget + native OPFS only).
+  if (String(key).startsWith("run-payload:")) {
+    const executionId = durableExecutionId(key);
+    if (!executionId) throw new Error(`invalid durable-run key: ${String(key)}`);
+    return memoryStoreAt(durablePayloadDirSegments(executionId), {
+      isMaster: false,
+      origin: `durable-payload:${executionId}`,
+      storeBoundBytes: null,
+    });
   }
   const executionId = durableExecutionId(key);
   if (!executionId) throw new Error(`invalid durable-run key: ${String(key)}`);
@@ -1227,6 +1258,26 @@ async function durableExecutionStores() {
   return stores;
 }
 
+/** Enumerate the retained-payload stores (one per execution). kmpq P0: chunk
+ * keys live under `durable-runs/payloads/<execId>` so they never consume a
+ * per-execution KV store's MAX_BYTES_PER_ORIGIN byte budget. */
+async function durablePayloadStores() {
+  const root = await openDirOptional([ROOT, DURABLE_ROOT, "payloads"]);
+  if (!root) return [];
+  const stores = [];
+  for await (const [leaf, handle] of root.entries()) {
+    if (handle.kind !== "directory") continue;
+    let executionId;
+    try { executionId = decodeURIComponent(leaf); } catch { continue; }
+    if (!new RegExp(`^${EXECUTION_ID_SOURCE}$`, "i").test(executionId)) continue;
+    stores.push(memoryStoreAt(
+      [ROOT, DURABLE_ROOT, "payloads", leaf],
+      { isMaster: false, origin: `durable-payload:${executionId}`, storeBoundBytes: null },
+    ));
+  }
+  return stores;
+}
+
 async function migrateLegacyDurableKey(key) {
   const legacy = masterMemory();
   const target = durableStoreForKey(key);
@@ -1273,34 +1324,52 @@ export async function migrateLegacyDurableRunMemory() {
  * migration copy-verifies and removes them. */
 export function durableRunMemory() {
   const legacy = masterMemory();
-  async function selected(key) {
+  // kmpq P0: run-payload keys now route to their own payload store family
+  // (durableStoreForKey), whose per-store byte bound is disabled so a complete
+  // multi-MiB retained response persists. Payload chunks written BEFORE this
+  // change live in the execution's KV dir; reads fall back there so existing
+  // retained payloads keep hydrating. Writes always target the NEW family.
+  function legacyPayloadStoreFor(key) {
+    if (typeof key !== "string" || !key.startsWith("run-payload:")) return null;
+    const executionId = durableExecutionId(key);
+    if (!executionId) return null;
+    return memoryStoreAt(
+      [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(executionId)],
+      { isMaster: false, origin: `durable:${executionId}` },
+    );
+  }
+  async function readStore(key) {
     const target = durableStoreForKey(key);
     if (await target.has(key)) return target;
+    const legacyPayload = legacyPayloadStoreFor(key);
+    if (legacyPayload && await legacyPayload.has(key)) return legacyPayload;
     if (await legacy.has(key)) return legacy;
     return target;
   }
   return {
     isMaster: false,
     origin: "durable-runs",
-    async get(key) { return await (await selected(key)).get(key); },
-    async has(key) { return await (await selected(key)).has(key); },
-    async snapshot(key) { return await (await selected(key)).snapshot(key); },
-    async getVersion(key) { return await (await selected(key)).getVersion(key); },
+    async get(key) { return await (await readStore(key)).get(key); },
+    async has(key) { return await (await readStore(key)).has(key); },
+    async snapshot(key) { return await (await readStore(key)).snapshot(key); },
+    async getVersion(key) { return await (await readStore(key)).getVersion(key); },
     async set(key, value) { return await durableStoreForKey(key).set(key, value); },
     async setTrusted(key, value) {
-      const store = await selected(key);
-      return await store.setTrusted(key, value);
+      return await durableStoreForKey(key).setTrusted(key, value);
     },
     async compareAndDelete(key, expectedVersion) {
-      return await (await selected(key)).compareAndDelete(key, expectedVersion);
+      return await (await readStore(key)).compareAndDelete(key, expectedVersion);
     },
     async compareAndRestore(key, expectedVersion, value) {
-      return await (await selected(key)).compareAndRestore(key, expectedVersion, value);
+      return await (await readStore(key)).compareAndRestore(key, expectedVersion, value);
     },
     async delete(key) {
       const target = durableStoreForKey(key);
       await target.delete(key);
-      // Cleanup can safely remove an interrupted migration's legacy duplicate.
+      // Cleanup can safely remove an interrupted migration's legacy duplicate
+      // (the master copy) AND a pre-kmpq payload copy in the execution dir.
+      const legacyPayload = legacyPayloadStoreFor(key);
+      if (legacyPayload && await legacyPayload.has(key)) await legacyPayload.delete(key);
       if (await legacy.has(key)) await legacy.delete(key);
     },
     async keys() {
@@ -1308,6 +1377,9 @@ export function durableRunMemory() {
       const registry = durableStoreForKey(DURABLE_INDEX_KEY);
       for (const key of await registry.keys()) keys.add(key);
       for (const store of await durableExecutionStores()) {
+        for (const key of await store.keys()) keys.add(key);
+      }
+      for (const store of await durablePayloadStores()) {
         for (const key of await store.keys()) keys.add(key);
       }
       for (const store of await durableThreadStores()) {
