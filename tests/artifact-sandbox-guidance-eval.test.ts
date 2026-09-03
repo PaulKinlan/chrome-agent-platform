@@ -244,3 +244,107 @@ function assertThrowsTeaching(fn, api, expectFix) {
     `expected the fix hint for ${api} ("${expectFix}"), got: ${thrown.message}`,
   );
 }
+
+// ── Eval scenario 6: the constraint reaches the model at DISCOVERY time ─────
+// np64 r5 review P1 #1: create_asset's sandbox note was APPENDED after a long
+// preamble, but the model-facing discovery surfaces are prefix-truncated —
+// tool-search summaries keep the first 512 bytes and list_tools rows keep the
+// first 256 (extension/lib/tool-search.js TOOL_SEARCH_BOUNDS.maxSummaryBytes;
+// extension/lib/lazy-tool-protocol.js maxDescBytes=256). The model therefore
+// NEVER SAW the localStorage/cookie ban when choosing or listing tools; the
+// earlier eval scenarios read create_asset.description directly (and
+// scenario 5 ran the guard against plain object shims), bypassing the
+// production seam. This eval drives the REAL LazyToolProtocol search/list
+// surfaces over the REAL management catalog — RED pre-fix because the returned
+// model-facing text lacks the ban and the alternative.
+import { executableManagementToolRecords, LazyToolProtocol } from "../extension/lib/lazy-tool-protocol.js";
+import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
+
+const HUB_SCOPE = { hub: true, agentId: "hub", origin: "", documentId: "" };
+function discoveryAdapterContext() {
+  return {
+    version: "1.0.0",
+    sourceGeneration: "extension:1",
+    scope: HUB_SCOPE,
+    capabilities: ["test.invoke"],
+  };
+}
+function discoveryRunContext() {
+  return {
+    runId: "run-1",
+    taskId: "task-1",
+    runGeneration: "generation-1",
+    agentId: "hub",
+    origin: "",
+    documentId: "hub-doc",
+  };
+}
+function discoveryRefFactory() {
+  let value = 0;
+  return () => `sel_${(++value).toString(16).padStart(36, "0")}`;
+}
+function realManagementProtocol() {
+  const records = executableManagementToolRecords(
+    managementToolset({ callRoute: async () => ({ ok: true }) }),
+    discoveryAdapterContext(),
+  );
+  return new LazyToolProtocol({
+    readSources: () => records,
+    selectionAuthority: new ToolSelectionAuthority({ newRef: discoveryRefFactory() }),
+  });
+}
+const discoveryText = (s) => flat(s).toLowerCase();
+
+Deno.test("eval: the create_asset search summary AND management list row carry the sandbox ban (real LazyToolProtocol)", async () => {
+  const protocol = realManagementProtocol();
+  const context = discoveryRunContext();
+  const searched = await protocol.search({ query: "create_asset", limit: 12 }, context);
+  assertEquals(searched.ok, true);
+  const hit = (searched.results ?? []).find((r) => r.name === "create_asset");
+  assert(hit, "search must return create_asset");
+  const summary = discoveryText(String(hit.summary ?? ""));
+  assert(summary.includes("localstorage"), `search summary must name the storage ban (got: ${summary})`);
+  assert(summary.includes("sessionstorage"), `search summary must name sessionStorage (got: ${summary})`);
+  assert(summary.includes("in-memory"), `search summary must prescribe the in-memory alternative (got: ${summary})`);
+  assert(
+    summary.includes("store it with the platform") || summary.includes("store state with the platform"),
+    `search summary must offer the platform store (got: ${summary})`,
+  );
+
+  const listed = await protocol.list({ source: "management" }, context);
+  assertEquals(listed.ok, true);
+  const row = (listed.tools?.management ?? []).find((r) => r.name === "create_asset");
+  assert(row, "the management list must include create_asset");
+  const desc = discoveryText(String(row.description ?? ""));
+  assert(desc.includes("localstorage"), `list row must name the storage ban (got: ${desc})`);
+  assert(desc.includes("in-memory"), `list row must prescribe the in-memory alternative (got: ${desc})`);
+  assert(
+    desc.includes("store it with the platform") || desc.includes("store state with the platform"),
+    `list row must offer the platform store (got: ${desc})`,
+  );
+});
+
+Deno.test("eval: the other artifact-writing tools survive discovery too (patch_asset search+list; update_asset/generate_ui list)", async () => {
+  // Same prefix-truncation defect class across the artifact-writing family:
+  // patch_asset's constraint also sat past BOTH truncation points; update_asset
+  // and generate_ui lost theirs only from the 256-byte list row.
+  const protocol = realManagementProtocol();
+  const context = discoveryRunContext();
+  for (const name of ["patch_asset", "update_asset", "generate_ui"]) {
+    const searched = await protocol.search({ query: name, limit: 12 }, context);
+    assertEquals(searched.ok, true);
+    const hit = (searched.results ?? []).find((r) => r.name === name);
+    assert(hit, `search must return ${name}`);
+    const listed = await protocol.list({ source: "management" }, context);
+    assertEquals(listed.ok, true);
+    const row = (listed.tools?.management ?? []).find((r) => r.name === name);
+    assert(row, `the management list must include ${name}`);
+    const listDesc = discoveryText(String(row.description ?? ""));
+    assert(listDesc.includes("localstorage"), `${name} list row must name the storage ban (got: ${listDesc})`);
+    assert(listDesc.includes("in-memory"), `${name} list row must prescribe the in-memory alternative (got: ${listDesc})`);
+    assert(
+      listDesc.includes("store it with the platform") || listDesc.includes("store state with the platform"),
+      `${name} list row must offer the platform store (got: ${listDesc})`,
+    );
+  }
+});

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.19] — 2026-09-03
+- Sandbox rules lead tool discovery, and a real browser proves the teaching message renders
+
 ## [0.3.18] — 2026-09-03
 - Generated UI artifacts learn the sandbox's API limits: the schemas and the system prompt state the constraint up front, the frame and script sandboxes throw teaching errors instead of raw SecurityErrors, and the eval proves a localStorage-using generation gets flagged
 

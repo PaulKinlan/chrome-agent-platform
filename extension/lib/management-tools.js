@@ -73,8 +73,13 @@ export function managementToolset({ callRoute }) {
   // told the constraint AT THE TOOL (the moment it writes the code), and the
   // thrown errors repeat it at runtime; the protected system-prompt rule
   // (lib/runtime-policy.js "sandboxed-artifacts") states the same invariant.
-  const HTML_ARTIFACT_SANDBOX_NOTE =
-    "When type is \"html\": the artifact renders live in an origin-opaque sandbox (allow-scripts only) — NO localStorage/sessionStorage/cookies, NO network, NO permission-gated APIs are available inside it. Write the artifact to keep its state IN-MEMORY (JS variables — state resets on reload), or store state with the platform (a saved-state artifact/memory key) and load it back at start.";
+  // The SHORT sandbox rule LEADS every artifact-writing tool description. The
+  // model-facing discovery surfaces are PREFIX-truncated (tool-search summaries
+  // keep the first 512 bytes, list_tools rows the first 256), so a rule
+  // appended after a long preamble was never seen at tool-discovery time
+  // (np64 r5 review P1). One spelling, first.
+  const HTML_ARTIFACT_SANDBOX_LEAD =
+    "For html artifacts: they render in an origin-opaque sandbox — no localStorage/sessionStorage/cookies, no network, no permission-gated APIs — keep state in-memory or store it with the platform. ";
 
   return {
     // ---- sub-agent management ----
@@ -124,8 +129,8 @@ export function managementToolset({ callRoute }) {
     // ---- artifacts ----
     create_asset: tool({
       description:
-        "Create an artifact (a thing you make for the owner). Use origin 'master' for a hub-level artifact, or an origin for a site-specific one. type: \"html\" | \"text\" | \"json\" | \"image\" | \"data\" (exactly one of these literals — never a MIME type). Pass the SAME key on every run that should produce the SAME artifact: a key that already exists finds and updates that exact artifact instead of creating a duplicate. " +
-        HTML_ARTIFACT_SANDBOX_NOTE,
+        HTML_ARTIFACT_SANDBOX_LEAD +
+        "Create an artifact (a thing you make for the owner). Use origin 'master' for a hub-level artifact, or an origin for a site-specific one. type: \"html\" | \"text\" | \"json\" | \"image\" | \"data\" (exactly one of these literals — never a MIME type). Pass the SAME key on every run that should produce the SAME artifact: a key that already exists finds and updates that exact artifact instead of creating a duplicate.",
       inputSchema: z.object({
         origin: z.string().default("master").describe("'master' or an https origin"),
         type: z.enum([...ASSET_TYPES]).default("text"),
@@ -138,6 +143,7 @@ export function managementToolset({ callRoute }) {
     }),
     update_asset: tool({
       description:
+        HTML_ARTIFACT_SANDBOX_LEAD +
         "Replace an artifact's whole name/type/content (resends the entire body — for a small change prefer patch_asset, which sends only the changed text). type: \"html\" | \"text\" | \"json\" | \"image\" | \"data\" (exactly one of these literals — never a MIME type). When the artifact is html, it still renders in the origin-opaque sandbox, so the constraint applies to the replacement code: no localStorage/sessionStorage/cookies, no network, no permission-gated APIs — keep state in-memory or store it with the platform.",
       inputSchema: z.object({
         origin: z.string().default("master"),
@@ -157,6 +163,7 @@ export function managementToolset({ callRoute }) {
     }),
     patch_asset: tool({
       description:
+        HTML_ARTIFACT_SANDBOX_LEAD +
         "Edit part of an artifact by exact text replacement — the cheap way to change a small piece. Each `search` must match exactly once (set all:true to replace every occurrence); a search that is not found or is ambiguous is refused without changing anything. Prefer this over update_asset for small edits — you send only the changed text, not the whole document. Pass expectVersion (the version you last read) to refuse the edit if the artifact changed underneath you. When the artifact is html, it still renders in the origin-opaque sandbox, so the constraint applies to the edited code: no localStorage/sessionStorage/cookies, no network, no permission-gated APIs — keep state in-memory or store it with the platform.",
       inputSchema: z.object({
         origin: z.string().default("master").describe("'master' or an https origin"),
@@ -374,6 +381,7 @@ export function managementToolset({ callRoute }) {
     // ---- generative UI (the co-do double-iframe) ----
     generate_ui: tool({
       description:
+        HTML_ARTIFACT_SANDBOX_LEAD +
         "Generate an interactive HTML UI (a page, a widget, a data visualization, a small app) for the owner. It is saved as an html artifact AND rendered LIVE in a sandboxed double-iframe in the conversation. The UI may use inline scripts + styles (interactive) but runs in an ORIGIN-OPAQUE SANDBOX: no localStorage/sessionStorage/cookies, no network, no permission-gated APIs are available inside it (the frame is allow-scripts-only and its CSP blocks all egress). Write the UI to keep its state IN-MEMORY (JS variables — state resets on reload), or store state with the platform (a saved-state artifact/memory key) and load it back at start — never generate code that needs storage, cookies, or network at runtime. The owner's theme/locale is percolated in automatically.",
       inputSchema: z.object({
         name: z.string().max(ASSET_BOUNDS.maxNameLength).describe("a short, clear name for the generated UI"),
