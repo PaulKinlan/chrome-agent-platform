@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.28] — 2026-09-03
+- 922q prompt-level layer (work, uncommitted at hub handoff): honest UnknownError text + modelContext-unavailable error + master-skill docs-fallback guidance + demo-model fallback script + seeded fallback tests
+
 ## [0.3.27] — 2026-09-03
 - no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
 

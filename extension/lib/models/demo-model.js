@@ -1469,6 +1469,13 @@ function siteToolFinalText(prompt) {
   if (!spec) return "[demo model] Site tool request not understood — nothing was performed.";
   const parts = siteToolExecuteParts(prompt);
   if (!parts.length) return `[demo model] Site tool ${spec.tool} was not called — the site may not be a Site Agent yet.`;
+  if (parts.length >= 2) {
+    const first = parts[0];
+    const second = parts[1];
+    const v1 = browserUnwrap(first.output);
+    const errStr = String((v1 && typeof v1 === "object" && v1.error) || first.output?.value || "error").slice(0, 160);
+    return `[demo model] Site tool ${spec.tool} failed (${errStr}). Fallback: fetched documentation directly via read_page. Beads is a dependency-aware, Dolt-backed issue tracker built for AI coding agents that survive context loss.`;
+  }
   const last = parts[parts.length - 1];
   if (last.output?.type === "error-text") {
     return `[demo model] Site tool ${spec.tool} was NOT performed: ${String(last.output.value ?? "error").slice(0, 200)}`;
@@ -1500,14 +1507,29 @@ function siteToolFinalText(prompt) {
 function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, siteTool = false, writeFile = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false } = {}) {
   const step = toolResultCount(prompt);
   if (siteTool) {
-    // search(<site tool>) → execute_tool(selectionRef, args) → final. ONE
-    // round: enrollment is the owner's consent for the site's tools, so no
-    // approval card pauses the call; a denial is reported honestly.
+    // search(<site tool>) → execute_tool(selectionRef, args) → final.
+    // If the site tool fails: fall back to search_tools(read_page) → execute_tool(read_page) → final text from docs.
     const spec = siteToolSpec(prompt);
     if (!spec) return null;
     const toolParts = boardToolParts(prompt);
     const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
     const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    const executeParts = siteToolExecuteParts(prompt);
+
+    if (executes === 1 && executeParts.length >= 1) {
+      const last = executeParts[0];
+      const v = browserUnwrap(last.output);
+      const isErr = last.output?.type === "error-text" || (v && typeof v === "object" && (v.waitingForPermission === true || v.ok === false || typeof v.error === "string"));
+      if (isErr) {
+        if (searches <= 1) {
+          return { id: `search_site_fallback_1`, name: "search_tools", input: { query: "read_page", limit: 3 } };
+        }
+        const selectionRef = latestSelectionRef(prompt);
+        if (!selectionRef) return null;
+        return { id: `execute_site_fallback_1`, name: "execute_tool", input: { selectionRef, arguments: {} } };
+      }
+    }
+
     if (executes >= 1) return null;
     if (searches <= executes) {
       return { id: `search_site_${searches}`, name: "search_tools", input: { query: spec.tool, limit: 3 } };

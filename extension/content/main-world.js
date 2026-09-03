@@ -399,6 +399,8 @@
     let text;
     if (message) {
       text = `tool ${detail.tool} failed (${type}): ${message}`;
+    } else if (isDomEx && (name === "UnknownError" || name === "DOMException")) {
+      text = `tool ${detail.tool} failed (${type}) — the page's handler threw a DOMException with no message (the documentation site's search/dispatch engine or browser WebMCP layer threw an internal exception) — open the page directly or fetch its documentation instead${stack ? "; a stack excerpt is in errorDetail" : ""}`;
     } else {
       // The honest answer when the page gives us nothing: say exactly that,
       // plus everything the boundary captured (chrome-agent-platform-ajcc).
@@ -455,6 +457,11 @@
       // The webmcp-tools API executes via `document.modelContext.executeTool(
       // tool, args)` (a TOOL OBJECT, not a name), or the tool's own execute fn.
       const mc = document.modelContext;
+      if (!mc) {
+        throw internalError(
+          `this site declares WebMCP tools but your browser does not currently expose the WebMCP dispatch layer (document.modelContext is unavailable) — open the page directly or fetch its documentation instead`
+        );
+      }
       const raw = await getRawTools();
       const tool = raw.find((t) => t && t.name === name);
       if (tool) {
