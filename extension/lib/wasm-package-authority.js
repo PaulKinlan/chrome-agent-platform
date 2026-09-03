@@ -10,22 +10,17 @@ import { sha256Hex, sha256HexBytes } from "./pure.js";
 
 export const LANES = Object.freeze(["bundled"]);
 export const WASM_PACKAGE_LIMITS = Object.freeze({
-  MAX_TOOLS: 64,
-  MAX_EXECUTABLES: 16,
-  MAX_IMPORT_MODULES: 8,
-  MAX_IMPORT_MODULE_NAME_BYTES: 64,
+  // dptw (2026-09-03): the package SIZE ceilings (binary/manifest/section
+  // bytes, tools/executables/packages/history counts, tier byte gates) are
+  // gone — a bundled tool's bytes are admitted whole. What remains:
+  //   - MAX_CAPABILITIES: the capability list IS the permission surface
+  //     (security, not size),
+  //   - tier maxPages: wasm32 memory pages — the browser's real RAM ceiling.
   MAX_CAPABILITIES: 32,
-  MAX_MANIFEST_BYTES: 128 * 1024,
-  MAX_PACKAGES: 64,
-  MAX_HISTORY: 64,
-  MAX_BINARY_BYTES: 64 * 1024 * 1024,
-  MAX_SECTIONS: 64,
-  MAX_SECTION_BYTES: 8 * 1024 * 1024,
-  MAX_CUSTOM_SECTION_BYTES: 1024 * 1024,
   TIERS: Object.freeze({
-    tiny: Object.freeze({ maxPages: 512, maxBytes: 4 * 1024 * 1024, admission: "allowed" }),
-    default: Object.freeze({ maxPages: 2048, maxBytes: 16 * 1024 * 1024, admission: "allowed" }),
-    large: Object.freeze({ maxPages: 4096, maxBytes: 64 * 1024 * 1024, admission: "blocked" }),
+    tiny: Object.freeze({ maxPages: 512, maxBytes: Number.POSITIVE_INFINITY, admission: "allowed" }),
+    default: Object.freeze({ maxPages: 2048, maxBytes: Number.POSITIVE_INFINITY, admission: "allowed" }),
+    large: Object.freeze({ maxPages: 4096, maxBytes: Number.POSITIVE_INFINITY, admission: "allowed" }),
   }),
 });
 
@@ -69,7 +64,6 @@ const SECTION_NAMES = Object.freeze({
   11: "data", 12: "datacount",
 });
 const KIND_NAMES = Object.freeze({ 0: "function", 1: "table", 2: "memory", 3: "global", 4: "tag" });
-const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 
 export class WasmPackageAuthorityError extends Error {
@@ -247,7 +241,7 @@ function validateManifestObject(manifest) {
   if (!ID_RE.test(assertAscii(manifest.package.name, "$.package.name", { min: 1, max: 64 }))) fail("package_name_invalid", "$.package.name");
   if (!PACKAGE_TYPES.has(manifest.package.type)) fail("package_type_invalid", "$.package.type");
 
-  if (!Array.isArray(manifest.tools) || manifest.tools.length > WASM_PACKAGE_LIMITS.MAX_TOOLS) fail("tool_bound", "$.tools");
+  if (!Array.isArray(manifest.tools)) fail("tool_bound", "$.tools");
   const toolIds = new Set();
   for (let index = 0; index < manifest.tools.length; index++) {
     const path = `$.tools[${index}]`;
@@ -262,7 +256,7 @@ function validateManifestObject(manifest) {
     validateReplay(tool.replayClass, `${path}.replayClass`);
   }
 
-  if (!Array.isArray(manifest.executables) || manifest.executables.length === 0 || manifest.executables.length > WASM_PACKAGE_LIMITS.MAX_EXECUTABLES) fail("executable_bound", "$.executables");
+  if (!Array.isArray(manifest.executables) || manifest.executables.length === 0) fail("executable_bound", "$.executables");
   const executableIds = new Set();
   for (let index = 0; index < manifest.executables.length; index++) {
     const path = `$.executables[${index}]`;
@@ -272,16 +266,16 @@ function validateManifestObject(manifest) {
     if (executableIds.has(executable.id)) fail("executable_id_duplicate", `${path}.id`);
     executableIds.add(executable.id);
     if (!HEX64_RE.test(executable.sha256)) fail("digest_invalid", `${path}.sha256`);
-    if (!Number.isSafeInteger(executable.size) || executable.size < 1 || executable.size > WASM_PACKAGE_LIMITS.MAX_BINARY_BYTES) fail("size_invalid", `${path}.size`);
+    if (!Number.isSafeInteger(executable.size) || executable.size < 1) fail("size_invalid", `${path}.size`);
     exactKeys(executable.imports, ["allowed", "disallowed"], [], `${path}.imports`);
     for (const field of ["allowed", "disallowed"]) {
       const values = executable.imports[field];
-      if (!Array.isArray(values) || values.length > WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULES) fail("import_bound", `${path}.imports.${field}`);
+      if (!Array.isArray(values)) fail("import_bound", `${path}.imports.${field}`);
       for (let item = 0; item < values.length; item++) {
         const itemPath = `${path}.imports.${field}[${item}]`;
         const module = assertAscii(values[item], itemPath, {
           min: 1,
-          max: WASM_PACKAGE_LIMITS.MAX_IMPORT_MODULE_NAME_BYTES,
+          max: Number.POSITIVE_INFINITY,
         });
         if (field === "disallowed" && module === "*") continue;
         if (!IMPORT_MODULE_RE.test(module)) fail("import_invalid", itemPath);
@@ -418,7 +412,6 @@ function readTableLimits(reader) {
 
 export function auditWasmBinary(input, executable, { limits = WASM_PACKAGE_LIMITS, allowLarge = false } = {}) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input ?? []);
-  if (bytes.byteLength > limits.MAX_BINARY_BYTES) fail("binary_too_large");
   if (bytes.byteLength < 8 || bytes[0] !== 0x00 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) fail("wasm_magic");
   if (bytes[4] !== 0x01 || bytes[5] !== 0x00 || bytes[6] !== 0x00 || bytes[7] !== 0x00) fail("wasm_version");
   const tier = limits.TIERS[executable?.memory?.tier];
@@ -435,15 +428,13 @@ export function auditWasmBinary(input, executable, { limits = WASM_PACKAGE_LIMIT
   const imports = [];
   const memories = [];
   while (!reader.done()) {
-    if (++sections > limits.MAX_SECTIONS) fail("too_many_sections");
+    sections += 1;
     const id = reader.byte();
     const size = reader.u32();
-    if (size > limits.MAX_SECTION_BYTES) fail("section_too_large");
     if (reader.offset + size > reader.end) fail("section_size_overflow");
     const end = reader.offset + size;
     if (id === 0) {
       customBytes += size;
-      if (customBytes > limits.MAX_CUSTOM_SECTION_BYTES) fail("custom_section_over_budget");
       reader.offset = end;
       continue;
     }
@@ -516,9 +507,9 @@ function semverCompare(a, b) {
 function validateRegistry(raw) {
   if (raw == null) return { schemaVersion: 1, packages: {} };
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.schemaVersion !== 1 || !raw.packages || typeof raw.packages !== "object" || Array.isArray(raw.packages) || Object.keys(raw).some((key) => !new Set(["schemaVersion", "packages"]).has(key))) fail("registry_corrupt");
-  if (Object.keys(raw.packages).length > WASM_PACKAGE_LIMITS.MAX_PACKAGES) fail("registry_corrupt");
+
   for (const [packageId, record] of Object.entries(raw.packages)) {
-    if (record?.packageId !== packageId || record?.lane !== "bundled" || !record.current || !Array.isArray(record.history) || record.history.length > WASM_PACKAGE_LIMITS.MAX_HISTORY) fail("registry_corrupt", packageId);
+    if (record?.packageId !== packageId || record?.lane !== "bundled" || !record.current || !Array.isArray(record.history)) fail("registry_corrupt", packageId);
     if (!new Set(["committed", "revoked"]).has(record.current.state)) fail("registry_corrupt", packageId);
   }
   return structuredClone(raw);
@@ -560,7 +551,6 @@ export class WasmPackageAuthority {
   validateManifest(raw) {
     try {
       if (typeof raw !== "string") fail("manifest_raw_required");
-      if (encoder.encode(raw).byteLength > WASM_PACKAGE_LIMITS.MAX_MANIFEST_BYTES) fail("manifest_too_large");
       preparseJson(raw);
       let manifest;
       try { manifest = JSON.parse(raw); } catch { fail("manifest_json_syntax"); }
@@ -656,7 +646,7 @@ export class WasmPackageAuthority {
       state: "committed",
       at: this._now(),
     };
-    const history = previous ? [...previous.history, { ...previous.current, state: previous.current.state === "revoked" ? "revoked" : "superseded", at: this._now() }].slice(-WASM_PACKAGE_LIMITS.MAX_HISTORY) : [];
+    const history = previous ? [...previous.history, { ...previous.current, state: previous.current.state === "revoked" ? "revoked" : "superseded", at: this._now() }]: [];
     return {
       packageId: manifest.package.id,
       lane: "bundled",
@@ -762,7 +752,7 @@ export class WasmPackageAuthority {
         if (validated.manifest.package.version === previous.current.version) fail("manifest_identity_conflict", previous.packageId);
         if (semverCompare(validated.manifest.package.version, previous.current.version) <= 0) fail("version_not_newer", previous.packageId);
       } else if (expectedVersion != null) fail("stale_version", validated.manifest.package.id);
-      if (!previous && Object.keys(registry.packages).length >= WASM_PACKAGE_LIMITS.MAX_PACKAGES) fail("registry_package_bound");
+
       const next = this._record(validated, measured, previous);
       const record = await this._commit(store, { op, packageId: next.packageId, prevRecord: previous, nextRecord: next, registry, registryGen });
       return { ok: true, record };

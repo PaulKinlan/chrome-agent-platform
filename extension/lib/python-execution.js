@@ -14,11 +14,11 @@
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
 
 export const PYTHON_EXEC_BOUNDS = Object.freeze({
-  // The bounded stdin mirror the Settings stdin tools (2 KiB).
-  maxStdinBytes: 2048,
-  // The bounded stdout mirror the FND-1 binary response ceiling (64 KiB).
-  maxStdoutBytes: EXECUTOR_BOUNDS.maxBinaryResponseBytes,
-  // The bounded wall-clock fence mirror the executor's call ceiling.
+  // dptw: no byte budgets on code/stdin/stdout — a program of any size runs
+  // and its output arrives whole. The wall-clock fence stays (a hung
+  // interpreter must still time out).
+  maxStdinBytes: Number.POSITIVE_INFINITY,
+  maxStdoutBytes: Number.POSITIVE_INFINITY,
   maxRunMs: EXECUTOR_BOUNDS.maxCallMs,
 });
 

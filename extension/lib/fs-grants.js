@@ -22,22 +22,12 @@
 
 import { newId } from "./pure.js";
 
-export const MAX_FS_LIST_ENTRIES = 500;
-export const MAX_FS_PATH_DEPTH = 16;
-export const MAX_FS_READ_BYTES = 10 * 1024 * 1024; // 10 MiB
-export const MAX_FS_TEXT_DECODE_BYTES = 2 * 1024 * 1024; // 2 MiB
-export const MAX_FS_WRITE_BYTES = 5 * 1024 * 1024; // 5 MiB
-export const MAX_FS_SCAN_ENTRIES = 10000;
-export const MAX_FS_SCAN_BYTES = 1024 * 1024; // 1 MiB
-export const MAX_FS_SEARCH_RESULTS = 50;
-export const MAX_FS_SEARCH_SCANNED = 5000;
-// grep bounds: a recursive content search over a granted directory has to stay
-// cheap and terminate. Matches, files scanned, per-file size, and line length
-// are all capped; oversized/binary files are skipped, never decoded as garbage.
-export const MAX_FS_GREP_MATCHES = 200;
-export const MAX_FS_GREP_FILES_SCANNED = 2000;
-export const MAX_FS_GREP_FILE_BYTES = 2 * 1024 * 1024; // 2 MiB — larger files are skipped
-export const MAX_FS_GREP_LINE_LENGTH = 2000; // a matched line is truncated to this many chars
+// dptw (2026-09-03): no size/count ceilings on granted-folder operations —
+// reads, writes, listings, searches and grep all carry complete data at any
+// size. The path TRAVERSAL guard (cleanRelativePath) is security and stays.
+// grep: no match/file/line caps — matches of any size and count are returned
+// whole. Only BINARY files are skipped (never decoded as garbage); that skip
+// is content correctness, not a size bound.
 
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;
@@ -337,12 +327,12 @@ export async function regrantFsGrantAccess(
 /**
  * Bounded listing of directory entries within a granted handle.
  * @param {string} grantId
- * @param {{ relativePath?: string, limit?: number }} [options]
+ * @param {{ relativePath?: string, limit?: number | null }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function listFsGrantEntries(
   grantId,
-  { relativePath = "", limit = MAX_FS_LIST_ENTRIES } = {},
+  { relativePath = "", limit = null } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -358,10 +348,6 @@ export async function listFsGrantEntries(
     segments = cleanRelativePath(relativePath);
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
-  }
-
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
   }
 
   if (grant.kind === "file") {
@@ -399,7 +385,9 @@ export async function listFsGrantEntries(
   const entries = [];
   let total = 0;
   let truncated = false;
-  const effectiveLimit = Math.min(Math.max(1, limit || MAX_FS_LIST_ENTRIES), MAX_FS_LIST_ENTRIES);
+  // dptw: no listing ceiling — every entry is returned. An explicit caller
+  // limit is a window request, honored exactly.
+  const effectiveLimit = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : Infinity;
 
   try {
     const iter = typeof dirHandle.values === "function"
@@ -435,15 +423,21 @@ export async function listFsGrantEntries(
   };
 }
 
-/** Search file names across every stored grant without reading file content. */
+/** Search file names across every stored grant without reading file content.
+ * @param {string} [query]
+ * @param {{ limit?: number | null, maxScanned?: number | null }} [options]
+ * @param {{ customIdb?: any }} [dbOptions]
+ */
 export async function searchFsGrantFiles(
   query = "",
-  { limit = MAX_FS_SEARCH_RESULTS, maxScanned = MAX_FS_SEARCH_SCANNED } = {},
+  { limit = null, maxScanned = null } = {},
   { customIdb = null } = {},
 ) {
   const q = String(query ?? "").trim().toLowerCase();
-  const effectiveLimit = Math.min(Math.max(1, Number(limit) || MAX_FS_SEARCH_RESULTS), MAX_FS_SEARCH_RESULTS);
-  const effectiveScanLimit = Math.min(Math.max(effectiveLimit, Number(maxScanned) || MAX_FS_SEARCH_SCANNED), MAX_FS_SEARCH_SCANNED);
+  // dptw: no result/scan ceilings — an explicit caller limit is a window
+  // request, honored exactly; the default is everything.
+  const effectiveLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.trunc(Number(limit)) : Infinity;
+  const effectiveScanLimit = Number.isFinite(Number(maxScanned)) && Number(maxScanned) > 0 ? Math.max(Math.trunc(Number(maxScanned)), 1) : Infinity;
   const files = [];
   const permissionIssues = [];
   const errors = [];
@@ -458,9 +452,7 @@ export async function searchFsGrantFiles(
   for (const grant of grants) {
     const status = await queryFsGrantStatus(grant);
     if (status !== "granted") {
-      if (permissionIssues.length < MAX_FS_SEARCH_RESULTS) {
-        permissionIssues.push({ grantId: grant.grantId, name: grant.name, status });
-      }
+      permissionIssues.push({ grantId: grant.grantId, name: grant.name, status });
       continue;
     }
 
@@ -484,9 +476,7 @@ export async function searchFsGrantFiles(
           lastModified: Number(file?.lastModified) || 0,
         });
       } catch (err) {
-        if (errors.length < MAX_FS_SEARCH_RESULTS) {
-          errors.push({ grantId: grant.grantId, path: relativePath, error: `get_file_failed: ${err?.message || err}` });
-        }
+        errors.push({ grantId: grant.grantId, path: relativePath, error: `get_file_failed: ${err?.message || err}` });
       }
     };
 
@@ -496,8 +486,7 @@ export async function searchFsGrantFiles(
     }
 
     const walk = async (dirHandle, prefix = "", depth = 0) => {
-      if (truncated || depth > MAX_FS_PATH_DEPTH) {
-        truncated = true;
+      if (truncated) {
         return;
       }
       try {
@@ -522,9 +511,7 @@ export async function searchFsGrantFiles(
           }
         }
       } catch (err) {
-        if (errors.length < MAX_FS_SEARCH_RESULTS) {
-          errors.push({ grantId: grant.grantId, path: prefix, error: `enumeration_failed: ${err?.message || err}` });
-        }
+        errors.push({ grantId: grant.grantId, path: prefix, error: `enumeration_failed: ${err?.message || err}` });
       }
     };
     await walk(grant.handle);
@@ -537,20 +524,47 @@ export async function searchFsGrantFiles(
     files,
     permissionIssues,
     errors,
-    scanned: Math.min(scanned, effectiveScanLimit),
+    scanned,
     truncated,
   };
 }
 
 /**
  * Bounded file reading within a granted handle (digest-pinned).
+ *
+ * A handle-backed read is NEVER refused or placeholder-substituted on size
+ * alone. The read is local — the size of the file is irrelevant to reading
+ * it — so a whole-file read returns the complete content and `offset`/`length`
+ * windows read through files of ANY size in chunks (CAP-FB-20260902-NO-SILLY-
+ * READ-CAPS-01: the old fs_file_too_large refusal at a caller-supplied
+ * maxBytes default once refused a 9080-byte README; review r3 removed the
+ * last size ceiling and its guidance placeholder — requested content always
+ * comes back, never a notice in its place, and never truncated:false while
+ * content was withheld). How much of a very large read the model sees inline
+ * is the transport's decision, not a substitution in this read. Text windows
+ * are aligned to whole UTF-8 characters: a window edge that splits a
+ * multi-byte sequence is widened to the characters it falls inside (at most 3
+ * bytes each side) so valid text never fails as fs_file_not_text, and
+ * `start`/`end` report the exact byte span whose text came back. `sha256`
+ * covers that returned span so a caller re-reading the same window can detect
+ * drift.
  * @param {string} grantId
- * @param {{ relativePath?: string, asText?: boolean, maxBytes?: number }} [options]
+ * @param {{ relativePath?: string, asText?: boolean, offset?: number, length?: number, maxBytes?: number }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function readFsGrantFile(
   grantId,
-  { relativePath = "", asText = true, maxBytes = MAX_FS_READ_BYTES } = {},
+  {
+    relativePath = "",
+    asText = true,
+    offset = null,
+    length = null,
+    // Legacy transport knob: the 2000-byte default this bound once carried is
+    // what refused whole files. Reads no longer consult it — a caller that
+    // wants less than the whole file asks for a window with offset/length.
+    // Kept in the signature so older callers do not break.
+    maxBytes = null,
+  } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -566,10 +580,6 @@ export async function readFsGrantFile(
     segments = cleanRelativePath(relativePath);
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
-  }
-
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
   }
 
   let fileHandle = null;
@@ -611,45 +621,103 @@ export async function readFsGrantFile(
     return { ok: false, error: `get_file_failed: ${err?.message || err}` };
   }
 
-  const effectiveMaxBytes = Math.min(Math.max(1, maxBytes || MAX_FS_READ_BYTES), MAX_FS_READ_BYTES);
   const fileSize = typeof file?.size === "number" ? file.size : 0;
-  if (fileSize > effectiveMaxBytes) {
-    return {
-      ok: false,
-      error: "fs_file_too_large",
-      size: fileSize,
-      maxBytes: effectiveMaxBytes,
-    };
+
+  // Byte window: whole file by default; offset/length pick a window (clamped
+  // to EOF) so ANY file size is readable in chunks. No size bound lives here
+  // and no content is substituted for the requested bytes: the read returns
+  // the complete requested content at any size. Deciding how much of a very
+  // large read the model sees inline is the transport's job (tool-result
+  // bounds, payload-by-reference), never this read's.
+  const hasOffset = Number.isInteger(offset);
+  const hasLength = Number.isInteger(length);
+  const explicitWindow = hasOffset || hasLength;
+  const start = explicitWindow
+    ? Math.min(Math.max(0, hasOffset ? offset : 0), fileSize)
+    : 0;
+  const end = explicitWindow
+    ? Math.min(fileSize, start + (hasLength ? Math.max(0, length) : fileSize - start))
+    : fileSize;
+
+  // UTF-8 text is decoded as whole characters, never per arbitrary byte
+  // window: a window edge that splits a multi-byte sequence would otherwise
+  // fail a fatal decoder with fs_file_not_text on valid text. The span is
+  // widened to the character boundaries the requested window falls inside
+  // (at most 3 bytes each side) and the span actually returned is disclosed
+  // in start/end; the digest covers exactly that span. Binary reads
+  // (asText:false) use the requested window untouched.
+  let spanStart = start;
+  let spanEnd = end;
+  if (asText && fileSize > 0) {
+    spanStart = Math.max(0, start - 3);
+    spanEnd = Math.min(fileSize, end + 3);
   }
 
-  let arrayBuffer = null;
+  let windowBytes = new Uint8Array(0);
   try {
-    arrayBuffer = typeof file.arrayBuffer === "function" ? await file.arrayBuffer() : new ArrayBuffer(0);
+    if (typeof file.slice === "function") {
+      // file.slice bounds the allocation to the span, so a huge file is read
+      // a piece at a time without ever loading the whole file.
+      windowBytes = new Uint8Array(await file.slice(spanStart, spanEnd).arrayBuffer());
+    } else {
+      const whole = typeof file.arrayBuffer === "function" ? await file.arrayBuffer() : new ArrayBuffer(0);
+      const wholeBytes = new Uint8Array(whole);
+      windowBytes = wholeBytes.subarray(spanStart, Math.min(spanEnd, wholeBytes.byteLength));
+    }
   } catch (err) {
     return { ok: false, error: `read_bytes_failed: ${err?.message || err}` };
   }
 
-  const bytes = new Uint8Array(arrayBuffer);
-  const sha256 = await computeSha256(arrayBuffer);
-
-  let textContent = null;
-  if (asText) {
-    if (bytes.byteLength > MAX_FS_TEXT_DECODE_BYTES) {
-      textContent = `[Binary or text content exceeds decode limit (${MAX_FS_TEXT_DECODE_BYTES / (1024 * 1024)} MiB)]`;
-    } else {
-      const hasBinaryControls = bytes.some((byte) =>
-        byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
-      );
-      try {
-        textContent = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-      } catch { /* rejected below */ }
-      if (hasBinaryControls || textContent === null) {
-        return { ok: false, error: "fs_file_not_text", grantId, path: segments.join("/"), size: fileSize, sha256 };
+  // Align the requested byte window to whole characters for text reads.
+  let effStart = start;
+  let effEnd = end;
+  if (asText && fileSize > 0 && windowBytes.byteLength > 0) {
+    const isContinuation = (byte) => (byte & 0xc0) === 0x80;
+    const charLengthAt = (byte) =>
+      (byte & 0x80) === 0 ? 1
+        : (byte & 0xe0) === 0xc0 ? 2
+        : (byte & 0xf0) === 0xe0 ? 3
+        : (byte & 0xf8) === 0xf0 ? 4
+        : 0;
+    // Snap start back to the leading byte of the character it falls inside.
+    if (start >= spanStart && start < spanStart + windowBytes.byteLength) {
+      let head = start;
+      while (head > spanStart && isContinuation(windowBytes[head - spanStart])) head -= 1;
+      if (!isContinuation(windowBytes[head - spanStart])) effStart = head;
+      // A continuation at spanStart itself means the region starts mid-
+      // character (invalid bytes): leave start put, the decode rejects below.
+    }
+    // Snap end forward past the character containing the last requested byte.
+    if (end > start && end - 1 >= spanStart && end - 1 < spanStart + windowBytes.byteLength) {
+      let head = end - 1;
+      while (head > spanStart && isContinuation(windowBytes[head - spanStart])) head -= 1;
+      const len = charLengthAt(windowBytes[head - spanStart]);
+      if (len > 0) {
+        const charEnd = Math.min(fileSize, head + len);
+        if (charEnd > effEnd) effEnd = charEnd;
       }
     }
   }
+  if (effEnd - spanStart > windowBytes.byteLength) {
+    effEnd = spanStart + windowBytes.byteLength; // a short read cannot invent bytes
+  }
+  const decodeBytes = windowBytes.subarray(effStart - spanStart, effEnd - spanStart);
+  const sha256 = await computeSha256(decodeBytes);
 
-  return {
+  let textContent = null;
+  if (asText) {
+    const hasBinaryControls = decodeBytes.some((byte) =>
+      byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
+    );
+    try {
+      textContent = new TextDecoder("utf-8", { fatal: true }).decode(decodeBytes);
+    } catch { /* rejected below */ }
+    if (hasBinaryControls || textContent === null) {
+      return { ok: false, error: "fs_file_not_text", grantId, path: segments.join("/"), size: fileSize, sha256 };
+    }
+  }
+
+  const out = {
     ok: true,
     grantId,
     path: segments.join("/"),
@@ -660,6 +728,11 @@ export async function readFsGrantFile(
     content: textContent,
     truncated: false,
   };
+  if (explicitWindow) {
+    out.start = effStart;
+    out.end = effEnd;
+  }
+  return out;
 }
 
 /**
@@ -669,12 +742,12 @@ export async function readFsGrantFile(
  * into RegExp matching (allowed under MV3 CSP — RegExp is not eval/new
  * Function); the default is a literal substring match, which cannot ReDoS.
  * @param {string} grantId
- * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number, maxDepth?: number }} [options]
+ * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number | null, maxDepth?: number | null }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function grepFsGrant(
   grantId,
-  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = MAX_FS_GREP_MATCHES, maxDepth = MAX_FS_PATH_DEPTH } = {},
+  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = null, maxDepth = null } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -710,17 +783,16 @@ export async function grepFsGrant(
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
-  }
-
   const matches = [];
   let filesScanned = 0;
   let truncated = false;
-  const effectiveMax = Math.min(Math.max(1, Number(maxMatches) || MAX_FS_GREP_MATCHES), MAX_FS_GREP_MATCHES);
+  // dptw: no match/file-scan ceilings and no per-file skip — an explicit
+  // maxMatches is a window request, honored exactly.
+  const effectiveMax = Number.isFinite(Number(maxMatches)) && Number(maxMatches) > 0 ? Math.trunc(Number(maxMatches)) : Infinity;
+  const effectiveDepth = Number.isFinite(Number(maxDepth)) && Number(maxDepth) > 0 ? Math.trunc(Number(maxDepth)) : Infinity;
 
   const scanFile = async (handle, path) => {
-    if (matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) {
+    if (matches.length >= effectiveMax) {
       truncated = true;
       return;
     }
@@ -729,7 +801,6 @@ export async function grepFsGrant(
       file = typeof handle?.getFile === "function" ? await handle.getFile() : handle;
     } catch { return; }
     const size = typeof file?.size === "number" ? file.size : 0;
-    if (size > MAX_FS_GREP_FILE_BYTES) return; // skip oversized files
     filesScanned += 1;
     let buffer;
     try {
@@ -754,15 +825,14 @@ export async function grepFsGrant(
       }
       let line = lines[i];
       if (matcher(line)) {
-        if (line.length > MAX_FS_GREP_LINE_LENGTH) line = line.slice(0, MAX_FS_GREP_LINE_LENGTH);
         matches.push({ path, line: i + 1, text: line });
       }
     }
   };
 
   const walk = async (dir, prefix, depth) => {
-    if (truncated || matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) return;
-    if (depth > maxDepth) {
+    if (truncated || matches.length >= effectiveMax) return;
+    if (depth > effectiveDepth) {
       truncated = true;
       return;
     }
@@ -776,7 +846,7 @@ export async function grepFsGrant(
     } catch { return; }
     try {
       for await (const raw of iter) {
-        if (matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) {
+        if (matches.length >= effectiveMax) {
           truncated = true;
           return;
         }
@@ -854,10 +924,6 @@ export async function writeFsGrantFile(
     return { ok: false, error: "invalid_file_path", message: "A file name is required" };
   }
 
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
-  }
-
   let bytes = null;
   if (content instanceof Uint8Array) {
     bytes = content;
@@ -867,15 +933,6 @@ export async function writeFsGrantFile(
     bytes = new Uint8Array(content);
   } else {
     bytes = new Uint8Array(0);
-  }
-
-  if (bytes.byteLength > MAX_FS_WRITE_BYTES) {
-    return {
-      ok: false,
-      error: "fs_file_too_large",
-      size: bytes.byteLength,
-      maxBytes: MAX_FS_WRITE_BYTES,
-    };
   }
 
   let fileHandle = null;
@@ -934,12 +991,12 @@ export async function writeFsGrantFile(
 /**
  * Recursive bounded manifest scan of a granted directory.
  * @param {string} grantId
- * @param {{ maxEntries?: number, maxDepth?: number }} [options]
+ * @param {{ maxEntries?: number | null, maxDepth?: number | null }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function scanFsGrantManifest(
   grantId,
-  { maxEntries = MAX_FS_SCAN_ENTRIES, maxDepth = MAX_FS_PATH_DEPTH } = {},
+  { maxEntries = null, maxDepth = null } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -955,8 +1012,13 @@ export async function scanFsGrantManifest(
   let totalCount = 0;
   let estimatedBytes = 0;
 
+  // dptw: no entry/byte/depth ceilings — the manifest walks everything.
+  // Explicit caller maxEntries/maxDepth are window requests, honored exactly.
+  const effectiveMaxEntries = Number.isFinite(Number(maxEntries)) && Number(maxEntries) > 0 ? Math.trunc(Number(maxEntries)) : Infinity;
+  const effectiveMaxDepth = Number.isFinite(Number(maxDepth)) && Number(maxDepth) > 0 ? Math.trunc(Number(maxDepth)) : Infinity;
+
   async function walk(dirHandle, currentPath, depth) {
-    if (depth > maxDepth || entries.length >= maxEntries || estimatedBytes >= MAX_FS_SCAN_BYTES) {
+    if (depth > effectiveMaxDepth || entries.length >= effectiveMaxEntries) {
       truncated = true;
       return;
     }
@@ -984,11 +1046,10 @@ export async function scanFsGrantManifest(
       }
 
       const record = { path: relPath, name: item.name, kind, size, lastModified };
-      const rowSize = JSON.stringify(record).length;
 
-      if (entries.length < maxEntries && estimatedBytes + rowSize < MAX_FS_SCAN_BYTES) {
+      if (entries.length < effectiveMaxEntries) {
         entries.push(record);
-        estimatedBytes += rowSize;
+        estimatedBytes += JSON.stringify(record).length;
       } else {
         truncated = true;
       }

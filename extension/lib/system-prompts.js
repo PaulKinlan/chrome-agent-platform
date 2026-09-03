@@ -189,7 +189,11 @@ export const PROMPT_REGISTRY = [
     title: "Protected safety constraints (the runtime policy)",
     // 1.1.0: generated from lib/runtime-policy.js; now the FINAL layer (after
     // skills) and carries the secret/origin/permission rules.
-    version: "1.1.0",
+    // 1.2.0: sandboxed-artifacts rule — generated html artifacts run in an
+    // origin-opaque sandbox (no storage/cookies/network/permission-gated
+    // APIs), so their code must keep state in-memory or store it with the
+    // platform (chrome-agent-platform-np64).
+    version: "1.2.0",
     release: "0.2.74",
     protected: true,
     content: PROTECTED_CONSTRAINTS,
@@ -245,8 +249,10 @@ export const PROMPT_OWNED_KEYS = [
   ATTESTATION_KEY_STORE,
 ];
 export const OVERRIDE_MODES = ["append", "prepend", "replace"];
-export const MAX_OVERRIDE_BYTES = 16_384; // 16 KiB of UTF-8
-export const MAX_BASE_SNAPSHOT_BYTES = 32_768; // 32 KiB of UTF-8
+// dptw: no override/base-snapshot byte limits — custom instructions of any
+// length save whole (malformed-Unicode and shape validation stay).
+export const MAX_OVERRIDE_BYTES = Number.POSITIVE_INFINITY;
+export const MAX_BASE_SNAPSHOT_BYTES = Number.POSITIVE_INFINITY;
 const MAX_SCOPES = 64;
 const MAX_QUARANTINE = 25;
 const STORE_VERSION = 1;
@@ -273,9 +279,6 @@ function validateStoredRecord(rec) {
   if (hasLoneSurrogates(rec.text)) {
     return { ok: false, reason: "malformed unicode" };
   }
-  if (utf8ByteLength(rec.text) > MAX_OVERRIDE_BYTES) {
-    return { ok: false, reason: "oversize text" };
-  }
   if (typeof rec.baseId !== "string" || !rec.baseId) {
     return { ok: false, reason: "baseId" };
   }
@@ -287,8 +290,7 @@ function validateStoredRecord(rec) {
   }
   if (
     typeof rec.baseSnapshot !== "string" ||
-    hasLoneSurrogates(rec.baseSnapshot) ||
-    utf8ByteLength(rec.baseSnapshot) > MAX_BASE_SNAPSHOT_BYTES
+    hasLoneSurrogates(rec.baseSnapshot)
   ) {
     return { ok: false, reason: "baseSnapshot" };
   }
@@ -426,13 +428,6 @@ export function normalizeOverrideInput(input) {
       error: "custom instructions are empty — use Reset to default instead",
     };
   }
-  const bytes = utf8ByteLength(text);
-  if (bytes > MAX_OVERRIDE_BYTES) {
-    return {
-      ok: false,
-      error: `custom instructions are too long (max ${MAX_OVERRIDE_BYTES} UTF-8 bytes; this is ${bytes})`,
-    };
-  }
   return { ok: true, value: { mode, text } };
 }
 
@@ -513,9 +508,8 @@ export async function setPromptOverride(scope, input, { registry, expectedRevisi
       baseVersion: base.version,
       baseHash: base.hash,
       // The base text at save time — the old-vs-new diff source when a later
-      // release changes the built-in. Bounded in UTF-8 BYTES, never splitting
-      // a code point, so it can't bloat storage or store malformed Unicode.
-      baseSnapshot: truncateUtf8(String(base.content ?? ""), MAX_BASE_SNAPSHOT_BYTES),
+      // release changes the built-in. dptw: stored WHOLE, never truncated.
+      baseSnapshot: String(base.content ?? ""),
       updatedAt: Date.now(),
     };
     store.scopes[s] = override;
@@ -613,7 +607,7 @@ export async function restampPromptOverride(scope, { registry, expectedRevision 
       ...store.scopes[target],
       baseVersion: base.version,
       baseHash: base.hash,
-      baseSnapshot: truncateUtf8(String(base.content ?? ""), MAX_BASE_SNAPSHOT_BYTES),
+      baseSnapshot: String(base.content ?? ""),
       updatedAt: Date.now(),
     };
     store.revision += 1;
@@ -909,21 +903,29 @@ function renderBoundarySkills(skills, untrustedToken = null) {
  * caller hands the agent core, the model's system message ALWAYS ends with
  * the immutable runtime policy, so no owner text, role, site-origin skill,
  * or foreign prompt can override it with a later instruction.
+ *
+ * `promotion` (chrome-agent-platform-ve67) is an optional bounded section
+ * naming catalog skills relevant to the CURRENT task — the model is told it
+ * may adopt one (/skill:<id>) or read it on demand (skill_read). It sits
+ * between the skills block and the protected constraints, so promoted
+ * (catalog-derived, deterministic) text can never override the policy.
  */
-export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null) {
+export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null, promotion = null) {
   const sys = String(systemText ?? "");
   const skillsText = renderBoundarySkills(skills, untrustedToken).trim();
+  const promoText = String(promotion ?? "").trim();
   const constraints = registryEntry(CONSTRAINTS_ID, registry);
   const protectedText = constraints ? String(constraints.content ?? "") : "";
   let out = sys;
-  if (skillsText) {
+  const middle = [skillsText, promoText].filter(Boolean).join("\n\n");
+  if (middle) {
     if (protectedText && sys.endsWith(protectedText)) {
       const head = sys.slice(0, sys.length - protectedText.length).replace(/\s+$/, "");
-      out = `${head}\n\n${skillsText}\n\n${protectedText}`;
+      out = `${head}\n\n${middle}\n\n${protectedText}`;
     } else {
-      // A prompt without a trailing protected block: skills append at the end
-      // (the protected block is then (re)asserted last below).
-      out = sys ? `${sys}\n\n${skillsText}` : skillsText;
+      // A prompt without a trailing protected block: skills/promotion append
+      // at the end (the protected block is then (re)asserted last below).
+      out = sys ? `${sys}\n\n${middle}` : middle;
     }
   }
   // The structural invariant: the protected runtime policy is ALWAYS the

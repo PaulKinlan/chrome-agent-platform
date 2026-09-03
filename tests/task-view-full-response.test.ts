@@ -88,40 +88,29 @@ Deno.test("full response: the terminal commit path also stores the complete text
   assert(last.content.endsWith("foxtrot. "), "the final characters of the response are present");
 });
 
-Deno.test("full response: an OVER-budget message (beyond the cap) is never silently truncated", async () => {
+Deno.test("full response (dptw): a message past the removed 240 KiB cap is stored WHOLE", async () => {
   const huge = "x".repeat((240 * 1024) + 2000);
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content: huge });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  assert(last.content.includes("truncated to 240 KiB"), "the truncation marker is present (never silent)");
-  assert(last.content.includes("complete text is in the run log"), "the reader is told where the full text lives");
+  assertEquals(last.content, huge, "dptw: no truncation, no marker — the whole response persists");
 });
 
-Deno.test("full response: the cap is UTF-8 BYTES, not chars — multi-byte content cannot bust the store bound (r1 B2)", async () => {
-  // 90,000 emoji = 180,000 UTF-16 units = 360,000 UTF-8 bytes (4 bytes each) —
-  // over the 240 KiB byte cap but far under it in CHAR count. The store must
-  // hold a byte-fit slice, and the stored value must stay under the memory
-  // store's 256 KiB per-value bound.
-  const emoji = "\u{1F600}".repeat(90_000); // 360,000 bytes
+Deno.test("full response (dptw): multi-byte content of ANY byte size stores whole", async () => {
+  // 90,000 emoji = 360,000 UTF-8 bytes — past the removed 240 KiB cap.
+  const emoji = "\u{1F600}".repeat(90_000);
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content: emoji });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  const bytes = new TextEncoder().encode(last.content).byteLength;
-  assert(bytes <= 240 * 1024, `multi-byte content must be capped in UTF-8 bytes (stored ${bytes} bytes > 240 KiB)`);
-  assert(last.content.includes("truncated to 240 KiB"), "the multi-byte over-cap response carries the never-silent marker");
-  // The stored thread value must be under the store's 256 KiB per-value bound.
-  const serialized = new TextEncoder().encode(JSON.stringify(stored.messages)).byteLength;
-  assert(serialized <= 256 * 1024, `thread messages must stay under the store bound (${serialized} bytes)`);
-  // A multi-byte response BELOW the cap stores byte-complete.
-  const okEmoji = "\u{1F600}".repeat(45_000); // 90,000 UTF-16 units = 180,000 bytes < 240 KiB
+  assertEquals(last.content, emoji, "dptw: 360 KiB of emoji persists whole — no byte cap, no surrogate-split clip");
+  // A smaller multi-byte response stores byte-complete too.
+  const okEmoji = "\u{1F600}".repeat(45_000);
   const t2 = await createThread("seed");
   await appendThreadMessage(t2.id, { role: "assistant", content: okEmoji });
   const stored2 = await getThread(t2.id);
-  const last2 = stored2.messages.at(-1);
-  const bytes2 = new TextEncoder().encode(last2.content).byteLength;
-  assertEquals(bytes2, 180_000, "a below-cap multi-byte response stores byte-complete");
+  assertEquals(stored2.messages.at(-1).content, okEmoji, "byte-complete");
 });
 
 Deno.test("full response: the SIDEBAR error preview stays a small bounded preview (r1 B3)", async () => {
@@ -153,32 +142,30 @@ Deno.test("full response: the durable/terminal-commit path also bounds the SIDEB
   assert(row.preview.length <= 165, "the durable-error sidebar preview stays a preview");
 });
 
-Deno.test("full response: the byte-cap cut never splits a UTF-16 surrogate pair (r2 B5)", async () => {
-  // Content whose UTF-8 bytes slightly exceed the 240 KiB cap, with emoji
-  // (surrogate pairs) deliberately placed where the byte boundary lands. The
-  // stored slice must not end with a lone high surrogate.
+Deno.test("full response (dptw): content past the removed 240 KiB cap stores WHOLE with surrogate pairs intact", async () => {
+  // dptw: there is no byte-cap cut anymore — the whole string persists. The
+  // fixture keeps emoji (surrogate pairs) straddling where the old 240 KiB
+  // boundary fell, so a regression to any cut would split a pair and fail.
   const base = "The quick brown fox jumps over the lazy dog. ";
-  const filler = "a".repeat(240 * 1024 - 30); // just under the cap in bytes
-  const emojiTail = "\u{1F600}".repeat(40) + "z"; // 4-byte emoji straddling the boundary
-  const content = filler + emojiTail;
+  const filler = "a".repeat(240 * 1024 - 30); // where the removed cap used to land
+  const emojiTail = "\u{1F600}".repeat(40) + "z"; // 4-byte emoji straddling that boundary
+  const content = base + filler + emojiTail;
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content });
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  // The slice must be a valid code-point boundary: no lone high surrogate at
-  // the end (the cut can fall inside a surrogate pair).
+  assertEquals(last.content, content, "dptw: the whole response persists past the removed cap — no cut at all");
   const lastChar = last.content.charCodeAt(last.content.length - 1);
   assert(!(lastChar >= 0xD800 && lastChar <= 0xDBFF),
-    `the cut left a lone high surrogate (last code unit 0x${lastChar.toString(16)})`);
-  // Every code point decodes cleanly (no replacement chars from split pairs).
+    `a lone high surrogate survived (last code unit 0x${lastChar.toString(16)})`);
   const decoded = new TextDecoder().decode(new TextEncoder().encode(last.content));
-  assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair survived");
-  // A below-cap response with the same emoji stores byte-complete and whole.
+  assert(!decoded.includes("\uFFFD"), "no replacement character — no split surrogate pair");
+  // A smaller emoji response stores byte-complete and whole too.
   const small = "\u{1F600}".repeat(100);
   const t2 = await createThread("seed");
   await appendThreadMessage(t2.id, { role: "assistant", content: small });
   const stored2 = await getThread(t2.id);
   const last2 = stored2.messages.at(-1);
-  assertEquals(last2.content.length, 200, "below-cap emoji stores whole (200 UTF-16 units)");
+  assertEquals(last2.content.length, 200, "emoji stores whole (200 UTF-16 units)");
   assertEquals(last2.content.charCodeAt(199), 0xDE00, "the pair's low surrogate is intact at the end");
 });

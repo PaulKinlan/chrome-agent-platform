@@ -23,13 +23,12 @@ export const PROFILE_SECTIONS = [
   "profile:disclosures",
 ];
 
-export const MAX_PROFILE_SECTION_BYTES = 131072; // 128 KiB UTF-8 bytes per section
-export const MAX_WORK_ENTRIES = 32;
-export const MAX_EDUCATION_ENTRIES = 16;
-export const MAX_LINKS_COUNT = 16;
-export const MAX_CUSTOM_ANSWERS = 32;
-export const MAX_AUDIT_LOG_ENTRIES = 100;
+// dptw: no section byte limit and no entry/link/answer count caps — the
+// owner's profile holds as much as the owner puts in it. The audit log keeps
+// a live window of 100 with overflow ARCHIVED (never dropped).
+export const PROFILE_AUDIT_LIVE_ENTRIES = 100;
 export const PROFILE_AUDIT_KEY = "profile:audit_log";
+export const PROFILE_AUDIT_ARCHIVE_KEY = "profile:audit_log_archive";
 
 const RESERVED_AGENT_SLUGS = new Set([
   "owner",
@@ -101,22 +100,22 @@ export function validateBasicProfile(data) {
     return { ok: false, error: "summary must be a string" };
   }
 
-  const firstName = String(data.firstName ?? "").trim().slice(0, 64);
-  const lastName = String(data.lastName ?? "").trim().slice(0, 64);
-  let fullName = String(data.fullName ?? "").trim().slice(0, 128);
+  const firstName = String(data.firstName ?? "").trim();
+  const lastName = String(data.lastName ?? "").trim();
+  let fullName = String(data.fullName ?? "").trim();
   if (!fullName && (firstName || lastName)) {
     fullName = [firstName, lastName].filter(Boolean).join(" ");
   }
 
-  const email = String(data.email ?? "").trim().slice(0, 128);
-  const phone = String(data.phone ?? "").trim().slice(0, 32);
-  const headline = String(data.headline ?? data.title ?? "").trim().slice(0, 120);
-  const summary = String(data.summary ?? "").trim().slice(0, 4000);
+  const email = String(data.email ?? "").trim();
+  const phone = String(data.phone ?? "").trim();
+  const headline = String(data.headline ?? data.title ?? "").trim();
+  const summary = String(data.summary ?? "").trim();
 
   let location = "";
   if (data.location !== undefined && data.location !== null) {
     if (typeof data.location === "string") {
-      location = data.location.trim().slice(0, 120);
+      location = data.location.trim();
     } else if (isPlainObject(data.location)) {
       for (const [k, v] of Object.entries(data.location)) {
         if (v !== undefined && v !== null && typeof v !== "string") {
@@ -129,7 +128,7 @@ export function validateBasicProfile(data) {
         data.location.country,
         data.location.postalCode,
       ].filter((x) => typeof x === "string" && x.trim());
-      location = parts.join(", ").slice(0, 120);
+      location = parts.join(", ");
     } else {
       return { ok: false, error: "location must be a string or object" };
     }
@@ -153,11 +152,10 @@ export function validateBasicProfile(data) {
         if (item.url === undefined || item.url === null || typeof item.url !== "string") {
           return { ok: false, error: `link at index ${i} requires a url string` };
         }
-        const label = String(item.label ?? item.name ?? `link_${i}`).trim().slice(0, 64);
-        const url = item.url.trim().slice(0, 512);
+        const label = String(item.label ?? item.name ?? `link_${i}`).trim();
+        const url = item.url.trim();
         if (label && url) {
           links[label] = url;
-          if (Object.keys(links).length >= MAX_LINKS_COUNT) break;
         }
       }
     } else if (isPlainObject(data.links)) {
@@ -166,9 +164,8 @@ export function validateBasicProfile(data) {
           if (typeof val !== "string") {
             return { ok: false, error: `link URL for "${key}" must be a string` };
           }
-          const label = key.trim().slice(0, 64);
-          links[label] = val.trim().slice(0, 512);
-          if (Object.keys(links).length >= MAX_LINKS_COUNT) break;
+          const label = key.trim();
+          links[label] = val.trim();
         }
       }
     } else {
@@ -208,7 +205,7 @@ export function validateWorkHistory(data) {
     if (item.company === undefined || item.company === null || typeof item.company !== "string") {
       return { ok: false, error: `work history entry at index ${i} requires a company string` };
     }
-    const company = item.company.trim().slice(0, 120);
+    const company = item.company.trim();
     if (!company) {
       return { ok: false, error: `work history entry at index ${i} requires a company name` };
     }
@@ -216,7 +213,7 @@ export function validateWorkHistory(data) {
     if (item.title === undefined || item.title === null || typeof item.title !== "string") {
       return { ok: false, error: `work history entry at index ${i} requires a job title string` };
     }
-    const title = item.title.trim().slice(0, 120);
+    const title = item.title.trim();
     if (!title) {
       return { ok: false, error: `work history entry at index ${i} requires a job title` };
     }
@@ -237,11 +234,12 @@ export function validateWorkHistory(data) {
       return { ok: false, error: `work history entry at index ${i} description must be a string` };
     }
 
-    const location = String(item.location ?? "").trim().slice(0, 120);
-    const startDate = String(item.startDate ?? "").trim().slice(0, 32);
-    const endDate = item.endDate == null ? null : String(item.endDate).trim().slice(0, 32);
+    // dptw: no per-field length clips — values are trimmed and stored whole.
+    const location = String(item.location ?? "").trim();
+    const startDate = String(item.startDate ?? "").trim();
+    const endDate = item.endDate == null ? null : String(item.endDate).trim();
     const current = typeof item.current === "boolean" ? item.current : Boolean(!endDate && startDate);
-    const description = String(item.description ?? "").trim().slice(0, 4000);
+    const description = String(item.description ?? "").trim();
 
     const highlights = [];
     if (item.highlights !== undefined && item.highlights !== null) {
@@ -254,8 +252,7 @@ export function validateWorkHistory(data) {
           return { ok: false, error: `work history entry at index ${i} highlight at ${hIdx} must be a string` };
         }
         if (h.trim()) {
-          highlights.push(h.trim().slice(0, 500));
-          if (highlights.length >= 16) break;
+          highlights.push(h.trim());
         }
       }
     }
@@ -271,7 +268,6 @@ export function validateWorkHistory(data) {
       highlights,
     });
 
-    if (entries.length >= MAX_WORK_ENTRIES) break;
   }
 
   return { ok: true, data: entries };
@@ -295,7 +291,7 @@ export function validateEducation(data) {
     if (rawInst === undefined || rawInst === null || typeof rawInst !== "string") {
       return { ok: false, error: `education entry at index ${i} requires an institution name string` };
     }
-    const institution = rawInst.trim().slice(0, 120);
+    const institution = rawInst.trim();
     if (!institution) {
       return { ok: false, error: `education entry at index ${i} requires an institution name` };
     }
@@ -321,12 +317,12 @@ export function validateEducation(data) {
       return { ok: false, error: `education entry at index ${i} activities must be a string` };
     }
 
-    const degree = String(item.degree ?? "").trim().slice(0, 120);
-    const fieldOfStudy = String(rawMajor ?? "").trim().slice(0, 120);
-    const startDate = String(item.startDate ?? "").trim().slice(0, 32);
-    const endDate = rawEnd == null ? null : String(rawEnd).trim().slice(0, 32);
-    const gpa = item.gpa == null ? null : String(item.gpa).trim().slice(0, 16);
-    const activities = String(item.activities ?? "").trim().slice(0, 2000);
+    const degree = String(item.degree ?? "").trim();
+    const fieldOfStudy = String(rawMajor ?? "").trim();
+    const startDate = String(item.startDate ?? "").trim();
+    const endDate = rawEnd == null ? null : String(rawEnd).trim();
+    const gpa = item.gpa == null ? null : String(item.gpa).trim();
+    const activities = String(item.activities ?? "").trim();
 
     entries.push({
       institution,
@@ -338,7 +334,6 @@ export function validateEducation(data) {
       activities,
     });
 
-    if (entries.length >= MAX_EDUCATION_ENTRIES) break;
   }
 
   return { ok: true, data: entries };
@@ -374,14 +369,14 @@ export function validateDisclosures(data) {
     return { ok: false, error: "raceEthnicity must be a string" };
   }
 
-  const workAuthorization = String(data.workAuthorization ?? "").trim().slice(0, 64);
+  const workAuthorization = String(data.workAuthorization ?? "").trim();
   const requiresSponsorship = typeof data.requiresSponsorship === "boolean"
     ? data.requiresSponsorship
     : (data.requiresSponsorship != null ? (String(data.requiresSponsorship).trim().toLowerCase() === "yes") : null);
-  const gender = String(data.gender ?? "").trim().slice(0, 64);
-  const veteranStatus = String(data.veteranStatus ?? "").trim().slice(0, 64);
-  const disabilityStatus = String(data.disabilityStatus ?? "").trim().slice(0, 64);
-  const raceEthnicity = String(data.raceEthnicity ?? "").trim().slice(0, 64);
+  const gender = String(data.gender ?? "").trim();
+  const veteranStatus = String(data.veteranStatus ?? "").trim();
+  const disabilityStatus = String(data.disabilityStatus ?? "").trim();
+  const raceEthnicity = String(data.raceEthnicity ?? "").trim();
 
   const customAnswers = {};
   if (data.customAnswers !== undefined && data.customAnswers !== null) {
@@ -393,11 +388,10 @@ export function validateDisclosures(data) {
       if (v !== undefined && v !== null && typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") {
         return { ok: false, error: `customAnswer for "${k}" must be a string or primitive` };
       }
-      const qKey = k.trim().slice(0, 64);
-      const ansVal = v == null ? "" : String(v).trim().slice(0, 1000);
+      const qKey = k.trim();
+      const ansVal = v == null ? "" : String(v).trim();
       if (qKey) {
         customAnswers[qKey] = ansVal;
-        if (Object.keys(customAnswers).length >= MAX_CUSTOM_ANSWERS) break;
       }
     }
   }
@@ -475,11 +469,18 @@ async function recordAudit(mem, { action, section, actor = "owner", fields = [] 
     at: Date.now(),
     action, // "create" | "update" | "delete" | "clear"
     section: section ?? null,
-    actor: String(actor || "owner").slice(0, 64),
-    fields: Array.isArray(fields) ? fields.slice(0, 32) : [],
+    actor: String(actor || "owner"),
+    fields: Array.isArray(fields) ? fields : [],
   };
   log.unshift(entry);
-  const boundedLog = log.slice(0, MAX_AUDIT_LOG_ENTRIES);
+  // dptw owner-steer: the live log keeps the newest entries; overflow is
+  // ARCHIVED to a sibling key (append-only), never dropped.
+  const boundedLog = log.slice(0, PROFILE_AUDIT_LIVE_ENTRIES);
+  const overflow = log.slice(PROFILE_AUDIT_LIVE_ENTRIES);
+  if (overflow.length > 0) {
+    const archive = (await readTrustedMemory(mem, PROFILE_AUDIT_ARCHIVE_KEY)) ?? [];
+    await mem.setTrusted(PROFILE_AUDIT_ARCHIVE_KEY, [...archive, ...overflow]);
+  }
   await mem.setTrusted(PROFILE_AUDIT_KEY, boundedLog);
   return entry;
 }
@@ -567,15 +568,7 @@ export async function setProfileSection(sectionKey, data, options = {}) {
   const validation = validateProfileSection(normSection, data);
   if (!validation.ok) return validation;
 
-  const serialized = JSON.stringify(validation.data);
-  const utf8Bytes = new TextEncoder().encode(serialized).byteLength;
-  if (utf8Bytes > MAX_PROFILE_SECTION_BYTES) {
-    return {
-      ok: false,
-      error: `section payload exceeds maximum size (${utf8Bytes} bytes > ${MAX_PROFILE_SECTION_BYTES} bytes)`,
-    };
-  }
-
+  // dptw: no section byte limit.
   const mem = options.memory ?? masterMemory();
 
   return await withAuditLock(async () => {
@@ -749,11 +742,7 @@ export async function setWholeProfile(profileObject, options = {}) {
     if (!valRes.ok) {
       return { ok: false, error: `validation failed for section ${norm}: ${valRes.error}` };
     }
-    const serialized = JSON.stringify(valRes.data);
-    const bytes = new TextEncoder().encode(serialized).byteLength;
-    if (bytes > MAX_PROFILE_SECTION_BYTES) {
-      return { ok: false, error: `section ${norm} exceeds maximum size (${bytes} > ${MAX_PROFILE_SECTION_BYTES})` };
-    }
+    // dptw: no section byte limit.
     validatedSections.push({ section: norm, data: valRes.data });
   }
 

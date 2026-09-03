@@ -159,12 +159,11 @@ import { fnv1a, newId } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
 
-// OPFS memory bounds (Constitution §4): a single value may not exceed this
-// serialized size, and the master store may not write these reserved registry
-// keys (the enrollment authority must never be reachable via the model's
-// `memory_set`). Per-origin stores are keyed separately so one site's growth
-// cannot crowd another; the journal is separately capped in journalAppend.
-const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
+// dptw: no per-value serialized size bound — a value of any size persists;
+// the OPFS quota is the honest ceiling. The master store may not write these
+// reserved registry keys (the enrollment authority must never be reachable via
+// the model's `memory_set`). Per-origin stores are keyed separately so one
+// site's growth cannot crowd another.
 // The thread authority (`threads` index + every `thread:<id>` body) must be
 // reserved from the MODEL's `memory_set` too: the wider-goal review proved a
 // forged `threads` index could be written through `masterMemory().set` and
@@ -214,12 +213,8 @@ const SITE_RESERVED_KEYS = new Set([
   "agentConfig",
 ]);
 
-// OPFS aggregate quotas (Constitution §4): stores — not just individual values
-// — must be bounded. A site may hold at most this many total serialized bytes
-// (and 64 MiB across all origins); beyond that, `set`/`setTrusted` fail closed
-// rather than growing without bound (the round-15 aggregate-unbounded finding).
-const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024; // 8 MiB per origin
-const MAX_BYTES_GLOBAL = 64 * 1024 * 1024; // 64 MiB across all origins
+// dptw: no aggregate per-origin/global byte quotas — stores grow until the
+// browser's own OPFS quota refuses, and that refusal surfaces honestly.
 
 // Durable execution authority is not model memory. Older builds stored every
 // `run:*`/log/outbox/payload file beside owner keys in `memory/master`, where an
@@ -693,28 +688,12 @@ async function globalUsage() {
   return bytes;
 }
 
-/** The quota gate shared by setValue and saveScreenshot: the store bound
- * (`storeDir` null skips it) and the global bound, evaluated against the
- * ledger; a failure reseeds from a fresh walk and re-evaluates so the
- * decision is exactly the walk's decision. `grow` is the non-negative growth. */
-async function assertQuota(storeDir, grow) {
+/** dptw: no quota gate — the ledger is still maintained for diagnostics, but
+ * no store/global byte bound is enforced; the browser's OPFS quota is the only
+ * ceiling and its refusal surfaces to the caller. */
+async function assertQuota(storeDir, grow, storeBoundBytes = null) {
+  void storeDir; void grow; void storeBoundBytes;
   await ledgerEnsure();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const storeOver = storeDir && ledgerStoreBytes(storeDir) + grow > MAX_BYTES_PER_ORIGIN;
-    const globalOver = ledger.global + grow > MAX_BYTES_GLOBAL;
-    if (!storeOver && !globalOver) return;
-    if (attempt === 0) { await ledgerSeed(); continue; }
-    if (storeOver) {
-      throw new MemoryStoreQuotaError(
-        "bytes",
-        `store exceeds the ${MAX_BYTES_PER_ORIGIN}-byte bound`,
-      );
-    }
-    throw new MemoryStoreQuotaError(
-      "global",
-      `global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`,
-    );
-  }
 }
 
 /** Ledger inspection (tests + the seeded perf gate) — a read/reseed surface, never a product API. */
@@ -753,7 +732,7 @@ function utf8Bytes(str) {
  * write without re-acquiring the same non-reentrant mutex (the round-19
  * critical deadlock: withWriteLock → setTrusted → setValue → withWriteLock hung
  * forever and poisoned all later OPFS writes). */
-async function setValueInner(path, key, value, { isMaster, trusted = false }) {
+async function setValueInner(path, key, value, { isMaster, trusted = false, storeBoundBytes = null }) {
   const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
   const k = String(key);
   // Reserve both exact keys AND the `thread:` PREFIX on the master store: a
@@ -778,11 +757,6 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
     throw new Error(`value for "${key}" is not JSON-serializable`);
   }
   const newBytes = utf8Bytes(serialized);
-  if (newBytes > MAX_VALUE_BYTES) {
-    throw new Error(
-      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`,
-    );
-  }
   const dir = await openDir(path);
   await ledgerEnsure();
   // The OLD value's file bytes come from the ledger (the same unit — UTF-8
@@ -791,13 +765,10 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   // the new write's version is monotonic — a per-key version token that is
   // NEVER reused (the round-27 CAS blocker: value equality is not identity).
   const oldBytes = ledgerFileBytes(dir, `${key}.json`);
-  // Aggregate quotas: a store may not grow past MAX_BYTES_PER_ORIGIN bytes
-  // (and the global tree past MAX_BYTES_GLOBAL).
-  // The delta is positive for BOTH new keys AND replacements that grow — a
-  // replacement that enlarges an existing value must also be budgeted (the
-  // round-16 finding: the global limit was only checked for new keys).
+  // The delta is positive for BOTH new keys AND replacements that grow; it
+  // feeds the diagnostics ledger only (no quota is enforced — dptw).
   const delta = newBytes - oldBytes;
-  await assertQuota(dir, Math.max(0, delta));
+  await assertQuota(dir, Math.max(0, delta), storeBoundBytes);
   // Issue the DURABLE generation and write the ENVELOPE. The returned version
   // is the write's durable identity token — callers capture it and pass it to
   // the version-scoped compareAndDelete/compareAndRestore so compensation
@@ -814,8 +785,8 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
   return version;
 }
 
-async function setValue(path, key, value, { isMaster, trusted = false }) {
-  return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted }));
+async function setValue(path, key, value, { isMaster, trusted = false, storeBoundBytes = null }) {
+  return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted, storeBoundBytes }));
 }
 
 /** Compare-and-swap on a single key, under the global write mutex (atomic with
@@ -884,7 +855,7 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
  * semantics. `memoryStore` (master + site origins) and `namedAgentMemory`
  * (named agents) both build their store through here so every store gets the
  * same bounds, version tokens, and CAS semantics. */
-function memoryStoreAt(path, { isMaster, origin }) {
+function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
   return {
     isMaster,
     origin,
@@ -956,7 +927,7 @@ function memoryStoreAt(path, { isMaster, origin }) {
       return await currentVersion(dir, key);
     },
     async set(key, value) {
-      return await setValue(path, key, value, { isMaster });
+      return await setValue(path, key, value, { isMaster, storeBoundBytes });
     },
     /** CAS delete: remove `key` ONLY if its current VERSION equals `expectedVersion`
      * (the write being rolled back). Never deletes a concurrent legitimate write
@@ -977,7 +948,7 @@ function memoryStoreAt(path, { isMaster, origin }) {
      * writable ONLY here — never via the model's `memory_set`/`set`. Returns the
      * version token (see `set`). */
     async setTrusted(key, value) {
-      return await setValue(path, key, value, { isMaster, trusted: true });
+      return await setValue(path, key, value, { isMaster, trusted: true, storeBoundBytes });
     },
     async keys() {
       const dir = await openDirOptional(path);
@@ -1108,6 +1079,19 @@ export function durableExecutionDirSegments(executionId) {
   return [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(String(executionId))];
 }
 
+/** The OPFS directory segments for one execution's RETAINED PAYLOAD chunks
+ * (`memory/durable-runs/payloads/<execId>`). kmpq: a retained response can be
+ * many MiB, but a per-execution store is byte-bounded at MAX_BYTES_PER_ORIGIN;
+ * chunking into the same execution store would make any response over that
+ * bound unpersistable (the P0). Payloads live in their OWN store family whose
+ * per-store byte bound is disabled (only the global budget + native OPFS
+ * quota apply), so a complete response persists regardless of size.
+ * Shares the execution's lifecycle: purge/retention remove the execution's
+ * payload dir with its record. */
+export function durablePayloadDirSegments(executionId) {
+  return [ROOT, DURABLE_ROOT, "payloads", encodeURIComponent(String(executionId))];
+}
+
 /** The OPFS directory segments for one thread's reverse-index store. */
 export function durableThreadDirSegments(threadId) {
   return [ROOT, DURABLE_ROOT, "threads", encodeURIComponent(String(threadId))];
@@ -1129,6 +1113,19 @@ function durableStoreForKey(key) {
       [ROOT, DURABLE_ROOT, "threads", encodeURIComponent(threadId)],
       { isMaster: false, origin: `durable-thread:${threadId}` },
     );
+  }
+  // kmpq P0: retained run payload chunks get their OWN store family. They are
+  // large BY DESIGN (a complete agent response, no per-row cap) and would blow
+  // a per-execution store's MAX_BYTES_PER_ORIGIN byte bound; `payloads` stores
+  // are created with that bound disabled (global budget + native OPFS only).
+  if (String(key).startsWith("run-payload:")) {
+    const executionId = durableExecutionId(key);
+    if (!executionId) throw new Error(`invalid durable-run key: ${String(key)}`);
+    return memoryStoreAt(durablePayloadDirSegments(executionId), {
+      isMaster: false,
+      origin: `durable-payload:${executionId}`,
+      storeBoundBytes: null,
+    });
   }
   const executionId = durableExecutionId(key);
   if (!executionId) throw new Error(`invalid durable-run key: ${String(key)}`);
@@ -1227,6 +1224,26 @@ async function durableExecutionStores() {
   return stores;
 }
 
+/** Enumerate the retained-payload stores (one per execution). kmpq P0: chunk
+ * keys live under `durable-runs/payloads/<execId>` so they never consume a
+ * per-execution KV store's MAX_BYTES_PER_ORIGIN byte budget. */
+async function durablePayloadStores() {
+  const root = await openDirOptional([ROOT, DURABLE_ROOT, "payloads"]);
+  if (!root) return [];
+  const stores = [];
+  for await (const [leaf, handle] of root.entries()) {
+    if (handle.kind !== "directory") continue;
+    let executionId;
+    try { executionId = decodeURIComponent(leaf); } catch { continue; }
+    if (!new RegExp(`^${EXECUTION_ID_SOURCE}$`, "i").test(executionId)) continue;
+    stores.push(memoryStoreAt(
+      [ROOT, DURABLE_ROOT, "payloads", leaf],
+      { isMaster: false, origin: `durable-payload:${executionId}`, storeBoundBytes: null },
+    ));
+  }
+  return stores;
+}
+
 async function migrateLegacyDurableKey(key) {
   const legacy = masterMemory();
   const target = durableStoreForKey(key);
@@ -1273,34 +1290,52 @@ export async function migrateLegacyDurableRunMemory() {
  * migration copy-verifies and removes them. */
 export function durableRunMemory() {
   const legacy = masterMemory();
-  async function selected(key) {
+  // kmpq P0: run-payload keys now route to their own payload store family
+  // (durableStoreForKey), whose per-store byte bound is disabled so a complete
+  // multi-MiB retained response persists. Payload chunks written BEFORE this
+  // change live in the execution's KV dir; reads fall back there so existing
+  // retained payloads keep hydrating. Writes always target the NEW family.
+  function legacyPayloadStoreFor(key) {
+    if (typeof key !== "string" || !key.startsWith("run-payload:")) return null;
+    const executionId = durableExecutionId(key);
+    if (!executionId) return null;
+    return memoryStoreAt(
+      [ROOT, DURABLE_ROOT, "executions", encodeURIComponent(executionId)],
+      { isMaster: false, origin: `durable:${executionId}` },
+    );
+  }
+  async function readStore(key) {
     const target = durableStoreForKey(key);
     if (await target.has(key)) return target;
+    const legacyPayload = legacyPayloadStoreFor(key);
+    if (legacyPayload && await legacyPayload.has(key)) return legacyPayload;
     if (await legacy.has(key)) return legacy;
     return target;
   }
   return {
     isMaster: false,
     origin: "durable-runs",
-    async get(key) { return await (await selected(key)).get(key); },
-    async has(key) { return await (await selected(key)).has(key); },
-    async snapshot(key) { return await (await selected(key)).snapshot(key); },
-    async getVersion(key) { return await (await selected(key)).getVersion(key); },
+    async get(key) { return await (await readStore(key)).get(key); },
+    async has(key) { return await (await readStore(key)).has(key); },
+    async snapshot(key) { return await (await readStore(key)).snapshot(key); },
+    async getVersion(key) { return await (await readStore(key)).getVersion(key); },
     async set(key, value) { return await durableStoreForKey(key).set(key, value); },
     async setTrusted(key, value) {
-      const store = await selected(key);
-      return await store.setTrusted(key, value);
+      return await durableStoreForKey(key).setTrusted(key, value);
     },
     async compareAndDelete(key, expectedVersion) {
-      return await (await selected(key)).compareAndDelete(key, expectedVersion);
+      return await (await readStore(key)).compareAndDelete(key, expectedVersion);
     },
     async compareAndRestore(key, expectedVersion, value) {
-      return await (await selected(key)).compareAndRestore(key, expectedVersion, value);
+      return await (await readStore(key)).compareAndRestore(key, expectedVersion, value);
     },
     async delete(key) {
       const target = durableStoreForKey(key);
       await target.delete(key);
-      // Cleanup can safely remove an interrupted migration's legacy duplicate.
+      // Cleanup can safely remove an interrupted migration's legacy duplicate
+      // (the master copy) AND a pre-kmpq payload copy in the execution dir.
+      const legacyPayload = legacyPayloadStoreFor(key);
+      if (legacyPayload && await legacyPayload.has(key)) await legacyPayload.delete(key);
       if (await legacy.has(key)) await legacy.delete(key);
     },
     async keys() {
@@ -1308,6 +1343,9 @@ export function durableRunMemory() {
       const registry = durableStoreForKey(DURABLE_INDEX_KEY);
       for (const key of await registry.keys()) keys.add(key);
       for (const store of await durableExecutionStores()) {
+        for (const key of await store.keys()) keys.add(key);
+      }
+      for (const store of await durablePayloadStores()) {
         for (const key of await store.keys()) keys.add(key);
       }
       for (const store of await durableThreadStores()) {
@@ -1408,10 +1446,10 @@ export async function listOrigins() {
     .sort();
 }
 
-// A small journal abstraction over a store (agent-do's memory pattern). The
-// journal is bounded by BOTH count (500 entries) AND serialized size (a long
-// model result must not blow past the value bound); long result/task text is
-// truncated.
+// A small journal abstraction over a store (agent-do's memory pattern).
+// dptw: no per-entry text clip and no serialized byte budget — every row is
+// stored WHOLE. The live ring still shows the latest 500 entries, but overflow
+// is ARCHIVED (never dropped) into the sibling "journal-archive" key.
 // `guard` (optional) is an async function awaited IMMEDIATELY before the durable
 // `setTrusted` commit — a scheduled run passes its fence so an ownership loss
 // during the preceding `store.get("journal")` await cannot stale-commit a row
@@ -1429,15 +1467,20 @@ function withJournalLock(fn) {
   return run;
 }
 
-const MAX_JOURNAL_ENTRY_TEXT = 16 * 1024;
-const MAX_JOURNAL_BYTES = 200 * 1024;
+// The live journal ring keeps the latest 500 entries; everything older is
+// archived (dptw owner-steer: archive-to-file, never evict).
+const JOURNAL_LIVE_ENTRIES = 500;
+const JOURNAL_ARCHIVE_KEY = "journal-archive";
 
 function boundJournal(entries) {
-  let bounded = entries.slice(-500);
-  while (bounded.length > 1 && utf8Bytes(JSON.stringify(bounded)) > MAX_JOURNAL_BYTES) {
-    bounded = bounded.slice(1);
-  }
-  return bounded;
+  return entries.slice(-JOURNAL_LIVE_ENTRIES);
+}
+
+/** Rows that fall off the live ring, in original order. */
+function journalOverflow(entries) {
+  return entries.length > JOURNAL_LIVE_ENTRIES
+    ? entries.slice(0, entries.length - JOURNAL_LIVE_ENTRIES)
+    : [];
 }
 
 async function exactStoreSnapshot(store, key) {
@@ -1457,7 +1500,6 @@ async function exactStoreSnapshot(store, key) {
 
 async function journalAppendInternal(store, entry, guard, idempotencyExecutionId, receiptCapable) {
   return withJournalLock(async () => {
-  const MAX_ENTRY_TEXT = MAX_JOURNAL_ENTRY_TEXT;
   // Capture the exact value, existence and version as one stable receipt.
   const pre = await exactStoreSnapshot(store, "journal");
   const original = pre.exists ? pre.value : [];
@@ -1474,15 +1516,19 @@ async function journalAppendInternal(store, entry, guard, idempotencyExecutionId
       : original;
   }
   const journal = original.slice();
-  const bounded = { ...entry };
-  for (const k of ["result", "task"]) {
-    if (typeof bounded[k] === "string" && bounded[k].length > MAX_ENTRY_TEXT) {
-      bounded[k] = bounded[k].slice(0, MAX_ENTRY_TEXT);
-    }
-  }
-  journal.push({ ts: Date.now(), ...bounded });
-  // The byte budget uses UTF-8 bytes, not UTF-16 `.length`.
+  // dptw: the entry is stored WHOLE — no result/task text clipping.
+  journal.push({ ts: Date.now(), ...entry });
   const entries = boundJournal(journal);
+  // Archive BEFORE the live commit: a failed archive aborts the append with
+  // the live journal untouched (nothing lost); a failed commit after a
+  // successful archive leaves an archive duplicate — harmless, archive rows
+  // are immutable records readers dedupe by executionId/ts.
+  const overflow = journalOverflow(journal);
+  if (overflow.length > 0) {
+    const archive = (await store.get(JOURNAL_ARCHIVE_KEY)) ?? [];
+    if (!Array.isArray(archive)) throw new Error("journal archive is not an array");
+    await store.setTrusted(JOURNAL_ARCHIVE_KEY, archive.concat(overflow));
+  }
   // Re-check the caller's fence IMMEDIATELY before the commit (no other await
   // between this check and setTrusted).
   if (guard) await guard();
@@ -1655,30 +1701,20 @@ export async function journalCommitCancellation(store, entry, executionId = entr
   });
 }
 
-// Screenshots are LARGE media (a single base64 PNG is ~300 KiB) that cannot fit
-// in the 256 KiB per-value memory bound. They are stored as SEPARATE OPFS files
-// under memory/master/screenshots/*.json (each bounded by MAX_SCREENSHOT_BYTES),
-// with a small metadata index (id/at/url ONLY — never the dataURL inline) kept
-// in the `screenshots` memory key. The index + files are bounded by
-// MAX_SCREENSHOTS; the oldest file is evicted when a new one arrives (the
-// round-17 blocker: the old code pushed up to 20 base64 dataURLs into ONE value,
-// overflowing the 256 KiB bound before a single image could be stored).
-const MAX_SCREENSHOTS = 5;
-const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024; // 4 MiB per screenshot
+// Screenshots are LARGE media stored as SEPARATE OPFS files under
+// memory/master/screenshots/*.json, with a small metadata index (id/at/url
+// ONLY — never the dataURL inline) kept in the `screenshots` memory key.
+// dptw: no per-screenshot byte cap and no count eviction — every capture is
+// retained until the owner deletes it or OPFS quota refuses honestly.
 
-/** Persist a screenshot as a dedicated OPFS file + bounded metadata index.
- * ATOMIC: the blob write + index update + oldest-eviction run under the global
- * write mutex, and a failed index update compensates by deleting the just-
- * written blob — so two concurrent captures can never read the same index, lose
- * one metadata entry, and orphan an unbounded file (the round-18 screenshot
- * race). */
+/** Persist a screenshot as a dedicated OPFS file + metadata index.
+ * ATOMIC: the blob write + index update run under the global write mutex, and
+ * a failed index update compensates by deleting the just-written blob — so two
+ * concurrent captures can never read the same index and lose one metadata
+ * entry (the round-18 screenshot race). */
 export async function saveScreenshot(mem, { url, dataURL }) {
   if (!dataURL || !String(dataURL).startsWith("data:image/")) {
     throw new Error("screenshot must be a data:image/* dataURL");
-  }
-  const bytes = utf8Bytes(String(dataURL));
-  if (bytes > MAX_SCREENSHOT_BYTES) {
-    throw new Error(`screenshot exceeds the ${MAX_SCREENSHOT_BYTES}-byte bound`);
   }
   return withWriteLock(async () => {
     const id = newId("shot");
@@ -1690,15 +1726,6 @@ export async function saveScreenshot(mem, { url, dataURL }) {
     const indexPath = mem.isMaster
       ? [ROOT, MASTER]
       : [ROOT, "origins", encodeOrigin(mem.origin)];
-    // Screenshots are LARGE media — charge the new blob against the GLOBAL quota
-    // BEFORE writing (five 4 MiB blobs are 20 MiB and must count toward the
-    // 64 MiB budget, the round-18 screenshot-quota finding).
-    try {
-      await assertQuota(null, bytes);
-    } catch (e) {
-      if (!(e instanceof MemoryStoreQuotaError)) throw e;
-      throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
-    }
     try {
       // Write the blob first, under ONE lock acquisition.
       await writeJson(dir, `${id}.json`, { url, dataURL, at: Date.now() });
@@ -1706,25 +1733,16 @@ export async function saveScreenshot(mem, { url, dataURL }) {
       // Metadata index (small): id/at/url only, never the dataURL inline.
       const index = (await mem.get("screenshots")) ?? [];
       index.push({ id, at: Date.now(), url });
-      const next = index.slice(-MAX_SCREENSHOTS);
+      // dptw: no count eviction — the index IS the full retained set.
+      const next = index;
 
-      // COMMIT the index FIRST (the authoritative step), THEN evict the
-      // orphaned blobs. If the index commit fails, the just-written blob is
-      // removed and NO old blob is deleted — the persisted index still matches
-      // the retained blobs (the round-18 "old blobs deleted before the index
-      // commits" orphan bug).
+      // COMMIT the index FIRST (the authoritative step). If the index commit
+      // fails, the just-written blob is removed (the round-18 "old blobs
+      // deleted before the index commits" orphan bug).
       await setValueInner(indexPath, "screenshots", next, {
         isMaster: mem.isMaster,
         trusted: true,
       });
-      const kept = new Set(next.map((s) => s.id));
-      for (const s of index) {
-        if (!kept.has(s.id)) {
-          try {
-            await removeTracked(dir, `${s.id}.json`);
-          } catch { /* absent */ }
-        }
-      }
       return { id, url };
     } catch (e) {
       // Compensate: a failed index commit must not leave an orphaned blob.

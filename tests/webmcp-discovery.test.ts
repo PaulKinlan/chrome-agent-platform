@@ -57,7 +57,7 @@ function makeWorld({ modelContext = null, pageGlobals = {} } = {}) {
   const loadListeners = [];
   const windowObj = {
     ...pageGlobals,
-    postMessage(msg) { posted.push(msg); },
+    postMessage(msg) { posted.push(structuredClone(msg)); },
     addEventListener(type, fn) {
       if (type === "message") messageListeners.push(fn);
       if (type === "load") loadListeners.push(fn);
@@ -278,7 +278,7 @@ Deno.test("webmcp invoke: page exception bodies are REDACTED from the result", a
   assertEquals(results.length, 1);
   assertEquals(results[0].ok, false);
   assert(!String(results[0].error).includes("sk-secret"), "the page-thrown secret never crosses the bridge");
-  assert(String(results[0].error).includes("Error"), "an allowlisted error name is reported");
+  assert(String(results[0].error).includes("Error"), "the thrown error's real name is reported honestly");
 });
 
 Deno.test("webmcp cancellation: disenroll while a promise tool runs discards the result (inFlight regression)", async () => {
@@ -384,8 +384,16 @@ Deno.test("webmcp singleton: re-execution tears down the old listener (one resul
   assertEquals(results.length, 1, "exactly one result posted");
 });
 
-Deno.test("webmcp invoke: a genuine DOMException reports its BOUNDED spec name (never the message)", async () => {
-  function gesture() { throw new DOMException("user gesture required — token abc123-secret", "NotAllowedError"); }
+Deno.test("webmcp invoke: a genuine DOMException surfaces its name AND a bounded, credential-redacted message (ajcc)", async () => {
+  // The ajcc contract (owner directive 2026-09-03, superseding the round-30
+  // strip-everything posture): the cause CROSSES — name + message excerpt —
+  // but credential shapes inside it stay redacted.
+  function gesture() {
+    throw new DOMException(
+      "quota exceeded — see https://x.test/a?token=sk-live-999999 or send Bearer sk-live-999999",
+      "QuotaExceededError",
+    );
+  }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [gesture], DOMException: globalThis.DOMException } });
   world.arm();
   await new Promise((r) => setTimeout(r, 30));
@@ -393,12 +401,32 @@ Deno.test("webmcp invoke: a genuine DOMException reports its BOUNDED spec name (
   assertEquals(results.length, 1);
   assertEquals(results[0].ok, false);
   const err = String(results[0].error);
-  assert(err.includes("DOMException: NotAllowedError"), `bounded name surfaced: ${err}`);
-  assert(!err.includes("abc123-secret"), "the DOMException MESSAGE (attacker text) never crosses");
-  assert(!err.includes("user gesture required"), "the message body stays redacted");
+  assert(err.includes("DOMException: QuotaExceededError"), `real name surfaced: ${err}`);
+  assert(err.includes("quota exceeded"), `message excerpt crosses: ${err}`);
+  assert(!err.includes("sk-live-999999"), `credential shape redacted: ${err}`);
+  assert(err.includes("[REDACTED]"), `redaction marker present: ${err}`);
+  assert(err.includes("…[query redacted]"), `URL query stripped: ${err}`);
+  const d = results[0].errorDetail;
+  assertEquals(d?.phase, "dispatch");
+  assertEquals(d?.pageControlled, true);
+  assertEquals(d?.name, "QuotaExceededError");
+  assertEquals(d?.tool, "gesture");
+  assert(!String(d?.message).includes("sk-live-999999"), "errorDetail message is redacted too");
 });
 
-Deno.test("webmcp invoke: UnknownError stays redacted across the bridge but page diagnostics keep full detail", async () => {
+Deno.test("webmcp invoke: a bare DOMException is reported as exactly that — no invented detail (ajcc)", async () => {
+  function bare() { throw new DOMException(); }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [bare], DOMException: globalThis.DOMException } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  const results = await invokeTool(world, { name: "bare", source: "inferred" });
+  const err = String(results[0].error);
+  assert(err.includes("no message"), `says exactly that nothing came across: ${err}`);
+  assert(err.includes("DOMException"), `type still named: ${err}`);
+  assertEquals(results[0].errorDetail?.message, "");
+});
+
+Deno.test("webmcp invoke: UnknownError now carries the cause honestly; page diagnostics keep the raw object (ajcc)", async () => {
   const thrown = new DOMException("database shard customer-42 failed", "UnknownError");
   function lookup() { throw thrown; }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [lookup], DOMException: globalThis.DOMException } });
@@ -410,29 +438,59 @@ Deno.test("webmcp invoke: UnknownError stays redacted across the bridge but page
     source: "inferred",
   });
 
-  assertEquals(results[0]?.error, "tool failed (DOMException: UnknownError)");
-  assert(!String(results[0]?.error).includes("customer-42"), "the sensitive message never crosses the bridge");
+  const err = String(results[0].error);
+  assert(err.includes("DOMException: UnknownError"), `name surfaced: ${err}`);
+  assert(err.includes("database shard customer-42 failed"), `the underlying cause crosses (bounded, page-controlled): ${err}`);
+  assertEquals(results[0].errorDetail?.pageControlled, true, "the cause is LABELLED page-controlled (untrusted, like any tool result)");
   assertEquals(world.warnings.length, 1, "the page console receives one full failure diagnostic");
   assertEquals(world.warnings[0][0], "[WebMCP:main]");
   assertEquals(world.warnings[0][2], { tool: "lookup", argsShape: "{ accountId, options }" });
-  assertEquals(world.warnings[0][3], thrown, "the page's original error object preserves message and stack detail");
+  assertEquals(world.warnings[0][3], thrown, "the page's original error object preserves message and stack detail page-locally");
 });
 
-Deno.test("webmcp invoke: a crafted DOMException with an arbitrary name falls back to the bare type", async () => {
+Deno.test("webmcp invoke: redaction parity with pure.js — keyword assignments, userinfo URLs, fragments (ajcc review P1)", async () => {
+  // The bridge redaction is a faithful port of lib/pure.js redactSecretText:
+  // keyword-adjacent assignments and userinfo/query/fragment URL credentials
+  // must never cross, while the honest cause does.
+  function kw() { throw new Error("upstream rejected the write: token=hunter2hunter2"); }
+  function pw() { throw new Error("login failed for the account: password=hunter2 retry later"); }
+  function url() { throw new Error("fetch https://user:hunter2@example.com/x?y=1#frag failed with 401"); }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [kw, pw, url], DOMException: globalThis.DOMException } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  const [rKw] = await invokeTool(world, { name: "kw", source: "inferred" });
+  const eKw = String(rKw.error);
+  assert(!eKw.includes("hunter2hunter2") && eKw.includes("token=[REDACTED]") && eKw.includes("upstream rejected"), `keyword-assigned token masked: ${eKw}`);
+  const [rPw] = await invokeTool(world, { name: "pw", source: "inferred", requestId: "r2" });
+  const ePw = String(rPw.error);
+  assert(!ePw.includes("hunter2") && ePw.includes("password=[REDACTED]") && ePw.includes("retry later"), `keyword-assigned password masked: ${ePw}`);
+  const [rUrl] = await invokeTool(world, { name: "url", source: "inferred", requestId: "r3" });
+  const eUrl = String(rUrl.error);
+  assert(!eUrl.includes("hunter2") && eUrl.includes("[REDACTED]@"), `userinfo password masked: ${eUrl}`);
+  assert(!eUrl.includes("y=1") && !eUrl.includes("#frag") && eUrl.includes("…[query redacted]"), `query AND fragment stripped: ${eUrl}`);
+  assert(eUrl.includes("401"), `the honest cause survives: ${eUrl}`);
+});
+
+Deno.test("webmcp invoke: a crafted DOMException name crosses as bounded inert TEXT (ajcc — honesty over name-allowlisting)", async () => {
   function crafted() { throw new DOMException("x", "EvilCustomName<script>alert(1)</script>"); }
   const world = makeWorld({ pageGlobals: { webmcpExpose: [crafted], DOMException: globalThis.DOMException } });
   world.arm();
   await new Promise((r) => setTimeout(r, 30));
   const results = await invokeTool(world, { name: "crafted", source: "inferred" });
   const err = String(results[0].error);
-  assertEquals(err, "tool failed (DOMException)", `crafted name contained: ${err}`);
-  assert(!err.includes("EvilCustomName") && !err.includes("<script>"), "no arbitrary name text crosses");
+  // The real name crosses (bounded to 64 chars); it is INERT TEXT — the
+  // constitution's untrusted-data rule (textContent, never innerHTML) is the
+  // rendering guard, and errorDetail.pageControlled marks it untrusted.
+  assert(err.includes("EvilCustomName"), `real (crafted) name surfaced honestly: ${err}`);
+  assertEquals(results[0].errorDetail?.name.length <= 64, true, "the name is bounded");
+  assertEquals(results[0].errorDetail?.pageControlled, true);
 });
 
-Deno.test("webmcp invoke: a fake DOMException-shaped object does NOT get the bounded-name treatment", async () => {
+Deno.test("webmcp invoke: a fake DOMException-shaped object is described honestly as what it is (ajcc)", async () => {
   function fake() {
-    // NOT a genuine DOMException — a crafted lookalike. It must never leak a
-    // non-allowlisted name (and never a message).
+    // NOT a genuine DOMException — a crafted lookalike. The honest contract
+    // describes it by its constructor name + message (bounded, redacted) like
+    // any other page-thrown value.
     const e = { name: "NotAllowedError", message: "secret-text", constructor: { name: "DOMException" } };
     throw e;
   }
@@ -441,6 +499,26 @@ Deno.test("webmcp invoke: a fake DOMException-shaped object does NOT get the bou
   await new Promise((r) => setTimeout(r, 30));
   const results = await invokeTool(world, { name: "fake", source: "inferred" });
   const err = String(results[0].error);
-  assertEquals(err, "tool failed (DOMException)", `lookalike collapses to the bare type: ${err}`);
-  assert(!err.includes("secret-text"), "lookalike message never crosses");
+  assert(err.includes("DOMException"), `constructor name carried: ${err}`);
+  assert(err.includes("secret-text"), `the lookalike's message crosses honestly (no credential shape to redact): ${err}`);
+  assertEquals(results[0].errorDetail?.errorType, "DOMException");
+});
+
+Deno.test("webmcp invoke: a non-cloneable result reports phase=result-serialization, never a handler failure (ajcc)", async () => {
+  // The harness postMessage structured-clones like the real bridge, so a
+  // function in the result throws DataCloneError at the post — pre-fix that
+  // throw fell into the handler catch and was MISLABELED "tool failed
+  // (DOMException: DataCloneError)".
+  function bad() { return { callback: () => 1, ok: true }; }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [bad], DOMException: globalThis.DOMException } });
+  world.arm();
+  await new Promise((r) => setTimeout(r, 30));
+  const results = await invokeTool(world, { name: "bad", source: "inferred" });
+  assertEquals(results.length, 1, "exactly one result posted (the honest error replaces the success post)");
+  assertEquals(results[0].ok, false);
+  const err = String(results[0].error);
+  assert(err.includes("could not cross the bridge"), `serialization phase named: ${err}`);
+  assert(err.includes("DataCloneError"), `the real error named: ${err}`);
+  assertEquals(results[0].errorDetail?.phase, "result-serialization");
+  assertEquals(results[0].errorDetail?.pageControlled, false);
 });

@@ -38,7 +38,7 @@ create_window a window. Never assume window.open.
 
 Need a capability? Call search_tools
 EXACTLY ONCE, then execute_tool the best match. Never search twice for the same capability:
-a selectionRef works for EVERY call of that tool all run — reuse it in loops. A lazy-arguments-invalid error means fix YOUR arguments (the detail
+a selectionRef works for EVERY call of that tool; reuse it in loops. A lazy-arguments-invalid error means fix YOUR arguments (the detail
 names the field) and retry with the SAME selectionRef; any other failure:
 report its error; do not re-search. For every item: iterate EVERY item, one
 call each; say which items you could not read and why.`;
@@ -52,8 +52,7 @@ ${PLATFORM_ENVIRONMENT_GROUNDING}
 ## 1. Tool discovery — SEARCH ONCE, THEN ACT
 search_tools(query, limit) returns a tool's exact name, argument schema and an
 executable
-  selectionRef; list_tools(source) lists a category. The matcher is
-LEXICAL — query with concrete tool-name nouns: search_tools("network rule"),
+  selectionRef. Query with concrete tool-name nouns: search_tools("network rule"),
 search_tools("MHTML"). CALL search_tools ONCE BEFORE GUESSING, then execute the
 best selectionRef; never call a tool from memory. Each tool's description
 carries its rules.

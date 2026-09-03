@@ -424,12 +424,12 @@ Deno.test("WASI host types: constants, job/context/quota and FD records are stri
     TypeError,
     "job_tier",
   );
+  // dptw: no stdin byte ceiling — a stdin past the removed 1 MiB quota is
+  // accepted whole (shape checks — non-Uint8Array — still fail).
+  const bigStdinJob = createWasiJob({ ...rawJob(), stdin: new Uint8Array(1024 * 1024 + 1) });
+  assertEquals(bigStdinJob.stdin.length, 1024 * 1024 + 1, "big stdin accepted whole");
   assertThrows(
-    () =>
-      createWasiJob({
-        ...rawJob(),
-        stdin: new Uint8Array(WASI_HOST_HARD_LIMITS.MAX_STDIN_BYTES + 1),
-      }),
+    () => createWasiJob({ ...rawJob(), stdin: "not-bytes" }),
     TypeError,
     "job_stdin",
   );

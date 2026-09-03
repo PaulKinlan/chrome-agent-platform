@@ -90,7 +90,7 @@ Deno.test("tool search: untrusted instruction-like text is inert searchable data
   assertEquals("grant" in result.results[0], false);
 });
 
-Deno.test("tool search: hostile Unicode/query size and top-k are bounded", () => {
+Deno.test("tool search: hostile Unicode is still stripped; query size and top-k have NO caps (dptw)", () => {
   const many = buildToolCatalog(
     Array.from({ length: 40 }, (_, index) =>
       item(
@@ -100,17 +100,24 @@ Deno.test("tool search: hostile Unicode/query size and top-k are bounded", () =>
         "common lexical target",
       )),
   );
+  // The bidi-override control char is stripped (safety) and the requested
+  // limit is honored exactly (no maxTopK clamp): all 40 matches return.
   const result = searchToolIndex(
     buildToolSearchIndex(many),
     "\u202E" + "common ".repeat(1000),
     { limit: 9999 },
   );
-  assert(result.results.length <= TOOL_SEARCH_BOUNDS.maxTopK);
-  assert(result.diagnostics.resultBytes <= TOOL_SEARCH_BOUNDS.maxResultBytes);
-  assert(result.diagnostics.queryTokens <= TOOL_SEARCH_BOUNDS.maxQueryTokens);
+  assertEquals(result.results.length, 40, "every match returns past the removed maxTopK 12");
+  // A query of 20 DISTINCT tokens keeps all of them (no 16-token clip).
+  const distinct = searchToolIndex(
+    buildToolSearchIndex(many),
+    Array.from({ length: 20 }, (_, i) => `tok${i}`).join(" "),
+    { limit: 9999 },
+  );
+  assertEquals(distinct.diagnostics.queryTokens, 20, "every query token is kept");
 });
 
-Deno.test("tool search: empty/hostile queries fail closed and catalog text is never returned wholesale", () => {
+Deno.test("tool search: empty/hostile queries fail closed; catalog text is returned COMPLETE (dptw)", () => {
   const index = buildToolSearchIndex(catalog);
   assertEquals(searchToolIndex(index, "").results, []);
   const poison = {
@@ -121,9 +128,8 @@ Deno.test("tool search: empty/hostile queries fail closed and catalog text is ne
   assertEquals(searchToolIndex(index, poison).results, []);
   const result = searchToolIndex(index, "read", { limit: 1 });
   assertEquals(result.results.length, 1);
-  assert(
-    new TextEncoder().encode(result.results[0].summary).length <=
-      TOOL_SEARCH_BOUNDS.maxSummaryBytes,
-  );
+  // dptw: the summary is the complete description — never size-clipped.
+  const source = catalog.descriptors.find((d) => d.name === result.results[0].name);
+  assertEquals(result.results[0].summary, source.description, "the summary is the complete description");
   assertEquals("descriptors" in result, false);
 });

@@ -267,6 +267,25 @@ export function describeError(error, context = {}) {
     );
   }
 
+  // 0c. The owner-surface authorization refusal (requireSettingsSender). The
+  //     throw text carries the word "credential", which the rule-5 heuristics
+  //     below would read as a provider-AUTH failure and answer with the
+  //     "key is missing, invalid, or revoked" action — blaming the key for a
+  //     surface problem (P0 2026-09-02, pek9). Say what it actually is and
+  //     how to recover, and never classify it as provider-auth.
+  if (
+    e?.name === "SettingsSurfaceRequiredError" ||
+    /restricted to the Settings surface/i.test(raw)
+  ) {
+    return build(
+      ERROR_CATEGORY.PERMISSION,
+      raw || "this action is restricted to the Settings surface",
+      "Open Settings from the hub and retry — the window that sent this request was not recognized as the Settings document.",
+      raw,
+      detailParts,
+    );
+  }
+
   // 1. Host-permission / network (the "Failed to fetch" class).
   if (/failed to fetch/i.test(raw + " " + cause) || /networkerror/i.test(raw + " " + cause)) {
     const reason = provider

@@ -34,11 +34,7 @@ import {
   grepFsGrant,
   cleanRelativePath,
   computeSha256,
-  MAX_FS_PATH_DEPTH,
-  MAX_FS_TEXT_DECODE_BYTES,
-  MAX_FS_WRITE_BYTES,
 } from "../../lib/fs-grants.js";
-import { STAGED_APPROVAL_DETAIL_BOUNDS } from "../../lib/owner-approval.js";
 
 const OWNER_SURFACES = new Set(["owner-options", "extension"]);
 const MAX_GRANT_ID_CHARS = 200;
@@ -165,18 +161,12 @@ export function createFsGrantRoutes({
         return { ok: false, error: String(err?.message || err) };
       }
       if (segments.length === 0) return { ok: false, error: "invalid_file_path", message: "A file name is required" };
-      if (segments.length > MAX_FS_PATH_DEPTH) return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
       const path = segments.join("/");
 
-      // 2. The size: the store's own write bound, then the card's diff bound
-      //    (a diff the owner cannot read in full is not an approvable diff).
+      // 2. No size limits (dptw): the approval card carries the COMPLETE
+      //    before/after bodies — an approvable diff is a whole diff, at any
+      //    size.
       const newBytes = new TextEncoder().encode(content);
-      if (newBytes.byteLength > MAX_FS_WRITE_BYTES) {
-        return { ok: false, error: "fs_file_too_large", size: newBytes.byteLength, maxBytes: MAX_FS_WRITE_BYTES };
-      }
-      if (content.length > STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars) {
-        return { ok: false, error: "fs_diff_too_large", size: content.length, maxChars: STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars };
-      }
 
       // 3. The grant: exists, is a read/write grant, and the browser still
       //    grants it (the same order writeFsGrantFile checks, surfaced early
@@ -190,17 +180,16 @@ export function createFsGrantRoutes({
       if (status !== "granted") return { ok: false, error: "fs_permission_lapsed", status, grantId: id };
 
       // 4. The bytes on disk: the "before" side of the card. A missing file is
-      //    a creation (empty before); a binary or oversized file is refused —
-      //    the card would otherwise show a misleading diff.
-      //    readFsGrantFile(asText:true) applies the store's own binary sniff
-      //    (NUL / control bytes / invalid UTF-8 → fs_file_not_text) and its
-      //    read bound; a file over the text-decode bound comes back with a
-      //    placeholder instead of its text, which is refused here.
+      //    a creation (empty before); a binary file is refused — the card
+      //    would otherwise show a misleading diff. readFsGrantFile(asText:true)
+      //    applies the store's own binary sniff (NUL / control bytes / invalid
+      //    UTF-8 → fs_file_not_text) and always returns the complete
+      //    before-text, at any size (dptw).
       const readBefore = async () => {
         const res = await readFsGrantFile(id, { relativePath: path, asText: true });
         if (res?.ok === true) {
-          if (res.size > MAX_FS_TEXT_DECODE_BYTES || typeof res.content !== "string") {
-            return { error: "fs_file_too_large", size: res.size, maxBytes: MAX_FS_TEXT_DECODE_BYTES };
+          if (typeof res.content !== "string") {
+            return { error: "fs_file_not_text", size: res.size };
           }
           return { text: res.content, sha256: res.sha256, exists: true };
         }
@@ -216,9 +205,6 @@ export function createFsGrantRoutes({
         if (typeof before.size === "number") out.size = before.size;
         if (typeof before.maxBytes === "number") out.maxBytes = before.maxBytes;
         return out;
-      }
-      if (before.text.length > STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars) {
-        return { ok: false, error: "fs_diff_too_large", path, size: before.text.length, maxChars: STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars };
       }
 
       // 5. The approval: target = this grant + this path; payload digest-bound

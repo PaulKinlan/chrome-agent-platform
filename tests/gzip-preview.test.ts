@@ -74,10 +74,10 @@ Deno.test("gzip spec/request: immutable exact modes, UTF-8 scalar checks and str
   assertEquals(spec.acceptedExitCodes, [0]);
   assertEquals(spec.stdoutEncoding, "base64");
   assertEquals(spec.allowedArgs, [[], ["-d"]]);
-  assertEquals(spec.maxTextInputBytes, 2048);
-  assertEquals(spec.maxBase64InputChars, 2048);
-  assertEquals(spec.maxDecodedInputBytes, 1536);
-  assertEquals(spec.maxBinaryOutputBytes, 65536);
+  // dptw: no maxTextInputBytes/maxBase64InputChars/maxDecodedInputBytes/maxBinaryOutputBytes in the spec.
+  for (const k of ["maxTextInputBytes", "maxBase64InputChars", "maxDecodedInputBytes", "maxBinaryOutputBytes"]) {
+    assertEquals(k in spec, false, `dptw: ${k} gone`);
+  }
   assert(Object.isFrozen(spec) && Object.isFrozen(spec.allowedArgs) && spec.allowedArgs.every(Object.isFrozen));
 
   assertEquals(validatePreviewInput({ toolId: "gzip", args: [], stdin: "hello" }).stdin, "hello");
@@ -85,18 +85,23 @@ Deno.test("gzip spec/request: immutable exact modes, UTF-8 scalar checks and str
   for (const args of [["-c"], ["-f"], ["-9"], ["--"], ["file.gz"], ["-d", "file.gz"], ["-dc"]]) {
     expectReject({ toolId: "gzip", args, stdin: "" }, "preview_args");
   }
-  for (const stdin of ["\ufeffhello", "a\0b", "\ud800", "x\udfff", "a".repeat(2049)]) {
+  for (const stdin of ["\ufeffhello", "a\0b", "\ud800", "x\udfff"]) {
     expectReject({ toolId: "gzip", args: [], stdin }, "preview_gzip_text");
   }
+  // dptw: text past the removed 2048-byte cap is accepted whole.
+  assertEquals(validatePreviewInput({ toolId: "gzip", args: [], stdin: "a".repeat(2049) }).stdin.length, 2049, "long UTF-8 text accepted");
   // A valid surrogate pair remains valid UTF-8 text.
   assertEquals(validatePreviewInput({ toolId: "gzip", args: [], stdin: "\ud83d\ude00" }).stdin, "😀");
 
   for (const stdin of [
     ` ${HELLO_GZIP_BASE64}`, `${HELLO_GZIP_BASE64}\n`, "____",
-    HELLO_GZIP_BASE64.slice(0, -1), "Zh==", "A===", "AA=A", "é===", "A".repeat(2049),
+    HELLO_GZIP_BASE64.slice(0, -1), "Zh==", "A===", "AA=A", "é===",
   ]) expectReject({ toolId: "gzip", args: ["-d"], stdin }, "preview_gzip_base64");
+  // dptw: canonical base64 of any decoded size is accepted (shape, not size).
+  const longCanonical = encodeCanonicalBase64(new Uint8Array(4097));
+  assertEquals(validatePreviewInput({ toolId: "gzip", args: ["-d"], stdin: longCanonical }).stdin, longCanonical, "long canonical base64 accepted");
   const tooManyDecoded = encodeCanonicalBase64(new Uint8Array(1537));
-  expectReject({ toolId: "gzip", args: ["-d"], stdin: tooManyDecoded }, "preview_gzip_base64");
+  assertEquals(validatePreviewInput({ toolId: "gzip", args: ["-d"], stdin: tooManyDecoded }).stdin, tooManyDecoded, "decoded past the removed 1536 cap accepted");
 
   // No request-borne mode, encoding, bytes, quota, package or capability authority.
   for (const extra of ["mode", "stdoutEncoding", "stdinBytes", "quota", "packageId", "capabilities"]) {
@@ -110,14 +115,14 @@ Deno.test("gzip job: compress UTF-8 and decompress canonical base64 become exact
   assertEquals(compress.args, ["gzip"]);
   assertEquals([...compress.stdin], [...new TextEncoder().encode("hello")]);
   assertEquals(compress.stdoutEncoding, "base64");
-  assertEquals(compress.quota.stdinBytes, 2048);
-  assertEquals(compress.quota.stdoutBytes, 65536);
+  assertEquals(compress.quota.stdinBytes, Number.POSITIVE_INFINITY, "dptw: no stdin quota");
+  assertEquals(compress.quota.stdoutBytes, Number.POSITIVE_INFINITY, "dptw: no stdout quota");
 
   const decompress = buildPreviewJob({ input: validatePreviewInput({ toolId: "gzip", args: ["-d"], stdin: HELLO_GZIP_BASE64 }), authority });
   assertEquals(decompress.args, ["gzip", "-d"]);
   assertEquals([...decompress.stdin], [...decodeCanonicalBase64(HELLO_GZIP_BASE64)]);
-  assertEquals(decompress.quota.stdinBytes, 1536);
-  assertEquals(decompress.quota.stdoutBytes, 65536);
+  assertEquals(decompress.quota.stdinBytes, Number.POSITIVE_INFINITY);
+  assertEquals(decompress.quota.stdoutBytes, Number.POSITIVE_INFINITY);
 });
 
 Deno.test("gzip retained Worker: deterministic hello member has RFC1952 header/footer and decompresses only to base64", async () => {
@@ -161,7 +166,7 @@ Deno.test("gzip retained Worker: arbitrary binary, NUL/invalid UTF-8 and empty o
   assertEquals(empty.stdoutBytes, 0);
 });
 
-Deno.test("gzip retained Worker: 64 KiB succeeds complete; cap+1 and compact bomb fail all-or-nothing within deadline", async () => {
+Deno.test("gzip retained Worker: 64 KiB succeeds complete; past-cap and large expansions succeed whole (dptw)", async () => {
   const exactBytes = new Uint8Array(65536).fill(0x41);
   const exactMember = await gzipFixture(exactBytes);
   assert(exactMember.byteLength <= 1536, "exact-bound fixture fits immutable compressed-input cap");
@@ -173,19 +178,19 @@ Deno.test("gzip retained Worker: 64 KiB succeeds complete; cap+1 and compact bom
   assertEquals(decodeCanonicalBase64(exact.stdoutBase64).byteLength, 65536);
   assertEquals(exact.counters.stdoutBytes, 65536);
 
-  // Run a success first, then failures, proving no stale prior base64 leaks.
+  // dptw: expansions past the removed 64 KiB output cap succeed whole.
   const overMember = await gzipFixture(new Uint8Array(65537).fill(0x41));
   const over = await runGzip(["-d"], encodeCanonicalBase64(overMember));
-  expectNoPartial(over, "65,537-byte expansion");
-  assertEquals(over.errno, 1, "retained guest converts the EFBIG path to nonzero exit");
+  assertEquals(over.ok, true, `65,537-byte expansion succeeds: ${JSON.stringify(over).slice(0, 160)}`);
+  assertEquals(over.stdoutBytes, 65537, "every expanded byte arrives");
 
-  const bombMember = await gzipFixture(new Uint8Array(200000).fill(0x41));
-  assert(bombMember.byteLength <= 1536, "compact bomb remains within input admission cap");
+  const bigMember = await gzipFixture(new Uint8Array(200000).fill(0x41));
   const started = performance.now();
-  const bomb = await runGzip(["-d"], encodeCanonicalBase64(bombMember));
+  const big = await runGzip(["-d"], encodeCanonicalBase64(bigMember));
   const elapsed = performance.now() - started;
-  expectNoPartial(bomb, "compact bomb");
-  assert(elapsed < 5000, `bomb terminates within preview deadline (${elapsed}ms)`);
+  assertEquals(big.ok, true, `200,000-byte expansion succeeds: ${JSON.stringify(big).slice(0, 160)}`);
+  assertEquals(big.stdoutBytes, 200000, "every expanded byte arrives");
+  assert(elapsed < 5000, `expansion completes within preview deadline (${elapsed}ms)`);
 });
 
 Deno.test("gzip retained Worker: malformed header/truncation/deflate/CRC failures expose no partial or stale output", async () => {
