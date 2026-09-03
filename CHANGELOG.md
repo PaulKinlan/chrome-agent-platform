@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.41] — 2026-09-03
+- cap-beads-afiu
+
 ## [0.3.40] — 2026-09-03
 - The unit test suite finishes in about a quarter of the time: test files run in parallel, and very long text no longer stalls secret redaction
 

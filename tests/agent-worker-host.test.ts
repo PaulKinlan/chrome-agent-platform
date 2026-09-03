@@ -175,3 +175,239 @@ Deno.test("P2 agent-worker.tool: honest error when the executor is not wired", a
   assertEquals(r.ok, false);
   assertEquals(r.error, "tool execution not wired in this context");
 });
+
+// ── review r6 falsification gates (gpt-5.6-sol:high, r5) ─────────────────────
+// Each fails on the r5 tree:
+//  r6 P1-1: agent-worker.run/dispatch registered the live run AFTER the host
+//    post — a worker that completes + relays agent-worker.result while the
+//    route still awaits the host response unregistered nothing and left a
+//    COMPLETED run live forever; register() failure was silently accepted.
+//  r6 P1-2: agent-worker.steer returned ok:true on a bare host "posted" — a
+//    steer_buffer_full refusal reached only the worker port and the owner was
+//    told the agent saw the steer.
+import { createRunControl } from "../extension/lib/run-control.js";
+
+function kvPair() {
+  const mem = {};
+  return { kvGet: async () => mem, kvSet: async (o) => Object.assign(mem, o) };
+}
+
+const R6_RUN_ID = "exec:r6-1111-2222-4333-8444-555555555555";
+
+Deno.test("r6 P1-1 agent-worker.run: REFUSES when the live-run registry cannot register (no run is posted)", async () => {
+  reset();
+  // A full/duplicate register returns null — the route must refuse the kick,
+  // never accept an unsteerable run. ensure is allowed; the run POST must
+  // never happen.
+  const posts = [];
+  const chromeStub = {
+    runtime: {
+      sendMessage: async (m) => {
+        if (m.type === "agent-worker-host:ensure") return { ok: true, created: true };
+        if (m.type === "agent-worker-host:post") posts.push(m);
+        return { ok: true };
+      },
+    },
+  };
+  const prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  try {
+    const routes = createAgentWorkerRoutes({
+      ensureOffscreen, kvGet, kvSet,
+      runControl: { register: () => null, unregister: () => {}, get: () => null },
+    });
+    const r = await routes["agent-worker.run"]({ agentId: "bg:hat", runId: R6_RUN_ID, task: "x" }, { principal: "extension" });
+    assertEquals(r.ok, false, "a refused registration must refuse the worker run");
+    assertEquals(r.code, "run_control_full");
+    assertEquals(posts.length, 0, "no run descriptor may be posted when registration was refused");
+  } finally {
+    globalThis.chrome = prev;
+  }
+});
+
+Deno.test("r6 P1-1 agent-worker.run: registers BEFORE the host post, and a failed post releases the record", async () => {
+  reset();
+  const ctl = createRunControl();
+  let sawLiveDuringPost = null;
+  const chromeStub = {
+    runtime: {
+      sendMessage: async (m) => {
+        if (m.type === "agent-worker-host:ensure") return { ok: true, created: true };
+        if (m.type === "agent-worker-host:post") {
+          // The host answers AFTER the worker is already live in the control
+          // plane: register-before-post means the record exists HERE.
+          sawLiveDuringPost = ctl.get(m.msg.runId) ?? null;
+          return { ok: false, error: "no such agent worker" }; // the post FAILS
+        }
+        return { ok: true };
+      },
+    },
+  };
+  const prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  try {
+    const routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+    const r = await routes["agent-worker.run"]({ agentId: "bg:hat", runId: R6_RUN_ID, task: "x" }, { principal: "extension" });
+    assertEquals(r.ok, false, "a failed host post must fail the run route");
+    assertEquals(sawLiveDuringPost?.executionId, R6_RUN_ID, "the run must be registered BEFORE the descriptor is posted");
+    assertEquals(ctl.get(R6_RUN_ID), null, "a failed post must release the live record — no phantom steerable run");
+  } finally {
+    globalThis.chrome = prev;
+  }
+});
+
+Deno.test("r6 P1-2 agent-worker.steer: reports the WORKER's refusal, not a bare host posted", async () => {
+  reset();
+  const ctl = createRunControl();
+  assert(ctl.register({ executionId: R6_RUN_ID, surface: "agent-worker:bg:hat", kind: "worker" }), "seed the live run");
+  const chromeStub = {
+    runtime: {
+      sendMessage: async (m) => {
+        if (m.type === "agent-worker-host:ensure") return { ok: true, created: true };
+        if (m.type === "agent-worker-host:post") {
+          // The host relays the worker's honest steer-refused (buffer full).
+          assertEquals(m.expectReply.keyField, "steerId", "steer posts must ask for the worker's own reply");
+          return { ok: true, posted: true, relayed: { type: "agent-worker:steer-refused", runId: R6_RUN_ID, steerId: m.msg.steerId, error: "steer_buffer_full" } };
+        }
+        return { ok: true };
+      },
+    },
+  };
+  const prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  try {
+    const routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+    const r = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode: "inject", text: "nudge" }, { principal: "extension" });
+    assertEquals(r.ok, false, "a worker steer_buffer_full refusal must reach the caller as ok:false");
+    assertEquals(r.code, "steer_buffer_full");
+    assert(r.steerId, "the refusal must carry the correlation id");
+  } finally {
+    globalThis.chrome = prev;
+  }
+});
+
+Deno.test("r6 P1-2 agent-worker.steer: reports the worker's steered ack, host post failures, and unconfirmed timeouts honestly", async () => {
+  reset();
+  const ctl = createRunControl();
+  assert(ctl.register({ executionId: R6_RUN_ID, surface: "agent-worker:bg:hat", kind: "worker" }), "seed the live run");
+
+  // (a) the worker accepted → steered:true with the correlation id.
+  let mode = "inject";
+  let hostReply = { ok: true, posted: true, relayed: { type: "agent-worker:steered", runId: R6_RUN_ID, steerId: "s-1", mode } };
+  let chromeStub = {
+    runtime: { sendMessage: async (m) => (m.type === "agent-worker-host:post" ? hostReply : { ok: true }) },
+  };
+  let prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  let routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+  try {
+    const ok = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode, text: "nudge", steerId: "s-1" }, { principal: "extension" });
+    assertEquals(ok.ok, true);
+    assertEquals(ok.steered, true);
+    assertEquals(ok.steerId, "s-1", "the caller's steer id must ride the confirmation");
+  } finally { globalThis.chrome = prev; }
+
+  // (b) the host itself refused the post (no such worker) → honest error.
+  hostReply = { ok: false, error: "no such agent worker" };
+  prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+  try {
+    const fail = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode, text: "nudge" }, { principal: "extension" });
+    assertEquals(fail.ok, false, "a failed host post must never be reported as steered");
+    assert(fail.code === "steer_unconfirmed" || fail.error, "the route must surface the post failure");
+  } finally { globalThis.chrome = prev; }
+
+  // (c) the worker never answered (host timeout) → unconfirmed, never "steered".
+  hostReply = { ok: false, posted: true, error: "worker_reply_timeout" };
+  prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+  try {
+    const timeout = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode, text: "nudge" }, { principal: "extension" });
+    assertEquals(timeout.ok, false, "an unanswered steer must be reported unconfirmed");
+    assertEquals(timeout.code, "steer_unconfirmed");
+  } finally { globalThis.chrome = prev; }
+
+  // (d) stop-run: the worker's aborted ack confirms the stop; a silent worker does not.
+  hostReply = { ok: true, posted: true, relayed: { type: "agent-worker:aborted", runId: R6_RUN_ID, agentId: "bg:hat" } };
+  prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+  try {
+    const stopped = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode: "stop-run" }, { principal: "extension" });
+    assertEquals(stopped.ok, true);
+    assertEquals(stopped.stopped, true);
+  } finally { globalThis.chrome = prev; }
+
+  hostReply = { ok: false, posted: true, error: "worker_reply_timeout" };
+  prev = globalThis.chrome;
+  globalThis.chrome = chromeStub;
+  routes = createAgentWorkerRoutes({ ensureOffscreen, kvGet, kvSet, runControl: ctl });
+  try {
+    const unstopped = await routes["agent-worker.steer"]({ runId: R6_RUN_ID, mode: "stop-run" }, { principal: "extension" });
+    assertEquals(unstopped.ok, false, "an unconfirmed stop must not be reported stopped");
+    assertEquals(unstopped.code, "stop_unconfirmed");
+  } finally { globalThis.chrome = prev; }
+});
+
+Deno.test("agent-worker-host (host): posts with expectReply resolve with the WORKER's relayed reply", async () => {
+  const workers = new Map();
+  globalThis.SharedWorker = class {
+    constructor(url, opts) {
+      this.url = url;
+      this.name = opts?.name;
+      this.port = { start() {}, postMessage() {}, close() {}, onmessage: null };
+      workers.set(this.name, this);
+    }
+  };
+  const mod = await import("../extension/lib/agent-worker-host.js?r6-host=" + Date.now());
+  try {
+    mod.ensureAgentWorker("bg:relay");
+    const worker = workers.get("bg:relay");
+    assertEquals(typeof worker.port.onmessage, "function", "the host must listen on its keep-alive port for worker replies");
+
+    // A steer post that awaits the worker's decision: the promise stays open
+    // until the worker's reply arrives on the host port.
+    let resolved = null;
+    const pending = mod.postAgentWorkerMessage("bg:relay", { type: "agent-worker:steer", runId: "r1", steerId: "s-42", mode: "inject", text: "hi" }, {
+      expectReply: { types: ["agent-worker:steered", "agent-worker:steer-refused"], keyField: "steerId", timeoutMs: 2000 },
+    });
+    pending.then((v) => { resolved = v; });
+    assertEquals(resolved, null, "the post must not resolve on a bare postMessage");
+    // (worker side) the reply comes back over the host's own port.
+    worker.port.onmessage({ data: { type: "agent-worker:steered", runId: "r1", agentId: "bg:relay", steerId: "s-42", mode: "inject" } });
+    const out = await pending;
+    assertEquals(out.ok, true);
+    assertEquals(out.posted, true);
+    assertEquals(out.relayed.type, "agent-worker:steered");
+    assertEquals(out.relayed.steerId, "s-42", "the relay must carry the keyed steer id");
+
+    // A REFUSED reply relays the refusal the same way (never a silent ok).
+    const pending2 = mod.postAgentWorkerMessage("bg:relay", { type: "agent-worker:steer", runId: "r1", steerId: "s-43", mode: "inject", text: "more" }, {
+      expectReply: { types: ["agent-worker:steered", "agent-worker:steer-refused"], keyField: "steerId", timeoutMs: 2000 },
+    });
+    worker.port.onmessage({ data: { type: "agent-worker:steer-refused", runId: "r1", steerId: "s-43", error: "steer_buffer_full" } });
+    const refused = await pending2;
+    assertEquals(refused.relayed.type, "agent-worker:steer-refused");
+    assertEquals(refused.relayed.error, "steer_buffer_full");
+
+    // A reply for a DIFFERENT key does not satisfy the waiter.
+    const pending3 = mod.postAgentWorkerMessage("bg:relay", { type: "agent-worker:steer", runId: "r1", steerId: "s-44", mode: "inject", text: "third" }, {
+      expectReply: { types: ["agent-worker:steered", "agent-worker:steer-refused"], keyField: "steerId", timeoutMs: 2000 },
+    });
+    worker.port.onmessage({ data: { type: "agent-worker:steered", runId: "r1", steerId: "s-OTHER", mode: "inject" } });
+    worker.port.onmessage({ data: { type: "agent-worker:steered", runId: "r1", steerId: "s-44", mode: "inject" } });
+    const matched = await pending3;
+    assertEquals(matched.relayed.steerId, "s-44", "only the keyed reply may resolve the waiter");
+
+    // Unknown agent: refused before anything is posted.
+    const ghost = await mod.postAgentWorkerMessage("bg:ghost", { type: "agent-worker:steer", runId: "r1", steerId: "s-45" }, {
+      expectReply: { types: ["agent-worker:steered"], keyField: "steerId", timeoutMs: 2000 },
+    });
+    assertEquals(ghost.ok, false);
+    assertEquals(ghost.error, "no such agent worker");
+  } finally {
+    delete globalThis.SharedWorker;
+  }
+});

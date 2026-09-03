@@ -54,6 +54,37 @@ function token() {
 // controller lets the SW stop the loop between steps.
 let activeRun = null; // { runId, controller }
 
+// ── Owner-steer buffer (chrome-agent-platform-afiu, review r5 P1-1) ───────
+// Steers arrive as control messages while a run is live; the run loop reads
+// the buffer at EVERY model call (`readSteers`) and appends their text
+// between steps. The buffer is per-run (cleared when a run starts/ends) and
+// BOUNDED — past the cap a steer is REFUSED with the limit surfaced, never
+// silently dropped after the owner was told "ok".
+const MAX_PENDING_STEERS = 5;
+const steerBuffer = [];
+
+/** Record a validated steer against the ACTIVE run. Refuses when no run is
+ * live or the steer names a different runId (a stale UI click must not land
+ * on a newer run). Returns {ok:true} or {ok:false, error}. */
+function pushSteer({ runId, steerId = null, mode = "inject", text = "" }) {
+  const target = String(runId ?? "");
+  if (!activeRun || target !== activeRun.runId) {
+    return { ok: false, error: "run_not_live", runId: target };
+  }
+  if (!["inject", "stop-step", "stop-run"].includes(String(mode))) {
+    return { ok: false, error: "invalid_steer_mode" };
+  }
+  if (steerBuffer.length >= MAX_PENDING_STEERS) {
+    return { ok: false, error: "steer_buffer_full", count: steerBuffer.length, limit: MAX_PENDING_STEERS };
+  }
+  steerBuffer.push({
+    id: steerId ? String(steerId).slice(0, 120) : `s${Date.now().toString(36)}`,
+    mode: String(mode),
+    text: String(text ?? "").slice(0, 1500),
+  });
+  return { ok: true, count: steerBuffer.length };
+}
+
 /** Resolve the run model. P2 supports the keyless demo model (proves the loop
  * + tool-RPC end-to-end with no key); real keyed providers are P3 — the worker
  * must not hold an API key (the SW is the credential authority), so the P3
@@ -103,13 +134,16 @@ async function handleRun(port, msg) {
   const modelKind = String(msg?.modelKind ?? "demo");
   const maxIterations = Number(msg?.maxIterations ?? 12) || 12;
   const controller = new AbortController();
+  steerBuffer.length = 0; // steers are per-run: each run starts clean
   activeRun = { runId, controller };
 
   const progress = (record) => {
+    if (record?.type === "steer") broadcast("steer", { runId, mode: record.mode, text: record.text });
     broadcast("progress", { runId, ...record });
     try { port.postMessage({ type: "agent-worker:progress", runId, ...record }); } catch { /* ignore */ }
   };
 
+  let terminal = null; // { ok, result } | { ok:false, aborted, error }
   try {
     const tools = buildProxyTools(msg?.toolSpecs, runId);
     const result = await runAgentLoop({
@@ -120,15 +154,46 @@ async function handleRun(port, msg) {
       onProgress: progress,
       signal: controller.signal,
       maxIterations,
+      // The loop reads the worker's local steer buffer at EVERY model call —
+      // a steer that arrives mid-tool-call changes the agent's next action.
+      readSteers: () => [...steerBuffer],
     });
+    terminal = { ok: true, result };
     broadcast("run-complete", { runId, ok: true });
     port.postMessage({ type: "agent-worker:run-done", runId, ok: true, result });
   } catch (e) {
     const aborted = controller.signal.aborted;
-    broadcast("run-complete", { runId, ok: false, aborted, error: String(e?.message ?? e).slice(0, 200) });
-    port.postMessage({ type: "agent-worker:run-done", runId, ok: false, aborted, error: String(e?.message ?? e).slice(0, 200) });
+    const error = String(e?.message ?? e).slice(0, 200);
+    terminal = { ok: false, aborted, error };
+    broadcast("run-complete", { runId, ok: false, aborted, error });
+    port.postMessage({ type: "agent-worker:run-done", runId, ok: false, aborted, error });
   } finally {
+    // Terminal relay (review r5 P1-1): the SW's agent-worker.result route
+    // releases this run from the live run-control plane and settles its
+    // durable record — WITHOUT it a finished worker run stays steerable and
+    // consumes a 64-slot live-registry seat forever (and the rejected
+    // fire-and-forget handleRun never relayed anything). The result rides
+    // bounded (the route applies the same 64 KiB bound downstream).
+    if (terminal) {
+      try {
+        const relay = {
+          type: "agent-worker.result",
+          executionId: runId,
+          agentId: AGENT_ID,
+          ok: terminal.ok === true,
+        };
+        if (terminal.ok === true) {
+          relay.result = String(terminal.result ?? "").slice(0, 65536);
+        } else {
+          relay.error = String(terminal.error ?? "").slice(0, 2048);
+          relay.aborted = terminal.aborted === true;
+        }
+        const reply = chrome.runtime.sendMessage(relay);
+        if (reply && typeof reply?.catch === "function") reply.catch(() => {});
+      } catch { /* SW may be gone — the port broadcast already carried the terminal */ }
+    }
     activeRun = null;
+    steerBuffer.length = 0;
   }
 }
 
@@ -141,9 +206,56 @@ function handleMessage(port, msg) {
     case "agent-worker:run":
       // The SW (validated) asked this worker to run the agent-do loop. Fire and
       // acknowledge immediately (the loop streams progress on the port/channel).
-      handleRun(port, msg);
       port.postMessage({ type: "agent-worker:run-started", runId: msg?.runId ?? "", agentId: AGENT_ID });
+      handleRun(port, msg).catch((e) => {
+        // A pre-loop failure (nothing past the runId/task parsing can throw,
+        // but never a silently orphaned run): relay the hard rejection so the
+        // SW releases the live control record. (review r5 P1-1)
+        const error = String(e?.message ?? e).slice(0, 200);
+        try { port.postMessage({ type: "agent-worker:run-done", runId: msg?.runId ?? "", ok: false, aborted: false, error }); } catch { /* ignore */ }
+        try {
+          const reply = chrome.runtime.sendMessage({
+            type: "agent-worker.result",
+            executionId: msg?.runId ?? "",
+            agentId: AGENT_ID,
+            ok: false,
+            error,
+          });
+          if (reply && typeof reply?.catch === "function") reply.catch(() => {});
+        } catch { /* SW gone — best effort */ }
+      });
       break;
+    case "agent-worker:steer": {
+      // Owner steer control message (chrome-agent-platform-afiu), forwarded by
+      // the validated SW route (agent-worker.steer). Review r5 P1-1: the
+      // message is REJECTED when it names a run this worker is not running
+      // (stale click / run already ended) and when the bounded buffer is
+      // full — the reply is honest either way, never a silent "steered".
+      const accepted = pushSteer({
+        runId: msg?.runId ?? "",
+        steerId: msg?.steerId ?? null,
+        mode: msg?.mode ?? "inject",
+        text: msg?.text ?? "",
+      });
+      if (!accepted.ok) {
+        port.postMessage({
+          type: "agent-worker:steer-refused",
+          runId: msg?.runId ?? "",
+          agentId: AGENT_ID,
+          // Review r6 P1-2: the reply echoes the steer's correlation id so
+          // the host can relay THIS refusal to the SW request that posted it.
+          steerId: msg?.steerId ?? null,
+          error: accepted.error,
+        });
+        break;
+      }
+      const mode = String(msg?.mode ?? "inject");
+      const text = String(msg?.text ?? "").slice(0, 1500);
+      // Broadcast so the transcript can render the owner interruption.
+      broadcast("steer", { runId: msg?.runId ?? "", mode, text });
+      port.postMessage({ type: "agent-worker:steered", runId: msg?.runId ?? "", agentId: AGENT_ID, mode, steerId: msg?.steerId ?? null });
+      break;
+    }
     case "agent-worker:abort":
       activeRun?.controller?.abort();
       port.postMessage({ type: "agent-worker:aborted", runId: msg?.runId ?? "", agentId: AGENT_ID });

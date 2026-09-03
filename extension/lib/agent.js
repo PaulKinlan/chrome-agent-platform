@@ -32,6 +32,7 @@ import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import { RUN_BUDGET_DEFAULTS, budgetExhaustedVerdict, continuationStopDecision, isSilentIteration } from "./run-budget.js";
+import { steerTextsToInject } from "./run-control.js";
 import { createRunDigest } from "./run-digest.js";
 import {
   anthropicAuthoritativeSearchRequests,
@@ -895,6 +896,14 @@ export function createAgent({
   // provider/model identity. NO prompt content crosses the sink.
   let attestationCb = null;
   let lastAttestedDigest = null; // dedupe: the system message is stable per run
+  // chrome-agent-platform-afiu: the per-run STEER source (mutable like the
+  // progress/attestation bindings — the cached agent is reused across runs).
+  // `steerSourceCb()` returns { pending, ack } where pending is the run
+  // control's steer records; the model seam injects their text into every
+  // outgoing call (between steps) and acks what it carried. Null → steering
+  // is inert (the pre-steer byte path).
+  let steerSourceCb = null;
+  let steerStopCarried = false; // a stop-step steer rode a model call
   // The ACTIVE run's full system prompt (the construction composition plus any
   // per-run skills inserted before the protected block). Runs of an agent are
   // serialized (the per-worker runQueue / the SW runMutex), so this mutable
@@ -1184,6 +1193,28 @@ export function createAgent({
           digestTurnsLogged = carried.turns;
           agentDoLog.info(`run digest carried across an inner-turn boundary`, { turns: carried.turns, bytes: carried.bytes, results: runDigest.counts() });
         }
+        // OWNER STEER (chrome-agent-platform-afiu): pending guidance rides the
+        // outgoing call as trailing user messages (the run loop honors it
+        // BETWEEN steps — never mid-tool-call). Ack what was carried so the SW
+        // knows nothing the owner typed was lost. A stop-step record flags the
+        // hooks to end the loop at the next step boundary.
+        if (steerSourceCb) {
+          try {
+            const src = steerSourceCb();
+            const pending = Array.isArray(src?.pending) ? src.pending : [];
+            const steerTexts = steerTextsToInject(pending);
+            if (steerTexts.length && Array.isArray(options?.prompt)) {
+              const prompt = [...options.prompt];
+              for (const text of steerTexts) prompt.push({ role: "user", content: text });
+              options = { ...options, prompt };
+              if (pending.some((s) => s?.mode === "stop-step")) steerStopCarried = true;
+              const ids = pending.map((s) => s?.id).filter(Boolean);
+              if (ids.length && typeof src?.ack === "function") {
+                try { src.ack(ids); } catch { /* an ack failure never breaks the call */ }
+              }
+            }
+          } catch { /* steering must never break a model call */ }
+        }
         // Model round-trip observability: method + attempt ordinal + call
         // latency (time to the provider's response OBJECT — stream consumption
         // continues after). NEVER log options/content (prompts, messages).
@@ -1418,6 +1449,19 @@ export function createAgent({
           silentContinuations = 0;
           stoppedBy = null;
         } else {
+          // chrome-agent-platform-afiu: an owner stop-step steer outranks the
+          // continuation economy — the loop ends at the step boundary AFTER
+          // the call that carried the steer (no further tool loop), and the
+          // run stops VISIBLY (the SW settles a steer-stop terminal).
+          if (steerStopCarried) {
+            steerStopCarried = false;
+            stoppedBy = { reason: "steer-stop-step", steps: budgetStep, iterations: silentContinuations };
+            agentDoLog.info(`step ${e.step} not started — the owner steered the run to stop at step ${budgetStep}`);
+            span.end("stopped");
+            stepSpans.delete(e.step);
+            try { progressCb?.({ type: "stopped", ...stoppedBy }); } catch { /* ignore */ }
+            return { decision: "stop" };
+          }
           // The continuation decision — agent-do's own stop hook, never a
           // patched loop (CAP-FB-20260830-MODEL-CALL-ECONOMY-01).
           const decision = continuationStopDecision({ lastIteration, silentContinuations });
@@ -1840,6 +1884,10 @@ export function createAgent({
     // Rebind the live progress callback without rebuilding the cached agent.
     // The SW calls this per-run (the orchestrator is reused across runs).
     setProgress: (cb) => { progressCb = cb; },
+    // Rebind the run-bound steer source (per run, like setProgress). The SW
+    // binds a reader over its run-control store keyed by THIS run's execution
+    // id; the model seam injects pending steer text between steps.
+    setSteerSource: (cb) => { steerSourceCb = cb; steerStopCarried = false; },
     // Rebind the run-bound prompt attestation sink (per run, like setProgress).
     // The SW binds a sink tagged with the runId so the attestation journaled
     // for a run is captured from THAT run's actual provider-bound message.
@@ -2133,6 +2181,12 @@ export function createOrchestrator({
     setAttestation(cb) {
       master.setAttestation?.(cb);
       for (const a of workerAgents.values()) a.setAttestation?.(cb);
+    },
+    // Rebind the run-bound steer source on the master + every worker (a
+    // delegated site run steers through the SAME run-control plane).
+    setSteerSource(cb) {
+      master.setSteerSource?.(cb);
+      for (const a of workerAgents.values()) a.setSteerSource?.(cb);
     },
     addWorker(config) {
       const a = createAgent({

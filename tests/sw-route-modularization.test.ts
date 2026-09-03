@@ -166,6 +166,13 @@ const BASELINE_ROUTES = [
   "run.list",
   "run.cancel",
   "run.resume",
+  // chrome-agent-platform-afiu: the composer's run-control protocol (steer a
+  // live run / durable per-thread follow-up queue).
+  "run.control.steer",
+  "run.control.queue.list",
+  "run.control.queue.enqueue",
+  "run.control.queue.remove",
+  "run.control.queue.move",
   // CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "Budget reached — Continue"
   // runs the continuation turn on the stopped run's thread.
   "run.continue",
