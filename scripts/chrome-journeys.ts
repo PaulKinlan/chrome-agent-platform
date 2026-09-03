@@ -3295,10 +3295,10 @@ async function main() {
 
     let openaiCard = null;
     for (let i = 0; i < 20 && !openaiCard; i++) {
-      // Radiogroup DOM: the recommended cards render on load in
-      // #provider-recommended — there is no side-tab to select. Make sure the
-      // Providers section is shown, then wait for the OpenAI card's Use/Update
-      // button (which lives in the always-visible card head).
+      // Family-tab DOM: the OpenAI card renders in the default-selected
+      // OpenAI-compatible family panel (fresh profile → recommended family).
+      // Make sure the Providers section is shown, then wait for the OpenAI
+      // card's Use/Update button (which lives in the always-visible card head).
       await evalIn(cdp, optsSession,
         `document.querySelector('.nav-item[data-section="providers"]')?.click(); true`).catch(() => {});
       await sleep(100);
@@ -3420,12 +3420,14 @@ async function main() {
     // "model id missing" (Settings red status + hub strip), never silently
     // falling back to the demo model.
     // ─────────────────────────────────────────────────────────────
-    // Reveal the OpenAI-compatible (BYO, no catalogue) card: it sits under the
-    // "More providers" disclosure, and its endpoint + model live under a
-    // per-card "Advanced" disclosure. Open both so the model picker input and
-    // the Use button are visible + reachable.
+    // Reveal the OpenAI-compatible (BYO, no catalogue) card: it lives in the
+    // OpenAI-compatible family tab's panel (selected by default on a fresh
+    // profile; click the tab anyway so the step is order-independent), and its
+    // endpoint + model live under a per-card "Advanced" disclosure. Open both
+    // so the model picker input and the Use button are visible + reachable.
     await evalOpts(`(() => {
-      document.getElementById('more-providers')?.setAttribute('open','');
+      const tabs = document.querySelector('#provider-tabs segmented-control');
+      tabs?.shadowRoot?.querySelector('[role="tab"][data-val="OpenAI-compatible"]')?.click();
       const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
       card?.querySelector('details.provider-advanced')?.setAttribute('open','');
       return true;
@@ -3497,10 +3499,12 @@ async function main() {
     }
     // Now save with an EMPTY model (no catalogue default for BYO) → the SW
     // route refuses with "model id missing" and keeps the previous model. The
-    // BYO card is now the active provider (its "More providers" disclosure is
-    // auto-opened); reveal it so the Use button stays clickable.
+    // BYO card is now the active provider (its family tab is selected by the
+    // default-family rule after the reload); re-select the tab + open Advanced
+    // so the Use button stays clickable.
     await evalOpts(`(() => {
-      document.getElementById('more-providers')?.setAttribute('open','');
+      const tabs = document.querySelector('#provider-tabs segmented-control');
+      tabs?.shadowRoot?.querySelector('[role="tab"][data-val="OpenAI-compatible"]')?.click();
       const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
       card?.querySelector('details.provider-advanced')?.setAttribute('open','');
       return true;
