@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.31] — 2026-09-03
+- File attachments have no 8 MiB select-time refuse: any file you pick is read and attached — if the read or the send genuinely fails, the attachment still lands labelled with an honest error instead of a silent size rejection
+
 ## [0.3.30] — 2026-09-03
 - MCP servers and hooks run uncapped: a 16 KiB bearer token, long server names/ids/urls, and more than 32 MCP servers all save whole (URLs and header names are still validated for shape — that's safety), and hook subscriptions have no 200-count or 64 KiB template limit (recipes are still validated as known — that's what stops arbitrary fan-out)
 

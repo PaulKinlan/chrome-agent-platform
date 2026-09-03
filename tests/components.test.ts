@@ -1613,3 +1613,13 @@ Deno.test("composer local files (dptw R2): no 1 MiB gate — text files attach a
   const attachmentsSrc = await Deno.readTextFile("extension/lib/attachments.js");
   if (attachmentsSrc.includes("MAX_LOCAL_TEXT_BYTES")) throw new Error("MAX_LOCAL_TEXT_BYTES reintroduced");
 });
+
+Deno.test("attach menu (dptw D1): no 8 MiB select-time refuse — any picked file is read and attached", async () => {
+  const src = await Deno.readTextFile("extension/shared/components.js");
+  if (src.includes("MAX_RAW_BYTES")) throw new Error("the 8 MiB raw-file bound is back");
+  if (src.includes("overLimit")) throw new Error("the over-limit refuse path is back");
+  if (src.includes("is over the 8 MiB limit")) throw new Error("the 8 MiB status copy is back");
+  const fn = src.match(/_pickFile\(kind\) \{[\s\S]*?\n  \}/);
+  if (!fn) throw new Error("_pickFile not found");
+  if (!/readAsDataURL\(file\)/.test(fn[0])) throw new Error("the picker must still read the file bytes");
+});
