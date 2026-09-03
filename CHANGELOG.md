@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.22] — 2026-09-03
+- Make the wrong-run abort test deterministically exercise the wrong-live guard
+
 ## [0.3.21] — 2026-09-03
 - stop-run requires an exact active-run match and refuses otherwise
 

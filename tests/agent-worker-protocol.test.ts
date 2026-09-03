@@ -276,9 +276,15 @@ Deno.test("r7 P1-1: an abort naming a run this worker is NOT running is REFUSED 
   assert(!find(port.sent, "agent-worker:aborted"), "a no-live abort must never be acknowledged as aborted");
 
   // A DIFFERENT run is live: refuse the stale id AND leave the live run alone.
+  // The mismatched abort is emitted in the SAME synchronous turn as the run
+  // kick (handleRun assigns activeRun before its first await), so the refusal
+  // deterministically exercises the WRONG-LIVE guard. Awaiting run-started
+  // first would yield while the fast demo settles and clears activeRun — the
+  // refusal would then pass through the no-live branch and prove nothing
+  // about the wrong-live case (review r8 P1-1).
   port.emit({ type: "agent-worker:run", runId: RUN_ID, task: "say hello", modelKind: "demo", maxIterations: 2 });
-  assert(await until(() => find(port.sent, "agent-worker:run-started")), "run must start");
   port.emit({ type: "agent-worker:abort", runId: OTHER_RUN_ID });
+  assert(await until(() => find(port.sent, "agent-worker:run-started")), "run must start");
   const refused2 = await until(() => [...port.sent].reverse().find((m) => m?.type === "agent-worker:abort-refused" && m?.runId === OTHER_RUN_ID));
   assert(refused2, "an abort naming the wrong runId must be refused while another run is live (r6: it aborted the WRONG run)");
   assertEquals(refused2.runId, OTHER_RUN_ID);
