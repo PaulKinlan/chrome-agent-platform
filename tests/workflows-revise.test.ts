@@ -5,8 +5,11 @@
 //      path (pending card → owner approves → sandbox executes) works.
 //   2. a NESTED tool-result failure ({ok:false}/{error} inside the lazy
 //      outer-ok envelope) fails the step and BLOCKS later pipeline steps.
-//   3. an owner-approval-gated step fails closed PRE-dispatch (zero tool
-//      execution, zero approval events), never raising a mid-pipeline card.
+//   3. pipeline steps that need owner approval get the REAL card (slice-2,
+//      chrome-agent-platform-3cb6): management/destructive steps DISPATCH and
+//      their route's requireOwnerApproval gates them in-route (a denial fails
+//      the step with the route's message; later steps never run). Only
+//      workflow_run (recursion) and mcp__* (remote) never dispatch.
 //   4. the workflows: namespace is reserved from memory_set; stored records
 //      are revalidated for SHAPE before approval/sandbox — never for SIZE
 //      (dptw: a large shape-valid record plans and runs whole).
@@ -49,7 +52,7 @@ import {
   workflowNameFromKey,
   workflowRunPlan,
   createWorkflowPipelineDispatcher,
-  PIPELINE_STEP_OWNER_APPROVAL_TOOLS,
+  PIPELINE_STEP_NEVER_DISPATCH_TOOLS,
 } from "../extension/lib/workflows.js";
 import { workflowsToolset, memoryToolset } from "../extension/lib/agent.js";
 
@@ -240,71 +243,57 @@ Deno.test("REVISE-2: a nested-failure step HALTS the pipeline (later steps never
   assertStringIncludes(String(res.error), "denied");
 });
 
-// ── 3. approval-gated steps fail closed PRE-dispatch (no card, no execute) ──
+// ── 3. approval-needing steps get the REAL card (slice-2) — only recursion +
+// ── remote never dispatch ───────────────────────────────────────────────────
 
-Deno.test("REVISE-3: the pre-dispatch deny set covers model-approval-gated tools", () => {
-  const set = new Set(PIPELINE_STEP_OWNER_APPROVAL_TOOLS);
-  for (const gated of ["delete_named_agent", "update_named_agent", "run_script", "create_script", "delete_agent", "update_agent", "update_asset", "delete_asset", "patch_asset", "disenroll_origin", "schedules_pause", "close_tab", "wipe_browsing_data", "remove_cookie", "write_file", "workflow_run"]) {
-    assert(set.has(gated), `${gated} must be pre-gated (its model route awaits an owner card)`);
+Deno.test("REVISE-3 (slice-2): the never-dispatch set is the recursion guard alone", () => {
+  const set = new Set(PIPELINE_STEP_NEVER_DISPATCH_TOOLS);
+  assert(set.has("workflow_run"), "workflow_run stays pre-gated (a pipeline must not recurse into the workflow runner)");
+  assertEquals(set.size, 1, "management/destructive tools LEFT the set — their owner cards now work mid-pipeline");
+  // The tools the old pre-gate covered are dispatchable now (their routes'
+  // requireOwnerApproval / capability pauses gate them exactly as for a
+  // model-initiated call).
+  for (const formerly of ["delete_named_agent", "update_named_agent", "run_script", "create_script", "delete_agent", "update_agent", "update_asset", "delete_asset", "patch_asset", "disenroll_origin", "schedules_pause", "close_tab", "wipe_browsing_data", "remove_cookie", "write_file", "schedule_task"]) {
+    assert(!set.has(formerly), `${formerly} must NOT be pre-gated — its owner card is the slice-2 feature`);
   }
-  // Non-gated workflow-usable tools stay runnable.
-  assert(!set.has("memory_get"), "memory_get is not owner-gated");
-  assert(!set.has("create_asset"), "create_asset is not owner-gated");
+  assert(!set.has("memory_get"), "memory_get is not gated");
+  assert(!set.has("create_asset"), "create_asset is not gated");
 });
 
-Deno.test("REVISE-3: patch_asset and disenroll_origin fail closed pre-dispatch — zero search/execute/approval events", async () => {
+Deno.test("REVISE-3 (slice-2): patch_asset and disenroll_origin DISPATCH — an in-route denial fails the step, later steps never run", async () => {
+  // Pre-slice-2 these failed closed PRE-dispatch (zero search/execute). Now
+  // the step dispatches; the route's owner card decides. A denied card comes
+  // back as the route's nested failure and halts the pipeline; an approved
+  // one returns the route's real result (the in-route approve case is covered
+  // in tests/workflows-approval.test.ts).
   for (const gated of ["patch_asset", "disenroll_origin"]) {
     let searches = 0;
     let executes = 0;
-    let settles = 0;
-    let approvalEvents = 0;
     const dispatcher = createWorkflowPipelineDispatcher({
       search: async () => { searches += 1; return { ok: true, results: [{ name: gated, selectionRef: "sel_gated" }] }; },
       execute: async () => {
-        executes += 1;
-        approvalEvents += 1; // the real executor would publish/await an owner card here
-        return { ok: true, selectedTool: gated, result: { ok: true } };
+        executes += 1; // the real route would publish/await its owner card here
+        return { ok: true, selectedTool: gated, result: { ok: false, error: `The owner denied ${gated}; the action was not performed.` } };
       },
-      settle: async () => { settles += 1; },
+      settle: async () => {},
       context: async () => ({ signal: null, runId: "r1" }),
     });
-    const r = await dispatcher(gated, { origin: "https://example.com" }, 1);
-    assert(!r.ok, `${gated} must fail closed, got ${JSON.stringify(r)}`);
-    assertStringIncludes(String(r.error), gated);
-    assertStringIncludes(String(r.error), "needs owner approval");
-    assertEquals(searches, 0, `${gated}: guard fires before the catalog is searched`);
-    assertEquals(executes, 0, `${gated}: executor never runs — no owner card can be raised`);
-    assertEquals(settles, 0, `${gated}: nothing dispatched, nothing to settle`);
-    assertEquals(approvalEvents, 0, `${gated}: ZERO approval events`);
+    const pipe = JSON.stringify({
+      steps: [
+        { id: "s1", tool: gated, args: { origin: "https://example.com" } },
+        { id: "s2", tool: "memory_set", args: { key: "y", value: "should-not-run" } },
+      ],
+    });
+    const res = await runPipelineWorkflow({ name: "p", kind: "pipeline", content: pipe, dispatchStep: dispatcher });
+    assert(!res.ok, `${gated}: an in-route denial fails the workflow, got ${JSON.stringify(res)}`);
+    assertStringIncludes(String(res.error), gated, `${gated}: the tool is named`);
+    assertStringIncludes(String(res.error), "denied", `${gated}: the denial is surfaced`);
+    assertEquals(searches, 1, `${gated}: the catalog WAS searched (no pre-gate)`);
+    assertEquals(executes, 1, `${gated}: the step dispatched exactly once — the owner card gates it in-route`);
   }
 });
 
-Deno.test("REVISE-3: a gated step fails closed BEFORE the executor — zero search/execute/settle/approval events", async () => {
-  let searches = 0;
-  let executes = 0;
-  let settles = 0;
-  let approvalEvents = 0;
-  const dispatcher = createWorkflowPipelineDispatcher({
-    search: async () => { searches += 1; return { ok: true, results: [{ name: "delete_named_agent", selectionRef: "sel_gated" }] }; },
-    execute: async () => {
-      executes += 1;
-      approvalEvents += 1; // the real executor would publish/await an owner card here
-      return { ok: true, selectedTool: "delete_named_agent", result: { ok: true, deleted: true } };
-    },
-    settle: async () => { settles += 1; },
-    context: async () => ({ signal: null, runId: "r1" }),
-  });
-  const r = await dispatcher("delete_named_agent", { id: "agent-1" }, 1);
-  assert(!r.ok, "a gated step must fail closed, got " + JSON.stringify(r));
-  assertStringIncludes(String(r.error), "delete_named_agent");
-  assertStringIncludes(String(r.error), "needs owner approval");
-  assertEquals(searches, 0, "the guard fires before the catalog is even searched");
-  assertEquals(executes, 0, "the executor never runs — no owner card can be raised");
-  assertEquals(settles, 0, "nothing was dispatched, so nothing needs settling");
-  assertEquals(approvalEvents, 0, "ZERO approval events for an approval-requiring step");
-});
-
-Deno.test("REVISE-3: mcp__* and workflow_run steps are pre-gated; non-gated steps still dispatch", async () => {
+Deno.test("REVISE-3 (slice-2): mcp__* and workflow_run steps still never dispatch; non-gated steps still run", async () => {
   const executed = [];
   const dispatcher = createWorkflowPipelineDispatcher({
     search: async (request) => ({ ok: true, results: [{ name: request.query, selectionRef: `sel_${request.query}` }] }),
@@ -312,31 +301,14 @@ Deno.test("REVISE-3: mcp__* and workflow_run steps are pre-gated; non-gated step
     context: async () => ({ signal: null, runId: "r1" }),
   });
   const mcp = await dispatcher("mcp__server__list_things", {}, 1);
-  assert(!mcp.ok, "remote MCP first-use approvals must not fire inside a pipeline");
+  assert(!mcp.ok, "remote MCP tools never dispatch from a pipeline");
+  assertStringIncludes(String(mcp.error), "cannot run inside a pipeline");
   const wf = await dispatcher("workflow_run", { name: "other" }, 2);
-  assert(!wf.ok, "a recursion into workflow_run (an owner card) must fail closed");
+  assert(!wf.ok, "a recursion into workflow_run never dispatches");
+  assertStringIncludes(String(wf.error), "cannot run inside a pipeline");
   const ok = await dispatcher("memory_get", { key: "x" }, 3);
   assert(ok.ok, "a non-gated tool still runs, got " + JSON.stringify(ok));
   assertEquals(executed.length, 1);
-});
-
-Deno.test("REVISE-3: a gated step inside a REAL pipeline halts it with zero later dispatch", async () => {
-  const calls = [];
-  const dispatcher = createWorkflowPipelineDispatcher({
-    search: async () => ({ ok: true, results: [] }), // never reached for the gated step
-    execute: async (request) => { calls.push(request.selectionRef); return { ok: true, result: { ok: true } }; },
-    context: async () => ({ signal: null, runId: "r1" }),
-  });
-  const pipe = JSON.stringify({
-    steps: [
-      { id: "s1", tool: "delete_named_agent", args: { id: "agent-1" } },
-      { id: "s2", tool: "memory_set", args: { key: "y", value: "should-not-run" } },
-    ],
-  });
-  const res = await runPipelineWorkflow({ name: "p", kind: "pipeline", content: pipe, dispatchStep: dispatcher });
-  assert(!res.ok, "the gated step must fail the workflow, got " + JSON.stringify(res));
-  assertStringIncludes(String(res.error), "delete_named_agent");
-  assertEquals(calls.length, 0, "no step after the gated one (or the gated one) may execute");
 });
 
 // ── 4. workflows: namespace reserved from memory_set; shape revalidated ─────

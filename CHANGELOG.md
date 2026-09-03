@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.37] — 2026-09-03
+- Pipeline steps that need your approval now ask: a step needing a capability or a destructive action shows the same approval card a directly-asked tool shows, and Allow runs the step right there (same tool, same checked inputs); Not now stops the pipeline at that step with the reason named. Previously such steps always failed with 'run this workflow interactively'. Only two kinds never run inside a pipeline: a workflow running itself, and remote MCP tools.
+
 ## [0.3.36] — 2026-09-03
 - Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
 

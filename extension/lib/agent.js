@@ -705,7 +705,7 @@ export function workflowsToolset({
     }),
     workflow_run: tool({
       description:
-        "Run ONE of YOUR saved workflows NOW. script-js workflows run sandboxed (no DOM/extension/network of its own; fetch is host-listed) and REQUIRE OWNER APPROVAL like run_script. pipeline workflows run their declared steps through your live tools, each step keeping its own gates; a step that would need an owner approval card fails closed naming the tool. script-python/instructions kinds fail closed with a clear message.",
+        "Run ONE of YOUR saved workflows NOW. script-js workflows run sandboxed (no DOM/extension/network of its own; fetch is host-listed) and REQUIRE OWNER APPROVAL like run_script. pipeline workflows run their declared steps through your live tools, each step keeping its own gates; a step that needs an owner approval card shows the card and, if you allow it, runs the step — deny and the pipeline stops there. script-python/instructions kinds fail closed with a clear message.",
       inputSchema: z.object({ name: z.string().min(1) }),
       execute: async ({ name }) => {
         const wfName = String(name ?? "");
@@ -1319,6 +1319,15 @@ export function createAgent({
     search: (request, ctx) => lazy.protocol.search(request, ctx),
     execute: (request, ctx) => lazy.protocol.execute(request, ctx),
     settle: (ref) => lazy.protocol.settlePausedCall(ref),
+    // Slice-2 (chrome-agent-platform-3cb6): a pipeline step's capability pause
+    // surfaces the run's REAL owner card through the SAME onPermissionRequest
+    // seam the agent loop's post-tool hook uses, and Allow re-executes the
+    // paused call through the runtime-only resume path — same tool, original
+    // validated args, same run fence (lazy.resumeApprovedCall self-injects the
+    // current run context). Absent either handle (a context with no approval
+    // surface), the dispatcher fails the step closed as before.
+    requestApproval: typeof onPermissionRequest === "function" ? (denial) => onPermissionRequest(denial) : null,
+    resume: (ref) => lazy.resumeApprovedCall(ref),
     context: readRunLazyContext,
   });
   // The provider receives the fixed lazy protocol tools. Every
