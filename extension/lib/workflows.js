@@ -162,7 +162,15 @@ export const PIPELINE_STEP_OWNER_APPROVAL_TOOLS = Object.freeze([
   // management tools routed to owner-approvable actions (agent/asset/named-agent/script/hooks/task)
   "update_agent",
   "delete_agent",
+  // delete_agent's sibling route alias: disenroll_origin posts the SAME
+  // agent.delete action, which awaits an owner card — a pipeline step naming
+  // it must fail closed pre-dispatch like delete_agent itself.
+  "disenroll_origin",
   "update_asset",
+  // update_asset's cheap sibling: patch_asset posts asset.patch, whose route
+  // awaits the SAME asset.update owner approval card (the edits resolve to a
+  // body behind the gate) — a pipeline step naming it must fail closed.
+  "patch_asset",
   "delete_asset",
   "create_named_agent",
   "update_named_agent",
