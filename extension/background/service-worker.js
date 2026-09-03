@@ -56,6 +56,7 @@ import { describeError, formatError, errorDetail } from "../lib/error-report.js"
 import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal, steerStopTerminal } from "../lib/run-budget.js";
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
 import { createRunControl, createThreadQueue } from "../lib/run-control.js";
+import { drainQueuedFollowUp, reconcileQueueClaims } from "../lib/queue-drain.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
   PREVIEW_LIMITS,
@@ -4627,44 +4628,54 @@ async function cancelExecutionTree(executionId, { reason, requestId = null }) {
  *   - each drained item runs as its own turn of the SAME thread (agent.run —
  *     the thread history is its context), so its own settle drains the next.
  * Fire-and-forget from runTask's finally (never awaited — the run mutex
- * serializes the next turn behind this one). */
+ * serializes the next turn behind this one).
+ *
+ * Review r5 P1-2: the drain is two-phase (lib/queue-drain.js) — the item is
+ * CLAIMED, not removed, before agent.run fires; it is dropped only once the
+ * fired run settled, and released back to the pending head when admission was
+ * refused or an SW stop beat the durable registration. Nothing the owner
+ * queued is ever lost to a shift-before-admission gap. */
 async function drainThreadQueueForThread(threadId, settledExecutionId) {
   const id = String(threadId ?? "");
   if (!id) return;
-  const pending = await threadQueues.list(id);
-  if (pending.length === 0) return;
-  if (settledExecutionId) {
-    try {
+  await drainQueuedFollowUp({
+    queue: threadQueues,
+    threadId: id,
+    settledExecutionId: settledExecutionId ?? null,
+    runRow: async (executionId) => {
       const snapshot = await durableRuns.list();
-      const run = snapshot.runs.find((row) => row.executionId === settledExecutionId);
-      if (!run) return; // the settle record is gone — never guess
-      const phase = String(run.phase ?? "");
-      if (phase === "cancelled" || phase === "cancel-requested") return;
-      if (phase !== "terminal") return; // still live/paused/quota-uncertain — never guess
-      if (run.terminal?.ok !== true) return;
-    } catch {
-      return; // an unreadable registry parks the queue (never a blind cascade)
-    }
-  }
-  const item = await threadQueues.shift(id);
-  if (!item) return;
-  const runId = retryRunId(); // a fresh per-turn client id for the registry row
-  // FIRE-AND-FORGET: this helper runs inside the settled run's finally (which
-  // still holds the run mutex) — awaiting the next turn here would deadlock.
-  // The next runTask queues behind this one via withRunLock and runs as soon
-  // as the mutex releases; its own settle drains the item after it.
-  try {
-    const runPromise = handlers["agent.run"]({ threadId: id, task: item.text, runId });
-    void Promise.resolve(runPromise).then((result) => {
-      if (result?.ok !== true) {
-        pushDiagnostic("error", `[thread] queued follow-up could not run: ${String(result?.error ?? "unknown").slice(0, 160)}`);
-      }
-    }).catch((e) => {
-      pushDiagnostic("error", `[thread] queued follow-up failed: ${String(e?.message ?? e).slice(0, 160)}`);
+      return snapshot.runs.find((row) => row.executionId === executionId) ?? null;
+    },
+    fireRun: ({ runId, text }) => handlers["agent.run"]({ threadId: id, task: text, runId }),
+    report: (level, message) => pushDiagnostic(level, message),
+    newRunId: retryRunId,
+  }).catch((e) => {
+    pushDiagnostic("error", `[thread] queue drain failed: ${String(e?.message ?? e).slice(0, 160)}`);
+  });
+}
+
+/** chrome-agent-platform-afiu: SW-wake reconcile of durable queue claims — an
+ * SW stop between "claim" and "durably admitted" must never orphan the
+ * owner's follow-up. lib/queue-drain.js decides each claim from the durable
+ * run registry; threads whose claim resolved (released / ran-to-ok) are
+ * re-drained (one item per thread — each fired turn's settle drains the
+ * next). Best-effort: reconcile failure surfaces in the log, never crashes
+ * boot. */
+async function reconcileThreadQueueClaims() {
+  const outcome = await reconcileQueueClaims({
+    queue: threadQueues,
+    rowForClientRunId: async (clientRunId) => {
+      const snapshot = await durableRuns.list();
+      return snapshot.runs.find((row) => row.clientCorrelationId === clientRunId) ?? null;
+    },
+    report: (level, message) => pushDiagnostic(level, message),
+  });
+  for (const threadId of outcome.threadsToRedrain) {
+    drainThreadQueueForThread(threadId, null).catch((e) => {
+      pushDiagnostic("error", `[thread] wake queue drain failed: ${String(e?.message ?? e).slice(0, 160)}`);
     });
-  } catch (e) {
-    pushDiagnostic("error", `[thread] queued follow-up dispatch failed: ${String(e?.message ?? e).slice(0, 160)}`);
   }
+  return outcome;
 }
 
 const boardRoutes = createAgentBoardRoutes({
@@ -9175,12 +9186,22 @@ chrome.runtime.onStartup?.addListener(() => {
   reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
     console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
   );
+  // chrome-agent-platform-afiu: an SW stop can orphan a queue CLAIM (the
+  // follow-up was fired but never durably admitted, or its run settled while
+  // the SW was down). Reconcile AFTER recoverOnBoot so stale-boot run rows
+  // have their final phase before each claim is decided.
+  reconcileThreadQueueClaims().catch((e) =>
+    console.error("reconcileThreadQueueClaims:", e?.message ?? e)
+  );
 });
 recoverOnBoot().catch((e) =>
   console.error("recoverOnBoot:", e?.message ?? e)
 );
 reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
   console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
+);
+reconcileThreadQueueClaims().catch((e) =>
+  console.error("reconcileThreadQueueClaims:", e?.message ?? e)
 );
 reconcileAgentWorkers({ ensureOffscreen, kvGet }).catch((e) =>
   console.error("reconcileAgentWorkers:", e?.message ?? e)

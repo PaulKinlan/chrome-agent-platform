@@ -388,6 +388,13 @@ export function createAgentWorkerRoutes({
     async "agent-worker.result"(m, context) {
       if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
       const executionId = String(m?.executionId ?? "");
+      // chrome-agent-platform-afiu review r5 P1-1: the live control record is
+      // released FIRST — before the durable-execution shape gate — because
+      // the registry holds whatever runId the run was registered under (the
+      // worker relays the SAME id it was given). A worker run that finishes
+      // must never stay steerable / consume a 64-slot live-registry seat
+      // because its id was not exec:-shaped.
+      runControl?.unregister(executionId);
       if (!validExecutionId(executionId)) return { ok: false, error: "invalid executionId" };
 
       const ok = m?.ok === true;
@@ -399,10 +406,6 @@ export function createAgentWorkerRoutes({
       const logicalId = m?.logicalId ? bounded(m.logicalId, 200) : undefined;
       const scheduleName = m?.scheduleName ? bounded(m.scheduleName, 200) : undefined;
       const aborted = m?.aborted === true;
-
-      // chrome-agent-platform-afiu: the run ended — release it from the live
-      // run-control plane (no orphaned steerable run; a later steer refuses).
-      runControl?.unregister(executionId);
 
       let terminal = null;
       if (durableRegistry) {

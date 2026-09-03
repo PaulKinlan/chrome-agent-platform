@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.19] — 2026-09-03
+- Worker steer control path works end to end: steers reach a live worker run and queue follow-ups can no longer be lost to a crash or refusal (chrome-agent-platform-afiu)
+
 ## [0.3.18] — 2026-09-03
 - Task composer steer + queue (chrome-agent-platform-afiu): while a task runs, sending steers the running agent at its next step (gentle inject / stop-step / stop-run), queues a durable per-thread follow-up drained in order at run end, or sends now after stopping — one run-control protocol across the SW and agent-worker run loops, persisted chips above the composer, with falsification tests for between-step steer delivery, FIFO drain across reloads, and clean stop.
 - The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
