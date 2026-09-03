@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.37] — 2026-09-03
+- test suite 408s -> ~90s: bounded redactor scheme regex (37.6s -> 50ms on long tokens) + two-phase serial/parallel runner
+
 ## [0.3.36] — 2026-09-03
 - Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
 

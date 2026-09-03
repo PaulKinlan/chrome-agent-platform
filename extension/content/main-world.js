@@ -342,7 +342,10 @@
     });
     // Bearer/Basic credentials in text + URL userinfo passwords.
     out = out.replace(/(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [REDACTED]");
-    out = out.replace(/([a-z][a-z0-9+.-]*:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
+    // Scheme run bounded ({0,63}) — unbounded * is quadratic on long tokens
+    // (37 s on a 300 KiB token, vj4s). Any scheme length still masks: the
+    // match window slides to a later start position inside the scheme run.
+    out = out.replace(/([a-z][a-z0-9+.-]{0,63}:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
     // A bounded keyword followed by a credential SHAPE (colon/quote OR bare
     // whitespace): `api_key=…`, `bad key sk-…`, `key: ghp_…`.
     out = out.replace(

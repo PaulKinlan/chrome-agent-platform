@@ -1899,8 +1899,8 @@ Deno.test("durable runs: settle never shrinks or spins — a 10MiB result fits a
   await begin(run.registry);
   // 10 MiB of content: the record carries the digest + ref, so the serialized
   // outbox is trivially small. No shrink loop exists to stall or fail-loud.
-  // (Heterogeneous content — homogeneous runs trip the redactor's URL-userinfo
-  // regex catastrophically, a pre-existing quirk unrelated to the outbox.)
+  // (Heterogeneous content; the homogeneous-run redactor quadratic that made
+  // this necessary was fixed in vj4s — the URL-userinfo scheme run is bounded.)
   const content = "The quick brown fox jumps over the lazy dog. 0123456789\n".repeat(Math.ceil((10 * 1024 * 1024) / 60));
   await run.registry.settle(executionId, { ok: true, result: content, logicalId: "task-p1a" });
   const outbox = captured[`run-outbox:${executionId}`];

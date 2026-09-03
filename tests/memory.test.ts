@@ -706,8 +706,8 @@ Deno.test("durable payload family: a 10MiB retained response persists through th
     journalTarget: "master",
     resumeRequest: { id: "tenmib", task: "tenmib", route: "runTask", routeArgs: {}, idempotencyKey: executionId },
   });
-  // 10MiB of ASCII (heterogeneous content trips the redactor's URL-userinfo
-  // regex catastrophically — pre-existing quirk, unrelated to the store path).
+  // 10MiB of ASCII (heterogeneous content by habit; the homogeneous-run
+  // redactor quadratic was fixed in vj4s — bounded URL-userinfo scheme run).
   const unit = "The quick brown fox jumps over the lazy dog. 0123456789\n";
   const big = unit.repeat(Math.ceil((10 * 1024 * 1024) / unit.length));
   const terminal = await registry.settle(executionId, { ok: true, result: big, logicalId: "tenmib", at: Date.now() });

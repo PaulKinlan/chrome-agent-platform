@@ -963,7 +963,12 @@ export function redactSecretText(text, knownSecrets = []) {
   out = _stripUrlQueries(out);
   // Bearer/Basic credentials in text + URL userinfo passwords.
   out = out.replace(/(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 [REDACTED]");
-  out = out.replace(/([a-z][a-z0-9+.-]*:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
+  // The scheme run is BOUNDED ({0,63}): an unbounded * is quadratic on long
+  // alphanumeric tokens (the engine eats the run, fails on ://, backtracks
+  // one char, retries — 37 s on a 300 KiB token, vj4s). Masking holds for
+  // ANY scheme length: the match window slides, so a >64-char scheme still
+  // matches from a later start position (only group-1's span shrinks).
+  out = out.replace(/([a-z][a-z0-9+.-]{0,63}:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
   // A bounded keyword followed by a credential SHAPE (colon/quote OR bare
   // whitespace): `api_key=…`, `bad key sk-…`, `key: ghp_…`.
   out = out.replace(

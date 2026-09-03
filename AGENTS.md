@@ -217,7 +217,9 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
   second instance.
 
 ## Testing
-- deno test tests/ — the pure/unit suite.
+- npm test — the full pure/unit suite (two-phase: build/artifact tests serial,
+  everything else parallel; vj4s). `deno test -A tests/` still runs the same
+  files serially.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
 - **Never name a debugging port.** Every harness in `scripts/` launches its
