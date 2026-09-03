@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.11] — 2026-09-03
+- R4 review fixes for the targeted test picker: fail closed when a changed file has no reachable test, keep deleted modules' importers selected, and recognize concatenated dynamic imports
+
 ## [0.3.10] — 2026-09-03
 - Fast targeted deno test gates: dependency-aware subset picker with npm scripts
 

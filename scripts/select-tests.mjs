@@ -1,6 +1,6 @@
 // scripts/select-tests.mjs — dependency-aware deno test subsetting (9hoc).
 //
-//   node scripts/select-tests.mjs            run the subset: `deno test -A --parallel <files>`
+//   node scripts/select-tests.mjs            run the subset: `deno test -A <files>`
 //   node scripts/select-tests.mjs --list     print the selected test files, one per line
 //   node scripts/select-tests.mjs --core     run the always-on core only (security/vocabulary)
 //   node scripts/select-tests.mjs --base <ref>   compare against <ref> instead of origin/main
@@ -9,9 +9,17 @@
 // (`deno test -A tests/`). This is ADDITIVE tooling so a per-commit gate can run
 // in well under a minute: a changed file (git diff vs origin/main) selects the
 // test files that transitively import it (static import graph), plus the always-on
-// core (security + vocabulary). Tests that READ a file without importing it are a
-// stated blind spot by design — the full suite covers them. Nothing is skipped or
-// weakened; test:changed is a faster subset of the same assertions.
+// core (security + vocabulary). FAIL CLOSED: a changed code/config file with no
+// reachable test (nothing imports it, or it was deleted with no remaining
+// importers) cannot be proved covered by a subset — the picker then runs the FULL
+// suite instead of a silent core-only green. Nothing is skipped or weakened;
+// test:changed is a faster subset of the same assertions.
+//
+// Subset runs match the gate semantics EXACTLY (serial `deno test -A` on the
+// selected files): --parallel was measured and REJECTED because this suite has
+// cross-file hazards (tests that regenerate shared build artifacts, spawn the
+// Chrome-lock-bound security runner, or materialize /tmp trees race under
+// concurrency and produce false reds).
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -46,19 +54,32 @@ function changedFiles(base) {
 }
 
 // ---- static import graph ----
-const IMPORT_RE = /\b(?:import|export)\s*(?:\(|\{)?[^'"]*?\bfrom\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|import\s*["']([^"']+)["']|import\s*\(\s*`([^`${]+)/g;
+const IMPORT_RE = /\b(?:import|export)\s*(?:\(|\{)?[^'"]*?\bfrom\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|import\s*["']([^"']+)["']|import\s*\(\s*`([^`${]+)|import\s*\(\s*["']([^"']+)["']\s*\+/g;
 
 function importsOf(absPath) {
   if (!existsSync(absPath)) return [];
   const text = readFileSync(absPath, "utf8");
   const out = [];
   for (const m of text.matchAll(IMPORT_RE)) {
-    const spec = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? "").trim();
+    const spec = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? "").trim();
     if (!spec || !spec.startsWith(".")) continue; // only relative repo imports
     const clean = spec.split("?")[0].split("#")[0];
     const resolved = resolve(dirname(absPath), clean);
     const found = resolvePath(resolved);
-    if (found) out.push(found);
+    if (found) {
+      out.push(found);
+    } else {
+      // The imported module is not on disk right now — it was deleted or
+      // renamed on this branch. Record the edge under the literal resolved
+      // path (and, for an extensionless spec, each candidate Deno would try)
+      // so the reverse graph keeps a key for the missing module. A changed
+      // (deleted/renamed) path is then looked up as a graph key and its
+      // importers are selected instead of the subset silently passing.
+      out.push(resolved);
+      if (!/\.[a-zA-Z0-9]+$/.test(clean)) {
+        for (const ext of [".js", ".ts", ".mjs"]) out.push(resolved + ext);
+      }
+    }
   }
   return out;
 }
@@ -98,25 +119,55 @@ export function buildReverseGraph() {
   return reverse;
 }
 
+const isTestRel = (rel) => /^tests[\\/][^\\/]+\.test\.(ts|js)$/.test(rel);
+const isChangedTest = (c) => /\.test\.(ts|js)$/.test(c);
+
+// Pure content/docs that no test executes; their edits cannot break the suite
+// through the import graph and are not fail-closed targets (the full suite's
+// doc-scanning tests, if any, stay the merge gate).
+const CONTENT_EXT_RE = /\.(md|markdown|txt|png|jpe?g|gif|svg|webp|ico|woff2?|pdf)$/i;
+
+// Walk the reverse graph from one abs path; true when a test file is reachable.
+function reachableTestFrom(startAbs, reverse, isTest) {
+  const seen = new Set([startAbs]);
+  const queue = [startAbs];
+  while (queue.length) {
+    const cur = queue.pop();
+    for (const imp of reverse.get(cur) ?? []) {
+      const rel = relative(ROOT, imp);
+      if (isTest(imp)) return true;
+      if (!rel.startsWith("..") && !seen.has(imp)) {
+        seen.add(imp);
+        queue.push(imp);
+      }
+    }
+  }
+  return false;
+}
+
 export function selectTestFiles(changed, reverse) {
   const selected = new Set(CORE.filter((c) => existsSync(join(ROOT, c))));
   const changedAbs = [];
   for (const c of changed) {
     const abs = resolve(ROOT, c);
-    if (!existsSync(abs)) continue;
-    if (/\.test\.(ts|js)$/.test(c)) selected.add(normalize(c)); // changed test files always run
+    // Changed test files always run themselves — but only if they still exist
+    // (a deleted test file cannot run; nothing else references it).
+    if (isChangedTest(c) && existsSync(abs)) selected.add(normalize(c));
+    // Retain EVERY changed path as a graph key, including paths absent from
+    // the current tree: deleting/renaming a module must still select the tests
+    // that import it (they now import a missing file and must fail loudly,
+    // never silently green).
     changedAbs.push(abs);
   }
   if (!changedAbs.length || !reverse) return [...selected].sort();
 
   const seen = new Set(changedAbs);
   const queue = [...changedAbs];
-  const isTest = (p) => /^tests[\\/][^\\/]+\.test\.(ts|js)$/.test(relative(ROOT, p));
   while (queue.length) {
     const cur = queue.pop();
     for (const imp of reverse.get(cur) ?? []) {
       const rel = relative(ROOT, imp);
-      if (isTest(imp)) {
+      if (isTestRel(rel)) {
         if (!rel.startsWith("..")) selected.add(rel);
       } else if (!seen.has(imp)) {
         seen.add(imp);
@@ -125,6 +176,27 @@ export function selectTestFiles(changed, reverse) {
     }
   }
   return [...selected].sort();
+}
+
+// Changed code/config files with NO reachable test. A subset cannot prove
+// coverage of these (nothing imports them), so callers must FAIL CLOSED to the
+// full suite rather than run a silent core-only green. Files absent from the
+// current tree (deleted/renamed) are NOT fail-closed candidates: retention in
+// selectTestFiles selects their remaining importers, whose imports now fail
+// loudly — the honest red. Pure content/docs can break nothing through the
+// import graph and stay core-only.
+export function changedWithoutCoverage(changed, reverse) {
+  const uncovered = [];
+  const reverseMap = reverse ?? new Map();
+  for (const c of changed) {
+    if (isChangedTest(c)) continue; // runs itself (or was deleted = nothing to do)
+    if (CONTENT_EXT_RE.test(c)) continue; // docs/assets: no executable effect
+    const abs = resolve(ROOT, c);
+    if (!existsSync(abs)) continue; // deleted/renamed: retention selects importers, if any
+    if (reachableTestFrom(abs, reverseMap, (p) => isTestRel(relative(ROOT, p)))) continue;
+    uncovered.push(c);
+  }
+  return uncovered;
 }
 
 function runDeno(files) {
@@ -144,6 +216,11 @@ function runDeno(files) {
   process.exit(r.status ?? 1);
 }
 
+function runFullSuite() {
+  const r = spawnSync("deno", ["test", "-A", "tests/"], { stdio: "inherit", cwd: ROOT });
+  process.exit(r.status ?? 1);
+}
+
 function main() {
   const args = process.argv.slice(2);
   const list = args.includes("--list");
@@ -160,6 +237,15 @@ function main() {
   const changed = changedFiles(base);
   if (!changed.length) console.error(`select-tests: no files changed vs ${base} — running always-on core.`);
   const reverse = changed.length ? buildReverseGraph() : null;
+  const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
+  if (uncovered.length) {
+    console.error(
+      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:\n  ${uncovered.join("\n  ")}\nRunning the FULL suite (deno test -A tests/) instead.`,
+    );
+    if (list) console.log("FULL_SUITE");
+    else runFullSuite();
+    return;
+  }
   const files = selectTestFiles(changed, reverse);
   if (list) console.log(files.join("\n"));
   else runDeno(files);
