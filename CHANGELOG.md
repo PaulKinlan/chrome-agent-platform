@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.24] — 2026-09-03
+- dptw phase 2 (storage): remove memory.js self-imposed caps (S1, S2, S5; S3 verified absent)
+
 ## [0.3.23] — 2026-09-03
 - dptw phase 2 (tools): remove self-imposed size caps across tool argument contracts, lazy-tool protocol, tool search/catalog, fs-grants, agent/browser tools, wasm host/executor bounds, preview authority, python execution
 

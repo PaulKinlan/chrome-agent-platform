@@ -114,15 +114,15 @@ Deno.test("saveScreenshot completes without deadlocking (round-19 CRITICAL)", as
   assert(index.some((s) => s.id === result.id), "index must contain the saved screenshot id");
 });
 
-Deno.test("saveScreenshot commits the index and evicts beyond MAX_SCREENSHOTS", async () => {
+Deno.test("saveScreenshot commits the index and RETAINS beyond the removed MAX_SCREENSHOTS (dptw)", async () => {
   const mem = masterMemory();
+  const before = (await listScreenshots()).length;
   const make = (i) => "data:image/png;base64," + "B".repeat(16) + i;
   for (let i = 0; i < 7; i++) {
     await saveScreenshot(mem, { url: `https://example.com/${i}`, dataURL: make(i) });
   }
   const index = await listScreenshots();
-  assert(index.length <= 5, "the screenshot index must be bounded to MAX_SCREENSHOTS");
-  assert(index.length === 5, "the oldest two must be evicted");
+  assertEquals(index.length - before, 7, "dptw: no screenshot count eviction — all 7 retained");
 });
 
 Deno.test("memory.has distinguishes a stored null from an absent key (round-22 null-compensation)", async () => {
@@ -490,7 +490,7 @@ Deno.test("durable authority migrates out of master store without eviction and n
   assertEquals((await master.keys()).some((key) => key.startsWith("run:")), false, "new runs consume zero master keys");
 });
 
-Deno.test("stores allow >500 tiny keys per execution until byte limits and keep byte limits unchanged", async () => {
+Deno.test("stores allow >500 tiny keys per execution with NO key count or byte limits (dptw)", async () => {
   root.children.clear();
   const durable = durableRunMemory();
   const id = "exec:11111111-1111-4111-8111-111111111111";
@@ -501,10 +501,10 @@ Deno.test("stores allow >500 tiny keys per execution until byte limits and keep 
   assertEquals(read549?.i, 549, ">500 keys per execution succeed without key count limitation");
 
   const source = await Deno.readTextFile(new URL("../extension/lib/memory.js", import.meta.url));
-  assert(source.includes("const MAX_VALUE_BYTES = 256 * 1024"));
+  assert(!source.includes("const MAX_VALUE_BYTES"), "dptw: per-value cap gone");
   assert(!source.includes("const MAX_KEYS_PER_ORIGIN"));
-  assert(source.includes("const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024"));
-  assert(source.includes("const MAX_BYTES_GLOBAL = 64 * 1024 * 1024"));
+  assert(!source.includes("const MAX_BYTES_PER_ORIGIN"), "dptw: per-origin quota gone");
+  assert(!source.includes("const MAX_BYTES_GLOBAL"), "dptw: global quota gone");
 });
 
 Deno.test("durable store routes the thread-runs reverse index instead of throwing", async () => {
@@ -654,40 +654,25 @@ Deno.test("a memory write performs zero directory enumerations once the ledger i
   assertEquals(directoryReads - before, 0, "writes must not enumerate directories (the per-write tree walk is gone)");
 });
 
-Deno.test("the per-origin quota rejects at exactly the same write with the same error (OPFS-USAGE-WALK-01)", async () => {
+Deno.test("a store grows past the removed 8 MiB per-origin quota (dptw); the ledger still tracks it", async () => {
   root.children.clear();
   usageLedgerInspector.reset();
   const mem = siteMemory("https://quota.example");
   const path = ["memory", "origins", encodeURIComponent("https://quota.example")];
-  const LIMIT = 8 * 1024 * 1024;
-  // Fill the store to LIMIT - 100 bytes of value files using 200 KiB values.
-  const chunk = 200 * 1024;
-  const envelopeOverhead = (i) => JSON.stringify({ __v: 0, __value: "" }).length + String(i).length; // approximate
-  let filled = 0;
+  const OLD_LIMIT = 8 * 1024 * 1024;
+  // dptw: write PAST the removed 8 MiB bound — every write lands.
+  const chunk = 1024 * 1024;
   let i = 0;
-  while (filled + chunk + 64 < LIMIT - 100) {
-    await mem.setTrusted(`f${i}`, "x".repeat(chunk));
-    filled = storeWalkBytes(path);
+  do {
+    await mem.setTrusted(`f${i}`, "x".repeat(chunk - 64));
     i++;
-  }
-  // Top up with a value that lands the store EXACTLY at LIMIT - 100.
-  const room = LIMIT - 100 - filled;
-  const probeKey = "top";
-  const envelopeBytes = (await mem.setTrusted(probeKey, "")) && storeWalkBytes(path) - filled; // bytes of an empty-string envelope
-  await mem.setTrusted(probeKey, "y".repeat(room - envelopeBytes));
-  assertEquals(storeWalkBytes(path), LIMIT - 100, "fixture: the store sits at LIMIT - 100 bytes");
-  assertEquals(usageLedgerInspector.storeBytes(path), LIMIT - 100, "the ledger sees LIMIT - 100 too");
-  void envelopeOverhead;
-  // A 200-byte write must be rejected with the unchanged quota error...
-  await assertRejects(
-    () => mem.set("over", "z".repeat(200)),
-    MemoryStoreQuotaError,
-    `store exceeds the ${LIMIT}-byte bound`,
-  );
-  // ...and a write that fits still lands (the ledger did not drift upward on the rejection).
+  } while (storeWalkBytes(path) < OLD_LIMIT + chunk);
+  const total = storeWalkBytes(path);
+  assert(total > OLD_LIMIT, `the store sits past the removed 8 MiB bound (${total} bytes)`);
+  assertEquals(usageLedgerInspector.storeBytes(path), total, "the diagnostics ledger still equals the walk");
+  // And a further write still lands.
   await mem.set("fits", "");
-  assert(storeWalkBytes(path) <= LIMIT, "the store never exceeds the bound");
-  assertEquals(usageLedgerInspector.storeBytes(path), storeWalkBytes(path), "ledger still equals the walk after a rejection");
+  assertEquals(usageLedgerInspector.storeBytes(path), storeWalkBytes(path), "ledger still equals the walk after growth");
 });
 
 Deno.test("durable payload family: a 10MiB retained response persists through the REAL durableRunMemory quota path (kmpq P0)", async () => {

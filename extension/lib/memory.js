@@ -159,12 +159,11 @@ import { fnv1a, newId } from "./pure.js";
 
 const ENROLL_KEY = "cap:enrollment";
 
-// OPFS memory bounds (Constitution §4): a single value may not exceed this
-// serialized size, and the master store may not write these reserved registry
-// keys (the enrollment authority must never be reachable via the model's
-// `memory_set`). Per-origin stores are keyed separately so one site's growth
-// cannot crowd another; the journal is separately capped in journalAppend.
-const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
+// dptw: no per-value serialized size bound — a value of any size persists;
+// the OPFS quota is the honest ceiling. The master store may not write these
+// reserved registry keys (the enrollment authority must never be reachable via
+// the model's `memory_set`). Per-origin stores are keyed separately so one
+// site's growth cannot crowd another.
 // The thread authority (`threads` index + every `thread:<id>` body) must be
 // reserved from the MODEL's `memory_set` too: the wider-goal review proved a
 // forged `threads` index could be written through `masterMemory().set` and
@@ -214,12 +213,8 @@ const SITE_RESERVED_KEYS = new Set([
   "agentConfig",
 ]);
 
-// OPFS aggregate quotas (Constitution §4): stores — not just individual values
-// — must be bounded. A site may hold at most this many total serialized bytes
-// (and 64 MiB across all origins); beyond that, `set`/`setTrusted` fail closed
-// rather than growing without bound (the round-15 aggregate-unbounded finding).
-const MAX_BYTES_PER_ORIGIN = 8 * 1024 * 1024; // 8 MiB per origin
-const MAX_BYTES_GLOBAL = 64 * 1024 * 1024; // 64 MiB across all origins
+// dptw: no aggregate per-origin/global byte quotas — stores grow until the
+// browser's own OPFS quota refuses, and that refusal surfaces honestly.
 
 // Durable execution authority is not model memory. Older builds stored every
 // `run:*`/log/outbox/payload file beside owner keys in `memory/master`, where an
@@ -693,32 +688,12 @@ async function globalUsage() {
   return bytes;
 }
 
-/** The quota gate shared by setValue and saveScreenshot: the store bound
- * (`storeDir` null skips it) and the global bound, evaluated against the
- * ledger; a failure reseeds from a fresh walk and re-evaluates so the
- * decision is exactly the walk's decision. `grow` is the non-negative growth.
- * `storeBoundBytes` overrides MAX_BYTES_PER_ORIGIN for a store family; null
- * disables the per-store bound entirely (the durable payload family — its
- * files still count toward the GLOBAL budget). */
-async function assertQuota(storeDir, grow, storeBoundBytes = MAX_BYTES_PER_ORIGIN) {
+/** dptw: no quota gate — the ledger is still maintained for diagnostics, but
+ * no store/global byte bound is enforced; the browser's OPFS quota is the only
+ * ceiling and its refusal surfaces to the caller. */
+async function assertQuota(storeDir, grow, storeBoundBytes = null) {
+  void storeDir; void grow; void storeBoundBytes;
   await ledgerEnsure();
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const storeOver = storeDir && storeBoundBytes !== null &&
-      ledgerStoreBytes(storeDir) + grow > storeBoundBytes;
-    const globalOver = ledger.global + grow > MAX_BYTES_GLOBAL;
-    if (!storeOver && !globalOver) return;
-    if (attempt === 0) { await ledgerSeed(); continue; }
-    if (storeOver) {
-      throw new MemoryStoreQuotaError(
-        "bytes",
-        `store exceeds the ${storeBoundBytes}-byte bound`,
-      );
-    }
-    throw new MemoryStoreQuotaError(
-      "global",
-      `global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`,
-    );
-  }
 }
 
 /** Ledger inspection (tests + the seeded perf gate) — a read/reseed surface, never a product API. */
@@ -757,7 +732,7 @@ function utf8Bytes(str) {
  * write without re-acquiring the same non-reentrant mutex (the round-19
  * critical deadlock: withWriteLock → setTrusted → setValue → withWriteLock hung
  * forever and poisoned all later OPFS writes). */
-async function setValueInner(path, key, value, { isMaster, trusted = false, storeBoundBytes = MAX_BYTES_PER_ORIGIN }) {
+async function setValueInner(path, key, value, { isMaster, trusted = false, storeBoundBytes = null }) {
   const reserved = isMaster ? MASTER_RESERVED_KEYS : SITE_RESERVED_KEYS;
   const k = String(key);
   // Reserve both exact keys AND the `thread:` PREFIX on the master store: a
@@ -782,11 +757,6 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
     throw new Error(`value for "${key}" is not JSON-serializable`);
   }
   const newBytes = utf8Bytes(serialized);
-  if (newBytes > MAX_VALUE_BYTES) {
-    throw new Error(
-      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`,
-    );
-  }
   const dir = await openDir(path);
   await ledgerEnsure();
   // The OLD value's file bytes come from the ledger (the same unit — UTF-8
@@ -795,12 +765,8 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
   // the new write's version is monotonic — a per-key version token that is
   // NEVER reused (the round-27 CAS blocker: value equality is not identity).
   const oldBytes = ledgerFileBytes(dir, `${key}.json`);
-  // Aggregate quotas: a store may not grow past its per-store bound bytes
-  // (the durable payload family passes null → global budget only) and the
-  // global tree past MAX_BYTES_GLOBAL).
-  // The delta is positive for BOTH new keys AND replacements that grow — a
-  // replacement that enlarges an existing value must also be budgeted (the
-  // round-16 finding: the global limit was only checked for new keys).
+  // The delta is positive for BOTH new keys AND replacements that grow; it
+  // feeds the diagnostics ledger only (no quota is enforced — dptw).
   const delta = newBytes - oldBytes;
   await assertQuota(dir, Math.max(0, delta), storeBoundBytes);
   // Issue the DURABLE generation and write the ENVELOPE. The returned version
@@ -819,7 +785,7 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
   return version;
 }
 
-async function setValue(path, key, value, { isMaster, trusted = false, storeBoundBytes = MAX_BYTES_PER_ORIGIN }) {
+async function setValue(path, key, value, { isMaster, trusted = false, storeBoundBytes = null }) {
   return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted, storeBoundBytes }));
 }
 
@@ -889,7 +855,7 @@ async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }
  * semantics. `memoryStore` (master + site origins) and `namedAgentMemory`
  * (named agents) both build their store through here so every store gets the
  * same bounds, version tokens, and CAS semantics. */
-function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = MAX_BYTES_PER_ORIGIN }) {
+function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
   return {
     isMaster,
     origin,
@@ -1727,30 +1693,20 @@ export async function journalCommitCancellation(store, entry, executionId = entr
   });
 }
 
-// Screenshots are LARGE media (a single base64 PNG is ~300 KiB) that cannot fit
-// in the 256 KiB per-value memory bound. They are stored as SEPARATE OPFS files
-// under memory/master/screenshots/*.json (each bounded by MAX_SCREENSHOT_BYTES),
-// with a small metadata index (id/at/url ONLY — never the dataURL inline) kept
-// in the `screenshots` memory key. The index + files are bounded by
-// MAX_SCREENSHOTS; the oldest file is evicted when a new one arrives (the
-// round-17 blocker: the old code pushed up to 20 base64 dataURLs into ONE value,
-// overflowing the 256 KiB bound before a single image could be stored).
-const MAX_SCREENSHOTS = 5;
-const MAX_SCREENSHOT_BYTES = 4 * 1024 * 1024; // 4 MiB per screenshot
+// Screenshots are LARGE media stored as SEPARATE OPFS files under
+// memory/master/screenshots/*.json, with a small metadata index (id/at/url
+// ONLY — never the dataURL inline) kept in the `screenshots` memory key.
+// dptw: no per-screenshot byte cap and no count eviction — every capture is
+// retained until the owner deletes it or OPFS quota refuses honestly.
 
-/** Persist a screenshot as a dedicated OPFS file + bounded metadata index.
- * ATOMIC: the blob write + index update + oldest-eviction run under the global
- * write mutex, and a failed index update compensates by deleting the just-
- * written blob — so two concurrent captures can never read the same index, lose
- * one metadata entry, and orphan an unbounded file (the round-18 screenshot
- * race). */
+/** Persist a screenshot as a dedicated OPFS file + metadata index.
+ * ATOMIC: the blob write + index update run under the global write mutex, and
+ * a failed index update compensates by deleting the just-written blob — so two
+ * concurrent captures can never read the same index and lose one metadata
+ * entry (the round-18 screenshot race). */
 export async function saveScreenshot(mem, { url, dataURL }) {
   if (!dataURL || !String(dataURL).startsWith("data:image/")) {
     throw new Error("screenshot must be a data:image/* dataURL");
-  }
-  const bytes = utf8Bytes(String(dataURL));
-  if (bytes > MAX_SCREENSHOT_BYTES) {
-    throw new Error(`screenshot exceeds the ${MAX_SCREENSHOT_BYTES}-byte bound`);
   }
   return withWriteLock(async () => {
     const id = newId("shot");
@@ -1762,15 +1718,6 @@ export async function saveScreenshot(mem, { url, dataURL }) {
     const indexPath = mem.isMaster
       ? [ROOT, MASTER]
       : [ROOT, "origins", encodeOrigin(mem.origin)];
-    // Screenshots are LARGE media — charge the new blob against the GLOBAL quota
-    // BEFORE writing (five 4 MiB blobs are 20 MiB and must count toward the
-    // 64 MiB budget, the round-18 screenshot-quota finding).
-    try {
-      await assertQuota(null, bytes);
-    } catch (e) {
-      if (!(e instanceof MemoryStoreQuotaError)) throw e;
-      throw new Error(`global memory exceeds the ${MAX_BYTES_GLOBAL}-byte bound`);
-    }
     try {
       // Write the blob first, under ONE lock acquisition.
       await writeJson(dir, `${id}.json`, { url, dataURL, at: Date.now() });
@@ -1778,25 +1725,16 @@ export async function saveScreenshot(mem, { url, dataURL }) {
       // Metadata index (small): id/at/url only, never the dataURL inline.
       const index = (await mem.get("screenshots")) ?? [];
       index.push({ id, at: Date.now(), url });
-      const next = index.slice(-MAX_SCREENSHOTS);
+      // dptw: no count eviction — the index IS the full retained set.
+      const next = index;
 
-      // COMMIT the index FIRST (the authoritative step), THEN evict the
-      // orphaned blobs. If the index commit fails, the just-written blob is
-      // removed and NO old blob is deleted — the persisted index still matches
-      // the retained blobs (the round-18 "old blobs deleted before the index
-      // commits" orphan bug).
+      // COMMIT the index FIRST (the authoritative step). If the index commit
+      // fails, the just-written blob is removed (the round-18 "old blobs
+      // deleted before the index commits" orphan bug).
       await setValueInner(indexPath, "screenshots", next, {
         isMaster: mem.isMaster,
         trusted: true,
       });
-      const kept = new Set(next.map((s) => s.id));
-      for (const s of index) {
-        if (!kept.has(s.id)) {
-          try {
-            await removeTracked(dir, `${s.id}.json`);
-          } catch { /* absent */ }
-        }
-      }
       return { id, url };
     } catch (e) {
       // Compensate: a failed index commit must not leave an orphaned blob.
