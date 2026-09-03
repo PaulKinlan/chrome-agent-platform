@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.17] — 2026-09-03
+- the full-response contract tests now falsify — surrogate-straddling cuts and escape-aware primary sizing go RED when the safety nets are removed
+
 ## [0.3.16] — 2026-09-03
 - Merge remote-tracking branch 'origin/cap-beads-kmpq' into merge-batch
 
