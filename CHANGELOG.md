@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.10] — 2026-09-03
+- sync the beads JSONL export
+
 ## [0.3.9] — 2026-09-03
 - sync the beads JSONL export (r3 candidate comment on chrome-agent-platform-9ve7)
 
