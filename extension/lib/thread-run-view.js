@@ -35,18 +35,16 @@ async function mapBounded(items, limit, fn) {
   return out;
 }
 
-// The last 50 runs of a surface reopen with their full visible history
-// (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01) — the same bound retention keeps
-// full logs for per thread (`RUN_RETENTION_POLICY.perThread`), so what the
-// view reads is what the store kept. Exported so the tests pin the two bounds
-// together.
-export const MAX_VIEW_EXECUTIONS = 50;
+// dptw: NO view bound — the view reads every execution the retention policy
+// kept (the retention keep-rule is the store-side bound, and it is reported
+// honestly via the compacted markers). The name stays exported so existing
+// pins read it: Infinity means "unbounded".
+export const MAX_VIEW_EXECUTIONS = Number.POSITIVE_INFINITY;
 // Bounded fan-out across executions (each page read is itself bounded).
 // 16 since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01: the view reads up to 50
 // executions (each a lock-shared bounded page read); measured 109 ms for a
 // 60-run thread of 300 tool rows at 8.
 const VIEW_READ_CONCURRENCY = 16;
-const MAX_VIEW_LOG_ROWS = 250;
 
 // kmpq P1 — legacy truncated rows whose journal can no longer be read must not
 // stay dishonest. A pre-kmpq thread row's truncation marker claimed "the
@@ -79,18 +77,15 @@ function viewBoundNotice(viewed, total, { turnsKept = false, at = Date.now() } =
   return { role: "system", content, ts: at, derived: true, viewBound: { viewed, total } };
 }
 
-/** Read one execution's bounded log page for a view (shared by the thread and
- *  agent views): a read failure is captured on the row, never thrown. */
+/** Read one execution's log for a view (shared by the thread and agent
+ *  views): a read failure is captured on the row, never thrown. dptw: no row
+ *  bound — every row the store kept is read. */
 async function readExecutionLogs(e, listLogs, recordFailure) {
   let logs = [];
   let logFailed = false;
-  let truncatedLogs = false;
   const logSpan = perfSpan(`thread-view:logs:${e.executionId}`);
   try {
-    logs = await listLogs(e.executionId, MAX_VIEW_LOG_ROWS);
-    // listLogs returns the most-recent `limit` rows (ascending by at); hitting
-    // the cap means there may be older rows omitted — flag it honestly.
-    truncatedLogs = logs.length >= MAX_VIEW_LOG_ROWS;
+    logs = await listLogs(e.executionId);
   } catch (err) {
     logFailed = true;
     recordFailure("thread-view-logs", `could not read run log for ${e.executionId}: ${String(err?.message ?? err).slice(0, 200)}`);
@@ -100,7 +95,7 @@ async function readExecutionLogs(e, listLogs, recordFailure) {
     executionId: e.executionId,
     logs,
     logFailed,
-    truncatedLogs,
+    truncatedLogs: false,
     phase: e.record?.phase ?? null,
     pause: e.record?.pause ?? null,
     terminal: e.record?.terminal ?? null,

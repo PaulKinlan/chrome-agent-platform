@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.29] — 2026-09-03
+- Run history and idempotency run uncapped: reopening a thread or agent shows every run and every log row the store kept (no 50-run / 250-row windows), a 257th idempotency key no longer fails the operation (expired keys still clean up), and a local text file over 1 MiB now attaches as text instead of an unread reference
+
 ## [0.3.28] — 2026-09-03
 - Fix the wide-object log test: keep it under the 20-key descriptor guard (that guard stops accessor traps on hostile objects — it is not a size cap) while still exceeding the old 1200-char JSON truncation
 

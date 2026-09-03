@@ -1601,3 +1601,15 @@ Deno.test("tool-directory-card host declares inline-size 100% alongside containe
     throw new Error(`the :host rule must declare inline-size: 100% beside container-type (got "${host.trim()}")`);
   }
 });
+
+Deno.test("composer local files (dptw R2): no 1 MiB gate — text files attach as text at any size", async () => {
+  const src = await Deno.readTextFile("extension/shared/components.js");
+  const fn = src.match(/async _attachLocalFile\(file\) \{[\s\S]*?\n  \}/);
+  if (!fn) throw new Error("_attachLocalFile not found");
+  const body = fn[0];
+  if (body.includes("MAX_LOCAL_TEXT_BYTES")) throw new Error("the 1 MiB local-text gate is back");
+  if (/maxBytes:/.test(body)) throw new Error("the attach read still passes a byte cap");
+  if (!/attachAsText = textLike;/.test(body)) throw new Error("text-like files must attach as text regardless of size");
+  const attachmentsSrc = await Deno.readTextFile("extension/lib/attachments.js");
+  if (attachmentsSrc.includes("MAX_LOCAL_TEXT_BYTES")) throw new Error("MAX_LOCAL_TEXT_BYTES reintroduced");
+});
