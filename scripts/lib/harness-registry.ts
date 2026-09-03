@@ -92,6 +92,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-generated-image-strip.ts": { class: "kat" },
   "kat-genui-error-state.ts": { class: "kat", ...RED("16/2", "two generated-UI error-state checks red", "the generated-UI bootstrap syntax lane (in flight)") },
   "kat-hub-timeline.ts": { class: "kat" },
+  "kat-interactive-artifact-click.ts": { class: "kat", budgetMs: 240_000 },
   "kat-mcp-agent-ui.ts": { class: "kat" },
   "kat-mcp-global-ui.ts": { class: "kat" },
   "kat-mcp-tool-injection.ts": { class: "kat" },

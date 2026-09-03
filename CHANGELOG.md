@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.12] — 2026-09-03
+- chrome-agent-platform-p45y: artifact source view renders the complete stored code — no more 64 KB cut-off — and a new browser check proves generated click-games stay interactive in the artifact tab, the hub dialog, and the library view
+
+## [0.3.11] — 2026-09-03
+- Artifact source view renders the complete stored code, and a browser check now proves generated click-games stay interactive in the artifact tab, the hub dialog, and the library.
+
+## [0.3.10] — 2026-09-03
+- Artifacts: the source view shows the complete saved code — a large artifact no longer looks cut off at 64 KB — and generated interactive artifacts are verified clickable in the artifact tab, the hub dialog, and the library.
+
 ## [0.3.9] — 2026-09-02
 - AGENTS.md: beads is the only tracker, the fleet is the default way to work, and beads best practices (epics, dependencies, lifecycle) are the standard. TASKS.md and KNOWN-ISSUES.md retired. New beads-flow skill: the pick-up-and-ship loop.
 
