@@ -98,27 +98,25 @@ Object.defineProperty(globalThis, "navigator", {
 
 // ---- pure bound helpers ----
 
-Deno.test("boundToolCalls caps at 16, truncates names, drops empty, keeps newest", () => {
+Deno.test("boundToolCalls keeps ALL calls with WHOLE names, drops empty (dptw)", () => {
   const many = Array.from({ length: 20 }, (_, i) => ({ name: `tool_${i}`, ok: i % 2 === 0 }));
   const bounded = boundToolCalls(many);
-  assertEquals(bounded.length, 16, "17th+ dropped");
-  assertEquals(bounded[0].name, "tool_4", "newest kept (oldest shifted off)");
-  assertEquals(bounded[15].name, "tool_19");
+  assertEquals(bounded.length, 20, "dptw: no count cap");
+  assertEquals(bounded[0].name, "tool_0", "order preserved");
+  assertEquals(bounded[19].name, "tool_19");
 
   const long = boundToolCalls([{ name: "x".repeat(100), ok: true }]);
-  assertEquals(long[0].name.length, 64, "oversized name truncated");
+  assertEquals(long[0].name.length, 100, "dptw: no name truncation");
 
   assertEquals(boundToolCalls([{ name: "", ok: true }, { name: "ok-tool", ok: false }]).length, 1);
   assertEquals(boundToolCalls(null), [], "null input -> []");
-  // Falsification: boundToolCalls no-oping (returning input verbatim) makes the
-  // cap assertions RED.
 });
 
-Deno.test("boundSkillIds dedupes, caps at 24, keeps newest", () => {
+Deno.test("boundSkillIds dedupes with NO cap, order preserved (dptw)", () => {
   const many = Array.from({ length: 30 }, (_, i) => `skill-${i}`);
   const bounded = boundSkillIds([...many, ...many]);
-  assertEquals(bounded.length, 24, "24 cap");
-  assertEquals(bounded[0], "skill-6", "newest kept after dedupe shift");
+  assertEquals(bounded.length, 30, "dptw: no cap — every distinct id kept");
+  assertEquals(bounded[0], "skill-0", "first-seen order preserved");
   assertEquals(new Set(bounded).size, bounded.length, "no dups");
   assertEquals(boundSkillIds([""]).length, 0, "empty dropped");
   assertEquals(boundSkillIds(null), [], "null -> []");

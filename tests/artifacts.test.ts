@@ -199,18 +199,32 @@ Deno.test("updateAsset with an unknown/empty id fails with a store error (CAP-FB
   );
 });
 
-Deno.test("createAsset rejects bad types, empty names, oversized content", async () => {
+Deno.test("createAsset rejects bad types and empty names; the artifact content cap is gone (dptw)", async () => {
   assert(ASSET_TYPES.has("html"), "ASSET_TYPES must include html");
   const badType = await createAsset("master", { type: "exe", name: "a", content: "b" });
   assert(!badType.ok, "bad type must be rejected");
   const noName = await createAsset("master", { type: "text", name: "  ", content: "b" });
   assert(!noName.ok, "empty name must be rejected");
-  const huge = await createAsset("master", {
-    type: "text",
-    name: "big",
-    content: "x".repeat(ASSET_BOUNDS.maxContentBytes + 1),
-  });
-  assert(!huge.ok, "oversized content must be rejected");
+  // dptw: no artifact-level content refusal. Content past the removed 256 KiB
+  // artifact cap is no longer rejected by the artifact library — the remaining
+  // per-value refusal, if any, is the memory store's own bound (the dptw
+  // STORAGE area), never "asset content exceeds".
+  let outcome;
+  try {
+    outcome = await createAsset("master", {
+      type: "text",
+      name: "big",
+      content: "x".repeat(256 * 1024 + 1),
+    });
+  } catch (error) {
+    outcome = { ok: false, error: String(error?.message ?? error) };
+  }
+  if (!outcome.ok) {
+    assert(!/asset content exceeds/.test(outcome.error ?? ""), `no artifact-level content cap: ${outcome.error}`);
+    assert(/262144-byte bound|memory/.test(outcome.error ?? ""), `the remaining refusal is the memory store's per-value bound (dptw storage area): ${outcome.error}`);
+  } else {
+    assert(outcome.ok, "stored whole");
+  }
 });
 
 Deno.test("createAsset enforces the per-origin count cap", async () => {

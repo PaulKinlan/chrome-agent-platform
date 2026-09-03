@@ -21,15 +21,6 @@ import {
   unwatchFsGrant,
   getActiveFsWatchers,
   cleanRelativePath,
-  MAX_FS_LIST_ENTRIES,
-  MAX_FS_PATH_DEPTH,
-  MAX_FS_READ_BYTES,
-  MAX_FS_TEXT_DECODE_BYTES,
-  MAX_FS_WRITE_BYTES,
-  MAX_FS_SCAN_ENTRIES,
-  MAX_FS_SCAN_BYTES,
-  MAX_FS_SEARCH_RESULTS,
-  MAX_FS_SEARCH_SCANNED,
   computeSha256,
 } from "../extension/lib/fs-grants.js";
 import {
@@ -657,8 +648,7 @@ Deno.test("searchFsGrantFiles: recursively matches names, bounds results, and re
     lastModified: 1700000000000,
   });
   assert(res.permissionIssues.some((issue) => issue.grantId === "fsg_search_lapsed" && issue.status === "prompt"));
-  assertEquals(MAX_FS_SEARCH_RESULTS, 50);
-  assertEquals(MAX_FS_SEARCH_SCANNED, 5000);
+  // dptw: no search result/scan ceilings — a caller limit is a window request.
 
   const capped = await searchFsGrantFiles("", { limit: 1 });
   assertEquals(capped.files.length, 1);
@@ -783,10 +773,9 @@ Deno.test("readFsGrantFile: a multi-MB file reads fully via offset/length chunki
   }
   assertEquals(pieces.join("").length, total, "chunked reads reassemble the whole file");
 
-  // A single window larger than the old text-decode ceiling (2 MiB) delivers
-  // its complete content too — the ceiling lived in the reader and is gone;
-  // only the tool's transport cap (MAX_FS_READ_BYTES per window) remains.
-  const wideLen = MAX_FS_TEXT_DECODE_BYTES + 1;
+  // dptw: a single window larger than the old text-decode ceiling (2 MiB)
+  // delivers its complete content — no ceiling remains anywhere on the path.
+  const wideLen = 2 * 1024 * 1024 + 1;
   const wide: any = await readFsGrantFile("fsg_read_big", { asText: true, offset: 0, length: wideLen });
   assertEquals(wide.ok, true, `a ${wideLen}-byte window must read: ${JSON.stringify(wide)}`);
   assertEquals(wide.start, 0);
@@ -974,11 +963,22 @@ Deno.test("writeFsGrantFile: writes content to readwrite grant and computes SHA-
   assert(typeof res.sha256 === "string" && res.sha256.length === 64);
 });
 
-Deno.test("writeFsGrantFile: enforces MAX_FS_WRITE_BYTES size cap", async () => {
+Deno.test("writeFsGrantFile: a write past the removed 5 MiB cap lands whole (dptw)", async () => {
+  let written: Uint8Array | null = null;
   const mockDirHandle = {
     kind: "directory",
     name: "rw-project",
     queryPermission: async () => "granted",
+    getFileHandle: async (name: string, _opts?: unknown) => ({
+      kind: "file",
+      name,
+      createWritable: async () => ({
+        write: async (chunk: any) => {
+          written = chunk instanceof Uint8Array ? chunk : new TextEncoder().encode(String(chunk ?? ""));
+        },
+        close: async () => {},
+      }),
+    }),
   };
 
   await saveFsGrant({
@@ -988,14 +988,17 @@ Deno.test("writeFsGrantFile: enforces MAX_FS_WRITE_BYTES size cap", async () => 
     mode: "readwrite",
   });
 
-  const oversized = new Uint8Array(MAX_FS_WRITE_BYTES + 1024);
+  // dptw: a write past the removed 5 MiB cap lands whole.
+  const pastOldCap = new Uint8Array(5 * 1024 * 1024 + 1024);
+  pastOldCap.fill(0x62);
   const res = await writeFsGrantFile("fsg_rw_oversized", {
     relativePath: "big.bin",
-    content: oversized,
+    content: pastOldCap,
   });
 
-  assertEquals(res.ok, false);
-  assertEquals(res.error, "fs_file_too_large");
+  assertEquals(res.ok, true, `write past the removed 5 MiB cap succeeds: ${JSON.stringify(res).slice(0, 200)}`);
+  assertEquals(res.size, pastOldCap.byteLength, "every byte landed");
+  assertEquals((written as unknown as Uint8Array)?.byteLength, pastOldCap.byteLength, "the sink received every byte");
 });
 
 Deno.test("scanFsGrantManifest: recursively scans directories with depth and entry bounds", async () => {
@@ -1308,7 +1311,6 @@ Deno.test("fs-grant.write-file-approved: refuses a path outside the grant, a bin
       ["absolute", { grantId, relativePath: "/etc/passwd", content: "x" }, "invalid_path_absolute"],
       ["directory (no file name)", { grantId, relativePath: "", content: "x" }, "invalid_file_path"],
       ["binary file", { grantId, relativePath: "blob.bin", content: "text over binary" }, "fs_file_not_text"],
-      ["oversized", { grantId, relativePath: "notes.txt", content: "a".repeat(MAX_FS_WRITE_BYTES + 1) }, "fs_file_too_large"],
       ["read-only grant", { grantId: roGrant, relativePath: "notes.txt", content: FIXED_TEXT }, "fs_write_permission_denied"],
       ["lapsed grant", { grantId: lapsed, relativePath: "notes.txt", content: FIXED_TEXT }, "fs_permission_lapsed"],
       ["missing grant", { grantId: `fsg_absent_${crypto.randomUUID()}`, relativePath: "notes.txt", content: FIXED_TEXT }, "grant_not_found"],

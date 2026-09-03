@@ -59,7 +59,7 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       const cfg = await getProviderConfig();
       const problem = providerEndpointProblem(cfg);
       return {
-        provider: String(cfg.provider ?? "").slice(0, 80),
+        provider: String(cfg.provider ?? ""),
         local: isLocalProvider(cfg),
         origin: providerOriginPattern(cfg),
         reason: problem ? problem.reason : "",
@@ -113,7 +113,7 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       // endpoint or a catalogue default — refuse it up front and keep the
       // previous config (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01).
       if (!choice) {
-        return { ok: false, error: "unknown provider", reason: "unknown provider", provider: String(cfg.provider ?? "").slice(0, 80) };
+        return { ok: false, error: "unknown provider", reason: "unknown provider", provider: String(cfg.provider ?? "") };
       }
       // A provider that needs a model id must have one — an explicit id or the
       // catalogue default. An empty model with no catalogue would silently run

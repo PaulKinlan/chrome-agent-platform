@@ -133,7 +133,6 @@ Deno.test("preview: the wasm-bytes transport rehydrates valid explicit arrays (i
     "object": { value: { 0: 0, length: 8 } },
     "sparse": { value: Array.from({ length: 8 }) }, // holes → undefined
     "too-short": { value: Array.from(new Uint8Array(7)) },
-    "overbound": { value: Array.from(new Uint8Array(EXECUTOR_BOUNDS.maxWasmBytes + 1)) },
     "fractional": { value: Array.from(cas.slice(0, 8)).map((b, i) => i === 3 ? 0.5 : b) },
     "negative": { value: Array.from(cas.slice(0, 8)).map((b, i) => i === 3 ? -1 : b) },
     "out-of-range": { value: Array.from(cas.slice(0, 8)).map((b, i) => i === 3 ? 256 : b) },
@@ -160,7 +159,6 @@ Deno.test("preview: the stdin transport rehydrates a dense byte array + rejects 
     "not-array": { value: "a,b" },
     "object": { value: { 0: 65, length: 1 } },
     "sparse": { value: Array.from({ length: 4 }) },
-    "overbound": { value: Array.from({ length: PREVIEW_LIMITS.maxStdinBytes + 1 }, () => 0) },
     "fractional": { value: [65, 0.5] },
     "negative": { value: [65, -1] },
     "out-of-range": { value: [65, 256] },
@@ -226,16 +224,21 @@ Deno.test("preview: strict exact-key bounded request (toolId + args + stdin)", (
     { toolId: "tree", args: [], stdin: "", defaultArgs: ["/job"] },
     { toolId: "tree", args: [], stdin: "", packageId: "cap.bundled.du" },
     { toolId: "tree", args: [], stdin: "", capabilities: ["file.write"] },
-    { toolId: "csvtool", args: ["x".repeat(PREVIEW_LIMITS.maxArgBytes + 1)], stdin: "" },
-    { toolId: "csvtool", args: Array.from({ length: PREVIEW_LIMITS.maxArgs + 1 }, () => "a"), stdin: "" },
     { toolId: "csvtool", args: ["a\u0000b"], stdin: "" },
-    { toolId: "csvtool", args: [], stdin: "x".repeat(PREVIEW_LIMITS.maxStdinBytes + 1) },
-    { toolId: "csvtool", args: ["a".repeat(600), "b".repeat(600)], stdin: "" }, // total arg bytes
   ]) {
     let threw = null;
     try { validatePreviewInput(bad); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assert(threw !== null, `expected rejection for ${JSON.stringify(bad)}`);
   }
+  // dptw: size is no longer a rejection — long args, many args and big stdin
+  // all validate.
+  const big = validatePreviewInput({
+    toolId: "csvtool",
+    args: ["x".repeat(600), "y".repeat(600), "z".repeat(600), "w".repeat(600), "v".repeat(600)],
+    stdin: "s".repeat(64 * 1024),
+  });
+  assertEquals(big.args.length, 5, "five args pass (was: maxArgs 4)");
+  assertEquals(big.stdin.length, 64 * 1024, "big stdin passes whole");
 });
 
 Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exact)", () => {
@@ -313,26 +316,14 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
     { path: "inputs/sub/g.txt", bytes: [103] },
   ] }), "tree receives only its immutable nested seed");
   assertEquals([...job.stdin].length, "a,b\n1,2".length);
-  // quota is bounded by the preview limits
-  assertEquals(job.quota.stdinBytes, PREVIEW_LIMITS.maxStdinBytes);
-  // per-tool arg bounds: the 17 stay 512/1024; diff/patch get the EXACT
-  // 1024/doc + 2048 total (the createWasiJob 1024 cap — the host schema
-  // unchanged); an over-bound doc is rejected
-  const diffSpec = previewSpecFor("diff");
-  assertEquals(diffSpec.argBounds.maxArgBytes, 1024, "diff per-doc bound");
-  assertEquals(diffSpec.argBounds.maxArgTotalBytes, 2048, "diff total bound");
-  assertEquals(previewSpecFor("csvtool").argBounds.maxArgBytes, 512, "the 17 stay 512/arg");
-  const diffInput = validatePreviewInput({ toolId: "diff", args: ["a".repeat(1024), "b".repeat(1024)], stdin: "" });
-  assertEquals(diffInput.args.length, 2, "two 1024-byte docs accepted");
+  // dptw: the job byte quotas are unbounded.
+  assertEquals(job.quota.stdinBytes, Number.POSITIVE_INFINITY, "no stdin byte quota");
+  // per-tool arg byte bounds are gone: long docs pass at any size.
+  const diffInput = validatePreviewInput({ toolId: "diff", args: ["a".repeat(1025), "b".repeat(2049)], stdin: "" });
+  assertEquals(diffInput.args.length, 2, "docs past the removed 1024/doc bound are accepted");
+  const threeDocs = validatePreviewInput({ toolId: "diff", args: ["a".repeat(1024), "b".repeat(1024), "c"], stdin: "" });
+  assertEquals(threeDocs.args.length, 3, "a third doc past the removed 2048 total is accepted");
   let threw = null;
-  try { validatePreviewInput({ toolId: "diff", args: ["a".repeat(1025), "b"], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
-  assertEquals(threw, "preview_args", "a 1025-byte doc rejects (per-arg 1024 cap)");
-  threw = null;
-  try { validatePreviewInput({ toolId: "diff", args: ["a".repeat(1024), "b".repeat(1025)], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
-  assertEquals(threw, "preview_args", "the second doc over 1024 rejects");
-  threw = null;
-  try { validatePreviewInput({ toolId: "diff", args: ["a".repeat(1024), "b".repeat(1024), "c"], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
-  assertEquals(threw, "preview_args", "three docs exceed the 2048 total");
   // NUL in a doc rejects (all tools); the leading-BOM rejection is scoped to
   // diff/patch ONLY — the predecessor 17 keep their PRIOR acceptance behavior
   threw = null;
@@ -345,17 +336,16 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   // acceptance (the normal-17 behavior is byte-unchanged)
   const bomArg = validatePreviewInput({ toolId: "grep", args: ["\ufeffx"], stdin: "" });
   assertEquals(JSON.stringify(bomArg.args), JSON.stringify(["\ufeffx"]), "a predecessor leading-BOM arg is accepted as before");
-  // the 17 keep rejecting >512/1024
-  threw = null;
-  try { validatePreviewInput({ toolId: "grep", args: ["a".repeat(513)], stdin: "" }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
-  assertEquals(threw, "preview_args", "the 17 reject >512/arg");
-  // argv0 + the user args stay inside the WASI arg bounds (64 args / 4096 bytes)
+  // dptw: the 17 no longer reject >512/arg either — no argv byte ceilings.
+  const longArg = validatePreviewInput({ toolId: "grep", args: ["a".repeat(513)], stdin: "" });
+  assertEquals(JSON.stringify(longArg.args), JSON.stringify(["a".repeat(513)]), "a 513-char arg passes");
+  // argv0 + the user args stay inside the WASI arg COUNT bound (64 args).
   const wide = buildPreviewJob({
-    input: { toolId: "csvtool", args: Array.from({ length: PREVIEW_LIMITS.maxArgs }, () => "x"), stdin: "" },
+    input: { toolId: "csvtool", args: Array.from({ length: 63 }, () => "x"), stdin: "" },
     authority,
   });
-  assertEquals(wide.args.length, PREVIEW_LIMITS.maxArgs + 1, "max user args + argv0");
-  assert(wide.args.length <= 64, "total args inside the WASI MAX_ARGS bound");
+  assertEquals(wide.args.length, 64, "63 user args + argv0");
+  assert(wide.args.length <= 64, "total args inside the WASI MAX_ARGS count bound");
   // a hostile authority (extra key / wrong origin) fails closed
   threw = null;
   try {
@@ -568,16 +558,12 @@ Deno.test("preview: the EXACT 28-tool static allowlist admits sqlite too (other 
   assertEquals(gzip.stdoutEncoding, "base64");
   assertEquals(JSON.stringify(gzip.acceptedExitCodes), JSON.stringify([0]));
   assertEquals(JSON.stringify(gzip.allowedArgs), JSON.stringify([[], ["-d"]]));
-  assertEquals(gzip.maxTextInputBytes, 2048);
-  assertEquals(gzip.maxBase64InputChars, 2048);
-  assertEquals(gzip.maxDecodedInputBytes, 1536);
-  assertEquals(gzip.maxBinaryOutputBytes, 65536);
+  assertEquals("maxTextInputBytes" in gzip, false, "dptw: no gzip input byte caps in the spec");
   assert(Object.isFrozen(gzip) && Object.isFrozen(gzip.allowedArgs) && gzip.allowedArgs.every(Object.isFrozen));
   assertEquals(JSON.stringify(previewSpecFor("base64").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("wc").caps), JSON.stringify(["compute", "text.transform"]));
   assertEquals(JSON.stringify(previewSpecFor("xxd").caps), JSON.stringify(["compute", "text.transform"]));
-  // The preview limits are honest against the executor's JSON request budget.
-  assert(PREVIEW_LIMITS.maxStdinBytes <= 4 * 1024, "stdin stays inside the 64 KiB executor request envelope");
+  // dptw: no byte envelopes remain; wall time still stays inside the executor bound.
   assert(PREVIEW_LIMITS.wallMs <= 30_000, "wall time stays inside the executor bound");
 });
 
@@ -591,7 +577,6 @@ Deno.test("R12 sqlite input: the exact-key {sql,params,database,readOnly} JSON; 
     JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: false }),
     JSON.stringify({ sql: "SELECT 1", params: [], database: "other.db", readOnly: true }),
     JSON.stringify({ sql: "SELECT 1", params: [], database: "../test.db", readOnly: true }),
-    JSON.stringify({ sql: "SELECT 1", params: [1, 2, 3, 4, 5, 6, 7, 8, 9], database: "test.db", readOnly: true }),
     JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true, extra: "x" }),
     JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db" }),
   ]) {
@@ -599,16 +584,10 @@ Deno.test("R12 sqlite input: the exact-key {sql,params,database,readOnly} JSON; 
     try { validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin }); } catch (e) { threw = (e as { code?: string }).code ?? null; }
     assert(threw !== null, `expected rejection: ${stdin.slice(0, 60)}`);
   }
-  // the 2 KiB total: sql 1792 + empty params OK; sql 1792 + params 256 REJECT (over the total).
+  // dptw: no sql/params/total byte bounds — only the shape, readOnly and
+  // fixture-database guards remain (they are security, not size).
   const bigSql = validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1792), params: [], database: "test.db", readOnly: true }) });
   assertEquals(bigSql.toolId, "sqlite3_query_bounded");
-  let threw = null;
-  try {
-    validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1792), params: ["p".repeat(256)], database: "test.db", readOnly: true }) });
-  } catch (e) { threw = (e as { code?: string }).code ?? null; }
-  assert(threw !== null, "the 2 KiB total rejects the over-budget combo");
-  // sql 1793 → the sql bound.
-  let threw2 = null;
-  try { validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1793), params: [], database: "test.db", readOnly: true }) }); } catch (e) { threw2 = (e as { code?: string }).code ?? null; }
-  assertEquals(threw2, "preview_sqlite_sql");
+  const overOldBounds = validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1793), params: ["p".repeat(600)], database: "test.db", readOnly: true }) });
+  assertEquals(overOldBounds.toolId, "sqlite3_query_bounded", "sql past the removed 1792 bound and params past 512 are accepted");
 });

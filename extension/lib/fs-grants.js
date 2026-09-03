@@ -22,22 +22,12 @@
 
 import { newId } from "./pure.js";
 
-export const MAX_FS_LIST_ENTRIES = 500;
-export const MAX_FS_PATH_DEPTH = 16;
-export const MAX_FS_READ_BYTES = 10 * 1024 * 1024; // 10 MiB — largest single offset/length window the read_file transport accepts (transport bound, not a reader ceiling)
-export const MAX_FS_TEXT_DECODE_BYTES = 2 * 1024 * 1024; // 2 MiB — the owner diff-card bound on fs-grant.write-file-approved (transport bound, not a reader ceiling)
-export const MAX_FS_WRITE_BYTES = 5 * 1024 * 1024; // 5 MiB
-export const MAX_FS_SCAN_ENTRIES = 10000;
-export const MAX_FS_SCAN_BYTES = 1024 * 1024; // 1 MiB
-export const MAX_FS_SEARCH_RESULTS = 50;
-export const MAX_FS_SEARCH_SCANNED = 5000;
-// grep bounds: a recursive content search over a granted directory has to stay
-// cheap and terminate. Matches, files scanned, per-file size, and line length
-// are all capped; oversized/binary files are skipped, never decoded as garbage.
-export const MAX_FS_GREP_MATCHES = 200;
-export const MAX_FS_GREP_FILES_SCANNED = 2000;
-export const MAX_FS_GREP_FILE_BYTES = 2 * 1024 * 1024; // 2 MiB — larger files are skipped
-export const MAX_FS_GREP_LINE_LENGTH = 2000; // a matched line is truncated to this many chars
+// dptw (2026-09-03): no size/count ceilings on granted-folder operations —
+// reads, writes, listings, searches and grep all carry complete data at any
+// size. The path TRAVERSAL guard (cleanRelativePath) is security and stays.
+// grep: no match/file/line caps — matches of any size and count are returned
+// whole. Only BINARY files are skipped (never decoded as garbage); that skip
+// is content correctness, not a size bound.
 
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;
@@ -337,12 +327,12 @@ export async function regrantFsGrantAccess(
 /**
  * Bounded listing of directory entries within a granted handle.
  * @param {string} grantId
- * @param {{ relativePath?: string, limit?: number }} [options]
+ * @param {{ relativePath?: string, limit?: number | null }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function listFsGrantEntries(
   grantId,
-  { relativePath = "", limit = MAX_FS_LIST_ENTRIES } = {},
+  { relativePath = "", limit = null } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -358,10 +348,6 @@ export async function listFsGrantEntries(
     segments = cleanRelativePath(relativePath);
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
-  }
-
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
   }
 
   if (grant.kind === "file") {
@@ -399,7 +385,9 @@ export async function listFsGrantEntries(
   const entries = [];
   let total = 0;
   let truncated = false;
-  const effectiveLimit = Math.min(Math.max(1, limit || MAX_FS_LIST_ENTRIES), MAX_FS_LIST_ENTRIES);
+  // dptw: no listing ceiling — every entry is returned. An explicit caller
+  // limit is a window request, honored exactly.
+  const effectiveLimit = Number.isFinite(limit) ? Math.max(1, Math.trunc(limit)) : Infinity;
 
   try {
     const iter = typeof dirHandle.values === "function"
@@ -435,15 +423,21 @@ export async function listFsGrantEntries(
   };
 }
 
-/** Search file names across every stored grant without reading file content. */
+/** Search file names across every stored grant without reading file content.
+ * @param {string} [query]
+ * @param {{ limit?: number | null, maxScanned?: number | null }} [options]
+ * @param {{ customIdb?: any }} [dbOptions]
+ */
 export async function searchFsGrantFiles(
   query = "",
-  { limit = MAX_FS_SEARCH_RESULTS, maxScanned = MAX_FS_SEARCH_SCANNED } = {},
+  { limit = null, maxScanned = null } = {},
   { customIdb = null } = {},
 ) {
   const q = String(query ?? "").trim().toLowerCase();
-  const effectiveLimit = Math.min(Math.max(1, Number(limit) || MAX_FS_SEARCH_RESULTS), MAX_FS_SEARCH_RESULTS);
-  const effectiveScanLimit = Math.min(Math.max(effectiveLimit, Number(maxScanned) || MAX_FS_SEARCH_SCANNED), MAX_FS_SEARCH_SCANNED);
+  // dptw: no result/scan ceilings — an explicit caller limit is a window
+  // request, honored exactly; the default is everything.
+  const effectiveLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Math.trunc(Number(limit)) : Infinity;
+  const effectiveScanLimit = Number.isFinite(Number(maxScanned)) && Number(maxScanned) > 0 ? Math.max(Math.trunc(Number(maxScanned)), 1) : Infinity;
   const files = [];
   const permissionIssues = [];
   const errors = [];
@@ -458,9 +452,7 @@ export async function searchFsGrantFiles(
   for (const grant of grants) {
     const status = await queryFsGrantStatus(grant);
     if (status !== "granted") {
-      if (permissionIssues.length < MAX_FS_SEARCH_RESULTS) {
-        permissionIssues.push({ grantId: grant.grantId, name: grant.name, status });
-      }
+      permissionIssues.push({ grantId: grant.grantId, name: grant.name, status });
       continue;
     }
 
@@ -484,9 +476,7 @@ export async function searchFsGrantFiles(
           lastModified: Number(file?.lastModified) || 0,
         });
       } catch (err) {
-        if (errors.length < MAX_FS_SEARCH_RESULTS) {
-          errors.push({ grantId: grant.grantId, path: relativePath, error: `get_file_failed: ${err?.message || err}` });
-        }
+        errors.push({ grantId: grant.grantId, path: relativePath, error: `get_file_failed: ${err?.message || err}` });
       }
     };
 
@@ -496,8 +486,7 @@ export async function searchFsGrantFiles(
     }
 
     const walk = async (dirHandle, prefix = "", depth = 0) => {
-      if (truncated || depth > MAX_FS_PATH_DEPTH) {
-        truncated = true;
+      if (truncated) {
         return;
       }
       try {
@@ -522,9 +511,7 @@ export async function searchFsGrantFiles(
           }
         }
       } catch (err) {
-        if (errors.length < MAX_FS_SEARCH_RESULTS) {
-          errors.push({ grantId: grant.grantId, path: prefix, error: `enumeration_failed: ${err?.message || err}` });
-        }
+        errors.push({ grantId: grant.grantId, path: prefix, error: `enumeration_failed: ${err?.message || err}` });
       }
     };
     await walk(grant.handle);
@@ -537,7 +524,7 @@ export async function searchFsGrantFiles(
     files,
     permissionIssues,
     errors,
-    scanned: Math.min(scanned, effectiveScanLimit),
+    scanned,
     truncated,
   };
 }
@@ -593,10 +580,6 @@ export async function readFsGrantFile(
     segments = cleanRelativePath(relativePath);
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
-  }
-
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
   }
 
   let fileHandle = null;
@@ -759,12 +742,12 @@ export async function readFsGrantFile(
  * into RegExp matching (allowed under MV3 CSP — RegExp is not eval/new
  * Function); the default is a literal substring match, which cannot ReDoS.
  * @param {string} grantId
- * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number, maxDepth?: number }} [options]
+ * @param {{ query?: string, relativePath?: string, regex?: boolean, ignoreCase?: boolean, maxMatches?: number | null, maxDepth?: number | null }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function grepFsGrant(
   grantId,
-  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = MAX_FS_GREP_MATCHES, maxDepth = MAX_FS_PATH_DEPTH } = {},
+  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = null, maxDepth = null } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -800,17 +783,16 @@ export async function grepFsGrant(
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };
   }
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
-  }
-
   const matches = [];
   let filesScanned = 0;
   let truncated = false;
-  const effectiveMax = Math.min(Math.max(1, Number(maxMatches) || MAX_FS_GREP_MATCHES), MAX_FS_GREP_MATCHES);
+  // dptw: no match/file-scan ceilings and no per-file skip — an explicit
+  // maxMatches is a window request, honored exactly.
+  const effectiveMax = Number.isFinite(Number(maxMatches)) && Number(maxMatches) > 0 ? Math.trunc(Number(maxMatches)) : Infinity;
+  const effectiveDepth = Number.isFinite(Number(maxDepth)) && Number(maxDepth) > 0 ? Math.trunc(Number(maxDepth)) : Infinity;
 
   const scanFile = async (handle, path) => {
-    if (matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) {
+    if (matches.length >= effectiveMax) {
       truncated = true;
       return;
     }
@@ -819,7 +801,6 @@ export async function grepFsGrant(
       file = typeof handle?.getFile === "function" ? await handle.getFile() : handle;
     } catch { return; }
     const size = typeof file?.size === "number" ? file.size : 0;
-    if (size > MAX_FS_GREP_FILE_BYTES) return; // skip oversized files
     filesScanned += 1;
     let buffer;
     try {
@@ -844,15 +825,14 @@ export async function grepFsGrant(
       }
       let line = lines[i];
       if (matcher(line)) {
-        if (line.length > MAX_FS_GREP_LINE_LENGTH) line = line.slice(0, MAX_FS_GREP_LINE_LENGTH);
         matches.push({ path, line: i + 1, text: line });
       }
     }
   };
 
   const walk = async (dir, prefix, depth) => {
-    if (truncated || matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) return;
-    if (depth > maxDepth) {
+    if (truncated || matches.length >= effectiveMax) return;
+    if (depth > effectiveDepth) {
       truncated = true;
       return;
     }
@@ -866,7 +846,7 @@ export async function grepFsGrant(
     } catch { return; }
     try {
       for await (const raw of iter) {
-        if (matches.length >= effectiveMax || filesScanned >= MAX_FS_GREP_FILES_SCANNED) {
+        if (matches.length >= effectiveMax) {
           truncated = true;
           return;
         }
@@ -944,10 +924,6 @@ export async function writeFsGrantFile(
     return { ok: false, error: "invalid_file_path", message: "A file name is required" };
   }
 
-  if (segments.length > MAX_FS_PATH_DEPTH) {
-    return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_FS_PATH_DEPTH };
-  }
-
   let bytes = null;
   if (content instanceof Uint8Array) {
     bytes = content;
@@ -957,15 +933,6 @@ export async function writeFsGrantFile(
     bytes = new Uint8Array(content);
   } else {
     bytes = new Uint8Array(0);
-  }
-
-  if (bytes.byteLength > MAX_FS_WRITE_BYTES) {
-    return {
-      ok: false,
-      error: "fs_file_too_large",
-      size: bytes.byteLength,
-      maxBytes: MAX_FS_WRITE_BYTES,
-    };
   }
 
   let fileHandle = null;
@@ -1024,12 +991,12 @@ export async function writeFsGrantFile(
 /**
  * Recursive bounded manifest scan of a granted directory.
  * @param {string} grantId
- * @param {{ maxEntries?: number, maxDepth?: number }} [options]
+ * @param {{ maxEntries?: number | null, maxDepth?: number | null }} [options]
  * @param {{ customIdb?: any }} [dbOptions]
  */
 export async function scanFsGrantManifest(
   grantId,
-  { maxEntries = MAX_FS_SCAN_ENTRIES, maxDepth = MAX_FS_PATH_DEPTH } = {},
+  { maxEntries = null, maxDepth = null } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -1045,8 +1012,13 @@ export async function scanFsGrantManifest(
   let totalCount = 0;
   let estimatedBytes = 0;
 
+  // dptw: no entry/byte/depth ceilings — the manifest walks everything.
+  // Explicit caller maxEntries/maxDepth are window requests, honored exactly.
+  const effectiveMaxEntries = Number.isFinite(Number(maxEntries)) && Number(maxEntries) > 0 ? Math.trunc(Number(maxEntries)) : Infinity;
+  const effectiveMaxDepth = Number.isFinite(Number(maxDepth)) && Number(maxDepth) > 0 ? Math.trunc(Number(maxDepth)) : Infinity;
+
   async function walk(dirHandle, currentPath, depth) {
-    if (depth > maxDepth || entries.length >= maxEntries || estimatedBytes >= MAX_FS_SCAN_BYTES) {
+    if (depth > effectiveMaxDepth || entries.length >= effectiveMaxEntries) {
       truncated = true;
       return;
     }
@@ -1074,11 +1046,10 @@ export async function scanFsGrantManifest(
       }
 
       const record = { path: relPath, name: item.name, kind, size, lastModified };
-      const rowSize = JSON.stringify(record).length;
 
-      if (entries.length < maxEntries && estimatedBytes + rowSize < MAX_FS_SCAN_BYTES) {
+      if (entries.length < effectiveMaxEntries) {
         entries.push(record);
-        estimatedBytes += rowSize;
+        estimatedBytes += JSON.stringify(record).length;
       } else {
         truncated = true;
       }

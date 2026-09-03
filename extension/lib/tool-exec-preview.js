@@ -34,19 +34,14 @@ import {
 } from "./wasm-package-authority.js";
 
 export const PREVIEW_LIMITS = Object.freeze({
-  maxArgs: 4,
-  maxArgBytes: 512,
-  maxArgTotalBytes: 1024,
-  // The wasm bytes transport at maxWasmBytes (4 MiB, the tiny-tier max) while
-  // the metadata/request JSON cap stays EXECUTOR_BOUNDS.maxRequestBytes 64 KiB;
-  // the stdin bound is sized for the metadata envelope (2 KiB honest for a
-  // settings preview sample).
-  maxStdinBytes: 2 * 1024,
-  // Bounded by the WASI host hard caps (MAX_STDOUT_BYTES 1 MiB, MAX_STDERR 256 KiB).
-  maxStdoutBytes: 1024 * 1024,
-  maxStderrBytes: 256 * 1024,
+  // dptw: no byte/arg ceilings on the settings preview — stdin/stdout/stderr
+  // and the rendered output text carry complete data. wallMs stays: a hung
+  // preview must still time out.
+  maxStdinBytes: Number.POSITIVE_INFINITY,
+  maxStdoutBytes: Number.POSITIVE_INFINITY,
+  maxStderrBytes: Number.POSITIVE_INFINITY,
   wallMs: 5000,
-  maxOutputTextBytes: 256 * 1024,
+  maxOutputTextBytes: Number.POSITIVE_INFINITY,
 });
 
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
@@ -62,8 +57,9 @@ import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 // contract — strlen-based C strings, multiline legal, NUL truncates by C
 // semantics); their per-arg bound is EXACTLY the createWasiJob 1024-byte cap
 // (2 docs + flags fit the 2048 total; the global host schema is unchanged).
-const TWO_DOCUMENT_BOUNDS = Object.freeze({ maxArgBytes: 1024, maxArgTotalBytes: 2048 });
-const SINGLE_DOCUMENT_BOUNDS = Object.freeze({ maxArgBytes: 512, maxArgTotalBytes: 1024 });
+// dptw (2026-09-03): no argv/stdin byte ceilings. The per-tool SHAPE rules
+// stay (gzip's two modes, the diff/patch BOM guard, NUL rejection — argv is a
+// C-string surface), but no size limit refuses complete input.
 
 export const PREVIEW_SPECS = Object.freeze(
   Object.fromEntries(
@@ -95,10 +91,6 @@ export const PREVIEW_SPECS = Object.freeze(
               Object.freeze([]),
               Object.freeze(["-d"]),
             ]),
-            maxTextInputBytes: 2048,
-            maxBase64InputChars: 2048,
-            maxDecodedInputBytes: 1536,
-            maxBinaryOutputBytes: 65536,
           } : {}),
           // Immutable per-tool workspace seeds. stat/du retain their minimum
           // deterministic input; tree alone gets the nested seed required to
@@ -128,9 +120,6 @@ export const PREVIEW_SPECS = Object.freeze(
             : row.toolId === "touch"
             ? { defaultArgs: Object.freeze(["-t", "0", "/job/scratch/touched"]) }
             : {}),
-          argBounds: row.toolId === "diff" || row.toolId === "patch"
-            ? TWO_DOCUMENT_BOUNDS
-            : SINGLE_DOCUMENT_BOUNDS,
         }),
       ]),
   ),
@@ -258,12 +247,8 @@ function parseSqliteInput(raw) {
   if (typeof sql !== "string") fail("preview_sqlite_shape");
   if (database !== "test.db") fail("preview_sqlite_database");
   if (readOnly !== true) fail("preview_sqlite_readonly");
-  if (!Array.isArray(params) || params.length > 8) fail("preview_sqlite_params");
+  if (!Array.isArray(params)) fail("preview_sqlite_params");
   const canonical = JSON.stringify({ sql, params, database, readOnly });
-  if (utf8Bytes(canonical) > PREVIEW_LIMITS.maxStdinBytes) fail("preview_stdin");
-  if (utf8Bytes(sql) > 1792) fail("preview_sqlite_sql");
-  const paramsSerialized = JSON.stringify(params);
-  if (utf8Bytes(paramsSerialized) > 512) fail("preview_sqlite_params");
   return Object.freeze({ sql, params: Object.freeze([...params]), database, readOnly, canonical });
 }
 
@@ -279,7 +264,7 @@ export function validatePreviewInput(raw) {
   ) fail("preview_request_shape");
   const spec = previewSpecFor(raw.toolId);
   if (!spec) fail("preview_unknown_tool");
-  if (!Array.isArray(raw.args) || raw.args.length > PREVIEW_LIMITS.maxArgs) {
+  if (!Array.isArray(raw.args)) {
     fail("preview_args");
   }
   // gzip is intentionally not a generic argv surface: only exact compress []
@@ -287,24 +272,17 @@ export function validatePreviewInput(raw) {
   if (raw.toolId === "gzip" && !spec.allowedArgs.some(
     (allowed) => JSON.stringify(allowed) === JSON.stringify(raw.args),
   )) fail("preview_args");
-  // The per-tool arg bounds from the immutable spec (diff/patch get the exact
-  // 1024/doc + 2048 total; the 17 others stay 512/1024).
-  const { maxArgBytes, maxArgTotalBytes } = spec.argBounds;
-  let totalBytes = 0;
   // The leading-BOM rejection is scoped to the two-document tools ONLY: the
   // diff/patch binaries are NUL/C-string argv consumers where a BOM would
   // corrupt argv[0]-adjacent parsing. The predecessor 17 keep their exact
   // prior argv behavior (a leading BOM in an arg is accepted as before).
+  // dptw: no per-arg or total byte ceilings.
   const rejectLeadingBom = raw.toolId === "diff" || raw.toolId === "patch";
   const args = raw.args.map((arg) => {
     if (typeof arg !== "string" || arg.includes("\0")) fail("preview_args");
     if (rejectLeadingBom && arg.charCodeAt(0) === 0xfeff) fail("preview_args");
-    const bytes = utf8Bytes(arg);
-    if (bytes > maxArgBytes) fail("preview_args");
-    totalBytes += bytes;
     return arg;
   });
-  if (totalBytes > maxArgTotalBytes) fail("preview_args");
   if (typeof raw.stdin !== "string") fail("preview_stdin");
   let sqliteInput = null;
   if (raw.toolId === "gzip") {
@@ -312,15 +290,12 @@ export function validatePreviewInput(raw) {
       // TextEncoder replaces malformed scalar values, so reject those values
       // first. A BOM or NUL is outside this intentionally narrow text mode.
       if (raw.stdin.charCodeAt(0) === 0xfeff || raw.stdin.includes("\0") ||
-          hasLoneSurrogate(raw.stdin) || utf8Bytes(raw.stdin) > spec.maxTextInputBytes) {
+          hasLoneSurrogate(raw.stdin)) {
         fail("preview_gzip_text");
       }
     } else {
-      if (raw.stdin.length > spec.maxBase64InputChars) fail("preview_gzip_base64");
-      let decoded;
-      try { decoded = decodeCanonicalBase64(raw.stdin); }
+      try { decodeCanonicalBase64(raw.stdin); }
       catch { fail("preview_gzip_base64"); }
-      if (decoded.byteLength > spec.maxDecodedInputBytes) fail("preview_gzip_base64");
     }
   } else if (raw.toolId === "sqlite3_query_bounded") {
     // The sqlite stdin is the canonical JSON string (the shape/readOnly/
@@ -399,17 +374,14 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     stdoutEncoding: spec.stdoutEncoding,
     workspaceSeed: spec.workspaceSeed,
     quota: quota ?? {
+      // dptw: byte quotas are unbounded; the count guards stay (runaway guard).
       hostCalls: 50_000,
       pathCalls: 4096,
-      stdinBytes: input.toolId === "gzip"
-        ? (input.args.length === 1 ? spec.maxDecodedInputBytes : spec.maxTextInputBytes)
-        : PREVIEW_LIMITS.maxStdinBytes,
-      stdoutBytes: input.toolId === "gzip"
-        ? spec.maxBinaryOutputBytes
-        : PREVIEW_LIMITS.maxStdoutBytes,
-      stderrBytes: PREVIEW_LIMITS.maxStderrBytes,
-      fileBytes: 10 * 1024 * 1024,
-      fileSize: 10 * 1024 * 1024,
+      stdinBytes: Number.POSITIVE_INFINITY,
+      stdoutBytes: Number.POSITIVE_INFINITY,
+      stderrBytes: Number.POSITIVE_INFINITY,
+      fileBytes: Number.POSITIVE_INFINITY,
+      fileSize: Number.POSITIVE_INFINITY,
       dynamicFds: 256,
     },
   });

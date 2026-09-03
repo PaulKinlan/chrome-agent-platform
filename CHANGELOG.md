@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.27] — 2026-09-03
+- no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
+
+## [0.3.26] — 2026-09-03
+- no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
+
 ## [0.3.25] — 2026-09-03
 - no self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
 

@@ -41,7 +41,6 @@
 // existing bodies (valid-body identity — never resurrects stale metadata).
 
 import { masterMemory, siteMemory, canonicalOrigin } from "./memory.js";
-import { TOOL_ARGUMENT_LIMITS } from "./tool-argument-contract.js";
 import { newId, sha256Hex } from "./pure.js";
 // The ONE diff core (jsdiff via ./shared/diff-core.js → dist bundle). The build
 // rewrites this dist import to the source wrapper for every bundle (build.mjs
@@ -417,7 +416,6 @@ async function repairPendingLocked(store, origin) {
 }
 
 export const ASSET_BOUNDS = {
-  maxContentBytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes,
   maxNameLength: 200,
   maxAssetsPerOrigin: 200,
   // The index byte bound used to be PER ORIGIN. The library is now one shared
@@ -443,7 +441,9 @@ export const ASSET_BOUNDS = {
   // space. Only a body that cannot fit even after every evictable version is
   // gone refuses (fail closed, readable error).
   maxVersionsPerAsset: 20,
-  maxVersionBytes: 4 * 1024 * 1024,
+  // dptw: no library-wide version byte budget — blobs are retained until the
+  // owner deletes artifacts or OPFS quota refuses honestly.
+  maxVersionBytes: Number.POSITIVE_INFINITY,
 };
 
 // ---- immutable versions: rows, content-addressed blobs, refcounts ----
@@ -573,32 +573,9 @@ async function planVersionEvictions(store, index, { id, n, addBytes }) {
     if (!(await readVersionRow(store, id, k))) break;
     take(id, k);
   }
-  // (b) the library-wide blob bytes: this artifact's oldest first, then the
-  // oldest other artifacts' oldest versions.
-  let total = (await readVersionBytes(store)) + addBytes;
-  if (total > ASSET_BOUNDS.maxVersionBytes) {
-    const others = index
-      .filter((r) => r && r.id !== id && Number.isSafeInteger(r.version))
-      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
-    const candidates = [{ id, version: n }, ...others];
-    let reads = 0;
-    outer: for (const r of candidates) {
-      const head = r.version;
-      for (let k = Math.max(1, head - ASSET_BOUNDS.maxVersionsPerAsset); k < head; k++) {
-        if (reads++ >= MAX_EVICTION_READS) break outer;
-        if (seen.has(`${r.id}:${k}`)) continue;
-        const row = await readVersionRow(store, r.id, k);
-        if (!row) continue;
-        const ref = await readBlobRef(store, row.sha256);
-        take(r.id, k);
-        if (ref <= 1) total -= row.size;
-        if (total <= ASSET_BOUNDS.maxVersionBytes) break outer;
-      }
-    }
-    if (total > ASSET_BOUNDS.maxVersionBytes) {
-      return { error: `artifact version storage is full (${ASSET_BOUNDS.maxVersionBytes} bytes) — delete artifacts to make room` };
-    }
-  }
+  // (b) REMOVED (dptw): no library-wide blob byte budget — the per-artifact
+  // count eviction above is the only version retention policy.
+  void addBytes;
   for (const r of index) {
     if (r && truncated.has(r.id)) r.versionsTruncated = true;
   }
@@ -712,7 +689,6 @@ function boundAssetMeta({ type, name, content }) {
   if (nm.length > ASSET_BOUNDS.maxNameLength) return { error: `asset name exceeds ${ASSET_BOUNDS.maxNameLength} chars` };
   if (typeof content !== "string") return { error: "asset content must be a string" };
   const size = utf8Bytes(content);
-  if (size > ASSET_BOUNDS.maxContentBytes) return { error: `asset content exceeds ${ASSET_BOUNDS.maxContentBytes} bytes` };
   return { ok: true, type: at, name: nm, size };
 }
 
