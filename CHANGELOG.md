@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.17] — 2026-09-03
+- The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
+
 ## [0.3.16] — 2026-09-03
 - read_file delivers every requested byte — no size-cap refusals in the reader, multibyte-safe windows, transport decides delivery
 
