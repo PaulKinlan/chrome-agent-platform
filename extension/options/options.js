@@ -47,10 +47,11 @@ import {
   renderInternalProviderStatus,
 } from "../lib/provider-visibility.js";
 import {
+  defaultFamilyId,
+  familyTabSlug,
   keyPageFor,
-  leadingProviders,
-  moreProviders,
   prefilledModelFor,
+  providerFamilies,
   useEnabled,
 } from "../lib/providers-view.js";
 import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
@@ -921,21 +922,26 @@ function buildProviderCard(p, cfg) {
   return card;
 }
 
+// Provider family tabs (CAP-FB-20260902-PROVIDERS-TABBED-UI-01): the SELECTED
+// family is view state (which panel is open); it survives re-renders. The
+// DEFAULT provider's family is only the initial selection.
+let selectedProviderFamily = null;
+
 async function renderProviders(restoreFocus = false) {
   // Route the provider read through the SERVICE WORKER (single authority) — never
   // call lib/provider.js's kv* directly in this page realm (the round-16 split-
   // authority finding). BOUNDED: a killed/suspended worker must not leave
   // Providers blank — settle with an honest error + Retry.
-  const recRoot = $("#provider-recommended");
-  const moreRoot = $("#provider-more");
+  const tabsRoot = $("#provider-tabs");
+  const panelsRoot = $("#provider-panels");
   let cfg;
   try {
     cfg = await boundedSend("provider.get");
   } catch (e) {
-    if (recRoot) {
-      recRoot.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
+    if (panelsRoot) {
+      panelsRoot.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
         `<button class="btn small" type="button" id="retry-providers">Retry</button>`;
-      recRoot.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
+      panelsRoot.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
     }
     return;
   }
@@ -945,23 +951,58 @@ async function renderProviders(restoreFocus = false) {
     $("#provider-selection-status"),
     providerSelectionPresentation(cfg, PROVIDERS),
   );
-  if (!recRoot || !moreRoot) return;
-  recRoot.innerHTML = "";
-  moreRoot.innerHTML = "";
+  if (!tabsRoot || !panelsRoot) return;
+  tabsRoot.replaceChildren();
+  panelsRoot.replaceChildren();
 
-  const lead = leadingProviders(PROVIDERS);
-  const rest = moreProviders(PROVIDERS);
-  for (const p of lead) recRoot.appendChild(buildProviderCard(p, cfg));
-  for (const p of rest) moreRoot.appendChild(buildProviderCard(p, cfg));
+  // One tab per provider family (Gemini, OpenAI-compatible, Anthropic,
+  // Local/Ollama). Cards are built ONCE per render into always-mounted panels,
+  // so switching tabs toggles `hidden` and unsaved input survives the switch.
+  const families = providerFamilies(PROVIDERS);
+  if (!families.some((f) => f.id === selectedProviderFamily)) {
+    selectedProviderFamily = defaultFamilyId(PROVIDERS, cfg.provider);
+  }
+  const selected = families.find((f) => f.id === selectedProviderFamily) ?? families[0];
 
-  // If the active default is one of the "More providers", open the disclosure
-  // so the user can see their current selection without hunting for it.
-  const more = $("#more-providers");
-  if (more && rest.some((p) => p.id === cfg.provider)) more.open = true;
+  const tabs = document.createElement("segmented-control");
+  tabs.setAttribute("items", families.map((f) => f.label).join(","));
+  tabs.setAttribute("label", "Provider families");
+  tabs.setAttribute("controls-prefix", "provider-family");
+  tabs.addEventListener("change", (e) => {
+    const fam = families.find((f) => f.label === e.detail?.value);
+    if (!fam) return;
+    selectedProviderFamily = fam.id;
+    for (const panel of panelsRoot.querySelectorAll(".provider-panel")) {
+      panel.hidden = panel.dataset.family !== fam.id;
+    }
+  });
+  tabsRoot.appendChild(tabs);
+  // Set the selection AFTER connect (the attribute-only `value` would race the
+  // custom element's upgrade).
+  if (selected) tabs.value = selected.label;
+
+  for (const fam of families) {
+    const slug = familyTabSlug(fam.label);
+    const panel = document.createElement("div");
+    panel.className = "provider-panel";
+    panel.dataset.family = fam.id;
+    panel.id = `provider-family-panel-${slug}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", `provider-family-tab-${slug}`);
+    panel.hidden = fam !== selected;
+    const cards = document.createElement("div");
+    cards.className = "provider-cards";
+    cards.setAttribute("role", "radiogroup");
+    cards.setAttribute("aria-label", `${fam.label} providers`);
+    for (const p of fam.providers) cards.appendChild(buildProviderCard(p, cfg));
+    panel.appendChild(cards);
+    panelsRoot.appendChild(panel);
+  }
 
   // ── radiogroup keyboard: arrow/Home/End move the checked selection + focus
-  // within each group (cards only; an arrow inside a text input is left alone).
-  for (const group of [recRoot, moreRoot]) {
+  // within each family's card group (an arrow inside a text input is left
+  // alone). Tab-strip arrow keys are the segmented-control's own pattern.
+  for (const group of panelsRoot.querySelectorAll(".provider-cards")) {
     group.addEventListener("keydown", (e) => {
       const target = e.target;
       if (!target?.classList?.contains?.("provider-card")) return; // typing in a field
@@ -986,12 +1027,8 @@ async function renderProviders(restoreFocus = false) {
 
   if (restoreFocus) {
     // Rerender replaces the focused subtree — re-focus a STABLE anchor (the
-    // active/checked card, else the first card) so a keyboard/AT user is not
-    // stranded.
-    const anchor = recRoot.querySelector('.provider-card[aria-checked="true"]') ||
-      moreRoot.querySelector('.provider-card[aria-checked="true"]') ||
-      recRoot.querySelector(".provider-card");
-    anchor?.focus();
+    // selected family's tab) so a keyboard/AT user is not stranded.
+    tabs.shadowRoot?.querySelector('[role="tab"][aria-selected="true"]')?.focus();
   }
 }
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.18] — 2026-09-03
+- Settings → Providers is tabbed again: one tab per provider family
+
+## [0.3.17] — 2026-09-03
+- Settings → Providers is tabbed again: one tab per provider family (Gemini, OpenAI-compatible, Anthropic, Local/Ollama) with full keyboard support; switching tabs keeps anything you typed; the recommended path and the four-click key flow are unchanged
+
 ## [0.3.16] — 2026-09-03
 - read_file delivers every requested byte — no size-cap refusals in the reader, multibyte-safe windows, transport decides delivery
 

@@ -94,17 +94,22 @@ Deno.test("the Providers copy never names chrome.storage", () => {
   );
 });
 
-Deno.test("the recommended card block leads a More providers disclosure (radiogroup a11y)", () => {
-  assertStringIncludes(html, `id="provider-recommended"`);
-  assertStringIncludes(html, `role="radiogroup"`);
-  assertStringIncludes(html, `id="provider-more"`);
-  assertStringIncludes(html, `<summary`); // the More providers disclosure
+Deno.test("the Providers panel is a family tablist + tabpanels (ARIA tabs pattern)", () => {
+  // CAP-FB-20260902-PROVIDERS-TABBED-UI-01: the recommended-scroll layout was
+  // replaced by one tab per provider family; the full family grouping and the
+  // default-tab rule are unit-tested in tests/providers-family-tabs.test.ts.
+  assertStringIncludes(html, `id="provider-tabs"`);
+  assertStringIncludes(html, `id="provider-panels"`);
+  assert(!html.includes(`id="provider-recommended"`), "the recommended-scroll container is gone");
+  assert(!html.includes(`id="provider-more"`), "the More providers disclosure is gone");
   // Each card is a radio with a checked state and a roving tabindex.
   assertStringIncludes(js, `card.setAttribute("role", "radio")`);
   assertStringIncludes(js, `aria-checked`);
   // The default provider is indicated (the badge + accessible name).
   assertStringIncludes(js, `provider-badge`);
-  // The panel container itself is not a tab stop (the card is).
+  // Panels are tabpanels labelled by their tab; not tab stops themselves.
+  assertStringIncludes(js, `role", "tabpanel"`);
+  assertStringIncludes(js, `aria-labelledby`);
   assert(!js.includes("panel.tabIndex = 0"), "the provider panel must not be a tab stop");
 });
 

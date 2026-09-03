@@ -105,6 +105,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-progress-inline.ts": { class: "kat" },
   "kat-provider-keyed-strip.ts": { class: "kat" },
   "kat-providers-recommended.ts": { class: "kat" },
+  "kat-providers-tabs.ts": { class: "kat" },
   "kat-recent-activity.ts": { class: "kat", ...RED("crash", "the explorer never mounts on the NTP ({mounted:false}) and the KAT then throws") },
   "kat-scheduled-next-run-widget.ts": { class: "kat" },
   "kat-scheduled-run-output.ts": { class: "kat" },

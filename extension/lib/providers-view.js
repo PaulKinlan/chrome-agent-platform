@@ -27,6 +27,75 @@ export function recommendedProvider(providers) {
   return (Array.isArray(providers) ? providers : []).find((p) => p?.recommended === true) ?? null;
 }
 
+/* ── Provider families (CAP-FB-20260902-PROVIDERS-TABBED-UI-01) ──
+ * The Providers panel is a tabbed interface: one tab per provider FAMILY.
+ * The grouping lives here (pure) so the tab order and the default-tab rule
+ * are unit-testable without a browser. */
+export const PROVIDER_FAMILIES = Object.freeze([
+  { id: "gemini", label: "Gemini" },
+  { id: "openai-compatible", label: "OpenAI-compatible" },
+  { id: "anthropic", label: "Anthropic" },
+  { id: "local", label: "Local/Ollama" },
+]);
+
+const PROVIDER_FAMILY_OF = Object.freeze({
+  gemini: "gemini",
+  anthropic: "anthropic",
+  openai: "openai-compatible",
+  deepseek: "openai-compatible",
+  "openai-compatible": "openai-compatible",
+  ollama: "local",
+  "lm-studio": "local",
+});
+
+/** The family a provider id belongs to. Unknown ids land in the generic
+ * OpenAI-compatible family (BYO endpoints are the catch-all shape), so a
+ * preset missing from the map never orphans from the tab strip. */
+export function familyForProvider(providerId) {
+  return PROVIDER_FAMILY_OF[String(providerId ?? "")] ?? "openai-compatible";
+}
+
+/** The slug shared by a family tab's id and its panel's id, derived from the
+ * tab LABEL. components.js <segmented-control> derives the same slug from the
+ * same label when controls-prefix is set — the two must agree (the providers
+ * tabs KAT asserts the aria-controls/aria-labelledby pair resolves). */
+export function familyTabSlug(label) {
+  return String(label ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+/** The tabbed panel content: one entry per family that HAS providers, in the
+ * fixed family order, members ordered recommended-first then alternative.
+ * Empty families produce no tab. */
+export function providerFamilies(providers) {
+  const list = (Array.isArray(providers) ? providers : []).filter(Boolean);
+  return PROVIDER_FAMILIES.map((f) => ({
+    ...f,
+    providers: list
+      .filter((p) => familyForProvider(p.id) === f.id)
+      .sort((a, b) =>
+        Number(b?.recommended === true) - Number(a?.recommended === true) ||
+        Number(b?.alternative === true) - Number(a?.alternative === true)
+      ),
+  })).filter((f) => f.providers.length > 0);
+}
+
+/** The tab a fresh render selects: the family of the CURRENT default provider
+ * (the user lands on what is actually running), else the recommended
+ * provider's family (a fresh profile leads with the recommended path), else
+ * the first family. */
+export function defaultFamilyId(providers, currentProviderId) {
+  const families = providerFamilies(providers);
+  if (!families.length) return null;
+  const cur = String(currentProviderId ?? "");
+  if (cur) {
+    const curFamily = families.find((f) => f.providers.some((p) => p.id === cur));
+    if (curFamily) return curFamily.id;
+  }
+  const rec = recommendedProvider(providers);
+  if (rec) return familyForProvider(rec.id);
+  return families[0].id;
+}
+
 /** The documented alternative (Gemini). */
 export function alternativeProvider(providers) {
   return (Array.isArray(providers) ? providers : []).find((p) => p?.alternative === true) ?? null;

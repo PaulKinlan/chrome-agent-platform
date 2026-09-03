@@ -3240,7 +3240,7 @@ customElements.define("artifact-diff", ArtifactDiff);
  * accent ink. Every label enters via textContent — never an HTML string.
  * ────────────────────────────────────────────────────────────────────────── */
 class SegmentedControl extends Component {
-  static get observedAttributes() { return ["items", "value", "label"]; }
+  static get observedAttributes() { return ["items", "value", "label", "controls-prefix"]; }
   constructor() { super(); this._value = ""; }
   _items() {
     return String(this.getAttribute("items") ?? "")
@@ -3257,6 +3257,12 @@ class SegmentedControl extends Component {
   _render() {
     const items = this._items();
     const value = this.value;
+    // controls-prefix (CAP-FB-20260902-PROVIDERS-TABBED-UI-01): when set, each
+    // tab gains a stable id + aria-controls pointing at the host's tabpanel of
+    // the same slug (the host owns the panels). Slug rule must match
+    // familyTabSlug() in lib/providers-view.js (label lowercase, non-alnum
+    // runs to dashes) — the providers tabs KAT asserts the pair resolves.
+    const prefix = String(this.getAttribute("controls-prefix") ?? "").trim();
     mountTemplate(this, `
       :host { display:inline-block; }
       .tabs { display:inline-flex; gap:2px; padding:3px; border:1px solid var(--border,#e3e0d9);
@@ -3278,6 +3284,11 @@ class SegmentedControl extends Component {
       b.type = "button";
       b.setAttribute("role", "tab");
       b.dataset.val = item;
+      if (prefix) {
+        const slug = item.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        b.id = `${prefix}-tab-${slug}`;
+        b.setAttribute("aria-controls", `${prefix}-panel-${slug}`);
+      }
       const selected = item === value;
       b.setAttribute("aria-selected", selected ? "true" : "false");
       b.tabIndex = selected ? 0 : -1;
