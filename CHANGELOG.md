@@ -1,7 +1,43 @@
 # Changelog
 
-## [0.3.41] — 2026-09-03
+## [0.3.53] — 2026-09-03
 - Running the whole unit suite the slow way is no longer possible: the repo points you at the fast npm commands instead
+
+## [0.3.52] — 2026-09-03
+- The changelog reads like release notes again — every entry describes what the user gets, and the version hook strips bare branch names and merge subjects so this never recurs
+
+## [0.3.51] — 2026-09-03
+- The MCP SDK is properly declared as a dependency — installs can no longer accidentally lose it
+
+## [0.3.50] — 2026-09-03
+- The changelog's shipped copy materializes automatically in fresh checkouts, nine version notes are rewritten in plain user language, and the version hook stops writing bare ids as release notes
+
+## [0.3.49] — 2026-09-03
+- The review-49 regression suite no longer depends on a tmpfs snapshot — it survives tmpfs cleanups
+
+## [0.3.48] — 2026-09-03
+- No self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
+
+## [0.3.47] — 2026-09-03
+- The hub's own worktree and directory entries are durable — not wiped by tmpfs cleanup
+
+## [0.3.46] — 2026-09-03
+- The task view shows long responses in full, exactly as they were generated — byte-true bounds, escapes handled, no broken characters
+
+## [0.3.45] — 2026-09-03
+- Embedded views share one content left edge at any viewport — the content-edge probes now use real visible elements and the embedded Artifacts title count is exact
+
+## [0.3.44] — 2026-09-03
+- Interactive artifacts are reliable — clicks reach the artifact, generated code no longer cuts off at size bounds, and the source view shows the complete stored body
+
+## [0.3.43] — 2026-09-03
+- Site-tool errors tell you the real cause — tool, phase, redacted message/stack, realm, and origin — with a docs-fallback that fetches the site's documentation when its tools fail
+
+## [0.3.42] — 2026-09-03
+- Pipeline workflows run with per-step owner approval — capability-paused steps show a real approval card and destructive steps fail closed
+
+## [0.3.41] — 2026-09-03
+- Worker runs can be steered and stopped safely — the stop-run path requires an exact run match and refuses wrong-run aborts
 
 ## [0.3.40] — 2026-09-03
 - The unit test suite finishes in about a quarter of the time: test files run in parallel, and very long text no longer stalls secret redaction

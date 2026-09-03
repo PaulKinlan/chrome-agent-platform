@@ -910,6 +910,88 @@
          with a soft edge rather than a hard cut. */
       background: linear-gradient(to top, var(--bg) 0, var(--bg) calc(100% - 12px), transparent);
     }
+    /* chrome-agent-platform-afiu: the run-control bar (steer/queue/send-now)
+       + the persisted queued-follow-up chips sit with the composer in the
+       dock, above it. */
+    .thread-body .run-control-bar, .thread-body .pending-chips {
+      flex: 0 0 auto;
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 4px 24px 0;
+      box-sizing: border-box;
+    }
+    .run-control-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .run-control-bar[hidden], .pending-chips[hidden] { display: none; }
+    .run-control-mode {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      align-items: center;
+      padding: 3px;
+      border: 1px solid var(--border,#e3e0d9);
+      border-radius: 10px;
+      background: var(--panel,#ffffff);
+      align-self: flex-start;
+    }
+    .run-control-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 7px;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--ink,#1d1b18);
+      cursor: pointer;
+      user-select: none;
+    }
+    .run-control-option:has(input:checked) { background: var(--accent,#0e6e63); color: var(--btn-fg,#fff); }
+    .run-control-option input { margin: 0; accent-color: var(--accent,#0e6e63); }
+    .run-control-option input:disabled + span { opacity: .45; cursor: not-allowed; }
+    .run-control-option:has(input:disabled) { cursor: not-allowed; }
+    .run-control-option input:focus-visible { outline: 2px solid var(--accent,#0e6e63); outline-offset: 2px; }
+    .run-control-hint { margin: 0; font-size: 12px; color: var(--muted,#635e56); }
+    .pending-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .pending-chips-label { font-size: 11.5px; font-weight: 600; color: var(--muted,#635e56); }
+    .pending-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      max-width: 320px;
+      border: 1px solid var(--border,#e3e0d9);
+      border-radius: 999px;
+      background: var(--panel,#ffffff);
+      padding: 3px 4px 3px 10px;
+      font-size: 12px;
+      color: var(--ink,#1d1b18);
+    }
+    .pending-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .chip-action {
+      flex: 0 0 auto;
+      min-width: 22px;
+      height: 22px;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted,#635e56);
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .chip-action:hover:not(:disabled) { background: var(--panel-2,#efede8); color: var(--ink,#1d1b18); }
+    .chip-action:focus-visible { outline: 2px solid var(--accent,#0e6e63); outline-offset: 1px; }
+    .chip-action:disabled { opacity: .35; cursor: default; }
+    .chip-remove { color: var(--muted,#635e56); }
     /* The debug overlay stays out of flow above the transcript. */
     .thread-body .run-debug { flex: 0 0 auto; }
     /* Programmatic focus on the title (the thread just opened) paints no
@@ -1113,6 +1195,28 @@
           <durable-run-registry id="durable-run-registry" hidden></durable-run-registry>
         </div>
         <agent-conversation id="thread-conversation" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation transcript" tabindex="0"></agent-conversation>
+        <!-- chrome-agent-platform-afiu: the composer's run-control affordances
+             (shown while the open task's run is live) + the persisted queued
+             follow-ups (chips). The mode radios decide what a send does while
+             the task runs: steer / queue / send-now (+ stop). -->
+        <div id="run-control-bar" class="run-control-bar" hidden>
+          <div class="run-control-mode" role="radiogroup" aria-label="While this task runs, sending">
+            <label class="run-control-option">
+              <input type="radio" name="run-control-mode" value="steer" checked>
+              <span>Steer</span>
+            </label>
+            <label class="run-control-option">
+              <input type="radio" name="run-control-mode" value="queue">
+              <span>Queue</span>
+            </label>
+            <label class="run-control-option">
+              <input type="radio" name="run-control-mode" value="send-now">
+              <span>Send now + stop</span>
+            </label>
+          </div>
+          <p class="run-control-hint" id="run-control-hint"></p>
+        </div>
+        <div id="pending-chips" class="pending-chips" hidden></div>
         <agent-composer id="thread-composer" placeholder="Reply, or @mention an agent…" send-label="Send"></agent-composer>
       </div>
     </div>

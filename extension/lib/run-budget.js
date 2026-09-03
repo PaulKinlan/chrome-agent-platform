@@ -164,3 +164,23 @@ export function continuationStopTerminal({ used, total, stopped } = {}) {
 export function isContinuationStopTerminal(terminal) {
   return isBudgetTerminal(terminal) && !!terminal.budget?.stopped;
 }
+
+/** The terminal a run settles with when the OWNER steered it to stop at the
+ * next step boundary (chrome-agent-platform-afiu, mode "stop-step"). Budget-
+ * family like the continuation-cap stop (the status row's Continue applies —
+ * the run was redirected mid-work and the owner can carry on), with words
+ * that say what actually happened instead of the cap's tool-loop copy. */
+export function steerStopTerminal({ used, total, stopped } = {}) {
+  const u = Number.isFinite(Number(used)) ? Math.trunc(Number(used)) : 0;
+  const t = Number.isFinite(Number(total)) ? Math.trunc(Number(total)) : 0;
+  const steps = Number.isFinite(Number(stopped?.steps)) ? Math.trunc(Number(stopped.steps)) : u;
+  const marker = formatContinuationStop({ steps });
+  return {
+    ok: false,
+    error: `${marker} — you steered the run; it stopped before the next step`,
+    errorCategory: "budget",
+    errorReason: `${marker} — the run stopped after your steer; the partial answer is above`,
+    errorAction: "Continue",
+    budget: { used: u, total: t, exhausted: false, stopped: { reason: "steer-stop-step", steps, iterations: 0 } },
+  };
+}

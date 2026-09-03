@@ -4878,6 +4878,7 @@ class MessageBubble extends Component {
       :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
       :host(:last-child) { margin-bottom:0; }
       :host([role="user"]) { justify-content:flex-end; }
+      :host([role="steer"]) { justify-content:flex-end; }
       .msg { max-width:78%; border-radius:12px; padding:10px 14px; overflow-wrap:anywhere; }
       /* An assistant turn: the identity header (avatar · name · time) above the bubble. */
       .turn { display:flex; flex-direction:column; gap:6px; max-width:78%; min-width:0; }
@@ -4886,6 +4887,8 @@ class MessageBubble extends Component {
       .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
       .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
       :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
+      :host([role="steer"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--accent,#0e6e63); }
+      :host([role="steer"]) .steer-label { display:block; font-size:11px; font-weight:600; color:var(--accent,#0e6e63); letter-spacing:.04em; text-transform:uppercase; margin:0 0 4px; }
       :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
       :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
       :host([role="error"]) .body { color:var(--danger,#b3261e); }
@@ -5555,6 +5558,19 @@ class AgentConversation extends Component {
     }
   }
   appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
+  /** chrome-agent-platform-afiu: an OWNER INTERRUPTION — the message the owner
+   *  steered into a running agent. Rendered as its own right-aligned bubble
+   *  (the "You steered" treatment) so a steer reads as guidance the agent is
+   *  now following, never as an assistant or tool row. */
+  appendSteer(text, ts) {
+    if (ts) this._maybeTsGap(ts);
+    const bubble = this._bubble("steer", String(text ?? ""));
+    const label = document.createElement("span");
+    label.className = "steer-label";
+    label.textContent = "You steered";
+    bubble._root?.querySelector(".msg")?.prepend(label);
+    return bubble;
+  }
   appendError(text, { reason, action, category, ts } = {}) {
     if (ts) this._maybeTsGap(ts);
     return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null, "error-category": category ?? null });
