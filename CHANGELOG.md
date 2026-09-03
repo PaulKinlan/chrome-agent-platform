@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.33] — 2026-09-03
+- beads export: file the thread-open perf follow-up (4epo)
+
 ## [0.3.32] — 2026-09-03
 - Flip the hook fan-out security test to the dptw contract: the guard against arbitrary fan-out is known-recipe validation (kept), not a template byte cap (removed) — a large template on a known recipe now subscribes
 
