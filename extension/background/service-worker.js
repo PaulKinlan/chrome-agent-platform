@@ -6255,8 +6255,17 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: `origin ${canonical} is not enrolled` };
     }
     const res = await invokeSiteTool(canonical, String(name ?? ""), args ?? {}, snap.gen);
-    if (res?.error) return { ok: false, error: res.error };
-    if (res?.ok === false) return { ok: false, error: res.error ?? "invoke failed" };
+    // Forward the FULL honest failure (chrome-agent-platform-ajcc):
+    // errorDetail (page-side name/message/stack excerpt + phase + realm +
+    // origin), plus the SW's own reason/detail on its early exits — re-wrapping
+    // to a bare { error } string here used to strip them all.
+    if (res?.error || res?.ok === false) {
+      const out = { ok: false, error: res.error ?? "invoke failed" };
+      if (res?.errorDetail) out.errorDetail = res.errorDetail;
+      if (typeof res?.reason === "string") out.reason = res.reason;
+      if (typeof res?.detail === "string") out.detail = res.detail;
+      return out;
+    }
     return { ok: true, result: res?.result };
   },
   async "webmcp.detect.bootstrap"({ origin, __sender }) {
