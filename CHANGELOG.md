@@ -1,7 +1,31 @@
 # Changelog
 
+## [0.3.36] — 2026-09-03
+- Merge remote-tracking branch 'origin/main' into cap-beads-922q
+
+## [0.3.35] — 2026-09-03
+- cap-beads-9ve7
+
+## [0.3.34] — 2026-09-03
+- work-p45y-r5
+
+## [0.3.33] — 2026-09-03
+- cap-beads-znx9
+
+## [0.3.32] — 2026-09-03
+- cap-beads-yop8
+
+## [0.3.31] — 2026-09-03
+- cap-beads-afiu
+
+## [0.3.30] — 2026-09-03
+- cap-beads-dptw-tr
+
+## [0.3.29] — 2026-09-03
+- cap-beads-60be
+
 ## [0.3.28] — 2026-09-03
-- 922q prompt-level layer (work, uncommitted at hub handoff): honest UnknownError text + modelContext-unavailable error + master-skill docs-fallback guidance + demo-model fallback script + seeded fallback tests
+- cap-beads-4ffg
 
 ## [0.3.27] — 2026-09-03
 - no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds

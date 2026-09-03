@@ -1921,6 +1921,16 @@ async function renderBrowser() {
   const granted = live?.active === true;
   const toggle = $("#browser-grant");
   toggle.checked = granted;
+  // Lifecycle cleanup (chrome-agent-platform-4ffg): auto-close tabs a
+  // finished task opened — DEFAULT OFF (owner trust). The service worker
+  // reads cap:autoCloseRunTabs at run end; nothing needs invalidating.
+  const autoClose = await storage.get("cap:autoCloseRunTabs");
+  const autoToggle = $("#auto-close-run-tabs");
+  autoToggle.checked = autoClose["cap:autoCloseRunTabs"] === true;
+  autoToggle.addEventListener("toggle", async (e) => {
+    await storage.set({ "cap:autoCloseRunTabs": e.detail.checked === true });
+    saveFlash(e.detail.checked === true ? "Auto-close run tabs on." : "Auto-close run tabs off.");
+  });
   $("#grant-origins").hidden = !granted;
   await renderGrantRows();
   // An Allow on an approval card in a chat adds to the set while this page is
