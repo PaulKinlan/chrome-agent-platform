@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.43",
+ "release": "0.3.44",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
