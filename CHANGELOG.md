@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.37] — 2026-09-03
+- 922q: site tools survive a broken native WebMCP dispatch + agents answer from the site's docs when tools fail
+
 ## [0.3.36] — 2026-09-03
-- Merge remote-tracking branch 'origin/main' into cap-beads-922q
+- Site agents recover when a site's tools break: if the browser's WebMCP dispatch layer fails (the beads.gascity.com search_docs DOMException), the call now falls through to the page's own tool handler, and if every path fails you get the real error with everything that was tried — plus the agent fetches the site's own documentation and answers from it, saying so, instead of leaving you with a bare failure.
 
 ## [0.3.35] — 2026-09-03
 - cap-beads-9ve7

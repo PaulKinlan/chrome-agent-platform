@@ -53,6 +53,7 @@ import {
   requireSettingsSender,
 } from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
+import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal } from "../lib/run-budget.js";
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
@@ -1521,15 +1522,20 @@ async function readSiteLazySources(origin, runGenCell) {
         "arguments",
       );
     },
-  }, ({ name, source, args }) =>
-    invokeSiteTool(
+  }, async ({ name, source, args }) => {
+    const res = await invokeSiteTool(
       origin,
       name,
       args,
       runGenCell?.get?.() ?? null,
       source,
-    )
-  );
+    );
+    // chrome-agent-platform-922q: a failed site tool no longer ends the
+    // question — when the site's own documentation is reachable, the agent
+    // answers from it (attribution included) instead of surfacing a bare
+    // failure. No docs discoverable → the honest error stands unchanged.
+    return await withSiteDocsFallback({ origin, name, args, res });
+  });
 }
 
 // The orchestrator build (the memory, the workers, the tools). Shared by

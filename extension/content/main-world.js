@@ -373,7 +373,14 @@
     }
   }
   // Describe a page-thrown error honestly + boundedly. Never throws.
-  function describePageError(e, tool, phase) {
+  // dispatchChain (optional): when the declared-tool dispatch chain exhausted
+  // EVERY path (922q), the labels + redacted error NAMES of what was tried —
+  // appended to the text and carried in errorDetail.dispatchChain. The chain
+  // note is built from labels + names only (no page message text), so the
+  // single redaction pass below stays the only one the message/stack see
+  // (a second redactBridgeText pass would NFKC-fold the "…[query redacted]"
+  // marker into three dots — observed in the 922q KAT).
+  function describePageError(e, tool, phase, dispatchChain = null) {
     let isDomEx = false;
     try {
       isDomEx = typeof NativeDOMException === "function" && e instanceof NativeDOMException;
@@ -406,6 +413,13 @@
       // plus everything the boundary captured (chrome-agent-platform-ajcc).
       text = `tool ${detail.tool} failed (${type}) — the page's handler threw ${isDomEx ? "a DOMException" : "an error"} with no message${stack ? "; a stack excerpt is in errorDetail" : " and no stack was captured"}`;
     }
+    if (Array.isArray(dispatchChain) && dispatchChain.length > 1) {
+      // Shape-gate: the chain rides a page-controlled error object — accept
+      // only a bounded array of short strings, never page prose.
+      const chain = dispatchChain.slice(0, 8).map((s) => String(s).slice(0, 80));
+      detail.dispatchChain = chain;
+      text += ` — every dispatch path failed (tried ${chain.join("; ")})`;
+    }
     return { error: text, errorDetail: detail };
   }
   // Errors WE throw (cancellation, dispatch, unknown tool) carry safe static
@@ -420,7 +434,7 @@
     if (e && e.__capInternal === true) {
       return { error: String(e.message).slice(0, 200), errorDetail: null };
     }
-    return describePageError(e, tool, "dispatch");
+    return describePageError(e, tool, "dispatch", e?.__capDispatchChain ?? null);
   }
 
   async function invoke(isStale, name, args, source) {
@@ -464,29 +478,76 @@
       }
       const raw = await getRawTools();
       const tool = raw.find((t) => t && t.name === name);
+      if (!tool && typeof mc?.callTool !== "function" && typeof mc?.invoke !== "function") {
+        throw internalError(`no such declared tool: ${name}`);
+      }
+      // The dispatch CHAIN (chrome-agent-platform-922q — the owner's
+      // beads.gascity.com search_docs failure): Chrome's NATIVE WebMCP
+      // dispatch (modelContext.executeTool) throws a bare
+      // DOMException: UnknownError on real sites whose page handler is
+      // perfectly healthy — the failure is in the browser's dispatch layer,
+      // never reaching the handler. First-match-wins therefore fails the call
+      // even though the descriptor's own execute function (identity-preserved
+      // from getTools(), so a colliding window global cannot hijack it) would
+      // have run the page's real code. Try every available path in order; a
+      // throwing path falls through to the next; only when EVERY path has
+      // failed does the honest error name each path and its cause.
+      // Tradeoff (accepted): a path that ran the handler and THEN threw (e.g.
+      // native result-serialization) can re-run the handler in the next path.
+      // The observed native failure happens BEFORE the handler is reached,
+      // and the dominant declared tools (search/read) are idempotent.
+      const dispatchPaths = [];
       if (tool) {
-        if (isStale()) {
-          throw internalError("invocation cancelled");
-        }
         if (typeof mc?.executeTool === "function") {
-          return await mc.executeTool(tool, args ?? {});
+          dispatchPaths.push(["modelContext.executeTool", () => mc.executeTool(tool, args ?? {})]);
         }
-        if (typeof tool.execute === "function") return await tool.execute(args ?? {});
-        if (typeof tool._execute === "function") return await tool._execute(args ?? {});
+        if (typeof tool.execute === "function") {
+          dispatchPaths.push(["tool.execute", () => tool.execute(args ?? {})]);
+        }
+        if (typeof tool._execute === "function") {
+          dispatchPaths.push(["tool._execute", () => tool._execute(args ?? {})]);
+        }
       }
       if (typeof mc?.callTool === "function") {
-        if (isStale()) {
-          throw internalError("invocation cancelled");
-        }
-        return await mc.callTool(name, args ?? {});
+        dispatchPaths.push(["modelContext.callTool", () => mc.callTool(name, args ?? {})]);
       }
       if (typeof mc?.invoke === "function") {
+        dispatchPaths.push(["modelContext.invoke", () => mc.invoke(name, args ?? {})]);
+      }
+      if (dispatchPaths.length === 0) {
+        throw internalError(
+          `declared tool ${name} has no callable dispatch path — the page's WebMCP layer exposes no way to run it`
+        );
+      }
+      const dispatchFailures = [];
+      for (const [dispatchLabel, runDispatch] of dispatchPaths) {
+        // Re-check the cancel epoch between paths: a cancel that landed while
+        // an earlier path was throwing must stop the chain before the next
+        // path starts another page-side attempt.
         if (isStale()) {
           throw internalError("invocation cancelled");
         }
-        return await mc.invoke(name, args ?? {});
+        try {
+          return await runDispatch();
+        } catch (dispatchError) {
+          const en = redactBridgeText(safeField(dispatchError, "name") || typeof dispatchError, 64) || "Error";
+          dispatchFailures.push({ label: dispatchLabel, name: en, error: dispatchError });
+        }
       }
-      throw internalError(`no such declared tool: ${name}`);
+      // EVERY path failed. Report the LAST failure's real error (its name,
+      // message and stack, redacted exactly once by describePageError) with
+      // the full chain attached — the single-path polyfill failure keeps its
+      // byte-identical ajcc shape; the multi-path native failure says what
+      // was tried. (The chain rides the page error object; describePageError
+      // shape-gates it, and the names were redacted at capture.)
+      const lastFailure = dispatchFailures[dispatchFailures.length - 1];
+      try {
+        Object.defineProperty(lastFailure.error, "__capDispatchChain", {
+          value: dispatchFailures.map((f) => `${f.label} threw ${f.name}`),
+          configurable: true,
+        });
+      } catch { /* a frozen page error just loses the chain note */ }
+      throw lastFailure.error;
     }
     throw internalError(`unknown tool source: ${String(source)}`);
   }
