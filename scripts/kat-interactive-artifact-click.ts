@@ -2,19 +2,24 @@
 // interactive artifact must be CLICKABLE in the artifact view and its SOURCE
 // view must show the COMPLETE stored content.
 //
-//   (A) Interactivity: a click-game artifact (a button that increments a
+//   (A) Interactivity legs: a click-game artifact (a button that increments a
 //       visible score) is opened in the real artifact viewer (artifact.html
-//       Preview tab) and in the hub's artifact dialog (openArtifactDialog).
-//       A GENUINE CDP click (Input.dispatchMouseEvent through the real
-//       compositor hit-test) lands on the button inside the nested sandboxed
-//       srcdoc frame and the visible score increments. Before the fix the
-//       clicks died (no state change) — the journey fails.
+//       Preview tab), in the hub's artifact dialog, and in the library dialog
+//       inside the hub view frame. A GENUINE CDP click (Input.dispatchMouseEvent
+//       through the real compositor hit-test) lands on the button inside the
+//       nested sandboxed srcdoc frame and the visible score increments. These
+//       legs PIN the interactivity contract the owner reported as broken (the
+//       double-iframe + sandbox stack delivers pointer events in all three
+//       surfaces): no pointer/iframe/sandbox PRODUCTION code changed in this
+//       fix — the fix's source guard (B) removes the truncated source view — so
+//       the click legs are the regression guard that keeps the surfaces honest
+//       against a future overlay / z-index / sandbox-attribute regression.
 //   (B) Source completeness: an artifact LARGER than the legacy 64 KiB
 //       source-view slice (90,000 chars) is created through the real
 //       asset.create route. The Source tab renders the COMPLETE stored body
-//       byte-for-byte (length + exact tail equality), and the preview host
-//       mounts it. Before the fix the Source tab showed only the first
-//       65,536 characters — the journey fails.
+//       byte-for-byte (the rendered text's SHA-256 equals the stored body's
+//       SHA-256), and the preview host mounts it. Before the fix the Source tab
+//       showed only the first 65,536 characters — the journey fails.
 //
 // Evidence: screenshots (viewer before/after click, hub dialog before/after
 // click, big-artifact Source tab) written to the OUT dir (default
@@ -70,6 +75,13 @@ const BIG_HTML = `<!doctype html><html><head><meta charset="utf-8"><title>Big ar
 <body id="big-artifact-body">${"x".repeat(90_000 - 5000)}<p id="big-tail">TAIL-END-${"y".repeat(4000)}</p>
 </body></html>`;
 const bigLength = BIG_HTML.length;
+
+/** SHA-256 hex of a string (Deno side — used to fingerprint the stored body
+ * and the rendered code text so the byte-for-byte check is a digest compare). */
+async function sha256Hex(s) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 /** Minimal CDP client over the browser websocket, with auto-attached iframe
  * (OOPIF) session collection + console-error capture per session. */
@@ -390,14 +402,21 @@ async function main() {
       sourceRead.shownLength === bigLength, { shown: sourceRead.shownLength, stored: bigLength });
     check("source: no 'bounded' truncation note remains for a complete render",
       sourceRead.noteHidden === true || sourceRead.noteText === "", sourceRead);
-    // Byte-for-byte: the visible code text must end with the artifact's real tail.
-    const tailMatch = await evaluate(big, `(() => {
+    // Byte-for-byte: the rendered code text must BE the stored body — compare
+    // the SHA-256 of the rendered text against the SHA-256 of the exact
+    // BIG_HTML the route stored (length + tail equality alone could pass with
+    // a corrupted middle; a digest cannot — p45y r4 review finding).
+    const expectedDigest = await sha256Hex(BIG_HTML);
+    const digestRead = await evaluate(big, `(async () => {
       const code = document.querySelector('#panel-source artifact-inspector')?.shadowRoot?.querySelector('code');
       const text = code?.textContent ?? '';
-      return { endsWithStoredTail: text.endsWith('</body></html>'), length: text.length };
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+      const hex = Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+      return { hex, length: text.length };
     })()`);
-    check("source: the rendered text ends with the stored document tail (byte-for-byte view)",
-      tailMatch?.endsWithStoredTail === true, tailMatch);
+    check("source: the rendered code text is byte-for-byte the stored body (SHA-256 matches)",
+      digestRead && !digestRead.__exception && digestRead.hex === expectedDigest && digestRead.length === bigLength,
+      { renderedDigest: digestRead?.hex?.slice(0, 16), storedDigest: expectedDigest.slice(0, 16), renderedLength: digestRead?.length });
     await cdp.send("Target.closeTarget", { targetId: bigTarget.result.targetId }).catch(() => {});
     await sleep(500);
 

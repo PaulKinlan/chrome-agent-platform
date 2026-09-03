@@ -11,6 +11,9 @@ export const TOOL_ARGUMENT_LIMITS = Object.freeze({
   maxStringUtf8Bytes: 16 * 1024,
   maxLargeJsonUtf8Bytes: 288 * 1024,
   maxAssetContentUtf8Bytes: 256 * 1024,
+  // One append_asset call carries a bounded chunk (an artifact body grows
+  // ACROSS calls — p45y r4); it is also the artifact store's per-append bound.
+  maxAssetAppendUtf8Bytes: 64 * 1024,
   maxScriptSourceUtf8Bytes: 64 * 1024,
 });
 
@@ -18,6 +21,7 @@ const LARGE_FIELDS = Object.freeze({
   management: Object.freeze({
     create_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
     update_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
+    append_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetAppendUtf8Bytes }),
     generate_ui: Object.freeze({ field: "html", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
     create_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),
     update_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),

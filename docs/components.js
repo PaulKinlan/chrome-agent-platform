@@ -2856,12 +2856,34 @@ class ArtifactInspector extends Component {
     this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
     const code = this._root.querySelector("code");
     const lang = this.language;
+    const status = this._root.querySelector(".status");
+    const bytes = new TextEncoder().encode(content).byteLength;
     // The COMPLETE stored body renders — never a slice (chrome-agent-platform-
     // p45y: the source view showed only the first 64 KiB, so a large artifact
     // read as truncated even though the store + Copy carried it whole).
-    // Highlight when a recognised language is known; otherwise the exact source
-    // as one text node. Both paths are markup-free (textContent / createTextNode).
-    if (lang && lang !== "text") code.replaceChildren(highlightSource(content, lang, document));
+    // Rendering is bounded by the artifact body contract (p45y r4): a VALID
+    // artifact is at most MAX_ARTIFACT_BODY_BYTES (the store's 4 MiB blob
+    // ceiling), and bodies above the 256 KiB single-call bound exist only via
+    // the append path — still valid, but too large to synchronously tokenize.
+    // Highlighting is therefore disabled above the single-call artifact limit,
+    // and a body beyond the 4 MiB valid-artifact ceiling is corrupted or
+    // foreign data: it is REFUSED from DOM mount (no synchronous tokenize of a
+    // multi-MB body, no giant DOM node) instead of rendered.
+    const MAX_ARTIFACT_BODY_BYTES = 4 * 1024 * 1024; // mirrors artifacts.js maxBodySerializedBytes
+    const MAX_ARTIFACT_HIGHLIGHT_BYTES = 256 * 1024; // the single-call content cap (tool-argument-contract)
+    if (bytes > MAX_ARTIFACT_BODY_BYTES) {
+      code.textContent = "";
+      status.textContent = "This artifact's body is larger than any valid artifact (corrupt or foreign data) — not rendered. Copy is disabled; delete the artifact and regenerate it.";
+      this._root.querySelector(".copy")?.setAttribute("disabled", "true");
+      this._root.querySelector(".play")?.setAttribute("disabled", "true");
+      const note = this._root.querySelector(".note");
+      note.hidden = true;
+      return;
+    }
+    // Highlight when a recognised language is known AND the body is small
+    // enough to tokenize synchronously; otherwise the exact source as one text
+    // node. Both paths are markup-free (textContent / createTextNode).
+    if (lang && lang !== "text" && bytes <= MAX_ARTIFACT_HIGHLIGHT_BYTES) code.replaceChildren(highlightSource(content, lang, document));
     else code.textContent = content;
     const note = this._root.querySelector(".note");
     note.hidden = true;

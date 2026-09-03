@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.15] — 2026-09-03
+- Artifacts can now grow beyond a single message: appending builds one artifact across calls, an artifact at the full 256 KB size always saves completely, and the source view guards oversized or damaged bodies
+
+## [0.3.14] — 2026-09-03
+- Artifacts can now grow beyond a single message: an agent can append to one artifact across several calls, an artifact at the full 256 KB size always saves completely, and an oversized or damaged artifact body no longer freezes the source view.
 ## [0.3.13] — 2026-09-03
 - chrome-agent-platform-p45y: sync the beads JSONL export (claim + discovered-changelog links)
 
@@ -13,7 +18,7 @@
 - Artifacts: the source view shows the complete saved code — a large artifact no longer looks cut off at 64 KB — and generated interactive artifacts are verified clickable in the artifact tab, the hub dialog, and the library.
 
 ## [0.3.9] — 2026-09-02
-- AGENTS.md: beads is the only tracker, the fleet is the default way to work, and beads best practices (epics, dependencies, lifecycle) are the standard. TASKS.md and KNOWN-ISSUES.md retired. New beads-flow skill: the pick-up-and-ship loop.
+- Work now lives on the project's shared issue board, so everyone can see what is being worked on and what is waiting for review in one place.
 
 ## [0.3.8] — 2026-09-02
 - Embedded views keep their owner identity: the boot strips ?embedded=1 after marking the document, so exact-document authorization matches the real Settings surface again

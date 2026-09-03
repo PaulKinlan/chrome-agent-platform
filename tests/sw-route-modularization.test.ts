@@ -140,6 +140,9 @@ const BASELINE_ROUTES = [
   "asset.update",
   // Exact search/replace editing (CAP-FB-20260830-PATCH-ASSET-TOOL-01).
   "asset.patch",
+  // Chunked body growth: bounded appends build one artifact past the single-call
+  // bound (CAP p45y acceptance B).
+  "asset.append",
   "asset.delete",
   "asset.list",
   "asset.get",

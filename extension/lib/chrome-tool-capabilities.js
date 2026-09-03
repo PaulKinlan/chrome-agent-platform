@@ -8,8 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 137,
-  managementTools: 42,
-  totalTools: 179,
+  managementTools: 43,
+  totalTools: 180,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -174,6 +174,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "create_asset",
   "update_asset",
   "patch_asset",
+  "append_asset",
   "delete_asset",
   "list_assets",
   "get_asset",
@@ -491,6 +492,7 @@ const rows = [
   record("create_asset", "management", ["management.asset.create"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("update_asset", "management", ["management.asset.update"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("patch_asset", "management", ["management.asset.patch"], [], "none", "mutating", false, "mutating", "management.assets"),
+  record("append_asset", "management", ["management.asset.append"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("delete_asset", "management", ["management.asset.delete"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("list_assets", "management", ["management.asset.list"], [], "none", "read-only", false, "read", "management.assets"),
   record("get_asset", "management", ["management.asset.get"], [], "none", "read-only", false, "read", "management.assets"),

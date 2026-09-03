@@ -165,6 +165,15 @@ const ENROLL_KEY = "cap:enrollment";
 // `memory_set`). Per-origin stores are keyed separately so one site's growth
 // cannot crowd another; the journal is separately capped in journalAppend.
 const MAX_VALUE_BYTES = 256 * 1024; // 256 KiB per value (serialized JSON)
+// Artifact version BODIES are content-addressed blobs under the reserved
+// `asset-blob:` family (artifacts.js). A body is the COMPLETE artifact
+// content, which an append path grows past the 256 KiB single-call bound, so
+// these trusted internal keys carry up to 4 MiB each — the same per-blob
+// ceiling the screenshot side-store uses (MAX_SCREENSHOT_BYTES). The write is
+// still quota-accounted through the ledger, still envelope/version-tokened
+// (compensation CAS works unchanged), and the artifact layer enforces its own
+// body ceiling with THIS same serialized-byte measure before writing.
+export const MAX_ASSET_BLOB_VALUE_BYTES = 4 * 1024 * 1024;
 // The thread authority (`threads` index + every `thread:<id>` body) must be
 // reserved from the MODEL's `memory_set` too: the wider-goal review proved a
 // forged `threads` index could be written through `masterMemory().set` and
@@ -778,9 +787,15 @@ async function setValueInner(path, key, value, { isMaster, trusted = false }) {
     throw new Error(`value for "${key}" is not JSON-serializable`);
   }
   const newBytes = utf8Bytes(serialized);
-  if (newBytes > MAX_VALUE_BYTES) {
+  // Artifact blob bodies are the ONE trusted value family that legitimately
+  // exceeds the generic 256 KiB per-value bound (append-grown artifact
+  // content); they are bounded by MAX_ASSET_BLOB_VALUE_BYTES instead. The
+  // `internal` check above already restricted the key family to trusted
+  // product code, so this widens only the artifact store's own blob writes.
+  const valueCap = internal && k.startsWith("asset-blob:") ? MAX_ASSET_BLOB_VALUE_BYTES : MAX_VALUE_BYTES;
+  if (newBytes > valueCap) {
     throw new Error(
-      `value for "${key}" exceeds the ${MAX_VALUE_BYTES}-byte bound`,
+      `value for "${key}" exceeds the ${valueCap}-byte bound`,
     );
   }
   const dir = await openDir(path);
