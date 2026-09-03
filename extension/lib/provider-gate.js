@@ -187,15 +187,21 @@ async function _awaitSettle(pattern, generation) {
 /** Fallback (no SW): a bounded install-grant VERIFICATION (no runtime request
  * exists — host access is granted at install via <all_urls>). */
 async function _directBoundedRequest(pattern) {
+  // The timeout timer is CLEARED once the race settles. Left pending it kept
+  // the event loop alive for the full LEASE_TIMEOUT_MS after every fast grant
+  // (a leaked timer per verification; ~8.5 s per test in the unit suite, vj4s).
+  let timer = null;
   try {
     const outcome = await Promise.race([
       chrome.permissions.contains({ origins: [pattern] }),
-      new Promise((resolve) => setTimeout(() => resolve("timeout"), LEASE_TIMEOUT_MS)),
+      new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), LEASE_TIMEOUT_MS); }),
     ]);
     if (outcome === "timeout") return { granted: false, pattern, error: "grant verification timed out" };
     return { granted: outcome === true, pattern, error: outcome === true ? null : "install grant not verified" };
   } catch (e) {
     return { granted: false, pattern, error: safeProviderError(String(e?.message ?? e)) };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

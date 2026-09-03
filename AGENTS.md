@@ -162,6 +162,22 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
   pieces land.
 - **Full-suite-green gate.** Never report work done (or push) without the full
   Chrome journey suite + unit tests green. A regression is a stop.
+- **Test quickly while iterating; test fully once before pushing (Paul,
+  2026-09-03).** The full unit suite is the PRE-PUSH gate, not the per-edit
+  loop. Agents were running `deno test --allow-all tests/` (minutes, serial)
+  after every change; that is the wrong tool for iteration. The ladder:
+  1. `npm run test:file -- tests/<name>.test.ts` — the one file you are
+     working in (seconds).
+  2. `npm run test:changed` — every test that transitively imports what you
+     changed vs `origin/main`, plus the always-on security/vocabulary core
+     (typically 4-10 s). It fails CLOSED to the full suite when a changed
+     executable/config file has no reachable test, so a green subset is
+     never a silent skip. `--base <ref>` compares against another ref.
+  3. `npm test` — the full unit suite, once, before you push or report done.
+     Always go through the npm script rather than a raw `deno test tests/`,
+     so the suite runs with the repo's current gate configuration.
+  Never weaken or skip a test to make a subset pass; the subset differs from
+  the gate only in WHICH files run.
 - **Visual verification.** UI work is verified by driving the real UI in headless
   Chrome (CDP) with screenshots, before + after. "It serves" is not "it works".
 - **Heavy componentization (Paul, 2026-08-16).** Every piece of UI is a reusable

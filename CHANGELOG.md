@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.38] — 2026-09-03
+- The targeted npm run test:changed, test:fast and test:file shortcuts work again, and provider host-access checks no longer leave an 8-second timer running after a fast grant
+
 ## [0.3.37] — 2026-09-03
 - The changelog reads like release notes instead of a git log — every entry describes what the user gets, not what branch was merged
 
