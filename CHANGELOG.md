@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.131] — 2026-09-04
+- remove stray extension/wasm-tools copy that broke build scanner
+
 ## [0.3.130] — 2026-09-04
 - Restore the Pyodide WASM runtime files lost in the dptw phase-2 merge
 
