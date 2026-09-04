@@ -1769,6 +1769,11 @@ export function projectThreadMessages(thread) {
   return output;
 }
 
+// Once-per-surface guard for the "no model configured" first-run notice
+// (chrome-agent-platform-zbe5): a container that already saw the notice never
+// sees it again, but a fresh conversation surface does.
+const unconfiguredModelNoticed = new WeakSet();
+
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null, onRunRegistered = null }) {
   const c = container;
   // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
@@ -1797,6 +1802,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // now Settings is the only genuine permission-request surface.
   try {
     const summary = await send("provider.permission-summary");
+    // First-run honesty (chrome-agent-platform-zbe5): when no keyed provider
+    // is configured the run uses the built-in demo. Say so — once per
+    // surface — instead of letting the first user believe their pasted-but-
+    // never-saved key is working. The demo run itself still proceeds.
+    if (summary?.local && summary?.configured === false && !unconfiguredModelNoticed.has(c)) {
+      unconfiguredModelNoticed.add(c);
+      appendBubble(c, "system", "No model is configured yet — these answers come from the built-in demo. To continue with your own provider, open Settings → Providers, paste your key, confirm a model, and press Use.");
+    }
     if (!summary?.local) {
       if (!summary?.origin) {
         // The gate's own reason (a missing vs an invalid base URL) is the

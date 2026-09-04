@@ -63,6 +63,11 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
         local: isLocalProvider(cfg),
         origin: providerOriginPattern(cfg),
         reason: problem ? problem.reason : "",
+        // Whether a KEYED provider is fully configured (base URL + key +
+        // model). Redacted boolean — lets the run surface say "no model is
+        // configured yet" honestly (chrome-agent-platform-zbe5) without ever
+        // touching the key.
+        configured: keyedProviderConfigured(cfg),
       };
     },
 

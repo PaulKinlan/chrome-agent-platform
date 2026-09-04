@@ -42,6 +42,7 @@ import {
 let currentUsageRange = "7d"; // hoisted above renderUsage — no TDZ on section open
 import { bindProviderSetDefault } from "../lib/provider-options-save.js";
 import { defaultModelFor, fetchLiveModels, suggestedModelsFor } from "../lib/model-catalog.js";
+import { modelPromptState } from "../lib/first-run-model-prompt.js";
 import {
   providerSelectionPresentation,
   renderInternalProviderStatus,
@@ -830,12 +831,41 @@ function buildProviderCard(p, cfg) {
   refreshUseState();
 
   const credentialInput = card.querySelector(".api-key");
+  // The "Confirm a model to continue" prompt (chrome-agent-platform-zbe5):
+  // when a key is pasted but no model is confirmed, the card says exactly
+  // what is left — and auto-selects the provider's catalogue default so the
+  // owner confirms ONE thing and presses Use instead of walking away with
+  // nothing saved.
+  const promptRow = document.createElement("p");
+  promptRow.className = "model-prompt";
+  promptRow.setAttribute("role", "status");
+  promptRow.hidden = true;
+  card.querySelector(".fields")?.appendChild(promptRow);
+  const updateModelPrompt = () => {
+    const picker = card.querySelector("model-picker");
+    picker?.commitTyped?.();
+    const state = modelPromptState({
+      providerId: p.id,
+      apiKey: credentialInput?.value ?? "",
+      modelValue: picker ? (picker.value ?? "") : (card.querySelector(".model")?.value ?? ""),
+      isActive,
+      needsKey: p.needsKey !== false,
+    });
+    promptRow.hidden = !state.show;
+    promptRow.textContent = state.message;
+    // Auto-select the catalogue default when the field is empty: the suggestion
+    // is visible + editable in the picker, never silent.
+    if (state.show && state.suggestedModel && picker && !(picker.value ?? "").trim()) {
+      picker.value = state.suggestedModel;
+    }
+  };
   // Editing the key resets the test gate (a passed test no longer describes the
   // current key) and refetches the live model list on commit.
-  credentialInput?.addEventListener("input", () => { card._testPassed = false; refreshUseState(); });
+  credentialInput?.addEventListener("input", () => { card._testPassed = false; refreshUseState(); updateModelPrompt(); });
   credentialInput?.addEventListener("change", () => { refreshLiveModels(card, p); });
-  // Editing the model likewise resets the gate.
-  card.querySelector("model-picker")?.addEventListener("change", () => { card._testPassed = false; refreshUseState(); });
+  // Editing the model likewise resets the gate — and settles the prompt once a
+  // model is confirmed.
+  card.querySelector("model-picker")?.addEventListener("change", () => { card._testPassed = false; refreshUseState(); updateModelPrompt(); });
   card.querySelector(".base-url")?.addEventListener("input", () => { card._testPassed = false; refreshUseState(); });
 
   bindProviderSetDefault({
