@@ -338,3 +338,33 @@ Deno.test("scan: the jwt-decode worker is statically eval/Function/network-free 
     assertEquals(v.length, 0, `${name} must contain no eval/Function/importScripts/network/Worker sink`);
   }
 });
+
+// The python Pyodide host (CAP-FB-20260823-PYODIDE-PYTHON-01) constructs a
+// fresh classic worker per python.run from a runtime-resolved extension URL.
+// Its single `new WorkerCtor(` is the canonical python worker-host exemption,
+// pinned to the exact location — the same pattern as the other worker hosts.
+const PYTHON_CANONICAL_REL = "extension/lib/python-host.js";
+
+async function pythonHostContents() {
+  return await Deno.readTextFile(new URL("../extension/lib/python-host.js", import.meta.url));
+}
+
+Deno.test("scan: the python-host canonical new WorkerCtor host is accepted at its exact location", async () => {
+  const source = await pythonHostContents();
+  const v = await scanShippedJs([PYTHON_CANONICAL_REL], { readText: async () => source });
+  assertEquals(v.length, 0, "the canonical python-host with the exact new WorkerCtor node stays clean");
+});
+
+Deno.test("scan: lookalike python-host paths NEVER inherit the canonical exemption", async () => {
+  const source = await pythonHostContents();
+  const lookalikes = [
+    `/repo/${PYTHON_CANONICAL_REL}.evil`,
+    `/repo/${PYTHON_CANONICAL_REL}/..`,
+    `/repo/xx${PYTHON_CANONICAL_REL}`,
+    `/repo/extension/lib/not-python-host.js`,
+  ];
+  for (const file of lookalikes) {
+    const v = await scanShippedJs([file], { readText: async () => source });
+    assert(v.length >= 1, `python-host lookalike ${JSON.stringify(file)} must violate`);
+  }
+});

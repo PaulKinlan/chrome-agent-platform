@@ -91,6 +91,11 @@ Deno.test("no shipped bundle contains new Function or eval(", async () => {
   const dist = new URL("extension/dist/", ROOT);
   let seen = 0;
   for await (const entry of walk(dist, { exts: [".js"], includeDirs: false })) {
+    // The admitted Pyodide runtime lane (dist/wasm-tools/python/) is vendored
+    // third-party runtime bytes admitted by exact sha256 (PYTHON_RUNTIME_PIN /
+    // MANIFEST.json, verified in python-runtime.test.ts) — NOT authored
+    // bundles; its dead network-loader branches contain the token "eval(".
+    if (entry.path.includes("/wasm-tools/python/")) continue;
     const text = await Deno.readTextFile(entry.path);
     const hits = text.match(/new Function\s*\(|[^.\w]eval\s*\(/g) ?? [];
     assertEquals(hits, [], `${entry.path} carries a dynamic evaluator`);

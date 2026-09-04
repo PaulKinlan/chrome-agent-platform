@@ -71,7 +71,16 @@ export async function runPython(runtime, { code = "", stdin = "", timeoutMs = PY
       runtime.setStdout({ batched: (chunk) => { out += String(chunk ?? ""); } });
     }
     if (typeof runtime.setStdin === "function") {
-      runtime.setStdin({ stdin: () => stdin });
+      // ONE-SHOT stdin: the whole input arrives once, then EOF. A provider
+      // that re-serves the same bytes forever makes `sys.stdin.read()` loop
+      // indefinitely in a real interpreter (verified against Pyodide 0.26.4)
+      // — the fence would have to kill every read-to-EOF program.
+      let stdinGiven = false;
+      runtime.setStdin({ stdin: () => {
+        if (stdinGiven) return undefined; // EOF
+        stdinGiven = true;
+        return stdin;
+      } });
     }
     const result = await withTimeout(
       Promise.resolve(runtime.runPythonAsync(code)),

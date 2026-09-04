@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.133] — 2026-09-04
+- Maintenance and fixes.
+
 ## [0.3.132] — 2026-09-04
 - run_pipeline approval resumes against the live scope: the resume binding re-reads the context per call (parity with the agent-loop wrapper), so a scope that moved between steps no longer turns an owner approval into 'approved but could not be re-run' — proven red against the stale binding, where the test halts with lazy-resume-scope-mismatch
 
@@ -7,16 +10,16 @@
 - Chain a few tools into one run with run_pipeline — the model names each step's tool and can bind an earlier step's result into a later step's arguments ({ $ref }), so search → read → save is one inspectable pipeline instead of separate calls. Every step runs through the ordinary tool gates: a step needing approval pauses on the owner's card mid-pipeline, a denied or failing step stops the run with the step named, and each step shows in the plan strip as it runs. The fourth meta-tool beside search/list/execute (chrome-agent-platform-qsm4 slice 2; the declarative core landed in slice 1).
 
 ## [0.3.130] — 2026-09-04
-- Maintenance and fixes.
+- Restore the Pyodide WASM runtime files lost in the dptw phase-2 merge
 
 ## [0.3.129] — 2026-09-04
-- cap-beads-fw8 (UI flash fix — encapsulated panel renderers, eliminated duplicate boot renders)
+- restore the k3-work (60be + 3cb6 + dptw-tr content verified by k3)
 
 ## [0.3.128] — 2026-09-04
-- Maintenance and fixes.
+- Pyodide WASM runtime + offscreen host + tool wiring
 
 ## [0.3.127] — 2026-09-04
-- Maintenance and fixes.
+- python_execute now runs real Pyodide 0.26.4, bundled and served from the extension package ()
 
 ## [0.3.126] — 2026-09-04
 - Maintenance and fixes.
