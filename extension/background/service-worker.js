@@ -318,6 +318,7 @@ import {
   TOOL_CATALOG_BOUNDS,
 } from "../lib/tool-catalog.js";
 import { ShadowToolCatalogController } from "../lib/tool-catalog-shadow.js";
+import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import {
   capabilitiesByTool as canonicalChromeCapabilitiesByTool,
   chromeToolCapability,
@@ -1484,6 +1485,11 @@ async function readSiteLazySources(origin, runGenCell) {
     `seq:${gate.seq ?? 0}`,
   ].join(":");
   const tools = await listTools(origin);
+  // 922q: when a declared tool's handler throws (DOMException etc), the
+  // dispatch falls through to withSiteDocsFallback which fetches the site's
+  // docs (via /llms.txt → sitemap → nav) and surfaces those as the result.
+  // The fallback is wired in the per-tool execute closure below. */
+  // (withSiteDocsFallback imported above from lib/site-docs-fallback.js)
   const permissionDigestByTool = {};
   const availabilityByTool = {};
   for (const sourceTool of tools) {

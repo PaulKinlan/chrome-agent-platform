@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.99] — 2026-09-04
+- Wire the docs-fallback module into the service worker — import + integration reference in readSiteLazySources (922q)
+
 ## [0.3.98] — 2026-09-04
 - znx9 test: assert content stored complete (no-limits) instead of 240KiB cap + truncation marker
 
