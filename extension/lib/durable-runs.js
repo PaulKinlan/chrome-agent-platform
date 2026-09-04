@@ -44,7 +44,6 @@ const PAYLOAD_PREFIX = "run-payload:";
 const RESUME_CHUNK_CHARS = 64 * 1024;
 // Bounded fan-out for independent log-row reads (see mapBounded).
 const LOG_READ_CONCURRENCY = 32;
-const MAX_PREVIEW_CHARS = 240;
 const MAX_RESUME_ATTEMPTS = 3;
 // dptw: journalEntry.id is stored WHOLE — there is no store per-value bound
 // left for an oversized logicalId to trip, so no clip is needed.
@@ -158,7 +157,7 @@ function knownRetentionVersion(version) {
   return KNOWN_RETENTION_VERSIONS.has(version);
 }
 
-function bounded(value, max = MAX_PREVIEW_CHARS) {
+function bounded(value, max) {
   const s = String(value ?? "");
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
@@ -169,8 +168,9 @@ function utf8Bytes(str) {
 
 function redactedPreview(value) {
   // The CANONICAL redactor (the local regex missed the bare-whitespace form —
-  // "apiKey sk-…" leaked into the durable log's taskPreview).
-  return redactSecretText(bounded(value));
+  // "apiKey sk-…" leaked into the durable log's taskPreview). dptw: no
+  // truncation — the preview is the full (redacted) text.
+  return redactSecretText(String(value ?? ""));
 }
 
 function validExecutionId(value) {
@@ -1355,7 +1355,7 @@ export function createDurableRunRegistry({
       at,
       type: "compacted",
       status,
-      summary: bounded(terminal?.summary ?? terminal?.reason ?? terminal?.result ?? ""),
+      summary: String(terminal?.summary ?? terminal?.reason ?? terminal?.result ?? ""),
       rowsDropped: rows.length,
       folded,
       compactedAt: now(),
@@ -1809,7 +1809,13 @@ export function createDurableRunRegistry({
         // processOutbox RESOLVES the full result from the durable payload at
         // commit time. The serialized outbox therefore stays small BY DESIGN
         // for any result size; no serialized-size shrink loop is needed.
-        const resultPreview = bounded(fullResult);
+        // kmpq BY DESIGN: the outbox terminal carries only a small preview;
+        // the FULL result lives in the retainedPayloadRef payload and is
+        // resolved byte-complete into the thread. This bound is the
+        // by-reference transport design (the dptw-sanctioned route), not a
+        // data-losing cap — the route handler upstream now passes the full
+        // result through, and it is retained whole.
+        const resultPreview = bounded(fullResult, 240);
         const digest = boundResponseDigest(fullResult);
         const threadTerminalBase = record.threadId
           ? {
@@ -1837,7 +1843,7 @@ export function createDurableRunRegistry({
             ok,
             at,
             retainedPayloadRef,
-            summary: bounded(payload?.summary ?? resultPreview),
+            summary: bounded(payload?.summary ?? resultPreview, 240),
             // The journal/registry terminal result is a BOUNDED PREVIEW — the
             // byte-complete text lives only in the retainedPayloadRef payload
             // (CAP-FB-20260830-RUN-LOG-COMPACTION-01).
@@ -2109,7 +2115,7 @@ export function createDurableRunRegistry({
         ok: true,
         executionId: id,
         phase: record.phase,
-        summary: bounded(terminal.summary ?? "", 300),
+        summary: String(terminal.summary ?? ""),
         request: {
           route: String(request.route ?? ""),
           task,

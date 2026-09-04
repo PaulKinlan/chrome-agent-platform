@@ -4,7 +4,7 @@
 // tests/diagnostics.test.ts — the error + security ring buffer (the transparency
 // surface). Bounded, newest-first, with a separate security buffer.
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 const mod = await import("../extension/lib/diagnostics.js");
 
@@ -147,4 +147,17 @@ Deno.test("diagnostics client refreshes on revision change and never installs an
     g.document = saved.document;
     g.setInterval = saved.setInterval;
   }
+});
+
+// ── dptw (R6): diagnostic details are no longer byte-capped ────────────────
+Deno.test("diagnostics: a detail past the old 800-byte cap is retained whole — still scrubbed (dptw)", () => {
+  const body = "provider replied with a long explanation ".repeat(60); // ~2400 chars
+  const secret = " api_key=sk-livekey123456 ";
+  const bidi = "‮evil‬";
+  const scrubbed = mod.scrubEventDetail(body + secret + bidi);
+  assert(scrubbed.length > 2000, `the full body is retained (no 800-byte cap): ${scrubbed.length}`);
+  assertStringIncludes(scrubbed, body.slice(1500, 1600), "text past the old cap survives");
+  assertEquals(scrubbed.includes("sk-livekey123456"), false, "secret still redacted");
+  assertEquals(scrubbed.includes("‮"), false, "bidi controls still stripped");
+  assert(scrubbed.startsWith(body.slice(0, 100)), "text retained from the start (no head truncation)");
 });

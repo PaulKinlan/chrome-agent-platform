@@ -21,7 +21,7 @@
 //     current accepts next ONLY on the verifiable continuity against the
 //     separate trusted `.quota.anchor` else QUARANTINE, overflow /
 //     both-invalid FAIL CLOSED)
-//   - applied idempotency keys are BOUNDED (MAX_APPLIED_KEYS) + GC'd only on
+//   - applied idempotency keys are UNCAPPED (dptw) + GC'd only on
 //     terminal/expired reservations while preserving the replay no-op
 //   - byte/file reservations atomic; the per-ORIGIN storage pressure fails
 //     closed
@@ -41,7 +41,6 @@ export const MAX_SEGMENT = 128;
 export const MAX_SAFE_SEQ = Number.MAX_SAFE_INTEGER;
 export const DEFAULT_BYTES = 64 * 1024 * 1024;
 export const DEFAULT_FILES = 512;
-export const MAX_APPLIED_KEYS = 256; // the bounded idempotency-key list
 export const RESERVATION_TTL_MS = 30 * 60 * 1000;
 export const GC_MARKER = ".gc";
 export const ANCHOR_FILE = ".quota.anchor";
@@ -336,15 +335,14 @@ export class OpfsToolWorkspace {
         const prior = (state.reservations ?? []).find((r) => r.key === idempotencyKey);
         return { ok: true, deduped: true, reservationId: prior?.id ?? `r${state.appliedKeys.indexOf(idempotencyKey)}` };
       }
-      // BOUNDED applied keys: GC the EXPIRED reservations' keys while
-      // preserving the replay no-op, then refuse new keys at the cap (fail
-      // closed).
+      // dptw: NO applied-keys count cap — GC the EXPIRED reservations' keys
+      // while preserving the replay no-op for LIVE reservations; a new key
+      // always lands.
       const now = this._now();
       const reservations = (state.reservations ?? []).filter((r) => r.expiresAt > now);
       const liveKeys = reservations.map((r) => r.key).filter((k) => typeof k === "string");
       let applied = (Array.isArray(state.appliedKeys) ? state.appliedKeys : [])
         .filter((k) => liveKeys.includes(k) || k === idempotencyKey);
-      if (applied.length >= MAX_APPLIED_KEYS && !applied.includes(idempotencyKey)) throw failClosed("applied_keys_full");
 
       const total = state.bytesUsed + bytes;
       if (total > state.bytesBudget && state.bytesBudget != null) throw failClosed("quota_exceeded_bytes", { total });

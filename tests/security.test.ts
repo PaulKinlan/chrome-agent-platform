@@ -236,17 +236,17 @@ Deno.test("security: a DENIED hook refuses subscription (the prompt-injection ga
   assertEquals(check.ok, false);
 });
 
-Deno.test("security: hook fan-out is bounded (unknown recipe + template size + count)", async () => {
+Deno.test("security: hook fan-out is guarded by KNOWN-recipe validation (dptw: size/count are not the guard)", async () => {
   reset();
   const { subscribeHook } = await import("../extension/lib/hooks.js");
   // an arbitrary/unknown recipeId must NOT create a fan-out row
   const bad = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "not-a-real-recipe-123" });
   assertEquals(bad.ok, false);
   assert((bad.error ?? "").includes("recipe"), "unknown recipeId must be rejected");
-  // an oversized prompt template must be refused
+  // dptw: a large prompt template is ACCEPTED (no size cap) — the fan-out
+  // guard is the known-recipe validation above, not a byte bound.
   const huge = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain", promptTemplate: "x".repeat(70000) });
-  assertEquals(huge.ok, false);
-  assert((huge.error ?? "").includes("large"), "oversized template must be refused");
+  assertEquals(huge.ok, true, "a large template on a KNOWN recipe is accepted (dptw)");
 });
 
 // ---- preference percolation (the controlled down-channel) ----

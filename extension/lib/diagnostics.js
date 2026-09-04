@@ -42,23 +42,6 @@ function now() {
 
 import { safeProviderError } from "./pure.js";
 
-const MAX_DETAIL_BYTES = 800;
-const MAX_INPUT_CODE_UNITS = 4096;
-const encoder = new TextEncoder();
-
-function byteCap(value, maxBytes = MAX_DETAIL_BYTES) {
-  const source = String(value).slice(0, MAX_INPUT_CODE_UNITS);
-  let out = "";
-  let used = 0;
-  for (const ch of source) {
-    const bytes = encoder.encode(ch).byteLength;
-    if (used + bytes > maxBytes) return out + "…";
-    out += ch;
-    used += bytes;
-  }
-  return out;
-}
-
 function scrubPrimitive(value) {
   if (value == null) return value === null ? "<null>" : "<undefined>";
   const type = typeof value;
@@ -68,8 +51,10 @@ function scrubPrimitive(value) {
     // rather than enumerating it, invoking accessors, or trusting prototypes.
     return "<redacted:structured>";
   }
+  // dptw: no length cap — the text is scrubbed (control chars, bidi, secrets)
+  // but kept whole.
   let text;
-  try { text = String(value).slice(0, MAX_INPUT_CODE_UNITS).normalize("NFKC"); }
+  try { text = String(value).normalize("NFKC"); }
   catch { return "<redacted>"; }
   let clean = "";
   for (const ch of text) {
@@ -78,14 +63,13 @@ function scrubPrimitive(value) {
     if ((cp >= 0x202a && cp <= 0x202e) || (cp >= 0x2066 && cp <= 0x2069)) continue;
     if ([0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0xfeff, 0x00ad, 0x2060, 0x034f].includes(cp)) continue;
     clean += ch;
-    if (clean.length >= MAX_INPUT_CODE_UNITS) break;
   }
   clean = clean
     .replace(/\b(?:api[_-]?key|token|secret|password|passwd|authorization|credential|private[_-]?key)\s*[:=]\s*[^\s,;]+/gi, "$1=<redacted>")
     .replace(/\b(?:sk-|ghp_|xox[bap]-|Bearer\s+)[A-Za-z0-9._~+/=-]{8,}\b/gi, "<redacted:token>")
     .replace(/[0-9a-f]{24,}/gi, "<redacted:opaque>")
     .replace(/[A-Za-z0-9_-]{40,}/g, "<redacted:opaque>");
-  return byteCap(clean);
+  return clean;
 }
 
 /** Public fail-closed redaction. It never inspects object keys/prototypes. */

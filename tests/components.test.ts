@@ -1602,3 +1602,41 @@ Deno.test("tool-directory-card host declares inline-size 100% alongside containe
     throw new Error(`the :host rule must declare inline-size: 100% beside container-type (got "${host.trim()}")`);
   }
 });
+
+Deno.test("composer local files (dptw R2): no 1 MiB gate — text files attach as text at any size", async () => {
+  const src = await Deno.readTextFile("extension/shared/components.js");
+  const fn = src.match(/async _attachLocalFile\(file\) \{[\s\S]*?\n  \}/);
+  if (!fn) throw new Error("_attachLocalFile not found");
+  const body = fn[0];
+  if (body.includes("MAX_LOCAL_TEXT_BYTES")) throw new Error("the 1 MiB local-text gate is back");
+  if (/maxBytes:/.test(body)) throw new Error("the attach read still passes a byte cap");
+  if (!/attachAsText = textLike;/.test(body)) throw new Error("text-like files must attach as text regardless of size");
+  const attachmentsSrc = await Deno.readTextFile("extension/lib/attachments.js");
+  if (attachmentsSrc.includes("MAX_LOCAL_TEXT_BYTES")) throw new Error("MAX_LOCAL_TEXT_BYTES reintroduced");
+});
+
+Deno.test("attach menu (dptw D1 + review P1): no 8 MiB refuse — a generous transport ceiling with an HONEST refusal, and read failures surface", async () => {
+  const src = await Deno.readTextFile("extension/shared/components.js");
+  // The old arbitrary 8 MiB cap stays gone.
+  if (src.includes("MAX_RAW_BYTES")) throw new Error("the 8 MiB raw-file bound is back");
+  if (src.includes("is over the 8 MiB limit")) throw new Error("the 8 MiB status copy is back");
+  const pick = src.match(/_pickFile\(kind\) \{[\s\S]*?\n  \}/);
+  if (!pick) throw new Error("_pickFile not found");
+  if (!/readAsDataURL\(file\)/.test(pick[0])) throw new Error("the picker must still read the file bytes");
+  // Review P1: an eager unbounded base64 read on the main thread freezes the
+  // tab — a GENEROUS, documented ceiling guards the transport (base64 4/3
+  // into the ~64 MiB runtime-message envelope), NOT an arbitrary size cap.
+  if (!/MAX_PICK_BYTES = 32 \* 1024 \* 1024/.test(pick[0])) throw new Error("the 32 MiB transport ceiling is missing");
+  // The honest refusal: an over-ceiling pick resolves overLimit and the click
+  // handler emits attach-error with the real reason (never a silent empty
+  // dataURL). Removing either half must fail this test.
+  if (!/overLimit: true/.test(pick[0])) throw new Error("over-ceiling picks are not flagged");
+  const handler = src.match(/_pickFile\(kind\);[\s\S]*?_emit\("attach"/);
+  if (!handler) throw new Error("the pick-result handler not found");
+  if (!/file\.overLimit[\s\S]*?_emit\("attach-error"/.test(handler[0])) throw new Error("an over-ceiling pick does not emit an honest attach-error");
+  // Below the ceiling a FileReader failure must surface honestly too — no
+  // silent resolve with an empty dataURL.
+  if (!/readError/.test(pick[0])) throw new Error("read failures are not captured");
+  if (!/file\.readError[\s\S]*?_emit\("attach-error"/.test(handler[0])) throw new Error("a read failure does not emit an honest attach-error");
+  if (/catch \{ \/\* non-fatal/.test(pick[0])) throw new Error("the silent catch is back");
+});

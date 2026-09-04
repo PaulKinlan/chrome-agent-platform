@@ -181,3 +181,25 @@ Deno.test("normalizeMcpServerList dedups by id and drops invalid entries", () =>
   assertEquals(list[0].name, "Calc v2");
   assertEquals(list[0].transport, "sse");
 });
+
+// ── dptw (R10): MCP config field/count caps removed ────────────────────────
+Deno.test("mcp-config (dptw): a 16 KiB bearer token, long id/name/url, and 40 servers all survive", () => {
+  const token = `tok_${"a".repeat(16 * 1024)}`; // past the old 8192-char cap
+  const longId = `server-${"x".repeat(100)}`; // past the old 64-char id cap (valid charset)
+  const longName = `My MCP Server ${"n".repeat(200)}`; // past the old 120-char name cap
+  const longUrl = `https://mcp.example.com/${"p".repeat(3000)}`; // past the old 2048-char url cap
+  const one = normalizeMcpServer({
+    id: longId, name: longName, transport: "http", url: longUrl,
+    auth: { headerName: "authorization", token },
+  });
+  assert(one, "a server with past-cap fields is accepted");
+  assertEquals(one.auth.token, token, "the token is stored whole (no 8192 slice)");
+  assertEquals(one.id, longId, "the long id is kept");
+  assertEquals(one.name, longName, "the long name is kept, not sliced");
+  assertEquals(one.url, longUrl, "the long url is kept");
+  // 40 distinct servers — past the old 32 count cap.
+  const list = normalizeMcpServerList(
+    Array.from({ length: 40 }, (_, i) => ({ id: `srv-${i}`, name: `S${i}`, transport: "http", url: `https://mcp-${i}.example.com/` })),
+  );
+  assertEquals(list.length, 40, "all 40 servers are kept — no 32-server cap");
+});

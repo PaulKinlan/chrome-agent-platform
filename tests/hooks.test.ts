@@ -192,12 +192,14 @@ Deno.test("an unknown recipeId refuses subscription (fan-out bound)", async () =
   assertEquals(subs.length, 0);
 });
 
-Deno.test("an oversized prompt template refuses subscription", async () => {
+Deno.test("a prompt template past the old 64 KiB cap subscribes whole (dptw)", async () => {
   reset();
-  const big = "x".repeat(70 * 1024); // 70 KiB > the 64 KiB cap
+  const big = "x".repeat(256 * 1024); // 256 KiB — past the old 64 KiB cap
   const r = await subscribeHook({ hookId: "runtime.onStartup", recipeId: null, promptTemplate: big });
-  assertEquals(r.ok, false);
-  assert((r.error ?? "").includes("too large"), "oversized template must be rejected");
+  assertEquals(r.ok, true, "the large template is accepted");
+  const subs = await getHookSubscriptions();
+  assertEquals(subs.length, 1);
+  assertEquals(subs[0].promptTemplate.length, big.length, "the template is stored whole, not truncated");
 });
 
 Deno.test("concurrent denies of DIFFERENT hooks do not last-write-wins (the deny-list RMW is serialized)", async () => {
@@ -240,20 +242,25 @@ Deno.test("concurrent same-key first subscriptions cannot produce an ungated rep
   assert(["first", "second"].includes(saved.promptTemplate));
 });
 
-Deno.test("the subscription registry is count-bounded", async () => {
+Deno.test("the subscription registry has no count cap (dptw): 208 distinct subscriptions all land", async () => {
   reset();
-  // Fill the registry to the cap with DISTINCT known recipe ids.
+  // DISTINCT (hook, recipe) pairs: 13 known recipes × 16 hooks = 208 — past
+  // the old 200-subscription cap.
   const ids = [
     "tab-hygiene", "page-summary", "link-collector", "reading-list",
     "context-menu-save-quote", "right-click-extract-topics", "right-click-summarize",
     "right-click-translate-selection", "clipboard-phrase-via-command", "omnibox-ask",
     "auto-group-by-domain", "auto-pin-favorites", "auto-reading-list",
   ];
-  for (let i = 0; i < ids.length; i++) {
-    await subscribeHook({ hookId: "runtime.onStartup", recipeId: ids[i] });
+  const hooks = HOOKS.slice(0, 16).map((h) => h.id);
+  // Grant every hook's optional permission so the gate lets them through.
+  for (const h of HOOKS.slice(0, 16)) if (h.permission) granted.add(h.permission);
+  for (const hookId of hooks) {
+    for (const recipeId of ids) {
+      const r = await subscribeHook({ hookId, recipeId });
+      assertEquals(r.ok, true, `subscription ${hookId}/${recipeId} lands`);
+    }
   }
-  // A 14th DISTINCT subscription on a different hook would exceed the cap once the
-  // registry is full; assert the cap path by pushing many distinct entries.
-  const before = (await getHookSubscriptions()).length;
-  assert(before <= 200, "registry must not exceed the cap");
+  const subs = await getHookSubscriptions();
+  assertEquals(subs.length, ids.length * hooks.length, "every distinct subscription is stored — no 200 cap");
 });
