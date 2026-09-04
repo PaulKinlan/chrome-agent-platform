@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.96] — 2026-09-04
+- cap-beads-brv (Python in the browser via Pyodide)
+
 ## [0.3.95] — 2026-09-04
 - remove MAX_MESSAGE_BYTES import from task-view-full-response-contract test
 
