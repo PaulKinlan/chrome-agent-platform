@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.69] — 2026-09-04
+- Added automated browser checks for the Settings pages.
+
 ## [0.3.68] — 2026-09-04
-- Add a browser KAT proving the provider server-tools toggle survives reload
+- Added automated browser checks for the Settings pages.
 
 ## [0.3.67] — 2026-09-04
 - Settings now keep the provider server tools choice after a page reload.
