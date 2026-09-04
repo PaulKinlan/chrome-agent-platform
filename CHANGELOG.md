@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.104] — 2026-09-04
+- Update tests for the no-limits contract — removed size-cap assertions that reference constants deleted by dptw
+
 ## [0.3.103] — 2026-09-04
 - Maintenance and fixes.
 
