@@ -3161,7 +3161,7 @@ async function buildAgentConfigDialog(opts) {
     const refreshUsage = async () => {
       const u = await send("agent-workspace.usage", { id: opts.selfId }).catch(() => ({ ok: false }));
       wsUsage.textContent = u?.ok === true
-        ? `${u.filesUsed} file${u.filesUsed === 1 ? "" : "s"} · ${Math.round((u.bytesUsed || 0) / 1024)} KiB of ${Math.round((u.maxBytes || 0) / 1024)} KiB`
+        ? `${u.filesUsed} file${u.filesUsed === 1 ? "" : "s"} · ${Math.round((u.bytesUsed || 0) / 1024)} KiB (unlimited — bounded only by the browser's storage)`
         : "workspace unavailable";
     };
     wsClear.addEventListener("click", async () => {

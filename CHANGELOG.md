@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.131] — 2026-09-04
+- Remove the 20MiB/200-file per-agent workspace quota
+
 ## [0.3.130] — 2026-09-04
 - Maintenance and fixes.
 

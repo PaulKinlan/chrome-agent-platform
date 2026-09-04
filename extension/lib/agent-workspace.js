@@ -15,13 +15,13 @@
 // never see each other's directories because each op resolves its own key from
 // the run stamp, and OPFS directory handles are never shared.
 //
-// Bounds: per-agent quota (DEFAULT bytes/files) accounted in a `.quota.json`
-// metadata file inside the workspace; writes over quota FAIL with an honest
-// `workspace_quota_exceeded` (never a silent truncation). Individual reads
-// and writes carry NO size cap of their own (post-dptw contract): a read
-// returns the complete content at any size, paged with offset/length; a
-// write's only bound is the workspace quota. Path grammar is the same bounded
-// ASCII segment walk as fs-grants (cleanRelativePath).
+// Storage: NO artificial per-agent quota (owner directive 2026-09-04). The
+// workspace is bounded only by the browser's native OPFS allocation — if
+// Chrome refuses a write under real storage pressure, the platform's own
+// error surfaces honestly. Individual reads and writes carry no size cap of
+// their own (post-dptw contract): a read returns the complete content at any
+// size, paged with offset/length. Path grammar is the same bounded ASCII
+// segment walk as fs-grants (cleanRelativePath).
 
 import { cleanRelativePath, computeSha256 } from "./fs-grants.js";
 import { currentRunContext } from "./run-context.js";
@@ -32,12 +32,7 @@ import { currentRunContext } from "./run-context.js";
 import { slugifyAgentId } from "./named-agents.js";
 
 export const WORKSPACE_ROOT = "agent-workspaces";
-export const DEFAULT_WORKSPACE_BYTES = 20 * 1024 * 1024; // 20 MiB per agent
-export const DEFAULT_WORKSPACE_FILES = 200;
 export const MAX_WORKSPACE_DEPTH = 8; // bounded nesting inside an agent workspace
-export const QUOTA_FILE = ".quota.json";
-
-const WORKSPACE_QUOTA_BYTES = 32 * 1024; // the metadata file itself is bounded
 
 /** Derive the agent's workspace key from the run context's agentSurfaceRef.
  * `named:<slug>` / `background:<slug>` map to `named-<slug>` / `background-<slug>`;
@@ -94,29 +89,6 @@ export async function resolveAgentWorkspace({ currentRunContext: ctxFn = current
   return { key, dir };
 }
 
-async function readQuota(dir) {
-  try {
-    const fh = await dir.getFileHandle(QUOTA_FILE);
-    const f = await fh.getFile();
-    const raw = await f.text();
-    if (raw.length > WORKSPACE_QUOTA_BYTES) return null; // corrupt oversized → treat absent
-    const q = JSON.parse(raw);
-    if (!Number.isSafeInteger(q?.bytesUsed) || !Number.isSafeInteger(q?.filesUsed)) return null;
-    return q;
-  } catch {
-    return null;
-  }
-}
-
-async function writeQuota(dir, quota) {
-  const fh = await dir.getFileHandle(QUOTA_FILE, { create: true });
-  const w = await fh.createWritable();
-  const payload = JSON.stringify({ ...quota, updatedAt: Date.now() });
-  if (payload.length > WORKSPACE_QUOTA_BYTES) throw failClosed("quota_file_oversize");
-  await w.write(payload);
-  await w.close();
-}
-
 async function walk(dir, segments) {
   let cur = dir;
   for (const seg of segments) {
@@ -133,16 +105,15 @@ async function walkCreate(dir, segments) {
   return cur;
 }
 
-/** Recompute the workspace's true bytes/files used by walking it (excludes the
- * quota metadata file). Used to reconcile the accounting after deletes and as
- * the authoritative source for the Settings usage row. */
+/** Recompute the workspace's true bytes/files used by walking it. Used as
+ * the authoritative source for the Settings usage row (there is no quota
+ * ledger to reconcile — usage is whatever the workspace holds). */
 export async function measureWorkspace(dir, { walkDepth = 0 } = {}) {
   let bytesUsed = 0;
   let filesUsed = 0;
   const scan = async (handle, depth) => {
     if (depth > MAX_WORKSPACE_DEPTH) return;
     for await (const entry of handle.values()) {
-      if (entry.name === QUOTA_FILE) continue;
       if (entry.kind === "directory") {
         await scan(entry, depth + 1);
       } else {
@@ -183,7 +154,6 @@ export async function listWorkspaceEntries(relativePath = "", { limit = 500, cur
   const effectiveLimit = Math.min(Math.max(1, limit || 500), 500);
   try {
     for await (const entry of dir.values()) {
-      if (entry.name === QUOTA_FILE) continue;
       total++;
       if (entries.length < effectiveLimit) {
         entries.push({
@@ -271,8 +241,10 @@ export async function readWorkspaceFile(relativePath = "", { offset = null, leng
 
 /** Write (create or overwrite) a file inside the current agent's workspace.
  * The agent's own sandbox — no owner approval required (same trust as memory).
- * No per-write size cap (post-dptw): the per-agent quota below is the only
- * bound, and it fails CLOSED with an honest error rather than truncating. */
+ * No size bound of any kind (owner directive 2026-09-04): the workspace is
+ * capped only by the browser's native OPFS allocation, and a platform refusal
+ * under real storage pressure surfaces as `workspace_write_failed` with
+ * Chrome's own message. */
 export async function writeWorkspaceFile(relativePath = "", content = "", { currentRunContext } = {}) {
   const ws = await resolveAgentWorkspace({ currentRunContext });
   if (!ws) return { ok: false, error: "no_agent_workspace" };
@@ -290,40 +262,6 @@ export async function writeWorkspaceFile(relativePath = "", content = "", { curr
   const parent = await walkCreate(ws.dir, segments.slice(0, -1));
   const fileName = segments[segments.length - 1];
 
-  // Quota accounting: recompute the authoritative used figures, then simulate
-  // the write (existing file replaces its old size; new file adds). Known
-  // bound: the measure-then-simulate check is NOT atomic — two concurrent
-  // writes can both pass it; the browser's OPFS quota is the hard backstop.
-  // Add a per-key write lock only if concurrent same-workspace writers ever
-  // collide in practice.
-  const measured = await measureWorkspace(ws.dir);
-  const existing = await parent.getFileHandle(fileName).catch(() => null);
-  let existingSize = 0;
-  if (existing) {
-    const f = await existing.getFile().catch(() => null);
-    existingSize = typeof f?.size === "number" ? f.size : 0;
-  }
-  const afterBytes = measured.bytesUsed - existingSize + bytes.byteLength;
-  const afterFiles = measured.filesUsed + (existing ? 0 : 1);
-  if (afterBytes > DEFAULT_WORKSPACE_BYTES) {
-    return {
-      ok: false,
-      error: "workspace_quota_exceeded",
-      bytesUsed: measured.bytesUsed,
-      maxBytes: DEFAULT_WORKSPACE_BYTES,
-      message: "This agent's private workspace quota (20 MiB) is full — remove files or ask the owner to clear it in Settings.",
-    };
-  }
-  if (afterFiles > DEFAULT_WORKSPACE_FILES) {
-    return {
-      ok: false,
-      error: "workspace_quota_exceeded",
-      filesUsed: measured.filesUsed,
-      maxFiles: DEFAULT_WORKSPACE_FILES,
-      message: "This agent's private workspace file quota (200 files) is full.",
-    };
-  }
-
   try {
     const fh = await parent.getFileHandle(fileName, { create: true });
     const w = await fh.createWritable();
@@ -333,7 +271,6 @@ export async function writeWorkspaceFile(relativePath = "", content = "", { curr
     return { ok: false, error: `workspace_write_failed: ${err?.message || err}` };
   }
   const sha256 = await computeSha256(bytes);
-  await writeQuota(ws.dir, { bytesUsed: afterBytes, filesUsed: afterFiles });
   return { ok: true, workspace: ws.key, path: segments.join("/"), bytes: bytes.byteLength, sha256 };
 }
 
@@ -357,8 +294,6 @@ export async function deleteWorkspaceFile(relativePath = "", { currentRunContext
   } catch {
     return { ok: false, error: "file_not_found" };
   }
-  const measured = await measureWorkspace(ws.dir);
-  await writeQuota(ws.dir, { bytesUsed: measured.bytesUsed, filesUsed: measured.filesUsed });
   return { ok: true, workspace: ws.key, path: segments.join("/") };
 }
 
@@ -373,7 +308,6 @@ export async function searchWorkspaceFiles(query = "", { limit = 200, currentRun
   const walkNames = async (handle, prefix, depth) => {
     if (files.length >= cap || depth > MAX_WORKSPACE_DEPTH) return;
     for await (const entry of handle.values()) {
-      if (entry.name === QUOTA_FILE) continue;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.kind === "directory") {
         await walkNames(entry, path, depth + 1);
@@ -405,11 +339,11 @@ export async function clearAgentWorkspace({ key = null, currentRunContext } = {}
   })() } : await resolveAgentWorkspace({ currentRunContext });
   if (!ws) return { ok: false, error: "no_agent_workspace" };
   try {
-    // Remove every entry EXCEPT the quota file first, then drop the directory.
+    // Remove every entry, leaving the (now empty) directory in place so a
+    // later run resolves the same key without recreating it.
     for await (const entry of ws.dir.values()) {
       await ws.dir.removeEntry(entry.name, { recursive: entry.kind === "directory" });
     }
-    await writeQuota(ws.dir, { bytesUsed: 0, filesUsed: 0 });
   } catch (err) {
     return { ok: false, error: `workspace_clear_failed: ${err?.message || err}` };
   }
@@ -417,8 +351,8 @@ export async function clearAgentWorkspace({ key = null, currentRunContext } = {}
 }
 
 /** Usage for a workspace by its explicit key (Settings surface). Returns
- * { ok, workspace, bytesUsed, filesUsed, maxBytes, maxFiles } — the maxes are
- * the quota defaults so the Settings row can render a bounded bar. */
+ * { ok, workspace, bytesUsed, filesUsed } — honest measured usage; there is
+ * no quota ceiling to report (owner directive 2026-09-04). */
 export async function getWorkspaceUsageByKey(key) {
   if (typeof key !== "string" || !/^(named|background)-[a-z0-9][a-z0-9-]{0,127}$/.test(key)) {
     return { ok: false, error: "invalid_workspace_key" };
@@ -429,7 +363,7 @@ export async function getWorkspaceUsageByKey(key) {
     dir = await root.getDirectoryHandle(key);
   } catch {
     // No workspace yet — honest empty usage.
-    return { ok: true, workspace: key, bytesUsed: 0, filesUsed: 0, maxBytes: DEFAULT_WORKSPACE_BYTES, maxFiles: DEFAULT_WORKSPACE_FILES };
+    return { ok: true, workspace: key, bytesUsed: 0, filesUsed: 0 };
   }
   const measured = await measureWorkspace(dir);
   return {
@@ -437,7 +371,5 @@ export async function getWorkspaceUsageByKey(key) {
     workspace: key,
     bytesUsed: measured.bytesUsed,
     filesUsed: measured.filesUsed,
-    maxBytes: DEFAULT_WORKSPACE_BYTES,
-    maxFiles: DEFAULT_WORKSPACE_FILES,
   };
 }
