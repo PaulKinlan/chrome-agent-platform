@@ -12,6 +12,7 @@
      form controls) with the same preference. No toggle UI exists; the media
      state applies instantly with no flash. ── */
   color-scheme: light dark;
+  scrollbar-gutter: stable;
   /* Light fallbacks FIRST (engines without light-dark(); dropped where the
      light-dark() declarations below parse). Keep in sync with the light half. */
   --bg: #f7f6f3;

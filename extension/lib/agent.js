@@ -1308,6 +1308,11 @@ export function createAgent({
     });
   };
   const lazy = createLazyProviderToolset({
+    // 4kl: semantic tool retrieval — the bundled precomputed vector table
+    // (lookup-only at runtime; lexical-only honest fallback if it fails).
+    vectorTableLoader: () =>
+      fetch(chrome.runtime.getURL("vendor/tool-vector-table.json"))
+        .then((response) => (response.ok ? response.json() : null)),
     // A screenshot reaches a vision model as a real IMAGE part, not as base64
     // text (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). Only lanes whose
     // transport carries an image content part get one; everything else reads

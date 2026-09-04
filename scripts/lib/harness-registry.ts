@@ -125,6 +125,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-wasi-tranche2.ts": { class: "kat", ...RED("1/9", "tool.preview.run answers 'offscreen unavailable: Could not establish connection'") },
 
   // ── manual (evidence / repro / bisect tools; not gates) ─────────────────
+  "dump-tool-corpus-tokens.ts": { class: "manual", reason: "4kl tablegen input generator: prints the built-in tool corpus tokens (or --mode=texts) for scripts/build-tool-vector-table.mjs; runs by hand only when regenerating the committed vector table", noVerdict: "pure generator — it prints the corpus; there is nothing to assert" },
   "agent-provider-picker.ts": { class: "manual", reason: "the picker-50 evidence run (scripts/evidence-runner.sh gate 16); 0/2 at the re-inventory both before and after the launcher migration — its build-test-extension.mjs copy does not load on this tree ('extension target not found'), which is outside this lane" },
   "axe-audit.ts": { class: "manual", reason: "4/3 at the re-inventory; a11y-audit.ts is the gate — this is the axe-core cross-check kept for comparison" },
   "flake-evidence.ts": { class: "manual", reason: "a bisect tool: runs the journey suite N times on a branch and its base and compares failure sets; exits 1 only for a branch-only failure" },
