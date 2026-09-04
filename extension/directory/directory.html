@@ -19,6 +19,14 @@
     .site-group { display:grid; gap:10px; min-inline-size:0; }
     .site-heading { margin:0; min-inline-size:0; color:var(--text); font-size:var(--text-lg);
       overflow-wrap:anywhere; }
+    .policy-row { display:flex; flex-wrap:wrap; align-items:safe center; gap:6px 12px;
+      min-inline-size:0; }
+    .policy-select { min-block-size:36px; max-inline-size:100%; padding:4px 8px;
+      border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
+      background:var(--panel,#fff); color:var(--text,#1d1b18);
+      font:600 var(--text-sm,13px)/1.4 inherit; }
+    .policy-note { margin:0; min-inline-size:0; color:var(--muted);
+      font-size:var(--text-xs,12px); line-height:1.5; overflow-wrap:anywhere; }
     .tool-list { display:grid; grid-template-columns:minmax(0,1fr); gap:10px;
       min-inline-size:0; margin:0; padding:0; list-style:none; }
     .tool-list > li { min-inline-size:0; }
@@ -29,7 +37,7 @@
 <body>
   <main class="wrap" aria-labelledby="directory-title">
     <h1 id="directory-title">Agent directory</h1>
-    <p class="sub">Every enrolled site can provide declared WebMCP, linked, or inferred functions. Each function shows its own source, schema, and approval state.</p>
+    <p class="sub">Every enrolled site can provide declared WebMCP, linked, or inferred functions. Each function shows its own source, schema, provenance, and policy state — and each site carries an enrollment policy (Allow tools / Ask before use / Blocked) that decides whether its tools are available to agents.</p>
     <div id="rows" aria-live="polite"></div>
   </main>
   <script type="module" src="directory.js"></script>

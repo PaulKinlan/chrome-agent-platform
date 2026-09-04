@@ -120,6 +120,12 @@ const BASELINE_ROUTES = [
   "tools.approve",
   "tools.pending",
   "tools.allOrigins",
+  // Per-site enrollment policy (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01):
+  // the Directory's policy read + set routes and the owner-approval leg an
+  // "ask"-policy site tool pays before its page call runs.
+  "tools.policies",
+  "tools.policy.set",
+  "webmcp.use-tool",
   "webmcp.diagnostics.get",
   "webmcp.diagnostics.set",
   "webmcp.status",

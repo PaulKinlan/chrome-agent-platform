@@ -64,6 +64,14 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   // model provider, so the owner approves the exact origin + cookie name
   // before the value is read at all.
   "browser.cookie-value",
+  // ONE invocation of an "ask"-policy site's WebMCP tool
+  // (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01): the per-site enrollment
+  // policy "ask" makes every call to that site's tools pay an in-conversation
+  // Allow-once / Deny card before the page call runs. Membership here is
+  // load-bearing exactly as for the destructive actions — without it
+  // createPendingApproval refuses and an ask-policy tool could never obtain a
+  // card (fail closed, never a silent run).
+  "webmcp.use-tool",
   // Using a REMOTE MCP server's tools (CAP-FB-20260831-MCP-TOOL-INJECTION-01):
   // the model reaches OUT to an owner-configured server whose results are
   // untrusted external content, so the owner approves the server on first use —
@@ -350,6 +358,15 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
       // an invalid id yields the empty identity (rejected by the caller).
       const id = typeof parts.id === "string" && /^(?!.*__)[a-zA-Z0-9_-]{1,64}$/.test(parts.id) ? parts.id : "";
       values = [id];
+      break;
+    }
+    case "webmcp-tool": {
+      // An ask-policy site tool's identity is its origin + its exact tool name
+      // (verbatim, bounded — two tools on one site are two different calls and
+      // must not share an approval row); the digest binds the full payload.
+      const webmcpOrigin = normalizedOrigin(parts.origin);
+      const webmcpTool = typeof parts.name === "string" ? parts.name.trim() : "";
+      values = [webmcpOrigin, webmcpTool.slice(0, 200)];
       break;
     }
     case "browser-action": {

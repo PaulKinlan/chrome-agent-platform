@@ -37,6 +37,7 @@ function ownData(value, key) {
 /** The named denial reasons — the owner-facing diagnostic for each conjunct. */
 export const WEBMCP_AUTHORITY_REASONS = Object.freeze([
   "not-enrolled",
+  "site-policy-denied",
   "tool-not-in-directory",
   "not-approved",
   "run-generation-missing",
@@ -48,6 +49,13 @@ export const WEBMCP_AUTHORITY_REASONS = Object.freeze([
  *
  * Inputs are already-resolved facts (the caller does the async reads):
  *  - enrolled / enrollmentGen: the LIVE enrollment snapshot for the origin.
+ *  - policy: the LIVE per-site tool-use policy ("allow" | "deny" | "ask" —
+ *    CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01). "deny" is the owner's
+ *    block: it fails closed BEFORE every other conjunct so a stale catalog
+ *    that still carries the site's records (built before the flip) can never
+ *    invoke one of them. "ask" passes here — the per-call owner card is paid
+ *    at dispatch time, not in the authorization decision (a run with no
+ *    owner conversation must fail at the gate, never silently run).
  *  - toolPresent: the descriptor (name + dispatch source) still exists in the
  *    live directory (descriptor re-verification — a WHAT-runs fence).
  *  - approved: the live approval state (enrollment-derived since
@@ -67,6 +75,7 @@ export const WEBMCP_AUTHORITY_REASONS = Object.freeze([
 export function evaluateWebmcpAuthority({
   enrolled,
   enrollmentGen,
+  policy,
   toolPresent,
   approved,
   runGen,
@@ -79,6 +88,7 @@ export function evaluateWebmcpAuthority({
     ownData(descriptorInput, "permissionDigest") ?? "none";
   let reason = "ok";
   if (enrolled !== true) reason = "not-enrolled";
+  else if (policy === "deny") reason = "site-policy-denied";
   else if (toolPresent !== true) reason = "tool-not-in-directory";
   else if (!isApprovedLive) reason = "not-approved";
   else if (runGen == null) reason = "run-generation-missing";
@@ -118,6 +128,7 @@ export function createWebmcpAuthorizationGuard({
     const decision = evaluateWebmcpAuthority({
       enrolled: nowEnrollment?.enrolled === true,
       enrollmentGen: nowEnrollment?.gen ?? 0,
+      policy: nowEnrollment?.policy ?? "allow",
       toolPresent: Boolean(current),
       approved,
       runGen: runGenCell?.get?.() ?? null,
@@ -137,4 +148,60 @@ export function createWebmcpAuthorizationGuard({
       reason: decision.reason,
     });
   };
+}
+
+/** The dispatch-time gate for one WebMCP tool call (CAP-FB-20260819-DIRECTORY-
+ * TOOL-EXPLORER-01) — THE gate readSiteLazySources' dispatch closure uses, so
+ * the shipped fence and the unit-tested fence are the SAME code (same
+ * zero-replica-drift rule that created this module). It re-checks the LIVE
+ * enrollment + policy the moment a call is about to hit the page:
+ *  - not enrolled → refused (never runs);
+ *  - policy "deny" → refused with the named reason (a toolset built before a
+ *    flip can never invoke one of the now-blocked tools);
+ *  - policy "ask" → the owner gate pays the in-conversation Allow-once/Deny
+ *    card; a run with NO owner gate (scoped/unattended) fails closed with an
+ *    honest error — never a silent auto-run;
+ *  - "allow" (and "ask" after the owner approved) → { ok: true }, and the
+ *    caller proceeds to the ordinary invokeSiteTool fence (enrollment
+ *    generation, descriptor, tab binding — nothing is weakened by the card).
+ * @param {{ enrolled?: boolean, policy?: string, askGate?: Function|null,
+ *           askPayload?: Object }} facts
+ * @returns {Promise<{ ok: boolean, reason?: string, error?: string,
+ *           approvalDenied?: boolean, approvalExpired?: boolean }>}
+ */
+export async function gateWebmcpToolDispatch({ enrolled, policy, askGate = null, askPayload = null } = {}) {
+  if (enrolled !== true) {
+    return Object.freeze({ ok: false, reason: "not-enrolled", error: "origin is not enrolled" });
+  }
+  if (policy === "deny") {
+    return Object.freeze({
+      ok: false,
+      reason: "site-policy-denied",
+      error: "site tools are blocked by the enrollment policy",
+    });
+  }
+  if (policy === "ask") {
+    if (typeof askGate !== "function") {
+      return Object.freeze({
+        ok: false,
+        reason: "owner-approval-channel-missing",
+        error: "site tools require owner approval, but this run has no approval channel",
+      });
+    }
+    let res;
+    try {
+      res = await askGate(askPayload ?? {});
+    } catch (e) {
+      return Object.freeze({ ok: false, error: String(e?.message ?? e) });
+    }
+    if (res?.ok !== true) {
+      return Object.freeze({
+        ok: false,
+        approvalDenied: res?.approvalDenied === true,
+        approvalExpired: res?.approvalExpired === true,
+        error: String(res?.error ?? "the owner did not approve this tool call"),
+      });
+    }
+  }
+  return Object.freeze({ ok: true });
 }
