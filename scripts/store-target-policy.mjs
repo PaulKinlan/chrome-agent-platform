@@ -6,7 +6,19 @@
 // defense-in-depth heuristics; exact CSP and exact package hashes are primary.
 
 import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { scanBundledWasmFiles, scanShippedJs } from "./scan-shipped.mjs";
+// The admitted Pyodide runtime lane (CAP-FB-20260823-PYODIDE-PYTHON-01): the
+// runtime ships as one byte-verified blob set (dist/wasm-tools/python/) whose
+// exact sha256 pins ARE the admission record (PYTHON_RUNTIME_PIN mirrors
+// wasm-tools/python/MANIFEST.json; tests/python-runtime.test.ts asserts disk ==
+// pins == manifest). It is NOT authored shipped source and NOT a WASI
+// tool-bundle: the vendored glue is verified byte-exact here instead of
+// AST-scanned, and its wasm is admitted by its pins instead of the bundled
+// executable map.
+import { PYTHON_RUNTIME_PIN, PYTHON_RUNTIME_DIR } from "../extension/lib/python-runtime.js";
+
+export const PYTHON_RUNTIME_ARCHIVE_PREFIX = PYTHON_RUNTIME_DIR; // "dist/wasm-tools/python/"
 
 export const STORE_TARGET = "store";
 export const STORE_EXTENSION_CSP =
@@ -134,6 +146,32 @@ export async function assertStoreTargetBoundary({
     byPath.set(entry.archivePath, entry);
   }
 
+  // Python-runtime lane: byte-exact admission against the shipped pins. Every
+  // file under the runtime dir must be pinned and hash-match; extras and
+  // drifted bytes fail closed. These entries are then EXCLUDED from the
+  // authored-source scans (they are vendored runtime bytes, admitted by hash
+  // like CAS binaries, not authored extension source).
+  const pythonRuntimeEntries = inventory.filter((entry) =>
+    entry.archivePath.startsWith(PYTHON_RUNTIME_ARCHIVE_PREFIX)
+  );
+  const pythonRuntimeViolations = [];
+  for (const entry of pythonRuntimeEntries) {
+    const file = entry.archivePath.slice(PYTHON_RUNTIME_ARCHIVE_PREFIX.length);
+    const pin = PYTHON_RUNTIME_PIN.files[file];
+    if (!pin) {
+      pythonRuntimeViolations.push(`${entry.archivePath}: unmanifested python-runtime file`);
+      continue;
+    }
+    const bytes = await readFile(entry.sourcePath);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest !== pin.sha256) {
+      pythonRuntimeViolations.push(`${entry.archivePath}: python-runtime byte drift (${digest} != ${pin.sha256})`);
+    }
+  }
+  const nonRuntimeEntries = inventory.filter((entry) =>
+    !entry.archivePath.startsWith(PYTHON_RUNTIME_ARCHIVE_PREFIX)
+  );
+
   const manifestEntry = byPath.get("manifest.json");
   if (!manifestEntry) throw policyError("manifest.json is missing");
   let manifest;
@@ -150,7 +188,7 @@ export async function assertStoreTargetBoundary({
   }
   assertExactStoreCsp(manifest);
 
-  const jsEntries = inventory.filter((entry) =>
+  const jsEntries = nonRuntimeEntries.filter((entry) =>
     /\.(?:m?js)$/iu.test(entry.archivePath)
   );
   const generatedBundles = new Set(
@@ -178,7 +216,7 @@ export async function assertStoreTargetBoundary({
     },
   );
 
-  const htmlEntries = inventory.filter((candidate) =>
+  const htmlEntries = nonRuntimeEntries.filter((candidate) =>
     /\.html$/iu.test(candidate.archivePath)
   );
   const htmlViolations = [];
@@ -191,7 +229,7 @@ export async function assertStoreTargetBoundary({
     );
   }
 
-  const wasmEntries = inventory.filter((entry) =>
+  const wasmEntries = nonRuntimeEntries.filter((entry) =>
     /\.wasm$/iu.test(entry.archivePath)
   );
   for (const archivePath of bundledWasmManifestByArchivePath.keys()) {
@@ -214,7 +252,7 @@ export async function assertStoreTargetBoundary({
     },
   );
 
-  const violations = [...jsViolations, ...htmlViolations, ...wasmViolations];
+  const violations = [...jsViolations, ...htmlViolations, ...wasmViolations, ...pythonRuntimeViolations];
   if (violations.length > 0) {
     throw policyError(
       `static boundary violations (${violations.length}):\n${

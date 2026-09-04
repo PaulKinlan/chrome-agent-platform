@@ -1145,7 +1145,10 @@ Deno.test("projection: execute_tool sends the PNG as an image content part only 
       acceptsImageToolResults: () => acceptsImageToolResults,
     });
 
-  const vision = build(true);
+  // The AI SDK tool surface is driven dynamically here (execute/toModelOutput
+  // with runtime-shaped args); the loose cast keeps the type-checker out of a
+  // boundary the runtime assertions below actually verify.
+  const vision = build(true) as any;
   const searched = await vision.tools.search_tools.execute({ query: "screenshot", limit: 1 });
   const ref = searched.results[0].selectionRef;
   const output = await vision.tools.execute_tool.execute({ selectionRef: ref, arguments: {} });
@@ -1166,7 +1169,7 @@ Deno.test("projection: execute_tool sends the PNG as an image content part only 
   // A text-only lane (the OpenAI-compatible chat transport JSON-stringifies a
   // `content` output, which would put the base64 straight back in the text)
   // gets the JSON envelope alone.
-  const textOnly = build(false);
+  const textOnly = build(false) as any;
   const searched2 = await textOnly.tools.search_tools.execute({ query: "screenshot", limit: 1 });
   const ref2 = searched2.results[0].selectionRef;
   const output2 = await textOnly.tools.execute_tool.execute({ selectionRef: ref2, arguments: {} });

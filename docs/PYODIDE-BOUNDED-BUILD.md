@@ -1,5 +1,25 @@
 # Pyodide bounded-build spec (CAP-FB-20260823-PYODIDE-PYTHON-01, owner OPTION A)
 
+> STATUS (2026-09-04, bead chrome-agent-platform-4usu): the runtime is BUILT and
+> ADMITTED, by the owner-approved simplification of this spec — the pinned
+> OFFICIAL Pyodide 0.26.4 core distribution (wasm-tools/python/, MANIFEST.json with
+> exact sha256, fetched from the GitHub release
+> pyodide-core-0.26.4.tar.bz2), not a custom Emscripten build. The byte ceilings this
+> spec sized for were removed by owner directive dptw (2026-09-03), so the
+> custom memory-bounded build (sections 1–2 below) is moot: official-dist bytes
+> are admitted whole and executed through a dedicated classic-worker dispatcher
+> (extension/lib/python-host.js + wasm-tools/python/python-worker.js), fresh
+> interpreter per run, pinned + hash-verified at the build/store gates.
+> build.mjs verifies every byte against MANIFEST.json and copies the runtime into
+> the packaged extension at dist/wasm-tools/python/ (the generated-artifact
+> tree; chrome-extension:// serves it, so nothing fetches the network). The
+> service worker injects the runtime provider through python-tool.js's
+> setPythonRuntimeProvider seam; each python.execute is transported to a fresh
+> classic Pyodide worker inside the offscreen document and the captured stdout
+> is returned whole. Section 6's acceptance maps to: python_execute executes
+> real code (see tests/python-runtime.test.ts REAL cases, which run the actual
+> pinned 0.26.4 interpreter in-process).
+
 Owner-approved MVS: a credential-free, OPFS-cached, **bounded-memory** Pyodide runtime
 admitted through the existing wasm-package authority, driving ONE bounded `python` tool.
 This document is the precise, unblocking build spec for the runtime BINARY — the actual
@@ -56,6 +76,12 @@ memory-evidence gate (the measured wasm memory-section max pages ≤ 2048 AND by
 two-operand composite the validator already accepts.
 
 ## 3. OPFS cache (no CDN, no network)
+
+> SUPERSEDED by the status note above (bead chrome-agent-platform-4usu): the
+> runtime is not OPFS-cached — it ships inside the packaged extension
+> (dist/wasm-tools/python/, verified byte-exact by build.mjs) and is served by
+> the chrome-extension:// origin. The network-free property is unchanged and
+> stronger: there is no first-run download to cache at all.
 
 The existing `lib/python-runtime.js` scaffold fetches from a CDN (jsdelivr) with SRI —
 that is the OLD, network-bearing approach and is **replaced** by Option A. The runtime

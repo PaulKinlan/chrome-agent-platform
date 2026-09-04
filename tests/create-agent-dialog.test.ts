@@ -131,10 +131,19 @@ Deno.test("create-agent dialog: skills section is collapsible to keep footer vis
     "skills must be housed inside a collapsible details component",
   );
 
+  // The skills list is NOT its own scroll island: it flows into the dialog's
+  // single scroll body so every skill and everything below it stays reachable
+  // by ONE scrollbar. The previous 180px cap + overflow-y:auto +
+  // overscroll-behavior:contain ate the wheel over the list and blocked
+  // reaching content beneath it (owner: "nothing underneath it is
+  // accessible"). These assertions are RED if anyone reintroduces the cap.
   assert(
-    /skillsList\.style\.maxHeight = "180px";[\s\S]*?skillsList\.style\.overflowY = "auto";/
-      .test(ntpJs),
-    "skills list must have max-height and overflow-y: auto",
+    !/skillsList\.style\.maxHeight = "180px";/.test(ntpJs),
+    "skills list must NOT cap its height (no inner scroll island — the dialog scrolls as one body)",
+  );
+  assert(
+    !/skillsList\.style\.overflowY = "auto";/.test(ntpJs),
+    "skills list must NOT be its own scroll container",
   );
 });
 
@@ -143,7 +152,13 @@ Deno.test("create-agent dialog: scroll container and inputs have unclipped focus
     new URL("../extension/ntp/ntp.js", import.meta.url),
   );
 
-  // Scroll body has overscroll-behavior: contain and scroll-padding
+  // Scroll body has min-height:0 + overscroll-behavior: contain and scroll-padding
+  // (min-height:0 is what lets the body scroll past Advanced/Skills instead of
+  // growing the container and clipping — RED if regressed to auto).
+  assert(
+    /scrollBody\.style\.minHeight = "0";[\s\S]*?scrollBody\.style\.overflowY = "auto";/.test(ntpJs),
+    "scrollBody must set min-height: 0 and overflow-y: auto so the dialog scrolls as one body",
+  );
   assert(
     /scrollBody\.style\.overscrollBehavior = "contain";[\s\S]*?scrollBody\.style\.scrollPadding = "12px";/
       .test(ntpJs),
@@ -155,5 +170,62 @@ Deno.test("create-agent dialog: scroll container and inputs have unclipped focus
     /el\.style\.boxSizing = "border-box";[\s\S]*?el\.style\.outlineOffset = "0px";/
       .test(ntpJs),
     "configField inputs must set outlineOffset: 0px and boxSizing: border-box for unclipped focus",
+  );
+});
+
+Deno.test("create-agent dialog: journey skills-wheel probe advances past the post-scrollIntoView position and hits the list itself", async () => {
+  const journeys = await Deno.readTextFile(
+    new URL("../scripts/chrome-journeys.ts", import.meta.url),
+  );
+
+  // The probe records the outer scroll position AFTER scrollIntoView moved it
+  // (r2 finding: scrollIntoView can move the scroller before the wheel, so a
+  // bare scrollTop > 0 final assertion false-passes — the centering did the
+  // moving, not the wheel). RED if the pre-scroll capture is dropped.
+  assert(
+    journeys.includes("scrollTopBeforeSkillsWheel: sc?.scrollTop ?? null"),
+    "skills-wheel probe must capture the outer scrollTop after scrollIntoView",
+  );
+  assert(
+    journeys.includes("(scrollProbe.scrollTopAfterSkillsWheel ?? 0) > (scrollProbe.scrollTopBeforeSkillsWheel ?? 0)"),
+    "skills-wheel gate must assert advancement from the post-scrollIntoView position, not merely scrollTop > 0",
+  );
+  // The wheel-coordinate hit test must land ON the skills list (the element or
+  // a descendant) — a hit anywhere inside .agent-config-scroll false-passes by
+  // wheeling a sibling surface.
+  assert(
+    journeys.includes("(sl === at || sl.contains(at))"),
+    "skills-wheel hit test must require the point to be on .skills-list, not anywhere in the scroll body",
+  );
+  assert(
+    journeys.includes("skProbe.hitSkillsList"),
+    "the wheel dispatch must be gated on the skills-list-specific hit test",
+  );
+});
+
+Deno.test("create-agent dialog: journey asserts below-Skills reachability via .agent-mcp-box intersection", async () => {
+  const journeys = await Deno.readTextFile(
+    new URL("../scripts/chrome-journeys.ts", import.meta.url),
+  );
+
+  // Below-Skills reachability was captured as a screenshot but never asserted
+  // (r2 finding). The probe must measure the follower element (.agent-mcp-box,
+  // appended to the Advanced body after the skills section) and the gate must
+  // require its intersection with the scroll viewport.
+  assert(
+    journeys.includes("document.querySelector('.agent-mcp-box')"),
+    "deep-scroll probe must measure the .agent-mcp-box follower below the skills section",
+  );
+  assert(
+    journeys.includes("mcpIntersects: mr.width > 0"),
+    "deep-scroll probe must record whether .agent-mcp-box intersects the scroll viewport",
+  );
+  assert(
+    journeys.includes("scrollProbe.mcpFound === true &&"),
+    "gate must require the below-Skills follower to exist",
+  );
+  assert(
+    journeys.includes("scrollProbe.mcpIntersects === true,"),
+    "gate must assert .agent-mcp-box is reachable after scrolling past skills",
   );
 });

@@ -14,9 +14,9 @@
 //   - per-FILE modes preserved from the previous tree; failures roll back and
 //     ROLLBACK FAILURE IS FATAL; every failure path cleans its staging.
 import { build } from "esbuild";
-import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
@@ -424,6 +424,33 @@ try {
     const prevMode = async (rel) => {
       try { const st = await stat(path.join(DIST, rel)); return st.mode & 0o777; } catch { return null; }
     };
+
+    // ── Admitted Pyodide runtime (CAP-FB-20260823-PYODIDE-PYTHON-01) ──────
+    // Verify the committed runtime bytes against wasm-tools/python/MANIFEST.json
+    // (exact sha256 — a drifted byte fails the build closed), then copy the
+    // runtime + python-worker.js into the staged dist tree so it ships in the
+    // packaged extension at dist/wasm-tools/python/ (the generated-artifact
+    // tree — the raw third-party glue is never shipped as scanned source).
+    {
+      const RUNTIME_SRC = path.join(ROOT, "wasm-tools/python");
+      const manifest = JSON.parse(await readFile(path.join(RUNTIME_SRC, "MANIFEST.json"), "utf8"));
+      const runtimeFiles = Object.keys(manifest.files); // 7 pinned files incl. python-worker.js
+      for (const file of runtimeFiles) {
+        const digest = createHash("sha256").update(await readFile(path.join(RUNTIME_SRC, file))).digest("hex");
+        const expected = manifest.files[file]?.sha256;
+        if (!expected) throw new Error(`pyodide runtime ${file} has no admission hash in wasm-tools/python/MANIFEST.json`);
+        if (digest !== expected) {
+          throw new Error(`pyodide runtime admission mismatch: ${file} sha256 ${digest} != manifest ${expected}`);
+        }
+      }
+      const PY = path.join(STAGE, "wasm-tools/python");
+      await mkdir(PY, { recursive: true });
+      for (const file of runtimeFiles) {
+        await copyFile(path.join(RUNTIME_SRC, file), path.join(PY, file));
+      }
+      console.log(`build: admitted Pyodide runtime staged (${runtimeFiles.length} files, sha256-verified against MANIFEST.json)`);
+    }
+
     for (const rel of ["background/service-worker.js", "options.bundle.js", "shared/diff-core.bundle.js"]) {
       const mode = await prevMode(rel);
       if (mode != null) await chmod(path.join(STAGE, rel), mode); // mode failure = publish failure (fatal)

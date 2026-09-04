@@ -1,103 +1,186 @@
-// lib/python-runtime.js — the lazy Pyodide loader (CAP-FEATURE-PYODIDE-01).
+// lib/python-runtime.js — the admitted Pyodide runtime + the python runtime
+// PROVIDER (CAP-FB-20260823-PYODIDE-PYTHON-01, bead chrome-agent-platform-4usu).
 //
-// The ~24 MB Pyodide runtime is NOT bundled into the extension. It loads on
-// demand from a pinned CDN entrypoint with an SRI integrity check, caches the
-// verified bytes in OPFS (the cold-start cache), and degrades GRACEFULLY: any
-// fetch/integrity/instantiation failure returns the product to "unavailable"
-// with no exception escaping — the platform works without Python.
+// The Pyodide runtime is an ADMITTED local artifact: the pinned 0.26.4 core
+// distribution lives in wasm-tools/python/ (committed; MANIFEST.json holds the
+// exact sha256 of every file), and build.mjs verifies + copies it into the
+// packaged extension at dist/wasm-tools/python/ (the generated-artifact tree —
+// the raw third-party glue is never shipped as scanned source; Chrome serves
+// it from the chrome-extension:// origin, so nothing touches the network).
 //
-// The status machine is: `unavailable` -> `loading` -> `available` (success) or
-// back to `unavailable` (any failure). `load` is single-flight (one in-flight
-// load at a time; a concurrent caller awaits the same promise).
+// The pins below MUST agree with wasm-tools/python/MANIFEST.json and the
+// on-disk bytes (tests/python-runtime.test.ts asserts all three).
+//
+// Execution host: python code runs in a FRESH classic Worker per run, spawned
+// by the offscreen document (extension/lib/python-host.js). The service worker
+// has no DOM and module workers cannot host Pyodide's classic glue; the
+// offscreen doc CAN spawn a classic worker, and a busy Python loop dies with
+// worker.terminate — the only reliable stop. Zero network at execution time;
+// fresh interpreter per run (no cross-run state).
+//
+// This module is the SERVICE-WORKER side: it owns the pins and the lazy
+// single-flight host handoff, and it exports the runtime PROVIDER the boot
+// injects through python-tool.js's setPythonRuntimeProvider seam. The provider
+// returns a runtime of the exact shape lib/python-execution.js's runPython
+// expects ({ setStdout, setStdin, runPythonAsync }) — code in → captured
+// stdout out — so the python.execute route and the python tool keep their
+// shape unchanged.
 
+import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
+import { newId } from "./pure.js";
+
+export const PYTHON_EXEC_TIMEOUT_MS = EXECUTOR_BOUNDS.maxCallMs; // 30s: a hung interpreter must die
+export const PYTHON_RUNTIME_VERSION = "0.26.4";
+
+/** The packaged location of the runtime (extension/dist/wasm-tools/python/).
+ * dist is the generated-artifact tree: built + verified from the committed
+ * wasm-tools/python/ sources by build.mjs. */
+export const PYTHON_RUNTIME_DIR = "dist/wasm-tools/python/";
+
+/** Exact admission hashes — must match wasm-tools/python/MANIFEST.json and
+ * the on-disk bytes (tests/python-runtime.test.ts asserts all three). */
 export const PYTHON_RUNTIME_PIN = Object.freeze({
-  version: "0.26.4",
-  jsUrl: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js",
-  wasmUrl: "https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.asm.wasm",
-  // The SRI integrity hashes are the SECURITY PIN: a substituted or truncated
-  // CDN response fails the check and degrades to unavailable. The exact digest
-  // is computed from the real bytes at the browser-gate lane (this module ships
-  // the check + the pins; the hashes are filled before any production enable).
-  jsIntegrity: "",
-  wasmIntegrity: "",
+  version: PYTHON_RUNTIME_VERSION,
+  worker: Object.freeze({ file: "python-worker.js" }),
+  files: Object.freeze({
+    "pyodide.js": Object.freeze({ sha256: "c0069107621d5b942a659e737a12e774cc0451feaa2256f475d72e071d844ec7", bytes: 14761 }),
+    "pyodide.mjs": Object.freeze({ sha256: "7f24c6655a79eacf0061d3d4e6a60dc0b1938812d15c52d7ff8b37d9e0689e51", bytes: 13779 }),
+    "pyodide.asm.js": Object.freeze({ sha256: "919560652ed3dad3707cb3a394785da1e046fb13dc0defa162058ff230cb7eed", bytes: 1229099 }),
+    "pyodide.asm.wasm": Object.freeze({ sha256: "b7e66a19427a55010ac3367c1b6c64b893f9826f783412945fdf0c3337f3bc94", bytes: 10088051 }),
+    "python_stdlib.zip": Object.freeze({ sha256: "72894522b791858b9d613ac786b951d8b5094035dcf376313ea24a466810f336", bytes: 2341872 }),
+    "pyodide-lock.json": Object.freeze({ sha256: "cd50b49de944c579045e122fe8628b31f9ce446379f032f36c05e273d38766e0", bytes: 106335 }),
+    "python-worker.js": Object.freeze({ sha256: "ed4cef93bfcc68103fa7ac1e640a57e1356f77f54c4c1604c4992056f1a1ec46", bytes: 3088 }),
+  }),
 });
 
-export const PYTHON_STATUS = Object.freeze({
-  unavailable: "unavailable",
-  loading: "loading",
-  available: "available",
-});
-
-/** An SRI-style integrity check over the fetched text. Empty pin = the check is
- * intentionally UNPINNED (the load still works, but the browser-gate lane MUST
- * fill the pin before any production enable). A non-empty pin that mismatches
- * throws (fail closed). */
-export async function verifyIntegrity(text, { integrity, digest = null } = {}) {
-  if (!integrity) return text; // unpinned — the browser-gate lane fills it.
-  if (typeof integrity !== "string" || !/^sha384-[A-Za-z0-9+/=]+$/.test(integrity)) {
-    throw new Error("python_runtime_bad_integrity_pin");
-  }
-  if (typeof digest !== "function") throw new Error("python_runtime_no_digest");
-  const want = integrity.slice("sha384-".length);
-  const bytes = new TextEncoder().encode(String(text ?? ""));
-  const gotBytes = new Uint8Array(await digest(bytes));
-  const got = btoa(String.fromCharCode(...gotBytes))
-    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  if (got !== want) throw new Error("python_runtime_integrity_mismatch");
-  return text;
+function withTimeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("python_run_timeout")), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
 
-/** The lazy loader. `loadPyodide` is the injected dependency: the REAL one (the
- * CDN glue + wasm instantiation) at the browser-gate lane; a mock in the KATs.
- * `fetch`/`crypto` are injected for the no-Chrome tests. */
-export function createPythonRuntime({ fetchImpl = null, cryptoImpl = null, cache = null } = {}) {
-  const doFetch = fetchImpl ?? ((url, init) => globalThis.fetch(url, init));
-  const digest = cryptoImpl?.subtle
-    ? (bytes) => cryptoImpl.subtle.digest("SHA-384", bytes)
-    : (bytes) => (typeof crypto !== "undefined" && crypto.subtle
-      ? crypto.subtle.digest("SHA-384", bytes)
-      : Promise.resolve(new ArrayBuffer(0)));
-  const store = cache ?? { bytes: new Map(), get: null, set: null };
+function sanitizeInput(value, max = 256 * 1024) {
+  const text = String(value ?? "");
+  return text.slice(0, max); // the message channel is not the stdout pipe — keep frames sane
+}
 
-  let state = PYTHON_STATUS.unavailable;
-  let runtime = null;
-  let inflight = null;
+/**
+ * Create the python runtime PROVIDER for the setPythonRuntimeProvider seam
+ * (extension/lib/python-tool.js). provider() resolves to a runtime facade of
+ * the lib/python-execution.js runPython shape — { setStdout({batched}),
+ * setStdin({stdin}), runPythonAsync(code) } — whose calls are transported to
+ * the offscreen-document python host (extension/lib/python-host.js), which
+ * runs each program in a FRESH classic Pyodide worker and streams the captured
+ * stdout back whole.
+ *
+ * `ensureHost` lazily opens/keeps the offscreen document (single-flight);
+ * `sendMessage` is the chrome.runtime round-trip to the host. Injectable for
+ * the no-Chrome tests. The host is retried on the next run when it cannot open
+ * or dies between runs.
+ */
+export function createPythonRuntimeProvider({
+  ensureHost = null,
+  sendMessage = null,
+  timeoutMs = PYTHON_EXEC_TIMEOUT_MS,
+} = {}) {
+  let hostSettled = false;
+  let hostOk = false;
+  let pending = null;
 
-  async function fetchPinned(url, integrity) {
-    const cached = typeof store.get === "function" ? await store.get(url) : store.bytes.get(url);
-    if (cached != null) return verifyIntegrity(cached, { integrity, digest });
-    const res = await doFetch(url, { method: "GET" });
-    if (!res || !res.ok) throw new Error("python_runtime_fetch_failed");
-    const text = await res.text();
-    await verifyIntegrity(text, { integrity, digest });
-    if (typeof store.set === "function") await store.set(url, text);
-    else store.bytes.set(url, text);
-    return text;
-  }
+  const doSend = sendMessage ?? ((message) => {
+    if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+      return Promise.resolve(null);
+    }
+    return Promise.resolve(chrome.runtime.sendMessage(message));
+  });
 
-  function status() { return state; }
-
-  async function load(loadPyodide) {
-    if (state === PYTHON_STATUS.available) return { ok: true, runtime };
-    if (inflight) return inflight;
-    inflight = (async () => {
-      state = PYTHON_STATUS.loading;
+  /** Lazily bring up the host ONCE (single-flight); later calls reuse the
+   * verdict. A host that dies later is retried on the next run's failure. */
+  async function ensureHostReady() {
+    if (hostSettled) return hostOk;
+    if (pending) return pending;
+    if (typeof ensureHost !== "function") {
+      hostSettled = true;
+      hostOk = false;
+      return false;
+    }
+    pending = (async () => {
       try {
-        await fetchPinned(PYTHON_RUNTIME_PIN.jsUrl, PYTHON_RUNTIME_PIN.jsIntegrity);
-        await fetchPinned(PYTHON_RUNTIME_PIN.wasmUrl, PYTHON_RUNTIME_PIN.wasmIntegrity);
-        if (typeof loadPyodide !== "function") throw new Error("python_runtime_no_loader");
-        runtime = await loadPyodide();
-        state = PYTHON_STATUS.available;
-        return { ok: true, runtime };
-      } catch (error) {
-        state = PYTHON_STATUS.unavailable; // the graceful degrade.
-        return { ok: false, error: String(error?.message ?? error) };
+        const result = await ensureHost();
+        hostOk = !result || result.ok !== false;
+      } catch {
+        hostOk = false;
       } finally {
-        inflight = null;
+        // Only SUCCESS is cached: a host that cannot open right now is retried
+        // on the next run (offscreen creation can fail transiently).
+        hostSettled = hostOk;
+        pending = null;
       }
+      return hostOk;
     })();
-    return inflight;
+    return pending;
   }
 
-  return Object.freeze({ status, load });
+  /** One fresh facade per provider() call — runPython wires setStdout/setStdin
+   * first, then runPythonAsync, exactly once each. */
+  function facade() {
+    let emitStdout = null;
+    let readStdin = null;
+    let stdinGiven = false;
+    const oneShotStdin = () => {
+      if (stdinGiven) return undefined; // EOF — the whole input arrives once
+      stdinGiven = true;
+      return typeof readStdin === "function" ? readStdin() : "";
+    };
+    return {
+      setStdout({ batched }) {
+        if (typeof batched === "function") emitStdout = batched;
+      },
+      setStdin({ stdin }) {
+        if (typeof stdin === "function") readStdin = stdin;
+      },
+      runPythonAsync: async (code) => {
+        const runId = newId("python");
+        const ready = await ensureHostReady();
+        if (!ready) throw new Error("python_unavailable_host");
+        let response;
+        try {
+          response = await withTimeout(
+            doSend({
+              type: "python.run",
+              runId,
+              code: sanitizeInput(code),
+              stdin: sanitizeInput(oneShotStdin()),
+            }),
+            timeoutMs,
+          );
+        } catch (error) {
+          if (String(error?.message ?? error) === "python_run_timeout") throw error;
+          // A dead host channel is retried next run.
+          hostSettled = false;
+          throw new Error("python_unavailable_host");
+        }
+        if (!response || typeof response !== "object") {
+          // No host answered (it can die between ensureHost and the send) — the
+          // next run retries the host.
+          hostSettled = false;
+          throw new Error("python_unavailable_host");
+        }
+        if (response.ok) {
+          if (emitStdout) emitStdout(String(response.stdout ?? ""));
+          return undefined;
+        }
+        throw new Error(String(response.error ?? "python_run_failed"));
+      },
+    };
+  }
+
+  return Object.freeze({
+    /** The provider: async () => runtime facade (the runPython surface). */
+    provider: async () => facade(),
+  });
 }

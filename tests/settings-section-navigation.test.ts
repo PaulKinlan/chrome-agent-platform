@@ -48,3 +48,48 @@ Deno.test("settings multi-section: DOM node count and active panel isolation", (
   const activeSections = [...HTML.matchAll(/<section\s+id="([^"]+)"\s+class="panel\s+active"/g)].map((m) => m[1]);
   assertEquals(activeSections, ["providers"], "only providers is initially active");
 });
+
+// cap-beads-wuvg — provider server tools toggle reset on reload.
+// The server-tools init (state load + toggle listener + per-agent rows) must
+// run when the PROVIDERS section renders — the toggle HTML lives there — not
+// inside renderAgents(), which only runs when the agents section is visited.
+Deno.test("settings multi-section: provider server tools init is bound to the providers render, not renderAgents", () => {
+  const initDef = "async function initProviderServerTools()";
+  assert(JS.includes(initDef), "initProviderServerTools must exist in options.js");
+  assertEquals(
+    (JS.match(/initProviderServerTools\(/g) ?? []).length,
+    2,
+    "initProviderServerTools is defined once and called from exactly one site (no double init)",
+  );
+
+  // The single call site is the providers branch of ensureSectionRendered —
+  // the section that is active by default on load and on reload→navigate.
+  const ensure = JS.slice(JS.indexOf("async function ensureSectionRendered"), JS.indexOf("// nav active state"));
+  assert(ensure.includes('if (sectionId === "providers")'), "providers branch present in ensureSectionRendered");
+  assert(ensure.includes("await initProviderServerTools();"), "the providers branch must run initProviderServerTools");
+  assert(
+    ensure.indexOf("await initProviderServerTools();") > ensure.indexOf('sectionId === "providers"'),
+    "the init call must sit inside the providers branch (not the agents branch or a shared tail)",
+  );
+  assert(
+    !ensure.includes('sectionId === "agents"') ||
+      ensure.indexOf('await initProviderServerTools();') < ensure.indexOf('sectionId === "agents"'),
+    "the init call must come before the agents branch, i.e. it is not (re)run there",
+  );
+
+  // renderAgents no longer initializes server tools (it did before the fix).
+  const agentsFn = JS.slice(JS.indexOf("async function renderAgents()"), JS.indexOf("async function initProviderServerTools()"));
+  assert(!agentsFn.includes("initProviderServerTools"), "renderAgents must not call initProviderServerTools");
+  assert(!agentsFn.includes('$("#server-tools-enabled")'), "the server-tools toggle binding must not live in renderAgents");
+
+  // State restore across reload→providers: the init reads the persisted kv
+  // record, drives the toggle's checked state from it, binds the save listener
+  // and renders the per-agent rows — all in one function.
+  const initFn = JS.slice(JS.indexOf(initDef), JS.indexOf("/** The per-agent override row"));
+  assert(initFn.includes('storage.get("cap:providerServerTools")'), "init must read the persisted server-tools record");
+  assert(initFn.includes("stToggle.checked = stCfg.enabled === true"), "init must restore the toggle from the persisted record");
+  assert(initFn.includes('stToggle.addEventListener("toggle"'), "init must bind the toggle save listener");
+  assert(initFn.includes("await renderServerToolAgents(stToggle.checked)"), "init must render the per-agent rows for the restored state");
+  const htmlSection = HTML.slice(HTML.indexOf('id="providers"'), HTML.indexOf('id="mcp-servers"'));
+  assert(htmlSection.includes('id="server-tools-enabled"'), "the server-tools toggle lives in the providers section HTML");
+});

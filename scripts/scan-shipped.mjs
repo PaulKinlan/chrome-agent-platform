@@ -246,6 +246,14 @@ const AGENT_WORKER_HOST_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
 const AGENT_WORKER_CLIENT_CANONICAL_PATH = "extension/lib/agent-worker-client.js";
 const AGENT_WORKER_CLIENT_CANONICAL_LOCATION = { line: 53, column: 15 };
 const AGENT_WORKER_CLIENT_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
+// The python Pyodide host (CAP-FB-20260823-PYODIDE-PYTHON-01) constructs a
+// FRESH classic worker per python.run from a runtime-resolved extension URL
+// (the dist path cannot be a source literal — it is built from the pinned
+// runtime dir). A SEPARATE canonical entry bound to the exact line/column +
+// the exact `new WorkerCtor(` shape, never a broad exemption.
+const PYTHON_WORKER_HOST_CANONICAL_PATH = "extension/lib/python-host.js";
+const PYTHON_WORKER_HOST_CANONICAL_LOCATION = { line: 72, column: 15 };
+const PYTHON_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
@@ -469,6 +477,13 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === AGENT_WORKER_CLIENT_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(AGENT_WORKER_CLIENT_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, PYTHON_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "WorkerCtor" &&
+            node.loc?.start?.line === PYTHON_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === PYTHON_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(PYTHON_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);

@@ -1,13 +1,76 @@
 # Changelog
 
+## [0.3.128] — 2026-09-04
+- Pyodide WASM runtime + offscreen host + tool wiring
+
+## [0.3.127] — 2026-09-04
+- python_execute now runs real Pyodide 0.26.4, bundled and served from the extension package ()
+
+## [0.3.126] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.125] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.124] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.123] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.122] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.121] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.120] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.119] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.118] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.117] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.116] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.115] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.114] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.113] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.112] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.111] — 2026-09-04
+- python_execute works in the shipped build again — restored the runtime-provider wiring and matched the tool counts to the catalog
+
+## [0.3.110] — 2026-09-04
+- Remove the python-tool RETAINED entry — the tool is now reachable via management-tools
+
+## [0.3.109] — 2026-09-04
+- Run Python programs in the browser: the python_execute tool is available again, executing code sandboxed in the built-in runtime with no DOM or network access.
+
+## [0.3.108] — 2026-09-04
+- Maintenance and fixes.
+
 ## [0.3.103] — 2026-09-04
-- Wire python_execute into the management toolset — the brv merge lost this wiring
+- Maintenance and fixes.
 
 ## [0.3.102] — 2026-09-04
-- Ignore .DS_Store files
+- Maintenance and fixes.
 
 ## [0.3.101] — 2026-09-04
-- Pyodide WASM runtime
+- Maintenance and fixes.
 
 ## [0.3.100] — 2026-09-04
 - The docs-fallback module is now imported by the service worker — drop the RETAINED entry
