@@ -3128,7 +3128,6 @@ async function buildAgentConfigDialog(opts) {
   advancedDetails.style.background = "var(--panel,#ffffff)";
   advancedDetails.style.minWidth = "0";
   advancedDetails.style.maxWidth = "100%";
-  advancedDetails.style.overflow = "hidden";
   const advancedSummary = document.createElement("summary");
   advancedSummary.textContent = "Advanced";
   advancedSummary.style.cssText = "cursor:pointer;font-size:13px;font-weight:600;padding:10px 12px;";
@@ -3149,7 +3148,6 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.style.background = "var(--panel,#ffffff)";
   skillsDetails.style.minWidth = "0";
   skillsDetails.style.maxWidth = "100%";
-  skillsDetails.style.overflow = "hidden";
 
   const skillsSummary = document.createElement("summary");
   skillsSummary.style.padding = "10px 12px";
@@ -3171,9 +3169,12 @@ async function buildAgentConfigDialog(opts) {
   const skillsList = document.createElement("div");
   skillsList.className = "skills-list";
   skillsList.style.padding = "8px 12px 10px";
-  skillsList.style.maxHeight = "180px";
-  skillsList.style.overflowY = "auto";
-  skillsList.style.overscrollBehavior = "contain";
+  // The skills list is NOT its own scroll island: it flows into the dialog's
+  // single scroll body (agent-config-scroll, min-height:0) so every skill and
+  // everything below stays reachable by ONE scrollbar. The previous 180px cap
+  // + overflow-y:auto + overscroll-behavior:contain made the wheel scroll the
+  // inner list and then STOP — the outer dialog never advanced past it (the
+  // owner's "nothing underneath it is accessible" report).
   skillsList.style.display = "flex";
   skillsList.style.flexDirection = "column";
   skillsList.style.gap = "6px";

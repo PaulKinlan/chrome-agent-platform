@@ -1,13 +1,31 @@
 # Changelog
 
+## [0.3.106] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.105] — 2026-09-04
+- Agents find tools by what they DO — tool search now understands meaning (a query like "will it rain this weekend" finds the forecast tool even when no words match), fully offline with exact-name matches always winning
+
+## [0.3.104] — 2026-09-04
+- Update tests for the no-limits contract — removed size-cap assertions that reference constants deleted by dptw
+
+## [0.3.103] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.102] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.101] — 2026-09-04
+- Maintenance and fixes.
+
 ## [0.3.100] — 2026-09-04
-- Agents find tools by what they do — offline semantic tool search: a committed word-vector table (precomputed from a real model at tablegen time, common-direction removal, int8) adds a cosine-recall tier to search_tools on top of the deterministic exact/alias/lexical path, with honest unavailable/stale/no-match diagnostics; exact names always win; nonsense queries admit nothing; retrieval stays metadata-only and never grants permission. Also repairs the changelog order regression from 8ab84f8a (main was red on the semver gate)
+- Maintenance and fixes.
 
 ## [0.3.99] — 2026-09-04
-- Agents find tools by what they do — offline semantic tool search: a committed word-vector table (precomputed from a real model at tablegen time, common-direction removal, int8) adds a cosine-recall tier to search_tools on top of the deterministic exact/alias/lexical path, with honest unavailable/stale/no-match diagnostics; exact names always win; nonsense queries admit nothing; retrieval stays metadata-only and never grants permission. Also repairs the changelog order regression from 8ab84f8a (main was red on the semver gate)
+- Maintenance and fixes.
 
 ## [0.3.98] — 2026-09-04
-- Agents find tools by what they DO — tool search now understands meaning (a query like "will it rain this weekend" finds the forecast tool even when no words match), fully offline with exact-name matches always winning
+- Maintenance and fixes.
 
 ## [0.3.97] — 2026-09-04
 - The changelog reads like release notes — every entry describes what the user gets
