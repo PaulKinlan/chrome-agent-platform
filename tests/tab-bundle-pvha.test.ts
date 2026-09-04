@@ -154,6 +154,14 @@ Deno.test("bundle builder: origins are bounded and non-web origins are dropped",
   assert(bundle.grantOrigins.every((o) => /^https:\/\//.test(o)), "only web origins survive");
 });
 
+Deno.test("bundle builder: once minted, the memo is never stamped onto a NON-family denial in the same run", async () => {
+  const opts = { hasPermission: async () => false, isControlGranted: async () => false, openTabOrigins: [] };
+  const first = await offerTabToolsBundle("exec-mix", { reason: "list your open tabs", permissions: ["tabs"] }, { ...opts, toolName: "list_tabs" });
+  assert(first, "the tab-family denial gets the bundle");
+  assertEquals(await offerTabToolsBundle("exec-mix", { reason: "open a page", permissions: ["tabs"], grantOrigins: ["https://shop.example"] }, { ...opts, toolName: "open_tab" }), null,
+    "an unrelated tool keeps its own destination-scoped per-tool ask");
+});
+
 Deno.test("stamp: the bundle replaces the denial's requirement IN PLACE (the live card, the tool-result event and the journal row share one object)", () => {
   const req = { reason: "list your open tabs", permissions: ["tabs"] };
   const d = denial(req);

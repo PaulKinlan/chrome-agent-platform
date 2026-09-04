@@ -70,13 +70,13 @@ export async function offerTabToolsBundle(executionId, requirement, {
   isControlGranted = async () => false,
   isExecutionActive = () => true,
 } = {}) {
+  if (!TAB_TOOLS_BUNDLE_FAMILY.includes(toolName)) return null;
+  if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) return null;
   const executionKey = typeof executionId === "string" && executionId ? executionId : null;
   if (executionKey) {
     const memo = offersByExecution.get(executionKey);
     if (memo && isExecutionActive(executionKey)) return memo;
   }
-  if (!TAB_TOOLS_BUNDLE_FAMILY.includes(toolName)) return null;
-  if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) return null;
   // Owner-approval cards and site-access asks are different decisions — never
   // folded into the bundle (fail closed to the floor).
   if ((Array.isArray(requirement.approvals) && requirement.approvals.length) ||
