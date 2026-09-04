@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- Vendor the pinned artifact-tx modules as in-repo test fixtures so the review49 regression suite no longer imports from an external path
+
 ## [0.3.128] — 2026-09-04
 - Maintenance and fixes.
 
