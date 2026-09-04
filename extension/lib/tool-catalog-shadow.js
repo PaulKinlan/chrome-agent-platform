@@ -6,6 +6,7 @@
 
 import { buildToolCatalog } from "./tool-catalog.js";
 import { buildToolSearchIndex, searchToolIndex } from "./tool-search.js";
+import { loadToolVectorTable } from "./tool-vectors.js";
 import { ToolSelectionAuthority } from "./tool-selection.js";
 import { buildLazyProviderCapture } from "./lazy-tool-wire.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
@@ -47,23 +48,36 @@ function ownData(value, key) {
 export class ShadowToolCatalogController {
   #readInputs;
   #selections;
+  // 4kl: optional bundled vector-table loader (see lazy-tool-protocol.js).
+  #vectorTableLoader;
 
-  constructor({ readInputs, selectionAuthority } = {}) {
+  /**
+   * @param {{
+   *   readInputs?: any,
+   *   selectionAuthority?: any,
+   *   vectorTableLoader?: null | (() => Promise<any>),
+   * }} [options]
+   */
+  constructor({ readInputs, selectionAuthority, vectorTableLoader = null } = {}) {
     if (typeof readInputs !== "function") {
       throw new TypeError("shadow catalog needs a source reader");
     }
     this.#readInputs = readInputs;
     this.#selections = selectionAuthority ?? new ToolSelectionAuthority();
+    this.#vectorTableLoader = vectorTableLoader;
   }
 
   async #snapshot() {
     const inputs = await this.#readInputs();
     const catalog = buildToolCatalog(inputs);
-    return { catalog, index: buildToolSearchIndex(catalog) };
+    const vectorTable = this.#vectorTableLoader
+      ? await loadToolVectorTable(this.#vectorTableLoader)
+      : null;
+    return { catalog, index: buildToolSearchIndex(catalog, { vectorTable }), vectorTable };
   }
 
   async inspect(request = {}, context = {}) {
-    const { catalog, index } = await this.#snapshot();
+    const { catalog, index, vectorTable } = await this.#snapshot();
     const selectionContext = {
       runId: ownData(request, "runId"),
       taskId: ownData(request, "taskId") ?? `shadow:${ownData(request, "runId") ?? "missing"}`,
@@ -139,6 +153,7 @@ export class ShadowToolCatalogController {
     if (action === "search") {
       const search = searchToolIndex(index, ownData(request, "query"), {
         limit: ownData(request, "limit"),
+        vectorTable,
       });
       return this.#selections.issue(
         search,
@@ -157,6 +172,7 @@ export class ShadowToolCatalogController {
     if (action === "capture") {
       const search = searchToolIndex(index, ownData(request, "query"), {
         limit: ownData(request, "limit"),
+        vectorTable,
       });
       const selected = this.#selections.issue(
         search,

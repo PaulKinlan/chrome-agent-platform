@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.100] — 2026-09-04
+- Agents find tools by what they do — offline semantic tool search: a committed word-vector table (precomputed from a real model at tablegen time, common-direction removal, int8) adds a cosine-recall tier to search_tools on top of the deterministic exact/alias/lexical path, with honest unavailable/stale/no-match diagnostics; exact names always win; nonsense queries admit nothing; retrieval stays metadata-only and never grants permission. Also repairs the changelog order regression from 8ab84f8a (main was red on the semver gate)
+
+## [0.3.99] — 2026-09-04
+- Agents find tools by what they do — offline semantic tool search: a committed word-vector table (precomputed from a real model at tablegen time, common-direction removal, int8) adds a cosine-recall tier to search_tools on top of the deterministic exact/alias/lexical path, with honest unavailable/stale/no-match diagnostics; exact names always win; nonsense queries admit nothing; retrieval stays metadata-only and never grants permission. Also repairs the changelog order regression from 8ab84f8a (main was red on the semver gate)
+
+## [0.3.98] — 2026-09-04
+- Agents find tools by what they DO — tool search now understands meaning (a query like "will it rain this weekend" finds the forecast tool even when no words match), fully offline with exact-name matches always winning
+
 ## [0.3.97] — 2026-09-04
 - The changelog reads like release notes — every entry describes what the user gets
 
@@ -48,11 +57,11 @@
 ## [0.3.44] — 2026-09-03
 - Interactive artifacts are reliable — clicks reach the artifact, and generated code no longer cuts off
 
-## [0.3.41] — 2026-09-03
-- Worker runs can be steered and stopped safely — stop-run requires an exact run match
-
 ## [0.3.42] — 2026-09-03
 - Pipeline workflows run with per-step owner approval — destructive steps fail closed
+
+## [0.3.41] — 2026-09-03
+- Worker runs can be steered and stopped safely — stop-run requires an exact run match
 
 ## [0.3.36] — 2026-09-03
 - The hub's left rail no longer wastes space between sections

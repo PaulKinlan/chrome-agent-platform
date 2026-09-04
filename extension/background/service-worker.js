@@ -3674,8 +3674,16 @@ async function readShadowCatalogInputs() {
   return inputs;
 }
 
+// 4kl: the bundled semantic tool-vector table (precomputed from a real model
+// at table-generation time; runtime is lookup-only — see lib/tool-vectors.js).
+// Load failure degrades search to lexical-only, honestly reported.
+const toolVectorTableLoader = () =>
+  fetch(chrome.runtime.getURL("vendor/tool-vector-table.json"))
+    .then((response) => (response.ok ? response.json() : null));
+
 const shadowToolCatalog = new ShadowToolCatalogController({
   readInputs: readShadowCatalogInputs,
+  vectorTableLoader: toolVectorTableLoader,
 });
 
 // Per-document bridge MAC keys (cross-world transport integrity, NOT page

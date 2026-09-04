@@ -21,6 +21,7 @@ import {
   TOOL_CATALOG_BOUNDS,
 } from "./tool-catalog.js";
 import { buildToolSearchIndex, searchToolIndex } from "./tool-search.js";
+import { loadToolVectorTable } from "./tool-vectors.js";
 import {
   toolArgumentContract,
 } from "./tool-argument-contract.js";
@@ -470,7 +471,7 @@ function inputForRecord(record) {
   return ownData(record, "descriptorInput") ?? ownData(record, "input");
 }
 
-async function liveSnapshot(readSources) {
+async function liveSnapshot(readSources, { vectorTable = null } = {}) {
   const raw = await readSources();
   if (!Array.isArray(raw)) {
     throw new Error("lazy-source-bound");
@@ -506,7 +507,8 @@ async function liveSnapshot(readSources) {
   }
   return Object.freeze({
     catalog,
-    index: buildToolSearchIndex(catalog),
+    index: buildToolSearchIndex(catalog, { vectorTable }),
+    vectorTable,
     byStableId,
   });
 }
@@ -623,13 +625,32 @@ export class LazyToolProtocol {
   // chrome-api stableId), so a claimed call revalidates across it by tool
   // identity instead of failing as scope-mismatch. runId -> { pending, until }.
   #approvalWindows = new Map();
+  // 4kl: optional loader for the bundled semantic vector table (parsed lazily,
+  // cached by tool-vectors.js). Absent/failed load = lexical-only search,
+  // reported honestly in diagnostics as semantic: "unavailable".
+  #vectorTableLoader;
 
-  constructor({ readSources, selectionAuthority } = {}) {
+  /**
+   * @param {{
+   *   readSources?: any,
+   *   selectionAuthority?: any,
+   *   vectorTableLoader?: null | (() => Promise<any>),
+   * }} [options]
+   */
+  constructor({ readSources, selectionAuthority, vectorTableLoader = null } = {}) {
     if (typeof readSources !== "function") {
       throw new TypeError("lazy protocol needs a live source reader");
     }
     this.#readSources = readSources;
     this.#selections = selectionAuthority ?? new ToolSelectionAuthority();
+    this.#vectorTableLoader = vectorTableLoader;
+  }
+
+  async #snapshot() {
+    const vectorTable = this.#vectorTableLoader
+      ? await loadToolVectorTable(this.#vectorTableLoader)
+      : null;
+    return liveSnapshot(this.#readSources, { vectorTable });
   }
 
   #untrustedToken(context) {
@@ -791,13 +812,14 @@ export class LazyToolProtocol {
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
     let snapshot;
     try {
-      snapshot = await liveSnapshot(this.#readSources);
+      snapshot = await this.#snapshot();
     } catch {
       return fixedError("lazy-source-unavailable");
     }
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
     const search = searchToolIndex(snapshot.index, ownData(request, "query"), {
       limit: ownData(request, "limit"),
+      vectorTable: snapshot.vectorTable,
     });
     const issued = this.#selections.issue(
       search,
@@ -1357,6 +1379,7 @@ export function executableBundledToolRecords(rows, context = {}) {
  *   contextReader?: any,
  *   selectionAuthority?: any,
  *   acceptsImageToolResults?: boolean | (() => boolean),
+ *   vectorTableLoader?: null | (() => Promise<any>),
  * }} [options]
  */
 export function createLazyProviderToolset({
@@ -1370,8 +1393,9 @@ export function createLazyProviderToolset({
   // (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). Read per call — a per-agent
   // provider override can change the answer mid-session.
   acceptsImageToolResults = false,
+  vectorTableLoader = null,
 } = {}) {
-  const protocol = new LazyToolProtocol({ readSources, selectionAuthority });
+  const protocol = new LazyToolProtocol({ readSources, selectionAuthority, vectorTableLoader });
   if (typeof contextReader !== "function") {
     throw new TypeError("lazy provider needs a run context reader");
   }
