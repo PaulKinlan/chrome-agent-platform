@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.70] — 2026-09-04
+- The UI checks' watchdog now kills the browser it spawned before exiting — a wedged run no longer leaves a Chrome tree running (five of tonight's earlier wedged runs had leaked 85 processes; the watchdog path now cleans up after itself, verified by firing it on purpose)
+
 ## [0.3.69] — 2026-09-04
 - Changelog wording: the interface checks pass end-to-end again, in plain language
 

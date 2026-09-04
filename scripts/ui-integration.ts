@@ -15,9 +15,14 @@ const EXT = `${ROOT}extension`;
 // Hard wall-clock budget: every CDP call below awaits a response with no
 // per-call timeout, so a hung renderer would otherwise leave this script
 // running forever (the bead-5ht "never finishes" symptom). Diagnose + exit 2.
+// The child is held in a hoisted slot so the watchdog can kill it: Deno.exit
+// skips the try/finally below, and without the kill the hang path would leak
+// the spawned Chrome (processes accumulate across wedged runs).
+let childProc: Deno.ChildProcess | null = null;
 const WATCHDOG_MS = 6 * 60 * 1000;
 setTimeout(() => {
   console.error(`ui-integration: exceeded its ${WATCHDOG_MS / 60000} min wall-clock budget — a CDP call never resolved (hung renderer?)`);
+  try { childProc?.kill("SIGKILL"); } catch { /* already gone */ }
   Deno.exit(2);
 }, WATCHDOG_MS);
 
@@ -109,6 +114,7 @@ function inBounds(rect: { left: number; top: number; right: number; bottom: numb
 const profile = `${RUN_DIR}/profile`;
 const chrome = await launch(profile);
 const proc = chrome.proc;
+childProc = proc;
 let exitCode = 1;
 try {
   const port = chrome.port;
