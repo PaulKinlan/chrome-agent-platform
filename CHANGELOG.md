@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.133] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.132] — 2026-09-04
+- Correct the merged management-tool count pins (44 on current main)
+
+## [0.3.131] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.130] — 2026-09-04
+- Every named agent gets a persistent private workspace of its own, beside the owner's shared folders: agents can keep and organize files between runs, and Settings shows each agent's workspace usage with a Clear button.
+
 ## [0.3.129] — 2026-09-04
 - cap-beads-fw8 (UI flash fix — encapsulated panel renderers, eliminated duplicate boot renders)
 

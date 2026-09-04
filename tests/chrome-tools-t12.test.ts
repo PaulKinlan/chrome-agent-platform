@@ -196,7 +196,7 @@ function tools() {
 // Registry parity: the 8 T12 tools are appended AND the counts are honest.
 // (The 4 chrome.debugger CDP tools were removed 2026-08-27 — see the guard below.)
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("T12: browserToolset has exactly 136 tools matching BROWSER_TOOL_NAMES (117 + 8 + 6 page actions + 5 file tools)", () => {
+Deno.test("T12: browserToolset has exactly 138 tools matching BROWSER_TOOL_NAMES (117 + 8 + 6 page actions + 7 file tools)", () => {
   reset();
   // BROWSER_TOOL_NAMES is the SHIPPED inventory (the developer build); the
   // default build omits the developer-only names
@@ -207,15 +207,16 @@ Deno.test("T12: browserToolset has exactly 136 tools matching BROWSER_TOOL_NAMES
     Object.keys(tools()),
     BROWSER_TOOL_NAMES.filter((name) => !DEVELOPER_ONLY_TOOL_NAMES.includes(name)),
   );
-  assertEquals(BROWSER_TOOL_NAMES.length, 137);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 137);
+  assertEquals(BROWSER_TOOL_NAMES.length, 138);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 138);
   // 159 + delegate_to_agent (G5) + 7 board tools (jobs board, 2026-08-29;
   // board_read_messages 2026-08-30) − open_side_panel (removed 2026-08-30,
   // CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01) = 167 (+ patch_asset, CAP-FB-20260830-PATCH-ASSET-TOOL-01)
   // + 5 read-only file tools (CAP-FB-20260831-FS-GRANT-TASK-USE-01) + write_file
   // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01); python_execute then joined the
-  // management set (CAP-FB-20260823-PYODIDE-PYTHON-01) → totalTools 181.
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 181);
+  // management set (CAP-FB-20260823-PYODIDE-PYTHON-01), and delete_file joined the
+  // browser set (CAP-FB-20260831-AGENT-PRIVATE-FS-01) → totalTools 182.
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 182);
   for (const name of [
     "register_user_script", "update_user_script", "unregister_user_script", "list_user_scripts",
     "register_content_script", "update_content_script", "unregister_content_script", "list_content_scripts",
