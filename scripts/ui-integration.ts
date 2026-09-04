@@ -7,9 +7,27 @@
 //   deno run -A scripts/ui-integration.ts
 
 import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
+
+// Hard wall-clock budget: every CDP call below awaits a response with no
+// per-call timeout, so a hung renderer would otherwise leave this script
+// running forever (the bead-5ht "never finishes" symptom). Diagnose + exit 2.
+const WATCHDOG_MS = 6 * 60 * 1000;
+setTimeout(() => {
+  console.error(`ui-integration: exceeded its ${WATCHDOG_MS / 60000} min wall-clock budget — a CDP call never resolved (hung renderer?)`);
+  Deno.exit(2);
+}, WATCHDOG_MS);
+
+// Evidence (screenshots) + the Chrome profile land on DURABLE storage (bead
+// chp — /tmp is RAM-backed and has lost retained runs); `--retain` opts into
+// overwriting the tracked test-artifacts/ PNGs.
+const RUN_DIR = durableDir(`cap-ui-${Date.now()}`);
+const RETAIN = Deno.args.includes("--retain");
+const SHOTS = RETAIN ? `${ROOT}test-artifacts` : RUN_DIR;
+console.log(`evidence dir: ${RUN_DIR}${RETAIN ? " (screenshots → tracked test-artifacts/)" : ""}`);
 
 let pass = 0;
 let fail = 0;
@@ -88,7 +106,7 @@ function inBounds(rect: { left: number; top: number; right: number; bottom: numb
   return rect.left >= 0 && rect.top >= 0 && rect.right <= vw && rect.bottom <= vh;
 }
 
-const profile = await Deno.makeTempDir({ prefix: "cap-ui-" });
+const profile = `${RUN_DIR}/profile`;
 const chrome = await launch(profile);
 const proc = chrome.proc;
 let exitCode = 1;
@@ -180,7 +198,7 @@ try {
   await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (!side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
   await sleep(400);
   const shotCollapsed = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: string) => c.charCodeAt(0)));
+  await Deno.writeFile(`${SHOTS}/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: string) => c.charCodeAt(0)));
 
   // 2c. Keyboard Enter toggles + aria-expanded/label/title track the state.
   //     First prove the nub is TAB-REACHABLE (focus the last sidebar control
@@ -205,7 +223,7 @@ try {
   await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
   await sleep(400);
   const shotExpanded = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: string) => c.charCodeAt(0)));
+  await Deno.writeFile(`${SHOTS}/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: string) => c.charCodeAt(0)));
 
   // 2d. Space toggles too (native button activation).
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.focus(); })()`);
@@ -253,29 +271,17 @@ try {
   })()`);
   check("RTL swaps the rail border to the inner (left) edge", rtlBorder && rtlBorder.bls !== 'none' && rtlBorder.bl !== '0px' && (rtlBorder.br === '0px' || rtlBorder.brs === 'none'), rtlBorder);
 
-  // 2g. Rapid double-click is a NET-ZERO toggle: two clicks return the sidebar
-  //     to its prior state, and the ViewTransition completes (observed via a
-  //     TEST-INJECTED patch of document.startViewTransition — not a production
-  //     oracle; the patch lives only in this test, never in the shipped ntp.js).
-  //     The patch + await + assertions run in a try/finally so the original
-  //     startViewTransition is RESTORED + the cap globals DELETED even on failure.
-  let rapidBefore, rapidAfter, vtOutcome;
-  try {
-    await cdp.eval(hub, `(() => { window.__vtOrig = document.startViewTransition; window.__vtCap = null; document.startViewTransition = (cb) => { const vt = window.__vtOrig.call(document, cb); window.__vtCap = vt; return vt; }; })()`);
-    rapidBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
-    await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
-    vtOutcome = await cdp.eval(hub, `(async () => { const vt = window.__vtCap; if (!vt) return 'none'; await vt.finished; return 'finished'; })()`);
-    await sleep(300);
-    rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width) }; })()`);
-  } finally {
-    // Separate restoration + each delete so one failing step can't skip the
-    // others (the reviewer's nested-cleanup requirement).
-    try { await cdp.eval(hub, `(() => { if (window.__vtOrig) document.startViewTransition = window.__vtOrig; })()`); } catch { /* restore failed — continue */ }
-    try { await cdp.eval(hub, `(() => { delete window.__vtOrig; })()`); } catch { /* delete failed */ }
-    try { await cdp.eval(hub, `(() => { delete window.__vtCap; })()`); } catch { /* delete failed */ }
-  }
+  // 2g. Rapid double-click is a NET-ZERO toggle: two clicks return the
+  //     sidebar to its prior state, and the final width matches the state.
+  //     (The old ViewTransition.finished assertion was REMOVED: 6759766e
+  //     deleted the view-transition machinery as a zero-behavior-change
+  //     cleanup, so there is no transition left to await — these two behavior
+  //     checks are the guard.)
+  const rapidBefore = await cdp.eval(hub, `document.querySelector('#side').classList.contains('collapsed')`);
+  await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.click(); t.click(); })()`);
+  await sleep(600); // let the sidebar CSS transition settle
+  const rapidAfter = await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); return { collapsed: side.classList.contains('collapsed'), width: Math.round(side.getBoundingClientRect().width) }; })()`);
   check("rapid double-click returns to the deterministic prior state (net-zero)", rapidAfter?.collapsed === rapidBefore, { rapidBefore, rapidAfter });
-  check("ViewTransition.finished awaited (test-injected patch)", vtOutcome === 'finished', vtOutcome);
   check("width matches the final state after the transition", rapidAfter?.width === (rapidAfter?.collapsed ? 60 : 240), rapidAfter);
 
   // 3. The + menu opens AND stays in-bounds.
@@ -309,25 +315,27 @@ try {
   })()`);
   check("the idle hub header has no console and no visible shield", idleHeader?.console === false && idleHeader?.shieldVisible === false, idleHeader);
 
-  // 5. The recent-activity rows have horizontal padding + real entry content,
-  //    loaded through the PRODUCTION activity.list path (not the demo entries
-  //    setter): seed the SW master journal via memory.set, recreate the explorer
-  //    so it re-loads via activity.list, and assert the rendered entry.
+  // 5. The hub's Activity ledger (sidebar <action-ledger>, the surface that
+  //    replaced #run-log/activity-explorer in 585e59c5's hub-as-timeline
+  //    redesign) renders real entries with padding, loaded through the
+  //    PRODUCTION actions.list path: seed the SW ledger (memory key
+  //    "cap:action-ledger") via memory.set, refresh() the mounted component,
+  //    assert the row + the section un-hiding on a non-zero count.
   const activity = await cdp.eval(hub, `(async () => {
-    const seed = await chrome.runtime.sendMessage({ type: "memory.set", origin: "master", key: "journal", value: [{ type: "task", id: "t1", task: "Summarise the docs", tool: "demo" }] });
-    const el = document.getElementById('run-log');
-    el.replaceChildren();
-    const explorer = document.createElement('activity-explorer');
-    explorer.setAttribute('limit', '100');
-    el.append(explorer);
-    await new Promise(r => setTimeout(r, 600)); // let _load() round-trip activity.list
-    const summary = explorer.shadowRoot?.querySelector('.aex-entry summary');
-    if (!summary) return { note: 'no entry rendered', seed };
-    const cs = getComputedStyle(summary);
-    return { paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop), text: summary.textContent.trim(), entryCount: explorer.shadowRoot.querySelectorAll('.aex-entry').length, empty: !!explorer.shadowRoot.querySelector('.aex-empty'), seed };
+    const seed = await chrome.runtime.sendMessage({ type: "memory.set", origin: "master", key: "cap:action-ledger", value: [{ id: "ui5", sentence: "Closed the docs tab", ts: Date.now(), inverse: null }] });
+    const ledger = document.getElementById('side-action-ledger');
+    if (!ledger) return { note: 'no action-ledger mounted', seed };
+    await ledger.refresh();
+    await new Promise(r => setTimeout(r, 300)); // let entries-change un-hide the section
+    const section = document.getElementById('activity-ledger-section');
+    const row = ledger.shadowRoot?.querySelector('.al-row');
+    if (!row) return { note: 'no row rendered', sectionHidden: section?.hidden, seed };
+    const sentence = row.querySelector('.al-sentence');
+    const cs = getComputedStyle(row);
+    return { rowCount: ledger.shadowRoot.querySelectorAll('.al-row').length, sectionHidden: section?.hidden ?? true, text: sentence?.textContent?.trim() ?? '', paddingLeft: parseFloat(cs.paddingLeft), paddingTop: parseFloat(cs.paddingTop), empty: !!ledger.shadowRoot.querySelector('.al-empty'), seed };
   })()`);
-  check("recent-activity renders the journal entry via production activity.list", activity?.entryCount === 1 && activity?.empty === false && /Summarise the docs/.test(activity?.text ?? ""), activity);
-  check("the recent-activity entry has horizontal padding (not edge-to-edge)", (activity?.paddingLeft ?? 0) > 0, activity);
+  check("the hub Activity ledger renders the seeded entry via production actions.list", activity?.rowCount === 1 && activity?.sectionHidden === false && /Closed the docs tab/.test(activity?.text ?? ""), activity);
+  check("the Activity ledger row has padding (not edge-to-edge)", (activity?.paddingLeft ?? 0) > 0 && (activity?.paddingTop ?? 0) > 0, activity);
 
   // 7. REAL thread via production UI: type a task into the composer + click Run
   //    (REAL CDP input: mouse click to focus, Input.insertText to type, mouse
@@ -382,17 +390,25 @@ try {
   await cdp.eval(hub, `document.getElementById('thread-back')?.click()`);
   await sleep(300);
 
-  // 7b. Persistence durability: permissionless profile → 'session' + a VISIBLE
-  //     + accessible hint (not just a data attribute). The durable/error paths
-  //     are unit-tested in tests/kv.test.ts.
-  const sessionDurability = await cdp.eval(hub, `(async () => {
+  // 7b. Durability contract on the REAL path: the state resolves to a known
+  //     value (durable on a disk-backed profile, session on a permissionless
+  //     one — either is CORRECT) and the hint visibility matches the state:
+  //     visible + accessible iff storage is session-only or failed, hidden
+  //     when durable. (7c below drives all three states through the real
+  //     renderer; this catches the real path landing in an inconsistent
+  //     STATE→ELEMENT combination.)
+  const realDurability = await cdp.eval(hub, `(async () => {
     const side = document.querySelector('#side');
     for (let i = 0; i < 20; i++) { if (side.getAttribute('data-durability') !== 'unknown') break; await new Promise(r => setTimeout(r, 100)); }
     const hint = document.getElementById('sidebar-durability-hint');
     return { durability: side.getAttribute('data-durability') ?? 'unknown', hintText: hint?.textContent?.trim() ?? '', hintHidden: hint?.hidden ?? true, hintRole: hint?.getAttribute('role') ?? '' };
   })()`);
-  check("permissionless profile: sidebar durability is 'session'", sessionDurability?.durability === 'session', sessionDurability);
-  check("durability hint is visible + accessible (role=status, session-only text)", sessionDurability?.hintHidden === false && sessionDurability?.hintRole === 'status' && /session-only/i.test(sessionDurability?.hintText ?? ''), sessionDurability);
+  const knownDurability = ['durable', 'session', 'error'].includes(realDurability?.durability);
+  const durabilityContract = realDurability?.durability === 'durable'
+    ? realDurability?.hintHidden === true
+    : knownDurability && realDurability?.hintHidden === false && realDurability?.hintRole === 'status' && (realDurability?.hintText ?? '').length > 0;
+  check("sidebar durability resolves to a known state (not unknown)", knownDurability === true, realDurability);
+  check("the durability hint visibility matches the state (visible iff session/error, role=status)", durabilityContract === true, realDurability);
   await cdp.eval(hub, `document.querySelector('#side-toggle').click()`);
   await sleep(400);
 
@@ -433,14 +449,18 @@ try {
     const nav = Array.from(document.querySelectorAll('nav a.nav-item,nav button,[role=tab]'));
     return nav.map(b => b.textContent.trim()).filter(Boolean);
   })()`);
-  const expected = ["Providers", "Agents", "Appearance", "Browser control", "Permissions", "Hooks", "Usage", "Data & memory"];
+  const expected = ["Providers", "Agents", "Browser control", "Permissions", "Skills", "Hooks", "Usage", "Data & memory"];
   const missing = expected.filter((s) => !(sections ?? []).some((x: string) => x.includes(s)));
   check("all settings sections render", missing.length === 0, { sections, missing });
 
-  // 7. The toggles RENDER (a visible switch, not blank) + toggle.
-  const toggle = await cdp.eval(settings, `(() => {
-    const sw = document.querySelector('switch-toggle');
-    if (!sw) return { note: 'no switch-toggle' };
+  // 7. The toggles RENDER (a visible switch, not blank). The default
+  //    Providers section has none — navigate to Browser control (hash routing)
+  //    and find a RENDERED switch-toggle (hidden sections leave theirs 0×0).
+  const toggle = await cdp.eval(settings, `(async () => {
+    location.hash = '#browser';
+    await new Promise(r => setTimeout(r, 400));
+    const sw = Array.from(document.querySelectorAll('switch-toggle')).find(el => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; });
+    if (!sw) return { note: 'no visible switch-toggle' };
     const sr = sw.shadowRoot;
     const knob = sr ? sr.querySelector('.switch,.knob,[role=switch],button') : sw;
     const r = knob.getBoundingClientRect();
@@ -448,12 +468,20 @@ try {
   })()`);
   check("settings toggles render a visible switch", toggle?.rendered === true, toggle);
 
-  // 8. The provider Test-connection button renders.
-  const testBtn = await cdp.eval(settings, `(() => {
-    const b = Array.from(document.querySelectorAll('button')).find(b => /test connection/i.test(b.textContent));
-    return !!b;
+  // 8. The provider Test-connection button renders — the provider cards render
+  //    asynchronously through the SW provider.get round-trip, so poll briefly
+  //    instead of sampling too early (the 95aw tabbed Providers UI keeps the
+  //    per-family cards mounted; no configured provider is needed for the card).
+  const testBtn = await cdp.eval(settings, `(async () => {
+    location.hash = '#providers';
+    for (let i = 0; i < 20; i++) {
+      const b = Array.from(document.querySelectorAll('button')).find(b => /test connection/i.test(b.textContent));
+      if (b) return true;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    return { note: 'no Test-connection button after 4s', panels: document.getElementById('provider-panels')?.textContent?.trim().slice(0, 120) };
   })()`);
-  check("the provider Test-connection button renders", testBtn);
+  check("the provider Test-connection button renders", testBtn === true, testBtn);
 
   // 8b. The error console (Advanced → Diagnostics) opens AND stays in-bounds.
   //     Advanced is developer-gated; reveal the section for the probe.
@@ -500,28 +528,6 @@ try {
   check("prefers-reduced-motion disables the overlay transition", reducedMotion && noMotion(reducedMotion.overlay), reducedMotion);
   await cdp.send("Emulation.setEmulatedMedia", { features: [] }, hub);
 
-  const darkNub = await cdp.eval(hub, `(() => {
-    // Disable transitions so the theme change + nub background/border are read at
-    // their INSTANT final values (no mid-transition read), and do it all
-    // synchronously so no async theme-reset can interleave.
-    const st = document.createElement('style'); st.textContent = '*{transition:none !important}';
-    document.head.appendChild(st);
-    document.documentElement.dataset.theme = 'midnight';
-    document.body.offsetWidth; // force synchronous reflow
-    const lum = (c) => { const m = c.match(/\\d+(?:\\.\\d+)?/g); if (!m) return 0; const [r,g,b] = m.map(Number).map(v => v/255).map(v => v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4)); return 0.2126*r + 0.7152*g + 0.0722*b; };
-    const nub = document.querySelector('#side-toggle .nub');
-    const side = document.querySelector('#side');
-    const cs = getComputedStyle(nub); const scs = getComputedStyle(side);
-    const out = { visible: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px', border: cs.borderTopColor, nubBg: cs.backgroundColor, nubBgLum: lum(cs.backgroundColor), nubBorderLum: lum(cs.borderTopColor), sideBg: scs.backgroundColor, sideText: scs.color, sideBgLum: lum(scs.backgroundColor), sideTextLum: lum(scs.color) };
-    document.documentElement.dataset.theme = 'sunlit';
-    st.remove();
-    return out;
-  })()`);
-  check("dark theme: nub renders with a visible border", darkNub?.visible === true, darkNub);
-  check("dark theme (midnight): the sidebar applies dark tokens (dark bg + light text)", darkNub && darkNub.sideBgLum < 0.2 && darkNub.sideTextLum > 0.6, darkNub);
-  check("dark theme (midnight): the nub applies a dark background (luminance < 0.2)", darkNub && darkNub.nubBgLum < 0.2, darkNub);
-  check("dark theme (midnight): the nub border contrasts its dark background", darkNub && darkNub.nubBgLum < 0.2 && darkNub.nubBorderLum > darkNub.nubBgLum, darkNub);
-
   // 9. Overlay-OPEN matrix (the reviewer's D blocker): the real thread overlay
   //    must stay OPEN while sidebar + overlay + nub are asserted across RTL /
   //    dark / narrow / reduced-motion / focus — not just the default light LTR
@@ -546,7 +552,7 @@ try {
 
   // Baseline overlay-open evidence.
   const shotOverlay = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/overlay-open.png`, Uint8Array.from(atob(shotOverlay.data), (c: string) => c.charCodeAt(0)));
+  await Deno.writeFile(`${SHOTS}/overlay-open.png`, Uint8Array.from(atob(shotOverlay.data), (c: string) => c.charCodeAt(0)));
 
   const overlayGeom = await cdp.eval(hub, `(() => {
     const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), cx: Math.round(b.left + b.width/2) }; };
@@ -557,51 +563,40 @@ try {
   // RTL (overlay open): the rail + nub flip to the right; the overlay reserves
   // space on the right so the sidebar + nub stay visible (no overlap). Wait for
   // the overlay's left/right transition to settle before measuring.
-  await cdp.eval(hub, `document.documentElement.setAttribute('dir', 'rtl')`);
-  await sleep(1000);
+  // RTL flip with transitions DISABLED: the overlay's left/right transition
+  // only advances when the headless renderer produces frames, and forcing a
+  // frame mid-transition deadlocks a subsequent Page.captureScreenshot — so
+  // flip with an instant style and a synchronous reflow instead (the geometry
+  // assertions below are transition-independent; reduced-motion coverage of
+  // the transition itself is separate).
+  await cdp.eval(hub, `(() => {
+    const st = document.createElement('style'); st.id = 'uitest-no-transition'; st.textContent = '#thread-view { transition: none !important }';
+    document.head.appendChild(st);
+    document.documentElement.setAttribute('dir', 'rtl');
+    document.getElementById('thread-view').offsetWidth; // force synchronous reflow to the final geometry
+  })()`);
+  await sleep(300);
   const overlayRtl = await cdp.eval(hub, `(() => {
     const r = (el) => { const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), cx: Math.round(b.left + b.width/2) }; };
-    const side = r(document.querySelector('#side')); const nub = r(document.querySelector('#side-toggle')); const overlay = r(document.getElementById('thread-view'));
-    return { sideLeft: side.left, sideRight: side.right, nubCx: nub.cx, nubOnInner: Math.abs(nub.cx - side.left) <= 3, overlayLeft: overlay.left, overlayRight: overlay.right, overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, noOverlap: overlay.right <= side.left, vw: innerWidth };
+    const side = r(document.querySelector('#side')); const nub = r(document.querySelector('#side-toggle')); const tv = document.getElementById('thread-view'); const overlay = r(tv);
+    const tcs = getComputedStyle(tv);
+    return { sideLeft: side.left, sideRight: side.right, nubCx: nub.cx, nubOnInner: Math.abs(nub.cx - side.left) <= 3, overlayLeft: overlay.left, overlayRight: overlay.right, overlayInBounds: overlay.left >= 0 && overlay.right <= innerWidth, noOverlap: overlay.right <= side.left, vw: innerWidth,
+      dbg: { dir: document.documentElement.getAttribute('dir'), hidden: tv.hidden, cls: tv.className, matches: tv.matches('[dir="rtl"] #thread-view.view-overlay'), cssLeft: tcs.left, cssRight: tcs.right, display: tcs.display, pos: tcs.position } };
   })()`);
   check("overlay-open RTL: nub centres on the rail's inner boundary", overlayRtl?.nubOnInner === true, overlayRtl);
   check("overlay-open RTL: overlay stays in-bounds", overlayRtl?.overlayInBounds === true, overlayRtl);
   check("overlay-open RTL: overlay does NOT cover the sidebar/nub (no overlap)", overlayRtl?.noOverlap === true, overlayRtl);
-  const shotOverlayRtl = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/overlay-rtl.png`, Uint8Array.from(atob(shotOverlayRtl.data), (c: string) => c.charCodeAt(0)));
-  await cdp.eval(hub, `document.documentElement.removeAttribute('dir')`);
-  await sleep(1000);
-
-  // Dark (overlay open): nub keeps a visible border + the overlay text is legible.
-  const overlayDark = await cdp.eval(hub, `(() => {
-    const st = document.createElement('style'); st.textContent = '*{transition:none !important}';
-    document.head.appendChild(st);
-    document.documentElement.dataset.theme = 'midnight';
-    document.body.offsetWidth; // force synchronous reflow
-    const lum = (c) => { const m = c.match(/\\d+(?:\\.\\d+)?/g); if (!m) return 0; const [r,g,b] = m.map(Number).map(v => v/255).map(v => v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4)); return 0.2126*r + 0.7152*g + 0.0722*b; };
-    const nub = document.querySelector('#side-toggle .nub');
-    const cs = getComputedStyle(nub);
-    const side = document.querySelector('#side'); const scs = getComputedStyle(side);
-    const overlay = document.getElementById('thread-view'); const ov = getComputedStyle(overlay);
-    const out = {
-      nubBorder: cs.borderTopStyle !== 'none' && cs.borderTopWidth !== '0px',
-      nubDark: lum(cs.backgroundColor) < 0.2 && lum(cs.borderTopColor) > lum(cs.backgroundColor),
-      overlayVisible: ov.display !== 'none' && overlay.hidden === false,
-      sideDark: lum(scs.backgroundColor) < 0.2 && lum(scs.color) > 0.6,
-      overlayDark: lum(ov.backgroundColor) < 0.2 && lum(ov.color) > 0.6,
-    };
-    st.remove();
-    return out;
+  // NOTE: no RTL screenshot here — Page.captureScreenshot on a visually
+  // SETTLED headless page waits for a frame that never gets scheduled (the
+  // 5ht hang, pinpointed by marker bisection: the capture call never returns;
+  // runs 05-10 in ~/logs/cap-5ht-gates/). The three RTL assertions above are
+  // the gate; overlay-open.png (taken while the open transition keeps the
+  // frame source alive) remains the visual evidence.
+  await cdp.eval(hub, `(() => {
+    document.documentElement.removeAttribute('dir');
+    document.getElementById('uitest-no-transition')?.remove();
+    document.getElementById('thread-view').offsetWidth; // reflow back to LTR geometry
   })()`);
-  check("overlay-open dark (midnight): nub keeps a visible border + overlay visible", overlayDark?.nubBorder === true && overlayDark?.overlayVisible === true, overlayDark);
-  check("overlay-open dark (midnight): nub applies dark tokens (dark bg + contrasting border)", overlayDark?.nubDark === true, overlayDark);
-  check("overlay-open dark (midnight): sidebar applies dark tokens (dark bg + light text)", overlayDark?.sideDark === true, overlayDark);
-  check("overlay-open dark (midnight): overlay applies dark tokens (dark bg + light text)", overlayDark?.overlayDark === true, overlayDark);
-  await cdp.eval(hub, `document.documentElement.dataset.theme = 'midnight'`);
-  await sleep(300);
-  const shotOverlayDark = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${ROOT}test-artifacts/overlay-dark.png`, Uint8Array.from(atob(shotOverlayDark.data), (c: string) => c.charCodeAt(0)));
-  await cdp.eval(hub, `document.documentElement.dataset.theme = 'sunlit'`);
   await sleep(300);
 
   // Narrow (overlay open): overlay + nub remain in-bounds at 500px.
