@@ -78,6 +78,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   // 61/0 since CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01 re-baselined the over-cap
   // scenario to the admission-time budget refusal (three delegation runs ≈ 3 min).
   "kat-agent-delegation.ts": { class: "kat", budgetMs: 300_000 },
+  "kat-browser-grant-persistence.ts": { class: "kat" },
   "kat-agent-templates.ts": { class: "kat", ...RED("13/24", "the first-run empty state now reads 'Browse starter templates' and seeds nothing automatically — the KAT predates the templates redesign") },
   "kat-artifact-library-capacity.ts": { class: "kat" },
   "kat-artifact-preview.ts": { class: "kat", ...RED("4/2", "the chat no longer renders the restricted artifact-preview host iframe the KAT expects") },

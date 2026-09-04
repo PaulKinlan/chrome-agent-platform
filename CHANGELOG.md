@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.56] — 2026-09-04
+- register kat-browser-grant-persistence in the harness registry
+
 ## [0.3.55] — 2026-09-03
 - Running a single test file through the npm shortcut works for every file, including the one that turns away the slow full sweep
 
