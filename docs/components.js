@@ -11490,13 +11490,15 @@ class DurableRunRegistry extends Component {
 customElements.define("durable-run-registry", DurableRunRegistry);
 
 /* ──────────────────────────────────────────────────────────────────────────
- * <tool-library> — READ-ONLY owner diagnostics for the tool catalog contract
- * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice).
+ * <tool-library> — the owner's tool catalog + explicit Settings preview
+ * (CAP-FB-20260822-TOOL-LIBRARY-UI-01, panel-1 first slice; tool-library
+ * decision A, chrome-agent-platform-vc52: the explicit Preview stays and the
+ * copy says so — the old "nothing here runs" framing contradicted it).
  *
  * HARD BOUNDARY: the ONLY action surface is the Settings preview Run
  * button (an EXPLICIT owner click that emits tool-preview-request; the options
  * surface wires the single tool.preview.run route over the static allowlist).
- * No install/update/revoke/grant/execute/verify/copy, no catalog/provider
+ * No install/update/revoke/grant/verify/copy, no catalog/provider
  * selection authority.
  * It renders bounded metadata from the Settings-principal tool-catalog.shadow
  * diagnostics route only (summary in production; rows when a future reviewed
@@ -11859,8 +11861,9 @@ class ToolLibrary extends Component {
       .status-line.error { color:var(--danger, #b3261e); }
       @media (max-width:560px) { .tool-head { grid-template-columns:1fr; } .groups .count { margin-inline-start:0; } }
     `, `
-      <p class="framing">This is a read-only diagnostic view of the tools the platform can see.
-        It cannot run, install, grant, update, or remove anything.</p>
+      <p class="framing">The tools the agent can use, grouped by source. The preview below runs a
+        bundled tool on this device, only on your explicit click — nothing here installs, grants,
+        updates, or removes tools.</p>
       <div class="catalog"></div>
       <div class="packages">
         <h3>Bundled tool packages</h3>

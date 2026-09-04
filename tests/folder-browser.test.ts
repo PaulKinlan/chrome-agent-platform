@@ -69,7 +69,15 @@ function makeEl(tag) {
   return el;
 }
 
-globalThis.document = { createElement: (tag) => makeEl(tag) };
+globalThis.document = {
+  createElement: (tag) => makeEl(tag),
+  createElementNS: (_ns, tag) => makeEl(tag),
+};
+
+/** The SVG line icon every entry row now carries (the emoji are gone). */
+function hasLineIcon(el) {
+  return (el?.children ?? []).some((c) => c.tag === "svg" && c.attrs?.stroke === "currentColor");
+}
 
 // --- test helpers ------------------------------------------------------------
 
@@ -186,7 +194,13 @@ Deno.test("mount lists the grant root with breadcrumb + entries", async () => {
   // A directory row is a real button; the file row is inert (has View).
   const dirBtn = byClass(host, "fs-dir");
   assertEquals(dirBtn.length, 1);
-  assertEquals(dirBtn[0].textContent, "📁 docs");
+  assertEquals(dirBtn[0].textContent, "docs");
+  assert(hasLineIcon(dirBtn[0]), "the directory row carries the SVG folder icon");
+  assert(!dirBtn[0].textContent.includes("📁"), "no emoji in the directory row");
+  const fileRow = byClass(host, "fs-file");
+  assertEquals(fileRow.length, 1);
+  assertEquals(fileRow[0].textContent, "notes.txt");
+  assert(hasLineIcon(fileRow[0]), "the file row carries the SVG file icon");
   assertEquals(dirBtn[0].type, "button");
 
   const viewBtns = byClass(host, "fs-view");
@@ -217,7 +231,8 @@ Deno.test("clicking a directory row queries the subdirectory path and re-renders
   assert(crumbs[0].attrs["aria-current"] === undefined);
   assert(crumbs[1].attrs["aria-current"] === "page");
   // Nested contents visible.
-  assertEquals(byClass(host, "fs-dir")[0].textContent, "📁 deep");
+  assertEquals(byClass(host, "fs-dir")[0].textContent, "deep");
+  assert(hasLineIcon(byClass(host, "fs-dir")[0]), "the nested directory row keeps its SVG icon");
 });
 
 Deno.test("nested click-through: docs/deep, then breadcrumb back to docs", async () => {

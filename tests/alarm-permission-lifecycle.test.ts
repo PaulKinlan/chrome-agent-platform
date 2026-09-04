@@ -162,10 +162,14 @@ Deno.test("alarm lifecycle: alarms stay mandatory — Settings requests optional
     '"required", "Always on"',
     "the mandatory boot set is displayed as the fixed Always on group",
   );
+  // SETTINGS-CLEANLINESS relocation (chrome-agent-platform-vc52): the Always on
+  // group now verifies the live install grant — healthy reads "Always on", a
+  // missing grant reads "Missing — reload" — but it is still text, never a
+  // control.
   assertStringIncludes(
     optionsSource,
-    'row.setAttribute("action-label", "Always on")',
-    "a mandatory permission row shows Always on and no control",
+    'row.setAttribute("action-label", isGranted ? "Always on" : "Missing — reload")',
+    "a mandatory permission row shows Always on (or Missing — reload) and no control",
   );
   // The worker-side activation route remains (harmless; the lifecycle listener
   // still owns disarm/re-arm on any permission change).

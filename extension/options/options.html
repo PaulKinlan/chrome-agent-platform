@@ -134,7 +134,7 @@
 
       <section id="tool-library" class="panel" data-developer="true">
         <h2>Tool library</h2>
-        <p class="muted">Read-only diagnostics: the tools the platform can see, grouped by source. Nothing here runs, installs, grants, updates, or removes tools.</p>
+        <p class="muted">The tools the agent can use, grouped by source. The preview below runs a bundled tool on this device, only on your explicit click — nothing here installs, grants, updates, or removes tools.</p>
         <tool-library id="tool-library-view"></tool-library>
       </section>
 
@@ -162,19 +162,6 @@
             <button class="btn" id="enroll-btn" type="button">Add Site Agent</button>
           </div>
           <div id="enrolled-sites" class="origin-list"></div>
-        </div>
-        <div class="webmcp-status" data-vocab="advanced">
-          <h3>Site Agent diagnostics</h3>
-          <p
-            class="muted">Check what each enrolled site reports when a tool you expect is missing.</p>
-          <div class="toggle-field">
-            <switch-toggle id="webmcp-diagnostics" label="Diagnostics logs"></switch-toggle>
-            <div class="toggle-text">
-              <span class="toggle-name">Diagnostics logs</span>
-              <span class="muted">Write a <code>[WebMCP]</code> line to the page's DevTools console each time a site's tools are checked.</span>
-            </div>
-          </div>
-          <div id="webmcp-status-body" class="origin-list" aria-live="polite"></div>
         </div>
       </section>
 
@@ -248,6 +235,7 @@
         <h2>Permissions</h2>
         <p
           class="muted">Capability permissions are optional and requested just-in-time from your click (the chat offers the same Enable inline). Host access and the permissions the extension needs to run are granted at install. This is the live, verified state of each grant.</p>
+        <p id="permission-health" class="permission-health" role="status" aria-live="polite"></p>
         <div id="permission-list" class="permission-list"></div>
       </section>
 
@@ -270,22 +258,7 @@
       <section id="hooks" class="panel" data-developer="true">
         <h2>System hooks</h2>
         <p
-          class="muted">Every chrome.* event an agent can listen to and respond to. Turn a hook off to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook's permission is granted at install; the deny-list is the control here.</p>
-        <div class="hooks-toolbar">
-          <span id="hooks-summary" class="muted" role="status"></span>
-          <button id="hooks-deny-all" class="btn small ghost" type="button">Deny all</button>
-        </div>
-        <div class="hooks-table-wrap">
-          <table id="hook-list" class="hooks-table">
-            <thead>
-              <tr>
-                <th scope="col">Event</th>
-                <th scope="col" class="col-api">Chrome API</th>
-                <th scope="col" class="col-state">Allowed</th>
-              </tr>
-            </thead>
-          </table>
-        </div>
+          class="muted">Every chrome.* event an agent can listen to and respond to. The deny/allow policy lives in Permissions, grouped by capability — turn an event off there and the agent can never use it. The raw chrome.* event identifiers and their subscribers live in Advanced → Diagnostics.</p>
       </section>
 
       <section id="prompts" class="panel" data-developer="true">
@@ -322,6 +295,46 @@
             <span class="muted">Open the captured entries, copy them for a bug report, or clear them.</span>
           </div>
         </div>
+        <details class="diag-block" id="diag-webmcp">
+          <summary>Site Agent script lifecycle (WebMCP)</summary>
+          <div class="webmcp-status" data-vocab="advanced">
+            <p
+              class="muted">Check what each enrolled site reports when a tool you expect is missing.</p>
+            <div class="toggle-field">
+              <switch-toggle id="webmcp-diagnostics" label="Diagnostics logs"></switch-toggle>
+              <div class="toggle-text">
+                <span class="toggle-name">Diagnostics logs</span>
+                <span class="muted">Write a <code>[WebMCP]</code> line to the page's DevTools console each time a site's tools are checked.</span>
+              </div>
+            </div>
+            <div id="webmcp-status-body" class="origin-list" aria-live="polite"></div>
+          </div>
+        </details>
+        <details class="diag-block" id="diag-permissions">
+          <summary>Extension permission matrix</summary>
+          <div data-vocab="advanced">
+            <p class="muted">The verified grant state of every permission in the manifest. A missing install grant is a reinstall-level problem — reload the extension first; if it persists, reinstall it.</p>
+            <div id="permission-matrix" class="permission-list"></div>
+          </div>
+        </details>
+        <details class="diag-block" id="diag-hooks">
+          <summary>System hook events — raw identifiers</summary>
+          <div data-vocab="advanced">
+            <p class="muted">The raw chrome.* event identifiers and their subscribers, grouped by API. The deny/allow switches live in Permissions.</p>
+            <div class="hooks-table-wrap">
+              <table id="hook-list" class="hooks-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Event</th>
+                    <th scope="col" class="col-api">Chrome API</th>
+                    <th scope="col">Subscribers</th>
+                    <th scope="col" class="col-state">State</th>
+                  </tr>
+                </thead>
+              </table>
+            </div>
+          </div>
+        </details>
         <h3>System prompts</h3>
         <p
           class="muted">The system prompt each agent runs with, layer by layer: the versioned built-in prompt, your customization, and the protected runtime policy (never editable, always applied last). The preview is the exact platform composition; every run also records a run-bound attestation of the exact provider-bound system message (digest + bytes, never content).</p>

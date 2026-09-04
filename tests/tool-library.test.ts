@@ -13,7 +13,7 @@ async function text(path: string) {
 // The exact component block (from its banner comment to its define call).
 async function componentSource() {
   const source = await text("../extension/shared/components.js");
-  const start = source.indexOf("<tool-library> — READ-ONLY owner diagnostics");
+  const start = source.indexOf("<tool-library> — the owner's tool catalog");
   const end = source.indexOf('customElements.define("tool-library"');
   assert(start > 0 && end > start, "the tool-library component block must exist");
   return source.slice(start, end);
@@ -81,8 +81,14 @@ Deno.test("tool-library: registered component with the tool selector + ONE expli
 
 Deno.test("tool-library: truthful framing + no verification claim can exist", async () => {
   const block = await componentSource();
-  assertMatch(block, /read-only diagnostic view/i, "the anti-overclaim framing line is present");
-  assertMatch(block, /cannot run, install, grant, update, or remove/i, "the framing names the absent actions");
+  // Decision A (chrome-agent-platform-vc52): the explicit Preview stays, so the
+  // framing says what the surface IS and names the actions it still cannot do —
+  // it no longer makes the false "nothing here runs" claim the preview refutes.
+  assertMatch(block, /the tools the agent can use/i, "the framing states what the surface is");
+  assertMatch(block, /nothing here installs, grants,\s*updates, or removes/i, "the framing names the absent actions");
+  assertMatch(block, /only on your explicit click/, "the preview-run truth is stated");
+  assertNotMatch(block, /It cannot run, install, grant, update, or remove anything/i, "the false nothing-runs claim is gone");
+  assertNotMatch(block, /read-only diagnostic view/i, "the old read-only framing is gone");
   // The preview console itself re-states the bounded scope truthfully.
   assertMatch(block, /Runs\s+ONLY on your\s+explicit click/, "the preview console states the explicit-owner-click contract");
   assertMatch(block, /no catalog or provider selection authority/, "no selection authority is claimed");
@@ -142,7 +148,8 @@ Deno.test("tool-library: Settings section + wiring use ONLY the existing shadow 
   assert(localFolders > 0 && nav > localFolders && nav < agents, "nav item sits between Local folders and Agents (Local models was removed)");
   const section = html.slice(html.indexOf('id="tool-library"'), html.indexOf('id="tool-library"') + 700);
   assertNotMatch(section, /<button/, "the section markup contains no buttons");
-  assertMatch(section, /Read-only diagnostics/, "the section carries the truthful intro");
+  assertMatch(section, /The tools the agent can use/, "the section carries the truthful intro");
+  assertMatch(section, /only on your explicit click/, "the intro states the explicit-preview truth");
   assertMatch(section, /id="tool-library-view"/, "the component has its own distinct id (no duplicate-id ambiguity)");
   assertEquals([...html.matchAll(/id="tool-library"/g)].length, 1, "exactly one #tool-library id (the section)");
 

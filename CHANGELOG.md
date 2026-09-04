@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- Settings: keep everyday controls up front and move diagnostic detail behind Advanced
+
 ## [0.3.128] — 2026-09-04
 - Maintenance and fixes.
 

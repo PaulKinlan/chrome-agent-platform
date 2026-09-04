@@ -1083,6 +1083,58 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   .hook-group-chevron { transition: none; }
 }
 
+/* Hook policy — the grouped deny/allow list in Permissions (the raw chrome.*
+   table moved to Advanced → Diagnostics). One sub-group per chrome.* API. */
+.hook-policy-api { padding: 6px 12px 2px; }
+.hook-policy-api h4 {
+  margin: 6px 0 2px;
+  font-size: var(--text-xs, 12px);
+  font-weight: 600;
+  color: var(--muted);
+}
+.hook-policy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 4px;
+}
+.hook-policy-name { font-size: var(--text-sm, 13px); }
+.hook-policy-row + .hook-policy-row { border-top: 1px solid var(--border); }
+.hook-policy-api .btn { margin: 8px 4px 10px; }
+
+/* The read-only raw table's state column (no switches there anymore). */
+.hook-state { font-size: var(--text-xs, 12px); color: var(--muted); }
+.hook-state.denied { color: var(--danger); font-weight: 600; }
+
+/* Advanced → Diagnostics disclosures: collapsed-by-default blocks under the
+   captured-errors console (WebMCP lifecycle, permission matrix, raw hooks). */
+.diag-block {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+.diag-block > summary {
+  cursor: pointer;
+  padding: 9px 12px;
+  font-size: var(--text-sm, 13px);
+  font-weight: 600;
+}
+.diag-block > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.diag-block[open] > summary { border-bottom: 1px solid var(--border); }
+.diag-block > div { padding: 10px 12px; }
+.diag-block .hooks-table-wrap { margin-top: 8px; }
+.diag-block .permission-list { margin-top: 8px; }
+
+/* The one-line install-access health summary atop Permissions. */
+.permission-health {
+  margin: 0 0 12px;
+  font-size: var(--text-sm, 13px);
+  color: var(--muted);
+}
+.permission-health[data-state="missing"] { color: var(--danger); font-weight: 600; }
+
 /* The board deny list still uses the plain row below. */
 .perm-row {
   display: grid;

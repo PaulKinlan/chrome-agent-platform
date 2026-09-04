@@ -31,6 +31,37 @@ export function parentPath(path) {
   return i === -1 ? "" : p.slice(0, i);
 }
 
+// The file/folder line icons (the product-wide SVG/currentColor rule — the
+// emoji rows they replaced ignore the color scheme). Inline SVG elements,
+// stroke = currentColor, so they follow the row's own color in both schemes.
+const FOLDER_ICON_PATH = "M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z";
+const FILE_ICON_PATH = "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z";
+const FILE_ICON_FOLD = "M14 2v6h6";
+
+/** Build the inline SVG line icon for a row ("directory" or "file"). */
+export function entryLineIcon(kind) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("d", kind === "directory" ? FOLDER_ICON_PATH : FILE_ICON_PATH);
+  svg.appendChild(path);
+  if (kind !== "directory") {
+    const fold = document.createElementNS(NS, "path");
+    fold.setAttribute("d", FILE_ICON_FOLD);
+    svg.appendChild(fold);
+  }
+  return svg;
+}
+
 /** ["", "a", "a/b"] for "a/b" — the root "" first, then each prefix. */
 export function breadcrumbParts(path) {
   const p = String(path ?? "").replace(/^\/+|\/+$/g, "");
@@ -236,12 +267,20 @@ export function mountGrantBrowser({ host, grant, send, rootLabel = null }) {
       btn.style.cursor = "pointer";
       btn.style.color = "var(--accent,#0e6e63)";
       btn.style.textAlign = "left";
-      btn.textContent = `📁 ${entry.name}`;
+      const dirName = document.createElement("span");
+      dirName.textContent = entry.name;
+      btn.append(entryLineIcon("directory"), dirName);
       btn.addEventListener("click", () => { if (!loading) load(joinPath(path, entry.name)); });
       row.append(btn);
     } else {
       const left = document.createElement("span");
-      left.textContent = `📄 ${entry.name}`;
+      left.className = "fs-file";
+      left.style.display = "flex";
+      left.style.alignItems = "center";
+      left.style.gap = "6px";
+      const fileName = document.createElement("span");
+      fileName.textContent = entry.name;
+      left.append(entryLineIcon("file"), fileName);
       const right = document.createElement("div");
       right.style.display = "flex";
       right.style.alignItems = "center";

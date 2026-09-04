@@ -45,9 +45,10 @@ Deno.test("settings cleanliness: real owner controls and install-grant diagnosti
   assertStringIncludes(options, "async function renderPermissions()");
   // OPTIONAL + JIT model: the Permissions section is a live three-state
   // display (granted = the switch / requestable = the ghost Turn on button /
-  // platform-unavailable = text) plus the fixed mandatory "Always on" group,
-  // every row a shared <capability-row>
-  // (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01).
+  // platform-unavailable = text), every row a shared <capability-row>
+  // (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01). The fixed
+  // "Always on" install-grant group relocated behind Advanced → Diagnostics
+  // (chrome-agent-platform-vc52) but keeps the same capability-row markup.
   assertStringIncludes(options, 'document.createElement("capability-row")');
   assertStringIncludes(options, 'row.dataset.state = "granted"');
   assertStringIncludes(options, 'row.setAttribute("action-state", "on")');
@@ -56,13 +57,25 @@ Deno.test("settings cleanliness: real owner controls and install-grant diagnosti
   assertStringIncludes(options, 'row.dataset.state = "unavailable"');
   assertStringIncludes(options, 'row.setAttribute("action-label", "Not available on this platform")');
   assertStringIncludes(options, 'row.dataset.state = "required"');
-  assertStringIncludes(options, 'row.setAttribute("action-label", "Always on")');
+  // The install-grant rows now verify the live grant: a healthy install reads
+  // "Always on"; a missing grant reads "Missing — reload" (the diagnostics
+  // moved behind Advanced → Diagnostics but stay truthful).
+  assertStringIncludes(options, 'row.setAttribute("action-label", isGranted ? "Always on" : "Missing — reload")');
   // The hand-rolled card row is gone from both sections (the board deny list
   // is the only remaining .perm-row user).
   const permissionsFn = options.slice(options.indexOf("async function renderPermissions()"), options.indexOf("async function renderHooks()"));
   assert(!permissionsFn.includes('"perm-row"'), "Permissions no longer hand-rolls .perm-row cards");
+  // SETTINGS-CLEANLINESS relocation (chrome-agent-platform-vc52): the raw
+  // chrome.* identifiers + subscribers became a READ-ONLY Advanced →
+  // Diagnostics table (no switches); the grouped deny/allowed policy with its
+  // owner switches moved to Permissions (renderHookPolicy). The owner control
+  // survives the move — it just lives in the user-facing section now.
   const hooksFn = options.slice(options.indexOf("async function renderHooks()"), options.indexOf("// vocab:advanced:end"));
-  assert(!hooksFn.includes('"perm-row"') && !hooksFn.includes("danger"), "Hooks is a table of switches, not danger-button cards");
-  assertStringIncludes(hooksFn, 'document.createElement("switch-toggle")');
+  assert(!hooksFn.includes('"perm-row"') && !hooksFn.includes("danger"), "Hooks diagnostics is a read-only raw table, not danger-button cards");
+  assert(!hooksFn.includes('document.createElement("switch-toggle")'), "the raw diagnostics carry no policy switches");
+  assert(hooksFn.includes("subscribers"), "the raw diagnostics name subscribers");
+  assertStringIncludes(options, "async function renderHookPolicy()");
+  const policyFn = options.slice(options.indexOf("async function renderHookPolicy()"), options.indexOf("vocab:advanced:start"));
+  assertStringIncludes(policyFn, 'document.createElement("switch-toggle")');
   assertStringIncludes(html, '<table id="hook-list" class="hooks-table">');
 });
