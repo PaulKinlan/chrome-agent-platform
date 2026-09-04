@@ -19,6 +19,7 @@ const LARGE_FIELDS = Object.freeze({
     generate_ui: Object.freeze({ field: "html" }),
     create_script: Object.freeze({ field: "source" }),
     update_script: Object.freeze({ field: "source" }),
+    python_execute: Object.freeze({ field: "code" }),
   }),
   // A local-file write carries the COMPLETE file body, so it gets the same
   // exact-content treatment an artifact body does

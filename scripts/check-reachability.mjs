@@ -49,11 +49,6 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     follow-up (this cut does not touch tests/). Each such line names the
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
-  // 922q: site-tool docs-fallback utilities — the site toolset's error path
-  // calls these when a declared tool's handler throws (chrome-agent-platform-922q);
-  // the integration wiring is a follow-up (chrome-agent-platform-dptw phase-2).
-  "lib/site-docs-fallback.js":
-    "922q docs-fallback — parseLlmsTxt/parseSitemapXml/extractSameOriginHrefs/rankDocUrls/htmlToText for the site-tool failure path",
   // ── owner directives (TASKS.md CAP-FB-20260830-DEAD-CODE-CUT-01 Acceptance, 2026-08-30) ──
   "lib/agent-cards.js":
     "Owner directive 2026-08-30: adopted by CAP-FB-20260830-AGENT-SHARING-01; tests/agent-cards.test.ts pins it.",
@@ -66,8 +61,6 @@ export const RETAINED = {
     "CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01 is OPEN, not ABANDONED; the adapter and lib/tabular-diff-artifacts-core.js stay until it lands or closes (tests/tabular-diff-artifacts.test.ts).",
   "lib/code-diff-artifacts.js":
     "Holds the sha256 retention helpers CAP-FB-20260830-ARTIFACT-VERSIONS-01 folds into the versions store; that entry deletes it (tests/code-diff-artifacts.test.ts).",
-  "lib/python-tool.js":
-    "CAP-FB-20260823-PYODIDE-PYTHON-01 (P1, OPEN) decides the Python runtime; python-execution.js is imported by it (tests/python-runtime.test.ts).",
   "lib/python-runtime.js":
     "CAP-FB-20260823-PYODIDE-PYTHON-01 (P1, OPEN) decides the Python runtime (tests/python-runtime.test.ts).",
   // ── only tests import these; cut together with the named tests in a follow-up ──

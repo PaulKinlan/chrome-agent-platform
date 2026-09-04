@@ -219,7 +219,10 @@ import {
   buildAgentRunView,
   finalizeUnadmittedThreadRun,
 } from "../lib/thread-run-view.js";
+import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
+import { runPython } from "../lib/python-execution.js";
+import { getPythonRuntimeProvider } from "../lib/python-tool.js";
 import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
@@ -1541,15 +1544,16 @@ async function readSiteLazySources(origin, runGenCell) {
         "arguments",
       );
     },
-  }, ({ name, source, args }) =>
-    invokeSiteTool(
+  }, async ({ name, source, args }) => {
+    const res = await invokeSiteTool(
       origin,
       name,
       args,
       runGenCell?.get?.() ?? null,
       source,
-    )
-  );
+    );
+    return await withSiteDocsFallback({ origin, name, args, res });
+  });
 }
 
 // The orchestrator build (the memory, the workers, the tools). Shared by
@@ -7249,6 +7253,14 @@ const handlers = mergeRouteMaps(
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+  },
+  async "python.execute"({ code, stdin }) {
+    const provider = getPythonRuntimeProvider();
+    const runtime = await provider();
+    if (!runtime) {
+      return { ok: false, error: "python unavailable — the bounded Python runtime is not admitted yet (see docs/PYODIDE-BOUNDED-BUILD.md); no result was fabricated" };
+    }
+    return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? "") });
   },
 
   // ---- saved workflows (workflows-to-memory) ----
