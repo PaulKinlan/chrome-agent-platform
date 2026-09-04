@@ -39,7 +39,14 @@ export function isRamBacked(dir) {
  * tmpfs (that silence is what the bead bans).
  */
 export function durableRoot() {
-  const root = process.env.CAP_DURABLE_ROOT ?? join(homedir(), "cap-evidence");
+  // An EMPTY override (CAP_DURABLE_ROOT="" — the classic result of shell
+  // parameter expansion of an unset var) means UNSET: ?? alone keeps "",
+  // and join("", …) would then yield a RELATIVE CWD path with no refusal
+  // (review P2 on 62696628).
+  const override = process.env.CAP_DURABLE_ROOT;
+  const root = override && override.trim() !== ""
+    ? override
+    : join(homedir(), "cap-evidence");
   if (isRamBacked(root)) {
     throw new Error(
       `durable root ${root} is RAM-backed (tmpfs) — evidence and scratch must survive ` +

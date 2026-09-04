@@ -28,6 +28,23 @@ Deno.test("durableRoot defaults to $HOME/cap-evidence (durable), honoring CAP_DU
   }
 });
 
+Deno.test("durableRoot treats an EMPTY CAP_DURABLE_ROOT as unset — never a relative CWD path", () => {
+  const saved = Deno.env.get("CAP_DURABLE_ROOT");
+  try {
+    // CAP_DURABLE_ROOT="" is the classic result of shell parameter expansion
+    // of an unset var; ?? alone keeps "", and join("", …) would then yield a
+    // RELATIVE path silently (review P2 on 62696628). Pin: empty/whitespace
+    // means unset → the default.
+    Deno.env.set("CAP_DURABLE_ROOT", "");
+    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
+    Deno.env.set("CAP_DURABLE_ROOT", "   ");
+    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
+  } finally {
+    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
+    else Deno.env.set("CAP_DURABLE_ROOT", saved);
+  }
+});
+
 Deno.test("durableRoot THROWS on a RAM-backed root — no silent tmpfs fallback", () => {
   const saved = Deno.env.get("CAP_DURABLE_ROOT");
   try {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.58] — 2026-09-04
+- chp review fixes: an empty CAP_DURABLE_ROOT now means unset (was a silent relative path), and a stale Chrome-slot poison marker from an interrupted run no longer fails the whole custody suite — the test clears its own debris loudly at setup. Full suite 3273/0 with the recurring custody flake gone.
+
 ## [0.3.57] — 2026-09-04
 - Document the durable-root rule in AGENTS.md
 

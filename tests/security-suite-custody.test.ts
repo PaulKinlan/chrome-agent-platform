@@ -25,6 +25,27 @@ const FIXTURE = `${ROOT}/tests/fixtures/security-suite-fake-runner.mjs`;
 const LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
 const decoder = new TextDecoder();
 
+// Suite-load flake fix (review P2 on 62696628): the supervisor REFUSES when a
+// poison marker exists, and an interrupted earlier run (killed test, suite
+// timeout) leaves one behind — every supervisor-running test then failed with
+// "no result marker: … slot is poisoned" (the recurring N/1 custody flake).
+// Clear a STALE marker once before this file's tests run. Guards mirror the
+// escape test's teardown: only a regular file we own is test debris; a
+// symlink or foreign-owned marker still blocks loudly (that is not ours to
+// clear). The escape scenario re-poisons during its own run and cleans up in
+// its finally — this setup clear only removes debris from PRIOR runs.
+async function clearStaleSlotPoison(): Promise<void> {
+  const info = await Deno.lstat(SLOT_POISON).catch(() => null);
+  if (info?.isFile && !info.isSymlink && info.uid === Deno.uid()) {
+    const reason = (await Deno.readTextFile(SLOT_POISON)).trim();
+    console.log(
+      `clearing stale Chrome-slot poison marker (${reason || "empty"}) left by an interrupted run`,
+    );
+    await Deno.remove(SLOT_POISON);
+  }
+}
+await clearStaleSlotPoison();
+
 type RunResult = {
   code: number;
   text: string;
