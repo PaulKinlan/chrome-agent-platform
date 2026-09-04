@@ -48,6 +48,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "list_scripts",
   "get_script",
   "run_script",
+  "python_execute",
   "schedules_list",
   "schedules_pause",
   "schedules_resume",
@@ -457,6 +458,16 @@ export function managementToolset({ callRoute }) {
         "Run a script NOW (sandboxed, no model re-invocation) and return its result. REQUIRES OWNER APPROVAL: the owner sees the script's source and the hosts it fetches on an approval card; the run waits for that decision.",
       inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
       execute: ({ id, origin }) => call("script.run", { origin, id }),
+    }),
+
+    python_execute: tool({
+      description:
+        "Execute a Python program in the sandboxed in-browser Pyodide runtime. Input is Python source code (code: string) and optional standard input (stdin: string). Output is captured standard output. The runtime runs sandboxed with no DOM access and no network.",
+      inputSchema: z.object({
+        code: z.string().min(1).describe("the Python program source, top-level only"),
+        stdin: z.string().optional().describe("optional standard input passed to the Python program"),
+      }),
+      execute: ({ code, stdin }) => call("python.execute", { code, stdin }),
     }),
 
     // ---- schedules (per-agent alarm visibility + control) ----

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.103] — 2026-09-04
+- Wire python_execute into the management toolset — the brv merge lost this wiring
+
 ## [0.3.102] — 2026-09-04
 - Ignore .DS_Store files
 
