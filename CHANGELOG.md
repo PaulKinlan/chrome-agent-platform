@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.101] — 2026-09-04
+- Pyodide WASM runtime
+
 ## [0.3.100] — 2026-09-04
 - The docs-fallback module is now imported by the service worker — drop the RETAINED entry
 
