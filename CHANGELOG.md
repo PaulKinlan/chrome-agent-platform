@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.110] — 2026-09-04
+- Remove the python-tool RETAINED entry — the tool is now reachable via management-tools
+
 ## [0.3.109] — 2026-09-04
 - Wire the Python/Pyodide tool back in — the multi-lane merge lost the management-tools, capabilities, and SW-route wiring
 
