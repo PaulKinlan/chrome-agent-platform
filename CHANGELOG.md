@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.130] — 2026-09-04
+- Move evidence and build scratch directories off /tmp to disk-backed defaults under $HOME, and extend the check that enforces this to cover subdirectories, shell scripts, and temp-directory calls
+
 ## [0.3.129] — 2026-09-04
 - cap-beads-fw8 (UI flash fix — encapsulated panel renderers, eliminated duplicate boot renders)
 

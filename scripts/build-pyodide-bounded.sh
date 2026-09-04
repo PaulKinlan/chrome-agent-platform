@@ -12,7 +12,8 @@ set -euo pipefail
 
 PIN="0.26.4"                        # pinned Pyodide release tag (frozen provenance)
 MAX_MEMORY_BYTES=$((2048 * 65536))  # 2048 pages = 128 MiB (default-tier ceiling)
-OUT_DIR="${PYODIDE_OUT_DIR:-/tmp/cap-pyodide-bounded}"
+# disk-backed default: the build takes hours and /tmp is RAM-backed tmpfs
+OUT_DIR="${PYODIDE_OUT_DIR:-$HOME/cap-pyodide-bounded}"
 
 echo "==> installing Emscripten SDK (this is the multi-hour step)"
 git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$OUT_DIR/emsdk"

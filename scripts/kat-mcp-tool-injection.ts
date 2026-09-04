@@ -26,11 +26,11 @@
 
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { startMcpTestServer } from "./mcp-test-server.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const OUT = Deno.args[1] ?? Deno.env.get("CAP_EVIDENCE_DIR") ??
-  "/tmp/claude-1000/-home-paulkinlan-chrome-agent-platform/25bf9309-c874-4b40-85db-e95719f9eeb2/scratchpad/work/mcp-tool-injection";
+const OUT = Deno.args[1] ?? Deno.env.get("CAP_EVIDENCE_DIR") ?? durableDir("cap-mcp-tool-injection-kats");
 const CHROMIUM = "/usr/bin/chromium";
 const STAMP = Date.now();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
