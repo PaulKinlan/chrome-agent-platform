@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.97] — 2026-09-04
+- cap-beads-8zlu (test cascade cleanup + site docs fallback wiring + changelog semver fix)
+
 ## [0.3.96] — 2026-09-04
 - cap-beads-brv (Python in the browser via Pyodide)
 
