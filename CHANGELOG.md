@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.100] — 2026-09-04
+- The docs-fallback module is now imported by the service worker — drop the RETAINED entry
+
 ## [0.3.99] — 2026-09-04
 - Wire the docs-fallback module into the service worker — import + integration reference in readSiteLazySources (922q)
 
