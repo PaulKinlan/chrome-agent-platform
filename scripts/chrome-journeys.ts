@@ -12,12 +12,13 @@
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-// Evidence is TEMPORARY by default; `--retain` is the explicit opt-in to write
-// the tracked test-artifacts/ directory.
+// Evidence defaults to a fresh dir under the DURABLE evidence root (disk;
+// bead chp — /tmp is RAM-backed and has lost retained runs); `--retain` is the
+// explicit opt-in to write the tracked test-artifacts/ directory.
 const RETAIN = Deno.args.includes("--retain");
 const EVIDENCE_DIR = RETAIN
   ? `${ROOT}test-artifacts`
-  : `/tmp/cap-evidence-${Date.now()}`;
+  : durableDir(`cap-evidence-${Date.now()}`);
 const RUN_ID = `cap-${Date.now()}`;
 
 const CHROMIUM = "/usr/bin/chromium";
@@ -27,6 +28,7 @@ const RM = "/bin/rm";
 const GIT = "/usr/bin/git";
 
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
+import { durableDir } from "./lib/durable-root.mjs";
 import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -289,11 +289,12 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
   // Drive the ACTUAL journey script's startup branch: run the real script in a
   // scratch repo whose build-test-extension fails. We reuse the production
   // script bytes via a scratch copy of the repo with a broken builder.
-  const fsQ2 = "node:fs/promises", pathQ2 = "node:path", osQ2 = "node:os";
+  const fsQ2 = "node:fs/promises", pathQ2 = "node:path";
   const fsp2 = await import(fsQ2);
   const path2 = (await import(pathQ2)).default;
-  const os2 = await import(osQ2);
-  const repo = await fsp2.mkdtemp(path2.join(os2.tmpdir(), "cap-startup-fail-"));
+  const { durableDir } = await import("../scripts/lib/durable-root.mjs");
+  const repo = await fsp2.mkdtemp(path2.join(durableDir("scratch") + "/", "cap-startup-fail-"));
+  const evidenceRoot = durableDir(`cap-cdp-startup-fail-evidence-${Date.now()}`);
   try {
     const cpMod2 = "node:child_process";
     const { execSync } = await import(cpMod2);
@@ -304,13 +305,16 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
     const run = await new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "scripts/agent-provider-picker.ts"],
       cwd: repo, stdout: "piped", stderr: "piped",
+      env: { CAP_DURABLE_ROOT: evidenceRoot, HOME: Deno.env.get("HOME") ?? "", PATH: Deno.env.get("PATH") ?? "" },
     }).output();
     const out = new TextDecoder().decode(run.stdout) + new TextDecoder().decode(run.stderr);
     assert(!run.success, "journey failed as expected");
     assert(out.includes("child exit code=97"), `first cause preserved (code=97): ${out.slice(-300)}`);
     assert(!out.includes("Cannot read properties of undefined"), "no secondary TypeError masking the cause");
     // The early manifest exists and carries the evidence:
-    const dirs = (await fsp2.readdir("/tmp")).filter((d: string) => d.startsWith("cap-picker-")).map((d: string) => "/tmp/" + d);
+    // The picker's manifest lands under the DURABLE evidence root (bead chp)
+    // — we pinned CAP_DURABLE_ROOT for the child, so search there, not /tmp.
+    const dirs = (await fsp2.readdir(evidenceRoot)).filter((d: string) => d.startsWith("cap-picker-")).map((d: string) => evidenceRoot + "/" + d);
     let found = null;
     for (const d of dirs.sort().reverse()) {
       const m = path2.join(d, "manifest.json");

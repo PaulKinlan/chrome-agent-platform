@@ -25,6 +25,7 @@
 // this child's own DevTools line, so it can never attach to another lane's
 // browser (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const EXT = "/home/paulkinlan/chrome-agent-platform/extension";
 const SHOTS = Deno.env.get("CAP_EVIDENCE_DIR") ?? "./evidence/live-run";
@@ -37,7 +38,7 @@ const MODEL = Deno.env.get("CAP_LIVE_MODEL") ?? "claude-sonnet-5";
 const PROMPT = Deno.args.join(" ") || "List my open tabs, then tell me what is open.";
 
 await Deno.mkdir(SHOTS, { recursive: true });
-const profile = await Deno.makeTempDir({ prefix: "live-run-" });
+const profile = durableDir(`live-run-${Date.now()}`);
 // The shared launcher: kernel-assigned port, endpoint read from this child's
 // own stderr, honest failure when the browser prints none. The argv it builds
 // is the standard headless set (chromeBaseArgs) — the same flags this script

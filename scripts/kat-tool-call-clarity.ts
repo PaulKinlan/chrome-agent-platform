@@ -14,10 +14,11 @@
 //   deno run -A scripts/kat-tool-call-clarity.ts [extension-dir] [out-dir]
 
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const OUT = Deno.args[1] ?? `/tmp/cap-tool-call-clarity-evidence-${Date.now()}`;
+const OUT = Deno.args[1] ?? durableDir(`cap-tool-call-clarity-evidence-${Date.now()}`);
 const SECRET = "sk-kat-redaction-check-123456";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

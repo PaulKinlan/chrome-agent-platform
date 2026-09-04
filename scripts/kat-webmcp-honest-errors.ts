@@ -21,6 +21,7 @@
 //   deno run -A scripts/kat-webmcp-honest-errors.ts [<out-dir>]
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -58,7 +59,7 @@ check("fixture server answers on 127.0.0.1:8934 (/errors)", fixtureUp);
 
 // Headless Chrome does not settle the JIT scripting grant — the variant
 // pregrants scripting+tabs (the webmcp-acceptance.ts headless pattern).
-const VARIANT = `/tmp/cap-kat-honest-errors-${Date.now()}`;
+const VARIANT = durableDir(`cap-kat-honest-errors-${Date.now()}`);
 {
   const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", VARIANT] }).spawn();
   await cp.status;

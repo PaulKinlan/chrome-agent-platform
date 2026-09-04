@@ -9,6 +9,7 @@ import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 import {
   cleanupExactProfile,
   pidAlive,
+  PROFILE_ROOT,
   readProcIdentity,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
@@ -22,7 +23,6 @@ const SUPERVISOR_NODE = `${ROOT}/scripts/security-suite-supervisor.mjs`;
 const RUNNER = `${ROOT}/scripts/security-suite.ts`;
 const FIXTURE = `${ROOT}/tests/fixtures/security-suite-fake-runner.mjs`;
 const LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
-const PROFILE_ROOT = "/tmp/cap-sec-profiles";
 const decoder = new TextDecoder();
 
 type RunResult = {
