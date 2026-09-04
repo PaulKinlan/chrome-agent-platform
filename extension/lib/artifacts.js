@@ -416,6 +416,21 @@ async function repairPendingLocked(store, origin) {
 }
 
 export const ASSET_BOUNDS = {
+  // no-limits (owner directive 2026-09-03)
+  maxContentBytes: Infinity,
+  // A single append call carries at most this many UTF-8 bytes (a bounded
+  // chunk of a body an artifact grows across calls); it is also the tool
+  // argument transport bound for append_asset (tool-argument-contract.js).
+  // no-limits (owner directive 2026-09-03)
+  maxAppendBytes: Infinity,
+  // The CEILING for ONE artifact body, measured the way the memory store
+  // measures the asset-blob value it is written to (serialized JSON bytes,
+  // memory.js MAX_ASSET_BLOB_VALUE_BYTES): append-grown bodies exceed the
+  // 256 KiB single-call bound but never this one. This is a STORE write-path
+  // ceiling only (p45y r5: the inspector mounts any stored or staged body in
+  // full — rendering has no size cap of its own).
+  // no-limits (owner directive 2026-09-03)
+  maxBodySerializedBytes: Infinity,
   maxNameLength: 200,
   maxAssetsPerOrigin: 200,
   // The index byte bound used to be PER ORIGIN. The library is now one shared
@@ -441,9 +456,7 @@ export const ASSET_BOUNDS = {
   // space. Only a body that cannot fit even after every evictable version is
   // gone refuses (fail closed, readable error).
   maxVersionsPerAsset: 20,
-  // dptw: no library-wide version byte budget — blobs are retained until the
-  // owner deletes artifacts or OPFS quota refuses honestly.
-  maxVersionBytes: Number.POSITIVE_INFINITY,
+  maxVersionBytes: 4 * 1024 * 1024,
 };
 
 // ---- immutable versions: rows, content-addressed blobs, refcounts ----
@@ -573,9 +586,32 @@ async function planVersionEvictions(store, index, { id, n, addBytes }) {
     if (!(await readVersionRow(store, id, k))) break;
     take(id, k);
   }
-  // (b) REMOVED (dptw): no library-wide blob byte budget — the per-artifact
-  // count eviction above is the only version retention policy.
-  void addBytes;
+  // (b) the library-wide blob bytes: this artifact's oldest first, then the
+  // oldest other artifacts' oldest versions.
+  let total = (await readVersionBytes(store)) + addBytes;
+  if (total > ASSET_BOUNDS.maxVersionBytes) {
+    const others = index
+      .filter((r) => r && r.id !== id && Number.isSafeInteger(r.version))
+      .sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
+    const candidates = [{ id, version: n }, ...others];
+    let reads = 0;
+    outer: for (const r of candidates) {
+      const head = r.version;
+      for (let k = Math.max(1, head - ASSET_BOUNDS.maxVersionsPerAsset); k < head; k++) {
+        if (reads++ >= MAX_EVICTION_READS) break outer;
+        if (seen.has(`${r.id}:${k}`)) continue;
+        const row = await readVersionRow(store, r.id, k);
+        if (!row) continue;
+        const ref = await readBlobRef(store, row.sha256);
+        take(r.id, k);
+        if (ref <= 1) total -= row.size;
+        if (total <= ASSET_BOUNDS.maxVersionBytes) break outer;
+      }
+    }
+    if (total > ASSET_BOUNDS.maxVersionBytes) {
+      return { error: `artifact version storage is full (${ASSET_BOUNDS.maxVersionBytes} bytes) — delete artifacts to make room` };
+    }
+  }
   for (const r of index) {
     if (r && truncated.has(r.id)) r.versionsTruncated = true;
   }
@@ -681,7 +717,15 @@ async function readIndexStrict(store) {
   return value;
 }
 
-function boundAssetMeta({ type, name, content }) {
+// Head rows written after the body-capacity change carry `sha256` (a
+// reference to the content-addressed version blob that holds the COMPLETE
+// body) and NO embedded content — a body can grow past the 256 KiB generic
+// per-value bound, which an embedded head could never hold. LEGACY head rows
+// (written before the change) still embed `content`; `readAssetContent` and
+// `getAsset` serve both shapes. The head blob is the head VERSION's blob
+// (every write stages its version first), so it is refcounted, byte-budgeted
+// and never evicted while the row lives — exactly like today's bodies.
+function boundAssetMeta({ type, name, content }, { allowBodyGrowth = false } = {}) {
   const at = type == null || type === "" ? "data" : String(type);
   if (!ASSET_TYPES.has(at)) return { error: `asset type must be one of ${[...ASSET_TYPES].join(", ")}` };
   const nm = String(name ?? "").trim();
@@ -689,7 +733,34 @@ function boundAssetMeta({ type, name, content }) {
   if (nm.length > ASSET_BOUNDS.maxNameLength) return { error: `asset name exceeds ${ASSET_BOUNDS.maxNameLength} chars` };
   if (typeof content !== "string") return { error: "asset content must be a string" };
   const size = utf8Bytes(content);
+  if (!allowBodyGrowth) {
+    // The single-call bound: create_asset / update_asset / write_file carry one
+    // COMPLETE body per call, so the advertised 256 KiB is the honest per-call
+    // limit AND the full cap must actually store (the body lives in the blob
+    // side of the head/version pair, which the memory store admits up to
+    // maxBodySerializedBytes — CAP p45y r4).
+    if (size > ASSET_BOUNDS.maxContentBytes) return { error: `asset content exceeds ${ASSET_BOUNDS.maxContentBytes} bytes` };
+  } else if (utf8Bytes(JSON.stringify(content)) > ASSET_BOUNDS.maxBodySerializedBytes) {
+    // The aggregate path (append/patch/restore on an already-grown body): the
+    // body may exceed the single-call bound, but the blob write must still fit
+    // the store's per-value bound — measured in the SAME unit the store uses.
+    return { error: `asset body exceeds the ${ASSET_BOUNDS.maxBodySerializedBytes}-byte storage bound` };
+  }
   return { ok: true, type: at, name: nm, size };
+}
+
+/** The COMPLETE body of a stored head row: legacy rows embed `content`; new
+ * rows carry `sha256` and the body lives in the content-addressed blob.
+ * Returns null when the head is a ref whose blob is missing (a repair in
+ * progress) — callers fail closed on that, never silently empty. */
+async function readAssetContent(store, value) {
+  if (value == null || typeof value !== "object") return null;
+  if (typeof value.content === "string") return value.content;
+  if (typeof value.sha256 === "string") {
+    const body = await store.getStrict(blobKey(value.sha256)).catch(() => null);
+    return typeof body === "string" ? body : null;
+  }
+  return null;
 }
 
 /** S0→S7 — create. The shared core runs under the per-origin lock; `pk` is
@@ -793,10 +864,14 @@ async function createAssetLocked(store, origin, o, { type, name, content, meta, 
     let bodyGen;
     try {
       await writeVersion(store, id, 1, content, staged, { by: by === "owner" ? "owner" : "model", summary, at: now });
-      // S3 — write the body (capture the exact write's version token); the
+      // S3 — write the body row (capture the exact write's version token); the
       // exact-token WAL record MUST land — a failure compensates the body by its
-      // exact token (the reviewer's body→token gap).
-      bodyGen = await store.setTrusted(`asset:${id}`, asset);
+      // exact token (the reviewer's body→token gap). The head row carries a
+      // REFERENCE to the content-addressed blob (`sha256`) instead of the body:
+      // a body at the full advertised cap (or grown past it by appends) can
+      // never fit a single JSON value, and the blob is already the durable,
+      // refcounted home of the content.
+      bodyGen = await store.setTrusted(`asset:${id}`, { ...asset, content: undefined, sha256: staged.sha });
     } catch (e) {
       await releaseStagedVersion(store, { id, ...versionFields }).catch(() => {});
       await removeObligations().catch(() => {});
@@ -941,7 +1016,13 @@ export async function createAssetKeyed(origin, { key, type, name, content, meta 
       const v = await store.getVersion(`asset:${prior.id}`).catch(() => 0);
       if (v != null && v > 0) {
         const asset = await store.get(`asset:${prior.id}`);
-        return { ok: true, deduped: true, id: prior.id, asset };
+        const content = await readAssetContent(store, asset);
+        if (typeof content !== "string") {
+          // A ref-head whose blob is missing is a repair-in-progress/corruption
+          // state — FAIL CLOSED (never a silent duplicate row under the key).
+          return { ok: false, error: "promotion body missing — repair in progress" };
+        }
+        return { ok: true, deduped: true, id: prior.id, asset: { ...asset, content } };
       }
       // A row with the key but NO body is a repair-in-progress/corruption
       // state — FAIL CLOSED (never a silent duplicate row under the same key).
@@ -969,10 +1050,18 @@ async function updateAssetLocked(store, origin, id, patch, opts = {}) {
   await repairPendingLocked(store, origin);
   const existing = await store.get(`asset:${id}`); // S0
   if (!existing) return { ok: false, error: "asset not found" };
+  const existingContent = await readAssetContent(store, existing);
   const nextType = patch.type ?? existing.type;
   const nextName = patch.name ?? existing.name;
-  const nextContent = patch.content ?? existing.content;
-  const meta = boundAssetMeta({ type: nextType, name: nextName, content: nextContent });
+  const nextContent = patch.content ?? existingContent;
+  if (typeof nextContent !== "string") {
+    return { ok: false, error: "asset body missing — repair in progress" };
+  }
+  // The aggregate write path (append/patch/restore on a body that may exceed
+  // the single-call bound) validates against the BLOB storage bound instead of
+  // the 256 KiB single-call cap; a single-call update_asset is still transport-
+  // capped at maxContentBytes by the tool argument contract.
+  const meta = boundAssetMeta({ type: nextType, name: nextName, content: nextContent }, { allowBodyGrowth: true });
   if (meta.error) return { ok: false, error: meta.error };
   const updated = {
     ...existing, type: meta.type, name: meta.name, content: nextContent,
@@ -1013,7 +1102,10 @@ async function updateAssetLocked(store, origin, id, patch, opts = {}) {
   let newBodyGen;
   try {
     await writeVersion(store, id, n, nextContent, staged, { by, summary: opts.summary, at: updated.updatedAt });
-    newBodyGen = await store.setTrusted(`asset:${id}`, updated);
+    // S2b — the new head row: same reference shape as create (blob sha, no
+    // embedded content) — small, token-CAS-able, and never over the per-value
+    // bound however large the body grew.
+    newBodyGen = await store.setTrusted(`asset:${id}`, { ...updated, content: undefined, sha256: staged.sha });
   } catch (e) {
     await releaseStagedVersion(store, walIntent).catch(() => {});
     await writeWal(store, { ...walIntent, state: "compensated" }).catch(() => {});
@@ -1212,13 +1304,23 @@ export async function deleteAsset(origin, id) {
 }
 
 /** Read one asset (with its content). Reads run under the per-origin mutex so
- * they never observe a split write (the re-review's interleaving finding). */
+ * they never observe a split write (the re-review's interleaving finding).
+ * New head rows reference the body's blob (`sha256`); the content is composed
+ * here so every caller (routes, gallery, inspector) sees the complete body.
+ * Legacy rows (embedded `content`) are served unchanged. */
 export async function getAsset(origin, id) {
   if (!id || typeof id !== "string") return { ok: false, error: "get_asset needs an id" };
   return withAssetLock(origin, async () => {
     const store = assetStore();
     const asset = await store.get(`asset:${id}`);
     if (!asset) return { ok: false, error: "asset not found" };
+    if (typeof asset.sha256 === "string") {
+      const content = await readAssetContent(store, asset);
+      if (typeof content !== "string") {
+        return { ok: false, error: "asset body missing — repair in progress" };
+      }
+      return { ok: true, asset: { ...asset, content } };
+    }
     return { ok: true, asset };
   });
 }
@@ -1336,6 +1438,53 @@ export function resolveAssetPatch(oldBody, edits) {
   return { ok: true, content: body };
 }
 
+/** The per-call append bound (exported for the tools + the contract tests):
+ * one append carries at most 64 KiB of UTF-8 text; an artifact body grows
+ * across calls up to ASSET_BOUNDS.maxBodySerializedBytes. */
+export const APPEND_MAX_BYTES = ASSET_BOUNDS.maxAppendBytes;
+
+/** S0→S3 — append `text` to an artifact's body as a NEW head version (the
+ * model's chunked write path: CAP p45y acceptance B — a body larger than any
+ * single-call bound is built across bounded calls instead of one giant tool
+ * argument). Runs the SAME compensated update as any edit (WAL + immutable
+ * version + head reference via updateAssetLocked), so the store contract is
+ * shared. `expectVersion`, when supplied, refuses a stale append (the head has
+ * moved since the model last saw the body) — mirrors patch_asset. The owner
+ * approval for a model-initiated append is the caller's (the `asset.append`
+ * route, action class asset.update); this seam is authoritative but unguarded,
+ * exactly like updateAsset. */
+export async function appendAsset(origin, id, text, opts = {}) {
+  if (!id || typeof id !== "string") return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+  if (typeof text !== "string" || text.length === 0) return { ok: false, error: "append_asset needs the text to append" };
+  if (utf8Bytes(text) > APPEND_MAX_BYTES) {
+    return { ok: false, error: `one append carries at most ${APPEND_MAX_BYTES} UTF-8 bytes (append in pieces)` };
+  }
+  const store = assetStore();
+  return withAssetLock(origin, async () => {
+    const existing = await store.get(`asset:${id}`);
+    if (!existing) return { ok: false, error: "asset not found" };
+    if (opts.expectVersion !== undefined && opts.expectVersion !== null) {
+      let index;
+      try { index = await readIndexStrict(store); } catch (e) { return { ok: false, error: String(e?.message ?? e) }; }
+      const row = index.find((e) => e.id === id);
+      const head = Number.isSafeInteger(row?.version) && row.version > 0 ? row.version : 0;
+      if (opts.expectVersion !== head) {
+        return { ok: false, error: "version_conflict", version: head };
+      }
+    }
+    const body = await readAssetContent(store, existing);
+    if (typeof body !== "string") return { ok: false, error: "asset body missing — repair in progress" };
+    const res = await updateAssetLocked(store, origin, id, { content: body + text }, {
+      by: opts.by, summary: opts.summary ?? `appended ${utf8Bytes(text)} bytes`,
+    });
+    if (!res?.ok) return res;
+    return {
+      ok: true, id, asset: res.asset, version: res.version,
+      appendedBytes: utf8Bytes(text), totalBytes: utf8Bytes(body) + utf8Bytes(text),
+    };
+  });
+}
+
 /** Apply exact search/replace `edits` to an artifact and commit the result as a
  * NEW head version — the cheap alternative to `update_asset` resending the whole
  * body (CAP-FB-20260830-PATCH-ASSET-TOOL-01). Runs the SAME S0→S3 compensated
@@ -1352,7 +1501,7 @@ export async function patchAsset(origin, id, edits, opts = {}) {
   return withAssetLock(origin, async () => {
     const existing = await store.get(`asset:${id}`);
     if (!existing) return { ok: false, error: "asset not found" };
-    const oldBody = typeof existing.content === "string" ? existing.content : "";
+    const oldBody = (await readAssetContent(store, existing)) ?? "";
     // expectVersion guards against editing a body the model has not seen: read
     // the head from the index and refuse if it has moved (no mutation).
     if (opts.expectVersion !== undefined && opts.expectVersion !== null) {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.84] — 2026-09-04
+- Fix the build lock file for fresh checkouts — the dist-complete validator needs it to pass
+
 ## [0.3.83] — 2026-09-04
 - Maintenance and fixes.
 
