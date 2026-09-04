@@ -57,19 +57,27 @@ export function installPageDiagnostics() {
 }
 
 /**
- * Refresh the badge counts on the <error-console> + <security-shield> (if
- * present). Called once on load and on every revision change while visible.
+ * Refresh the badge counts on the <error-console> + <security-shield> +
+ * <diagnostics-panel> (if present). Called once on load and on every revision
+ * change while visible.
  */
 export async function refreshDiagnostics() {
   const consoleEl = document.querySelector("error-console");
   const shieldEl = document.querySelector("security-shield");
-  if (!consoleEl && !shieldEl) return;
+  const diagEl = document.querySelector("diagnostics-panel");
+  if (!consoleEl && !shieldEl && !diagEl) return;
 
   try {
-    if (consoleEl) {
+    if (consoleEl || diagEl) {
       const res = await send("diagnostics.list");
       const count = res?.count ?? 0;
-      consoleEl.setAttribute("count", String(count));
+      if (consoleEl) consoleEl.setAttribute("count", String(count));
+      if (diagEl) {
+        diagEl.setAttribute("count", String(count));
+        if (count > 0) diagEl.setAttribute("attention", "");
+        else diagEl.removeAttribute("attention");
+        if (diagEl._open) diagEl.refresh?.();
+      }
     }
   } catch { /* no backend */ }
 
