@@ -1696,6 +1696,17 @@ class AttachButton extends Component {
       }
       const file = await this._pickFile(kind);
       if (!file) return;
+      // Honest refusal: an over-ceiling pick or a failed read is reported with
+      // the real reason — never attached as a silent empty dataURL.
+      if (file.overLimit) {
+        const mib = Math.round(file.size / (1024 * 1024));
+        this._emit("attach-error", { message: `${file.name} is ${mib} MiB — over the 32 MiB attach ceiling (the bytes travel to the model as base64 in a single message)` });
+        return;
+      }
+      if (file.readError) {
+        this._emit("attach-error", { message: `Couldn't read ${file.name}: ${file.readError}` });
+        return;
+      }
       this._emit("attach", file);
     });
     this._bindDocument("click", (e) => {
@@ -1735,12 +1746,25 @@ class AttachButton extends Component {
       input.onchange = async () => {
         const file = input.files?.[0] ?? null;
         if (!file) return resolve(null);
-        // dptw: NO select-time size bound — any picked file is read. If the
-        // FileReader or the transport fails, the degradation below is honest
-        // (the attachment is still labelled; the SW surfaces transport errors).
+        // dptw note: the old arbitrary 8 MiB select-time refuse is gone. What
+        // remains is a TRANSPORT ceiling, not a size cap: the bytes cross to
+        // the service worker as a base64 dataURL inside ONE runtime message —
+        // base64 inflates by 4/3 and the practical runtime-messaging envelope
+        // is ~64 MiB, so 32 MiB raw (~43 MiB on the wire) is the generous
+        // edge with headroom; past it the send itself risks failing, and
+        // FileReader would build a 40+ MiB string on the main thread first
+        // (tab freeze). Over the ceiling: refuse HONESTLY (attach-error with
+        // the real reason), never a silent empty dataURL.
+        const MAX_PICK_BYTES = 32 * 1024 * 1024; // 32 MiB raw (~43 MiB base64)
+        if (file.size > MAX_PICK_BYTES) {
+          resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL: "", overLimit: true });
+          return;
+        }
         // Read the bytes as a dataURL so the service worker can actually send
-        // TEXT content to the model (and label media honestly).
+        // TEXT content to the model (and label media honestly). A read failure
+        // is carried as readError and surfaced by the caller — never silent.
         let dataURL = "";
+        let readError = null;
         try {
           dataURL = await new Promise((res, rej) => {
             const fr = new FileReader();
@@ -1748,8 +1772,10 @@ class AttachButton extends Component {
             fr.onerror = () => rej(fr.error);
             fr.readAsDataURL(file);
           });
-        } catch { /* non-fatal — the SW still labels the attachment */ }
-        resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL });
+        } catch (err) {
+          readError = String(err?.message ?? err ?? "the file could not be read");
+        }
+        resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL, readError });
       };
       input.oncancel = () => resolve(null);
       input.click();

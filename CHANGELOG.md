@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.131] — 2026-09-04
+- A worker's large result now reaches its saved record whole — the last hidden 64 KB cut on the results path is gone (re-applied after the merge took main's agent-worker route file wholesale)
+
 ## [0.3.130] — 2026-09-04
 - Merge main into cap-beads-dptw-tr: attachments, run history, logs, and MCP configuration are no longer cut off at hidden size limits — content is kept whole, and any real failure is reported with its reason
 
