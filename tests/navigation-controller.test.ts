@@ -490,3 +490,73 @@ Deno.test("Back-stack fix: settings sub-nav with replace:true uses history.repla
   assertEquals(replaces, 1, "replace:true must call replaceState exactly once");
   assertEquals(env.historyStack.length, 1, "history stays at one entry — Back returns Home in one press");
 });
+
+// ── Boot with no fragment (chrome-agent-platform-hy91) ─────────────────────
+// The hub's Settings button opens `options/options.html` with NO hash, and so
+// does Chrome's own extension Options entry. Before the fix the boot sync fell
+// through the same fail-closed guard as a bogus mid-session hash, so NO section
+// renderer ran and the statically-active Providers panel stayed empty — a first
+// user reached Settings and found no provider list, no key field, no model
+// picker. Boot must land on the declared default section.
+
+Deno.test("Boot: an empty hash renders the default section (hy91: Settings opened with no fragment)", async () => {
+  const env = createMockNavigationEnvironment({ initialHash: "", hasModernNav: true });
+  const navigated = [];
+  const ctrl = createNavigationController({
+    win: env.win,
+    normalizeHash: normalizeSettingsSectionId,
+    isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
+    defaultHash: "#providers",
+    onNavigate: async ({ sectionId }) => { navigated.push(sectionId); },
+  });
+  await ctrl.syncCurrent();
+  assertEquals(navigated.length, 1, "boot with no hash must render a section, not nothing");
+  assertEquals(navigated[0], "providers", "boot with no hash must land on the default section");
+  ctrl.dispose();
+});
+
+Deno.test("Boot: an unresolvable hash falls back to the default section rather than rendering nothing", async () => {
+  const env = createMockNavigationEnvironment({ initialHash: "#no-such-section", hasModernNav: true });
+  const navigated = [];
+  const ctrl = createNavigationController({
+    win: env.win,
+    normalizeHash: normalizeSettingsSectionId,
+    isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
+    defaultHash: "#providers",
+    onNavigate: async ({ sectionId }) => { navigated.push(sectionId); },
+  });
+  await ctrl.syncCurrent();
+  assertEquals(navigated.join(","), "providers", "a stale deep link must still render the default section");
+  ctrl.dispose();
+});
+
+Deno.test("Boot fallback is opt-in: with no defaultHash an empty hash still fails closed", async () => {
+  const env = createMockNavigationEnvironment({ initialHash: "", hasModernNav: true });
+  const navigated = [];
+  const ctrl = createNavigationController({
+    win: env.win,
+    normalizeHash: normalizeSettingsSectionId,
+    isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
+    onNavigate: async ({ sectionId }) => { navigated.push(sectionId); },
+  });
+  await ctrl.syncCurrent();
+  assertEquals(navigated.length, 0, "without a declared default, boot must not invent a section");
+  ctrl.dispose();
+});
+
+Deno.test("Mid-session navigation still fails closed on an unknown hash even with a defaultHash", async () => {
+  const env = createMockNavigationEnvironment({ initialHash: "#providers", hasModernNav: true });
+  const navigated = [];
+  const ctrl = createNavigationController({
+    win: env.win,
+    normalizeHash: normalizeSettingsSectionId,
+    isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
+    defaultHash: "#providers",
+    onNavigate: async ({ sectionId }) => { navigated.push(sectionId); },
+  });
+  await ctrl.syncCurrent();
+  const ok = await ctrl.navigate("#no-such-section");
+  assertEquals(ok, false, "an unknown navigation target must be refused, not redirected to the default");
+  assertEquals(navigated.length, 1, "the refused navigation must not render a section");
+  ctrl.dispose();
+});

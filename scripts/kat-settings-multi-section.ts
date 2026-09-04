@@ -1,7 +1,8 @@
 // scripts/kat-settings-multi-section.ts — CAP-FB-20260827-SETTINGS-MONOLITH-01 / q94
 //
 // Drives real Chromium with loaded extension:
-// 1. Load Settings (#providers by default) -> assert only #providers is visible (.panel.active), others hidden.
+// 1. Load Settings with NO fragment (what the hub's Settings button opens) ->
+//    assert #providers is visible AND its provider cards/key fields rendered.
 // 2. Click sidebar nav for "Browser control" -> assert #browser is visible, #providers is hidden.
 // 3. Navigate directly to #skills deep link -> assert #skills is visible, others hidden.
 // 4. Navigate directly to #about deep link -> assert #about is visible, others hidden.
@@ -66,6 +67,31 @@ try {
 
   const visiblePanels1 = await evalIn(opts, `[...document.querySelectorAll("section.panel")].filter(s => getComputedStyle(s).display !== "none").map(s => s.id)`);
   check("initial load: only #providers panel is visible", JSON.stringify(visiblePanels1) === JSON.stringify(["providers"]), visiblePanels1);
+
+  // The hub's Settings button opens this URL — with NO fragment. Visibility
+  // alone was never enough: the markup marks #providers active statically, so
+  // the panel showed while its renderer had never run and the owner landed on
+  // an empty Providers page with no provider list, no key field and no model
+  // picker (chrome-agent-platform-hy91). Assert the CONTENT, not the class.
+  const bootProviders = await evalIn(opts, `({
+    tabs: document.querySelectorAll("#provider-tabs segmented-control").length,
+    panels: document.querySelectorAll("#provider-panels .provider-panel").length,
+    cards: document.querySelectorAll(".provider-card").length,
+    keyFields: document.querySelectorAll("#provider-panels .api-key").length,
+  })`);
+  check("boot with no fragment: the providers list actually rendered (cards + key fields)",
+    bootProviders?.cards > 0 && bootProviders?.keyFields > 0, bootProviders);
+  check("boot with no fragment: the family tab strip rendered with its panels",
+    bootProviders?.tabs === 1 && bootProviders?.panels > 0, bootProviders);
+
+  // A stale/unknown deep link must land on the default section too, never on a
+  // page where nothing rendered.
+  const staleT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#no-such-section` });
+  const staleSess = (await send("Target.attachToTarget", { targetId: staleT.result.targetId, flatten: true })).result?.sessionId;
+  await send("Runtime.enable", {}, staleSess);
+  await sleep(1600);
+  const staleCards = await evalIn(staleSess, `document.querySelectorAll(".provider-card").length`);
+  check("stale deep link: falls back to a rendered Providers section", staleCards > 0, staleCards);
 
   // 2. Click "Browser control" nav link
   const clickedBrowser = await clickSelector(opts, `document.querySelector('.nav-item[data-section="browser"]')`);

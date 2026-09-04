@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.132] — 2026-09-04
+- Settings opens on the provider list again, not an empty panel
+
 ## [0.3.131] — 2026-09-04
 - remove stray extension/wasm-tools copy that broke build scanner
 

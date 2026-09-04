@@ -9,6 +9,9 @@
 //   - Back/forward traversal restores full UI state (aria-current, data renders, scroll, focus, overlay state).
 //   - Deep links and reloads restore the exact target view/section.
 //   - Stale/invalid hashes fail closed safely without crashing.
+//   - On BOOT (syncCurrent) a missing or unresolvable hash falls back to the
+//     caller's declared defaultHash, so a page opened with no fragment still
+//     renders its default section instead of nothing.
 
 export const NAVIGATION_EVENT_TYPES = Object.freeze({
   NAVIGATE: "navigate",
@@ -25,6 +28,7 @@ export function createNavigationController({
   onError = null,
   normalizeHash = (h) => (h ? h.replace(/^#/, "") : null),
   isAllowedHash = () => true,
+  defaultHash = null,
 } = {}) {
   if (!win) {
     return {
@@ -161,7 +165,20 @@ export function createNavigationController({
     },
     syncCurrent() {
       if (disposed) return;
-      return handleHashChange(win.location.hash, { isTraverse: false });
+      // BOOT, not navigation. The page can be opened with no hash at all — the
+      // Settings button does exactly that (`options/options.html`) — or with a
+      // hash that no longer resolves. handleHashChange fails CLOSED on both,
+      // which is right for a navigation but wrong for the first paint: the
+      // markup's statically-active section would sit there with none of its
+      // content rendered (chrome-agent-platform-hy91: Settings opened on an
+      // empty Providers panel, so a first user could not reach the provider
+      // list at all). On boot an unresolvable hash falls back to the caller's
+      // declared default section; mid-session navigation still fails closed.
+      const current = win.location?.hash ?? "";
+      const cleanId = normalizeHash(current);
+      const resolvable = Boolean(cleanId) && isAllowedHash(cleanId);
+      const hash = resolvable ? current : (defaultHash ?? current);
+      return handleHashChange(hash, { isTraverse: false });
     },
     dispose() {
       disposed = true;
