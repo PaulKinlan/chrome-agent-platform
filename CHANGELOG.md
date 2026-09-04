@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- The changelog check passes on fresh checkouts, and the version hook no longer turns merge subjects or branch names into release notes
+
 ## [0.3.128] — 2026-09-04
 - Maintenance and fixes.
 
