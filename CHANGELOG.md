@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.77] — 2026-09-04
+- Maintenance and fixes.
+
 ## [0.3.76] — 2026-09-04
 - Register the site-docs-fallback module in RETAINED (922q docs-fallback utility; integration wiring follows in dptw phase-2)
 

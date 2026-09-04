@@ -246,7 +246,7 @@ const BUILT_IN_TOOLS = new Set([
   "find_elements", "click_element", "type_text", "select_option", "scroll_page", "wait_for",
   "memory_get", "memory_grep", "memory_list", "memory_set",
   "create_agent", "update_agent", "delete_agent", "get_agent", "list_agents",
-  "disenroll_origin", "create_asset", "update_asset", "patch_asset", "delete_asset", "list_assets",
+  "disenroll_origin", "create_asset", "update_asset", "patch_asset", "append_asset", "delete_asset", "list_assets",
   "get_asset", "get_usage", "get_memory_overview",
   "create_named_agent", "update_named_agent", "delete_named_agent", "get_named_agent",
   "list_named_agents", "set_agent_provider", "list_hooks", "subscribe_hook",

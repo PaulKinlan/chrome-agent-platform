@@ -2863,7 +2863,9 @@ const SOURCE_TOKEN_STYLE = `
 
 /* <artifact-inspector> — source/hex inspection and explicit confined HTML play.
  * Content is property-only and enters the DOM via textContent/srcdoc, never an
- * outer HTML parser. Rendering is bounded while Copy preserves exact content. */
+ * outer HTML parser. Rendering shows the COMPLETE stored content at any size
+ * (a truncated source view read as data loss even when Copy was exact — p45y;
+ * no size-based refusal — r5) while Copy preserves exact content. */
 class ArtifactInspector extends Component {
   constructor() { super(); this._asset = null; this._language = ""; this._frameCleanup = null; this._frameDispose = null; }
   set asset(value) { this._asset = value && typeof value === "object" ? value : null; if (this._rendered) this._render(); }
@@ -2877,8 +2879,6 @@ class ArtifactInspector extends Component {
     const a = this._asset ?? {};
     const type = String(a.type ?? "data");
     const content = String(a.content ?? "");
-    const limit = 65536;
-    const truncated = content.length > limit;
     mountTemplate(this, `
       :host { display:block; min-inline-size:min(76vw,920px); max-inline-size:920px; }
       .bar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-block-end:10px; }
@@ -2896,15 +2896,23 @@ class ArtifactInspector extends Component {
     `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
     this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
     const code = this._root.querySelector("code");
-    const shown = content.slice(0, limit);
     const lang = this.language;
-    // Highlight when a recognised language is known; otherwise the exact source
-    // as one text node. Both paths are markup-free (textContent / createTextNode).
-    if (lang && lang !== "text") code.replaceChildren(highlightSource(shown, lang, document));
-    else code.textContent = shown;
+    // The COMPLETE stored body renders — never a slice and never size-refused
+    // (chrome-agent-platform-p45y: the source view once showed only the first
+    // 64 KiB, and r4's 4 MiB mount refusal could hide an append-grown body;
+    // owner 2026-09-03: no size caps on rendering — whatever the stored or
+    // staged body is, the source view shows all of it, byte for byte).
+    // textContent mounts the multi-MB case as one text node, so there is no
+    // DOM or tokenize cost that needs a size refusal.
+    // Highlighting is the ONLY bounded step, and only because the tokenizer
+    // runs synchronously: a body above the single-call artifact limit renders
+    // as exact plain text instead (tokenizing a multi-MB body would freeze).
+    const MAX_ARTIFACT_HIGHLIGHT_BYTES = 256 * 1024; // the single-call content cap (tool-argument-contract)
+    const rawBytes = new TextEncoder().encode(content).byteLength;
+    if (lang && lang !== "text" && rawBytes <= MAX_ARTIFACT_HIGHLIGHT_BYTES) code.replaceChildren(highlightSource(content, lang, document));
+    else code.textContent = content;
     const note = this._root.querySelector(".note");
-    note.hidden = !truncated;
-    if (truncated) note.textContent = `Inspection is bounded to the first ${limit.toLocaleString()} characters. Copy includes the complete artifact.`;
+    note.hidden = true;
   }
   _wire() {
     this._root.querySelector(".copy")?.addEventListener("click", async () => {

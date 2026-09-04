@@ -256,6 +256,8 @@ import {
 } from "../lib/system-prompts.js";
 import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
+  APPEND_MAX_BYTES,
+  appendAsset,
   assetLibraryCapacity,
   createAsset,
   createOrUpdateAssetKeyed,
@@ -7015,6 +7017,53 @@ const handlers = mergeRouteMaps(
     }
     return res.ok
       ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, added: res.added, removed: res.removed }
+      : res;
+  },
+  // Append text to an artifact's END — the chunked build path for a body
+  // larger than one call can carry (p45y acceptance B: a generated artifact
+  // grows across bounded calls instead of one giant tool argument). Same
+  // approval class as every artifact edit (asset.update): the payload binds
+  // the APPENDED text (bounded per call), and expectVersion binds the base the
+  // model read, so an approval can never land silently on a body that moved
+  // while the owner decided.
+  async "asset.append"({ origin, id, content, expectVersion }, context) {
+    const scope = origin ?? "master";
+    if (typeof id !== "string" || !id) {
+      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+    }
+    if (typeof content !== "string" || content.length === 0) {
+      return { ok: false, error: "append_asset needs the text to append" };
+    }
+    if (new TextEncoder().encode(content).byteLength > APPEND_MAX_BYTES) {
+      return { ok: false, error: `one append carries at most ${APPEND_MAX_BYTES} UTF-8 bytes (append in pieces)` };
+    }
+    const exists = await getAsset(scope, id);
+    if (!exists.ok) {
+      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+    }
+    if (expectVersion !== undefined && expectVersion !== null) {
+      const versions = await listAssetVersions(scope, id);
+      const head = versions.ok ? versions.head : 0;
+      if (expectVersion !== head) return { ok: false, error: "version_conflict", version: head };
+    }
+    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["id", id], ["content", content],
+      ]);
+    } catch { return { ok: false, error: "asset append payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "asset.update", target, payload);
+    if (!gate.ok) return gate;
+    const res = await appendAsset(scope, id, content, {
+      expectVersion, by: ownerPrincipal(context) ? "owner" : "model",
+    });
+    if (!res.ok && res.error === "asset not found") {
+      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+    }
+    return res.ok
+      ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, appendedBytes: res.appendedBytes, totalBytes: res.totalBytes }
       : res;
   },
   // ---- immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01) ----
