@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.57] — 2026-09-04
+- Document the durable-root rule in AGENTS.md
+
 ## [0.3.56] — 2026-09-04
 - Test evidence, Chrome profiles, and big scratch copies now land on disk, not the RAM-backed /tmp
 
