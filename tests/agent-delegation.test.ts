@@ -25,6 +25,7 @@ import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
   appendDelegationAudit,
+  assertDelegationSpendWithinCap,
   canPauseDelegatedRun,
   canStartDelegationIteration,
   chargeChildSpend,
@@ -34,6 +35,7 @@ import {
   delegationCancellationFailure,
   evaluateDelegation,
   normalizeCanDelegateTo,
+  remainingIterations,
   resolveTargetAgent,
 } from "../extension/lib/agent-delegation.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../extension/lib/management-tools.js";
@@ -519,6 +521,30 @@ Deno.test("demo delegation markers reject suffix overmatches but accept the exac
   assertEquals(wantsDemoToolsX2(prompt("@demo-tools-x20")), false);
   assertEquals(wantsDemoToolsX2(prompt("@demo-tools-x2garbage")), false);
   assertEquals(wantsDemoToolsX2(prompt("@demo-tools-x2Continue working on this task")), true);
+});
+
+Deno.test("delegation accounting: thinking steps 0..N represent N+1 consumed iterations (count not 0-based index)", () => {
+  const state = rootState({ maxIterations: 12, step: 0 });
+  // Simulate thinking progress events: steps 0, 1, 2
+  for (const stepIndex of [0, 1, 2]) {
+    state.step = Math.max(state.step, stepIndex + 1);
+  }
+  assertEquals(state.step, 3, "a run that observed thinking steps 0, 1, 2 has consumed exactly 3 iterations");
+  assertEquals(remainingIterations(state), 9, "12 max - 3 consumed = 9 remaining");
+});
+
+Deno.test("delegation accounting: subtree spend is bounded and assertDelegationSpendWithinCap enforces cap", () => {
+  const state = rootState({ maxIterations: 12, step: 3, childSpend: 9 });
+  assertEquals(assertDelegationSpendWithinCap(state), { own: 3, descendants: 9, total: 12, cap: 12 });
+  const overState = rootState({ maxIterations: 12, step: 4, childSpend: 9 });
+  let threw = false;
+  try {
+    assertDelegationSpendWithinCap(overState);
+  } catch (e) {
+    threw = true;
+    assertEquals(e.code, "delegation-budget");
+  }
+  assert(threw, "subtree spend exceeding cap throws delegation-budget error");
 });
 
 Deno.test("delegation SW pins (round 3): pre-admission fencing, dequeue revalidation, terminal child pauses, audited input, surfaced cancel failures", async () => {

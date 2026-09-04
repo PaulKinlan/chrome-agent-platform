@@ -2699,10 +2699,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           }
         } catch { /* redaction failure must never break the run */ }  }
       // Live budget tracking for the delegation guard: each model step emits a
-      // thinking event carrying the loop's step counter; the caller's REMAINING
-      // iterations bound any child run it spawns (agent.delegate reads this).
+      // thinking event carrying the loop's 0-based step counter; the count of
+      // consumed iterations is event.step + 1, so the caller's REMAINING
+      // iterations bound any child run it spawns (CAP-FB-20260902-DELEGATION-STEP-OFF-BY-ONE-01).
       if (delegationState && event?.type === "thinking" && Number.isFinite(event.step)) {
-        delegationState.step = Math.max(delegationState.step, event.step);      }
+        delegationState.step = Math.max(delegationState.step, event.step + 1);
+      }
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
       // Every substantive per-step answer is persisted IN ORDER as an interim
