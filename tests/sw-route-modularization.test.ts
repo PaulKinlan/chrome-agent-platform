@@ -76,6 +76,7 @@ const BASELINE_ROUTES = [
   "named-agent.update",
   "named-agent.set-provider",
   "named-agent.set-mcp-servers",
+  "named-agent.set-tools",
   "named-agent.delete",
   "named-agent.grep",
   "named-agent.avatar",
