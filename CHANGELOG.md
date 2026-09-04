@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.108] — 2026-09-04
+- comment truth: the semantic "stale" branch is a test seam — production callers build the index from the same table as the query, and real table/code skew fails earlier at loadToolVectorTable as "unavailable" (review PASS-WITH-NOTES fix)
+
 ## [0.3.107] — 2026-09-04
 - build 0.3.106: fold 4kl changelog entry over the build's placeholder bump
 

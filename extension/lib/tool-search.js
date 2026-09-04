@@ -227,8 +227,14 @@ export function searchToolIndex(index, queryValue, options = {}) {
     });
   }
   // 4kl: embed the query in the SAME table the index rows were embedded with.
-  // A version skew (index built with an older table) reports "stale" honestly
-  // and the query vector is simply not used — lexical ranking still runs.
+  // In production this version check always matches: both real callers
+  // (tool-catalog-shadow.js and lazy-tool-protocol.js #snapshot) build the
+  // index from the same vectorTable passed to the query, and a genuine
+  // bundled-table-vs-code mismatch is caught earlier by loadToolVectorTable's
+  // version/parse gate, which yields semantic "unavailable" instead. The
+  // "stale" branch is therefore a TEST SEAM (an index built against a
+  // different table version by a caller that mixes them); it reports "stale"
+  // honestly and lexical ranking still runs either way.
   let queryVector = null;
   let semantic = "unavailable";
   if (vectorTable && index?.rows?.some((row) => row.vector)) {
