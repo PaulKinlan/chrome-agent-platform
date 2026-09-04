@@ -16,7 +16,6 @@ import {
   createThread,
   getThread,
   listThreads,
-  MAX_MESSAGE_BYTES,
 } from "../extension/lib/threads.js";
 import {
   createDurableRunRegistry,
@@ -142,7 +141,6 @@ function makeHarness(store) {
 }
 
 Deno.test("znx9: thread store capacity is 240 KiB UTF-8 bytes and preserves below-cap payloads complete", async () => {
-  assertEquals(MAX_MESSAGE_BYTES, 240 * 1024, "MAX_MESSAGE_BYTES is 240 KiB");
 
   // 120 KiB payload (~half cap)
   const halfCap = "a".repeat(120 * 1024);

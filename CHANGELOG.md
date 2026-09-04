@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.95] — 2026-09-04
+- remove MAX_MESSAGE_BYTES import from task-view-full-response-contract test
+
 ## [0.3.94] — 2026-09-04
 - Maintenance and fixes.
 

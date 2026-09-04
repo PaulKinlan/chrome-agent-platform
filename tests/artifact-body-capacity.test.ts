@@ -23,7 +23,6 @@
 // @ts-nocheck
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
-  APPEND_MAX_BYTES,
   appendAsset,
   createAsset,
   getAsset,
@@ -137,17 +136,15 @@ Deno.test("artifact append: repeated appends grow ONE artifact past the 256 KiB 
   assert(versions.ok === true && versions.head >= 3, "each append is an immutable version");
 });
 
-Deno.test("artifact append: a per-call append over the 64 KiB bound is refused without mutating", async () => {
+Deno.test("artifact append: appends carry any size — no per-call cap (owner no-limits directive)", async () => {
   resetStore();
-  const r0 = await createAsset("master", { type: "text", name: "bounded-append", content: "head" });
+  const r0 = await createAsset("master", { type: "text", name: "unbounded-append", content: "head" });
   assert(r0.ok === true);
-  const before = await getAsset("master", r0.asset?.id ?? r0.id);
-  const big = "z".repeat(APPEND_MAX_BYTES + 1);
-  const denied = await appendAsset("master", r0.asset?.id ?? r0.id, big);
-  assert(denied.ok === false, "an over-bound append is refused");
-  assert(String(denied.error).includes(String(APPEND_MAX_BYTES)), `the refusal names the per-call cap: ${denied.error}`);
+  const big = "z".repeat(200 * 1024);
+  const result = await appendAsset("master", r0.asset?.id ?? r0.id, big);
+  assert(result.ok === true, "a large append succeeds without size refusal");
   const after = await getAsset("master", r0.asset?.id ?? r0.id);
-  assertEquals(after.asset.content, "head", "the refused append mutated nothing");
+  assertEquals(after.asset.content.length, "head".length + big.length, "the append landed whole");
 });
 
 Deno.test("artifact body: edits and version restore still work on an append-grown (>cap) body", async () => {
