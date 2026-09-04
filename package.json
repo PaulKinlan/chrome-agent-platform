@@ -1,6 +1,6 @@
 {
   "name": "chrome-agent-platform",
-  "version": "0.3.137",
+  "version": "0.3.139",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.139] — 2026-09-04
+- test(1ik): harden kat-dialog-consolidation with timeouts and cleanup
+
+## [0.3.138] — 2026-09-04
+- Confirmation dialogs and prompt editors follow one consistent, reliable design across the extension
+
 ## [0.3.137] — 2026-09-04
 - Python tasks now prove they execute in the shipped extension
 
