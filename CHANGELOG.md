@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.108] — 2026-09-04
+- Version 0.3.107 — restore correct version ordering after the multi-lane merge
+
 ## [0.3.103] — 2026-09-04
 - Maintenance and fixes.
 
