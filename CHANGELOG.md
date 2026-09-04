@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.143] — 2026-09-05
+- test(kdjk): add real-path tests for destructive delete_named_agent in-route approval in pipelines
+
+## [0.3.142] — 2026-09-04
+- Pipeline workflows now verify owner approval for destructive operations with live confirmation cards
+
 ## [0.3.141] — 2026-09-04
 - Tool descriptions now tell the truth about size: there is no size limit, and adding to a saved artifact keeps your exact text
 
