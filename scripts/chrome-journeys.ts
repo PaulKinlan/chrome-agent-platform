@@ -5312,6 +5312,58 @@ async function main() {
     );
 
     // ─────────────────────────────────────────────────────────────
+    // JOURNEY 3f-pipeline — chrome-agent-platform-qsm4 (slice 2): the
+    // run_pipeline meta-tool, live. @demo-pipeline issues ONE run_pipeline
+    // call chaining memory_set → memory_get with the read's key BOUND to the
+    // write's result ({ $ref: "set", path: "key" }). The journey asserts both
+    // steps render in the plan strip (the per-step pipeline-step events) and
+    // the final text carries the value the pipe actually moved.
+    // ─────────────────────────────────────────────────────────────
+    await driveHubTask("@demo-pipeline");
+    const pipeRunning = [];
+    let pipeFinal = null;
+    let pipeShot = null;
+    {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 30000) {
+        const st = await planState();
+        if (st && st.present && st.state === "running") {
+          pipeRunning.push(st);
+          const done = (st.rows ?? []).filter((r) => r.status === "done").length;
+          const active = (st.rows ?? []).filter((r) => r.status === "active").length;
+          if (!pipeShot && active >= 1 && done >= 1) {
+            pipeShot = await captureShot(cdp, ntpSession);
+            if (pipeShot) await writeEvidence("pipeline-strip-mid-run.png", pipeShot);
+          }
+        }
+        if (st && st.present && st.state === "settled" &&
+          !(st.status ?? []).some((s) => ["queued", "running", "retrying"].includes(s))) { pipeFinal = st; break; }
+        if (st && (st.status ?? []).some((s) => s === "failed" || s === "cancelled")) { pipeFinal = st; break; }
+        await sleep(120);
+      }
+      if (!pipeFinal) pipeFinal = await planState();
+    }
+    if (!pipeShot) { pipeShot = await captureShot(cdp, ntpSession); if (pipeShot) await writeEvidence("pipeline-strip-mid-run.png", pipeShot); }
+    await sleep(400);
+    pipeFinal = await planState();
+    const pipeFinalShot = await captureShot(cdp, ntpSession);
+    if (pipeFinalShot) await writeEvidence("pipeline-strip-settled.png", pipeFinalShot);
+    const pipeThreadText = String(await evalIn(cdp, ntpSession, THREAD_TEXT("#thread-conversation")).catch(() => ""));
+    console.log(`pipeline journey (running samples=${pipeRunning.length}): ${JSON.stringify(pipeFinal)}`);
+    check(
+      "Pipeline: both steps render in the plan strip and settle checked (write then read)",
+      !!pipeFinal && pipeFinal.present === true && pipeFinal.state === "settled" &&
+        Array.isArray(pipeFinal.rows) && pipeFinal.rows.length >= 2 &&
+        pipeFinal.rows.every((r) => r.status === "done") &&
+        pipeFinal.rows.some((r) => /Writing memory/i.test(r.label)) &&
+        pipeFinal.rows.some((r) => /Reading memory/i.test(r.label)),
+    );
+    check(
+      "Pipeline: the final answer carries the value the pipe actually moved (memory_set's key → memory_get's read)",
+      /pipeline demo-pipe: demo-pipeline-colour carried "teal"/.test(pipeThreadText),
+    );
+
+    // ─────────────────────────────────────────────────────────────
     // JOURNEY 3g — CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "it should go
     // through every tab". (1) Twelve fixture tabs; the demo model lists them and
     // reads EVERY one through the real lazy protocol with ONE read_page search —

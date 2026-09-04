@@ -583,7 +583,7 @@ Deno.test("kv.get (real dispatcher): secret namespaces redacted on read-all AND 
   assertEquals(lazyCapture?.eagerBindingChanged, false);
   assertEquals(lazyCapture?.canExecute, false);
   assertEquals(lazyCapture?.canGrant, false);
-  assertEquals(lazyCapture?.protocolTools?.map((row) => row.name), ["search_tools", "list_tools", "execute_tool"]);
+  assertEquals(lazyCapture?.protocolTools?.map((row) => row.name), ["search_tools", "list_tools", "execute_tool", "run_pipeline"]);
   assertEquals(lazyCapture?.selectedDescriptors?.length, 1);
   assertEquals(lazyCapture?.selectedDescriptors?.[0]?.authorizes, false);
   const seedRes = await dispatch({ type: "kv.set", values: {

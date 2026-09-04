@@ -128,6 +128,28 @@ export const TOOL_OUTPUT_SCHEMA_REGISTRY = Object.freeze({
       retryable: { type: "boolean" }, selectionRef: { type: "string" },
     },
   },
+  // chrome-agent-platform-qsm4 (slice 2): run_pipeline's envelope is the
+  // pipeline runner's own outcome — the per-step rows ({id, tool, result}),
+  // the final step's result, or the fail-closed halt (failedStep + error).
+  run_pipeline: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, name: { type: "string" },
+      steps: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" }, tool: { type: "string" },
+            result: JSON_VALUE_OUTPUT,
+          },
+        },
+      },
+      final: JSON_VALUE_OUTPUT,
+      failedStep: { type: "string" }, stepIndex: { type: "number" },
+      completed: { type: "array" }, error: ERROR,
+    },
+  },
   create_asset: ARTIFACT_RESULT,
   update_asset: ARTIFACT_RESULT,
   generate_ui: ARTIFACT_RESULT,

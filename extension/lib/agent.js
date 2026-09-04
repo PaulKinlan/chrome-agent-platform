@@ -1305,6 +1305,11 @@ export function createAgent({
       runGeneration: ownData(dynamic, "runGeneration") ?? ownData(activeRun.identity, "runGeneration") ?? String(activeRun.gen ?? "0"),
       replayMetadata: ownData(activeRun.identity, "replayMetadata") ?? null,
       untrustedToken: typeof untrustedToken === "string" ? untrustedToken : null,
+      // chrome-agent-platform-qsm4 (slice 2): the run_pipeline meta-tool emits
+      // a per-STEP plan-strip event through the run's live progress stream.
+      // The closure reads the mutable progressCb at emit time, so a later
+      // run's setProgress rebind reaches an in-flight pipeline too.
+      onProgress: (event) => progressCb?.(event),
     });
   };
   const lazy = createLazyProviderToolset({
@@ -1346,6 +1351,9 @@ export function createAgent({
       return [...builtin, ...extra];
     },
     contextReader: readRunLazyContext,
+    // run_pipeline steps surface the run's REAL owner card on a capability
+    // pause (chrome-agent-platform-qsm4 rides the 3cb6 approval machinery).
+    onPermissionRequest: typeof onPermissionRequest === "function" ? (denial) => onPermissionRequest(denial) : null,
   });
   // The pipeline-step dispatcher for pipeline-kind workflows: steps resolve by
   // EXACT tool name against the run's live lazy catalog and execute through the

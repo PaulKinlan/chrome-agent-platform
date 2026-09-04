@@ -131,6 +131,12 @@ const PATCH_ARTIFACT_MARKER = "@demo-patch-artifact";
 // (search_tools → execute_tool). The write half of the recall journey
 // (CAP-FB-20260830-MEMORY-RECALL-NEW-THREAD-01).
 const REMEMBER_MARKER = "@demo-remember";
+// @demo-pipeline: ONE run_pipeline meta-tool call chaining memory_set →
+// memory_get, the read's key BOUND to the write's result ({ $ref: "set",
+// path: "key" }) — the slice-2 live wiring of the declarative pipeline core
+// (chrome-agent-platform-qsm4). The journey asserts both steps render in the
+// plan strip and the piped value reaches the final text.
+const PIPELINE_MARKER = "@demo-pipeline";
 // @demo-recall <key>: NO tool call at all — the model answers from what its OWN
 // system prompt carries. A passing recall check therefore proves the
 // runtime-context memory digest reached the wire in a NEW thread, which is
@@ -400,6 +406,7 @@ function latestRunSlice(prompt) {
       promotion: lastUser.includes(PROMOTION_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
       remember: lastUser.includes(REMEMBER_MARKER),
+      pipeline: lastUser.includes(PIPELINE_MARKER),
       recall: lastUser.includes(RECALL_MARKER),
     },
   };
@@ -492,6 +499,65 @@ function recallAlreadyFinal(prompt) {
     m?.role === "assistant" &&
     Array.isArray(m?.content) &&
     m.content.some((p) => p?.type === "text" && RECALL_FINAL_RE.test(p.text ?? "")));
+}
+
+// ── @demo-pipeline helpers (chrome-agent-platform-qsm4, slice 2) ────────────
+const PIPELINE_FINAL_RE = /\[demo model\] pipeline/;
+const PIPELINE_DEMO_KEY = "demo-pipeline-colour";
+const PIPELINE_DEMO_VALUE = "teal";
+
+function wantsPipeline(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.pipeline;
+}
+
+/** ONE run_pipeline call: memory_set → memory_get with the read's key BOUND
+ * to the write's result. Nothing else, so a pass proves the live wiring. */
+function pipelineDemoCall(prompt) {
+  const toolParts = boardToolParts(prompt);
+  const runs = toolParts.filter((p) => p?.toolName === "run_pipeline").length;
+  if (runs >= 1) return null; // the pipeline ran (or failed) — final text next
+  return {
+    id: "run_demo_pipeline",
+    name: "run_pipeline",
+    input: {
+      name: "demo-pipe",
+      steps: [
+        { id: "set", tool: "memory_set", args: { key: PIPELINE_DEMO_KEY, value: PIPELINE_DEMO_VALUE } },
+        { id: "get", tool: "memory_get", args: { key: { $ref: "set", path: "key" } } },
+      ],
+    },
+  };
+}
+
+/** Honest about the PIPELINE: the run_pipeline envelope decides. The piped
+ * value (the read's result, whose key came from the write's result) is named
+ * so the journey can assert the data actually flowed. */
+function pipelineFinalText(prompt) {
+  const parts = runSlice(prompt)
+    .filter((m) => m?.role === "tool")
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+    .filter((p) => p?.toolName === "run_pipeline");
+  const last = parts[parts.length - 1];
+  let raw = last?.output?.value ?? last?.output ?? null;
+  // The model-facing tool result arrives as the JSON STRING (agent-do's
+  // modelContent), the same shape @demo-remember handles — parse it.
+  if (typeof raw === "string") {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  if (!raw || typeof raw !== "object" || raw.ok !== true) {
+    const detail = raw && typeof raw === "object" && typeof raw.error === "string" ? raw.error : "no pipeline result";
+    return `[demo model] pipeline failed: ${String(detail).slice(0, 160)}`;
+  }
+  const final = raw.final;
+  const value = final && typeof final === "object" ? final.value : undefined;
+  return `[demo model] pipeline demo-pipe: ${PIPELINE_DEMO_KEY} carried "${String(value)}" through ${Array.isArray(raw.steps) ? raw.steps.length : 0} steps.`;
+}
+
+function pipelineAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" &&
+    Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && PIPELINE_FINAL_RE.test(p.text ?? "")));
 }
 
 // ── @demo-promotion helpers (chrome-agent-platform-ve67) ────────────────────
@@ -1987,6 +2053,8 @@ export function createDemoModel() {
         ? obeyPageCall(options.prompt)
         : wantsRemember(options.prompt) && !rememberAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { remember: true })
+        : wantsPipeline(options.prompt) && !pipelineAlreadyFinal(options.prompt)
+        ? pipelineDemoCall(options.prompt)
         : wantsAgentDelegate(options.prompt) && !agentDelegateAlreadyFinal(options.prompt)
         ? lazyDemoCall(options.prompt, { delegateAgent: true })
         : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
@@ -2049,6 +2117,18 @@ export function createDemoModel() {
           .find((p2) => p2?.type === "text" && REMEMBER_FINAL_RE.test(p2.text ?? ""));
         return Promise.resolve({
           content: [{ type: "text", text: prior?.text ?? rememberFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
+      if (wantsPipeline(options.prompt)) {
+        const prior = runSlice(options.prompt)
+          .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+          .flatMap((m) => m.content)
+          .find((p2) => p2?.type === "text" && PIPELINE_FINAL_RE.test(p2.text ?? ""));
+        return Promise.resolve({
+          content: [{ type: "text", text: prior?.text ?? pipelineFinalText(options.prompt) }],
           finishReason: "stop",
           usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
           warnings: [],
@@ -2231,6 +2311,8 @@ export function createDemoModel() {
             ? obeyPageCall(options.prompt)
             : wantsRemember(options.prompt) && !rememberAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { remember: true })
+            : wantsPipeline(options.prompt) && !pipelineAlreadyFinal(options.prompt)
+            ? pipelineDemoCall(options.prompt)
             : wantsADel && !agentDelegateAlreadyFinal(options.prompt)
             ? lazyDemoCall(options.prompt, { delegateAgent: true })
             : wantsEnumSlip(options.prompt) && !enumSlipAlreadyFinal(options.prompt)
@@ -2348,6 +2430,15 @@ export function createDemoModel() {
               .find((p2) => p2?.type === "text" && re.test(p2.text ?? ""));
             response = prior?.text ??
               (wantsRemember(options.prompt) ? rememberFinalText(options.prompt) : recallFinalText(options.prompt));
+          }
+          else if (wantsPipeline(options.prompt)) {
+            // qsm4 slice 2: the run_pipeline envelope decides the text — the
+            // piped value is named so a journey can assert the data flowed.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && PIPELINE_FINAL_RE.test(p2.text ?? ""));
+            response = prior?.text ?? pipelineFinalText(options.prompt);
           }
           else if (wantsPromotion(options.prompt)) {
             // The promotion report (chrome-agent-platform-ve67): what THIS

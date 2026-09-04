@@ -32,6 +32,8 @@ import {
   buildLazyProviderCapture,
   LAZY_PROTOCOL_TOOL_WIRE,
 } from "./lazy-tool-wire.js";
+import { runPipeline } from "./tool-pipeline.js";
+import { createWorkflowPipelineDispatcher } from "./workflows.js";
 import {
   fenceUntrustedText,
   fenceUntrustedValue,
@@ -1380,6 +1382,7 @@ export function executableBundledToolRecords(rows, context = {}) {
  *   selectionAuthority?: any,
  *   acceptsImageToolResults?: boolean | (() => boolean),
  *   vectorTableLoader?: null | (() => Promise<any>),
+ *   onPermissionRequest?: null | ((denial: any) => Promise<string> | string),
  * }} [options]
  */
 export function createLazyProviderToolset({
@@ -1394,6 +1397,13 @@ export function createLazyProviderToolset({
   // provider override can change the answer mid-session.
   acceptsImageToolResults = false,
   vectorTableLoader = null,
+  // The run's owner-approval seam (agent.js's onPermissionRequest). A
+  // run_pipeline STEP whose dispatch pauses on a capability surfaces the real
+  // owner card through it; Allow re-runs the step through the runtime-only
+  // resume path (chrome-agent-platform-3cb6). Absent here, a pause fails the
+  // step closed exactly as a direct call's pause would with no approval
+  // surface.
+  onPermissionRequest = null,
 } = {}) {
   const protocol = new LazyToolProtocol({ readSources, selectionAuthority, vectorTableLoader });
   if (typeof contextReader !== "function") {
@@ -1479,6 +1489,69 @@ export function createLazyProviderToolset({
             })),
           ],
         };
+      },
+    }),
+    // run_pipeline (chrome-agent-platform-qsm4, slice 2): the declarative
+    // pipeline core (lib/tool-pipeline.js) wired LIVE. Each step dispatches
+    // through THIS protocol's public search → execute seam — the exact-name
+    // catalog entry's selectionRef, the ordinary validation/authority/
+    // fencing/ledger path — via the same dispatcher adapter the workflow
+    // runner uses (lib/workflows.js createWorkflowPipelineDispatcher), so a
+    // step's owner-approval pause surfaces the run's real card (the 3cb6
+    // machinery: requestApproval → resumeApprovedCall) and a deny/failure
+    // halts the pipeline fail-closed. Per-step progress rides the run
+    // context's onProgress for the plan strip.
+    run_pipeline: tool({
+      description: LAZY_PROTOCOL_TOOL_WIRE[3].description,
+      inputSchema: z.object({
+        name: z.string().max(80).optional(),
+        steps: z.array(z.object({
+          id: z.string(),
+          tool: z.string(),
+          args: z.record(z.unknown()).optional(),
+        }).strict()).min(1),
+      }).strict(),
+      outputSchema: jsonSchema(LAZY_PROTOCOL_TOOL_WIRE[3].outputSchema),
+      execute: async (request) => {
+        const context = await readContext();
+        if (!context) return fixedError("lazy-run-context-unavailable");
+        const dispatchStep = createWorkflowPipelineDispatcher({
+          search: (req, ctx) => protocol.search(req, ctx),
+          execute: (req, ctx) => protocol.execute(req, ctx),
+          settle: (ref) => protocol.settlePausedCall(ref),
+          requestApproval: typeof onPermissionRequest === "function" ? onPermissionRequest : null,
+          // The paused record lives under THIS run's fence; the context read
+          // above is that same run's (the fence fields are run-stable).
+          resume: (ref) => protocol.resumeApprovedCall(ref, context),
+          // Each step re-reads the LIVE context (a long pipeline tracks the
+          // run's current scope exactly as a model-issued call would).
+          context: readContext,
+        });
+        const emit = ownData(context, "onProgress");
+        const pipelineName = typeof ownData(request, "name") === "string" ? ownData(request, "name") : "";
+        // runPipeline awaits each step before dispatching the next, so the
+        // counter IS the current step's index.
+        let stepIndex = 0;
+        return await runPipeline(
+          { name: pipelineName, steps: ownData(request, "steps") },
+          {
+            dispatchTool: (name, args) => dispatchStep(name, args, stepIndex++),
+            onStep: typeof emit === "function"
+              ? (evt) => {
+                try {
+                  emit({
+                    type: "pipeline-step",
+                    status: evt.status === "running" ? "running" : evt.status === "ok" ? "ok" : "failed",
+                    tool: evt.tool,
+                    id: evt.id,
+                    index: evt.index,
+                    pipeline: pipelineName,
+                  });
+                } catch { /* progress is telemetry — never break the run */ }
+              }
+              : undefined,
+          },
+        );
       },
     }),
   });

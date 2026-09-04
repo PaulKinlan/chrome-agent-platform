@@ -336,6 +336,14 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
     if (ev.type === "disconnect") { terminal.onPortError(); return; }
     if (ev.runId !== executionId) return;
     switch (ev.type) {
+      case "pipeline-step": {
+        // A run_pipeline step (chrome-agent-platform-qsm4): a plan-strip row
+        // per step, never a tool card — the pipeline wrapper is plumbing.
+        const stepLabel = planStepLabel(String(ev.tool ?? ""), null);
+        if (ev.status === "running") c.planEvent?.({ type: "step-start", label: stepLabel });
+        else c.planEvent?.({ type: "step-end", status: ev.status === "failed" ? "error" : "done", label: stepLabel });
+        break;
+      }
       case "tool-call": {
         onStatus?.({ state: "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
         // A tool call is a plan step — append it to the strip (a protocol call
@@ -1116,7 +1124,10 @@ export function effectiveToolCall(toolName, args, result) {
  * `search_tools` / `list_tools` are how the model finds a tool, not work the
  * owner asked for. They stay in the durable run log (the debugger surface) and
  * are never rendered as transcript cards. */
-export const PROTOCOL_TOOLS = new Set(["search_tools", "list_tools"]);
+// run_pipeline is composition plumbing too: the WRAPPER renders no card and
+// no plan row — its per-step pipeline-step events carry the visibility
+// (chrome-agent-platform-qsm4, slice 2).
+export const PROTOCOL_TOOLS = new Set(["search_tools", "list_tools", "run_pipeline"]);
 export function isProtocolTool(name) { return PROTOCOL_TOOLS.has(String(name ?? "")); }
 
 /** The selected tool's OWN result from a lazy `execute_tool` envelope
@@ -2176,6 +2187,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
           state: attempt > 1 ? "retrying" : "running",
           activity: budget ? withBudget(lastActivity) : (step != null ? `Thinking · step ${step}${total}` : "Thinking…"),
         });
+        break;
+      }
+      case "pipeline-step": {
+        // A run_pipeline step (chrome-agent-platform-qsm4): a plan-strip row
+        // per step, never a tool card — the pipeline wrapper is plumbing.
+        const stepLabel = planStepLabel(String(ev.tool ?? ""), null);
+        if (ev.status === "running") c.planEvent?.({ type: "step-start", label: stepLabel });
+        else c.planEvent?.({ type: "step-end", status: ev.status === "failed" ? "error" : "done", label: stepLabel });
         break;
       }
       case "tool-call": {

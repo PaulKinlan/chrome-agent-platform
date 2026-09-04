@@ -210,7 +210,8 @@ every agent run while retaining the public Settings-only shadow capture:
   keys, and array items). The same contract drives lazy sanitization and the
   artifact/script store ceilings, so discovery and enforcement cannot drift;
 - every catalog row also carries a bounded `outputSchemaSummary`. Exact output
-  schemas currently cover `search_tools`, `list_tools`, `execute_tool`, the
+  schemas currently cover `search_tools`, `list_tools`, `execute_tool`,
+  `run_pipeline`, the
   create/update/delete/list/get/generate-UI artifact family, and Gemini `google_search` /
   Anthropic `web_search`; other tools use the generic JSON-value contract until
   the follow-up return-shape audit extends the tool-id registry. `execute_tool`
