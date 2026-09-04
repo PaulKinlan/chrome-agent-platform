@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- cap-beads-fw8 (UI flash fix — encapsulated panel renderers, eliminated duplicate boot renders)
+
 ## [0.3.128] — 2026-09-04
 - Maintenance and fixes.
 
