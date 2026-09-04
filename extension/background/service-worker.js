@@ -72,6 +72,14 @@ import {
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
+import {
+  collectExportData,
+  buildArchive,
+  parseArchive,
+  importArchive,
+  createOpfsAdapter,
+  createChromeAlarmsAdapter,
+} from "../lib/data-archive.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
@@ -6246,6 +6254,70 @@ const handlers = mergeRouteMaps(
     }
     const targets = await enumerateStorageTargets();
     return { ok: true, targets };
+  },
+
+  /** Owner export of ALL agent data (chrome-agent-platform-ykb). OWNER
+   * GESTURE ONLY — this route is never registered in any model-callable tool
+   * catalog: a full memory export is a high-value exfiltration target. The
+   * bundle is inspectable JSON; provider API keys and MCP auth headers are
+   * NEVER serialized (shapes only). */
+  async "owner.export.all"(_m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent(
+        "blocked-action",
+        `data export denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "export is restricted to the Settings surface" };
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      const snapshot = await collectExportData({
+        kvGet,
+        opfs: createOpfsAdapter(root),
+        alarms: createChromeAlarmsAdapter(),
+      });
+      const bundle = buildArchive(snapshot, {
+        extensionVersion: String(chrome.runtime.getManifest()?.version ?? "unknown"),
+      });
+      return { ok: true, bundle, manifest: JSON.parse(bundle).manifest };
+    } catch (err) {
+      return { ok: false, code: err?.code ?? "export_failed", error: `export failed: ${err?.message || err}` };
+    }
+  },
+
+  /** Owner import (restore) — transactional: validates the bundle and the
+   * target BEFORE touching anything; a non-empty profile refuses without the
+   * explicit overwrite choice; every restored byte is verified by re-read. */
+  async "owner.import.all"({ bundle, overwrite } = {}, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent(
+        "blocked-action",
+        `data import denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "import is restricted to the Settings surface" };
+    }
+    if (typeof bundle !== "string" || !bundle.length) {
+      return { ok: false, code: "archive-bad-shape", error: "no bundle supplied" };
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      const report = await importArchive(bundle, {
+        kvGet,
+        kvSet,
+        kvRemove,
+        opfs: createOpfsAdapter(root),
+        alarms: createChromeAlarmsAdapter(),
+        overwrite: overwrite === true,
+      });
+      // The restored profile changes provider config, agents and durable runs
+      // under this worker's feet — drop cached state the way factory reset
+      // does, so the next run reads the restored stores, not a stale cache.
+      durableRuns.forgetCachedState?.();
+      invalidateAgent();
+      return { ok: true, report };
+    } catch (err) {
+      return { ok: false, code: err?.code ?? "import_failed", error: `import failed: ${err?.message || err}` };
+    }
   },
 
   /** The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the

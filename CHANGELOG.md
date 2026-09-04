@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.56] — 2026-09-04
+- Backup and restore for all agent data: one-click export of agents, memories, threads, artifacts and settings as a single inspectable file — and import to restore them, without ever putting provider keys in the file
+
 ## [0.3.55] — 2026-09-03
 - Running a single test file through the npm shortcut works for every file, including the one that turns away the slow full sweep
 

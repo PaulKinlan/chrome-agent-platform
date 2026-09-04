@@ -2859,6 +2859,10 @@ async function renderData() {
 // ── Factory reset / Delete all data (CAP-FB-20260823-FACTORY-RESET-01) ──
 const factoryResetBtn = $("#factory-reset-btn");
 const factoryResetStatus = $("#factory-reset-status");
+const exportAllBtn = $("#export-all-btn");
+const importAllBtn = $("#import-all-btn");
+const importAllFile = $("#import-all-file");
+const backupStatus = $("#backup-status");
 
 // ── Agent data maintenance (owner-reported leftover fix: agents deleted before
 // teardown existed left OPFS dirs + journals behind; journals needed a purge
@@ -2943,6 +2947,76 @@ sweepOrphansBtn?.addEventListener("click", async () => {
     if (maintenanceStatus) maintenanceStatus.textContent = `Sweep failed: ${e?.message ?? e}`;
   } finally {
     sweepOrphansBtn.disabled = false;
+  }
+});
+
+function setBackupStatus(text) {
+  if (!backupStatus) return;
+  backupStatus.hidden = false;
+  backupStatus.textContent = text;
+}
+
+/** One-click owner export: ask the service worker for the full bundle, then
+ * download it as a single inspectable .json file. The SW route is
+ * owner-gated; the bundle never contains provider keys or MCP headers. */
+exportAllBtn?.addEventListener("click", async () => {
+  setBackupStatus("Collecting your agents, memories, artifacts and settings…");
+  exportAllBtn.disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "owner.export.all" });
+    if (!res?.ok || typeof res.bundle !== "string") {
+      throw new Error(res?.error || "Export failed");
+    }
+    const when = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const blob = new Blob([res.bundle], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cap-export-${when}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    const m = res.manifest || {};
+    setBackupStatus(`Exported ${m.opfsFiles ?? 0} stored files, ${m.kvKeys ?? 0} settings keys and ${m.alarms ?? 0} schedules. Keep the file safe — it contains your agents' memories.`);
+  } catch (err) {
+    setBackupStatus(`Export failed: ${err?.message || err}`);
+  } finally {
+    exportAllBtn.disabled = false;
+  }
+});
+
+/** Owner import: pick a bundle, confirm the replacement explicitly, then let
+ * the service worker restore it transactionally (validate first, verify every
+ * restored byte after). */
+importAllBtn?.addEventListener("click", () => importAllFile?.click());
+importAllFile?.addEventListener("change", async () => {
+  const file = importAllFile?.files?.[0];
+  if (!file) return;
+  importAllFile.value = "";
+  try {
+    const bundle = await file.text();
+    const confirmed = await confirmActionDialog({
+      title: "Import this backup?",
+      body:
+        "Importing replaces your CURRENT profile with the backup's agents, memories, artifacts and settings. Data the backup does not contain will be removed.\n\nProvider API keys and MCP auth headers are never in the file — you will re-enter them in Settings afterwards.\n\nContinue?",
+      confirmLabel: "Replace my data with this backup",
+      destructive: true,
+    });
+    if (!confirmed) {
+      setBackupStatus("Import cancelled — nothing was changed.");
+      return;
+    }
+    setBackupStatus("Validating and restoring the backup…");
+    importAllBtn.disabled = true;
+    const res = await chrome.runtime.sendMessage({ type: "owner.import.all", bundle, overwrite: true });
+    if (!res?.ok) throw new Error(res?.error || "Import failed");
+    const r = res.report?.restored || {};
+    setBackupStatus(`Restored ${r.opfsFiles ?? 0} files, ${r.kvKeys ?? 0} settings keys and ${r.alarms ?? 0} schedules. Re-enter your provider API keys in the Providers section.`);
+  } catch (err) {
+    setBackupStatus(`Import failed: ${err?.message || err}`);
+  } finally {
+    importAllBtn.disabled = false;
   }
 });
 

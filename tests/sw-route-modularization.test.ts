@@ -97,6 +97,11 @@ const BASELINE_ROUTES = [
   "agent.directory",
   "system.factoryReset",
   "system.factoryResetEnumerate",
+  // Owner export/import of all agent data (chrome-agent-platform-ykb):
+  // owner-gesture only, never model-callable — a full memory export is a
+  // high-value exfiltration target.
+  "owner.export.all",
+  "owner.import.all",
   // The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the
   // provider hosts the code really resolves + the run-log policy in force.
   "privacy.statement",
