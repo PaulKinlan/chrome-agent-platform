@@ -852,9 +852,9 @@ function buildProviderCard(p, cfg) {
         saveFlash(`${p.name} was not updated — ${outcome.saved.reason || outcome.saved.error || "check the provider settings"}.`);
         card._saveFailed = true;
       } else if (access.status === "pending") {
-        saveFlash(`Saved ${p.name}. Chrome's network-access decision is still pending; provider requests remain blocked until access is granted.`);
+        saveFlash(`Saved ${p.name}. Network access verification is pending; provider requests remain blocked until access is verified.`);
       } else if (access.status === "denied") {
-        saveFlash(`Saved ${p.name}, but network access was not granted — provider requests remain blocked. Re-enable it when Chrome asks.`);
+        saveFlash(`Saved ${p.name}, but network access was not verified — host access was not granted at install.`);
       } else {
         saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
       }

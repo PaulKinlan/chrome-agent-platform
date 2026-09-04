@@ -81,27 +81,12 @@ export async function hasProviderHostAccess(cfg) {
 }
 
 /**
- * Request the provider's host permission. MUST be called from a real user
- * gesture (the Settings Set/Update button, the Test connection button). Returns
- * { granted, pattern, error } — never swallows the result.
+ * Verify the provider's host permission install-grant.
+ * Under Manifest V3 with <all_urls> install-granted, this verifies the grant
+ * via chrome.permissions.contains({ origins: [pattern] }) with a bounded timeout.
+ * Returns { granted, pattern, error, generation } — never swallows the result.
  */
-// ── permission-request coordination THROUGH THE SW (the final review's HIGH)
-// ────────────────────────────────────────────────────────────────────────────
-// The in-flight registry lives in the SERVICE WORKER (lib/perm-lease.js via
-// the perm-lease.* routes) so every extension page — Settings + each
-// conversation surface — shares ONE slot per origin pattern: two pages can
-// never launch duplicate prompts. The PAGE still performs
-// chrome.permissions.request during ITS OWN user gesture (gesture context
-// cannot cross into the SW), then settles the lease; a page that cannot get
-// the lease waits for the settle broadcast (bounded) instead of prompting.
-const LEASE_TIMEOUT_MS = 8_000;
-
-function _swSend(message) {
-  if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-    return Promise.resolve(chrome.runtime.sendMessage(message)).catch((e) => ({ __sendError: String(e?.message ?? e) }));
-  }
-  return Promise.resolve({ __sendError: "no runtime" });
-}
+const VERIFY_TIMEOUT_MS = 8_000;
 
 export async function requestProviderHostAccess(cfg, { onIssued = null } = {}) {
   const pattern = providerOriginPattern(cfg);
@@ -109,92 +94,44 @@ export async function requestProviderHostAccess(cfg, { onIssued = null } = {}) {
   if (typeof chrome === "undefined" || !chrome.permissions?.contains) {
     return { granted: true, pattern, error: null, generation: null };
   }
-  // 1. Acquire the single in-flight slot from the SW authority.
-  const acquired = await _swSend({ type: "perm-lease.acquire", pattern });
-  if (!acquired || acquired.__sendError) {
-    // No SW coordination available (unit tests / non-extension): bounded
-    // direct request, no dedupe possible; no generation exists to bind.
-    const r = await _directBoundedRequest(pattern);
-    return { ...r, generation: null };
+  if (onIssued) {
+    try { onIssued({ pattern, generation: "install-verified", ours: true }); } catch { /* ignore */ }
   }
-  if (!acquired.lease) {
-    // Someone else's request is in flight. If it already timed out, deny
-    // honestly NOW (never a duplicate prompt); otherwise wait (bounded) for
-    // the settle broadcast, then report the RECONCILED outcome. The consumer
-    // is bound to the OBSERVED in-flight generation (exact match in the
-    // waiter), never a guess.
-    if (onIssued) { try { onIssued({ pattern, generation: acquired.generation, ours: false }); } catch { /* consumer error */ } }
-    if (acquired.timedOut) {
-      return { granted: false, pattern, error: "permission request timed out (another surface's request is still pending)", generation: acquired.generation };
-    }
-    const r = await _awaitSettle(pattern, acquired.generation);
-    return { ...r, generation: acquired.generation };
-  }
-  // 2. We hold the lease: OUR generation was issued atomically WITH the
-  // acquisition — the onIssued callback (this caller's own subscription) is
-  // invoked before any await can interleave, so a consumer registered this
-  // way can never observe a stale or newer settlement.
-  if (onIssued) { try { onIssued({ pattern, generation: acquired.generation, ours: true }); } catch { /* consumer error */ } }
-  try {
-    // requestPermissionBundleFromGesture performs no asynchronous work before
-    // chrome.permissions.request. Callers must invoke this directly from the
-    // owner click (never after provider.get/contains awaits). The provider's
-    // perm-lease settle is preserved (generation/token) around the orchestrated
-    // request.
-    const granted = await requestPermissionBundleFromGesture({ origins: [pattern] });
-    await _swSend({ type: "perm-lease.settle", pattern, generation: acquired.generation, token: acquired.token, granted: Boolean(granted) });
-    return { granted: Boolean(granted), pattern, error: granted ? null : "permission request denied", generation: acquired.generation };
-  } catch (e) {
-    await _swSend({ type: "perm-lease.settle", pattern, generation: acquired.generation, token: acquired.token, granted: false, error: String(e?.message ?? e) });
-    return { granted: false, pattern, error: safeProviderError(String(e?.message ?? e)), generation: acquired.generation };
-  }
-}
-
-/** Wait (bounded) for another surface's in-flight request to settle, then
- *  report the reconciled outcome from the SW state. */
-async function _awaitSettle(pattern, generation) {
-  return await new Promise((resolve) => {
-    let done = false;
-    let timer = null;
-    const finish = async () => {
-      if (done) return;
-      done = true;
-      if (timer) clearTimeout(timer);
-      if (typeof chrome !== "undefined") chrome.runtime.onMessage.removeListener(onSettled);
-      const state = await _swSend({ type: "perm-lease.state", pattern });
-      resolve({
-        granted: state?.lastOutcome === "granted",
-        pattern,
-        error: state?.inFlight
-          ? "permission request timed out (another surface's request was pending)"
-          : (state?.lastOutcome === "granted" ? null : "permission request denied on another surface"),
-      });
-    };
-    const onSettled = (msg) => {
-      // EXACT-match consumer (the acceptance review): only the broadcast for
-      // the EXACT expected pattern + generation resolves this wait — a
-      // missing, older, OR newer generation is dropped.
-      if (msg?.type === "provider-host-perm:settled" && msg.pattern === pattern &&
-          msg.generation === generation) {
-        finish();
-      }
-    };
-    try { chrome.runtime.onMessage.addListener(onSettled); } catch { /* non-extension */ }
-    timer = setTimeout(finish, LEASE_TIMEOUT_MS + 500);
-  });
-}
-
-/** Fallback (no SW): a bounded install-grant VERIFICATION (no runtime request
- * exists — host access is granted at install via <all_urls>). */
-async function _directBoundedRequest(pattern) {
-  // The timeout timer is CLEARED once the race settles. Left pending it kept
-  // the event loop alive for the full LEASE_TIMEOUT_MS after every fast grant
-  // (a leaked timer per verification; ~8.5 s per test in the unit suite, vj4s).
   let timer = null;
   try {
     const outcome = await Promise.race([
       chrome.permissions.contains({ origins: [pattern] }),
-      new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), LEASE_TIMEOUT_MS); }),
+      new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), VERIFY_TIMEOUT_MS); }),
+    ]);
+    if (outcome === "timeout") {
+      return { granted: false, pattern, error: "grant verification timed out", generation: null };
+    }
+    return {
+      granted: outcome === true,
+      pattern,
+      error: outcome === true ? null : "network access to provider origin not verified — host access was not granted at install",
+      generation: "install-verified",
+    };
+  } catch (e) {
+    return {
+      granted: false,
+      pattern,
+      error: safeProviderError(String(e?.message ?? e)),
+      generation: null,
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Fallback / direct: a bounded install-grant VERIFICATION (no runtime request
+ * exists — host access is granted at install via <all_urls>). */
+async function _directBoundedRequest(pattern) {
+  let timer = null;
+  try {
+    const outcome = await Promise.race([
+      chrome.permissions.contains({ origins: [pattern] }),
+      new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), VERIFY_TIMEOUT_MS); }),
     ]);
     if (outcome === "timeout") return { granted: false, pattern, error: "grant verification timed out" };
     return { granted: outcome === true, pattern, error: outcome === true ? null : "install grant not verified" };
