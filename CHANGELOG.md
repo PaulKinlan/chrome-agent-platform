@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.57] — 2026-09-04
+- Maintenance and fixes.
+
 ## [0.3.56] — 2026-09-04
 - register kat-browser-grant-persistence in the harness registry
 

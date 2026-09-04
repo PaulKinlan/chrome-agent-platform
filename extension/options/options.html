@@ -393,6 +393,20 @@
           <p id="maintenance-status" role="status" aria-live="polite" class="muted" style="margin: 10px 0 0; font-size: 13px;"></p>
         </div>
 
+        <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
+          <h3 style="margin: 0 0 6px;">Backup &amp; restore</h3>
+          <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
+            Export everything you have built — agents, memories, threads, artifacts, schedules and settings — as one inspectable file. Provider API keys and MCP auth headers are never included; the file only records which providers were configured.
+          </p>
+          <button type="button" class="btn" id="export-all-btn">Export all data…</button>
+          <button type="button" class="btn" id="import-all-btn">Import from file…</button>
+          <label style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">
+            Import a backup file
+            <input type="file" id="import-all-file" accept=".json,application/json" hidden>
+          </label>
+          <p id="backup-status" class="hint" role="status" aria-live="polite" hidden></p>
+        </div>
+
         <div class="danger-zone" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
           <h3 style="color: var(--danger,#b3261e); margin: 0 0 6px;">Factory reset</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
