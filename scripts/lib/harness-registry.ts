@@ -68,7 +68,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "perf-seeded-scale.ts": { class: "named", npm: "test:perf:seeded", reason: "takes a seed-count argument (120) and a seeded profile; SEEDED-PROFILE-GATES-01 owns wiring it as a gate" },
   "read-page-host-grant-acceptance.ts": { class: "named", npm: "test:read-page-host-grant", reason: "11/11 at the re-inventory (14 s); run on demand — promotion is the owner's call" },
   "sidebar-parity.ts": { class: "named", npm: "test:sidebar", reason: "18/2 at the re-inventory (two sidebar parity checks red); promote once green" },
-  "ui-integration.ts": { class: "named", npm: "test:ui", reason: "25/1 at the re-inventory and then a crash: #run-log is no longer on the hub (step 5 dereferences null) and 'ViewTransition.finished awaited' fails; promote once green" },
+  "ui-integration.ts": { class: "named", npm: "test:ui", reason: "56/0 after the 5ht repair (hub moved #run-log → action-ledger; theme switching removed; durability contract now state-conditional; 6-min watchdog caps any hang; falsification: a rail-width break produces 4 failing checks); ~90s; run on demand — promotion is the owner's call" },
   "webmcp-acceptance.ts": { class: "named", npm: "test:webmcp", reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof" },
   "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
 
