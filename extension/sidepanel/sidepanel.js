@@ -32,7 +32,7 @@ import {
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
-import { deleteAgentDialog } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
+import { deleteAgentDialog, renderAgentPermissionsPanel } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 import { capLog } from "../lib/cap-log.js";
 import { actionableRunsForSurface } from "../lib/run-scope.js";
 
@@ -510,6 +510,20 @@ async function openAgentDetail(agent) {
   const entries = await loadHistory(opened.kind, opened.id);
   if (openAgent !== opened) return; // the selection changed (or closed) mid-load
   renderHistory(entries);
+  // Per-agent permission management in the agent view
+  // (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01, increment 2): the owner
+  // sees and manages the permission posture RIGHT HERE, not only in Settings.
+  // For a Site Agent that is its own host access (grant/revoke the origin);
+  // for a named/background agent it is the extension-wide posture, honestly
+  // labelled. Fenced by isCurrent so a stale read never paints the wrong agent.
+  const permSlot = document.getElementById("agent-permissions-slot");
+  if (permSlot) {
+    renderAgentPermissionsPanel(permSlot, {
+      kind: opened.kind,
+      id: opened.id,
+      isCurrent: () => openAgent === opened,
+    });
+  }
   const liveRun = actionableRunsForSurface(latestDurableRuns, { agentId: opened.id, agentKind: opened.kind })
     .sort((a, b) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))[0];
   if (liveRun) projectConversationRunStatus(historyEl, { state: "running", activity: "Run in progress", executionId: liveRun.executionId });

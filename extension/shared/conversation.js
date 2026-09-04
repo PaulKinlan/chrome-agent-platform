@@ -1857,9 +1857,88 @@ export async function runConversationTurn(container, { text, attachments = [], h
     else appendBubble(c, "error", err.error);
     return err;
   }
-  const appendProviderGrant = (category) => {
-    if (category !== "host-permission") return;
-    appendBubble(c, "system", "Provider access is missing or was revoked. Open Settings → Providers to approve the exact origin, then run the task again.");
+  // Post-error provider host-access remediation
+  // (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01, increment 2): a run that
+  // ENDS on a host-permission failure (the provider origin revoked mid-run or
+  // withheld at run time) used to append a "Open Settings → Providers" bubble
+  // — the Settings-redirect dead-end, one layer later than the preflight case
+  // increment 1 fixed. Now the terminal renders ONE in-context remediation
+  // card naming the exact provider origin; Allow requests exactly that
+  // `<origin>/*` from the owner's genuine click and the SAME turn runs again
+  // exactly once (deterministic continuation). Not now / expired end honestly
+  // with nothing granted; a Chrome-refused request leaves the card actionable.
+  // At most ONE remediation retry per turn — a second permission terminal is
+  // an honest plain line, never a card loop.
+  let remediationRetried = false;
+  let remediationActive = false;
+  const remediateProviderHostAccess = async (category) => {
+    if (category !== "host-permission") return null;
+    // The owner already took the in-context path once this turn and the run
+    // failed on permissions AGAIN: no card loop — one honest line, and this
+    // time Settings is named (the genuine re-grant surface after a failed
+    // attempt cycle).
+    if (remediationRetried || remediationActive) {
+      appendBubble(c, "system", "Provider access is still not granted, so the run ended. You can approve the exact origin in Settings → Providers, then run the task again.");
+      return null;
+    }
+    let summary = null;
+    try { summary = await send("provider.permission-summary"); } catch { summary = null; }
+    if (!summary || summary.local || !summary.origin) {
+      // Nothing a card can grant (local/demo provider, or a configuration
+      // problem): Settings remains the right surface, and the text says so.
+      appendBubble(c, "system", "Provider access is missing or was revoked. Open Settings → Providers to approve the exact origin, then run the task again.");
+      return null;
+    }
+    if (stale()) return null;
+    remediationActive = true;
+    try {
+      const exactOrigin = String(summary.origin).replace(/\/\*+$/, "");
+      let host = exactOrigin;
+      try { host = new URL(exactOrigin).host; } catch { /* the raw origin is its own label */ }
+      const result = {
+        waitingForPermission: true,
+        permissionRequirement: {
+          reason: `connect to ${host} (the provider that runs this task) so this run can continue`,
+          hostOrigins: [exactOrigin],
+        },
+      };
+      const requirement = normalizePermissionRequirement(result);
+      if (!requirement) {
+        appendBubble(c, "system", `Network access to ${host} could not be requested from here. Open Settings → Providers to approve the exact origin, then run the task again.`);
+        return null;
+      }
+      const decision = await new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          const entry = pendingApprovals.get(requirement.key);
+          if (entry && entry.status === "pending") {
+            entry.status = "expired";
+            entry.card?.setAttribute("state", "expired");
+            entry.card?.setAttribute("detail", "The request expired after 60 seconds. The action was not performed.");
+          }
+          resolve("expired");
+        }, 60_000);
+        maybeRenderApproval(result, {
+          preRun: true,
+          settle: (state) => { clearTimeout(timer); resolve(state); },
+        });
+      });
+      if (stale()) return null;
+      if (decision === "granted") {
+        remediationRetried = true;
+        attemptSettled = false;
+        const retried = await executeTurn();
+        return { dispatched: true, result: retried };
+      }
+      const msg = decision === "denied"
+        ? `Network access to ${host} was not granted — you declined. The run ended.`
+        : decision === "expired"
+          ? `Network access to ${host} was not granted — the request expired before you decided. Send the message again to ask once more.`
+          : `Network access to ${host} was not granted. The run ended.`;
+      appendBubble(c, "system", msg);
+      return null;
+    } finally {
+      remediationActive = false;
+    }
   };
   // 1. the user's turn appears immediately — the surface becomes a conversation.
   if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
@@ -2362,7 +2441,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
         } else {
           appendBubble(c, "error", ev.message ?? "error");
         }
-        appendProviderGrant(ev.category ?? null);
+        // Remediation is owned by the terminal branch below (exactly one
+        // card per turn); the port error only surfaces the error line.
         break;
     }
   });
@@ -2512,7 +2592,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
     } else {
       appendBubble(c, "error", "Error: " + msg);
     }
-    appendProviderGrant(category);
+    // The in-context remediation card (increment 2): on a host-permission
+    // terminal the owner can grant the exact provider origin and the SAME
+    // turn runs again once — no Settings redirect. The retry's own terminal
+    // result becomes THIS turn's result (deterministic continuation).
+    const remediated = await remediateProviderHostAccess(category);
+    if (remediated?.dispatched) return remediated.result;
   }
   // An approval granted DURING this attempt makes one owner-initiated retry:
   // the capability the agent just asked for is now in place, so the same task

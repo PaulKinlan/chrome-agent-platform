@@ -12222,6 +12222,160 @@ customElements.define("privacy-statement", PrivacyStatement);
  * One call registers everything (idempotent). Extension pages + the docs
  * showcase both call this.
  * ────────────────────────────────────────────────────────────────────────── */
+/**
+ * The agent-view permissions panel (CAP-FB-20260819-PERMISSION-REMEDIATION-
+ * UX-01, increment 2): in-context grant management where the owner already
+ * is — the agent detail. Chrome permissions are extension-global (the honest
+ * label says so); the panel shows the posture the agent operates under:
+ *   - Site Agent: that site's host-access state with Grant/Revoke buttons.
+ *   - NAMED/BACKGROUND agent: every granted host origin (each revocable) plus
+ *     the extension's optional-permission states (read-only here).
+ * Every Chrome mutation happens from the owner's genuine click through the
+ * injected `chromePermissions` seam (the real chrome.permissions by default);
+ * failures surface inline and honestly — never silent, never a redirect.
+ */
+export async function renderAgentPermissionsPanel(host, {
+  kind = "",
+  id = "",
+  chromePermissions = (typeof chrome !== "undefined" && chrome?.permissions) || null,
+  // Staleness fence: a rapid A→B agent switch must never let A's slow
+  // permission read paint into B's slot. Checked after every await.
+  isCurrent = () => true,
+} = {}) {
+  if (!host) return;
+  host.textContent = "";
+  const section = document.createElement("section");
+  section.className = "agent-permissions";
+  const heading = document.createElement("h4");
+  heading.textContent = "Permissions";
+  section.append(heading);
+
+  const line = (text, className) => {
+    const p = document.createElement("p");
+    p.className = className ?? "agent-permissions-note";
+    p.textContent = text;
+    return p;
+  };
+
+  if (!chromePermissions || typeof chromePermissions.getAll !== "function") {
+    section.append(line("Permission management is unavailable in this context."));
+    host.append(section);
+    return;
+  }
+
+  let state = null;
+  try {
+    state = await chromePermissions.getAll();
+  } catch {
+    state = null;
+  }
+  if (!isCurrent()) return; // the owner switched agents mid-read
+  if (!state || typeof state !== "object") {
+    section.append(line("The permission state could not be read."));
+    host.append(section);
+    return;
+  }
+  const origins = Array.isArray(state.origins) ? state.origins.filter((o) => typeof o === "string") : [];
+  const permissions = Array.isArray(state.permissions) ? state.permissions.filter((p) => typeof p === "string") : [];
+
+  if (kind === "site") {
+    const origin = String(id).replace(/\/$/, "");
+    const pattern = `${origin}/*`;
+    const granted = origins.some((o) => o === pattern || o.startsWith(`${origin}/`));
+    const row = document.createElement("div");
+    row.className = "agent-permissions-row";
+    const label = document.createElement("span");
+    label.className = "agent-permissions-origin";
+    label.textContent = origin;
+    const status = document.createElement("span");
+    status.className = granted ? "agent-permissions-status granted" : "agent-permissions-status missing";
+    status.textContent = granted ? "Site access granted" : "Site access not granted";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "agent-permissions-action";
+    button.textContent = granted ? "Revoke access" : "Grant access…";
+    const errorLine = line("", "agent-permissions-error");
+    errorLine.hidden = true;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      errorLine.hidden = true;
+      try {
+        if (granted) {
+          const ok = await chromePermissions.remove({ origins: [pattern] });
+          if (ok !== true) throw new Error("the browser refused the revocation");
+        } else {
+          const ok = await chromePermissions.request({ origins: [pattern] });
+          if (ok !== true) {
+            errorLine.textContent = "The browser did not grant site access — you can try again from this button.";
+            errorLine.hidden = false;
+            button.disabled = false;
+            return;
+          }
+        }
+        if (!isCurrent()) return;
+        await renderAgentPermissionsPanel(host, { kind, id, chromePermissions, isCurrent });
+      } catch (err) {
+        errorLine.textContent = err?.message ? String(err.message) : "the permission change failed";
+        errorLine.hidden = false;
+        button.disabled = false;
+      }
+    });
+    row.append(label, status, button);
+    section.append(row, errorLine);
+    section.append(line("Site access lets this site's agent read and act on pages of this site. Chrome permissions belong to the whole extension; this agent uses them."));
+    host.append(section);
+    return;
+  }
+
+  // Named / background agents: the extension-wide posture, honestly labelled.
+  section.append(line("These permissions belong to the extension; this agent uses them."));
+  if (permissions.length) {
+    const list = document.createElement("ul");
+    list.className = "agent-permissions-list";
+    for (const p of permissions) {
+      const item = document.createElement("li");
+      item.className = "agent-permissions-item";
+      item.textContent = `${p} — granted to the extension`;
+      list.append(item);
+    }
+    section.append(list);
+  }
+  if (origins.length) {
+    for (const o of origins) {
+      const row = document.createElement("div");
+      row.className = "agent-permissions-row";
+      const label = document.createElement("span");
+      label.className = "agent-permissions-origin";
+      label.textContent = o;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "agent-permissions-action";
+      button.textContent = "Revoke";
+      const errorLine = line("", "agent-permissions-error");
+      errorLine.hidden = true;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        errorLine.hidden = true;
+        try {
+          const ok = await chromePermissions.remove({ origins: [o] });
+          if (ok !== true) throw new Error("the browser refused the revocation");
+          if (!isCurrent()) return;
+          await renderAgentPermissionsPanel(host, { kind, id, chromePermissions, isCurrent });
+        } catch (err) {
+          errorLine.textContent = err?.message ? String(err.message) : "the revocation failed";
+          errorLine.hidden = false;
+          button.disabled = false;
+        }
+      });
+      row.append(label, button);
+      section.append(row, errorLine);
+    }
+  } else {
+    section.append(line("No site access is granted to the extension."));
+  }
+  host.append(section);
+}
+
 export function registerComponents() {
   // All components are defined at module load via customElements.define above.
   // This function exists as the single, idempotent entry point for clarity and
