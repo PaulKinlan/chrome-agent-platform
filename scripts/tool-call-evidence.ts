@@ -22,6 +22,7 @@
 const ROOT = new URL("..", import.meta.url).pathname;
 import { pairToolJournal } from "../extension/shared/conversation.js";
 import { CHROMIUM, launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 const EXT = `${ROOT}extension`;
 const MODE = Deno.args.includes("--mode=tree") ? "tree" : "raw";
 const EVIDENCE_DIR = `${ROOT}test-artifacts/tool-call`;
@@ -142,8 +143,8 @@ function check(name: string, cond: boolean, detail?: unknown) {
   if (cond) { pass++; console.log(`PASS: ${name}`); }
   else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)}`); }
 }
-/** The EXTERNAL evidence output dir (never committed) — defaults to /tmp. */
-const EVIDENCE_OUT = Deno.env.get("GVS_EVIDENCE_OUT") ?? `/tmp/gvs-evidence-${Date.now()}`;
+/** The EXTERNAL evidence output dir (never committed) — defaults to the durable evidence root. */
+const EVIDENCE_OUT = Deno.env.get("GVS_EVIDENCE_OUT") ?? durableDir(`gvs-evidence-${Date.now()}`);
 const invocationStartedAt = Date.now();
 const invocationEndedAt = () => Date.now(); // the upper bound captured at validation
 // FAIL-CLOSED fresh output dir: the recursive cleanup only IGNORES a
@@ -163,7 +164,7 @@ try {
 
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-  const profile = `/tmp/tool-call-${Date.now()}`;
+  const profile = durableDir(`tool-call-${Date.now()}`);
   // The spawn goes through the shared launcher: the debugging port is
   // kernel-assigned and the endpoint is read back from THIS child's own
   // stderr. The argv is this harness's own.

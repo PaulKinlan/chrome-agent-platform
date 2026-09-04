@@ -46,8 +46,55 @@ export async function closeAgentWorkerFor(agentId, { kvGet, kvSet } = {}) {
   return { ok: true, agentId: id, closed: true };
 }
 const WORKER_PATH = "dist/workers/agent-worker.js";
+const MAX_PREVIEW_CHARS = 240;
+// Review r6 P1-2: a steer control message is only reported "steered" once the
+// WORKER confirms it (the host relays the worker's steered/steer-refused
+// reply back). This bounds how long the SW waits for that confirmation.
+const STEER_REPLY_TIMEOUT_MS = 8000;
+
+let steerSeq = 0;
+/** A fresh correlation id for a worker steer when the caller did not supply
+ * one (the host matches the worker's reply on it — never guess across
+ * concurrent steers). */
+function steerToken() {
+  steerSeq += 1;
+  return `sw-${Date.now().toString(36)}-${steerSeq.toString(36)}`;
+}
 
 const log = capLog("agent-workers");
+
+/** Review r6 P1-1: a worker run must be in the live run-control plane BEFORE
+ * the run descriptor reaches the worker — the worker executes in another
+ * realm and can complete + relay agent-worker.result while this route still
+ * awaits the host's post response. Registering only after the post let that
+ * early result unregister nothing and left a COMPLETED run registered
+ * forever (steerable, 64-slot seat consumed). A null register (registry
+ * full) REFUSES the kick — an accepted-but-unsteerable run would lie to the
+ * owner. Every post/ensure failure releases the record. */
+async function kickWorkerRun({ runId, identity, descriptor, runControl }) {
+  if (runControl) {
+    const record = runControl.register({ executionId: runId, surface: `agent-worker:${identity}`, kind: "worker" });
+    if (!record) {
+      return { ok: false, error: "live-run registry full — worker run refused (cannot be steered or stopped)", code: "run_control_full", runId };
+    }
+  }
+  let posted;
+  try {
+    posted = await chrome.runtime.sendMessage({
+      type: "agent-worker-host:post",
+      agentId: identity,
+      msg: { type: "agent-worker:run", ...descriptor },
+    });
+  } catch (e) {
+    runControl?.unregister(runId);
+    return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
+  }
+  if (!posted?.ok) {
+    runControl?.unregister(runId);
+    return { ok: false, error: posted?.error || "worker run not posted" };
+  }
+  return { ok: true, runId, identity };
+}
 
 /** The validated extension-surface principal set (same as the owner-surface
  * routes: extension pages + Settings; never a content-script/page or model). */
@@ -69,12 +116,12 @@ function validExecutionId(value) {
     || /^exec_[a-zA-Z0-9][a-zA-Z0-9_-]{7,194}$/.test(value);
 }
 
-function bounded(value, max) {
+function bounded(value, max = MAX_PREVIEW_CHARS) {
   const s = String(value ?? "");
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-function redactedPreview(value, max) {
+function redactedPreview(value, max = MAX_PREVIEW_CHARS) {
   // The CANONICAL redactor (the local regex missed the bare-whitespace form).
   return redactSecretText(bounded(value, max));
 }
@@ -103,20 +150,32 @@ function sanitizeProgressEvent(event) {
   return out;
 }
 
+// dptw: the journal stores every field WHOLE — redacted for secrets, never
+// clipped. (The structured renderer parses serialized fields; JSON.stringify
+// keeps them valid, and redaction is the same text-level pass journalJson
+// applies.)
+function journalWhole(value) {
+  try {
+    return redactSecretText(typeof value === "string" ? value : JSON.stringify(value));
+  } catch {
+    return "\"[unserializable value]\"";
+  }
+}
+
 function sanitizeJournalEntry(entry, executionId) {
   if (!entry || typeof entry !== "object") return { type: "task", executionId };
-  const type = String(entry.type ?? "task").slice(0, 64);
-  const id = entry.id ? String(entry.id).slice(0, 200) : String(Date.now());
+  const type = String(entry.type ?? "task");
+  const id = entry.id ? String(entry.id) : String(Date.now());
   const out = { type, id, executionId };
-  if (entry.task != null) out.task = redactedPreview(entry.task, 4096);
+  if (entry.task != null) out.task = redactSecretText(String(entry.task));
   if (entry.result != null) {
-    out.result = journalJson(entry.result, { maxBytes: 65536 });
+    out.result = journalWhole(entry.result);
   }
-  if (entry.tool != null) out.tool = String(entry.tool).slice(0, 128);
-  if (entry.selectedTool != null) out.selectedTool = String(entry.selectedTool).slice(0, 128);
-  if (entry.args != null) out.args = journalJson(entry.args, { maxBytes: 4096 });
-  if (entry.callId != null) out.callId = String(entry.callId).slice(0, 200);
-  if (entry.run != null) out.run = String(entry.run).slice(0, 200);
+  if (entry.tool != null) out.tool = String(entry.tool);
+  if (entry.selectedTool != null) out.selectedTool = String(entry.selectedTool);
+  if (entry.args != null) out.args = journalWhole(entry.args);
+  if (entry.callId != null) out.callId = String(entry.callId);
+  if (entry.run != null) out.run = String(entry.run);
   if (entry.ok !== undefined) out.ok = Boolean(entry.ok);
   if (entry.at != null && Number.isFinite(entry.at)) out.at = entry.at;
   return out;
@@ -133,6 +192,7 @@ export function createAgentWorkerRoutes({
   resolveJournalStore = null,
   journalAppend = null,
   resolveAgentIdentity = null,
+  runControl = null,
 }) {
   // Review P1-2: worker identity must be the agent's IMMUTABLE instanceId —
   // a caller-supplied reusable slug would key the host worker + alive-set by
@@ -196,18 +256,11 @@ export function createAgentWorkerRoutes({
         maxIterations: Math.min(Number(m?.maxIterations ?? RUN_BUDGET_DEFAULTS.maxIterations) || RUN_BUDGET_DEFAULTS.maxIterations, RUN_BUDGET_BOUNDS.maxIterations),
         toolSpecs: Array.isArray(m?.toolSpecs) ? m.toolSpecs.slice(0, 200) : [],
       };
-      let posted;
-      try {
-        posted = await chrome.runtime.sendMessage({
-          type: "agent-worker-host:post",
-          agentId: identity,
-          msg: { type: "agent-worker:run", ...descriptor },
-        });
-      } catch (e) {
-        return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
-      }
-      if (!posted?.ok) return { ok: false, error: posted?.error || "worker run not posted" };
-      return { ok: true, runId, agentId: identity };
+      // Review r6 P1-1: register BEFORE the host post (kickWorkerRun owns the
+      // order) — see the helper's comment for the race it closes.
+      const kicked = await kickWorkerRun({ runId, identity, descriptor, runControl });
+      if (!kicked?.ok) return kicked;
+      return { ok: true, runId, agentId: kicked.identity };
     },
 
     /** P4 dispatch seam: a background/foreground run KICKED through the worker.
@@ -235,20 +288,10 @@ export function createAgentWorkerRoutes({
         maxIterations: Math.min(Number(m?.maxIterations ?? RUN_BUDGET_DEFAULTS.maxIterations) || RUN_BUDGET_DEFAULTS.maxIterations, RUN_BUDGET_BOUNDS.maxIterations),
         toolSpecs: Array.isArray(m?.toolSpecs) ? m.toolSpecs.slice(0, 200) : [],
       };
-      let posted;
-      try {
-        posted = await chrome.runtime.sendMessage({
-          type: "agent-worker-host:post",
-          agentId: identity,
-          msg: { type: "agent-worker:run", ...descriptor },
-        });
-      } catch (e) {
-        return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
-      }
-      if (!posted?.ok) {
-        return { ok: false, error: posted?.error || "worker run not posted" };
-      }
-      return { ok: true, runId, agentId };
+      // Review r6 P1-1: same register-before-post discipline as agent-worker.run.
+      const kicked = await kickWorkerRun({ runId, identity, descriptor, runControl });
+      if (!kicked?.ok) return kicked;
+      return { ok: true, runId, agentId: kicked.identity };
     },
 
     /** PHASE-2 tool bridge — the worker's RPC proxy resolves here. THIS is the
@@ -292,6 +335,83 @@ export function createAgentWorkerRoutes({
       await writeAliveSet(alive.filter((id) => id !== agentId && id !== identity));
       return { ok: true, agentId: identity, closed: true };
     },
+    /** chrome-agent-platform-afiu: the run protocol's STEER control message
+     * for a live WORKER run. Only a validated extension surface may steer;
+     * the control record is forwarded to the worker (its run loop honors it
+     * between steps). stop-run maps to the worker's abort (clean cancel — the
+     * worker reports the aborted terminal, never an orphaned run). */
+    async "agent-worker.steer"(m, context) {
+      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+      const agentId = String(m?.agentId ?? "").slice(0, 200);
+      const executionId = String(m?.runId ?? m?.executionId ?? "");
+      if (!executionId) return { ok: false, error: "invalid runId" };
+      const mode = String(m?.mode ?? "inject").slice(0, 16);
+      if (!["inject", "stop-step", "stop-run"].includes(mode)) return { ok: false, error: "invalid_steer_mode" };
+      const text = String(m?.text ?? "").slice(0, 1500);
+      // The agent identity comes from the live control record (surface
+      // `agent-worker:<identity>`) when the caller did not name it — a steer
+      // is always keyed to a LIVE run, never to a slug that could re-target
+      // a newer run.
+      let identity = null;
+      const live = runControl?.get?.(executionId) ?? null;
+      if (agentId) identity = await workerIdentity(agentId);
+      else if (live?.surface?.startsWith("agent-worker:")) identity = live.surface.slice("agent-worker:".length);
+      if (!identity) return { ok: false, error: "run_not_live", executionId };
+      try {
+        if (mode === "stop-run") {
+          // Stop the worker's loop (its abort relay ends the run and settles
+          // the durable record through agent-worker.result). Review r6 P1-2:
+          // the host relays the worker's aborted ack back — the owner is
+          // never told "stopped" against a dead host or a missed abort.
+          const relayed = await chrome.runtime.sendMessage({
+            type: "agent-worker-host:post",
+            agentId: identity,
+            msg: { type: "agent-worker:abort", runId: executionId },
+            expectReply: { types: ["agent-worker:aborted"], keyField: "runId", timeoutMs: STEER_REPLY_TIMEOUT_MS },
+          });
+          if (relayed?.ok !== true) {
+            return { ok: false, executionId, error: relayed?.error || "worker stop not confirmed", code: "stop_unconfirmed" };
+          }
+          return { ok: true, executionId, stopped: true };
+        }
+        // inject / stop-step — review r6 P1-2: the SW asks the host to relay
+        // the WORKER's own decision back (steered / steer-refused), keyed by
+        // a steerId the worker echoes. A bare host "posted" acknowledgement
+        // never reaches the owner as "steered" — a steer_buffer_full refusal
+        // (or a dead worker) is surfaced as the honest error it is.
+        const steerId = m?.steerId ? String(m.steerId).slice(0, 120) : steerToken();
+        const relayed = await chrome.runtime.sendMessage({
+          type: "agent-worker-host:post",
+          agentId: identity,
+          msg: {
+            type: "agent-worker:steer",
+            runId: executionId,
+            steerId,
+            mode,
+            text,
+          },
+          expectReply: {
+            types: ["agent-worker:steered", "agent-worker:steer-refused"],
+            keyField: "steerId",
+            timeoutMs: STEER_REPLY_TIMEOUT_MS,
+          },
+        });
+        if (relayed?.ok !== true) {
+          // Host unreachable, no such worker, or the worker never answered:
+          // the steer was NOT confirmed — never report it as steered.
+          return { ok: false, executionId, steerId, error: relayed?.error || "worker steer post failed", code: "steer_unconfirmed" };
+        }
+        if (relayed.relayed?.type === "agent-worker:steer-refused") {
+          const refused = relayed.relayed;
+          const code = String(refused.error ?? "steer_refused");
+          return { ok: false, executionId, steerId, error: code, code };
+        }
+        return { ok: true, executionId, steered: true, mode, steerId };
+      } catch (e) {
+        return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
+      }
+    },
+
     /** Phase 3: Bounded, redacted progress commit from a worker run.
      * Records progress in durable registry logs + updates execution heartbeat
      * + broadcasts live progress to UI ports. */
@@ -334,14 +454,17 @@ export function createAgentWorkerRoutes({
     async "agent-worker.result"(m, context) {
       if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
       const executionId = String(m?.executionId ?? "");
+      // chrome-agent-platform-afiu review r5 P1-1: the live control record is
+      // released FIRST — before the durable-execution shape gate — because
+      // the registry holds whatever runId the run was registered under (the
+      // worker relays the SAME id it was given). A worker run that finishes
+      // must never stay steerable / consume a 64-slot live-registry seat
+      // because its id was not exec:-shaped.
+      runControl?.unregister(executionId);
       if (!validExecutionId(executionId)) return { ok: false, error: "invalid executionId" };
 
       const ok = m?.ok === true;
-      // dptw: the result passes through WHOLE — the old 64 KiB bound here
-      // truncated the result BEFORE settle, so even the retained payload was
-      // clipped. The durable-runs settle path retains large results by
-      // reference (kmpq); the transport record stays small by design there.
-      const result = m?.result !== undefined ? String(m.result) : undefined;
+      const result = m?.result !== undefined ? bounded(m.result, 64 * 1024) : undefined;
       const error = m?.error ? bounded(m.error, 2048) : undefined;
       const errorCategory = m?.errorCategory ? String(m.errorCategory).slice(0, 64) : undefined;
       const errorReason = m?.errorReason ? bounded(m.errorReason, 512) : undefined;

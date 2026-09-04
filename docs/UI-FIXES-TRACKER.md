@@ -367,7 +367,7 @@ Fix (planned): shared `<provider-select>` + `<model-picker>` Web Components (sin
    accessible combobox semantics, custom-ID path, equal control heights on the design tokens,
    "Use global provider" preserved, key stays write-only, baseURL stored deliberately.
 
-1. **Browser-control toggle/grant persistence** — Paul flagged "STILL not working" after the item-51 fix; re-verify the toggle stays ON + the grant persists across a reload in the real extension, and fix the actual cause. (The grant-storage read/write is present; the persistence needs a real-browser proof.)
+1. **Browser-control toggle/grant persistence (VERIFIED)** — Re-verified toggle and grant persistence across reloads in real Chrome via `scripts/kat-browser-grant-persistence.ts` (17/17 passed): toggle stays checked on reload, global and per-origin grant sets persist across Page.reload, origin rows re-render from persistent store, and revoke removes the grant cleanly across reloads.
 
 2. **Remove the Chrome Prompt API (Gemini nano) + Demo (local) from the settings provider picker** — both are for internal/testing use only. The picker filtering is IN FLIGHT (uncommitted); verify it lands + only the real chat providers show.
 

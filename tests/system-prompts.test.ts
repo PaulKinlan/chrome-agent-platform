@@ -482,22 +482,12 @@ Deno.test("validation: bad modes / empty / non-string are REJECTED", () => {
   assertEquals(normalizeOverrideInput(null).ok, false);
 });
 
-Deno.test("validation: the bound is UTF-8 BYTES — multi-byte text is measured honestly", () => {
-  // ASCII at the byte bound passes; one byte over fails.
-  assertEquals(normalizeOverrideInput({ mode: "append", text: "x".repeat(MAX_OVERRIDE_BYTES) }).ok, true);
-  assertEquals(normalizeOverrideInput({ mode: "append", text: "x".repeat(MAX_OVERRIDE_BYTES + 1) }).ok, false);
-  // A CJK string of MAX/3+1 chars is 3 bytes/char → over the byte bound even
-  // though the CHARACTER count is a third of it (the old char-count bug).
-  const cjk = "常".repeat(Math.floor(MAX_OVERRIDE_BYTES / 3) + 1);
-  assertEquals(normalizeOverrideInput({ mode: "append", text: cjk }).ok, false, "UTF-8 bytes, not chars");
-  // An emoji-heavy string: 4 bytes per emoji.
-  const emoji = "🙂".repeat(MAX_OVERRIDE_BYTES / 4);
-  assertEquals(normalizeOverrideInput({ mode: "append", text: emoji }).ok, true, "exactly at the byte bound");
-  assertEquals(
-    normalizeOverrideInput({ mode: "append", text: emoji + "🙂" }).ok,
-    false,
-    "one emoji over the byte bound",
-  );
+Deno.test("validation: NO byte bound (dptw) — multi-byte text of any size is accepted whole", () => {
+  assertEquals(normalizeOverrideInput({ mode: "append", text: "x".repeat(16_384) }).ok, true);
+  assertEquals(normalizeOverrideInput({ mode: "append", text: "x".repeat(16_385) }).ok, true, "past the removed 16 KiB bound");
+  const cjk = "常".repeat(6_000);
+  assertEquals(normalizeOverrideInput({ mode: "append", text: cjk }).ok, true, "CJK of any size passes");
+  assertEquals(normalizeOverrideInput({ mode: "append", text: cjk }).value.text, cjk, "the text is stored whole");
 });
 
 Deno.test("validation: malformed Unicode (lone surrogates) is REJECTED, never silently rewritten", () => {
@@ -539,18 +529,19 @@ Deno.test("persistence: an override round-trips through the VERSIONED store with
   assertStringIncludes(resolved.text, "Be terse.");
 });
 
-Deno.test("persistence: the base snapshot is bounded in UTF-8 bytes without splitting a code point", async () => {
+Deno.test("persistence: the base snapshot is stored WHOLE (dptw — never truncated)", async () => {
   __resetUsage();
   reset();
+  const bigBase = "✓".repeat(32_768) + "EXTRA";
   const reg = PROMPT_REGISTRY.map((p) =>
     p.id === "cap.hub.master"
-      ? { ...p, content: "✓".repeat(MAX_BASE_SNAPSHOT_BYTES) + "EXTRA" }
+      ? { ...p, content: bigBase }
       : p
   );
   const r = await save("hub", { mode: "append", text: "x" }, { registry: reg });
   assertEquals(r.ok, true);
-  assert(utf8ByteLength(r.override.baseSnapshot) <= MAX_BASE_SNAPSHOT_BYTES, "byte-bounded");
-  assert(!hasLoneSurrogates(r.override.baseSnapshot), "no split surrogate pairs");
+  assertEquals(r.override.baseSnapshot, bigBase, "dptw: the whole base text is snapshotted, EXTRA included");
+  assert(!hasLoneSurrogates(r.override.baseSnapshot), "well-formed Unicode");
 });
 
 Deno.test("migration: a LEGACY plain-map store reads (revision 0) and rewrites versioned", async () => {
@@ -589,16 +580,17 @@ Deno.test("corruption: a junk store / malformed records are QUARANTINED, never c
   assert(Array.isArray(quarantine) && quarantine.length === 1, "the junk shape is quarantined");
   assertEquals(quarantine[0].scope, "(store)");
 
-  // A valid-mode but OVERSIZE stored record (bypasses the input path): shown
-  // as nothing, quarantined, and NEVER composed.
+  // dptw: a valid-mode LARGE stored record is no longer oversize — it reads
+  // and composes whole (only genuinely malformed records quarantine).
   const base = registryEntry("cap.hub.master");
+  const bigText = "x".repeat(16_385);
   store.set(PROMPT_OVERRIDES_KEY, {
     version: 1,
     revision: 3,
     scopes: {
       hub: {
         mode: "append",
-        text: "x".repeat(MAX_OVERRIDE_BYTES + 1),
+        text: bigText,
         baseId: base.id,
         baseVersion: base.version,
         baseHash: base.hash,
@@ -608,13 +600,10 @@ Deno.test("corruption: a junk store / malformed records are QUARANTINED, never c
     },
   });
   const d = await describePrompt("hub");
-  assertEquals(d.override, null, "the oversize record is not surfaced as a customization");
-  assert(!d.effective.text.includes("x".repeat(200)), "the oversize record is never composed");
+  assertEquals(d.override?.text, bigText, "dptw: a large record surfaces whole");
+  assert(d.effective.text.includes(bigText), "a large record composes");
   quarantine = store.get(PROMPT_QUARANTINE_KEY);
-  assertEquals(quarantine.length, 2, "the oversize record joins the quarantine");
-  assertEquals(quarantine[1].reason, "oversize text");
-  // The live store is cleaned.
-  assertEquals(store.get(PROMPT_OVERRIDES_KEY).scopes.hub, undefined);
+  assertEquals(quarantine.length, 1, "only the genuinely-junk record quarantines");
 
   // Unknown extra fields are stripped; a well-formed record still reads.
   store.set(PROMPT_OVERRIDES_KEY, {

@@ -19,6 +19,7 @@ import { HARNESSES, isKat, KAT_VERDICTS_PATH, readKatVerdicts } from "./lib/harn
 import { makeChecker } from "./lib/expected-red.ts";
 import { runLockAware } from "./lib/lock-aware-command.ts";
 import { CHROME_LOCK_PATH } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const GREEN_BUDGET_MS = 600_000;
@@ -26,7 +27,7 @@ const LOCK_WAIT_MS = 20 * 60_000;
 const RED_BUDGET_MS = 90_000;
 const only = Deno.args.find((a) => a.startsWith("--only="))?.slice("--only=".length) ?? "";
 const greenOnly = Deno.args.includes("--green-only");
-const LOG_DIR = await Deno.makeTempDir({ prefix: "cap-kat-runner-" });
+const LOG_DIR = durableDir(`cap-kat-runner-${Date.now()}`);
 
 const kats = Object.entries(HARNESSES)
   .filter(([f, e]) => isKat(f) && e.class === "kat")

@@ -22,18 +22,12 @@ import { REPLAY_UNKNOWN, replaySafetyForTool } from "./tool-replay-safety.js";
 export const TOOL_CATALOG_SCHEMA_VERSION = 1;
 
 export const TOOL_CATALOG_BOUNDS = Object.freeze({
-  maxDescriptors: 1200,
-  maxCatalogBytes: 2 * 1024 * 1024,
-  maxNameBytes: 192,
-  maxDescriptionBytes: 1024,
-  maxAliases: 12,
-  maxAliasBytes: 128,
-  maxSchemaBytes: 4096,
-  maxCapabilities: 24,
-  maxCapabilityBytes: 96,
+  // dptw (2026-09-03): every descriptor/catalog SIZE ceiling is gone — no more
+  // silent drops past 1200 tools, no more clipped names/descriptions/schemas.
+  // What remains is identity GRAMMAR (not size): ids, digests, scope and
+  // generation strings are bounded so a hostile descriptor cannot smuggle an
+  // oversized identity through the authority comparisons.
   maxIdentityBytes: 256,
-  maxSourceGenerationBytes: 192,
-  maxAuthorityDigestBytes: 192,
   maxScopeBytes: 768,
 });
 
@@ -111,12 +105,13 @@ function boundedIdentity(value, code) {
   return text;
 }
 
-function boundedText(value, maxBytes, code, { allowEmpty = true } = {}) {
+function boundedText(value, code, { allowEmpty = true } = {}) {
+  // dptw: text is validated (no lone surrogates) but never size-clipped.
   const text = normalizeCatalogText(value);
   if ((!allowEmpty && !text) || hasLoneSurrogates(text)) {
     throw new ToolCatalogValidationError(code);
   }
-  return truncateUtf8(text, maxBytes);
+  return text;
 }
 
 function canonicalJson(value) {
@@ -206,9 +201,6 @@ function summarizeSchema(value) {
     if (error instanceof ToolCatalogValidationError) throw error;
     throw new ToolCatalogValidationError("schema-hostile");
   }
-  if (utf8ByteLength(summary) > TOOL_CATALOG_BOUNDS.maxSchemaBytes) {
-    throw new ToolCatalogValidationError("schema-too-large");
-  }
   return summary;
 }
 
@@ -224,9 +216,9 @@ export function summarizeToolOutputSchema(value, toolId = "unknown") {
   return summarizeSchema(toolOutputSchema(toolId, value));
 }
 
-function normalizeList(value, { maxItems, maxBytes, code }) {
+function normalizeList(value, { code }) {
   if (value == null) return [];
-  if (!Array.isArray(value) || value.length > maxItems) {
+  if (!Array.isArray(value)) {
     throw new ToolCatalogValidationError(code);
   }
   const seen = new Set();
@@ -241,7 +233,7 @@ function normalizeList(value, { maxItems, maxBytes, code }) {
     if (!descriptor || !("value" in descriptor)) {
       throw new ToolCatalogValidationError(code);
     }
-    const text = boundedText(descriptor.value, maxBytes, code, {
+    const text = boundedText(descriptor.value, code, {
       allowEmpty: false,
     });
     const key = text.toLocaleLowerCase("en-US");
@@ -262,13 +254,9 @@ function normalizeScope(scope) {
   }
   const normalized = {
     hub: ownData(raw, "hub") === true,
-    agentId: boundedText(ownData(raw, "agentId"), 192, "scope-agent"),
-    origin: boundedText(ownData(raw, "origin"), 256, "scope-origin"),
-    documentId: boundedText(
-      ownData(raw, "documentId"),
-      192,
-      "scope-document",
-    ),
+    agentId: boundedText(ownData(raw, "agentId"), "scope-agent"),
+    origin: boundedText(ownData(raw, "origin"), "scope-origin"),
+    documentId: boundedText(ownData(raw, "documentId"), "scope-document"),
   };
   if (
     utf8ByteLength(canonicalJson(normalized)) >
@@ -299,20 +287,14 @@ export function canonicalToolDescriptor(input) {
   const version = boundedIdentity(ownData(input, "version"), "version");
   const name = boundedText(
     ownData(input, "name"),
-    TOOL_CATALOG_BOUNDS.maxNameBytes,
     "name",
     { allowEmpty: false },
   );
   const normalizedName = normalizedCollisionText(name);
   if (!normalizedName) throw new ToolCatalogValidationError("name");
-  const aliases = normalizeList(ownData(input, "aliases"), {
-    maxItems: TOOL_CATALOG_BOUNDS.maxAliases,
-    maxBytes: TOOL_CATALOG_BOUNDS.maxAliasBytes,
-    code: "aliases",
-  }).filter((alias) => normalizedCollisionText(alias) !== normalizedName);
+  const aliases = normalizeList(ownData(input, "aliases"), { code: "aliases" }).filter((alias) => normalizedCollisionText(alias) !== normalizedName);
   const description = boundedText(
     ownData(input, "description"),
-    TOOL_CATALOG_BOUNDS.maxDescriptionBytes,
     "description",
   );
   const schemaSummary = summarizeToolSchema(
@@ -324,41 +306,28 @@ export function canonicalToolDescriptor(input) {
     ownData(input, "outputSchema"),
     toolId,
   );
-  const capabilities = normalizeList(ownData(input, "capabilities"), {
-    maxItems: TOOL_CATALOG_BOUNDS.maxCapabilities,
-    maxBytes: TOOL_CATALOG_BOUNDS.maxCapabilityBytes,
-    code: "capabilities",
-  });
+  const capabilities = normalizeList(ownData(input, "capabilities"), { code: "capabilities" });
   const scope = normalizeScope(ownData(input, "scope"));
   const sourceGeneration = boundedText(
     ownData(input, "sourceGeneration"),
-    TOOL_CATALOG_BOUNDS.maxSourceGenerationBytes,
     "source-generation",
     { allowEmpty: false },
   );
-  const closureGeneration = boundedText(
+  const closureGeneration = boundedIdentity(
     ownData(input, "closureGeneration") ?? sourceGeneration,
-    TOOL_CATALOG_BOUNDS.maxSourceGenerationBytes,
     "closure-generation",
-    { allowEmpty: false },
   );
-  const packageDigest = boundedText(
+  const packageDigest = boundedIdentity(
     ownData(input, "packageDigest") ?? sha256Hex(`${packageId}\u0000${version}\u0000${sourceGeneration}`),
-    TOOL_CATALOG_BOUNDS.maxAuthorityDigestBytes,
     "package-digest",
-    { allowEmpty: false },
   );
-  const permissionDigest = boundedText(
+  const permissionDigest = boundedIdentity(
     ownData(input, "permissionDigest") ?? "none",
-    TOOL_CATALOG_BOUNDS.maxAuthorityDigestBytes,
     "permission-digest",
-    { allowEmpty: false },
   );
-  const grantDigest = boundedText(
+  const grantDigest = boundedIdentity(
     ownData(input, "grantDigest") ?? "none",
-    TOOL_CATALOG_BOUNDS.maxAuthorityDigestBytes,
     "grant-digest",
-    { allowEmpty: false },
   );
   if (
     sourceKind === "bundled-package" &&
@@ -455,8 +424,8 @@ export function buildToolCatalog(inputs) {
   } catch {
     rawInputLength = 0;
   }
-  const inputLength = Math.min(rawInputLength, 1000000);
-  const inspectLimit = TOOL_CATALOG_BOUNDS.maxDescriptors * 2;
+  const inputLength = rawInputLength;
+  const inspectLimit = Infinity;
   const diagnostics = {
     input: inputLength,
     accepted: 0,
@@ -534,19 +503,12 @@ export function buildToolCatalog(inputs) {
   const sorted = [...byStableId.values()].sort((a, b) =>
     a.stableId < b.stableId ? -1 : a.stableId > b.stableId ? 1 : 0
   );
+  // dptw: every descriptor lands — no count or byte ceiling, no silent drop.
+  // `bytes` stays in diagnostics as INFORMATIONAL measurement only.
   const descriptors = [];
   let bytes = 0;
   for (const descriptor of sorted) {
-    if (descriptors.length >= TOOL_CATALOG_BOUNDS.maxDescriptors) {
-      diagnostics.truncated++;
-      continue;
-    }
-    const descriptorBytes = utf8ByteLength(canonicalJson(descriptor));
-    if (bytes + descriptorBytes > TOOL_CATALOG_BOUNDS.maxCatalogBytes) {
-      diagnostics.truncated++;
-      continue;
-    }
-    bytes += descriptorBytes;
+    bytes += utf8ByteLength(canonicalJson(descriptor));
     descriptors.push(descriptor);
   }
   diagnostics.accepted = descriptors.length;
@@ -583,7 +545,7 @@ function adaptAiToolMap(toolMap, context) {
     return inputs;
   }
   for (
-    const [name, aiTool] of entries.slice(0, TOOL_CATALOG_BOUNDS.maxDescriptors)
+    const [name, aiTool] of entries
   ) {
     inputs.push({
       sourceKind: context.sourceKind,
@@ -652,10 +614,7 @@ export function adaptMcpTools(toolMap, context) {
 export function adaptWebMcpTools(tools, context) {
   const inputs = [];
   for (
-    const sourceTool of (Array.isArray(tools) ? tools : []).slice(
-      0,
-      TOOL_CATALOG_BOUNDS.maxDescriptors,
-    )
+    const sourceTool of (Array.isArray(tools) ? tools : [])
   ) {
     const source = safeString(ownData(sourceTool, "source"));
     if (source !== "declared" && source !== "inferred") continue;
@@ -696,7 +655,7 @@ export function adaptWebMcpTools(tools, context) {
  * provider route. */
 export function adaptBundledTools(rows, context = {}) {
   const inputs = [];
-  for (const row of (Array.isArray(rows) ? rows : []).slice(0, TOOL_CATALOG_BOUNDS.maxDescriptors)) {
+  for (const row of (Array.isArray(rows) ? rows : [])) {
     const toolId = ownData(row, "toolId");
     const binary = ownData(row, "binary");
     const packageDigest = ownData(binary, "sha256");

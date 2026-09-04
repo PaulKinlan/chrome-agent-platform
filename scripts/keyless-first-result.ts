@@ -19,14 +19,15 @@
 // RUN: deno run -A scripts/keyless-first-result.ts
 // Evidence: keyless-thread.png (the paragraph + tool cards), keyless-artifact.png
 // (the artifact library), keyless-tab-groups.json (chrome.tabGroups.query)
-// under KEYLESS_EVIDENCE_DIR (default: a fresh /tmp dir, printed).
+// under KEYLESS_EVIDENCE_DIR (default: a fresh dir under the durable evidence root, printed).
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = Deno.env.get("CAP_CHROMIUM") ?? "/usr/bin/chromium";
-const EVIDENCE_DIR = Deno.env.get("KEYLESS_EVIDENCE_DIR") ?? `/tmp/cap-keyless-${Date.now()}`;
+const EVIDENCE_DIR = Deno.env.get("KEYLESS_EVIDENCE_DIR") ?? durableDir(`cap-keyless-${Date.now()}`);
 const PROMPT = "group my tabs by topic";
 const DEMO_LITERAL = /\[demo model\]|Task received|\d+ chars/u;
 

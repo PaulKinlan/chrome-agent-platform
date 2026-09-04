@@ -795,7 +795,7 @@ export function createWasiPreview1Runtime({
     if ((record.rights & right) !== right) fault(WASI_ERRNO.ENOTCAPABLE);
   }
 
-  function parseIovecs(iovsPointer, iovsLength, resultPointer, { allowOversize = false } = {}) {
+  function parseIovecs(iovsPointer, iovsLength, resultPointer) {
     const count = asU32(iovsLength);
     if (count > WASI_HOST_HARD_LIMITS.MAX_IOVECS) fault(WASI_ERRNO.E2BIG);
     const tableBytes = count * 8;
@@ -828,16 +828,12 @@ export function createWasiPreview1Runtime({
       }
       total += data.len;
       if (!Number.isSafeInteger(total)) fault(WASI_ERRNO.E2BIG);
-      // The MAX_IO_BYTES_PER_CALL cap is preserved for FILE reads and ALL
-      // writes. For STDIN reads an advertised iovec length is NOT a promise to
-      // consume that many bytes — a tool may advertise a large buffer while
-      // the actual job stdin is tiny (short-read on EOF). The table/pointer/
-      // overlap checks above still reject OOB/overlap; the copy below is
-      // bounded by the REAL remaining stdin bytes (already ≤ the validated
-      // stdin quota), so no large allocation ever happens.
-      if (!allowOversize && total > WASI_HOST_HARD_LIMITS.MAX_IO_BYTES_PER_CALL) {
-        fault(WASI_ERRNO.E2BIG);
-      }
+      // dptw: no per-call IO byte cap. For STDIN reads an advertised iovec
+      // length is NOT a promise to consume that many bytes — a tool may
+      // advertise a large buffer while the actual job stdin is tiny
+      // (short-read on EOF). The table/pointer/overlap checks above still
+      // reject OOB/overlap; the copy below is bounded by the REAL remaining
+      // stdin bytes, so no oversized allocation ever happens.
       rows.push(data);
     }
     return rows;
@@ -1648,9 +1644,7 @@ export function createWasiPreview1Runtime({
         fault(WASI_ERRNO.EBADF);
       }
       requireRight(record, WASI_RIGHTS.FD_READ);
-      const rows = parseIovecs(iovsPtr, iovsLength, nreadPtr, {
-        allowOversize: record.kind === FD_KIND.STDIN,
-      });
+      const rows = parseIovecs(iovsPtr, iovsLength, nreadPtr);
       let total = 0;
       for (const row of rows) {
         if (row.len === 0) continue;
@@ -1725,13 +1719,14 @@ export function createWasiPreview1Runtime({
           if (position > BigInt(Number.MAX_SAFE_INTEGER)) {
             fault(WASI_ERRNO.EOVERFLOW);
           }
-          const sizeRemaining = BigInt(job.quota.fileSize) - position;
-          if (sizeRemaining <= 0n) allowed = 0;
-          else {allowed = Math.min(
-              allowed,
-              job.quota.fileBytes - state.fileBytes,
-              Number(sizeRemaining),
-            );}
+          if (Number.isFinite(job.quota.fileSize)) {
+            const sizeRemaining = BigInt(job.quota.fileSize) - position;
+            if (sizeRemaining <= 0n) allowed = 0;
+            else allowed = Math.min(allowed, Number(sizeRemaining));
+          }
+          if (Number.isFinite(job.quota.fileBytes)) {
+            allowed = Math.min(allowed, job.quota.fileBytes - state.fileBytes);
+          }
         }
         if (allowed <= 0) {
           if (total === 0) fault(WASI_ERRNO.EFBIG);
@@ -1778,7 +1773,7 @@ export function createWasiPreview1Runtime({
       const next = base + offset;
       if (next < 0n) fault(WASI_ERRNO.EINVAL);
       if (next > BigInt(Number.MAX_SAFE_INTEGER)) fault(WASI_ERRNO.EOVERFLOW);
-      if (next > BigInt(job.quota.fileSize)) fault(WASI_ERRNO.EFBIG);
+      if (Number.isFinite(job.quota.fileSize) && next > BigInt(job.quota.fileSize)) fault(WASI_ERRNO.EFBIG);
       span(newOffsetPtr, 8);
       writeU64(newOffsetPtr, next);
       replaceOffset(record, next);

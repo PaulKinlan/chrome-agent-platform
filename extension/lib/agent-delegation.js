@@ -64,6 +64,7 @@ export function resolveTargetAgent(ref, agents) {
 /**
  * The delegation decision. `state` is the caller's LIVE run state:
  *   { agentId, rootRunId, depth, path: [agentIds…], maxIterations, step }
+ * Note: `step` is the COUNT of iterations consumed by the caller (not a 0-based index).
  * `descendantCount` is the root run's live child count.
  * Returns { ok:true, child: { depth, path, maxIterations } } or
  * { ok:false, code, error } — every denial is structured for the model.

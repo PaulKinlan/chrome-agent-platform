@@ -14,9 +14,9 @@ Deno.test("jwt-decode: disabled bundled-package descriptor with the exact bounds
   assertEquals(JWT_DECODE_TOOL.availability, "disabled");
   assertEquals(JWT_DECODE_TOOL.replayClass, "read-only");
   assertEquals(JWT_DECODE_TOOL.spdxLicense, "MIT");
-  assertEquals(LIMITS.maxTokenBytes, 16384);
-  assertEquals(LIMITS.maxJsonDepth, 32);
-  assertEquals(LIMITS.maxOutputBytes, 32768);
+  assertEquals(LIMITS.maxTokenBytes, Number.POSITIVE_INFINITY, "dptw: no token byte limit");
+  assertEquals(LIMITS.maxJsonDepth, 32, "parse-recursion grammar bound stays");
+  assertEquals(LIMITS.maxOutputBytes, Number.POSITIVE_INFINITY, "dptw: no output byte limit");
   assert(["compute", "data.read"].every((c) => JWT_DECODE_TOOL.capabilities.includes(c)), "capabilities");
 });
 
@@ -37,9 +37,13 @@ Deno.test("jwt-decode: the core rejects a 5-component JWE and an enc header", ()
   assertThrows(() => decodeJwtBounded(encHeader), Error, "JWE");
 });
 
-Deno.test("jwt-decode: the core rejects an oversize token and duplicate keys", () => {
-  const oversize = "x".repeat(LIMITS.maxTokenBytes + 1);
-  assertThrows(() => decodeJwtBounded(oversize), Error, "16 KiB");
+Deno.test("jwt-decode: no token size limit (dptw); duplicate keys still reject", () => {
+  // A token past the removed 16 KiB limit decodes (a 20 KiB payload claim).
+  const bigClaim = "x".repeat(20000);
+  const b64 = (obj) => btoa(JSON.stringify(obj)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const bigToken = `${b64({ alg: "none" })}.${b64({ big: bigClaim })}.`;
+  const decoded = decodeJwtBounded(bigToken);
+  assertEquals(decoded.payload.big, bigClaim, "a past-limit token decodes whole");
   const dup = "eyJhbGciOiJIUzI1NiIsImFsZyI6Im5vbmUifQ.e30.c2ln";
   assertThrows(() => decodeJwtBounded(dup), Error, "duplicate");
 });

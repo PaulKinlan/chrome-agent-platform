@@ -7,6 +7,7 @@
 //   deno run -A scripts/panel-leak-probe.ts [cycles=10]
 
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -105,7 +106,7 @@ try {
 
   const result = { cycles: CYCLES, samples, growth, options_targets_retained: retained };
   console.log(JSON.stringify(result, null, 1));
-  await Deno.writeTextFile("/tmp/cap-panel-leak-probe.json", JSON.stringify(result, null, 1));
+  await Deno.writeTextFile(durableDir("cap-panel-leak-probe") + "/result.json", JSON.stringify(result, null, 1));
   console.error(`GROWTH docs+${growth.documents} frames+${growth.frames} listeners+${growth.listeners} heap+${growth.jsHeapMB}MB | retained options targets: ${retained}`);
 
   // The honest pass condition (UX-001: "repeated panel open/close grows

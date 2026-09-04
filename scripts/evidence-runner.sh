@@ -36,7 +36,7 @@ GATE() { # GATE <name> <command...>
   echo "gate $name: $(grep -oE 'exit=[0-9]+' "$log" | tail -1)"
 }
 
-GATE 10-unit deno test -A tests/
+GATE 10-unit node scripts/run-tests.mjs
 GATE 11-build node build.mjs
 # build leftovers + marker + repo-root strays
 {

@@ -116,20 +116,22 @@ Deno.test("PROBE-5: clear writes a fresh pending generation (no stale outbox ent
 });
 
 // ---- PROBE 6: preparse bounds ----
-Deno.test("PROBE-6: preparse bound + quarantine cap (small corrupt quarantined; over-cap fail-closed)", async () => {
+Deno.test("PROBE-6 (dptw): corrupt authorities quarantine WHOLE at any size (no preparse/quarantine cap)", async () => {
   await setupAbsent();
   const s = await freshStore();
-  // Small corrupt blob (< 1 MiB) → quarantined + replaced with empty.
+  // Small corrupt blob → quarantined + replaced with empty.
   await injectAuthorityBytes(new TextEncoder().encode("{ corrupt small !!!"));
   const r = await s.usageRead();
   assertEquals(r.rows.length, 0, "small corrupt authority reads empty");
-  // Over-cap corrupt blob (> 1 MiB) → fail closed (throw, source preserved).
+  // dptw: a >1 MiB corrupt blob also quarantines whole — no fail-closed cap.
   await setupAbsent();
   const s2 = await freshStore();
   const huge = new TextEncoder().encode(JSON.stringify({ v: 2, gen: 1, rows: [], tombstones: [], pad: "x".repeat(2 * 1024 * 1024) }));
   await injectAuthorityBytes(huge);
   let threw = false; try { await s2.usageRead(); } catch { threw = true; }
-  assert(threw, "an over-cap corrupt authority must fail closed (no unbounded quarantine)");
+  assert(!threw, "dptw: an over-1 MiB corrupt authority quarantines whole, never fails closed");
+  const r2 = await s2.usageRead();
+  assertEquals(r2.rows.length, 0, "the corrupt (invalid-envelope) blob still reads empty");
 });
 
 // ---- Finding 1 (in-tx discard re-check) ----

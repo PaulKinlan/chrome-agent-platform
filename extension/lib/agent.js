@@ -16,12 +16,23 @@ import { assertRunOwned } from "./run-fence.js";
 import { MODEL_PRICING } from "./model-prices.js";
 import { appendSkillsLayer, baselineSystemPrompt } from "./system-prompts.js";
 import { sha256Hex, utf8ByteLength, safeProviderError, sleep } from "./pure.js";
+import {
+  workflowKey,
+  workflowNameFromKey,
+  WORKFLOW_KINDS,
+  WORKFLOW_NAMESPACE,
+  validateWorkflow,
+  workflowRunPlan,
+  runPipelineWorkflow,
+  createWorkflowPipelineDispatcher,
+} from "./workflows.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 import { maskCredentialShapes } from "./error-report.js";
 import { isToolResultFailure, toolResultFullJson } from "./tool-summary.js";
 import { correctUnsupportedMutationClaims } from "./mutation-claim-check.js";
 import { RUN_BUDGET_DEFAULTS, budgetExhaustedVerdict, continuationStopDecision, isSilentIteration } from "./run-budget.js";
+import { steerTextsToInject } from "./run-control.js";
 import { createRunDigest } from "./run-digest.js";
 import {
   anthropicAuthoritativeSearchRequests,
@@ -190,12 +201,9 @@ export function isAbortShape(value) {
   return false;
 }
 
-// One skill_read response carries at most this many bytes of file text — the
-// lazy protocol's per-string projection bound (TOOL_ARGUMENT_LIMITS.
-// maxStringUtf8Bytes, 16KiB) hard-caps what the model can receive in one
-// result, so requesting more would be silently truncated. The tool returns
-// EXACTLY what the model can read, with pagination (`truncated`/`nextOffset`)
-// for larger bodies.
+// The skill_read DEFAULT page size. Pagination (offset/limit +
+// `truncated`/`nextOffset`) is a feature, not a ceiling (dptw): a caller may
+// request any limit and receives exactly that window, whole.
 const SKILL_READ_LIMIT = 16 * 1024;
 
 /**
@@ -221,10 +229,10 @@ export function skillReadToolset(skillStore = null) {
       description:
         "Read an imported skill's SKILL.md body or one of its files. A large skill's body is NOT composed into the system prompt; call this to load the body or a supporting file (scripts/, references/) on demand. Args: skill (the /skill: id), path (default SKILL.md), offset+limit for pagination. Returns the text chunk with totalBytes and nextOffset when more remains.",
       inputSchema: z.object({
-        skill: z.string().min(1).max(64),
-        path: z.string().min(1).max(512).optional(),
+        skill: z.string().min(1),
+        path: z.string().min(1).optional(),
         offset: z.number().int().min(0).optional(),
-        limit: z.number().int().min(1).max(SKILL_READ_LIMIT).optional(),
+        limit: z.number().int().min(1).optional(),
       }),
       execute: async ({ skill, path = "SKILL.md", offset = 0, limit = SKILL_READ_LIMIT }) => {
         const rawKey = String(path ?? "SKILL.md");
@@ -325,8 +333,16 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
     memory_set: tool({
       description:
         "Write a value to the agent's memory. Values are bounded (256 KiB) and reserved registry keys are protected.",
-      inputSchema: z.object({ key: z.string().min(1).max(128), value: z.any() }),
+      inputSchema: z.object({ key: z.string().min(1), value: z.any() }),
       execute: async ({ key, value }) => {
+        // The workflows: namespace is OWNED by save_workflow (its records carry
+        // save-time validation that memory_set cannot reproduce — a forged
+        // workflows:* record would bypass validateWorkflow's kind/shape checks
+        // and reach workflow_run). Refuse honestly instead of silently
+        // shadowing save_workflow.
+        if (String(key ?? "").startsWith(WORKFLOW_NAMESPACE)) {
+          return { ok: false, error: `key "${key}" is reserved — save and manage workflows with save_workflow/workflow_get, never memory_set` };
+        }
         // memory_set is a durable side-effecting boundary — fence it BEFORE the
         // write (the round-16 fence coverage finding) AND AFTER the awaited OPFS
         // write (the round-18 finding). On abort AFTER a committed overwrite,
@@ -486,7 +502,7 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
       description:
         "Search this agent's own memory (key-value store) AND run history (journal) for a substring. Returns matching keys + a bounded excerpt of each match, never the full store.",
       inputSchema: z.object({
-        query: z.string().min(1).max(200).describe("the substring to search for"),
+        query: z.string().min(1).describe("the substring to search for"),
       }),
       execute: async ({ query }) => {
         const err = await enrolledGuard();
@@ -504,6 +520,235 @@ export function memoryToolset(memory, enrollmentGuard = null, getRunGen = null, 
   // SCOPED (hook) runs are side-effect-free: no memory_set. Untrusted event
   // data must never persist state to the hub/worker memory.
   if (readOnly) delete tools.memory_set;
+  return tools;
+}
+
+/**
+ * The agent's reusable-workflow tools (save_workflow / workflow_list /
+ * workflow_get / workflow_run). Records live under `workflows:<name>` keys in
+ * the SAME origin-keyed memory store the memory tools use (the run's own
+ * store, never another origin's) and ride the same enrollment-generation +
+ * read-only fencing as memoryToolset: a stale deleted worker must never write
+ * into a re-enrolled origin's store, SCOPED (hook) runs must never persist
+ * workflows, and reads revalidate the immutable run-start generation BEFORE
+ * and AFTER the awaited store call.
+ *
+ * `runRoute` (optional) is the owner-approved script-js dispatcher → the SW's
+ * `workflow.run` route (sandbox host), present only on real management-capable
+ * runs. `pipelineDispatch` (optional) is the agent-bound dispatcher that runs
+ * pipeline-kind steps through the run's live lazy catalog; both fail closed
+ * with a clear message when absent.
+ */
+
+export function workflowsToolset({
+  memory,
+  runRoute = null,
+  pipelineDispatch = null,
+  enrollmentGuard = null,
+  getRunGen = null,
+  readOnly = false,
+} = {}) {
+  if (!memory) return {};
+  const enrolledGuard = async () => {
+    if (!enrollmentGuard) return null;
+    const g = await enrollmentGuard();
+    const runGen = getRunGen?.() ?? null;
+    if (!g?.ok) return { error: g?.error ?? "origin not enrolled" };
+    if (runGen != null && (g.gen ?? 0) !== runGen) {
+      return { error: "origin re-enrolled during run — workflow access rejected" };
+    }
+    return null;
+  };
+  const tools = {
+    save_workflow: tool({
+      description:
+        "Save a reusable workflow to YOUR memory so you can run it again later: a JS script body (runs sandboxed, owner-approved), a saved tool pipeline (declarative steps of existing tools), Python source (saving only — the Python runtime is not admitted yet), or step-by-step instructions. Later runs can list (workflow_list), read (workflow_get) and run (workflow_run) it.",
+      inputSchema: z.object({
+        name: z.string().min(1).describe("a short, clear name for the workflow"),
+        description: z.string().optional().describe("one line about what it does"),
+        kind: z.enum(WORKFLOW_KINDS).describe("script-js | script-python | pipeline | instructions"),
+        content: z.string().describe("the workflow body (JS source, pipeline JSON, Python source, or instructions)"),
+      }),
+      execute: async ({ name, description, kind, content }) => {
+        if (readOnly) return { ok: false, error: "workflow save is not available in this context" };
+        const v = validateWorkflow({ name, description, kind, content });
+        if (!v.ok) return { ok: false, error: v.error };
+        const key = workflowKey(v.record.name);
+        const pre = await enrolledGuard();
+        if (pre) return pre;
+        // No count ceiling (dptw): the OPFS store and its quota are the honest
+        // capacity. Durable ownership + generation fencing BEFORE the write,
+        // mirroring memory_set exactly (the round-20/22/23 patterns).
+        {
+          let prev = undefined;
+          let existed = false;
+          let committed = false;
+          let wroteVersion = null;
+          try {
+            await assertRunOwned();
+            existed = typeof memory.has === "function"
+              ? await memory.has(key)
+              : (await memory.get(key)) !== undefined;
+            prev = await memory.get(key);
+            await assertRunOwned();
+            if (enrollmentGuard) {
+              const g = await enrollmentGuard();
+              const runGen = getRunGen?.() ?? null;
+              if (!g?.ok) {
+                return { error: g?.error ?? "origin not enrolled — workflow not saved" };
+              }
+              if (runGen != null && (g.gen ?? 0) !== runGen) {
+                return { error: "origin re-enrolled during run — workflow not saved" };
+              }
+            }
+            wroteVersion = await memory.set(key, v.record);
+            committed = true;
+            // POST-write durable-ownership fence (the memory_set round-20/24
+            // pattern): an abort/ownership loss DURING the awaited write must not
+            // report success and must not leave this run's record committed. A
+            // throw here lands in the catch below, which compensates.
+            await assertRunOwned();
+            if (enrollmentGuard) {
+              const g = await enrollmentGuard();
+              const runGen = getRunGen?.() ?? null;
+              if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
+                throw new Error("origin re-enrolled during run — workflow save compensated");
+              }
+            }
+            return { ok: true, name: v.record.name, kind: v.record.kind };
+          } catch (e) {
+            // Compensation mirrors memory_set: an abort/ownership-loss AFTER the
+            // write restores the PRIOR record (a same-name overwrite) or removes
+            // the NEW key — never deletes an existing key wholesale. The restore
+            // is version-scoped CAS when the store offers it (a concurrent write
+            // of the SAME key by the same enrollment is never clobbered), and
+            // enrollment-scoped: a delete→re-enroll means the NEW enrollment owns
+            // the store, so only THIS write (CAS by version) is ever removed.
+            if (committed && typeof memory.set === "function") {
+              try {
+                let sameEnrollment = true;
+                if (enrollmentGuard) {
+                  const g = await enrollmentGuard();
+                  const runGen = getRunGen?.() ?? null;
+                  if (!g?.ok || (runGen != null && (g.gen ?? 0) !== runGen)) {
+                    sameEnrollment = false;
+                  }
+                }
+                const casDelete = typeof memory.compareAndDelete === "function";
+                const casRestore = typeof memory.compareAndRestore === "function";
+                if (sameEnrollment) {
+                  if (existed) {
+                    if (casRestore && wroteVersion != null) await memory.compareAndRestore(key, wroteVersion, prev);
+                    else await memory.set(key, prev);
+                  } else {
+                    if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
+                    else await memory.delete(key);
+                  }
+                } else {
+                  if (casDelete && wroteVersion != null) await memory.compareAndDelete(key, wroteVersion);
+                  else await memory.delete(key);
+                }
+              } catch { /* best-effort */ }
+            }
+            const aborted = /abort|re-?enroll/i.test(String(e?.message ?? e));
+            return aborted
+              ? { error: String(e?.message ?? e) }
+              : { ok: false, error: `workflow save failed: ${e?.message ?? e}` };
+          }
+        }
+      },
+    }),
+    workflow_list: tool({
+      description:
+        "List YOUR saved workflows (name, kind, description only — never the full body). Memory recall: the same workflows: keys also appear in your run-time memory digest and in memory_list/memory_grep results.",
+      inputSchema: z.object({}),
+      execute: async () => {
+        const pre = await enrolledGuard();
+        if (pre) return pre;
+        let keys = [];
+        try {
+          keys = typeof memory.keys === "function" ? await memory.keys() : [];
+        } catch { /* best-effort */ }
+        const names = (Array.isArray(keys) ? keys : [])
+          .map((k) => workflowNameFromKey(String(k)))
+          .filter(Boolean);
+        const workflows = [];
+        for (const wfName of names) {
+          try {
+            const rec = await memory.get(workflowKey(wfName));
+            if (rec && typeof rec === "object" && typeof rec.name === "string") {
+              workflows.push({ name: rec.name, kind: String(rec.kind ?? ""), description: String(rec.description ?? "") });
+            }
+          } catch { /* skip unreadable */ }
+        }
+        const post = await enrolledGuard();
+        if (post) return post;
+        return { ok: true, workflows };
+      },
+    }),
+    workflow_get: tool({
+      description: "Read ONE of YOUR saved workflows in full (name, kind, description, content).",
+      inputSchema: z.object({ name: z.string().min(1) }),
+      execute: async ({ name }) => {
+        const pre = await enrolledGuard();
+        if (pre) return pre;
+        let rec = null;
+        try {
+          rec = await memory.get(workflowKey(name));
+        } catch { /* absent */ }
+        const post = await enrolledGuard();
+        if (post) return post;
+        if (!rec || typeof rec !== "object" || typeof rec.name !== "string") {
+          return { ok: false, error: `workflow "${String(name)}" not found` };
+        }
+        return { ok: true, workflow: rec };
+      },
+    }),
+    workflow_run: tool({
+      description:
+        "Run ONE of YOUR saved workflows NOW. script-js workflows run sandboxed (no DOM/extension/network of its own; fetch is host-listed) and REQUIRE OWNER APPROVAL like run_script. pipeline workflows run their declared steps through your live tools, each step keeping its own gates; a step that would need an owner approval card fails closed naming the tool. script-python/instructions kinds fail closed with a clear message.",
+      inputSchema: z.object({ name: z.string().min(1) }),
+      execute: async ({ name }) => {
+        const wfName = String(name ?? "");
+        const pre = await enrolledGuard();
+        if (pre) return pre;
+        let rec = null;
+        try {
+          rec = await memory.get(workflowKey(wfName));
+        } catch { /* absent */ }
+        const post = await enrolledGuard();
+        if (post) return post;
+        if (!rec || typeof rec !== "object" || typeof rec.name !== "string") {
+          return { ok: false, error: `workflow "${wfName}" not found` };
+        }
+        const plan = workflowRunPlan(rec);
+        if (!plan.ok) return plan;
+        if (plan.mode === "script-js") {
+          if (typeof runRoute !== "function") {
+            return { ok: false, error: "workflow run is not available in this context" };
+          }
+          return await runRoute({
+            name: rec.name,
+            kind: String(rec.kind ?? ""),
+            source: String(rec.content ?? ""),
+            description: String(rec.description ?? ""),
+          });
+        }
+        if (plan.mode === "pipeline") {
+          if (typeof pipelineDispatch !== "function") {
+            return { ok: false, error: "workflow run is not available in this context" };
+          }
+          return await runPipelineWorkflow({
+            name: rec.name,
+            kind: String(rec.kind ?? ""),
+            content: String(rec.content ?? ""),
+            dispatchStep: pipelineDispatch,
+          });
+        }
+        return plan;
+      },
+    }),
+  };
   return tools;
 }
 
@@ -573,6 +818,11 @@ export function createAgent({
   // `readOnlyMemory` (SCOPED hook runs): memory_set is omitted — untrusted
   // event data must never persist state.
   readOnlyMemory = false,
+  // The owner-approved script-js run dispatcher for saved workflows → the
+  // service worker's `workflow.run` route (sandboxed host + approval card,
+  // mirroring script.run). Absent (workers, SCOPED hook runs) → workflow_run
+  // fails closed with a clear message for script-js workflows.
+  workflowRunRoute = null,
   // The imported-skills store reader: async () => importedSkillRecords. When
   // present, the agent gets the `skill_read` tool — on-demand loading of a
   // large/multi-file imported skill's SKILL.md body or any stored file
@@ -628,6 +878,12 @@ export function createAgent({
   let progressCb = onProgress;
 
   const getRunGen = () => activeRun?.gen ?? null;
+  // The agent-bound pipeline-step dispatcher for pipeline-kind workflows
+  // (CAP-FB-20260902-WORKFLOWS-TO-MEMORY): bound once `lazy` exists below — it
+  // dispatches every step through the run's LIVE lazy catalog, so the tools
+  // map is created before `lazy`, but executes only at run time (after the
+  // binding is set).
+  let livePipelineStepDispatch = null;
 
   // The RUN-BOUND prompt attestation sink (mutable per run — the orchestrator
   // is cached across runs, so the SW rebinds this per run like setProgress).
@@ -640,6 +896,14 @@ export function createAgent({
   // provider/model identity. NO prompt content crosses the sink.
   let attestationCb = null;
   let lastAttestedDigest = null; // dedupe: the system message is stable per run
+  // chrome-agent-platform-afiu: the per-run STEER source (mutable like the
+  // progress/attestation bindings — the cached agent is reused across runs).
+  // `steerSourceCb()` returns { pending, ack } where pending is the run
+  // control's steer records; the model seam injects their text into every
+  // outgoing call (between steps) and acks what it carried. Null → steering
+  // is inert (the pre-steer byte path).
+  let steerSourceCb = null;
+  let steerStopCarried = false; // a stop-step steer rode a model call
   // The ACTIVE run's full system prompt (the construction composition plus any
   // per-run skills inserted before the protected block). Runs of an agent are
   // serialized (the per-worker runQueue / the SW runMutex), so this mutable
@@ -929,6 +1193,28 @@ export function createAgent({
           digestTurnsLogged = carried.turns;
           agentDoLog.info(`run digest carried across an inner-turn boundary`, { turns: carried.turns, bytes: carried.bytes, results: runDigest.counts() });
         }
+        // OWNER STEER (chrome-agent-platform-afiu): pending guidance rides the
+        // outgoing call as trailing user messages (the run loop honors it
+        // BETWEEN steps — never mid-tool-call). Ack what was carried so the SW
+        // knows nothing the owner typed was lost. A stop-step record flags the
+        // hooks to end the loop at the next step boundary.
+        if (steerSourceCb) {
+          try {
+            const src = steerSourceCb();
+            const pending = Array.isArray(src?.pending) ? src.pending : [];
+            const steerTexts = steerTextsToInject(pending);
+            if (steerTexts.length && Array.isArray(options?.prompt)) {
+              const prompt = [...options.prompt];
+              for (const text of steerTexts) prompt.push({ role: "user", content: text });
+              options = { ...options, prompt };
+              if (pending.some((s) => s?.mode === "stop-step")) steerStopCarried = true;
+              const ids = pending.map((s) => s?.id).filter(Boolean);
+              if (ids.length && typeof src?.ack === "function") {
+                try { src.ack(ids); } catch { /* an ack failure never breaks the call */ }
+              }
+            }
+          } catch { /* steering must never break a model call */ }
+        }
         // Model round-trip observability: method + attempt ordinal + call
         // latency (time to the provider's response OBJECT — stream consumption
         // continues after). NEVER log options/content (prompts, messages).
@@ -988,11 +1274,45 @@ export function createAgent({
 
   const sourceTools = {
     ...memoryToolset(memory, enrollmentGuard, getRunGen, readOnlyMemory),
+    ...workflowsToolset({
+      memory,
+      runRoute: workflowRunRoute,
+      pipelineDispatch: async (toolName, args, stepIndex) =>
+        livePipelineStepDispatch
+          ? livePipelineStepDispatch(toolName, args, stepIndex)
+          : { ok: false, error: "pipeline workflow run is not available in this context" },
+      enrollmentGuard,
+      getRunGen,
+      readOnly: readOnlyMemory,
+    }),
     ...skillReadToolset(skillStore),
     ...tools,
   };
   const instanceGeneration = `agent-instance:${crypto.randomUUID()}`;
+  // The run-context reader shared by the lazy provider tools AND the
+  // pipeline-step dispatcher: null when no run is active (a pipeline step can
+  // never dispatch outside a real run).
+  const readRunLazyContext = async () => {
+    if (!activeRun) return null;
+    const dynamic = await readLazyScope();
+    return Object.freeze({
+      signal: activeRun.controller.signal,
+      runId: ownData(activeRun.identity, "runId"),
+      taskId: ownData(activeRun.identity, "taskId"),
+      agentId: id,
+      origin: ownData(dynamic, "origin") ?? ownData(activeRun.identity, "origin") ?? (id === "hub" ? "" : id),
+      documentId: ownData(dynamic, "documentId") ?? ownData(activeRun.identity, "documentId") ?? "",
+      runGeneration: ownData(dynamic, "runGeneration") ?? ownData(activeRun.identity, "runGeneration") ?? String(activeRun.gen ?? "0"),
+      replayMetadata: ownData(activeRun.identity, "replayMetadata") ?? null,
+      untrustedToken: typeof untrustedToken === "string" ? untrustedToken : null,
+    });
+  };
   const lazy = createLazyProviderToolset({
+    // 4kl: semantic tool retrieval — the bundled precomputed vector table
+    // (lookup-only at runtime; lexical-only honest fallback if it fails).
+    vectorTableLoader: () =>
+      fetch(chrome.runtime.getURL("vendor/tool-vector-table.json"))
+        .then((response) => (response.ok ? response.json() : null)),
     // A screenshot reaches a vision model as a real IMAGE part, not as base64
     // text (CAP-FB-20260830-SCREENSHOT-TO-MODEL-01). Only lanes whose
     // transport carries an image content part get one; everything else reads
@@ -1015,6 +1335,7 @@ export function createAgent({
         capabilitiesByTool: Object.fromEntries(
           Object.keys(sourceTools).map((toolName) => [toolName, [
             toolName === "memory_set" ? "memory.write" :
+            toolName === "save_workflow" ? "memory.write" :
             toolName === "delegate_task" ? "agent.delegate" :
             toolName === "list_agents" ? "agent.list" : "memory.read",
           ]]),
@@ -1024,21 +1345,17 @@ export function createAgent({
       if (!Array.isArray(extra)) throw new Error("lazy source reader shape");
       return [...builtin, ...extra];
     },
-    contextReader: async () => {
-      if (!activeRun) return null;
-      const dynamic = await readLazyScope();
-      return Object.freeze({
-        signal: activeRun.controller.signal,
-        runId: ownData(activeRun.identity, "runId"),
-        taskId: ownData(activeRun.identity, "taskId"),
-        agentId: id,
-        origin: ownData(dynamic, "origin") ?? ownData(activeRun.identity, "origin") ?? (id === "hub" ? "" : id),
-        documentId: ownData(dynamic, "documentId") ?? ownData(activeRun.identity, "documentId") ?? "",
-        runGeneration: ownData(dynamic, "runGeneration") ?? ownData(activeRun.identity, "runGeneration") ?? String(activeRun.gen ?? "0"),
-        replayMetadata: ownData(activeRun.identity, "replayMetadata") ?? null,
-        untrustedToken: typeof untrustedToken === "string" ? untrustedToken : null,
-      });
-    },
+    contextReader: readRunLazyContext,
+  });
+  // The pipeline-step dispatcher for pipeline-kind workflows: steps resolve by
+  // EXACT tool name against the run's live lazy catalog and execute through the
+  // protocol — validation, run ownership and capability gates all apply as for
+  // a model-initiated execute_tool call (workflows-to-memory).
+  livePipelineStepDispatch = createWorkflowPipelineDispatcher({
+    search: (request, ctx) => lazy.protocol.search(request, ctx),
+    execute: (request, ctx) => lazy.protocol.execute(request, ctx),
+    settle: (ref) => lazy.protocol.settlePausedCall(ref),
+    context: readRunLazyContext,
   });
   // The provider receives the fixed lazy protocol tools. Every
   // source closure above stays private until a fresh search result is resolved
@@ -1137,6 +1454,19 @@ export function createAgent({
           silentContinuations = 0;
           stoppedBy = null;
         } else {
+          // chrome-agent-platform-afiu: an owner stop-step steer outranks the
+          // continuation economy — the loop ends at the step boundary AFTER
+          // the call that carried the steer (no further tool loop), and the
+          // run stops VISIBLY (the SW settles a steer-stop terminal).
+          if (steerStopCarried) {
+            steerStopCarried = false;
+            stoppedBy = { reason: "steer-stop-step", steps: budgetStep, iterations: silentContinuations };
+            agentDoLog.info(`step ${e.step} not started — the owner steered the run to stop at step ${budgetStep}`);
+            span.end("stopped");
+            stepSpans.delete(e.step);
+            try { progressCb?.({ type: "stopped", ...stoppedBy }); } catch { /* ignore */ }
+            return { decision: "stop" };
+          }
           // The continuation decision — agent-do's own stop hook, never a
           // patched loop (CAP-FB-20260830-MODEL-CALL-ECONOMY-01).
           const decision = continuationStopDecision({ lastIteration, silentContinuations });
@@ -1559,6 +1889,10 @@ export function createAgent({
     // Rebind the live progress callback without rebuilding the cached agent.
     // The SW calls this per-run (the orchestrator is reused across runs).
     setProgress: (cb) => { progressCb = cb; },
+    // Rebind the run-bound steer source (per run, like setProgress). The SW
+    // binds a reader over its run-control store keyed by THIS run's execution
+    // id; the model seam injects pending steer text between steps.
+    setSteerSource: (cb) => { steerSourceCb = cb; steerStopCarried = false; },
     // Rebind the run-bound prompt attestation sink (per run, like setProgress).
     // The SW binds a sink tagged with the runId so the attestation journaled
     // for a run is captured from THAT run's actual provider-bound message.
@@ -1621,6 +1955,9 @@ export function createOrchestrator({
   skillStore = null, // async () => imported-skill records — enables skill_read
                      // (CAP-FB-20260830-SKILLS-UNCAPPED-01) on the master AND
                      // every worker (skills are a shared master store)
+  workflowRunRoute = null, // the owner-approved script-js workflow run dispatcher
+                           // (SW `workflow.run`) — bound to the MASTER only; a
+                           // worker's script-js workflow_run fails closed
 }) {
   const workerAgents = new Map();
   let currentRunIdentity = null;
@@ -1786,6 +2123,7 @@ export function createOrchestrator({
     iterationGuard,
     serverTooling,
     skillStore,
+    workflowRunRoute,
     // `extraTools` stay out of this eager map. Their live records come from
     // readMasterLazySources; only delegation's existing closures are added to
     // the private built-in source map.
@@ -1848,6 +2186,12 @@ export function createOrchestrator({
     setAttestation(cb) {
       master.setAttestation?.(cb);
       for (const a of workerAgents.values()) a.setAttestation?.(cb);
+    },
+    // Rebind the run-bound steer source on the master + every worker (a
+    // delegated site run steers through the SAME run-control plane).
+    setSteerSource(cb) {
+      master.setSteerSource?.(cb);
+      for (const a of workerAgents.values()) a.setSteerSource?.(cb);
     },
     addWorker(config) {
       const a = createAgent({

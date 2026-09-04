@@ -19,14 +19,13 @@ import {
   readFsGrantFile,
   scanFsGrantManifest,
   grepFsGrant,
-  MAX_FS_READ_BYTES,
-  MAX_FS_WRITE_BYTES,
 } from "./fs-grants.js";
 import { normalizeHostPattern } from "./permission-orchestration.js";
 import { DEVELOPER_ONLY_TOOL_NAMES, requirementFor } from "./chrome-tool-capabilities.js";
 import { permissionPlainName } from "./permission-language.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
+import { cleanupGuidanceFor } from "./lifecycle-cleanup.js";
 
 const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
@@ -39,7 +38,6 @@ const RAW_ALARM_KEY = "cap:rawAlarms";
 /** T6: MHTML snapshots are returned inline — hard-capped so a hostile page
  * can't flood the run (over-cap pages are REFUSED with the size reported
  * honestly, never silently truncated into an unusable partial file). */
-const MAX_MHTML_BYTES = 8 * 1024 * 1024;
 const DEFAULT_GRANT_MS = 15 * 60 * 1000; // only used when an EXPLICIT expiryMs is passed
 
 // A GLOBAL grant mutex serializes the grant CHECK with the destructive Chrome
@@ -2239,7 +2237,7 @@ export function browserToolset(readOnly = false, {
       inputSchema: z.object({
         grantId: z.string().optional(),
         path: z.string().optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).optional(),
       }),
       execute: async ({ grantId, path, limit }) => {
         const g = await resolveRunGrantId(grantId);
@@ -2254,7 +2252,7 @@ export function browserToolset(readOnly = false, {
       inputSchema: z.object({
         query: z.string(),
         grantId: z.string().optional(),
-        limit: z.number().int().min(1).max(500).optional(),
+        limit: z.number().int().min(1).optional(),
       }),
       execute: async ({ query, grantId, limit }) => {
         const g = await resolveRunGrantId(grantId);
@@ -2277,11 +2275,11 @@ export function browserToolset(readOnly = false, {
         path: z.string().describe("the file path, relative to the granted folder"),
         grantId: z.string().optional().describe("which folder, when more than one is available (see list_folders)"),
         offset: z.number().int().min(0).optional().describe("byte offset of the read window (0 = start of file). Use with `length` to page through a large file in chunks."),
-        length: z.number().int().min(1).max(MAX_FS_READ_BYTES).optional().describe("byte length of the read window (omitting it reads to the end of the file from `offset`)"),
+        length: z.number().int().min(1).optional().describe("byte length of the read window (omitting it reads to the end of the file from `offset`)"),
         // Legacy transport knob kept for schema compatibility: it no longer
         // bounds or refuses reads (a 2000-byte default once refused whole
         // files). Ask for a partial read with offset/length instead.
-        maxBytes: z.number().int().min(1).max(MAX_FS_READ_BYTES).optional(),
+        maxBytes: z.number().int().min(1).optional(),
       }),
       execute: async ({ path, grantId, maxBytes, offset, length }) => {
         const g = await resolveRunGrantId(grantId);
@@ -2299,7 +2297,7 @@ export function browserToolset(readOnly = false, {
         path: z.string().optional(),
         regex: z.boolean().optional(),
         ignoreCase: z.boolean().optional(),
-        maxMatches: z.number().int().min(1).max(200).optional(),
+        maxMatches: z.number().int().min(1).optional(),
       }),
       execute: async ({ query, grantId, path, regex, ignoreCase, maxMatches }) => {
         const g = await resolveRunGrantId(grantId);
@@ -2316,10 +2314,10 @@ export function browserToolset(readOnly = false, {
     }),
     write_file: tool({
       description:
-        "Write a UTF-8 text file inside a granted local folder (the folder must be granted with write access in Settings → Local folders). REQUIRES OWNER APPROVAL: the owner sees the exact diff between the file on disk and your content before anything is written, and a denial leaves the file untouched. Read the file first (read_file) and send the COMPLETE new content, never a fragment. A missing file is created; binary files, files over the size bound, and paths outside the folder are refused. Returns { ok, path, size, sha256, added, removed } or a bounded JSON error.",
+        "Write a UTF-8 text file inside a granted local folder (the folder must be granted with write access in Settings → Local folders). REQUIRES OWNER APPROVAL: the owner sees the exact diff between the file on disk and your content before anything is written, and a denial leaves the file untouched. Read the file first (read_file) and send the COMPLETE new content, never a fragment. A missing file is created; binary files and paths outside the folder are refused. There is no size limit. Returns { ok, path, size, sha256, added, removed } or a bounded JSON error.",
       inputSchema: z.object({
         path: z.string().describe("the file path, relative to the granted folder"),
-        content: z.string().max(MAX_FS_WRITE_BYTES).describe("the COMPLETE new file content (UTF-8 text)"),
+        content: z.string().describe("the COMPLETE new file content (UTF-8 text)"),
         grantId: z.string().optional().describe("which folder, when more than one is available (see list_folders)"),
       }),
       execute: async ({ path, content, grantId }) => {
@@ -2353,9 +2351,12 @@ export function browserToolset(readOnly = false, {
     }),
     open_tab: tool({
       description:
-        "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring).",
-      inputSchema: z.object({ url: z.string().url() }),
-      execute: async ({ url }) => {
+        "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring). " +
+        "Pass keep:true when this tab IS the task's result and you intend it to stay open for the user " +
+        "(a default-off run-end auto-close then leaves it alone). " +
+        cleanupGuidanceFor("open_tab"),
+      inputSchema: z.object({ url: z.string().url(), keep: z.boolean().optional() }),
+      execute: async ({ url, keep }) => {
         // Scheme guard FIRST: a chrome:/file:/about:/data: destination can
         // never be authorized, so it is refused before any permission check.
         const dest = webDestination(url);
@@ -2397,7 +2398,7 @@ export function browserToolset(readOnly = false, {
           // the Act class (no destructive card); a tab the run did NOT open is
           // Destructive (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
           if (typeof tab?.id === "number") openedTabIds.add(tab.id);
-          return { ok: true, tabId: tab.id, url };
+          return { ok: true, tabId: tab.id, url, ...(keep === true ? { keep: true } : {}) };
         });
       },
     }),
@@ -2637,7 +2638,7 @@ export function browserToolset(readOnly = false, {
       description:
         "Schedule a future task to run the agent. REQUIRED: pass exactly one of `at` (absolute epoch ms in the future) or `delayMs` (a positive delay in ms) — a call with neither fails. The task runs even if the browser is idle. Pass scriptId (a script you created with create_script) to run that JS directly on the schedule — no model re-invocation.",
       inputSchema: z.object({
-        task: z.string().min(1).max(4000),
+        task: z.string().min(1),
         at: z.number().optional().describe("absolute epoch ms in the future — pass this OR delayMs, exactly one is required"),
         delayMs: z.number().optional().describe("positive delay in ms from now — pass this OR at, exactly one is required"),
         periodInMinutes: z.number().optional(),
@@ -2716,7 +2717,8 @@ export function browserToolset(readOnly = false, {
     }),
     create_window: tool({
       description:
-        "Open a new browser window, optionally at a URL. Requires browser-control permission (scoped + expiring); a URL destination must be inside the granted origin(s).",
+        "Open a new browser window, optionally at a URL. Requires browser-control permission (scoped + expiring); a URL destination must be inside the granted origin(s). " +
+        cleanupGuidanceFor("create_window"),
       inputSchema: z.object({
         url: z.string().url().max(2048).optional(),
         focused: z.boolean().optional(),
@@ -3889,12 +3891,19 @@ export function browserToolset(readOnly = false, {
     }),
     duplicate_tab: tool({
       description:
-        "Duplicate a tab (the copy opens next to it). Requires browser-control permission (scoped + expiring) for the tab's origin.",
-      inputSchema: z.object({ tabId: z.number().int() }),
-      execute: async ({ tabId }) =>
+        "Duplicate a tab (the copy opens next to it). Requires browser-control permission (scoped + expiring) for the tab's origin. " +
+        "Pass keep:true when the copy IS the task's result and you intend it to stay open for the user " +
+        "(a default-off run-end auto-close then leaves it alone). " +
+        cleanupGuidanceFor("duplicate_tab"),
+      inputSchema: z.object({ tabId: z.number().int(), keep: z.boolean().optional() }),
+      execute: async ({ tabId, keep }) =>
         t13MutateTabWithGrant(tabId, "duplicated", async () => {
           const copy = await chrome.tabs.duplicate(tabId);
-          return { ok: true, tabId, newTabId: copy?.id ?? null };
+          // The copy is a NEW tab this run created — closing it is Act (no
+          // destructive card), exactly like a tab this run opened via open_tab
+          // (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
+          if (typeof copy?.id === "number") openedTabIds.add(copy.id);
+          return { ok: true, tabId, newTabId: copy?.id ?? null, ...(keep === true ? { keep: true } : {}) };
         }, "duplicate_tab"),
     }),
     set_tab_pinned: tool({
@@ -4526,14 +4535,7 @@ export function browserToolset(readOnly = false, {
             return { error: `capture failed: ${e?.message ?? e}` };
           }
           if (!blob) return { error: "capture returned no data" };
-          const size = blob.size ?? 0;
-          if (size > MAX_MHTML_BYTES) {
-            return {
-              error: `page too large to save inline (${size} bytes > ${MAX_MHTML_BYTES} cap) — not saved`,
-              sizeBytes: size,
-              capBytes: MAX_MHTML_BYTES,
-            };
-          }
+          const size = blob.size ?? 0; // honest size metadata (no cap — dptw)
           let mhtml;
           try {
             mhtml = await blob.text();
@@ -4609,7 +4611,8 @@ export function browserToolset(readOnly = false, {
     }),
     restore_closed: tool({
       description:
-        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required.",
+        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required. " +
+        cleanupGuidanceFor("restore_closed"),
       inputSchema: z.object({ sessionId: z.string().min(1).max(128) }),
       execute: async ({ sessionId }) =>
         await withGrantLock(async () => {
@@ -4668,7 +4671,26 @@ export function browserToolset(readOnly = false, {
           } catch {
             return { error: "run aborted — session restored then aborted" };
           }
-          return { ok: true, sessionId, restored: Boolean(restored), kind: item.tab ? "tab" : "window" };
+          // The restored Session carries the REAL ids Chrome re-opened: a tab
+          // (restored.tab.id) or a window (restored.window.id + its tabs) — the
+          // run-end summary lists them instead of a count (review finding: the
+          // old Boolean reduction left the tracker with no ids to report).
+          const restoredSession = restored && typeof restored === "object" ? restored : null;
+          const restoredTabId = Number.isInteger(restoredSession?.tab?.id) ? restoredSession.tab.id : null;
+          const restoredWindow = restoredSession?.window && typeof restoredSession.window === "object" ? restoredSession.window : null;
+          const restoredWindowId = Number.isInteger(restoredWindow?.id) ? restoredWindow.id : null;
+          const restoredWindowTabIds = Array.isArray(restoredWindow?.tabs)
+            ? restoredWindow.tabs.map((t) => (t && Number.isInteger(t.id) ? t.id : null)).filter(Number.isInteger)
+            : [];
+          return {
+            ok: true,
+            sessionId,
+            kind: item.tab ? "tab" : "window",
+            restoredTabId,
+            restoredWindowId,
+            restoredWindowTabIds,
+            restored: Boolean(restoredSession),
+          };
         }),
     }),
     list_synced_devices: tool({

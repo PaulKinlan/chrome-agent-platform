@@ -68,7 +68,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "perf-seeded-scale.ts": { class: "named", npm: "test:perf:seeded", reason: "takes a seed-count argument (120) and a seeded profile; SEEDED-PROFILE-GATES-01 owns wiring it as a gate" },
   "read-page-host-grant-acceptance.ts": { class: "named", npm: "test:read-page-host-grant", reason: "11/11 at the re-inventory (14 s); run on demand — promotion is the owner's call" },
   "sidebar-parity.ts": { class: "named", npm: "test:sidebar", reason: "18/2 at the re-inventory (two sidebar parity checks red); promote once green" },
-  "ui-integration.ts": { class: "named", npm: "test:ui", reason: "25/1 at the re-inventory and then a crash: #run-log is no longer on the hub (step 5 dereferences null) and 'ViewTransition.finished awaited' fails; promote once green" },
+  "ui-integration.ts": { class: "named", npm: "test:ui", reason: "56/0 after the 5ht repair (hub moved #run-log → action-ledger; theme switching removed; durability contract now state-conditional; 6-min watchdog caps any hang; falsification: a rail-width break produces 4 failing checks); ~90s; run on demand — promotion is the owner's call" },
   "webmcp-acceptance.ts": { class: "named", npm: "test:webmcp", reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof" },
   "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
 
@@ -78,6 +78,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   // 61/0 since CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01 re-baselined the over-cap
   // scenario to the admission-time budget refusal (three delegation runs ≈ 3 min).
   "kat-agent-delegation.ts": { class: "kat", budgetMs: 300_000 },
+  "kat-browser-grant-persistence.ts": { class: "kat" },
   "kat-agent-templates.ts": { class: "kat", ...RED("13/24", "the first-run empty state now reads 'Browse starter templates' and seeds nothing automatically — the KAT predates the templates redesign") },
   "kat-artifact-library-capacity.ts": { class: "kat" },
   "kat-artifact-preview.ts": { class: "kat", ...RED("4/2", "the chat no longer renders the restricted artifact-preview host iframe the KAT expects") },
@@ -93,6 +94,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-generated-image-strip.ts": { class: "kat" },
   "kat-genui-error-state.ts": { class: "kat", ...RED("16/2", "two generated-UI error-state checks red", "the generated-UI bootstrap syntax lane (in flight)") },
   "kat-hub-timeline.ts": { class: "kat" },
+  "kat-interactive-artifact-click.ts": { class: "kat", budgetMs: 240_000 },
   "kat-mcp-agent-ui.ts": { class: "kat" },
   "kat-mcp-global-ui.ts": { class: "kat" },
   "kat-mcp-tool-injection.ts": { class: "kat" },
@@ -111,6 +113,8 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-scheduled-next-run-widget.ts": { class: "kat" },
   "kat-scheduled-run-output.ts": { class: "kat" },
   "kat-settings-cleanliness.ts": { class: "kat" },
+  "kat-settings-multi-section.ts": { class: "kat" },
+  "kat-settings-server-tools.ts": { class: "kat" },
   "kat-task-lifecycle.ts": { class: "kat", ...RED("0/1", "'no service worker target' — the KAT does not wait for the MV3 worker to register") },
   "kat-task-view-simplify.ts": { class: "kat", ...RED("21/1", "'a settled run leaves no debug affordance' — a toggle is still visible") },
   "kat-template-cards.ts": { class: "kat", ...RED("0/6", "the create dialog no longer has the template select the KAT expects (Name / What it does / Run on a schedule)") },
@@ -122,6 +126,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-wasi-tranche2.ts": { class: "kat", ...RED("1/9", "tool.preview.run answers 'offscreen unavailable: Could not establish connection'") },
 
   // ── manual (evidence / repro / bisect tools; not gates) ─────────────────
+  "dump-tool-corpus-tokens.ts": { class: "manual", reason: "4kl tablegen input generator: prints the built-in tool corpus tokens (or --mode=texts) for scripts/build-tool-vector-table.mjs; runs by hand only when regenerating the committed vector table", noVerdict: "pure generator — it prints the corpus; there is nothing to assert" },
   "agent-provider-picker.ts": { class: "manual", reason: "the picker-50 evidence run (scripts/evidence-runner.sh gate 16); 0/2 at the re-inventory both before and after the launcher migration — its build-test-extension.mjs copy does not load on this tree ('extension target not found'), which is outside this lane" },
   "axe-audit.ts": { class: "manual", reason: "4/3 at the re-inventory; a11y-audit.ts is the gate — this is the axe-core cross-check kept for comparison" },
   "flake-evidence.ts": { class: "manual", reason: "a bisect tool: runs the journey suite N times on a branch and its base and compares failure sets; exits 1 only for a branch-only failure" },

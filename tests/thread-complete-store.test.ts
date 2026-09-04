@@ -7,8 +7,7 @@
 // stays under the store bound (digest + ref, never a giant slice), the outbox
 // record never approaches 256KiB, reload/cold-start hydrates complete, and a
 // legacy truncated row back-fills from the journal. (Realistic heterogeneous
-// content: homogeneous runs trip the redactor's URL-userinfo regex
-// catastrophically — a pre-existing quirk unrelated to the store contract.)
+// content by habit; the homogeneous-run redactor quadratic was fixed in vj4s.)
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
 
@@ -109,20 +108,18 @@ Deno.test("complete store: a 10MiB response is stored COMPLETE in the journal an
   assertEquals(answers[answers.length - 1].content, BIG_TEXT, "the reopened thread hydrates the complete 10MiB response");
 });
 
-Deno.test("complete store: the memory thread row stays under the store bound — a bounded digest + retainedPayloadRef, never a giant slice", async () => {
+Deno.test("complete store: the memory thread row holds the WHOLE response (dptw — no store bound, no digest substitution)", async () => {
   const store = new FakeStore();
   const registry = makeRegistry(store, (id, execId, terminal) => commitThreadTerminal(id, execId, terminal));
   const t = await createThread("bounded row");
   await seedHugeRun(registry, "exec_complete_bound", { threadId: t.id, result: BIG_TEXT });
 
   const stored = await getThread(t.id);
-  const serialized = new TextEncoder().encode(JSON.stringify(stored.messages)).byteLength;
-  assert(serialized < 256 * 1024, `thread messages must stay under the store bound (${serialized} bytes)`);
   const last = stored.messages.at(-1);
   assertEquals(last.role, "assistant");
-  // The row keeps the index/summary + the ref — the response text itself is
-  // NOT a truncated slice of the payload.
-  assert(last.content.length < 64 * 1024, `the row holds a bounded summary, not the payload (${last.content.length} chars)`);
+  // dptw: the row carries the COMPLETE response — never a digest, never a
+  // truncated slice. The retainedPayloadRef remains recorded for provenance.
+  assertEquals(last.content, BIG_TEXT, "the row holds the complete response");
   assert(typeof last.retainedPayloadRef === "string" && last.retainedPayloadRef.length > 0, "the row carries the retainedPayloadRef");
 });
 

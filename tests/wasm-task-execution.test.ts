@@ -73,10 +73,11 @@ Deno.test("executableBundledToolRecords: validateArguments validates valid and r
   assertEquals(valid2.ok, true);
   assertEquals(valid2.data.args.includes("-d"), true);
 
-  // Hostile / oversized stdin (>2 KiB)
+  // dptw: stdin of any size validates (the >2 KiB refusal is gone).
   const hugeStdin = "a".repeat(3000);
-  const invalid1 = await base64Rec.validateArguments({ stdin: hugeStdin });
-  assertEquals(invalid1.ok, false, "oversized stdin must fail validation");
+  const bigStdin = await base64Rec.validateArguments({ stdin: hugeStdin });
+  assertEquals(bigStdin.ok, true, "stdin past the removed 2 KiB bound validates");
+  assertEquals(bigStdin.data.stdin, hugeStdin, "the stdin arrives whole");
 
   // Two document tool (diff)
   const diffRec = records.find((r) => r.descriptorInput.toolId === "diff");

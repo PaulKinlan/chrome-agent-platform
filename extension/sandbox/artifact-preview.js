@@ -2,7 +2,9 @@
 // never executes or document.write()s untrusted HTML. It mounts that HTML in a
 // second allow-scripts-only iframe, so self/location navigation can replace at
 // most the disposable inner document — never this message/lifecycle boundary.
-const MAX_HTML_BYTES = 300000;
+// No size cap: an HTML artifact built across ≤64 KiB appends is a normal
+// stored artifact at any size the store admits (owner 2026-09-03: no preview
+// limits), so whatever guarded HTML the embedder delivers is mounted as-is.
 // Never sit on "Preparing restricted preview…" forever: if no payload arrives
 // (the tool call failed, the embedder was removed, or the delivery raced the
 // frame load), say so honestly and offer a retry. The embedder re-delivers the
@@ -65,7 +67,7 @@ window.addEventListener("message", (event) => {
     if (data?.type === "cap:artifact-preview-open") {
       const html = typeof data.html === "string" ? data.html : "";
       const nonce = typeof data.nonce === "string" ? data.nonce : "";
-      if (!validNonce(nonce) || html.length > MAX_HTML_BYTES) return;
+      if (!validNonce(nonce)) return;
       mountPreview({ nonce, html });
       return;
     }

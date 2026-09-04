@@ -7,7 +7,6 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
-  SCRIPT_BOUNDS,
   SCRIPT_FRAME_CSP,
   createScript,
   deleteScript,
@@ -114,13 +113,18 @@ Deno.test("createScript → list → get round-trips a script", async () => {
   assert(got.script.source.includes("paul.kinlan.me"), "source must round-trip");
 });
 
-Deno.test("createScript bounds the name + source", async () => {
+Deno.test("createScript validates a name; source has NO size cap (dptw)", async () => {
   const noName = await createScript("master", { name: "  ", source: "return 1;" });
   assert(!noName.ok, "blank name must fail");
 
-  const huge = "x".repeat(SCRIPT_BOUNDS.maxSourceBytes + 1);
+  // Past the removed 64 KiB script-source cap: stored complete. (The backing
+  // memory store's own per-value bound is the dptw STORAGE area — the >256 KiB
+  // proof lands with that removal.)
+  const huge = "x".repeat(200 * 1024 + 1);
   const big = await createScript("master", { name: "big", source: huge });
-  assert(!big.ok, "oversized source must fail");
+  assert(big.ok, `oversized source is accepted: ${big.error ?? "ok"}`);
+  const got = await getScript("master", big.script.id);
+  assertEquals(got.script.source.length, huge.length, "the source round-trips whole");
 });
 
 Deno.test("updateScript patches name/source + deleteScript removes it", async () => {
