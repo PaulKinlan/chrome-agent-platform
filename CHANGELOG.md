@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.136] — 2026-09-04
+- Changelog wording for the pipeline entries in plain user language
+
 ## [0.3.135] — 2026-09-04
 - Maintenance and fixes.
 
@@ -7,10 +10,10 @@
 - Maintenance and fixes.
 
 ## [0.3.133] — 2026-09-04
-- run_pipeline approval resumes against the live scope: the resume binding re-reads the context per call (parity with the agent-loop wrapper), so a scope that moved between steps no longer turns an owner approval into 'approved but could not be re-run' — proven red against the stale binding, where the test halts with lazy-resume-scope-mismatch
+- A pipeline step that asks for your approval now keeps working even when the task's context moved since the pipeline started — approving the step re-runs it instead of stopping the run with an error.
 
 ## [0.3.132] — 2026-09-04
-- Chain a few tools into one run with run_pipeline — the model names each step's tool and can bind an earlier step's result into a later step's arguments ({ $ref }), so search → read → save is one inspectable pipeline instead of separate calls. Every step runs through the ordinary tool gates: a step needing approval pauses on the owner's card mid-pipeline, a denied or failing step stops the run with the step named, and each step shows in the plan strip as it runs. The fourth meta-tool beside search/list/execute (chrome-agent-platform-qsm4 slice 2; the declarative core landed in slice 1).
+- The agent can now chain a few tools into one run: it names the tool for each step and can pass an earlier step's result into a later step's input, so a few separate calls become one legible pipeline. Every step still runs through the usual gates — a step that needs approval pauses on your card mid-run, a denied or failing step stops the run and names the step, and each step shows in the plan strip as it runs.
 
 ## [0.3.131] — 2026-09-04
 - remove stray extension/wasm-tools copy that broke build scanner
