@@ -48,11 +48,11 @@
 ## [0.3.44] — 2026-09-03
 - Interactive artifacts are reliable — clicks reach the artifact, and generated code no longer cuts off
 
-## [0.3.41] — 2026-09-03
-- Worker runs can be steered and stopped safely — stop-run requires an exact run match
-
 ## [0.3.42] — 2026-09-03
 - Pipeline workflows run with per-step owner approval — destructive steps fail closed
+
+## [0.3.41] — 2026-09-03
+- Worker runs can be steered and stopped safely — stop-run requires an exact run match
 
 ## [0.3.36] — 2026-09-03
 - The hub's left rail no longer wastes space between sections

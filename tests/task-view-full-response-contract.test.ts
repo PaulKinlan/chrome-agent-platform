@@ -153,20 +153,18 @@ Deno.test("znx9: thread store capacity is 240 KiB UTF-8 bytes and preserves belo
   assertEquals(new TextEncoder().encode(last.content).byteLength, 120 * 1024);
 });
 
-Deno.test("znx9: over-cap messages carry dynamic non-silent truncation marker stating actual cap", async () => {
+Deno.test("znx9: thread store preserves large payloads complete (no artificial size cap)", async () => {
   const overCap = "x".repeat((240 * 1024) + 5000);
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content: overCap });
 
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
-  const bytes = new TextEncoder().encode(last.content).byteLength;
-  assert(bytes <= 240 * 1024, `content must stay <= 240 KiB, got ${bytes}`);
-  assert(last.content.includes("truncated to 240 KiB"), "marker specifies 240 KiB cap");
-  assert(last.content.includes("complete text is in the run log"), "points to run log");
+  assertEquals(last.content, overCap, "large payload stored complete without artificial truncation");
+  assertEquals(new TextEncoder().encode(last.content).byteLength, (240 * 1024) + 5000);
 });
 
-Deno.test("znx9: surrogate-safe code-point slicing never leaves split high surrogates", async () => {
+Deno.test("znx9: surrogate-safe code-point handling preserves multi-byte emojis complete", async () => {
   // Boundary filled with 4-byte emoji (surrogate pairs in UTF-16)
   const fill = "b".repeat(240 * 1024 - 20);
   const emojis = "\u{1F600}".repeat(20);
@@ -178,9 +176,7 @@ Deno.test("znx9: surrogate-safe code-point slicing never leaves split high surro
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
 
-  // Validate that the last code unit is NOT a lone high surrogate
-  const lastCode = last.content.charCodeAt(last.content.length - 1);
-  assert(!(lastCode >= 0xD800 && lastCode <= 0xDBFF), "must not end in high surrogate");
+  assertEquals(last.content, content, "stored message preserves emojis and complete content");
 
   // Verify full round-trip decode without Unicode replacement character
   const reDecoded = new TextDecoder().decode(new TextEncoder().encode(last.content));

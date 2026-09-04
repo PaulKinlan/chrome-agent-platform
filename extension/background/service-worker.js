@@ -219,6 +219,7 @@ import {
   buildAgentRunView,
   finalizeUnadmittedThreadRun,
 } from "../lib/thread-run-view.js";
+import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import {
   MAX_DELEGATION_DEPTH,
@@ -1541,15 +1542,16 @@ async function readSiteLazySources(origin, runGenCell) {
         "arguments",
       );
     },
-  }, ({ name, source, args }) =>
-    invokeSiteTool(
+  }, async ({ name, source, args }) => {
+    const res = await invokeSiteTool(
       origin,
       name,
       args,
       runGenCell?.get?.() ?? null,
       source,
-    )
-  );
+    );
+    return await withSiteDocsFallback({ origin, name, args, res });
+  });
 }
 
 // The orchestrator build (the memory, the workers, the tools). Shared by
