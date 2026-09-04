@@ -151,6 +151,7 @@ const COMPONENTS = [
   "agent-nav",
   "error-console",
   "security-shield",
+  "diagnostics-panel",
   // BeautifulUI-inspired primitives
   "loading-state",
   "conversation-run-status",
