@@ -17,8 +17,10 @@
 > setPythonRuntimeProvider seam; each python.execute is transported to a fresh
 > classic Pyodide worker inside the offscreen document and the captured stdout
 > is returned whole. Section 6's acceptance maps to: python_execute executes
-> real code (see tests/python-runtime.test.ts REAL cases, which run the actual
-> pinned 0.26.4 interpreter in-process).
+> real code. `tests/python-runtime.test.ts` runs the pinned interpreter
+> in-process; `scripts/kat-pyodide.ts` loads the production extension in Chrome,
+> calls the real `python.execute` route, and retains JSON + screenshot evidence
+> that `print(1+1)` returns captured stdout `2`.
 
 Owner-approved MVS: a credential-free, OPFS-cached, **bounded-memory** Pyodide runtime
 admitted through the existing wasm-package authority, driving ONE bounded `python` tool.

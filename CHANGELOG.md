@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.137] — 2026-09-04
+- Python tasks now prove they execute in the shipped extension
+
 ## [0.3.136] — 2026-09-04
 - Changelog wording for the pipeline entries in plain user language
 
