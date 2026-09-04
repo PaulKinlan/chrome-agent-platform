@@ -1,13 +1,16 @@
 # Changelog
 
+## [0.3.69] — 2026-09-04
+- Changelog wording: the interface checks pass end-to-end again, in plain language
+
 ## [0.3.68] — 2026-09-04
 - Changelog entries for the interface-checks repair written in plain language
 
 ## [0.3.67] — 2026-09-04
-- beads: f5lb (headless capture hang) + ol11 (gallery-only theme-picker) from the 5ht run
+- Two findings noted for later: a screenshot stall seen in the testing environment, and a leftover theme-picker piece that no product page uses any more.
 
 ## [0.3.66] — 2026-09-04
-- The UI integration suite runs green end-to-end again (56/0): it drives the CURRENT hub — the Activity ledger in the sidebar instead of the removed #run-log, the tabbed Providers settings — drops assertions for features that no longer exist (theme switching, ViewTransitions), waits for the provider cards' async render instead of sampling too early, asserts the durability contract for whichever storage mode the profile actually has, and carries a 6-minute watchdog so a headless frame stall becomes an honest bounded failure instead of a silent hang. One RTL screenshot dropped: captureScreenshot on a visually-settled headless page never returns (f5lb). Falsification: narrowing the rail break produced 4 RED checks (log 12).
+- The built-in interface checks pass end-to-end again: they now exercise the current hub (the Activity list in the sidebar and the tabbed Providers settings), no longer check features that were removed, and report an honest failure within six minutes instead of hanging quietly.
 
 ## [0.3.65] — 2026-09-04
 - Build and test evidence now survives restarts, and the recurring check flake is fixed
