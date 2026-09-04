@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.68] — 2026-09-04
+- Add a browser KAT proving the provider server-tools toggle survives reload
+
+## [0.3.67] — 2026-09-04
+- Settings now keep the provider server tools choice after a page reload.
+
 ## [0.3.66] — 2026-09-04
 - Fix provider server tools toggle resetting on reload
 
