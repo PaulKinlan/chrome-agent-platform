@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.66] — 2026-09-04
+- Site tools now appear in the Settings tool library — each origin's declared and inferred WebMCP tools are listed with the site they belong to
+
 ## [0.3.65] — 2026-09-04
 - Build and test evidence now survives restarts, and the recurring check flake is fixed
 

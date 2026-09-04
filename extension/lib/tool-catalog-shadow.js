@@ -100,6 +100,13 @@ export class ShadowToolCatalogController {
             .slice(0, TOOL_LIBRARY_SUMMARY_LIMITS.maxNameBytes),
           sourceLabel: TOOL_LIBRARY_SOURCE_LABELS[descriptor.sourceKind] ??
             descriptor.sourceKind,
+          // Which site this tool belongs to (chrome-agent-platform-lmk2): a
+          // site tool's descriptor carries its origin in scope; hub tools have
+          // none. The Settings row shows it so the owner sees WHICH site
+          // declared/inferred each tool ("search_docs — beads.gascity.com").
+          origin: typeof descriptor.scope?.origin === "string"
+            ? descriptor.scope.origin.slice(0, 2048)
+            : "",
           version: bundled?.version ?? null,
           available: previewAdmitted || descriptor.availability === "ready",
           description: String(bundled?.description ?? descriptor.description ?? "")

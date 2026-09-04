@@ -11778,6 +11778,7 @@ class ToolLibrary extends Component {
       .source-tool-head .avail { font-size:11px; padding:1px 8px; border:1px solid var(--border, #ddd8d2);
         border-radius:999px; color:var(--muted, #625d57); white-space:nowrap; }
       .source-tool-head .avail.unavailable { border-color:var(--warning, #9a6b00); color:var(--warning, #9a6b00); }
+      .source-tool-origin { margin:2px 0 0; font-size:11px; color:var(--muted, #625d57); overflow-wrap:anywhere; }
       .source-tool-desc { margin:4px 0 0; font-size:12px; color:var(--muted, #625d57);
         overflow-wrap:anywhere; min-inline-size:0; }
       @media (max-width:560px) { .source-tool-head { grid-template-columns:1fr; } }
@@ -12034,10 +12035,20 @@ class ToolLibrary extends Component {
               ? `v${row.version}`
               : (row.available === true ? "available" : "unavailable");
             head.append(title, avail);
+            li.append(head);
+            // Site tools carry their origin (chrome-agent-platform-lmk2):
+            // "search_docs — beads.gascity.com" — the owner sees WHICH site
+            // declares/infers each tool. Hub rows have no origin.
+            if (typeof row.origin === "string" && row.origin) {
+              const originEl = document.createElement("div");
+              originEl.className = "source-tool-origin";
+              originEl.textContent = row.origin.replace(/^https?:\/\//, "");
+              li.append(originEl);
+            }
             const desc = document.createElement("p");
             desc.className = "source-tool-desc";
             desc.textContent = String(row.description ?? "");
-            li.append(head, desc);
+            li.append(desc);
             list.append(li);
           }
           details.append(list);

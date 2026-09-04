@@ -3646,8 +3646,14 @@ async function readShadowCatalogInputs() {
     }),
   ];
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
-  for (const origin of (await listOrigins()).slice(0, 200)) {
-    if (inputs.length >= TOOL_CATALOG_BOUNDS.maxDescriptors * 2) break;
+  // Per-origin WebMCP declared/inferred tools (chrome-agent-platform-lmk2):
+  // every enrolled origin's directory reaches the catalog. dptw removed the
+  // descriptor SIZE caps, but this loop kept computing the removed descriptor
+  // ceiling (now undefined) — `remaining` was NaN, `slice(0, NaN)` is always
+  // [], and the Settings tool library silently showed 0 site tools. The
+  // catalog's own validation stays fail-closed; no arithmetic bound here
+  // (bounded only by what the directories hold).
+  for (const origin of await listOrigins()) {
     const enrollment = await enrollmentSnapshot(origin);
     const gate = gateMap[origin] ?? {};
     const sourceGeneration = [
@@ -3660,14 +3666,13 @@ async function readShadowCatalogInputs() {
       : "";
     const currentDocument = enrollment.enrolled && documentId &&
       Number.isFinite(gate.epoch) && gate.epoch > 0;
-    const remaining = TOOL_CATALOG_BOUNDS.maxDescriptors * 2 - inputs.length;
     inputs.push(...adaptWebMcpTools(await listTools(origin), {
       origin,
       agentId: `site:${origin}`,
       documentId,
       sourceGeneration,
       availability: currentDocument ? "ready" : "stale",
-    }).slice(0, remaining));
+    }));
   }
   return inputs;
 }

@@ -372,7 +372,10 @@ Deno.test("shadow summary: toolsBySource is a bounded read-only per-tool list (n
     assert(rows.length <= 64, "bounded rows per source");
     for (const row of rows) {
       for (const key of Object.keys(row)) {
-        assert(["toolId", "name", "sourceLabel", "version", "available", "description"].includes(key), `only summary fields: ${key}`);
+        // origin is the lmk2 site label (which site declares the tool) — a
+        // bounded string, never a secret/digest/authority surface.
+        assert(["toolId", "name", "sourceLabel", "origin", "version", "available", "description"].includes(key), `only summary fields: ${key}`);
+        if (key === "origin") assert(typeof row.origin === "string" && row.origin.length <= 2048, "origin is a bounded string");
       }
       assertEquals(typeof row.name, "string");
       assertEquals(typeof row.description, "string");
