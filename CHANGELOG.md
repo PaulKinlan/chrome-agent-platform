@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.68] — 2026-09-04
+- Changelog entries for the interface-checks repair written in plain language
+
 ## [0.3.67] — 2026-09-04
 - beads: f5lb (headless capture hang) + ol11 (gallery-only theme-picker) from the 5ht run
 
