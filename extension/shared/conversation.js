@@ -1789,12 +1789,20 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // checks are pending. This is the sole queued signal for the conversation.
   status({ state: "queued" });
 
+  // A pre-run provider host-access pause: set when the preflight below finds
+  // the configured provider's exact origin ungranted. The turn then renders
+  // ONE in-context grant card (never a Settings redirect for a permission a
+  // genuine card gesture can grant — CAP-FB-20260819-PERMISSION-REMEDIATION-
+  // UX-01) and waits on the owner's decision before any run starts.
+  let providerPermissionPause = null;
+
   // Do not treat the original Run click as a live gesture after an asynchronous
   // provider lookup: calling permissions.request after that round-trip is
   // rejected by Chrome and creates a misleading retry loop. This redacted
   // preflight keeps provider secrets out of the page and pauses before any
-  // model execution. The complete owner-button orchestration remains OPEN; for
-  // now Settings is the only genuine permission-request surface.
+  // model execution. Settings remains the surface for provider CONFIGURATION
+  // (a missing/invalid base URL); a missing host-ACCESS grant is a permission
+  // and pauses on the in-context card below.
   try {
     const summary = await send("provider.permission-summary");
     if (!summary?.local) {
@@ -1809,19 +1817,17 @@ export async function runConversationTurn(container, { text, attachments = [], h
       }
       const granted = await chrome.permissions.contains({ origins: [summary.origin] }).catch(() => false);
       if (!granted) {
-        const err = {
-          ok: false,
-          waitingForPermission: true,
-          error: `network access to ${summary.origin} is not granted — open Settings → Providers and approve that exact origin`,
-          errorCategory: "host-permission",
-          errorReason: "the configured provider's exact origin is not granted",
-          errorAction: "grant the exact provider origin in Settings, then run this task again",
-        };
+        // The provider's network origin is a PERMISSION the owner can grant
+        // in-context: pause the turn on one grant card. Allow requests the
+        // exact `<origin>/*` from the card's own genuine click (the same
+        // request Settings' Use button makes) and the run then starts; Not
+        // now ends the turn honestly with a declined line. The card renders
+        // after the user's message below; nothing runs until the decision.
         if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
-        status({ state: "waiting-for-permission", message: err.errorReason, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
-        if (typeof c.appendError === "function") c.appendError(err.error, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
-        else appendBubble(c, "error", err.error);
-        return err;
+        const exactOrigin = String(summary.origin).replace(/\/\*+$/, "");
+        let host = exactOrigin;
+        try { host = new URL(exactOrigin).host; } catch { /* the raw origin is its own label */ }
+        providerPermissionPause = { origin: exactOrigin, host };
       }
     }
   } catch (e) {
@@ -1923,8 +1929,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
       card?.setAttribute("state", entry.status);
       // A blocking request remains inside the original tool invocation: the SW
       // wakes that exact promise. Legacy browser-grant denials still retry the
-      // turn because those tools currently report only after returning.
-      if (!entry.blocking && approve) {
+      // turn because those tools currently report only after returning. A
+      // PRE-RUN pause (the provider host-access card) never takes either path:
+      // its own outer waiter starts the run after the grant — the legacy
+      // retry flag must not fire a SECOND automatic attempt.
+      if (!entry.blocking && approve && !entry.preRun) {
         approvalRetryRequested = true;
         approvalBindingForRetry = (requirement.approvals ?? [])
           .map((a) => a.approvalId)
@@ -1934,6 +1943,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
           Promise.resolve().then(() => executeTurn()).catch(() => {});
         }
       }
+      // A PRE-RUN waiter (the provider host-access pause) resolves here —
+      // after the terminal state is set — so the outer turn can start the run
+      // or end honestly (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01).
+      entry.settle?.(entry.status);
     } else {
       entry.status = "pending";
       card?.setAttribute("state", "error");
@@ -1975,7 +1988,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     diff.after = typeof detail.newContent === "string" ? detail.newContent : "";
     card.appendChild(diff);
   };
-  const maybeRenderApproval = (result, { blocking = false, requestId = null } = {}) => {
+  const maybeRenderApproval = (result, { blocking = false, requestId = null, preRun = false, settle = null } = {}) => {
     const requirement = normalizePermissionRequirement(result);
     if (!requirement) return;
     const existing = pendingApprovals.get(requirement.key);
@@ -1989,6 +2002,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
         existing.requestId = requestId;
         approvalById.set(requestId, existing);
       }
+      // A late pre-run waiter on the same key still wants the decision.
+      if (typeof settle === "function") existing.settle = settle;
       // The SAME requirement denied AGAIN after a grant (the grant did not
       // take effect — e.g. it was set session-only and the worker restarted,
       // or a narrower scope than the tool needs) — re-open the SAME card for
@@ -2051,7 +2066,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         augmentApprovalCardWithDiff(card, editApproval);
       }
     }
-    const entry = { requirement, status: "pending", card, blocking, requestId, requestIds: requestId ? [requestId] : [] };
+    const entry = { requirement, status: "pending", card, blocking, requestId, requestIds: requestId ? [requestId] : [], ...(preRun ? { preRun: true } : {}), ...(typeof settle === "function" ? { settle } : {}) };
     pendingApprovals.set(requirement.key, entry);
     for (const approval of requirement.approvals) approvalById.set(approval.approvalId, entry);
     if (requestId) approvalById.set(requestId, entry);
@@ -2514,5 +2529,86 @@ export async function runConversationTurn(container, { text, attachments = [], h
 
   // 6. Run this turn once. Permission failures require a new owner-initiated
   // attempt after Settings changes; this page never loops or auto-retries.
+  // A provider host-access pause (the preflight found the configured
+  // provider's exact origin ungranted) renders ONE in-context grant card and
+  // waits on the owner's decision BEFORE any run starts. Allow requests the
+  // exact `<origin>/*` from the card's own genuine click and the run then
+  // starts; Not now ends the turn honestly with a declined line — never a
+  // Settings redirect for a permission a card gesture can grant
+  // (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01).
+  if (providerPermissionPause) {
+    const result = {
+      waitingForPermission: true,
+      permissionRequirement: {
+        reason: `connect to ${providerPermissionPause.host} (the provider that runs this task)`,
+        hostOrigins: [providerPermissionPause.origin],
+      },
+    };
+    const requirement = normalizePermissionRequirement(result);
+    if (!requirement) {
+      // Defensive: the origin could not be normalized (non-http(s)); the SW
+      // run gate would refuse it anyway. Fail closed with the honest line.
+      const msg = `network access to ${providerPermissionPause.host} is not granted and cannot be requested from here`;
+      const err = {
+        ok: false,
+        failed: true,
+        error: msg,
+        errorCategory: "host-permission",
+        errorReason: `the provider origin ${providerPermissionPause.origin} is not granted`,
+        errorAction: "grant the exact provider origin in Settings → Providers, then run the task again",
+      };
+      status({ state: "failed", message: msg, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
+      if (typeof c.appendError === "function") c.appendError(msg, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
+      else appendBubble(c, "error", msg);
+      return err;
+    }
+    // The decision promise resolves from handleApprovalDecision the moment the
+    // owner's click reaches a terminal state (granted / denied — a failed
+    // Chrome request leaves the card pending and actionable). Like the live
+    // in-run cards the service worker settles after 60 s, an UNANSWERED
+    // pre-run ask expires at the same bound with the same card language — an
+    // abandoned card must never leave the conversation stuck in a phantom
+    // "waiting" state.
+    const decision = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const entry = pendingApprovals.get(requirement.key);
+        if (entry && entry.status === "pending") {
+          entry.status = "expired";
+          entry.card?.setAttribute("state", "expired");
+          entry.card?.setAttribute("detail", "The request expired after 60 seconds. The action was not performed.");
+        }
+        resolve("expired");
+      }, 60_000);
+      maybeRenderApproval(result, {
+        preRun: true,
+        settle: (state) => { clearTimeout(timer); resolve(state); },
+      });
+    });
+    if (stale()) return { ok: false, superseded: true, error: "the surface was replaced before the run started" };
+    if (decision !== "granted") {
+      const denied = decision === "denied";
+      const msg = denied
+        ? `Network access to ${providerPermissionPause.host} was not granted — you declined. The run did not start.`
+        : decision === "expired"
+          ? `Network access to ${providerPermissionPause.host} was not granted — the request expired before you decided. Send the message again to ask once more.`
+          : `Network access to ${providerPermissionPause.host} was not granted. The run did not start.`;
+      const err = {
+        ok: false,
+        failed: true,
+        error: msg,
+        errorCategory: "host-permission",
+        errorReason: `the provider origin ${providerPermissionPause.origin} is not granted`,
+        errorAction: denied
+          ? "run the task again and choose Allow to grant the exact origin, or grant it in Settings → Providers"
+          : "grant the exact provider origin in Settings → Providers, or run the task again and choose Allow",
+      };
+      status({ state: "failed", message: msg, errorReason: err.errorReason, errorAction: err.errorAction, errorCategory: err.errorCategory });
+      if (typeof c.appendError === "function") c.appendError(msg, { reason: err.errorReason, action: err.errorAction, category: err.errorCategory });
+      else appendBubble(c, "error", msg);
+      return err;
+    }
+    // Granted: fall through and start the run — the SW's own provider gate
+    // now passes.
+  }
   return await executeTurn();
 }

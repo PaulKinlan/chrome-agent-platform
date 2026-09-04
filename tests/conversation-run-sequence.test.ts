@@ -293,18 +293,67 @@ Deno.test("conversation run sequence: no-tools turn guarantees assistant bubble 
   assertEquals(bubbles.filter((b) => b.role === "agent")[0]?.content, "[demo] no-tools response");
 });
 
-Deno.test("conversation run sequence: ungranted provider preflight transitions queued -> waiting-for-permission with actionable details", async () => {
+// ── provider host-access pre-run pause (CAP-FB-20260819-PERMISSION-
+// REMEDIATION-UX-01 increment): a configured NETWORK provider whose exact
+// origin is not granted pauses the turn on ONE in-context permission card
+// instead of a dead-end "open Settings → Providers" error. Allow requests the
+// exact `<origin>/*` from the card's genuine click and starts the run; Not now
+// ends the turn honestly; a refused Chrome request leaves the card actionable.
+class FakeCard {
+  tag: string;
+  attrs = new Map<string, string>();
+  listeners = new Map<string, Array<(ev: any) => void>>();
+  children: unknown[] = [];
+  constructor(tag: string) { this.tag = tag; }
+  setAttribute(k: string, v: unknown) { this.attrs.set(k, String(v)); }
+  getAttribute(k: string) { return this.attrs.get(k) ?? null; }
+  addEventListener(t: string, fn: (ev: any) => void) {
+    if (!this.listeners.has(t)) this.listeners.set(t, []);
+    this.listeners.get(t)!.push(fn);
+  }
+  dispatchEvent(ev: any) {
+    for (const fn of [...(this.listeners.get(ev?.type) ?? [])]) fn(ev);
+    return true;
+  }
+  append(node: unknown) { this.children.push(node); }
+  focus() {}
+  querySelector() { return null; }
+  get shadowRoot() { return null; }
+}
+
+function installCardDocument() {
+  const cards: FakeCard[] = [];
+  const prev = (globalThis as Record<string, unknown>).document;
+  (globalThis as Record<string, unknown>).document = {
+    createElement(tag: string) {
+      const el = new FakeCard(String(tag));
+      if (el.tag === "permission-approval-card") cards.push(el);
+      return el;
+    },
+    activeElement: null,
+  };
+  return { cards, restore: () => { (globalThis as Record<string, unknown>).document = prev; } };
+}
+
+function installProviderGrantChrome(opts: {
+  origin: string;
+  requests: Array<string[]>;
+  runs: string[];
+  requestResult?: () => boolean;
+  runResultText?: string;
+}) {
+  let granted = false;
   (globalThis as Record<string, unknown>).chrome = {
     runtime: {
       lastError: null,
-      sendMessage(msg: { type: string }, cb: (res: unknown) => void) {
+      sendMessage(msg: { type: string; task?: string }, cb: (res: unknown) => void) {
         if (msg.type === "provider.permission-summary") {
-          queueMicrotask(() => cb({
-            ok: true,
-            provider: "openai",
-            local: false,
-            origin: "http://127.0.0.1:9/*",
-          }));
+          queueMicrotask(() => cb({ ok: true, provider: "openai", local: false, origin: opts.origin, reason: "" }));
+          return;
+        }
+        if (msg.type === "agent.run") {
+          opts.runs.push(msg.task ?? "");
+          queueMicrotask(() => cb({ ok: true, threadId: "t_provider", executionId: "exec_provider", result: opts.runResultText ?? "[demo] provider answer" }));
           return;
         }
         queueMicrotask(() => cb({ ok: true }));
@@ -317,38 +366,133 @@ Deno.test("conversation run sequence: ungranted provider preflight transitions q
         };
       },
     },
-    permissions: { contains: () => Promise.resolve(false) },
-  };
-
-  const { runConversationTurn } = await import("../extension/shared/conversation.js");
-  const bubbles: Bubble[] = [];
-  const container = makeContainer(bubbles);
-  const statuses: Status[] = [];
-  const liveStatus: { current: Record<string, unknown> | null } = { current: null };
-  const liveSurface = {
-    setLiveStatus(status: Record<string, unknown>) { liveStatus.current = status; },
-    clearLiveStatus() { liveStatus.current = null; },
-  };
-  const { projectConversationRunStatus } = await import("../extension/shared/run-status.js");
-
-  const res = await runConversationTurn(container as never, {
-    text: "query with ungranted provider",
-    onStatus: (s: Status) => {
-      statuses.push(s);
-      projectConversationRunStatus(liveSurface, s);
+    permissions: {
+      contains: async () => granted,
+      request: async (query: { origins?: string[] }) => {
+        opts.requests.push([...(query?.origins ?? [])]);
+        const ok = opts.requestResult?.() ?? true;
+        if (ok) granted = true;
+        return ok;
+      },
     },
-  } as never);
+  };
+}
 
-  assertEquals(res.ok, false);
-  assertEquals(res.waitingForPermission, true);
-  assertEquals(res.errorCategory, "host-permission");
-  assertEquals(statuses[0]?.state, "queued", "accepted turn emits queued first");
-  assertEquals(statuses.at(-1)?.state, "waiting-for-permission", "transitions to waiting-for-permission");
-  assertEquals(liveStatus.current?.actionLabel, "Fix in Settings",
-    "the final post-resolution row retains the recovery action emitted by the real turn");
-  const errBubbles = bubbles.filter((b) => b.role === "error");
-  assertEquals(errBubbles.length, 1, "exactly one error bubble appended");
-  assert(errBubbles[0].content.includes("127.0.0.1:9"), "error bubble names the ungranted origin");
+function makeApprovalContainer() {
+  const bubbles: Bubble[] = [];
+  const container = {
+    append() {},
+    appendUser(text: string) { bubbles.push({ role: "user", content: text }); },
+    appendAgent(text: string) { bubbles.push({ role: "agent", content: text }); },
+    appendSystem(text: string) { bubbles.push({ role: "system", content: text }); },
+    appendError(text: string) { bubbles.push({ role: "error", content: text }); },
+    appendTool() { return { setAttribute() {} }; },
+  };
+  return { bubbles, container };
+}
+
+Deno.test("conversation run sequence: ungranted provider preflight pauses on ONE in-context card — Allow requests the exact origin and starts the run ONCE (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01)", async () => {
+  const requests: Array<string[]> = [];
+  const runs: string[] = [];
+  installProviderGrantChrome({ origin: "http://127.0.0.1:9/*", requests, runs });
+  const dom = installCardDocument();
+  try {
+    const { runConversationTurn } = await import("../extension/shared/conversation.js");
+    const { bubbles, container } = makeApprovalContainer();
+    const statuses: Status[] = [];
+    const turn = runConversationTurn(container as never, {
+      text: "query with ungranted provider",
+      onStatus: (s: Status) => statuses.push(s),
+    } as never);
+    await waitForCondition(() => statuses.some((s) => s.state === "waiting-for-permission"), 500,
+      "the provider pause surfaces waiting-for-permission");
+    assertEquals(statuses[0]?.state, "queued", "accepted turn emits queued first");
+    assertEquals(dom.cards.length, 1, "exactly one in-context permission card renders");
+    assertEquals(runs.length, 0, "no run starts before the owner decides");
+    assert(bubbles.every((b) => b.role !== "error"), "no Settings-redirect error bubble is appended");
+    assert(bubbles.some((b) => b.role === "user" && b.content === "query with ungranted provider"),
+      "the user's own message is visible while the run pauses");
+    const card = dom.cards[0];
+    assert(String(card.getAttribute("reason") ?? "").includes("127.0.0.1:9"), "the card names the provider origin");
+    assertEquals(card.getAttribute("host-origins"), JSON.stringify(["http://127.0.0.1:9"]),
+      "the card carries the exact origin (hostOrigins)");
+    card.dispatchEvent({ type: "approve", detail: { sourceEvent: { isTrusted: true } } });
+    const res = await turn;
+    assertEquals(res.ok, true, "the run completes after the owner's Allow");
+    assertEquals(requests.length, 1, "one exact-origin permission request");
+    assertEquals(requests[0], ["http://127.0.0.1:9/*"], "the request is exactly the provider's origin pattern");
+    assertEquals(runs.length, 1, "the granted run starts exactly once — no double-run from the grant");
+    assertEquals(card.getAttribute("state"), "granted");
+    assert(statuses.some((s) => s.state === "completed"), "the turn completes");
+  } finally {
+    dom.restore();
+  }
+});
+
+Deno.test("conversation run sequence: provider pre-run card Not now — honest declined line, nothing requested, no run (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01)", async () => {
+  const requests: Array<string[]> = [];
+  const runs: string[] = [];
+  installProviderGrantChrome({ origin: "http://127.0.0.1:9/*", requests, runs });
+  const dom = installCardDocument();
+  try {
+    const { runConversationTurn } = await import("../extension/shared/conversation.js");
+    const { bubbles, container } = makeApprovalContainer();
+    const statuses: Status[] = [];
+    const turn = runConversationTurn(container as never, {
+      text: "query with ungranted provider",
+      onStatus: (s: Status) => statuses.push(s),
+    } as never);
+    await waitForCondition(() => dom.cards.length === 1, 500, "the provider card renders");
+    const card = dom.cards[0];
+    card.dispatchEvent({ type: "deny", detail: { sourceEvent: { isTrusted: true } } });
+    const res = await turn;
+    assertEquals(res.ok, false);
+    assertEquals(res.errorCategory, "host-permission");
+    assert(String(res.error).includes("declined"), "the honest denial names the decline");
+    assertEquals(requests.length, 0, "nothing is requested on a decline");
+    assertEquals(runs.length, 0, "no run starts after a decline");
+    assertEquals(card.getAttribute("state"), "denied");
+    const errBubbles = bubbles.filter((b) => b.role === "error");
+    assertEquals(errBubbles.length, 1, "exactly one declined error bubble");
+    assert(errBubbles[0].content.includes("127.0.0.1:9") && errBubbles[0].content.includes("declined"),
+      "the declined line names the origin and the decline");
+    assert(statuses.at(-1)?.state === "failed", "the declined turn reads as failed, not waiting");
+  } finally {
+    dom.restore();
+  }
+});
+
+Deno.test("conversation run sequence: provider pre-run card Chrome refusal — card stays actionable, no phantom run (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01)", async () => {
+  const requests: Array<string[]> = [];
+  const runs: string[] = [];
+  let grantOutcome = false; // Chrome refuses the origin request
+  installProviderGrantChrome({ origin: "http://127.0.0.1:9/*", requests, runs, requestResult: () => grantOutcome });
+  const dom = installCardDocument();
+  try {
+    const { runConversationTurn } = await import("../extension/shared/conversation.js");
+    const { container } = makeApprovalContainer();
+    const statuses: Status[] = [];
+    const turn = runConversationTurn(container as never, {
+      text: "query with ungranted provider",
+      onStatus: (s: Status) => statuses.push(s),
+    } as never);
+    await waitForCondition(() => dom.cards.length === 1, 500, "the provider card renders");
+    const card = dom.cards[0];
+    // Allow is clicked but Chrome refuses the request: nothing runs and the
+    // card reports the failure and stays actionable.
+    card.dispatchEvent({ type: "approve", detail: { sourceEvent: { isTrusted: true } } });
+    await waitForCondition(() => card.getAttribute("state") === "error", 500, "the refused grant shows on the card");
+    assertEquals(runs.length, 0, "a refused Chrome request never starts a run");
+    // The owner may then decline; the turn ends honestly and nothing runs.
+    card.dispatchEvent({ type: "deny", detail: { sourceEvent: { isTrusted: true } } });
+    const res = await turn;
+    assertEquals(res.ok, false);
+    assertEquals(runs.length, 0, "no run after the refused grant + decline");
+    assertEquals(card.getAttribute("state"), "denied");
+    assert(statuses.at(-1)?.state === "failed", "the turn ends failed, not stuck waiting");
+  } finally {
+    dom.restore();
+  }
 });
 
 Deno.test("conversation run sequence: real ntp.js event routing — thread follow-up (J2) -> thread-back -> hub composer submit (J3)", async () => {
