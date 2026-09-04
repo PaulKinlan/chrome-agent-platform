@@ -339,3 +339,88 @@ Deno.test("run_pipeline fails closed without a run context", async () => {
   });
   assertEquals(result, { ok: false, error: "lazy-run-context-unavailable" });
 });
+
+
+
+Deno.test("run_pipeline: a scope that moves BETWEEN steps does not poison a later step's approval resume (context re-read per resume)", async () => {
+  // Regression for the review P2: the resume binding must re-read the LIVE
+  // context (parity with the agent-loop wrapper). The contextReader returns
+  // a FRESH snapshot per read (as the real agent loop does) — so a binding
+  // captured at pipeline start goes stale the moment the scope moves. The
+  // scope moves between step 0 and step 1 (via the step-end progress event;
+  // a tool mutating scope inside its own execute is refused by the
+  // post-dispatch scope check, by design). With a stale resume context, the
+  // paused record's fence (captured at the NEW scope) mismatches and the
+  // pipeline halts with lazy-resume-scope-mismatch.
+  const calls: Array<{ name: string; args: unknown }> = [];
+  const approvals: unknown[] = [];
+  let gatedCalls = 0;
+  const live = { documentId: "hub-doc" };
+  const progressHandler = (ev: Record<string, unknown>) => {
+    // The run's scope moves after step 0 completes and before step 1
+    // dispatches — exactly the window the re-read fix covers.
+    if (ev.type === "pipeline-step" && ev.status === "ok" && ev.index === 0) {
+      live.documentId = "moved-doc";
+    }
+  };
+  const tools = {
+    scope_move: tool({
+      description: "A step after which the run's scope moves",
+      inputSchema: z.object({}),
+      execute: async () => {
+        calls.push({ name: "scope_move", args: {} });
+        return { ok: true };
+      },
+    }),
+    gated_thing: tool({
+      description: "A thing that needs an owner capability",
+      inputSchema: z.object({ label: z.string() }),
+      execute: async ({ label }: { label: string }) => {
+        gatedCalls++;
+        calls.push({ name: "gated_thing", args: { label } });
+        if (gatedCalls === 1) {
+          return {
+            waitingForPermission: true,
+            permissionRequirement: { reason: "gated capability", permissions: ["test.gated"] },
+          };
+        }
+        return { ok: true, did: label };
+      },
+    }),
+  };
+  const records = executableBuiltinToolRecords(tools, {
+    version: "1.0.0",
+    sourceGeneration: "extension:1",
+    scope: HUB_SCOPE,
+    capabilities: ["test.invoke"],
+  });
+  const bound = createLazyProviderToolset({
+    readSources: () => records,
+    // A FRESH snapshot per read — the realistic contract. Identity-sharing
+    // readers would mask the stale-binding bug this test exists to catch.
+    contextReader: () => ({
+      runId: "run-1",
+      taskId: "task-1",
+      runGeneration: "generation-1",
+      agentId: "hub",
+      origin: "",
+      documentId: live.documentId,
+      onProgress: progressHandler,
+    }),
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+    onPermissionRequest: (denial: unknown) => {
+      approvals.push(denial);
+      return "approved";
+    },
+  }) as any;
+  const result = await bound.tools.run_pipeline.execute({
+    steps: [
+      { id: "move", tool: "scope_move", args: {} },
+      { id: "act", tool: "gated_thing", args: { label: "the-deed" } },
+    ],
+  });
+  assertEquals(result.ok, true, `scope-moving step must not poison the resume (got: ${JSON.stringify(result.error ?? "")})`);
+  assertEquals(approvals.length, 1);
+  assertEquals(gatedCalls, 2, "the approval resumed and re-ran the step at the moved scope");
+  assertEquals(live.documentId, "moved-doc");
+});

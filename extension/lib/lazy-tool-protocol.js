@@ -1520,9 +1520,11 @@ export function createLazyProviderToolset({
           execute: (req, ctx) => protocol.execute(req, ctx),
           settle: (ref) => protocol.settlePausedCall(ref),
           requestApproval: typeof onPermissionRequest === "function" ? onPermissionRequest : null,
-          // The paused record lives under THIS run's fence; the context read
-          // above is that same run's (the fence fields are run-stable).
-          resume: (ref) => protocol.resumeApprovedCall(ref, context),
+          // The paused record lives under THIS run's fence. Re-read the LIVE
+          // context per resume (parity with the agent-loop wrapper): an earlier
+          // step may have moved the run's documentId/origin, and the fence
+          // check must see the scope as it stands at resume time.
+          resume: async (ref) => protocol.resumeApprovedCall(ref, await readContext()),
           // Each step re-reads the LIVE context (a long pipeline tracks the
           // run's current scope exactly as a model-issued call would).
           context: readContext,
