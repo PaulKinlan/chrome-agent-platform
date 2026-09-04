@@ -3385,6 +3385,8 @@ async function ensureSectionRendered(sectionId) {
   } else if (sectionId === "agents") {
     await renderAgents();
     await renderEnroll();
+    await renderEnrolledSites();
+    await renderWebmcpStatus();
   } else if (sectionId === "browser") {
     await renderBrowser();
     await renderActionPolicy();
@@ -3398,8 +3400,13 @@ async function ensureSectionRendered(sectionId) {
     if (developerFeaturesEnabled) await renderPrompts();
   } else if (sectionId === "usage") {
     await renderUsage();
+  } else if (sectionId === "data") {
+    await renderData();
+    await renderMemoryExplorer();
   } else if (sectionId === "about") {
     await renderAbout();
+    await wireObservabilitySettings();
+    await wireRunRetentionSettings();
   }
 }
 
@@ -3420,6 +3427,7 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
   }
   hideDeveloperLockedNotice();
 
+  const wasActive = section.classList.contains("active");
   document.querySelectorAll("section.panel").forEach((s) => {
     s.classList.toggle("active", s.id === sectionId);
   });
@@ -3438,15 +3446,17 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
   await ensureSectionRendered(sectionId);
   if (sectionId === "usage") await renderUsage(); // keep usage fresh on every visit
 
-  section.scrollIntoView({
-    behavior: isTraverse ? "auto" : "smooth",
-    block: "start",
-  });
+  if (!wasActive || isTraverse) {
+    section.scrollIntoView({
+      behavior: isTraverse ? "auto" : "smooth",
+      block: "start",
+    });
 
-  const heading = section.querySelector("h2, h3");
-  if (heading) {
-    heading.setAttribute("tabindex", "-1");
-    heading.focus({ preventScroll: true });
+    const heading = section.querySelector("h2, h3");
+    if (heading) {
+      heading.setAttribute("tabindex", "-1");
+      heading.focus({ preventScroll: true });
+    }
   }
 
   return true;
@@ -3564,12 +3574,6 @@ await refreshStoragePermission();
 await readDeveloperFeaturesFlag();
 applyDeveloperVisibility(developerFeaturesEnabled);
 
-// CAP-FB-20260827-SETTINGS-MONOLITH-01: multi-section navigation.
-// Only the active section is rendered on boot (and on section switch);
-// the remaining sections are lazy-mounted when navigated to.
-await renderLocalFolders();
-await navigationController.syncCurrent();
-
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run
 // completing, or the owner clearing), not show a stale count until a manual
 // reload. PUSH-driven (CAP-FB-20260830-HUB-POLLING-01): the SW bumps
@@ -3604,10 +3608,6 @@ document.querySelectorAll(".usage-range").forEach((b) => {
 });
 // Add-server button (MCP servers section) — a STATIC control wired exactly once.
 document.getElementById("mcp-add-btn")?.addEventListener("click", () => mcpOpenEditor(null));
-await renderData();
-await renderMemoryExplorer();
-await renderEnrolledSites();
-await renderWebmcpStatus();
 
 // ── Developer-features toggle (About) ───────────────────────────────────────
 // The switch reflects the stored flag and, on change, persists it, re-applies
@@ -3799,8 +3799,10 @@ async function renderAbout() {
     renderChangelog("# Changelog\n\n## [0.0.0] — \n- Changelog unavailable in this context.\n");
   }
 }
-await wireObservabilitySettings();
-await wireRunRetentionSettings();
+
+// CAP-FB-20260827-SETTINGS-MONOLITH-01: multi-section navigation.
+// Synchronize the current section navigation exactly once at end of setup.
+await renderLocalFolders();
 await navigationController.syncCurrent();
 
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- prevent UI flash and double-sync layout shift on bootstrap and section navigation (fw8)
+
 ## [0.3.128] — 2026-09-04
 - Maintenance and fixes.
 
