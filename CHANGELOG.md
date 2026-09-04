@@ -1,9 +1,9 @@
 # Changelog
 
-## [0.3.106] — 2026-09-04
-- Maintenance and fixes.
+## [0.3.107] — 2026-09-04
+- build 0.3.106: fold 4kl changelog entry over the build's placeholder bump
 
-## [0.3.105] — 2026-09-04
+## [0.3.106] — 2026-09-04
 - Agents find tools by what they DO — tool search now understands meaning (a query like "will it rain this weekend" finds the forecast tool even when no words match), fully offline with exact-name matches always winning
 
 ## [0.3.104] — 2026-09-04
