@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.130] — 2026-09-04
+- Restore the Pyodide WASM runtime files lost in the dptw phase-2 merge
+
 ## [0.3.129] — 2026-09-04
 - restore the k3-work (60be + 3cb6 + dptw-tr content verified by k3)
 
