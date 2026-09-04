@@ -6,7 +6,7 @@
 //
 //   deno run -A scripts/ui-integration.ts
 
-import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
+import { CHROMIUM, launchChrome, safeCaptureScreenshot } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -592,12 +592,11 @@ try {
   check("overlay-open RTL: nub centres on the rail's inner boundary", overlayRtl?.nubOnInner === true, overlayRtl);
   check("overlay-open RTL: overlay stays in-bounds", overlayRtl?.overlayInBounds === true, overlayRtl);
   check("overlay-open RTL: overlay does NOT cover the sidebar/nub (no overlap)", overlayRtl?.noOverlap === true, overlayRtl);
-  // NOTE: no RTL screenshot here — Page.captureScreenshot on a visually
-  // SETTLED headless page waits for a frame that never gets scheduled (the
-  // 5ht hang, pinpointed by marker bisection: the capture call never returns;
-  // runs 05-10 in ~/logs/cap-5ht-gates/). The three RTL assertions above are
-  // the gate; overlay-open.png (taken while the open transition keeps the
-  // frame source alive) remains the visual evidence.
+  // RTL screenshot: safely captured with safeCaptureScreenshot fallback (f5lb)
+  const shotOverlayRtl = await safeCaptureScreenshot((m, p, s) => cdp.send(m, p, s), hub, { format: "png", fromSurface: true, timeoutMs: 5000 });
+  if (shotOverlayRtl) {
+    await Deno.writeFile(`${SHOTS}/overlay-rtl.png`, shotOverlayRtl);
+  }
   await cdp.eval(hub, `(() => {
     document.documentElement.removeAttribute('dir');
     document.getElementById('uitest-no-transition')?.remove();

@@ -270,6 +270,8 @@ export interface CdpClient {
   open(url: string): Promise<{ targetId: string; sessionId: string }>;
   /** `Runtime.evaluate` with awaitPromise + returnByValue; throws on a page exception. */
   eval(sessionId: string, expression: string): Promise<any>;
+  /** Safely capture a screenshot of a target without wedging on quiesced headless frames (f5lb). */
+  screenshot(sessionId: string, opts?: ScreenshotOptions): Promise<Uint8Array | null>;
   /** Wait (bounded) for the extension's service-worker target; returns its info or null. */
   serviceWorker(opts?: { timeoutMs?: number }): Promise<any | null>;
   /** Subscribe to a CDP event (e.g. Runtime.executionContextCreated). Returns an unsubscribe. */
@@ -350,6 +352,7 @@ export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}):
       }
       return res?.result?.value;
     },
+    screenshot: (sessionId, opts = {}) => safeCaptureScreenshot(send, sessionId, opts),
     serviceWorker: (o = {}) => waitForServiceWorker(send, o),
     on(method, handler) {
       if (!listeners.has(method)) listeners.set(method, new Set());
@@ -387,7 +390,81 @@ export async function waitForServiceWorker(
   }
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+export interface ScreenshotOptions {
+  format?: "png" | "jpeg" | "webp";
+  quality?: number;
+  clip?: { x: number; y: number; width: number; height: number; scale?: number };
+  fromSurface?: boolean;
+  captureBeyondViewport?: boolean;
+  timeoutMs?: number;
+}
+
+/**
+ * Capture a screenshot safely without hanging on quiesced headless frames (chrome-agent-platform-f5lb).
+ *
+ * In headless Chromium with --disable-gpu, Page.captureScreenshot(fromSurface: true)
+ * issued when the page has no pending visual work waits forever for a compositor
+ * frame that is never scheduled (the renderer is idle, so Viz never gets an OnBeginFrame).
+ *
+ * This helper:
+ *   1. Races the capture against a bounded timeout (default 8000ms).
+ *   2. If fromSurface: true was requested or defaulted and times out or rejects,
+ *      wakes the frame pipeline with a micro requestAnimationFrame / style tick
+ *      and falls back to fromSurface: false (which reads from the backing store /
+ *      Blink paint tree directly rather than waiting for an unscheduled Viz frame).
+ *   3. Returns Uint8Array of bytes, or null on terminal failure (never wedges the process).
+ */
+export async function safeCaptureScreenshot(
+  send: CdpSend,
+  sessionId: string,
+  opts: ScreenshotOptions = {},
+): Promise<Uint8Array | null> {
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  const captureCall = (fromSurface?: boolean) => {
+    const params: Record<string, unknown> = {
+      format: opts.format ?? "png",
+      ...(opts.quality !== undefined ? { quality: opts.quality } : {}),
+      ...(opts.clip ? { clip: opts.clip } : {}),
+      ...(opts.captureBeyondViewport !== undefined ? { captureBeyondViewport: opts.captureBeyondViewport } : {}),
+      ...(fromSurface !== undefined ? { fromSurface } : {}),
+    };
+    return send("Page.captureScreenshot", params, sessionId);
+  };
+
+  // Attempt 1: Caller's preferred fromSurface setting with bounded timeout
+  try {
+    const res = await withTimeout(captureCall(opts.fromSurface), timeoutMs);
+    const b64 = res?.result?.data ?? res?.data;
+    if (b64 && typeof b64 === "string") {
+      return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    }
+  } catch (_err) {
+    // If fromSurface was true (or defaulted), the frame scheduler may be quiesced.
+    // Fall through to wake the compositor and retry with fromSurface: false.
+  }
+
+  // Attempt 2: Wake up compositor and capture with fromSurface: false
+  try {
+    await withTimeout(
+      send("Runtime.evaluate", {
+        expression: "new Promise(r => requestAnimationFrame(() => r(true)))",
+        awaitPromise: true,
+      }, sessionId),
+      1500,
+    ).catch(() => {});
+    const fallback = await withTimeout(captureCall(false), Math.min(timeoutMs, 4000));
+    const b64 = fallback?.result?.data ?? fallback?.data;
+    if (b64 && typeof b64 === "string") {
+      return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   if (ms <= 0) return Promise.reject(new Error("deadline"));
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("deadline")), ms);

@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.140] — 2026-09-04
+- add safeCaptureScreenshot with quiesced frame fallback
+
 ## [0.3.139] — 2026-09-04
-- test(1ik): harden kat-dialog-consolidation with timeouts and cleanup
+- Safe screenshot captures fall back cleanly and never hang on quiet pages
 
 ## [0.3.138] — 2026-09-04
 - Confirmation dialogs and prompt editors follow one consistent, reliable design across the extension
