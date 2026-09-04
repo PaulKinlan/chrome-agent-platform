@@ -316,6 +316,12 @@ the retired markdown trackers (`TASKS.md`, `KNOWN-ISSUES.md` — history only).
   never destroyed — until an owner decision reconciles them.
 - **Serialized Chrome evidence** (the canonical lock, acceptance runs, screenshots) is written
   outside the tmpfs to a durable evidence path; the evidence survives reboots.
+- **Scripts and tests route evidence, Chrome profiles, and big scratch copies through
+  `scripts/lib/durable-root.mjs`** (`durableRoot()`/`durableDir()`; default `$HOME/cap-evidence`,
+  override `CAP_DURABLE_ROOT`). The helper REFUSES a RAM-backed target rather than silently
+  writing to tmpfs; `tests/durable-root.test.ts` fails if a `/tmp` evidence literal comes back.
+  Only tiny cross-process coordination files (the canonical Chrome lock, the slot poison marker)
+  stay on tmpfs — a reboot clearing stale locks is a feature.
 - **The read-only audit** `node scripts/worktree-audit.mjs` inventories every registered worktree
   (HEAD/branch/dirty tracked+untracked/reachability/rescue/location class) and REFUSES destructive
   operations; private absolute paths are reported as class counts only, never committed.

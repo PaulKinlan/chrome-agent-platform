@@ -12,10 +12,11 @@
 // genuinely level-driven in this run.
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const OUT = Deno.args[1] ?? "/tmp/cap-mic-state-kats";
+const OUT = Deno.args[1] ?? durableDir("cap-mic-state-kats");
 // Arch Chromium ignores --load-extension; Chrome for Testing honors it.
 const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
 

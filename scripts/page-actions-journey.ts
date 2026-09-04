@@ -23,11 +23,12 @@
 // page-actions-after-click.png, page-actions-after-type.png.
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = Deno.env.get("CAP_CHROMIUM") ?? "/usr/bin/chromium";
-const EVIDENCE_DIR = Deno.env.get("PAGE_ACTIONS_EVIDENCE_DIR") ?? `/tmp/cap-page-actions-${Date.now()}`;
+const EVIDENCE_DIR = Deno.env.get("PAGE_ACTIONS_EVIDENCE_DIR") ?? durableDir(`cap-page-actions-${Date.now()}`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const results: { name: string; pass: boolean }[] = [];

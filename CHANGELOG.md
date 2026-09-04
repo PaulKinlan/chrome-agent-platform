@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.65] — 2026-09-04
+- Build and test evidence now survives restarts, and the recurring check flake is fixed
+
+## [0.3.64] — 2026-09-04
+- Build and test evidence now survives restarts — nothing is stored on volatile temp storage anymore, and the recurring check flake is fixed
+
+## [0.3.63] — 2026-09-04
+- Build and test evidence now survives restarts — nothing is stored on volatile temp storage anymore, and the recurring custody check flake is fixed
+
+## [0.3.62] — 2026-09-04
+- Maintenance and fixes.
+
 ## [0.3.61] — 2026-09-04
 - Maintenance and fixes.
 
@@ -37,7 +49,7 @@
 - The changelog's shipped copy materializes automatically in fresh checkouts, nine version notes are rewritten in plain user language, and the version hook stops writing bare ids as release notes
 
 ## [0.3.49] — 2026-09-03
-- The review-49 regression suite no longer depends on a tmpfs snapshot — it survives tmpfs cleanups
+- A regression suite no longer breaks when temp storage is cleaned between sessions
 
 ## [0.3.48] — 2026-09-03
 - No self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size

@@ -46,6 +46,7 @@
 // Chrome is launched through launchChrome() (a kernel-assigned debugging port
 // read back from Chrome's own stderr — never a fixed port).
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -53,7 +54,7 @@ const CHROMIUM = "/usr/bin/chromium";
 const RETAIN = Deno.args.includes("--retain");
 const EVIDENCE_DIR = (Deno.env.get("READ_PAGE_EVIDENCE_DIR")?.trim() || (RETAIN
   ? `${ROOT}test-artifacts/read-page-host-grant`
-  : `/tmp/cap-read-page-evidence-${Date.now()}`)).replace(/\/$/, "");
+  : durableDir(`cap-read-page-evidence-${Date.now()}`))).replace(/\/$/, "");
 const RAW_CHROME_STRING = "Cannot access contents of the page";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -184,7 +185,7 @@ async function waitFor(fn: () => Promise<unknown>, ms = 20000) {
 // The TEST VARIANT: byte-identical except `tabs` moves from optional to
 // required (see the header). Returns the dir + the shipped/variant manifests.
 async function makeVariant() {
-  const dir = `/tmp/cap-read-page-variant-${Date.now()}`;
+  const dir = durableDir(`cap-read-page-variant-${Date.now()}`);
   await Deno.mkdir(dir, { recursive: true });
   await new Deno.Command("cp", { args: ["-r", EXT + "/.", dir] }).spawn().status;
   const shipped = JSON.parse(await Deno.readTextFile(`${EXT}/manifest.json`));

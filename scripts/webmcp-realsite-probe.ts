@@ -29,6 +29,7 @@
 // not in the site's code, and that conclusion is recorded in the evidence.
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -49,7 +50,7 @@ await Deno.mkdir(OUT, { recursive: true });
 // harness's headless mode does the same): copy the extension and move
 // scripting+tabs from optional to required for the probe's load only.
 // Transient build scratch, rebuilt every run (webmcp-acceptance.ts pattern).
-const VARIANT = `/tmp/cap-webmcp-probe-variant-${Date.now()}`;
+const VARIANT = durableDir(`cap-webmcp-probe-variant-${Date.now()}`);
 {
   const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", VARIANT] }).spawn();
   await cp.status;

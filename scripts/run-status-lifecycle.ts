@@ -33,16 +33,17 @@
 // ATTESTATION: the manifest binds the exact tested commit (git rev-parse),
 // the worktree cleanliness (DERIVED from git status — never hardcoded), the
 // branch, and SHA-256 of every screenshot AND every loaded source/bundle file.
-// Evidence is EXTERNAL (a fresh /tmp dir), never committed.
+// Evidence is EXTERNAL (a fresh dir under the durable evidence root), never committed.
 //
 //   deno run -A scripts/run-status-lifecycle.ts
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const GIT = "/usr/bin/git";
-const EVIDENCE_DIR = `/tmp/cap-run-status-evidence-${Date.now()}`;
+const EVIDENCE_DIR = durableDir(`cap-run-status-evidence-${Date.now()}`);
 const RUN_ID = `cap-run-status-${Date.now()}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -139,7 +140,7 @@ const watchdog = setTimeout(() => {
 
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-  const profile = `/tmp/cap-run-status-profile-${Date.now()}`;
+  const profile = durableDir(`cap-run-status-profile-${Date.now()}`);
   const chrome = await startChrome(profile);
   const proc = chrome.proc;
   watchdogProc = proc;

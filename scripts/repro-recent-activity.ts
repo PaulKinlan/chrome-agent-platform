@@ -8,10 +8,11 @@
 //   deno run -A scripts/repro-recent-activity.ts [extension-dir]
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const OUT = Deno.args[1] ?? `/tmp/repro-recent-activity-${Date.now()}`;
+const OUT = Deno.args[1] ?? durableDir(`repro-recent-activity-${Date.now()}`);
 const CHROMIUM = "/usr/bin/chromium";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

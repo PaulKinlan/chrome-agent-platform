@@ -12,10 +12,11 @@
 //   - sampled visible text must hold WCAG AA (>= 4.5:1; large text >= 3:1)
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const OUT = Deno.args[1] ?? "/tmp/cap-dark-scheme-kats";
+const OUT = Deno.args[1] ?? durableDir("cap-dark-scheme-kats");
 const CHROMIUM = "/usr/bin/chromium";
 
 let pass = 0, fail = 0;

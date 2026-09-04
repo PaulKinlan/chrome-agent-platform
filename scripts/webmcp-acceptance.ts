@@ -60,6 +60,7 @@
 // See docs/WEBMCP-ACCEPTANCE.md.
 //
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -179,7 +180,7 @@ async function waitForFixture(ms = 10000): Promise<{ ok: boolean; detail?: strin
 // The TEST VARIANT: byte-identical extension except the manifest pre-holds the
 // API permissions exercised by the headed flow. Shipped host access is unchanged.
 async function makeVariant() {
-  const dir = `/tmp/cap-webmcp-variant-${Date.now()}`;
+  const dir = durableDir(`cap-webmcp-variant-${Date.now()}`);
   await Deno.mkdir(dir, { recursive: true });
   const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", dir] }).spawn();
   await cp.status;
@@ -281,7 +282,7 @@ async function main() {
   // <all_urls> already exposes tab URLs/titles). This block carries its own
   // minimal plumbing so the proven variant flow below is untouched.
   if (!HEADED) {
-    const freshProfile = `/tmp/cap-webmcp-fresh-${Date.now()}`;
+    const freshProfile = durableDir(`cap-webmcp-fresh-${Date.now()}`);
     await Deno.mkdir(freshProfile, { recursive: true });
     const fresh = await launch(freshProfile, EXT);
     const freshProc = fresh.proc;
@@ -432,7 +433,7 @@ async function main() {
   // WEBMCP-AUTOAPPROVE-01): the negative asserted here is that BEFORE the click
   // nothing on the site can be invoked, and no permission is held.
   if (!HEADED) {
-    const showcaseProfile = `/tmp/cap-webmcp-showcase-${Date.now()}`;
+    const showcaseProfile = durableDir(`cap-webmcp-showcase-${Date.now()}`);
     await Deno.mkdir(showcaseProfile, { recursive: true });
     const launched = await launchChrome({
       binary: CHROMIUM,
@@ -710,7 +711,7 @@ async function main() {
   }
 
   const extDir = HEADED ? EXT : await makeVariant();
-  const profile = `/tmp/cap-webmcp-acc-${Date.now()}`;
+  const profile = durableDir(`cap-webmcp-acc-${Date.now()}`);
   await Deno.mkdir(profile, { recursive: true });
   const variant = await launch(profile, extDir);
   const proc = variant.proc;
