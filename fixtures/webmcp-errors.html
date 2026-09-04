@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebMCP Honest-Errors Fixture</title>
+  <script>
+    // The same realistic WebMCP polyfill shape as webmcp-fixture.html, hosting
+    // the FAILURE-MODE tools for chrome-agent-platform-ajcc: the agent-visible
+    // error must carry the underlying cause (name + bounded redacted message +
+    // stack excerpt + phase + realm + origin), a non-cloneable result must
+    // fail honestly instead of timing out, and page text carrying credential
+    // shapes must stay redacted even while the cause is surfaced.
+    (function installModelContext() {
+      const tools = new Map();
+      function define(name, description, inputSchema, execute) {
+        tools.set(name, { name, description, inputSchema, execute });
+      }
+
+      // The happy path — proves the honest-error change leaves the success
+      // round-trip byte-identical.
+      define("happy_echo", "Echo the query back", { type: "object", properties: { query: { type: "string" } } },
+        (args) => ({ echo: args?.query ?? "" }));
+
+      // A handler that throws a SPECIFIC DOMException — the agent-visible
+      // error must name QuotaExceededError and carry the message excerpt.
+      define("fail_named", "Throws a named DOMException", { type: "object", properties: {} }, () => {
+        throw new DOMException("search index quota exceeded for workspace ws_42", "QuotaExceededError");
+      });
+
+      // A handler that throws a BARE DOMException — no message at all. The
+      // agent-visible error must say exactly that (never invent detail).
+      define("fail_bare", "Throws a bare DOMException", { type: "object", properties: {} }, () => {
+        throw new DOMException();
+      });
+
+      // A plain JS error — the common failure shape of real page code.
+      define("fail_typeerror", "Throws a TypeError", { type: "object", properties: {} }, () => {
+        const docs = undefined;
+        return docs.documents;
+      });
+
+      // A handler whose message embeds credential SHAPES — the honest error
+      // must surface the cause while STILL redacting the credential (the
+      // round-30 protection is preserved, not removed).
+      define("fail_leaky", "Throws an error containing credential shapes", { type: "object", properties: {} }, () => {
+        throw new Error("request to https://api.internal.example/search?token=sk-live-abcdef123456 failed; sent Authorization: Bearer sk-live-abcdef123456");
+      });
+
+      // The ajcc review P1 cases — redaction parity with lib/pure.js
+      // redactSecretText: keyword-adjacent assignments, and URL userinfo +
+      // query + fragment.
+      define("fail_kw_assignment", "Throws an error with a keyword-assigned token", { type: "object", properties: {} }, () => {
+        throw new Error("upstream rejected the write: token=hunter2hunter2");
+      });
+      define("fail_kw_password", "Throws an error with a keyword-assigned password", { type: "object", properties: {} }, () => {
+        throw new Error("login failed for the account: password=hunter2 retry later");
+      });
+      define("fail_userinfo_url", "Throws an error with a userinfo URL carrying query and fragment", { type: "object", properties: {} }, () => {
+        throw new Error("fetch https://user:hunter2@example.com/x?y=1#frag failed with 401");
+      });
+
+      // chrome-agent-platform-922q: tools whose name starts with
+      // "dispatch_broken" simulate the owner's beads.gascity.com failure —
+      // the NATIVE WebMCP dispatch layer (modelContext.executeTool) throws a
+      // bare DOMException: UnknownError while the page's own handler function
+      // is healthy (…_handler_ok) or throws the REAL cause (…_handler_throws).
+      // The dispatcher must fall through to the descriptor's own execute fn
+      // and only fail when EVERY path fails — naming what it tried.
+      define("dispatch_broken_handler_ok", "Native dispatch broken; the page handler is healthy", { type: "object", properties: {} }, () => {
+        return { answer: "handler-direct-result-922q" };
+      });
+      define("dispatch_broken_handler_throws", "Native dispatch broken; the page handler throws the real cause", { type: "object", properties: {} }, () => {
+        throw new TypeError("the docs index is not a function");
+      });
+
+      // A handler whose RESULT cannot cross the bridge — structured cloning
+      // rejects functions and DOM nodes. Pre-fix the postMessage DataCloneError
+      // was mislabeled as a handler failure ("tool failed (DOMException:
+      // DataCloneError)"); it must now report its real phase honestly.
+      define("return_noncloneable", "Returns a non-cloneable value", { type: "object", properties: {} }, () => {
+        return { node: document.body, callback: () => 1, ok: true };
+      });
+
+      document.modelContext = {
+        getTools: async () => Array.from(tools.values()).map((t) => ({
+          name: t.name,
+          description: t.description,
+          inputSchema: JSON.stringify(t.inputSchema ?? { type: "object", properties: {} }),
+          execute: t.execute,
+        })),
+        registerTool: async (t) => {
+          tools.set(t.name, { name: t.name, description: t.description, inputSchema: t.inputSchema ?? {}, execute: t.execute ?? (() => null) });
+          return t;
+        },
+        executeTool: async (tool, args) => {
+          // 922q: the "native dispatch is broken" simulation — exactly the
+          // owner-observed beads.gascity.com shape (bare UnknownError, no
+          // message, handler never reached).
+          if (typeof tool?.name === "string" && tool.name.startsWith("dispatch_broken")) {
+            throw new DOMException("", "UnknownError");
+          }
+          if (tool?.execute) return tool.execute(args);
+          return "executed";
+        },
+      };
+    })();
+  </script>
+</head>
+<body>
+  <h1>WebMCP Honest-Errors Fixture</h1>
+  <p id="msg">errors fixture loaded</p>
+</body>
+</html>

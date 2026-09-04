@@ -54,8 +54,10 @@ import {
   requireSettingsSender,
 } from "./routes/index.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
-import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal } from "../lib/run-budget.js";
+import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal, steerStopTerminal } from "../lib/run-budget.js";
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
+import { createRunControl, createThreadQueue } from "../lib/run-control.js";
+import { drainQueuedFollowUp, reconcileQueueClaims } from "../lib/queue-drain.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
   PREVIEW_LIMITS,
@@ -71,8 +73,17 @@ import {
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
+import {
+  collectExportData,
+  buildArchive,
+  parseArchive,
+  importArchive,
+  createOpfsAdapter,
+  createChromeAlarmsAdapter,
+} from "../lib/data-archive.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
+import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
 import {
   canonicalOrigin,
   journalAppend,
@@ -165,9 +176,11 @@ import {
   generateAvatarForCreatedAgent,
   getNamedAgent,
   getNamedAgentProvider,
+  getNamedAgentToolsConfig,
   grepAgentMemory,
   listNamedAgents,
   normalizeAgentProvider,
+  normalizeAgentToolsConfig,
   normalizeCoreAssets,
   normalizeProfileGrants,
   validateProfileGrants,
@@ -178,6 +191,7 @@ import {
   resolveNamedAgentStore,
   setNamedAgentProvider,
   setNamedAgentMcpServers,
+  setNamedAgentToolsConfig,
   slugifyAgentId,
   updateNamedAgent,
   withNamedAgentsLock,
@@ -209,7 +223,10 @@ import {
   buildAgentRunView,
   finalizeUnadmittedThreadRun,
 } from "../lib/thread-run-view.js";
+import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
+import { runPython } from "../lib/python-execution.js";
+import { getPythonRuntimeProvider } from "../lib/python-tool.js";
 import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
@@ -246,6 +263,8 @@ import {
 } from "../lib/system-prompts.js";
 import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
+  APPEND_MAX_BYTES,
+  appendAsset,
   assetLibraryCapacity,
   createAsset,
   createOrUpdateAssetKeyed,
@@ -275,6 +294,7 @@ import {
   recordScriptRun,
   updateScript,
 } from "../lib/scripts.js";
+import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
   captureTabScreenshot,
@@ -292,6 +312,7 @@ import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRu
 import { resolveSkillRef } from "../lib/skill-resolve.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
+import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
 import { replaySafetyForTool } from "../lib/tool-replay-safety.js";
 import { createAlarmPermissionLifecycle } from "../lib/alarm-permission-lifecycle.js";
@@ -669,6 +690,13 @@ function withRunLock(fn) {
   runMutex = run.then(() => {}, () => {});
   return run;
 }
+
+// chrome-agent-platform-afiu — the run-level control plane: live STEER (owner
+// guidance injected into an in-flight run between model steps) + the durable
+// per-thread follow-up QUEUE (FIFO fired one per settled run). One protocol
+// for thread/named/background/site runs — the composer surface drives both.
+const runControl = createRunControl();
+const threadQueues = createThreadQueue({ kvGet, kvSet });
 
 // ---- agent→agent delegation (G5) ----
 // Live state for every delegation-capable run (named-agent runs): identity,
@@ -1260,14 +1288,14 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub") {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null) {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
   // memory instead of the agent's own tier. A custom prompt scope (a named
   // agent's own system-prompt customization) takes the same fresh-build path —
   // the cached shared master carries the hub's composition, not the agent's.
-  if (memoryOverride || promptScope || approvalExecutionId) {
+  if (memoryOverride || promptScope || approvalExecutionId || agentTools) {
     // A management-capable run receives a FRESH toolset whose closure captures
     // this immutable execution id. Cached/global mutable cells would let a
     // stale tool call borrow a later run's authority.
@@ -1282,6 +1310,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       runMaxIterations,
       iterationGuard,
       providerServerAgentId,
+      agentTools,
     );
   }
   while (true) {
@@ -1334,7 +1363,7 @@ async function lazyPermissionDigest() {
   }
 }
 
-async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null }) {
+async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null, agentTools = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
   const permissionDigest = await lazyPermissionDigest();
@@ -1397,11 +1426,19 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
       : []),
     // Admitted bundled Wasm packages provide spec-derived validation, run-bound
     // authorization, and task execution dispatch closures through the shared core.
-    ...executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
-      scope,
-      sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
-      closureGeneration: "task-execution-core",
-    }),
+    ...executableBundledToolRecords(
+      agentTools?.bundledWasm != null
+        ? BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => {
+            const allowed = new Set(agentTools.bundledWasm);
+            return allowed.has(row.packageId) || allowed.has(row.toolId);
+          })
+        : BUNDLED_TOOL_PACKAGE_ROWS,
+      {
+        scope,
+        sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
+        closureGeneration: "task-execution-core",
+      },
+    ),
     // Provider-EXECUTED (server-side) tools — discovery through the same lazy
     // index; "execution" latches the provider-defined tool onto the run (the
     // agent-core proxy declares it on the next model call). Availability is
@@ -1520,22 +1557,23 @@ async function readSiteLazySources(origin, runGenCell) {
         "arguments",
       );
     },
-  }, ({ name, source, args }) =>
-    invokeSiteTool(
+  }, async ({ name, source, args }) => {
+    const res = await invokeSiteTool(
       origin,
       name,
       args,
       runGenCell?.get?.() ?? null,
       source,
-    )
-  );
+    );
+    return await withSiteDocsFallback({ origin, name, args, res });
+  });
 }
 
 // The orchestrator build (the memory, the workers, the tools). Shared by
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub") {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null) {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -1562,7 +1600,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     });
     const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole, runtimeContext });
     // Workers = enrolled site origins, each with its own memory + skills.
-    const origins = await listOrigins();
+    const allOrigins = await listOrigins();
+    const allowedWebmcpOrigins = agentTools?.webmcpOrigins != null
+      ? new Set(agentTools.webmcpOrigins.map((o) => canonicalOrigin(o) || o.toLowerCase()))
+      : null;
+    const origins = allowedWebmcpOrigins == null
+      ? allOrigins
+      : allOrigins.filter((origin) => allowedWebmcpOrigins.has(origin) || allowedWebmcpOrigins.has(canonicalOrigin(origin)));
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
     // created INSIDE this build and never shared across builds. The old code used
     // a module-global `runGenCells` Map, so two concurrent same-generation builds
@@ -1760,6 +1804,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // browser mutation, a durable schedule, or a memory write (the wider-goal
       // review's "scoped != side-effect-free" finding).
       scoped,
+      // workflow_run → the owner-approved `workflow.run` route (sandboxed host
+      // for script-js workflows). Bound only on real management-capable runs —
+      // SCOPED (hook) runs get NO route, so their workflow_run fails closed
+      // (mirroring the management tools, which scoped runs also lack).
+      workflowRunRoute: scoped ? null : (args) => modelManagementDispatch("workflow.run", args ?? {}),
       extraTools: { ...liveBrowserTools, ...liveManagementTools },
       readMasterLazySources: () => liveChromeLazyRecords({
         browserTools: liveBrowserTools,
@@ -1773,9 +1822,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
           readSwitches: readServerToolSwitches,
           latchRegistry: serverToolLatchRegistry,
         },
+        agentTools,
       }),
       serverTooling,
       delegateGuard: async (origin) => {
+        if (allowedWebmcpOrigins != null && !allowedWebmcpOrigins.has(origin) && !allowedWebmcpOrigins.has(canonicalOrigin(origin))) {
+          return { ok: false, error: `origin ${origin} is not in this agent's WebMCP origin allow-list` };
+        }
         // The model-facing delegate_task must revalidate LIVE enrollment before
         // running a cached worker (the internal path previously bypassed the
         // lifecycle gate — the round-15 finding). Use the ATOMIC snapshot (enrolled
@@ -1814,6 +1867,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       workerLayers[origin] = (await attestComposition(composed, "worker")).layers;
     }
     if (Object.keys(workerLayers).length) orch.promptInfo.workerLayers = workerLayers;
+    // Expose the run's untrusted-content boundary token (lib/untrusted-fence.js)
+    // on the orchestrator so runTask can fence imported skill PROMOTION
+    // metadata with the SAME token the master agent's untrusted-content policy
+    // layer and boundary-skills layer name (chrome-agent-platform-ve67 r2 P1).
+    orch.untrustedToken = runtimeContext.untrustedToken ?? null;
     // Expose the build-local provider-server observations so the run's settle
     // path can attach citations to the terminal message + record the usage
     // line. Read-only view; the maps themselves stay private to this build.
@@ -2445,7 +2503,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null, agentTools = null }) {
   // skipRunLock is ONLY for the delegation child path (agent.delegate): the
   // child builds a FRESH orchestrator (its own memory + abort controller via
   // the memoryOverride/promptScope/executionId path below), so the shared-
@@ -2617,6 +2675,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // EVERY-ITEM-01): {used,total,exhausted}. `exhausted` turns the terminal
     // into a "Budget reached — Continue" stop instead of a silent finish.
     let runBudget = null;
+    // Lifecycle cleanup (chrome-agent-platform-4ffg): what THIS run opened
+    // (tabs/windows) and what it already closed itself, fed from the same
+    // tool-result stream journaled below. The run-end summary names it and
+    // the default-off auto-close setting closes exactly it (never a tab this
+    // run did not open — the plan is a pure filter over the tracker's ids).
+    const lifecycle = createLifecycleTracker();
     const journalingProgress = async (event) => {
       if (event?.type === "budget" && Number.isFinite(event.step) && Number.isFinite(event.total)) {
         runBudget = { used: event.step, total: event.total, exhausted: event.exhausted === true || runBudget?.exhausted === true };
@@ -2629,6 +2693,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           : null;
         runBudget = { used: Number(event.budget.used) || 0, total: Number(event.budget.total) || 0, exhausted: event.budget.exhausted === true, ...(stopped ? { stopped } : {}) };
       }
+      // Lifecycle accounting runs on the UNREDACTED copy (the retained full
+      // result below is already redacted at this chokepoint's own boundary;
+      // the ids this tracker needs are never secret-shaped). Recorded BEFORE
+      // the mutation below so the release/close half of a same-event edit is
+      // never skipped.
+      try {
+        if (event?.type === "tool-result") {
+          lifecycle.onToolResult(
+            event.selectedTool ?? event.toolName ?? "",
+            event.ok === true,
+            typeof event.resultFull === "string" && event.resultFull ? event.resultFull : event.result ?? null,
+          );
+        }
+      } catch { /* lifecycle telemetry never breaks a run */ }
       // Redact credentials at the SINGLE progress chokepoint so BOTH the live
       // broadcast and the persisted journal never carry them (the tool-call
       // clarity finding: raw args/results — including credential-shaped
@@ -2658,10 +2736,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           }
         } catch { /* redaction failure must never break the run */ }  }
       // Live budget tracking for the delegation guard: each model step emits a
-      // thinking event carrying the loop's step counter; the caller's REMAINING
-      // iterations bound any child run it spawns (agent.delegate reads this).
+      // thinking event carrying the loop's 0-based step counter; the count of
+      // consumed iterations is event.step + 1, so the caller's REMAINING
+      // iterations bound any child run it spawns (CAP-FB-20260902-DELEGATION-STEP-OFF-BY-ONE-01).
       if (delegationState && event?.type === "thinking" && Number.isFinite(event.step)) {
-        delegationState.step = Math.max(delegationState.step, event.step);      }
+        delegationState.step = Math.max(delegationState.step, event.step + 1);
+      }
       try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
       // Every substantive per-step answer is persisted IN ORDER as an interim
@@ -2791,6 +2871,14 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // finally, and its slot is FINALIZED so a late emission can never leak
     // into a later run's records.
     beginExecution(executionId, taskId);
+    // chrome-agent-platform-afiu: this run is now steerable/queuable — the
+    // composer's run.control.* routes resolve against THIS live record.
+    runControl.register({
+      executionId,
+      threadId: threadId ?? null,
+      surface: agentSurfaceRef ?? null,
+      kind: runKind ?? (agentRole ? "agent" : "task"),
+    });
     // Everything after beginExecution is inside this try: orchestrator/key
     // establishment can fail too, and even that pre-model failure must seal the
     // slot. This run builds a management toolset that CAPTURES executionId.
@@ -2861,10 +2949,23 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         delegationState ? delegationState.maxIterations : boundedIterations(maxIterations),
         delegationState ? (step) => canStartDelegationIteration(delegationState, step) : null,
         providerServerAgentId,
+        agentTools,
       );
       durableRunAborters.set(executionId, () => {
         try { orch?.abort?.(); } catch { /* already stopped */ }
       });
+      // chrome-agent-platform-afiu: bind the run's steer source (per run, like
+      // setProgress/setAttestation — the cached orchestrator is reused). The
+      // model seam injects pending steer text between steps and acks it.
+      try {
+        orch?.setSteerSource?.((runId) => {
+          const key = String(runId ?? executionId ?? "");
+          return {
+            pending: runControl.pending(key),
+            ack: (ids) => runControl.markInjected(key, ids),
+          };
+        });
+      } catch { /* steering binding must never break a run */ }
       // Close the cancel-before-aborter race: cancellation removes durable
       // ownership before stopping live work, so this immediate check prevents
       // task/tool commits if Cancel landed while the orchestrator initialized.
@@ -2990,8 +3091,38 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // continuation re-applies them (the same union the caller of a fresh
       // continuation reads from the thread). The journal stores the
       // source-qualified refId when present so a colliding imported skill is
-      // re-resolved to the imported row, never the built-in.
-      runSkillIds = runSkills.map((r) => r?.refId ?? r?.id).filter((x) => typeof x === "string" && x).slice(0, 24);
+      // re-resolved to the imported row, never the built-in. The journaled list
+      // stays capped at JOURNALED_SKILLS_CAP so resume rows remain small; the
+      // PROMOTION exclusion set below is derived from ALL runSkills instead — an
+      // agent may attach up to 128 skills (agent-cards.js MAX_CARD_SKILLS), and
+      // an attached skill's body already composes, so a skill past the 24th must
+      // never be re-promoted (chrome-agent-platform-ve67 r2 P1).
+      runSkillIds = attachedSkillRefs(runSkills).slice(0, JOURNALED_SKILLS_CAP);
+      // Skill PROMOTION (chrome-agent-platform-ve67): when the run's agent has
+      // NO relevant skills attached, a bounded section names the catalog
+      // skills that match the current task — the model can adopt one
+      // (/skill:<id>) or read an imported one on demand (skill_read).
+      // Failure-isolated: a catalog/read error never blocks the run (no
+      // promotion is composed). Imported rows' name/description are REMOTE
+      // (untrusted) frontmatter — promotion fences them with THIS run
+      // orchestrator's boundary token (the same token the run's
+      // untrusted-content policy layer and boundary-skills layer name), so the
+      // model reads them as data, never instructions (r2 P1).
+      let runPromotion = null;
+      try {
+        const { skillCatalog } = await import("../lib/skill-catalog.js");
+        const { promoteSkills } = await import("../lib/skill-promotion.js");
+        const catalog = await skillCatalog({ memory: mem ?? masterMemory(), fileStore: skillFileStore });
+        // The exclusion set is EVERY attached run-skill ref — never the
+        // journal-capped subset (a 25th+ attached skill is still excluded).
+        const adopted = new Set(attachedSkillRefs(runSkills));
+        runPromotion = promoteSkills({
+          task: String(task ?? ""),
+          catalog: catalog.skills,
+          adoptedIds: adopted,
+          untrustedToken: orch?.untrustedToken ?? null,
+        });
+      } catch { runPromotion = null; }
       // agent-do's run(task, context, history) -> result text; context is a STRING.
       // `history` carries the prior conversation turns (the unified surface: a
       // follow-up / nudge is a new turn in the SAME persistent thread, so the
@@ -3011,6 +3142,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             origin: "",
             documentId: "",
           }),
+          runPromotion,
         );
         result = (runOutcome && typeof runOutcome === "object" && !Array.isArray(runOutcome) && typeof runOutcome.text === "string")
           ? runOutcome.text
@@ -3062,7 +3194,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // model kept answering continuations with tool calls and no text, so
       // the task is not finished and Continue is the one action.
       if (runBudget?.exhausted === true || runBudget?.stopped) {
-        const budgetStop = runBudget.stopped ? continuationStopTerminal(runBudget) : budgetExhaustedTerminal(runBudget);
+        const budgetStop = runBudget.stopped
+          ? (runBudget.stopped.reason === "steer-stop-step"
+            ? steerStopTerminal(runBudget)
+            : continuationStopTerminal(runBudget))
+          : budgetExhaustedTerminal(runBudget);
         const terminal = await durableRuns.settle(executionId, {
           ...budgetStop,
           logicalId: taskId,
@@ -3108,6 +3244,44 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         } catch { /* usage telemetry must never fail a settled run */ }
       }
       const serverToolKind = serverToolSpecForProvider(serverGrounding?.provider)?.toolId ?? "google_search";
+      // ── Lifecycle cleanup (chrome-agent-platform-4ffg) ────────────────────────
+      // A terminal SUCCESS is where the run summary gets its teeth: append the
+      // runtime note naming the tabs/windows THIS run opened and left open (the
+      // model's final text is the summary the owner reads, so the note rides
+      // it). When the owner set auto-close on (default OFF), remove exactly the
+      // run's own still-open opened tabs FIRST — tabs the run already closed
+      // itself are never re-closed, and no tab the run did not open can enter
+      // the plan (autoCloseTabPlan is a pure filter over the tracker's ids).
+      // Windows are never auto-closed (closing one closes every tab in it —
+      // that stays an owner-approved Destructive action). Cleanup never breaks
+      // or slows a settled run: every failure is caught.
+      // The summary is only as honest as its "still open" claim: ids the run
+      // opened but the owner closed mid-run (or that vanished) are dropped by
+      // a live re-check before the note is composed — a closed tab is never
+      // reported as open, and auto-close never burns a remove on it. The same
+      // filter covers the run's RESTORED tabs/windows (r6 finding 1: restored
+      // ids used to bypass it, so an owner-closed restored surface was still
+      // claimed open).
+      const liveSnapshot = await liveLifecycleSnapshot(
+        lifecycle.snapshot(),
+        (id) => chrome.tabs.get(id),
+        (id) => chrome.windows.get(id),
+      );
+      let autoClosedTabIds = [];
+      if (liveSnapshot.openedTabs.length > 0) {
+        try {
+          const autoCloseSetting = await kvGet("cap:autoCloseRunTabs");
+          if (autoCloseSetting?.["cap:autoCloseRunTabs"] === true) {
+            for (const tabId of autoCloseTabPlan(liveSnapshot)) {
+              try {
+                await chrome.tabs.remove(tabId);
+                autoClosedTabIds.push(tabId);
+              } catch { /* the tab is already gone — nothing to close */ }
+            }
+          }
+        } catch { /* a settings read failure never blocks the summary */ }
+      }
+      result = appendRunEndCleanupNote(result, liveSnapshot, autoClosedTabIds);
       const terminal = await durableRuns.settle(executionId, { ok: true, result, logicalId: taskId,
         ...(serverGrounding && (serverGrounding.citations.length > 0 || serverGrounding.queryOccurrenceCount > 0)
           ? {
@@ -3275,6 +3449,20 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       }
       // The ROOT run releases the descendant counter on settle.
       if (delegationState && delegationState.depth === 0) delegationRegistry.release(delegationState.rootRunId);
+      // chrome-agent-platform-afiu: release the run from the live control plane.
+      // A steer that never reached the model becomes a queued follow-up on the
+      // run's thread (nothing the owner typed is lost); a settled thread run
+      // then drains its queue one item per run.
+      const endedRun = runControl.unregister(executionId);
+      if (threadId && endedRun?.ok) {
+        for (const steer of endedRun.undelivered) {
+          if (steer.text && steer.mode !== "stop-run") {
+            threadQueues.enqueue(threadId, steer.text).catch(() => {});
+          }
+        }
+        void drainThreadQueueForThread(threadId, executionId).catch((err) =>
+          pushDiagnostic("error", `[thread] queue drain failed: ${String(err?.message ?? err).slice(0, 160)}`));
+      }
       // Seal THIS execution: unbind the attestation callback from the (cached)
       // orchestrator and finalize the execution slot, so no late/duplicate
       // emission can be recorded against this — or a later — run (the ring
@@ -3305,6 +3493,11 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // run's ensureOrchestrator rebinds inside ITS lock.
       try {
         orch?.setProgress?.(null);
+      } catch { /* best-effort */ }
+      // Unbind the per-run steer source the same way (a stale reader would be
+      // inert — its execution is unregistered — but must never linger).
+      try {
+        orch?.setSteerSource?.(null);
       } catch { /* best-effort */ }
       // Remove the abort listener BEFORE the run mutex is released (in the
       // `finally`, which still runs under withRunLock). The scheduled run's
@@ -3964,10 +4157,14 @@ function namedCandidatePayload(candidate) {
     // Delegation edges are authorization grants — the owner approval must bind
     // them exactly, never let them ride unapproved inside another change.
     canonicalField("canDelegateTo", payloadStringArray(candidate.canDelegateTo)),
+    canonicalField("tools", candidate.tools ? canonicalRecord(
+      canonicalField("webmcpOrigins", payloadStringArray(candidate.tools.webmcpOrigins ?? [])),
+      canonicalField("bundledWasm", payloadStringArray(candidate.tools.bundledWasm ?? [])),
+    ) : canonicalScalar(null)),
   );
 }
 
-function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo }) {  const patch = Object.create(null);
+function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools }) {  const patch = Object.create(null);
   patch.name = name === undefined ? undefined : String(name).trim();
   patch.role = role === undefined ? undefined : String(role).trim();
   patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
@@ -3982,6 +4179,9 @@ function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileG
     }
     patch.profileGrants = validated.grants;
   }  patch.canDelegateTo = canDelegateTo === undefined ? undefined : normalizeCanDelegateTo(canDelegateTo);
+  if (tools !== undefined) {
+    patch.tools = tools === null ? null : normalizeAgentToolsConfig(tools);
+  }
   return patch;
 }
 
@@ -3997,6 +4197,16 @@ function namedPatchPayload(id, patch) {
     canonicalField("content", canonicalScalar(asset.content)),
   )))));
   fields.push(canonicalField("profileGrants", patch.profileGrants === undefined ? canonicalScalar(undefined) : payloadStringArray(patch.profileGrants)));
+  if (patch.tools === undefined) {
+    fields.push(canonicalField("tools", canonicalScalar(undefined)));
+  } else if (patch.tools === null) {
+    fields.push(canonicalField("tools", canonicalScalar(null)));
+  } else {
+    fields.push(canonicalField("tools", canonicalRecord(
+      canonicalField("webmcpOrigins", payloadStringArray(patch.tools.webmcpOrigins ?? [])),
+      canonicalField("bundledWasm", payloadStringArray(patch.tools.bundledWasm ?? [])),
+    )));
+  }
   return canonicalRecord(...fields);
 }
 
@@ -4288,6 +4498,7 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
       attachments: attachments ?? [],
       memory: mem,
       modelOverride,
+      agentTools: agent.tools ? normalizeAgentToolsConfig(agent.tools) : null,
       providerBinding: overrideConfig ? providerResumeIdentity(overrideConfig) : null,
       providerGateConfig: overrideConfig,
       clientCorrelationId: runId ?? null,
@@ -4531,6 +4742,71 @@ async function cancelExecutionTree(executionId, { reason, requestId = null }) {
   return result;
 }
 
+/** chrome-agent-platform-afiu: after a thread-attributed run settles, fire the
+ * NEXT queued follow-up (FIFO — one item per settled run). Gated:
+ *   - only a live-thread run whose settle was a SUCCESS drains (a cancelled,
+ *     budget-stopped or failed settle PARKS the queue — the owner's Stop or a
+ *     provider failure must not silently cascade the remaining items into more
+ *     paid turns; the chips stay visible for the owner to act on);
+ *   - each drained item runs as its own turn of the SAME thread (agent.run —
+ *     the thread history is its context), so its own settle drains the next.
+ * Fire-and-forget from runTask's finally (never awaited — the run mutex
+ * serializes the next turn behind this one).
+ *
+ * Review r5 P1-2: the drain is two-phase (lib/queue-drain.js) — the item is
+ * CLAIMED, not removed, before agent.run fires; it is dropped only once the
+ * fired run settled, and released back to the pending head when admission was
+ * refused or an SW stop beat the durable registration. Nothing the owner
+ * queued is ever lost to a shift-before-admission gap. */
+async function drainThreadQueueForThread(threadId, settledExecutionId) {
+  const id = String(threadId ?? "");
+  if (!id) return;
+  await drainQueuedFollowUp({
+    queue: threadQueues,
+    threadId: id,
+    settledExecutionId: settledExecutionId ?? null,
+    runRow: async (executionId) => {
+      const snapshot = await durableRuns.list();
+      return snapshot.runs.find((row) => row.executionId === executionId) ?? null;
+    },
+    fireRun: ({ runId, text }) => handlers["agent.run"]({ threadId: id, task: text, runId }),
+    report: (level, message) => pushDiagnostic(level, message),
+    newRunId: retryRunId,
+  }).catch((e) => {
+    pushDiagnostic("error", `[thread] queue drain failed: ${String(e?.message ?? e).slice(0, 160)}`);
+  });
+}
+
+/** chrome-agent-platform-afiu: SW-wake reconcile of durable queue claims — an
+ * SW stop between "claim" and "durably admitted" must never orphan the
+ * owner's follow-up. lib/queue-drain.js decides each claim from the durable
+ * run registry; threads whose claim resolved (released / ran-to-ok) are
+ * re-drained (one item per thread — each fired turn's settle drains the
+ * next). Best-effort: reconcile failure surfaces in the log, never crashes
+ * boot. */
+async function reconcileThreadQueueClaims() {
+  // Review r6 P1-3: never classify claims against a registry that is not yet
+  // recoverable — an unready durableRuns.list() throws (or returns nothing)
+  // and a lookup failure must NOT read as "the run never existed" (releasing
+  // a live run's claim could double-fire its message). Chain after
+  // durableRecoveryReady exactly like resumeInterruptedRuns.
+  await durableRecoveryReady;
+  const outcome = await reconcileQueueClaims({
+    queue: threadQueues,
+    rowForClientRunId: async (clientRunId) => {
+      const snapshot = await durableRuns.list();
+      return snapshot.runs.find((row) => row.clientCorrelationId === clientRunId) ?? null;
+    },
+    report: (level, message) => pushDiagnostic(level, message),
+  });
+  for (const threadId of outcome.threadsToRedrain) {
+    drainThreadQueueForThread(threadId, null).catch((e) => {
+      pushDiagnostic("error", `[thread] wake queue drain failed: ${String(e?.message ?? e).slice(0, 160)}`);
+    });
+  }
+  return outcome;
+}
+
 const boardRoutes = createAgentBoardRoutes({
   memory: masterMemory(),
   withLock: withNamedAgentsLock,
@@ -4686,6 +4962,10 @@ const handlers = mergeRouteMaps(
     // Worker identity = the agent's immutable instanceId (review P1-2):
     // slug-keyed workers would be inherited by a recreated same-name agent.
     resolveAgentIdentity: (agentId) => resolveAgentInstanceId(agentId),
+    // chrome-agent-platform-afiu: worker runs join the same live run-control
+    // plane so the composer's run.control.steer reaches a worker run through
+    // the agent-worker protocol (one steer protocol for every surface).
+    runControl,
     // ── PHASE-2 tool bridge authority ───────────────────────────────────────
     // The worker's RPC proxy (agent-worker.tool) resolves here. The SW is the
     // ONLY tool executor: resolve the tool by name from the SAME toolsets the
@@ -5444,13 +5724,13 @@ const handlers = mergeRouteMaps(
     const [enriched] = await enrichAgentsWithSchedules([agent]);
     return { ok: true, agent: enriched };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule, profileGrants, canDelegateTo }, context) {
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule, profileGrants, canDelegateTo, tools }, context) {
     if (profileGrants !== undefined) {
       const validated = validateProfileGrants(profileGrants);
       if (!validated.ok) return validated;
     }
     const r = await createNamedAgent(
-      { id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo },
+      { id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools },
       {
         gateOnReplace: async ({ slug, existing, candidate }) => {
           let payload;
@@ -5501,10 +5781,10 @@ const handlers = mergeRouteMaps(
     }
     return r;
   },
-  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo }, context) {
+  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools }, context) {
     let patch;
     try {
-      patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo });
+      patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools });
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -5523,6 +5803,15 @@ const handlers = mergeRouteMaps(
     });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
+    return r;
+  },
+  async "named-agent.set-tools"({ id, tools }, context) {
+    if (!id || typeof id !== "string") return { ok: false, error: "agent id required" };
+    const r = await setNamedAgentToolsConfig(id, tools);
+    if (r?.ok !== false) {
+      broadcastProgress({ type: "named-agent-changed" });
+      broadcastRegistryChanged();
+    }
     return r;
   },
   async "named-agent.set-provider"({ id, config }, context) {
@@ -6029,6 +6318,70 @@ const handlers = mergeRouteMaps(
     return { ok: true, targets };
   },
 
+  /** Owner export of ALL agent data (chrome-agent-platform-ykb). OWNER
+   * GESTURE ONLY — this route is never registered in any model-callable tool
+   * catalog: a full memory export is a high-value exfiltration target. The
+   * bundle is inspectable JSON; provider API keys and MCP auth headers are
+   * NEVER serialized (shapes only). */
+  async "owner.export.all"(_m, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent(
+        "blocked-action",
+        `data export denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "export is restricted to the Settings surface" };
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      const snapshot = await collectExportData({
+        kvGet,
+        opfs: createOpfsAdapter(root),
+        alarms: createChromeAlarmsAdapter(),
+      });
+      const bundle = buildArchive(snapshot, {
+        extensionVersion: String(chrome.runtime.getManifest()?.version ?? "unknown"),
+      });
+      return { ok: true, bundle, manifest: JSON.parse(bundle).manifest };
+    } catch (err) {
+      return { ok: false, code: err?.code ?? "export_failed", error: `export failed: ${err?.message || err}` };
+    }
+  },
+
+  /** Owner import (restore) — transactional: validates the bundle and the
+   * target BEFORE touching anything; a non-empty profile refuses without the
+   * explicit overwrite choice; every restored byte is verified by re-read. */
+  async "owner.import.all"({ bundle, overwrite } = {}, context) {
+    if (context?.principal !== "owner-options") {
+      securityEvent(
+        "blocked-action",
+        `data import denied for principal ${context?.principal ?? "unknown"}`,
+      );
+      return { ok: false, error: "import is restricted to the Settings surface" };
+    }
+    if (typeof bundle !== "string" || !bundle.length) {
+      return { ok: false, code: "archive-bad-shape", error: "no bundle supplied" };
+    }
+    try {
+      const root = await navigator.storage.getDirectory();
+      const report = await importArchive(bundle, {
+        kvGet,
+        kvSet,
+        kvRemove,
+        opfs: createOpfsAdapter(root),
+        alarms: createChromeAlarmsAdapter(),
+        overwrite: overwrite === true,
+      });
+      // The restored profile changes provider config, agents and durable runs
+      // under this worker's feet — drop cached state the way factory reset
+      // does, so the next run reads the restored stores, not a stale cache.
+      durableRuns.forgetCachedState?.();
+      invalidateAgent();
+      return { ok: true, report };
+    } catch (err) {
+      return { ok: false, code: err?.code ?? "import_failed", error: `import failed: ${err?.message || err}` };
+    }
+  },
+
   /** The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the
    * hosts the provider layer really resolves (derived from the presets) and
    * the run-log policy in force. Read-only, no secrets — any extension page
@@ -6222,8 +6575,17 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: `origin ${canonical} is not enrolled` };
     }
     const res = await invokeSiteTool(canonical, String(name ?? ""), args ?? {}, snap.gen);
-    if (res?.error) return { ok: false, error: res.error };
-    if (res?.ok === false) return { ok: false, error: res.error ?? "invoke failed" };
+    // Forward the FULL honest failure (chrome-agent-platform-ajcc):
+    // errorDetail (page-side name/message/stack excerpt + phase + realm +
+    // origin), plus the SW's own reason/detail on its early exits — re-wrapping
+    // to a bare { error } string here used to strip them all.
+    if (res?.error || res?.ok === false) {
+      const out = { ok: false, error: res.error ?? "invoke failed" };
+      if (res?.errorDetail) out.errorDetail = res.errorDetail;
+      if (typeof res?.reason === "string") out.reason = res.reason;
+      if (typeof res?.detail === "string") out.detail = res.detail;
+      return out;
+    }
     return { ok: true, result: res?.result };
   },
   async "webmcp.detect.bootstrap"({ origin, __sender }) {
@@ -6715,6 +7077,53 @@ const handlers = mergeRouteMaps(
       ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, added: res.added, removed: res.removed }
       : res;
   },
+  // Append text to an artifact's END — the chunked build path for a body
+  // larger than one call can carry (p45y acceptance B: a generated artifact
+  // grows across bounded calls instead of one giant tool argument). Same
+  // approval class as every artifact edit (asset.update): the payload binds
+  // the APPENDED text (bounded per call), and expectVersion binds the base the
+  // model read, so an approval can never land silently on a body that moved
+  // while the owner decided.
+  async "asset.append"({ origin, id, content, expectVersion }, context) {
+    const scope = origin ?? "master";
+    if (typeof id !== "string" || !id) {
+      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+    }
+    if (typeof content !== "string" || content.length === 0) {
+      return { ok: false, error: "append_asset needs the text to append" };
+    }
+    if (new TextEncoder().encode(content).byteLength > APPEND_MAX_BYTES) {
+      return { ok: false, error: `one append carries at most ${APPEND_MAX_BYTES} UTF-8 bytes (append in pieces)` };
+    }
+    const exists = await getAsset(scope, id);
+    if (!exists.ok) {
+      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+    }
+    if (expectVersion !== undefined && expectVersion !== null) {
+      const versions = await listAssetVersions(scope, id);
+      const head = versions.ok ? versions.head : 0;
+      if (expectVersion !== head) return { ok: false, error: "version_conflict", version: head };
+    }
+    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["id", id], ["content", content],
+      ]);
+    } catch { return { ok: false, error: "asset append payload is not approvable" }; }
+    const gate = await requireOwnerApproval(context, "asset.update", target, payload);
+    if (!gate.ok) return gate;
+    const res = await appendAsset(scope, id, content, {
+      expectVersion, by: ownerPrincipal(context) ? "owner" : "model",
+    });
+    if (!res.ok && res.error === "asset not found") {
+      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+    }
+    return res.ok
+      ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, appendedBytes: res.appendedBytes, totalBytes: res.totalBytes }
+      : res;
+  },
   // ---- immutable artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01) ----
   // Every create/update appends a version row; the rows never carry a body
   // (`asset.version-get` returns one body on request). A restore is a NEW
@@ -6898,6 +7307,42 @@ const handlers = mergeRouteMaps(
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+  },
+  async "python.execute"({ code, stdin }) {
+    const provider = getPythonRuntimeProvider();
+    const runtime = await provider();
+    if (!runtime) {
+      return { ok: false, error: "python unavailable — the bounded Python runtime is not admitted yet (see docs/PYODIDE-BOUNDED-BUILD.md); no result was fabricated" };
+    }
+    return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? "") });
+  },
+
+  // ---- saved workflows (workflows-to-memory) ----
+  // Run a saved workflow's script-js body. The agent's workflow_run tool reads
+  // the record from ITS OWN origin-keyed memory and dispatches {name, kind,
+  // source, description}; this route RE-GATES with the same owner-approval +
+  // sandbox contract as script.run (source digest + fetch hosts on the card,
+  // sandboxed host, no model re-invocation) and fails closed for kinds whose
+  // runtime is not this route's (pipeline workflows run inside the agent
+  // through the run's live lazy catalog). The production path lives in
+  // lib/workflows.js so tests exercise the SAME code.
+  async "workflow.run"({ name, kind, source, description }, context) {
+    const wfName = String(name ?? "");
+    if (!wfName) return { ok: false, error: "workflow name is required" };
+    const src = typeof source === "string" ? source : "";
+    // The approval gate is the script-shaped card (source digest + fetch
+    // hosts); the sandbox host is master-scoped like run_script — the
+    // workflow's STORE is the agent's own origin memory, which the agent-side
+    // tool already read.
+    return await runWorkflowRoute({
+      name: wfName,
+      kind,
+      source: src,
+      description,
+      gate: async ({ name: n, description: d }) =>
+        scriptApprovalGate(context, "workflow.run", "master", n, src, { name: n, description: d }),
+      runSandboxed: runScriptSandboxed,
+    });
   },
 
   // ---- capability check (the SW CANNOT request: chrome.permissions.request
@@ -7107,6 +7552,86 @@ const handlers = mergeRouteMaps(
       continuesExecutionId: executionId,
     });
   },
+  // ── run.control.* — the composer's STEER + QUEUE protocol
+  // (chrome-agent-platform-afiu) ────────────────────────────────────────────
+  // The owner surface drives a LIVE run (steer: inject guidance between
+  // steps / stop-step / stop-run) and a durable per-thread follow-up queue
+  // (enqueue while running; the SW drains one item per settled run). All
+  // routes are extension/owner-options only — a model or page principal can
+  // never steer or queue for the owner.
+  async "run.control.steer"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const executionId = String(m?.executionId ?? "");
+    if (!executionId) return { ok: false, error: "executionId is required" };
+    const mode = String(m?.mode ?? "inject").slice(0, 16);
+    if (!["inject", "stop-step", "stop-run"].includes(mode)) return { ok: false, error: "invalid_steer_mode" };
+    const text = String(m?.text ?? "").slice(0, 1500);
+    const live = runControl.get(executionId);
+    if (!live) return { ok: false, error: "run_not_live", executionId };
+    // A WORKER run steers through the agent-worker protocol (the worker's own
+    // run loop honors the control message between steps).
+    if (live.kind === "worker") {
+      return await handlers["agent-worker.steer"]({ runId: executionId, mode, text }, context);
+    }
+    if (mode === "stop-run") {
+      // Stop cancels the run cleanly (the existing cancellation tree — no
+      // orphaned durable run). Text the owner typed alongside Stop is queued
+      // on the run's thread so nothing is lost.
+      const cancelled = await cancelExecutionTree(executionId, {
+        reason: m?.reason ?? "owner steer: stop the run",
+        requestId: m?.requestId ?? crypto.randomUUID?.() ?? String(Date.now()),
+      });
+      if (live.threadId && String(text).trim()) {
+        await threadQueues.enqueue(live.threadId, text).catch(() => {});
+      }
+      return { ...(cancelled ?? { ok: true }), stopped: true, executionId };
+    }
+    // inject / stop-step: record against the live run; the run loop's model
+    // seam injects the text between steps and ends the loop at the next step
+    // boundary for stop-step.
+    return await runControl.steer({ executionId, mode, text });
+  },
+
+  async "run.control.queue.list"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    return { ok: true, threadId, items: await threadQueues.list(threadId) };
+  },
+
+  async "run.control.queue.enqueue"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    return await threadQueues.enqueue(threadId, String(m?.text ?? ""));
+  },
+
+  async "run.control.queue.remove"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    return await threadQueues.remove(threadId, String(m?.id ?? ""));
+  },
+
+  async "run.control.queue.move"(m, context) {
+    if (!["extension", "owner-options"].includes(context?.principal)) {
+      return { ok: false, error: "owner_extension_required" };
+    }
+    const threadId = String(m?.threadId ?? "");
+    if (!threadId) return { ok: false, error: "threadId is required" };
+    const delta = Number(m?.delta);
+    if (!Number.isFinite(delta) || delta === 0) return { ok: false, error: "invalid delta" };
+    return await threadQueues.move(threadId, String(m?.id ?? ""), delta);
+  },
+
   async "run.retry"(m, context) {
     // UX-008 (CAP-FB-20260828-SILENT-DISPATCH-LOSS-01): a failed dispatch must
     // be RETRYABLE from its stored prompt, never retyped. The failed run's
@@ -8958,12 +9483,22 @@ chrome.runtime.onStartup?.addListener(() => {
   reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
     console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
   );
+  // chrome-agent-platform-afiu: an SW stop can orphan a queue CLAIM (the
+  // follow-up was fired but never durably admitted, or its run settled while
+  // the SW was down). Reconcile AFTER recoverOnBoot so stale-boot run rows
+  // have their final phase before each claim is decided.
+  reconcileThreadQueueClaims().catch((e) =>
+    console.error("reconcileThreadQueueClaims:", e?.message ?? e)
+  );
 });
 recoverOnBoot().catch((e) =>
   console.error("recoverOnBoot:", e?.message ?? e)
 );
 reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
   console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
+);
+reconcileThreadQueueClaims().catch((e) =>
+  console.error("reconcileThreadQueueClaims:", e?.message ?? e)
 );
 reconcileAgentWorkers({ ensureOffscreen, kvGet }).catch((e) =>
   console.error("reconcileAgentWorkers:", e?.message ?? e)

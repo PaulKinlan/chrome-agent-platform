@@ -82,6 +82,12 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   "browser.remove-bookmark",
   "browser.set-cookie",
   "browser.remove-cookie",
+  // A model-initiated run of a saved workflow's script-js body (workflows-to-
+  // memory): the SW's workflow.run route pays the SAME source-digest card as
+  // script.run (sandboxed host + fetch-host list on the card), so the action
+  // must be approvable — without membership here createPendingApproval
+  // refuses and workflow.run could never obtain an approval (no card, no run).
+  "workflow.run",
 ]);
 
 // The three visible policy classes (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
@@ -628,7 +634,7 @@ export function approvalPendingCount(store) {
 // The actions whose card discloses the exact script source + the hosts it
 // fetches. The owner cannot approve code they have not seen, so for these
 // (and only these) the card carries the bounded source and host list.
-export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script"]);
+export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run"]);
 export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253 });
 
 /** Bound a script-approval detail ({ source, hosts, dynamic }) for the card;
@@ -666,34 +672,29 @@ export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
 // current body is not necessarily model-authored. The record is staged in the
 // approval store keyed by approvalId and evicted with the approval row.
 export const STAGED_APPROVAL_DETAIL_KINDS = new Set(["asset.update", "script.update", "fs.write"]);
-export const STAGED_APPROVAL_DETAIL_BOUNDS = Object.freeze({
-  maxContentChars: 1024 * 1024,
-  maxNameChars: 256,
-  maxLabelChars: 256,
-});
-
-/** Bound a staged edit detail ({ kind, name, oldContent, newContent, added,
+/** Validate a staged edit detail ({ kind, name, oldContent, newContent, added,
  * removed, oldLabel, newLabel }). A malformed record (unknown kind, no name)
- * is dropped — the card then falls back to the opaque form. The `added` /
+ * is dropped — the card then falls back to the opaque form. Content is NEVER
+ * clipped (dptw): the owner approves only a diff shown in full. The `added` /
  * `removed` counts are computed by the caller with the diff core over the SAME
  * two bodies stored here, so the card title's `+n -m` can never disagree with
  * the rendered diff. */
 export function boundStagedApprovalDetail(detail) {
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return null;
   if (!STAGED_APPROVAL_DETAIL_KINDS.has(detail.kind)) return null;
-  const str = (value, max) => (typeof value === "string" ? value.slice(0, max) : "");
+  const str = (value) => (typeof value === "string" ? value : "");
   const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : 0);
-  const name = str(detail.name, STAGED_APPROVAL_DETAIL_BOUNDS.maxNameChars);
+  const name = str(detail.name);
   if (!name) return null;
   return {
     kind: detail.kind,
     name,
-    oldContent: str(detail.oldContent, STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars),
-    newContent: str(detail.newContent, STAGED_APPROVAL_DETAIL_BOUNDS.maxContentChars),
+    oldContent: str(detail.oldContent),
+    newContent: str(detail.newContent),
     added: count(detail.added),
     removed: count(detail.removed),
-    oldLabel: str(detail.oldLabel, STAGED_APPROVAL_DETAIL_BOUNDS.maxLabelChars) || `${name} (current)`,
-    newLabel: str(detail.newLabel, STAGED_APPROVAL_DETAIL_BOUNDS.maxLabelChars) || `${name} (proposed)`,
+    oldLabel: str(detail.oldLabel) || `${name} (current)`,
+    newLabel: str(detail.newLabel) || `${name} (proposed)`,
   };
 }
 

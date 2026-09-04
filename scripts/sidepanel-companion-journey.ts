@@ -16,10 +16,11 @@
 //   deno run -A scripts/sidepanel-companion-journey.ts [extension-dir] [out-dir]
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const OUT = Deno.args[1] ?? `/tmp/sidepanel-companion-${Date.now()}`;
+const OUT = Deno.args[1] ?? durableDir(`sidepanel-companion-${Date.now()}`);
 const CHROMIUM = "/usr/bin/chromium";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

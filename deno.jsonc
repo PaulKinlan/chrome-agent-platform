@@ -1,0 +1,22 @@
+{
+  // Auto-discovered by every `deno` command run from this repo.
+  //
+  // WHY THE EXCLUDE (Paul, 2026-09-04): agents kept running the raw serial
+  // sweep `deno test --allow-all tests/` (3-7 minutes) after every edit, no
+  // matter what AGENTS.md said. With this exclude a raw sweep finds only
+  // tests/00-use-npm-test_test.ts, which prints the right commands and fails
+  // in under a second. The repo's runners bypass it with
+  // `--config deno.runner.jsonc`:
+  //
+  //   npm test                                 the full suite (two-phase, ~90 s) — the merge gate
+  //   npm run test:changed                     the tests your change reaches, plus the security core
+  //   npm run test:file -- tests/<name>.test.ts one file (a raw `deno test tests/x.test.ts` now
+  //                                            reports "No test modules found" — use the script)
+  //
+  // Nothing is skipped or weakened: the same files run, only through the
+  // runner, which is where the parallel/serial split lives.
+  "nodeModulesDir": "manual",
+  "test": {
+    "exclude": ["tests/*.test.ts"]
+  }
+}

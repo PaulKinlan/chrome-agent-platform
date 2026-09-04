@@ -50,17 +50,83 @@ an exception. These rules make that safe:
    If you find another session's uncommitted or unpushed work in a shared
    place, preserve it and coordinate — never delete it to unblock yourself.
 
-## Beads Issue Tracker
+## Task tracking: beads only (Paul, 2026-09-02 — HARD RULE)
 
-This project uses bd (beads) for issue tracking.
+**bd (beads) is the ONLY task/bug/next-work tracker.** TASKS.md, TASKS-DONE.md,
+KNOWN-ISSUES.md and every other markdown tracker are RETIRED — they are legacy
+views kept only for history. Never create, update, or consult them for state;
+a markdown tracker entry is not a task. Everything lives in beads, synced to
+the GitHub remote via `bd dolt push` (a post-commit hook does this
+automatically; run it manually after beads-only changes).
 
-- Run `bd prime` for workflow context and command guidance.
-- Use `bd ready`, `bd show <id>`, `bd update <id> --claim`, and `bd close <id>`.
-- Use `bd remember "insight"` for persistent project memory; do not create MEMORY.md files.
-- Do not use markdown TODO lists for task tracking.
+- **Pick work**: `bd ready` (the claimable frontier — open beads with no open
+  blockers). Claim atomically: `bd update <id> --claim`.
+- **Read work**: `bd show <id>` — the description alone must be enough for any
+  agent to implement (intent, design decisions, acceptance, repro, seams).
+  A bead too thin to implement from is a defect: thicken it before claiming.
+- **Update state**: `bd update <id> --status in_progress`, `bd close <id>`
+  (only when the complete fix is on the pushed branch or merged).
+- **File everything**: every bug, feature, product ask, or blocker found along
+  the way becomes a bead IN THE SAME SESSION you find it, with an honest
+  description (what was observed, how to reproduce, acceptance for done).
+- **Link as you go**: issues discovered during a task get
+  `bd link <new-id> --discovered-from <current-id>`; hard ordering gets
+  `bd link <blocked-id> --blocked-by <blocker-id>`. The dependency graph — not
+  a human dispatcher — decides what is workable next.
+- `.beads/issues.jsonl` is a passive export, not the tracker.
+
+### Epics and breakdown (beads best practice)
+A feature is not one bead. Break work down like this:
+
+1. **Epic** (`bd create --type epic`) for the feature/capability, with the
+   intent, design direction, and acceptance in the description.
+2. **Children** for each stage (`bd dep add <child> <epic>` — parent-child).
+   Stages are ordered only by EXPLICIT `blocks` dependencies; numbered names
+   never imply sequence.
+3. **Detail bar**: every child bead carries enough intent + acceptance that any
+   agent — this session, a fresh subagent, a different model — can implement it
+   without re-deriving the design. Include: the why, the seams/files, the
+   falsification tests that will prove it, and what must NOT change.
+4. **Lifecycle**: `open` → `in_progress` → (label `in_review` while a candidate
+   is under review) → `closed` = merged to origin/main with the full suite
+   green. A failed review stays in_progress with findings recorded as comments.
+5. **Repeatable multi-step work** (release checklist, feature pipeline) is
+   declared once as a beads **formula** and stamped via `bd cook` + `bd mol
+   pour` — see https://beads.gascity.com/workflows.
+
+### Progress visibility
+The graph answers "what are we making progress on": `bd ready` = workable now;
+`bd list --status in_progress` = in flight; `bd blocked` = waiting. Say what is
+actually true — never "landed"/"done" before it is merged and green.
+
+## Parallelize: the fleet is the default (Paul, 2026-09-02 — HARD RULE)
+
+**One agent working alone is a bug.** This repo is worked by a FLEET: multiple
+pi instances (intercom peers on different paid models) and pi-subagents
+(deepseek-v4-flash workers, gpt-5.6-sol:high reviewers, k3, gemini). The
+coordinator session NEVER implements a whole feature inline — it acknowledges,
+files/delegates, reviews, and reports. Anything >30s of work is dispatched.
+
+- **Shard by default.** On any new ask: acknowledge → capture the beads →
+  dispatch workers (subagent workflows with `context: fresh`, or intercom peers)
+  → keep the inbox free. Multiple independent beads = multiple parallel
+  workers, each in its own worktree on its own branch.
+- **Keep every lane fed.** When a worker finishes, immediately re-task it with
+  the next `bd ready` bead. An idle paid model is waste.
+- **Different-model review is REQUIRED.** The implementer never reviews its own
+  work: flash implements → sol (or another family) reviews → the coordinator
+  synthesises findings → revise rounds until PASS. Reviews are
+  falsification-focused: "would each test fail if the behavior regressed?"
+- **Worker attestation is never trusted.** The coordinator independently
+  verifies every delivery: diff inspected against the claims, gates re-run on
+  the exact commit, closure claims checked against fetched origin/main.
+- **Verify against FETCHED origin/main.** Features land between issue filing
+  and pickup (multiple coordinators exist). Before implementing: `git fetch
+  origin` + check whether the behavior already exists. If complete: pin it with
+  falsification tests, close with evidence. If partial: implement the remainder.
 
 ## Hard rules
-- **TASKS.md is the source of truth for task state — update it after EVERY completion.** Whenever a task lands, is reviewed, changes state, or a bug is captured, update its TASKS.md entry in the SAME commit cycle (status, Shipping `origin/main@<sha>`, a dated History line). A completion that does not update TASKS.md is not complete. Mark landed work DONE with the exact public commit and archive it to `TASKS-DONE.md` at triage; never leave landed work marked OPEN/IN_REVIEW.
+- **beads (bd) is the ONLY task/bug/next-work tracker** (owner directive 2026-09-02). TASKS.md, TASKS-DONE.md, KNOWN-ISSUES.md and every other markdown tracker are RETIRED — never create, update, or consult them for state. Pick work with `bd ready`, claim with `bd update <id> --claim`, close only when the complete fix is on the pushed branch. See "Task tracking: beads only" below.
 - Never accept "it serves" as "it works" — drive the real behavior in a browser
   (CDP) with screenshots as evidence.
 - Real libraries, not patterns (agent-do is imported, not reimplemented).
@@ -72,6 +138,9 @@ This project uses bd (beads) for issue tracking.
 - Untrusted data renders with textContent/escaping, never innerHTML.
 
 ## The skills
+- **beads-flow** (.agents/skills/beads-flow) — the fast loop: pick the next
+  bead, work it, gate it, ship it. Start here when picking up work.
+- **beads** (.agents/skills/beads) — full beads workflow guidance.
 - **impeccable** (.agents/skills/impeccable) — the design skill. Use it for EVERY
   UI/design task (the craft-floor, PRODUCT.md, DESIGN.md). Always loaded for design work.
 - **modern-web-guidance** (.agents/skills/modern-web-guidance) — modern web APIs
@@ -108,7 +177,7 @@ read in run 2.
 
 ## Working conventions (Paul, 2026-08-16)
 - **Track every ask.** Every product issue/request gets a stable entry in root
-  `TASKS.md`; UI detail also lives in `docs/UI-FIXES-TRACKER.md`, and review/system
+  beads; UI detail also lives in `docs/UI-FIXES-TRACKER.md` (legacy view), and review/system
   findings live in root `KNOWN-ISSUES.md`. Nothing is dropped.
   Work through them in subagents; advance each only with the required evidence.
 - **Resolve open questions.** Read docs/OPEN-QUESTIONS.md; mark the questions Paul
@@ -119,6 +188,23 @@ read in run 2.
   pieces land.
 - **Full-suite-green gate.** Never report work done (or push) without the full
   Chrome journey suite + unit tests green. A regression is a stop.
+- **Test quickly while iterating; test fully once before pushing (Paul,
+  2026-09-03).** The full unit suite is the PRE-PUSH gate, not the per-edit
+  loop. Agents were running `deno test --allow-all tests/` (minutes, serial)
+  after every change; that command is now refused by the repo (see Testing).
+  The ladder:
+  1. `npm run test:file -- tests/<name>.test.ts` — the one file you are
+     working in (seconds).
+  2. `npm run test:changed` — every test that transitively imports what you
+     changed vs `origin/main`, plus the always-on security/vocabulary core
+     (typically 4-10 s). It fails CLOSED to the full suite when a changed
+     executable/config file has no reachable test, so a green subset is
+     never a silent skip. `--base <ref>` compares against another ref.
+  3. `npm test` — the full unit suite, once, before you push or report done.
+     It is the only way to run the whole suite: a raw `deno test tests/` is
+     refused, and a raw single-file run finds no modules.
+  Never weaken or skip a test to make a subset pass; the subset differs from
+  the gate only in WHICH files run.
 - **Visual verification.** UI work is verified by driving the real UI in headless
   Chrome (CDP) with screenshots, before + after. "It serves" is not "it works".
 - **Heavy componentization (Paul, 2026-08-16).** Every piece of UI is a reusable
@@ -174,7 +260,15 @@ read in run 2.
   second instance.
 
 ## Testing
-- deno test tests/ — the pure/unit suite.
+- npm test — the full pure/unit suite (two-phase: build/artifact tests serial,
+  everything else parallel; vj4s, ~90 s). **A raw `deno test tests/` sweep is
+  refused** (Paul, 2026-09-04): `deno.jsonc` hides `tests/*.test.ts` from
+  discovery, so the sweep loads only `tests/00-use-npm-test_test.ts`, which
+  prints the runner commands and fails in under a second. The runners pass
+  `--config deno.runner.jsonc` and see every file. A raw
+  `deno test tests/x.test.ts` reports "No test modules found" — use
+  `npm run test:file -- tests/x.test.ts`. Do not add `--config deno.runner.jsonc`
+  to a sweep by hand; that is the runner's job.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
 - **Never name a debugging port.** Every harness in `scripts/` launches its
@@ -220,7 +314,7 @@ and blockers; `CAP-FB-20260830-EXEC-DEMO-01` is the umbrella. The P0 ids are lis
 access, Q19 page actions, Q12 default model) and carry recommended defaults in
 [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md).
 
-Take work by following the atomic-ownership procedure in `TASKS.md`, never from the review
+Take work by following the beads-flow loop (`bd ready` → claim → durable worktree → gates → push), never from the review
 alone. The earlier [`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md) (the delivery diagnosis)
 is kept as history; its two behavioural rules still apply:
 
@@ -230,32 +324,13 @@ is kept as history; its two behavioural rules still apply:
 
 ## Repository-local task recovery (2026-08-19)
 
-Root [`TASKS.md`](TASKS.md) is the durable, public-safe product task record.
-Root [`KNOWN-ISSUES.md`](KNOWN-ISSUES.md) is a THIN VIEW over `TASKS.md` — gate state plus
-the few open findings that are not obvious from a task title. `TASKS.md` is the authority
-for every open item; keeping two trackers is what let both drift. Twenty-seven rounds of
-historical review findings are archived in `docs/KNOWN-ISSUES-ARCHIVE.md` (do not add to
-it).
+## Task recovery (2026-09-03)
 
-- Create a stable `CAP-FB-YYYYMMDD-SLUG-NN` entry when feedback arrives. Never
-  rename, reuse, or delete an ID; archive the complete entry only after its
-  terminal state.
-- The accepted Git commit containing `TASKS.md` is authoritative. Ownership and
-  material fields change together with one History event in one commit. A
-  concurrent tracker edit is a compare-and-swap conflict that must be reconciled,
-  never overwritten. Reviewers may append review evidence without taking
-  implementation custody.
-- After a crash, preserve any dirty diff, read the last committed tracker state,
-  verify recorded commits and ancestry, reconcile the stable ID with the private
-  coordination ledger, and choose the more conservative state when evidence is
-  incomplete. Missing/diverged/ambiguous work becomes `BLOCKED` with a recovery
-  owner, prior state, blocker, and one next action.
-- Never publish local absolute paths, session/relay/provider IDs, transport
-  receipts, credentials, personal data, or private evidence locations. Public
-  entries use role labels, repository refs, Git object IDs, and content hashes.
-- Reconcile at least once per active workday and after any recovery. Full schema,
-  state/evidence requirements, atomic ownership, and recovery commands live in
-  `TASKS.md`.
+Task state lives in beads (bd) — the Dolt database synced via `refs/dolt/data`
+on the GitHub remote. Recovery after a crash: `bd list --status in_progress`
+shows claimed lanes; pushed branches on origin carry each lane's work; the
+bead comments carry candidate shas and gate evidence. Never consult or revive
+the retired markdown trackers (`TASKS.md`, `KNOWN-ISSUES.md` — history only).
 
 ## Worktree and evidence hygiene (Paul, 2026-08-22 — CAP-FB-20260821-WORKTREE-HYGIENE-01)
 
@@ -267,6 +342,12 @@ it).
   never destroyed — until an owner decision reconciles them.
 - **Serialized Chrome evidence** (the canonical lock, acceptance runs, screenshots) is written
   outside the tmpfs to a durable evidence path; the evidence survives reboots.
+- **Scripts and tests route evidence, Chrome profiles, and big scratch copies through
+  `scripts/lib/durable-root.mjs`** (`durableRoot()`/`durableDir()`; default `$HOME/cap-evidence`,
+  override `CAP_DURABLE_ROOT`). The helper REFUSES a RAM-backed target rather than silently
+  writing to tmpfs; `tests/durable-root.test.ts` fails if a `/tmp` evidence literal comes back.
+  Only tiny cross-process coordination files (the canonical Chrome lock, the slot poison marker)
+  stay on tmpfs — a reboot clearing stale locks is a feature.
 - **The read-only audit** `node scripts/worktree-audit.mjs` inventories every registered worktree
   (HEAD/branch/dirty tracked+untracked/reachability/rescue/location class) and REFUSES destructive
   operations; private absolute paths are reported as class counts only, never committed.
@@ -279,15 +360,15 @@ That is the whole lifecycle.
 
 **Merged is done (Paul, 2026-08-28).** `MERGED` and `DONE` were separate states whose only
 difference was a gate that is checked on every commit anyway. The split did nothing except
-leave finished work sitting in `TASKS.md` looking unfinished. Work on `origin/main` with the
-suite green is DONE, and DONE entries are moved to `TASKS-DONE.md` at triage. `TASKS.md`
+leave finished work sitting in a tracker looking unfinished. Work on `origin/main` with the
+suite green is DONE; the bead closes with the merge sha. Retired trackers
 holds ONLY what is in progress or still to do. Legacy `MERGED` entries read as `DONE`.
 
 | State | Means | To leave it you need |
 |---|---|---|
 | `OPEN` | Not started, or being worked on. | A candidate commit and a review pass. |
 | `IN_REVIEW` | A candidate exists and is under review — a fresh session on the diff where possible, an author review with the falsification gates otherwise. The `Review:` field says which. | A review verdict. A failed review stays `IN_REVIEW` with the findings recorded — it does not need its own state. |
-| `DONE` | On `origin/main` with the journey suite green at that tip. Terminal — archived to `TASKS-DONE.md` at the next triage. | — |
+| `DONE` | On `origin/main` with the journey suite green at that tip. Terminal — the bead closes with the merge sha. | — |
 | `BLOCKED` | Stopped on something external. Records an owner, the reason, and one next action. | Resolution of the named blocker. |
 | `ABANDONED` | Will not be done. Records why. Terminal. | — |
 

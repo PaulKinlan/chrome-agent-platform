@@ -1,0 +1,11 @@
+{
+  // The config the repo's test runners pass explicitly (`--config
+  // deno.runner.jsonc`) so they see every test file; the auto-discovered
+  // deno.jsonc hides tests/*.test.ts from raw sweeps — read its comment.
+  // "manual" keeps package.json / node_modules resolution for the npm
+  // dependencies (an explicit --config otherwise drops package.json).
+  "nodeModulesDir": "manual",
+  // Never rewrite deno.lock from a test run: an explicit --config drops the
+  // package.json workspace view and would strip the npm entries on every gate.
+  "lock": false
+}

@@ -8,8 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 138,
-  managementTools: 42,
-  totalTools: 180,
+  managementTools: 44,
+  totalTools: 182,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -175,6 +175,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "create_asset",
   "update_asset",
   "patch_asset",
+  "append_asset",
   "delete_asset",
   "list_assets",
   "get_asset",
@@ -196,6 +197,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "list_scripts",
   "get_script",
   "run_script",
+  "python_execute",
   "schedules_list",
   "schedules_pause",
   "schedules_resume",
@@ -493,6 +495,7 @@ const rows = [
   record("create_asset", "management", ["management.asset.create"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("update_asset", "management", ["management.asset.update"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("patch_asset", "management", ["management.asset.patch"], [], "none", "mutating", false, "mutating", "management.assets"),
+  record("append_asset", "management", ["management.asset.append"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("delete_asset", "management", ["management.asset.delete"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("list_assets", "management", ["management.asset.list"], [], "none", "read-only", false, "read", "management.assets"),
   record("get_asset", "management", ["management.asset.get"], [], "none", "read-only", false, "read", "management.assets"),
@@ -514,6 +517,7 @@ const rows = [
   record("list_scripts", "management", ["management.script.list"], [], "none", "read-only", false, "read", "management.scripts"),
   record("get_script", "management", ["management.script.get"], [], "none", "read-only", false, "read", "management.scripts"),
   record("run_script", "management", ["management.script.run"], [], "none", "mutating", false, "mutating", "management.scripts"),
+  record("python_execute", "management", ["management.python.execute"], [], "none", "mutating", false, "mutating", "management.compute"),
   // Per-agent schedule visibility + control (pause/resume/update are gated
   // owner-approved mutations; list is a read, scoped to the calling agent).
   record("schedules_list", "management", ["management.schedules.list"], [], "none", "read-only", false, "read", "management.schedules"),

@@ -9,6 +9,7 @@
 // @ts-nocheck — orchestration script (dynamic types).
 
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const RUNS = Number(Deno.args[0] ?? 4);
@@ -25,8 +26,11 @@ const branchCommit = await gitOut(["rev-parse", "HEAD"]);
 const branchName = await gitOut(["rev-parse", "--abbrev-ref", "HEAD"]);
 const baseCommit = await gitOut(["merge-base", "HEAD", "origin/main"]);
 
-// A detached worktree at the BASE for clean-base runs.
-const baseDir = await Deno.makeTempDir({ prefix: "cap-flake-base-" });
+// A detached worktree at the BASE for clean-base runs. DURABLE scratch (disk,
+// bead chp): a full worktree + npm install on RAM-backed /tmp is exactly the
+// inode/space pressure this bead removes.
+const scratchBase = durableDir("scratch");
+const baseDir = await Deno.makeTempDir({ dir: scratchBase, prefix: "cap-flake-base-" });
 await run("git", ["worktree", "add", "--detach", baseDir, baseCommit]);
 // The base worktree has no built artifacts (dist/ + bundles are gitignored) —
 // build it once so its runs are equivalent to the branch's.

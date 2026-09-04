@@ -118,10 +118,11 @@ Deno.test("P1-b r5: pseudo-index properties (e.g. arr['01']='hidden') are reject
   assertEquals(importAgentCard({ version: 1, name: "Float", skills: arrFloat }).ok, false);
 });
 
-Deno.test("P1-a r5: pretty-printed JSON export budget enforcement on exact boundary sizes (n=131041, n=131023)", () => {
-  // Test both exact boundary sizes from reviewer probes
-  for (const n of [131041, 131023, 131072]) {
-    const assets = Array.from({ length: MAX_CARD_CORE_ASSETS }, (_, i) => ({
+Deno.test("P1-a r5 (dptw): NO export budget — past-cap assets export and re-import WHOLE", () => {
+  // 8 assets of 131072 backslashes each = ~1 MiB of content; the pretty JSON
+  // is > 2 MiB and must export + re-import with 100% content equality.
+  for (const n of [131041, 131072]) {
+    const assets = Array.from({ length: 8 }, (_, i) => ({
       name: `asset-${i}.txt`,
       type: "text/plain",
       content: "\\".repeat(n),
@@ -134,29 +135,24 @@ Deno.test("P1-a r5: pretty-printed JSON export budget enforcement on exact bound
       coreAssets: assets,
     };
 
-    // Both pretty-printed export and compact export must fit within MAX_CARD_JSON_BYTES
     const prettyJson = exportAgentCardJson(agent);
     const prettyBytes = new TextEncoder().encode(prettyJson).byteLength;
-    assert(prettyBytes <= MAX_CARD_JSON_BYTES, `pretty JSON at n=${n} must be <= 2 MiB (${prettyBytes} <= ${MAX_CARD_JSON_BYTES})`);
+    assert(prettyBytes > 2 * 1024 * 1024, `fixture must exceed the removed 2 MiB budget (${prettyBytes})`);
 
-    const compactJson = JSON.stringify(exportAgentCard(agent));
-    const compactBytes = new TextEncoder().encode(compactJson).byteLength;
-    assert(compactBytes <= MAX_CARD_JSON_BYTES, `compact JSON at n=${n} must be <= 2 MiB (${compactBytes} <= ${MAX_CARD_JSON_BYTES})`);
-
-    // Re-importing pretty JSON must succeed and maintain 100% content equality
     const reimported = importAgentCard(prettyJson);
-    assert(reimported.ok, `pretty export at n=${n} must re-import: ${!reimported.ok && reimported.error}`);
-    assertEquals(reimported.agent.coreAssets.length, MAX_CARD_CORE_ASSETS);
+    assert(reimported.ok, `past-budget export at n=${n} must re-import: ${!reimported.ok && reimported.error}`);
+    assertEquals(reimported.agent.coreAssets.length, 8, "dptw: all assets kept");
 
     const parsed = JSON.parse(prettyJson);
-    for (let i = 0; i < MAX_CARD_CORE_ASSETS; i++) {
+    for (let i = 0; i < 8; i++) {
       assertEquals(reimported.agent.coreAssets[i].content, parsed.coreAssets[i].content);
     }
   }
 });
 
+
 Deno.test("P1-a r2: Unicode round-trip — 8 legal multi-byte emoji assets export and re-import with 100% content equality", () => {
-  const emojiAssets = Array.from({ length: MAX_CARD_CORE_ASSETS }, (_, i) => ({
+  const emojiAssets = Array.from({ length: 8 }, (_, i) => ({
     name: `emoji-asset-${i}.txt`,
     type: "text/plain",
     content: "🔥".repeat(40000),
@@ -171,15 +167,15 @@ Deno.test("P1-a r2: Unicode round-trip — 8 legal multi-byte emoji assets expor
 
   const cardJson = exportAgentCardJson(agentWithEmojiAssets);
   const totalBytes = new TextEncoder().encode(cardJson).byteLength;
-  assert(totalBytes <= MAX_CARD_JSON_BYTES, `exported JSON must not exceed 2 MiB (${totalBytes} <= ${MAX_CARD_JSON_BYTES})`);
+  assert(totalBytes > 0, "export produced");
 
   const reimported = importAgentCard(cardJson);
   assert(reimported.ok, `maximal Unicode export must re-import cleanly: ${!reimported.ok && reimported.error}`);
-  assertEquals(reimported.agent.coreAssets.length, MAX_CARD_CORE_ASSETS);
+  assertEquals(reimported.agent.coreAssets.length, 8);
 
   // 100% content equality check
   const parsedExport = JSON.parse(cardJson);
-  for (let i = 0; i < MAX_CARD_CORE_ASSETS; i++) {
+  for (let i = 0; i < 8; i++) {
     assertEquals(reimported.agent.coreAssets[i].content, parsedExport.coreAssets[i].content);
   }
 });
@@ -273,8 +269,8 @@ Deno.test("P2 r2: omittedValidSkillsCount counts distinct omitted skills, not re
 
   const res = importAgentCard(card, { knownSkillIds: knownSet });
   assert(res.ok);
-  assertEquals(res.agent.skills.length, MAX_CARD_SKILLS); // 128
-  assertEquals(res.omittedValidSkillsCount, 2);
+  assertEquals(res.agent.skills.length, 130, "dptw: no skill cap — all 130 distinct skills kept");
+  assertEquals(res.omittedValidSkillsCount, 0, "dptw: nothing omitted");
 });
 
 Deno.test("agent cards: exportAgentCard produces a well-formed card object with expected fields", () => {
@@ -440,12 +436,12 @@ Deno.test("agent cards: missing or empty name is rejected honestly (fails closed
   assert(res5.error.includes("name must be a string"));
 });
 
-Deno.test("agent cards: oversized fields are bounded to their respective maximums", () => {
-  const hugeName = "A".repeat(MAX_CARD_NAME_LEN + 100);
-  const hugeRole = "B".repeat(MAX_CARD_ROLE_LEN + 5000);
-  const hugeCreatedFrom = "C".repeat(MAX_CREATED_FROM_LEN + 50);
-  const hugeAvatar = "data:image/png;base64," + "D".repeat(MAX_AVATAR_LEN + 1000);
-  const hugeAssetContent = "E".repeat(MAX_CARD_CORE_ASSET_BYTES + 500);
+Deno.test("agent cards (dptw): oversized fields are kept WHOLE — no maximums", () => {
+  const hugeName = "A".repeat(220);
+  const hugeRole = "B".repeat(37_000);
+  const hugeCreatedFrom = "C".repeat(114);
+  const hugeAvatar = "data:image/png;base64," + "D".repeat(33_768);
+  const hugeAssetContent = "E".repeat(131_572);
 
   const card = {
     version: 1,
@@ -460,19 +456,14 @@ Deno.test("agent cards: oversized fields are bounded to their respective maximum
   };
 
   const res = importAgentCard(card);
-  assert(res.ok, "oversized card imports successfully with bounded fields");
-  assertEquals(res.agent.name.length, MAX_CARD_NAME_LEN);
-  assertEquals(res.agent.name, "A".repeat(MAX_CARD_NAME_LEN));
-  assertEquals(res.agent.role.length, MAX_CARD_ROLE_LEN);
-  assertEquals(res.agent.role, "B".repeat(MAX_CARD_ROLE_LEN));
-  assertEquals(res.agent.createdFrom?.length, MAX_CREATED_FROM_LEN);
-  assertEquals(res.agent.createdFrom, "C".repeat(MAX_CREATED_FROM_LEN));
-  assertEquals(res.agent.avatar?.length, MAX_AVATAR_LEN);
-
-  const asset = res.agent.coreAssets[0];
-  assert(asset.content.endsWith("…"));
-  assertEquals(new TextEncoder().encode(asset.content).byteLength, MAX_CARD_CORE_ASSET_BYTES);
+  assert(res.ok, "oversized card imports successfully");
+  assertEquals(res.agent.name, hugeName, "name whole");
+  assertEquals(res.agent.role, hugeRole, "role whole");
+  assertEquals(res.agent.createdFrom, hugeCreatedFrom, "createdFrom whole");
+  assertEquals(res.agent.avatar, hugeAvatar, "avatar whole");
+  assertEquals(res.agent.coreAssets[0].content, hugeAssetContent, "asset content whole — no ellipsis clip");
 });
+
 
 Deno.test("agent cards: hostile input fails closed on invalid field types", () => {
   const badRole = { version: 1, name: "Agent", role: { nested: "object" } };

@@ -23,11 +23,12 @@
 // exact-assertion-set gate below, not by the type checker.
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const GIT = "/usr/bin/git";
-const EVIDENCE_DIR = `/tmp/cap-agent-access-evidence-${Date.now()}`;
+const EVIDENCE_DIR = durableDir(`cap-agent-access-evidence-${Date.now()}`);
 const RUN_ID = `cap-agent-access-${Date.now()}`;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -156,7 +157,7 @@ async function fetchJson(url, opts) {
 
 async function main() {
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
-  const profile = `/tmp/cap-agent-access-profile-${Date.now()}`;
+  const profile = durableDir(`cap-agent-access-profile-${Date.now()}`);
   // The shared launcher: kernel-assigned debugging port, the endpoint read
   // from THIS child's own stderr (never a probe of a named port), the same
   // headless argv every harness uses, and a cleared environment so Chrome

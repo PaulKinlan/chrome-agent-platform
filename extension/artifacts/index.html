@@ -6,11 +6,7 @@
     <meta name="color-scheme" content="light dark">
 <title>Artifacts — Chrome Agent Platform</title>
 <link rel="stylesheet" href="../shared/theme.css">
-<script>
-  if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
-    document.documentElement.dataset.embedded = "1";
-  }
-</script>
+    <script src="../shared/embedded-boot.js"></script>
 <script type="module" src="../shared/components.js"></script>
 <style>
   .wrap { max-inline-size: var(--content-max); margin-inline: auto; padding-inline: var(--content-gutter); padding-block: 24px; }

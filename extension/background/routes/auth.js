@@ -9,5 +9,10 @@
  */
 export function requireSettingsSender(context) {
   if (context?.principal === "owner-options") return;
-  throw new Error("provider credential routes are restricted to the Settings surface");
+  // Named so the route error classifier can say what this IS (a surface
+  // authorization refusal) instead of letting its text trip the provider-AUTH
+  // heuristics and blame the API key (P0 2026-09-02, pek9).
+  const e = new Error("provider credential routes are restricted to the Settings surface");
+  e.name = "SettingsSurfaceRequiredError";
+  throw e;
 }

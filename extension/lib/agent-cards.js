@@ -20,18 +20,22 @@
 import { RECIPES } from "./recipes.js";
 
 export const AGENT_CARD_VERSION = 1;
-export const MAX_CARD_NAME_LEN = 120;
-export const MAX_CARD_ROLE_LEN = 32000;
-export const MAX_CARD_SKILLS = 128;
-export const MAX_RAW_SKILLS_INPUT = 256;
-export const MAX_DROPPED_SKILLS_REPORT = 128;
-export const MAX_CARD_CORE_ASSETS = 8;
-export const MAX_CARD_CORE_ASSET_BYTES = 131072; // 128 KiB UTF-8 bytes per core asset
-export const MAX_CARD_JSON_BYTES = 2097152; // 2 MiB ceiling for total card JSON
-export const MAX_CREATED_FROM_LEN = 64;
-export const MAX_AVATAR_LEN = 32768; // 32 KiB for avatar data URL / emoji / SVG
-export const MAX_SCHEDULE_TASK_LEN = 4000;
-export const MAX_SCHEDULE_AT_LEN = 64;
+// dptw: no card name/role length, skill count, raw-skills input, core-asset
+// count/bytes, card-JSON bytes, createdFrom/avatar/schedule length limits —
+// a card of any size exports and imports whole. Shape/charset validation
+// stays; Infinity is used so the truncate/budget helpers short-circuit whole.
+export const MAX_CARD_NAME_LEN = Number.POSITIVE_INFINITY;
+export const MAX_CARD_ROLE_LEN = Number.POSITIVE_INFINITY;
+export const MAX_CARD_SKILLS = Number.POSITIVE_INFINITY;
+export const MAX_RAW_SKILLS_INPUT = Number.POSITIVE_INFINITY;
+export const MAX_DROPPED_SKILLS_REPORT = 128; // report-window only (not data)
+export const MAX_CARD_CORE_ASSETS = Number.POSITIVE_INFINITY;
+export const MAX_CARD_CORE_ASSET_BYTES = Number.POSITIVE_INFINITY;
+export const MAX_CARD_JSON_BYTES = Number.POSITIVE_INFINITY;
+export const MAX_CREATED_FROM_LEN = Number.POSITIVE_INFINITY;
+export const MAX_AVATAR_LEN = Number.POSITIVE_INFINITY;
+export const MAX_SCHEDULE_TASK_LEN = Number.POSITIVE_INFINITY;
+export const MAX_SCHEDULE_AT_LEN = Number.POSITIVE_INFINITY;
 
 /**
  * Truncate a UTF-8 string to at most maxBytes, appending an ellipsis "…" (3 UTF-8 bytes)
@@ -321,6 +325,19 @@ export function exportAgentCard(agent, { schedule = null, exportedAt = null } = 
     }
   }
 
+  if (agent.tools && typeof agent.tools === "object" && !Array.isArray(agent.tools)) {
+    const normTools = {};
+    if (Array.isArray(agent.tools.webmcpOrigins)) {
+      normTools.webmcpOrigins = agent.tools.webmcpOrigins.map((s) => String(s ?? "").trim().toLowerCase()).filter(Boolean);
+    }
+    if (Array.isArray(agent.tools.bundledWasm)) {
+      normTools.bundledWasm = agent.tools.bundledWasm.map((s) => String(s ?? "").trim()).filter(Boolean);
+    }
+    if (Object.keys(normTools).length > 0) {
+      card.tools = normTools;
+    }
+  }
+
   if (agent.avatar && typeof agent.avatar === "string" && agent.avatar.trim()) {
     card.avatar = agent.avatar.trim().slice(0, MAX_AVATAR_LEN);
   }
@@ -524,6 +541,31 @@ export function validateAgentCard(card, options = {}) {
       if (cleanAvatar) avatar = cleanAvatar;
     }
 
+    // tools (WebMCP origins + bundled WASM allowlists)
+    let tools = null;
+    const rawTools = Object.hasOwn(card, "tools") ? card.tools : undefined;
+    if (rawTools !== undefined && rawTools !== null) {
+      if (typeof rawTools !== "object" || Array.isArray(rawTools)) {
+        return { ok: false, error: "tools must be an object" };
+      }
+      const normTools = {};
+      if (Object.hasOwn(rawTools, "webmcpOrigins") && rawTools.webmcpOrigins !== undefined && rawTools.webmcpOrigins !== null) {
+        if (!Array.isArray(rawTools.webmcpOrigins)) {
+          return { ok: false, error: "webmcpOrigins must be an array of origin strings" };
+        }
+        normTools.webmcpOrigins = rawTools.webmcpOrigins.map((s) => String(s ?? "").trim().toLowerCase()).filter(Boolean);
+      }
+      if (Object.hasOwn(rawTools, "bundledWasm") && rawTools.bundledWasm !== undefined && rawTools.bundledWasm !== null) {
+        if (!Array.isArray(rawTools.bundledWasm)) {
+          return { ok: false, error: "bundledWasm must be an array of package/tool strings" };
+        }
+        normTools.bundledWasm = rawTools.bundledWasm.map((s) => String(s ?? "").trim()).filter(Boolean);
+      }
+      if (Object.keys(normTools).length > 0) {
+        tools = normTools;
+      }
+    }
+
     // exportedAt validation
     let exportedAt = null;
     if (Object.hasOwn(card, "exportedAt") && card.exportedAt !== undefined && card.exportedAt !== null) {
@@ -541,6 +583,7 @@ export function validateAgentCard(card, options = {}) {
       role: boundedRole,
       skills: validSkills,
       coreAssets,
+      ...(tools ? { tools } : {}),
       ...(schedule ? { schedule } : {}),
       ...(createdFrom ? { createdFrom } : {}),
       ...(avatar ? { avatar } : {}),

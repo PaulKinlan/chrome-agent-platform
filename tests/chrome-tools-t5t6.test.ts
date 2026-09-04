@@ -163,7 +163,7 @@ Deno.test("T6: readingList CRUD flows with http/https-only validation + honest p
   assertEquals(readingList.size, 0);
 });
 
-Deno.test("T6: save_page_as_mhtml rides the screenshot consent chain + hard byte cap", async () => {
+Deno.test("T6: save_page_as_mhtml rides the screenshot consent chain; NO byte cap (dptw)", async () => {
   reset();
   // pageCapture permission denied → honest error.
   assert((await tools().save_page_as_mhtml.execute({ tabId: 7 })).error.includes("pageCapture permission not granted"));
@@ -186,12 +186,12 @@ Deno.test("T6: save_page_as_mhtml rides the screenshot consent chain + hard byte
   assertEquals(ok.sizeBytes, 128);
   assertEquals(ok.mhtml.length, 128);
   assertEquals(ok.truncated, false);
-  // Over the 8 MiB cap → REFUSED with the size reported (never silently truncated).
+  // dptw: past the removed 8 MiB cap the capture is delivered whole.
   mhtmlSize = 9 * 1024 * 1024;
   const big = await tools().save_page_as_mhtml.execute({ tabId: 7 });
-  assert(big.error.includes("too large"), "over-cap refused");
+  assertEquals(big.ok, true, `past the removed cap the capture lands: ${JSON.stringify(big).slice(0, 160)}`);
   assertEquals(big.sizeBytes, 9 * 1024 * 1024);
-  assert(big.capBytes === 8 * 1024 * 1024);
+  assertEquals(big.mhtml.length, 9 * 1024 * 1024, "every byte arrives");
   await revokeBrowserControlGrant();
 });
 

@@ -237,7 +237,7 @@ const JWT_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // A SEPARATE canonical entry bound to the exact line/column + the exact
 // `new SharedWorker(` shape, never a broad exemption.
 const AGENT_WORKER_HOST_CANONICAL_PATH = "extension/lib/agent-worker-host.js";
-const AGENT_WORKER_HOST_CANONICAL_LOCATION = { line: 36, column: 13 };
+const AGENT_WORKER_HOST_CANONICAL_LOCATION = { line: 60, column: 13 };
 const AGENT_WORKER_HOST_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
 
 // The UI-side port client (Phase 4) constructs the SAME per-agent shared

@@ -14,6 +14,7 @@
 //   deno run -A scripts/opfs-real-browser.ts
 
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -38,7 +39,7 @@ async function fetchJson(url: string) {
 }
 
 async function main() {
-  const profile = `/tmp/cap-opfs-${Date.now()}`;
+  const profile = durableDir(`cap-opfs-${Date.now()}`);
   await Deno.mkdir(profile, { recursive: true });
   // The shared launcher: kernel-assigned port, endpoint read from this child's
   // own stderr, honest failure when the browser prints none

@@ -35,14 +35,16 @@ const AGENTS_KEY = "cap:namedAgents";
 // (Constitution §4). Over-cap ROLE/NAME input is REJECTED with a clear error
 // — never silently clipped (the 200-char silent slice destroyed detailed
 // roles, the P0 this family raise fixes).
-const MAX_AGENTS = 200;
-const MAX_NAME_LEN = 120;
-export const MAX_ROLE_LEN = 32000;
-export const MAX_SKILLS = 128;
-const MAX_CORE_ASSETS = 8;
-const MAX_CORE_ASSET_BYTES = 131072; // 128 KiB per core asset
-const MAX_PROFILE_GRANTS = 8;
-export const MAX_PROFILE_GRANTS_INPUT = 32;
+const MAX_NAME_LEN = Number.POSITIVE_INFINITY; // dptw: no name length cap
+// dptw: no registry count, name/role length, skill count, core-asset
+// count/bytes, or profile-grant count limits — an owner defines agents of any
+// size. Charset/shape validation stays.
+export const MAX_ROLE_LEN = Number.POSITIVE_INFINITY;
+export const MAX_SKILLS = Number.POSITIVE_INFINITY;
+const MAX_CORE_ASSETS = Number.POSITIVE_INFINITY;
+const MAX_CORE_ASSET_BYTES = Number.POSITIVE_INFINITY;
+const MAX_PROFILE_GRANTS = Number.POSITIVE_INFINITY;
+export const MAX_PROFILE_GRANTS_INPUT = Number.POSITIVE_INFINITY;
 
 export const VALID_PROFILE_GRANTS = new Set([
   "profile:basic",
@@ -106,7 +108,7 @@ export function normalizeCoreAssets(assets) {
     const name = String(a.name ?? "").slice(0, 96);
     const type = String(a.type ?? "text/plain").slice(0, 64);
     let content = a.content == null ? "" : String(a.content);
-    if (content.length > MAX_CORE_ASSET_BYTES) content = content.slice(0, MAX_CORE_ASSET_BYTES) + "…";
+    // dptw: core-asset content is stored whole (no byte clip).
     if (!name && !content) continue;
     out.push({ name, type, content });
     if (out.length >= MAX_CORE_ASSETS) break;
@@ -247,6 +249,45 @@ export function normalizeAgentMcpServers(value) {
   return normalizeMcpServerList(value);
 }
 
+/** Validate + normalize a per-agent tool configuration (WebMCP origins and bundled WASM allowlists).
+ * Returns null when unconfigured (inherit/all), or a clean object with { webmcpOrigins, bundledWasm }.
+ * An empty array [] means explicitly restricted to none. */
+export function normalizeAgentToolsConfig(value) {
+  if (value == null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return null;
+  let webmcpOrigins = null;
+  if (Array.isArray(value.webmcpOrigins)) {
+    webmcpOrigins = Array.from(new Set(
+      value.webmcpOrigins
+        .map((s) => String(s ?? "").trim().toLowerCase())
+        .filter(Boolean)
+    ));
+  }
+  let bundledWasm = null;
+  if (Array.isArray(value.bundledWasm)) {
+    bundledWasm = Array.from(new Set(
+      value.bundledWasm
+        .map((s) => String(s ?? "").trim())
+        .filter(Boolean)
+    ));
+  }
+  if (webmcpOrigins === null && bundledWasm === null) {
+    return null;
+  }
+  return {
+    webmcpOrigins,
+    bundledWasm,
+  };
+}
+
+/** Fetch a named agent's tool configuration (WebMCP origin allowlist + bundled WASM allowlist). */
+export async function getNamedAgentToolsConfig(id) {
+  const map = await agentsMap();
+  const slug = slugifyAgentId(id);
+  const raw = map[slug]?.tools;
+  return raw ? normalizeAgentToolsConfig(raw) : null;
+}
+
 /**
  * Create (or replace) a named agent. `id` is optional — when omitted a slug is
  * derived from the name. Returns `{ ok, agent }` or `{ ok:false, error }`.
@@ -255,7 +296,7 @@ export function normalizeAgentMcpServers(value) {
  * sandbox (its `agents.md` operating instructions).
  */
 export async function createNamedAgent(
-  { id, name, role = "", avatar = null, skills = [], coreAssets = [], profileGrants = [], agentsMd = null, provider = null, canDelegateTo = [], mcpServers = null },
+  { id, name, role = "", avatar = null, skills = [], coreAssets = [], profileGrants = [], agentsMd = null, provider = null, canDelegateTo = [], mcpServers = null, tools = null },
   { gateOnReplace = null } = {},
 ) {
   const cleanName = String(name ?? "").trim();
@@ -265,7 +306,7 @@ export async function createNamedAgent(
   if (roleText.length > MAX_ROLE_LEN) {
     return { ok: false, error: `role too long (${roleText.length} > ${MAX_ROLE_LEN}) — shorten the role; it was NOT saved` };
   }
-  const skillList = Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : [];
+  const skillList = Array.isArray(skills) ? skills : [];
   const assetList = normalizeCoreAssets(coreAssets);
 
   let cleanProfileGrants = [];
@@ -282,9 +323,7 @@ export async function createNamedAgent(
     const map = await agentsMap();
     const slug = slugifyAgentId(id) || slugifyAgentId(cleanName) || `agent-${Date.now()}`;
     const existing = map[slug];
-    if (!existing && Object.keys(map).length >= MAX_AGENTS) {
-      return { ok: false, error: `too many agents (${MAX_AGENTS})` };
-    }
+    // dptw: no agent-count cap.
     const agent = {
       id: slug,
       name: cleanName,
@@ -305,6 +344,10 @@ export async function createNamedAgent(
       // ids this agent may delegate to. Empty = cannot delegate. Normalized by
       // the shared guard module so the record and the route can never disagree.
       canDelegateTo: normalizeCanDelegateTo(canDelegateTo.length ? canDelegateTo : (existing?.canDelegateTo ?? [])),
+      // Per-agent tool config (G4): WebMCP origins allow-list + bundled WASM allow-list.
+      tools: tools !== undefined && tools !== null
+        ? normalizeAgentToolsConfig(tools)
+        : (existing?.tools ? normalizeAgentToolsConfig(existing.tools) : null),
       // Non-reusable row identity + monotonic per-row revision let an owner
       // approval bind the exact current agent without hashing large avatars or
       // credential-bearing provider state.
@@ -354,7 +397,7 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
       next.role = roleText;
     }
     if (patch.avatar !== undefined) next.avatar = patch.avatar ? String(patch.avatar) : null;
-    if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills.slice(0, MAX_SKILLS) : [];
+    if (patch.skills !== undefined) next.skills = Array.isArray(patch.skills) ? patch.skills : [];
     if (patch.coreAssets !== undefined) next.coreAssets = normalizeCoreAssets(patch.coreAssets);
     if (patch.profileGrants !== undefined) {
       if (patch.profileGrants === null) {
@@ -374,6 +417,9 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
       next.mcpServers = normalizeMcpServerList(patch.mcpServers);
     }
     if (patch.canDelegateTo !== undefined) next.canDelegateTo = normalizeCanDelegateTo(patch.canDelegateTo);
+    if (patch.tools !== undefined) {
+      next.tools = patch.tools === null ? null : normalizeAgentToolsConfig(patch.tools);
+    }
     next.instanceId = existing.instanceId ?? crypto.randomUUID();
     next.revision = (Number.isSafeInteger(existing.revision) ? existing.revision : 0) + 1;
     next.updatedAt = Date.now();
@@ -436,6 +482,12 @@ export async function setNamedAgentMcpServers(id, list, { gateBeforeMutation = n
   if (r?.ok === false) return r;
   // REDACTED result: a token never crosses back out of the resolution path.
   return { ok: true, agent: redactAgentRecord(r.agent) };
+}
+
+/** Set (or clear) a named agent's tool configuration (WebMCP origins + bundled WASM). */
+export async function setNamedAgentToolsConfig(id, tools, { gateBeforeMutation = null } = {}) {
+  const normalized = normalizeAgentToolsConfig(tools);
+  return await updateNamedAgent(id, { tools: normalized }, { gateBeforeMutation });
 }
 
 /** Delete a named agent + its OPFS sandbox + its system-prompt override

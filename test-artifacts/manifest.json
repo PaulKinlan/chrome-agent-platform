@@ -1,14 +1,14 @@
 {
-  "testedSourceCommit": "43de802ae4e9b1cb4b6bd3787d8b7bac15a54b5e",
+  "testedSourceCommit": "6179ee90c478e66d2e8a234cacbea0ee16d5b01e",
   "evidenceCommitNote": "committed AFTER this run — a tracked manifest cannot contain its own commit hash",
   "worktreeClean": true,
   "worktreeDirtyFiles": [],
-  "runId": "cap-1788304414079",
+  "runId": "cap-1788442930677",
   "retain": true,
-  "ts": "2026-09-01T23:18:36.747Z",
-  "evidenceDir": "/home/paulkinlan/worktrees/tool-result-full-json/test-artifacts",
-  "passed": 302,
-  "failed": 0,
+  "ts": "2026-09-03T13:51:07.948Z",
+  "evidenceDir": "/tmp/cap-merge4/test-artifacts",
+  "passed": 356,
+  "failed": 2,
   "checks": [
     {
       "name": "SW auto-attach configured (waitForDebuggerOnStart)",
@@ -75,6 +75,42 @@
       "pass": true
     },
     {
+      "name": "hub: idle 60 s produces zero diagnostics/security/usage routes",
+      "pass": true
+    },
+    {
+      "name": "hub: the shield badge updates within 1 s of a security event",
+      "pass": true
+    },
+    {
+      "name": "hub: retained the shield-badge screenshot",
+      "pass": true
+    },
+    {
+      "name": "hub: idle header has no status text, no dot, at most one icon button",
+      "pass": true
+    },
+    {
+      "name": "hub: no footer button is filled when idle; the open view's button has aria-current=page",
+      "pass": true
+    },
+    {
+      "name": "embedded views share one content left edge at 1440",
+      "pass": false
+    },
+    {
+      "name": "embedded views share one content left edge at 1024",
+      "pass": false
+    },
+    {
+      "name": "embedded Artifacts view shows its name exactly once",
+      "pass": true
+    },
+    {
+      "name": "hub: #agent=named:writer reload shows Writer",
+      "pass": true
+    },
+    {
       "name": "after enabling one recipe the four agent surfaces agree (1)",
       "pass": true
     },
@@ -124,6 +160,14 @@
     },
     {
       "name": "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
+      "pass": true
+    },
+    {
+      "name": "hub + Settings: the delete-agent dialogs share one body in the reader's words",
+      "pass": true
+    },
+    {
+      "name": "Settings: the Providers page never speaks the system's words",
       "pass": true
     },
     {
@@ -299,15 +343,19 @@
       "pass": true
     },
     {
+      "name": "permissions: the rows are grouped Browsing · Content · System · Always on",
+      "pass": true
+    },
+    {
       "name": "permissions: optional capabilities start ungranted (JIT model)",
       "pass": true
     },
     {
-      "name": "permissions: Context menus Enable button found in the Settings panel",
+      "name": "permissions: Context menus Turn on button found in the Settings panel",
       "pass": true
     },
     {
-      "name": "permissions: Context menus Enable clicked via a trusted gesture",
+      "name": "permissions: Context menus Turn on clicked via a trusted gesture",
       "pass": true
     },
     {
@@ -551,6 +599,14 @@
       "pass": true
     },
     {
+      "name": "hub: demo reply is a sentence without a bracketed model tag",
+      "pass": true
+    },
+    {
+      "name": "hub: sidebar preview has no bracketed model tag",
+      "pass": true
+    },
+    {
       "name": "hub: two demo turns produce two user activity rows (no attestation/tool rows)",
       "pass": true
     },
@@ -595,6 +651,26 @@
       "pass": true
     },
     {
+      "name": "Base URL: the preflight refusal names the missing base URL (the gate's reason)",
+      "pass": true
+    },
+    {
+      "name": "Base URL: provider.status is ok:false for a BYO provider with no base URL, naming the base URL",
+      "pass": true
+    },
+    {
+      "name": "Base URL: the hub strip shows 'Provider issue — … base URL …' for the BYO config with no base URL",
+      "pass": true
+    },
+    {
+      "name": "Base URL: provider.set for a preset with no base URL stores the preset endpoint and provider.status is ok:true",
+      "pass": true
+    },
+    {
+      "name": "Base URL: provider.set without baseURL then a run reaches the provider (the provider's own error, never the preflight string)",
+      "pass": true
+    },
+    {
       "name": "Streaming: the assistant bubble grows across at least 5 distinct lengths",
       "pass": true
     },
@@ -624,6 +700,22 @@
     },
     {
       "name": "Run log: every memory_get result row carries the complete redacted result (resultFull > 300 chars with the tail leaf), never flagged truncated",
+      "pass": true
+    },
+    {
+      "name": "thread: card count survives reload",
+      "pass": true
+    },
+    {
+      "name": "thread: final answer expandable after reload",
+      "pass": true
+    },
+    {
+      "name": "agent view: card count survives reload (the run-log view, never the journal's slice)",
+      "pass": true
+    },
+    {
+      "name": "agent view: final answer expandable after reload (the retained full answer, never the 240-char preview)",
       "pass": true
     },
     {
@@ -663,11 +755,55 @@
       "pass": true
     },
     {
+      "name": "Scripted provider: artifact create turn is exactly 3 provider calls (search, execute, answer — no continuation call), selectionRef round trip",
+      "pass": true
+    },
+    {
+      "name": "Scripted provider: turn 2 pauses on the approval card naming the artifact with a diff",
+      "pass": true
+    },
+    {
+      "name": "Scripted provider: the approved edit lands as version 2 with the final text",
+      "pass": true
+    },
+    {
+      "name": "Scripted provider: the sandboxed artifact frame never reaches the provider origin (zero leak hits)",
+      "pass": true
+    },
+    {
+      "name": "Runaway tool loop: stops after 3 silent continuations — exactly 6 provider calls, no continuation after the third silence",
+      "pass": true
+    },
+    {
+      "name": "Runaway tool loop: the thread shows one muted 'Stopped after 6 steps' status line with Continue, no repeated agent bubbles, never 'Budget reached'",
+      "pass": true
+    },
+    {
       "name": "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
       "pass": true
     },
     {
       "name": "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
+      "pass": true
+    },
+    {
+      "name": "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
+      "pass": true
+    },
+    {
+      "name": "Every item: the status row counts Step N of M while working",
+      "pass": true
+    },
+    {
+      "name": "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
+      "pass": true
+    },
+    {
+      "name": "Budget: Continue runs a second execution on the same thread",
+      "pass": true
+    },
+    {
+      "name": "Budget verdict: a run that writes its answer on its last allowed step (while still calling tools) settles ok, never 'Budget reached'",
       "pass": true
     },
     {
@@ -680,6 +816,10 @@
     },
     {
       "name": "screenshot: capture SUCCEEDS for the granted origin",
+      "pass": true
+    },
+    {
+      "name": "Browser control: revoking one origin through the service worker reports it gone",
       "pass": true
     },
     {
@@ -724,6 +864,18 @@
     },
     {
       "name": "screenshot: grant scoped to the red origin via the UI",
+      "pass": true
+    },
+    {
+      "name": "Browser control: allowing a second origin keeps the first origin granted",
+      "pass": true
+    },
+    {
+      "name": "Browser control: Settings lists every allowed origin with its own Turn off",
+      "pass": true
+    },
+    {
+      "name": "Browser control: turning off one origin leaves the other origin granted",
       "pass": true
     },
     {
@@ -1007,6 +1159,14 @@
       "pass": true
     },
     {
+      "name": "frame-guards: generated UI frame lang equals the owner locale",
+      "pass": true
+    },
+    {
+      "name": "frame-guards: no SyntaxError exceptions on any about:srcdoc target during the artifact journey",
+      "pass": true
+    },
+    {
       "name": "approval: primary NTP Settings iframe can deny an exact request",
       "pass": true
     },
@@ -1096,6 +1256,22 @@
     },
     {
       "name": "mgmt: agent gone from the directory after delete",
+      "pass": true
+    },
+    {
+      "name": "escaper: created an agent whose name carries a single quote, double quotes and angle brackets",
+      "pass": true
+    },
+    {
+      "name": "escaper: the hub renders the quoted name as literal text (no injected element)",
+      "pass": true
+    },
+    {
+      "name": "escaper: Settings renders the quoted name as literal text (no injected element)",
+      "pass": true
+    },
+    {
+      "name": "escaper: retained the hub + Settings quoted-name screenshots",
       "pass": true
     },
     {
@@ -1199,6 +1375,54 @@
       "pass": true
     },
     {
+      "name": "demo-path: step 1 groups tabs and renders sentences",
+      "pass": true
+    },
+    {
+      "name": "demo-path: step 1 shows exactly one permission card",
+      "pass": true
+    },
+    {
+      "name": "demo-path: step 4 hub shows the scheduled run summary",
+      "pass": true
+    },
+    {
+      "name": "demo-path: step 5 artifact renders in the thread",
+      "pass": true
+    },
+    {
+      "name": "privacy page: renders the lists and the host-access sentence",
+      "pass": true
+    },
+    {
+      "name": "privacy page: names every outbound host and every storage class the code declares",
+      "pass": true
+    },
+    {
+      "name": "privacy page: linked from Settings → About",
+      "pass": true
+    },
+    {
+      "name": "factory reset: every storage class is populated before the reset",
+      "pass": true
+    },
+    {
+      "name": "factory reset: the Settings button raises the destructive confirm dialog",
+      "pass": true
+    },
+    {
+      "name": "factory reset: after the genuine confirm every storage class is empty",
+      "pass": true
+    },
+    {
+      "name": "factory reset: the hub shows the first-run guide again",
+      "pass": true
+    },
+    {
+      "name": "factory reset: the seeded markers are gone and the run and thread lists are empty",
+      "pass": true
+    },
+    {
       "name": "profile removed (no leak)",
       "pass": true
     },
@@ -1222,323 +1446,433 @@
   "files": [
     {
       "name": "fresh-profile-sidebar.png",
-      "sha256": "922f3aec7b2852c89d2eefd6572dd62cc2a87e5052547a990b854d254a525923",
-      "bytes": 64047
+      "sha256": "0a2ef79715a33d0404e0183213956051cdfbbd96b5cee1bc7f7a68100fc206b5",
+      "bytes": 62942
     },
     {
       "name": "hub-fresh-1440-after.png",
-      "sha256": "133b6f9e78c6a2a96528853f48615e21167f96da834427a25a7d2b8bfc3158b1",
-      "bytes": 55057
+      "sha256": "858f65da4e9784f981b6abfc4a026f8bd19502d097c914ea218482385d6ac579",
+      "bytes": 53864
     },
     {
       "name": "hub-fresh-1024-after.png",
-      "sha256": "d8273488e49088abae615104f7cd31395261d462575678ecaf6dc4ee1eeffb3d",
-      "bytes": 51593
+      "sha256": "8ce7ea89a1b13ef3ff0240b3defd33f864e5ff5ed742f7288baa8f1602f2b43b",
+      "bytes": 50655
+    },
+    {
+      "name": "hub-shield-badge-updated.png",
+      "sha256": "6fd8bfb1f872610e73aefeb8bc9d5e86ed7992f07cb38f6daa60a165f776be4f",
+      "bytes": 63504
+    },
+    {
+      "name": "hub-idle-header.png",
+      "sha256": "e73d687cf55163b5fb919c07f754d219edeb82a6363d8b5eb5b6f001b8a8edd9",
+      "bytes": 62960
+    },
+    {
+      "name": "hub-footer-settings-current.png",
+      "sha256": "c17375f6ce88fc679e5970922941a0f414ebbbfbb05b33071f1608cf62acf263",
+      "bytes": 220845
+    },
+    {
+      "name": "hub-view-artifacts-1440.png",
+      "sha256": "ac69e06fb11df61e7cdf31e75730e58ab8b06d5ec1f55396d97c3249648d9d10",
+      "bytes": 20776
+    },
+    {
+      "name": "hub-view-directory-1440.png",
+      "sha256": "ac69e06fb11df61e7cdf31e75730e58ab8b06d5ec1f55396d97c3249648d9d10",
+      "bytes": 20776
+    },
+    {
+      "name": "hub-view-settings-1440.png",
+      "sha256": "ac69e06fb11df61e7cdf31e75730e58ab8b06d5ec1f55396d97c3249648d9d10",
+      "bytes": 20776
+    },
+    {
+      "name": "agent-view-title-writer.png",
+      "sha256": "7e7d3fb557da7b22f42191181e43bd6bbcba6ba09dce3a18c040eceb863e6493",
+      "bytes": 48366
     },
     {
       "name": "one-recipe-enabled-sidebar.png",
-      "sha256": "f675478dd3fbabe8ddde05c7c8a356a9ff508579d25a1ccf6fbbb6ffcdef0120",
-      "bytes": 93204
+      "sha256": "0626caeb0f9950403dc5b54fba9e843ac84e2eae11b6ba1211c99f136c73a7f5",
+      "bytes": 93451
     },
     {
       "name": "template-select-open-light.png",
-      "sha256": "29afba51ce6e746c4cebe9b7fc17c0e6d46788a4a5071f652b636c29db6048ee",
-      "bytes": 131550
+      "sha256": "65cab4cf52f9e6d4296fc642c19f4b96d8db6ca95ea3c580aa41bdbf0aaaaf95",
+      "bytes": 131060
     },
     {
       "name": "template-select-open-dark.png",
-      "sha256": "7035367ab81912884957b21f3264b9eb994da0ddc92f528e01b81fd64ce54abc",
-      "bytes": 120704
+      "sha256": "e2a16d5e13f2356f7f6adf551f8bdfc8f0212194103969e48818aacfdaad6e4b",
+      "bytes": 120415
     },
     {
       "name": "create-dialog-advanced-dark.png",
-      "sha256": "a31ad0ed24075646f32909fdc40365a7bd14360b6a2be0012c0e7d181bbb0f62",
-      "bytes": 144890
+      "sha256": "2a974d8e1b59a8c85e8472ab1e124c95b34e4847dbd2d3bbf56425e282a0790c",
+      "bytes": 144486
     },
     {
       "name": "template-select-open-dark-r5.png",
-      "sha256": "a31ad0ed24075646f32909fdc40365a7bd14360b6a2be0012c0e7d181bbb0f62",
-      "bytes": 144890
+      "sha256": "2a974d8e1b59a8c85e8472ab1e124c95b34e4847dbd2d3bbf56425e282a0790c",
+      "bytes": 144486
     },
     {
       "name": "create-dialog-advanced-light.png",
-      "sha256": "21af006ea27d3134be0010fc62e8f3a7cb580ac8dbb8d37dece7954bce905372",
-      "bytes": 130848
+      "sha256": "41709e4ca79563f994af58f3c1d87e4e627c753dc9e3b97ecbbff1ae0a4fbd5d",
+      "bytes": 130384
     },
     {
       "name": "templates-gallery.png",
-      "sha256": "21af006ea27d3134be0010fc62e8f3a7cb580ac8dbb8d37dece7954bce905372",
-      "bytes": 130848
+      "sha256": "41709e4ca79563f994af58f3c1d87e4e627c753dc9e3b97ecbbff1ae0a4fbd5d",
+      "bytes": 130384
     },
     {
       "name": "templates-created.png",
-      "sha256": "7f0d522cb433b4d2ef3d71a629bad8e06c6945dbd7a02861ab471220ea30d492",
-      "bytes": 113442
+      "sha256": "5a5089bb219d1c5b34ec23b6807260b4d8ee28b7e4337423ae53007eb2faa5c4",
+      "bytes": 113657
+    },
+    {
+      "name": "dialog-delete-agent-shared.png",
+      "sha256": "7c6f08ab1c294acb39349df2193aab11c944fb2bd6f7e33ab3a1a89d201a68b7",
+      "bytes": 82325
+    },
+    {
+      "name": "options-providers-no-model-copy.png",
+      "sha256": "b153660c1cd1ac51efbca7c5cccc9ad6f51deb5a2c0cd7b6f1510ce742751080",
+      "bytes": 223984
     },
     {
       "name": "folder-command-chip.png",
-      "sha256": "d01f8068bafc8f260b224c3a24c2c08bc9689e7884f6b76490b6d174b422486b",
-      "bytes": 123780
+      "sha256": "512c4cc57c0cc9b62c724743a6931278d4cbfe0fc73b958d2629c8fe20e2eb70",
+      "bytes": 124453
     },
     {
       "name": "multi-slash-tabs-popup.png",
-      "sha256": "1aedd0c6a1f450b01e0dfb30688448614d4fbd68eaf2e4817c0ae53ce8870553",
-      "bytes": 117463
+      "sha256": "3cbd5febff76f7c54a44ce22ea30cd627ef4409ca7992076f771791a8e23d773",
+      "bytes": 117976
     },
     {
       "name": "ntp-driven.png",
-      "sha256": "5de493d28457c6c1f42a72e325bd0ec27038bf6f584d4f68f36453c0201e724b",
-      "bytes": 79070
+      "sha256": "2a0d36460c38b5e2837a4b0d28a4d4507836d1fd78762df7a4195168f9c332d8",
+      "bytes": 74810
     },
     {
       "name": "lazy-enum-slip-recovered.png",
-      "sha256": "63a3ec7319d4282bfe2df123be28a5420370338685920d8a578d2b38315fbc44",
-      "bytes": 127828
+      "sha256": "1934374139bfd94374b6c5344c5ccd490150e8592aa7eccc868d8931e00459c3",
+      "bytes": 130247
     },
     {
       "name": "ntp-jobs-empty.png",
-      "sha256": "d4e8a094d84becfd26b897cabb7aa09ecb80acc8ea9d2f2cbf294c60533ff8ce",
-      "bytes": 158790
+      "sha256": "c6d0bafeb3863dd6abda3fd47948c005981d9d6f265073bce43eeddd98c55ae5",
+      "bytes": 156163
     },
     {
       "name": "ntp-jobs-populated.png",
-      "sha256": "653df4efbd2db3463367f64881fdf0818a5f86166d4fa08c89c9e746b37dd160",
-      "bytes": 185941
+      "sha256": "c279777751415b753c1d6f6f06d2377815daaa768c82bfcb80d8875b6f48bc21",
+      "bytes": 183618
     },
     {
       "name": "ntp-jobs-settled.png",
-      "sha256": "6ae74cc3d8e4e0e652b9782393ed08fce15cf9b1caeeb7c50994065ba42e886b",
-      "bytes": 188125
+      "sha256": "9db0e9396aaf1ba09560dafd1ca3dae439ce7fc2c5cf55e110691a277af80a6f",
+      "bytes": 185739
     },
     {
       "name": "ntp-activity-ledger.png",
-      "sha256": "91a95c2370ca94e649fdfc57763480a23409f47734cfe61b63d866d82d987204",
-      "bytes": 194531
+      "sha256": "d39d61aa4c720efeb70508922266bff33079fab0a5fe84db4ba4740c71d0711a",
+      "bytes": 191872
     },
     {
       "name": "ntp-activity-ledger-undone.png",
-      "sha256": "ae7cb712bb987c219117b434844d28d183452698a293e4b864ceeeab6b926f79",
-      "bytes": 193963
+      "sha256": "48209d67a6bf7f726f9650b7991375cb4042479bccfb5aa08e5c3b2c7436876b",
+      "bytes": 191182
     },
     {
       "name": "settings-turn-off-owner-dialog.png",
-      "sha256": "db8ddc700903980e3a8f5909539db340900993ab1b96dc612bb488398cf94dc1",
-      "bytes": 296730
+      "sha256": "1322f60cb9089ae104465e19f4821c739b07a9c8eabe71102d2073ad8a29ead7",
+      "bytes": 253709
     },
     {
       "name": "board-deny-added.png",
-      "sha256": "3e4031549f3f9774a22a5c534f35e6a33f648aebbb5ea5dd5332fabb944dda6e",
-      "bytes": 270549
+      "sha256": "38a6fcbe8bcc4e65dfdd58009903660a85d5cfc7decb38e6f241aa0a8df7c869",
+      "bytes": 247372
     },
     {
       "name": "settings-openai-picker-after.png",
-      "sha256": "5c92e4f1829959e05bf53fe78039b3404a117c4673d9ec81f50def2eb78e1624",
-      "bytes": 235040
+      "sha256": "a78b75cf0c2a669e331cf6096edddec47fa235a23ae654953233164d7aa041cc",
+      "bytes": 230022
     },
     {
       "name": "settings-byo-typed-model.png",
-      "sha256": "d87a10c2fa0d93614e8896ede01636e0b9ea16492ef09d48a64a839f35420328",
-      "bytes": 209833
+      "sha256": "2d5af5dca33d28ab904437e0a28d4b97876d3ae318be671da4106f6e69fa2d69",
+      "bytes": 227094
     },
     {
       "name": "settings-byo-empty-model-red.png",
-      "sha256": "31baa9f05649709d32e7d5cb4ff8813161d920fb21f5da5d1cd2c423cd5cb94b",
-      "bytes": 216866
+      "sha256": "7a65dbe9fc17d6f14a564e79b15a26e19b0324e54b22227b39456e0edcf24ad6",
+      "bytes": 229890
     },
     {
       "name": "options-driven.png",
-      "sha256": "ea68e8ec276f4919c09fabfc4bec592dcefaf92fd69d77fae9bc91d4c5c37dc3",
-      "bytes": 244363
+      "sha256": "4754f7f8bbb627d316330340f346a291c5cebaaefb4614e94835d88dc7014d99",
+      "bytes": 235509
     },
     {
       "name": "keyless-first-result-card.png",
-      "sha256": "800a1b77d636d9fd9b8bc5010d886b3d2832dddac7d9f049c06746b6ae1df306",
-      "bytes": 111505
+      "sha256": "d402c2ab6f06a4ff4089d4a6c857e6c180a0e550d73eebafac35e62bf8c75851",
+      "bytes": 118017
     },
     {
       "name": "keyless-first-result-no-permission.png",
-      "sha256": "3d2fa2257e844307c867620bf64e0e27087a465c72b21e1564f9d3618f0e46a2",
-      "bytes": 126369
+      "sha256": "03da7e13077ec3dbbaa24d34fa92356f88c7668b5e4c89318b07c49d41e5a05c",
+      "bytes": 129731
     },
     {
       "name": "tool-cards-no-leak-live-denial.png",
-      "sha256": "3d2fa2257e844307c867620bf64e0e27087a465c72b21e1564f9d3618f0e46a2",
-      "bytes": 126369
+      "sha256": "03da7e13077ec3dbbaa24d34fa92356f88c7668b5e4c89318b07c49d41e5a05c",
+      "bytes": 129731
     },
     {
       "name": "grant-card-reopened-thread.png",
-      "sha256": "18941c9a804beb1701b72945796b43ae3ec5be3721c60d9deecb3786c5a4edaa",
-      "bytes": 126700
+      "sha256": "7db1a18349dfc599ead91b7fd951e7929d8ceeac15e5339e7da017d3fe0343d0",
+      "bytes": 129722
+    },
+    {
+      "name": "hub-demo-reply-voice.png",
+      "sha256": "d7d994432a5085a9ab8a03addda55774b9139c79c456eab75aba7dca88d700df",
+      "bytes": 137353
     },
     {
       "name": "hub-activity-two-rows-1440.png",
-      "sha256": "bd82a4df2980f240a2f4d022a70d72e42715cd0f1a3feec65c1a3243a64fb228",
-      "bytes": 138473
+      "sha256": "8b5e4ca66d1a65da7516ced53cf2e40bd062872a2f397fa114c2a2a73045f49c",
+      "bytes": 137564
     },
     {
       "name": "hub-activity-two-rows-1024.png",
-      "sha256": "066b916fba722f324f03e548293d757b06d17fd6156f1a8e7cb7e4a61480d88f",
-      "bytes": 93162
+      "sha256": "07c283f0198b6e11b3a5d9189f6b487fa207b139b9fd6be70513ebad84359b38",
+      "bytes": 97434
     },
     {
       "name": "transcript-before-reload.png",
-      "sha256": "e7dad4a55026fbb4f3b390ad4320d4b67e6dcde990d324c50cb347cd39aba223",
-      "bytes": 130434
+      "sha256": "eb2bb3a9a94b1df51c67d2296597b729f80e04440c49c38803b232c3847a7896",
+      "bytes": 131586
     },
     {
       "name": "transcript-after-reload.png",
-      "sha256": "e7dad4a55026fbb4f3b390ad4320d4b67e6dcde990d324c50cb347cd39aba223",
-      "bytes": 130434
+      "sha256": "eb2bb3a9a94b1df51c67d2296597b729f80e04440c49c38803b232c3847a7896",
+      "bytes": 131586
     },
     {
       "name": "tool-cards-no-leak-reopened.png",
-      "sha256": "3125a9f8dae621268982f4405c79ab7ad67aadd8523df455a393c929791f0f7b",
-      "bytes": 213780
+      "sha256": "412ff8694e937dc2f76ae456ab912ae256102a2cb4da664902dae743efbe7bb0",
+      "bytes": 215300
     },
     {
       "name": "provider-401-bubble.png",
-      "sha256": "a504252b092a5dd41ca8c376ed53afaec6feabf82d2b40f76d4b30e2393c3678",
-      "bytes": 149513
+      "sha256": "4a5b520720ef25bc92e2ccc4c540fb01fc9d124d2220e76bda813b88a1cd913d",
+      "bytes": 154693
     },
     {
       "name": "provider-preflight-failed.png",
-      "sha256": "e55d9dfa807c17cdb0449be7011df69fe27d789d6fba1443116d03c771f8a7c3",
-      "bytes": 137087
+      "sha256": "7d2f0df684a0c528afe72d2af1bce8dcd32cb4962686c71ac563b61358621090",
+      "bytes": 142999
+    },
+    {
+      "name": "provider-status-byo-missing.png",
+      "sha256": "f81d99d985e9224c99052cf39d6aadbbd6c071bf48cd89a5d4f6662f333874cd",
+      "bytes": 231820
+    },
+    {
+      "name": "provider-preset-no-baseurl-run.png",
+      "sha256": "91910c1a9474bfb50fe6159b1df3fa66dfdf99df20f10be3c36993ff23cbf4e3",
+      "bytes": 159517
     },
     {
       "name": "streaming-mid.png",
-      "sha256": "18bcc8597cd74dac294c1d0ad8552c84b8a423c2529e4a65693b94739a0decf7",
-      "bytes": 139892
+      "sha256": "a330b52293d21c765778348f8f54845a63e25f81a8b7a2fb577b8c8dd2976a1a",
+      "bytes": 146334
     },
     {
       "name": "streaming-final.png",
-      "sha256": "f4c8c78336ca27b0de16dd05d3ee44ff9610f935ad9ab27ac7159c29882b6dd3",
-      "bytes": 289093
+      "sha256": "eb0b3cbe1547c4c7e78823d4e3b25e77e85670da8599cc8060b4018e281c0b42",
+      "bytes": 295135
     },
     {
       "name": "full-response-collapsed.png",
-      "sha256": "a363275c9649223df408947af1d863e9c3193f7ca65bf5544c54802e32889af1",
-      "bytes": 204494
+      "sha256": "556b669a76c2a2f54627e2c6774346d6272ecff2f810a1f5b6e6c5752eb38eb3",
+      "bytes": 209265
     },
     {
       "name": "full-response-expanded.png",
-      "sha256": "e8a32309ce7d9974d8ab90726c04ca1da4677a0bcd08438ae37b13c937b1c801",
-      "bytes": 630062
+      "sha256": "14d3cff49e36351f6815c99fe63411b7d26b865d4c0b7dc3407d2da04c159303",
+      "bytes": 634528
     },
     {
       "name": "tool-result-json-tree.png",
-      "sha256": "a406490d4df34c29df410fc7642e4ede53bff5920053f77a0a8c401a0df37aed",
-      "bytes": 247378
+      "sha256": "746766dc11f57c5e1422d7c8c98275e6f109a43c2c646d4d8297bc3c1006c19f",
+      "bytes": 253494
     },
     {
       "name": "tool-result-after-reload.png",
-      "sha256": "f3d694b945cf94d840aba7236c4873028e67efe7470ab3c1f5e513958ee68601",
-      "bytes": 302948
+      "sha256": "aeaa7bd0101f8a3811cec9043beeb7f13eb02cded6f27b3b0bda4694b47360fd",
+      "bytes": 309199
+    },
+    {
+      "name": "thread-after-reload.png",
+      "sha256": "07a4c9a3c3b8ba34b4fe574f0f5fd8075d3e280a2c40256778620ab5537c01d8",
+      "bytes": 637621
+    },
+    {
+      "name": "agent-view-after-reload.png",
+      "sha256": "712e5e40c90d9d2ee35b51e7f9291fa50ea525b3376f683b556bb1ebb46023bb",
+      "bytes": 642136
     },
     {
       "name": "claim-check-delegate.png",
-      "sha256": "7ec39e90a8c4d13336ebb9cd480ec58c63ac97fe0a97cb20b6032f82127bd9da",
-      "bytes": 357396
+      "sha256": "4304981eb0f87883d89c55a93f26d46df677d73e4284b8fb77dcac86d9177ee6",
+      "bytes": 180886
     },
     {
       "name": "tool-result-nested-error.png",
-      "sha256": "7ec39e90a8c4d13336ebb9cd480ec58c63ac97fe0a97cb20b6032f82127bd9da",
-      "bytes": 357396
+      "sha256": "4304981eb0f87883d89c55a93f26d46df677d73e4284b8fb77dcac86d9177ee6",
+      "bytes": 180886
     },
     {
       "name": "thread-edit-approval-diff.png",
-      "sha256": "dcf69771c0050c0b0292a4581606f163cc8325464817da5674b7c29b5bf1d8e4",
-      "bytes": 104140
+      "sha256": "1d526c2e3e17937da2de9bfd83f91e4684ae5f2fdf34c7426ba1929c7ae8a6ea",
+      "bytes": 128423
     },
     {
       "name": "thread-view-1440-turn1.png",
-      "sha256": "29f1e385722302044e8ecc692b33abb04c99e34766d7cc2cd1f2dcab8f8d72e7",
-      "bytes": 130559
+      "sha256": "c064330b188c6051d0ad77a5a16c2c6b32204e4f56f1b7be852b9c2641784597",
+      "bytes": 137966
     },
     {
       "name": "thread-two-artifact-cards.png",
-      "sha256": "1d7bba934d012b6d66e21c2ae42a9e8940b90e7bd6b4f688e62109f43b7c82ad",
-      "bytes": 120587
+      "sha256": "78a95024c46d984dcf7ab609f01e66f18016acff3dee727aef2f1d32a0e207c9",
+      "bytes": 128438
     },
     {
       "name": "thread-view-1440-running-300ms.png",
-      "sha256": "8ffd6184b3eb7f0b6c990f5f2b22db2125897d00e1f91577919585a701be7762",
-      "bytes": 124668
+      "sha256": "b0cc779e3f059ae9a730841b06079c45edec8c4b1b3997cfee824007977dc95e",
+      "bytes": 132457
     },
     {
       "name": "thread-view-1440-turn2.png",
-      "sha256": "9f9b4b8199894ce837ef624891b8e024a57db45f6701e11dcf9045f1e9d0bb4e",
-      "bytes": 234165
+      "sha256": "99d72f4f3823a4c31dcf068b955f02c1494872be9fff0003e3b443e0032835f5",
+      "bytes": 238870
     },
     {
       "name": "thread-view-1024-turn2.png",
-      "sha256": "8526dff29d6b66647d7c1df640c4a1bbe2593d9c7becccd1ef1d4a1acccfc823",
-      "bytes": 165530
+      "sha256": "62a571094907593b39fcc08f0031ca223c7261f2e6321a2e480724843e982631",
+      "bytes": 173269
+    },
+    {
+      "name": "journey-crumb-turn1.png",
+      "sha256": "59910993559a1f9c098ee75667ed4f9b7a2b93e734626c554bf5dcc9382f59e6",
+      "bytes": 156880
+    },
+    {
+      "name": "journey-crumb-turn2-approval.png",
+      "sha256": "98d1ce05bf4f63a87dd54508aa8eb80a87c86fb36522cbf59c83f8c593feb77b",
+      "bytes": 265301
+    },
+    {
+      "name": "thread-stopped-after-steps.png",
+      "sha256": "052272fcbcb759be803594a90c3947170b3d84c8a1716accc81c5e0ad697e685",
+      "bytes": 145418
     },
     {
       "name": "plan-strip-mid-run.png",
-      "sha256": "cab22b41421de3b6b7a4262e2f802b8c2ea90dc748112d59a3c091ef21d3dd9a",
-      "bytes": 142969
+      "sha256": "ec9c6382f5390144609612badeec6b90cf11253077f58bb0c991fcec3a46bfb9",
+      "bytes": 152865
     },
     {
       "name": "plan-strip-settled.png",
-      "sha256": "4d60ffbd4c43a57ffbac65e60051161c85954e0ff82395b5a740c5489609b974",
-      "bytes": 155774
+      "sha256": "986ec508ed307fb6787f3fb68b4fc40e0b986c0e7a29883b2f2d0dac66510393",
+      "bytes": 164521
+    },
+    {
+      "name": "run-budget-step-counter.png",
+      "sha256": "7b65bafb87c57109671bad6da10bbb7729a4e234ce8e0d9f465cb2c5ad72462e",
+      "bytes": 145568
+    },
+    {
+      "name": "every-tab-demo-12.png",
+      "sha256": "2a2026695ef57da84b3c127c329092ab96e6b04a1467c36c43c448964e6a82ba",
+      "bytes": 251717
+    },
+    {
+      "name": "run-budget-continue-card.png",
+      "sha256": "4a8409deae52f57d6a6094d7f4055d99194a0e73b78858032baf62cedf562ad4",
+      "bytes": 272020
     },
     {
       "name": "lease-settings-after-toggle-on.png",
-      "sha256": "a534b2b1cfec39662e80e4a150037548626476277a49d391d752fc32c789a28a",
-      "bytes": 264015
+      "sha256": "6b8cfd9153ecafad5a53d8a97ab1f3153a619aa15ea34e02b8b91e985583bc2f",
+      "bytes": 242764
+    },
+    {
+      "name": "lease-settings-after-toggle-off.png",
+      "sha256": "22b07e3a0e473b8c358932adf7133aa7ce05646b57f35c06e0f67795695a6065",
+      "bytes": 250560
     },
     {
       "name": "permission-card-open-tab.png",
-      "sha256": "b046fc9b6e89f15398fffb4f82c2333f4326097ea190173d2d7db92110038b3d",
-      "bytes": 191239
+      "sha256": "71f99abdd5ac8a5c5700e60ccdae024fb0bd56e84329276d881a19ed008eb0a7",
+      "bytes": 340386
     },
     {
       "name": "permission-card-read-page-allowed.png",
-      "sha256": "01bb94a87a6d53079b1be47adef7b517fbaf6a6d06a398c29b8d3e0c4b0ab5a7",
-      "bytes": 277802
+      "sha256": "1e0af14a760b20374375c4c5bc059fedf158c4fd5cd07720f90c33670378f545",
+      "bytes": 350638
     },
     {
       "name": "permission-card-capture-allowed.png",
-      "sha256": "3f356093fe82ebc14749a56f3913b61bec6752c923176f87abbd46363ecff051",
-      "bytes": 336362
+      "sha256": "6ad45b08a734186395c6f9477e69d580e9c40da449363b263b9500113f64aa69",
+      "bytes": 341756
     },
     {
       "name": "screenshot-tool-card-thumbnail.png",
-      "sha256": "0f8ac9d028b76c6354d95a83371b0f12f7c61ef097a1af134feda0b6a3c1437d",
-      "bytes": 317420
+      "sha256": "98c02b63d4ab34eaf6036ebef603beaaf8cee92ccbcca56a5decae73a71889bd",
+      "bytes": 337389
     },
     {
       "name": "image-strip-thread.png",
-      "sha256": "c332e289babf667e68d0cab227e5db33cc173a632f6f6b59b369c73ace5a1d75",
-      "bytes": 339189
+      "sha256": "798c4411b4de49d6a9dc43799cb0d0ac820d1a5a2f3d68f506c5f819b25d6260",
+      "bytes": 345685
     },
     {
       "name": "settings-data-retention.png",
-      "sha256": "dacbbc84186a3a195a70b39359e00601df559f577de546e1349ebae0da303ef6",
-      "bytes": 219144
+      "sha256": "05b9557daf37729bd424cc9040ea5e7abe6e8f4b9f8317904ca8cf41bbfbf89a",
+      "bytes": 225912
     },
     {
       "name": "settings-site-agents-after-turn-off.png",
-      "sha256": "bbb77734cbc77c3e3920639c5626419f6214ab06464073c47e482991947fb2b3",
-      "bytes": 386110
+      "sha256": "4afb6e50c37fca88797de6e67df09fb1cc6b65b6cb1aa49214bc381f948de560",
+      "bytes": 248253
+    },
+    {
+      "name": "artifact-frame-ready.png",
+      "sha256": "9238392f9dd484914a66a55091f641e883beba8d551a9c751b7c34387431af8d",
+      "bytes": 84970
     },
     {
       "name": "approval-iframe-denied.png",
-      "sha256": "3cfe1b4865cd9fcc897d4a029ca7fb7c9a8edb1d218e113357bf600500a87bc8",
-      "bytes": 224502
+      "sha256": "9860a9832f3dc540cb11ab3db81a8a2b3a215b9ea93b19286c14511662698c5d",
+      "bytes": 220829
     },
     {
       "name": "approval-deny-pending.png",
-      "sha256": "e6357f84dbff1921b33109c559a762249edf20ee1d5a4a2eee1f7e830ff58e5a",
-      "bytes": 248556
+      "sha256": "0720b9e66dc68f834498c9015697285be158f90d6a8103f54ba0859e35c02545",
+      "bytes": 227532
     },
     {
       "name": "approval-deny-resolved.png",
-      "sha256": "d669c1ba4f8a9ea0eff77e65e28ca4c8529e7f0c63cfa2a7bff780ef1ca0e139",
-      "bytes": 248558
+      "sha256": "0720b9e66dc68f834498c9015697285be158f90d6a8103f54ba0859e35c02545",
+      "bytes": 227532
     },
     {
       "name": "viewer-source-highlighted.png",
@@ -1547,38 +1881,83 @@
     },
     {
       "name": "viewer-diff-versions.png",
-      "sha256": "e231c65303aa37e1d07cbfde98a139df7d2a0cfcea27988c413517f13075caf8",
-      "bytes": 44642
+      "sha256": "60f55f272c448396ce6dc056ae4171e641723abd07c08652eebdce97d3a018ab",
+      "bytes": 44512
     },
     {
       "name": "artifact-newtab-single.png",
-      "sha256": "dff0a2be6b67dde068e4e5cda373d88d7ec533a5ad1ee4c3ad44efc005bd389b",
-      "bytes": 103828
+      "sha256": "02aba751e7b178daf30875902a13786499181b23461f3bce1c855211c34748fa",
+      "bytes": 91274
     },
     {
       "name": "script-approval-card.png",
-      "sha256": "00091c989f9440e723a6374ff7091dcaa9e2dd1dedd0e8ec503ec6bedfa423bd",
-      "bytes": 162389
+      "sha256": "927c7761b49065c09103b98a97f4d146cee8f711298f009266fd4a91aafd4711",
+      "bytes": 177264
+    },
+    {
+      "name": "hub-quoted-name-escaped.png",
+      "sha256": "7c303db4c02eac8b1a4fac7f96ce7fcb17f8d1313164d927c05fc5d340da40c6",
+      "bytes": 391248
+    },
+    {
+      "name": "settings-quoted-name-escaped.png",
+      "sha256": "94d2143b481eabaf993e5fc33e362a177da84eb8d4b7f0bbe24804b3589f549c",
+      "bytes": 225681
     },
     {
       "name": "skills-import-large.png",
-      "sha256": "d2b4f7e8265cf64f2ca76f5c58e45298d4e8b845869bf39597f15859131b5d1f",
-      "bytes": 248465
+      "sha256": "130ecd9f7436c727275e583390a813e28bfa941b2c2ae456a93823eef3b0e7dd",
+      "bytes": 238274
     },
     {
       "name": "skills-run-read.png",
-      "sha256": "ddd80cf7ba266967e16e62aead316b51de02320f1857157a543eecf8d5ba1015",
-      "bytes": 169480
+      "sha256": "29a7f547be864cd040b7f2491179dacf9e9e50f6e974caf38d55416ef9c18b74",
+      "bytes": 181720
     },
     {
       "name": "skill-popup-sync.png",
-      "sha256": "0a52024f1689a97f15feabd9b11dc188185408d617fd79f712482fc89f86d24e",
-      "bytes": 389110
+      "sha256": "8db12f1a25b1a28f39b4768e0daf15a6524a45ff7af2744f9723f75c86136b06",
+      "bytes": 403011
     },
     {
       "name": "about-whats-new.png",
-      "sha256": "cdddb39e805096727ece7d01d926c3f2afc9f8250ec67c28edfcd681d68799bd",
-      "bytes": 239075
+      "sha256": "c35d8f7360103075a091e43367bc598f5f5bec1863f3d79ed9a721e0005c59ef",
+      "bytes": 242173
+    },
+    {
+      "name": "demo-path-step1-thread.png",
+      "sha256": "c4634752395efef78d71f2dc61af16d2eb1d57b415131818e3efbfcc39591d92",
+      "bytes": 235500
+    },
+    {
+      "name": "one-card-per-step.png",
+      "sha256": "4077ed545fa68b4da68b6284ec95676d3a340e46fa51193ac85d8813e5b3047d",
+      "bytes": 118268
+    },
+    {
+      "name": "demo-path-step4-timeline.png",
+      "sha256": "295d868b2de85b079c2641a28474c48bf592ac53296897e1705c9c6baaa304ae",
+      "bytes": 130949
+    },
+    {
+      "name": "demo-path-step5-artifact.png",
+      "sha256": "41c44ac73efc202c0617a3c42dda481fea8009ebe8c5d039cb61269e49e4c989",
+      "bytes": 148399
+    },
+    {
+      "name": "privacy-page.png",
+      "sha256": "a490b7806da9943d0471ea485123e532f34ab88606d14340922c665350cbf0c4",
+      "bytes": 230214
+    },
+    {
+      "name": "settings-factory-reset-dialog.png",
+      "sha256": "eef0433f671fda446ec7ad3025c25095c37fd9e9bbcf075d5cbd5778de3e363a",
+      "bytes": 214180
+    },
+    {
+      "name": "settings-factory-reset-after.png",
+      "sha256": "890f15dca26a3141159ee4effbd0631f94d5367f9fbfbcb4af6af0d8e1ae22ce",
+      "bytes": 62949
     }
   ]
 }

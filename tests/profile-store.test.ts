@@ -13,11 +13,6 @@
 
 import { assert, assertEquals, assertExists, assertRejects } from "jsr:@std/assert@1";
 import {
-  MAX_CUSTOM_ANSWERS,
-  MAX_EDUCATION_ENTRIES,
-  MAX_LINKS_COUNT,
-  MAX_PROFILE_SECTION_BYTES,
-  MAX_WORK_ENTRIES,
   PROFILE_SECTIONS,
   clearProfile,
   deleteProfileSection,
@@ -260,14 +255,13 @@ Deno.test("P1-b: audit fail-closed & rollback compensation on delete/clear/set f
   assert(delIoRes.error.includes("injected deletion IO error"));
 });
 
-Deno.test("P1-a: validateProfileGrants strictly validates array bounds, non-arrays, and null", () => {
-  // Array over MAX_PROFILE_GRANTS_INPUT (32) is rejected
+Deno.test("P1-a (dptw): validateProfileGrants validates shape (non-arrays, null) but has NO count bound", () => {
+  // dptw: a 35-entry grant list is accepted (the 32 input cap is gone).
   const hugeGrants = Array.from({ length: 35 }, () => "profile:basic");
   const rHuge = validateProfileGrants(hugeGrants);
-  assertEquals(rHuge.ok, false);
-  assert(rHuge.error.includes("exceeds maximum allowed length"));
+  assertEquals(rHuge.ok, true, "dptw: no input count cap");
 
-  // null and primitives rejected
+  // null and primitives rejected (shape validation stays)
   assertEquals(validateProfileGrants(null).ok, false);
   assertEquals(validateProfileGrants("profile:basic").ok, false);
   assertEquals(validateProfileGrants(12345).ok, false);
@@ -364,8 +358,8 @@ Deno.test("P1-d: setWholeProfile rollback catches thrown errors and compensates 
   assertEquals(checkEdu.data, null);
 });
 
-Deno.test("P1-d: exact multi-byte UTF-8 byte bounds reject payloads over 128 KiB (multi-byte accounting)", async () => {
-  // 32 entries with 1,500 emojis each = 32 * 6,000 = 192,000 UTF-8 bytes (> 131,072 MAX_PROFILE_SECTION_BYTES)
+Deno.test("P1-d (dptw): a >128 KiB multi-byte UTF-8 section SAVES WHOLE (no byte cap)", async () => {
+  // 32 entries with 1,500 emojis each = 32 * 6,000 = 192,000 UTF-8 bytes (past the removed 128 KiB cap)
   const manyEmojiJobs = Array.from({ length: 32 }, (_, i) => ({
     company: `Company ${i}`,
     title: "Engineer",
@@ -373,12 +367,14 @@ Deno.test("P1-d: exact multi-byte UTF-8 byte bounds reject payloads over 128 KiB
   }));
 
   const utf8Bytes = new TextEncoder().encode(JSON.stringify(manyEmojiJobs)).byteLength;
-  assert(utf8Bytes > MAX_PROFILE_SECTION_BYTES, `must exceed byte cap (${utf8Bytes} > ${MAX_PROFILE_SECTION_BYTES})`);
+  assert(utf8Bytes > 131072, `fixture must exceed the removed byte cap (${utf8Bytes} > 131072)`);
 
   const res = await setProfileSection("profile:work_history", manyEmojiJobs);
-
-  assertEquals(res.ok, false);
-  assert(res.error.includes("payload exceeds maximum size"));
+  assertEquals(res.ok, true, `dptw: past-cap section saves: ${JSON.stringify(res).slice(0, 120)}`);
+  const readBack = await getProfileSection("profile:work_history");
+  const entries = Array.isArray(readBack.data) ? readBack.data : readBack.data.entries;
+  assertEquals(entries.length, 32, "all 32 entries stored (no count cap either)");
+  assertEquals(entries[0].description, "🔥".repeat(1500), "whole multi-byte content survives");
 });
 
 Deno.test("P1-e: link labels and names are strictly validated before normalization", () => {

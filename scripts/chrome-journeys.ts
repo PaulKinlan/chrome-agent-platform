@@ -12,12 +12,13 @@
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
-// Evidence is TEMPORARY by default; `--retain` is the explicit opt-in to write
-// the tracked test-artifacts/ directory.
+// Evidence defaults to a fresh dir under the DURABLE evidence root (disk;
+// bead chp — /tmp is RAM-backed and has lost retained runs); `--retain` is the
+// explicit opt-in to write the tracked test-artifacts/ directory.
 const RETAIN = Deno.args.includes("--retain");
 const EVIDENCE_DIR = RETAIN
   ? `${ROOT}test-artifacts`
-  : `/tmp/cap-evidence-${Date.now()}`;
+  : durableDir(`cap-evidence-${Date.now()}`);
 const RUN_ID = `cap-${Date.now()}`;
 
 const CHROMIUM = "/usr/bin/chromium";
@@ -27,6 +28,7 @@ const RM = "/bin/rm";
 const GIT = "/usr/bin/git";
 
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
+import { durableDir } from "./lib/durable-root.mjs";
 import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1433,7 +1435,7 @@ async function main() {
     await sleep(300);
 
     // Open Artifacts
-    await clickSel(cdp, ntpSession, "#open-artifacts");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
@@ -1460,7 +1462,7 @@ async function main() {
     if (artShot1440) await writeEvidence("hub-view-artifacts-1440.png", artShot1440);
 
     // Open Directory
-    await clickSel(cdp, ntpSession, "#open-directory");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
     const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
@@ -1471,7 +1473,7 @@ async function main() {
     if (dirShot1440) await writeEvidence("hub-view-directory-1440.png", dirShot1440);
 
     // Open Settings
-    await clickSel(cdp, ntpSession, "#open-settings");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-settings')?.click(); true`);
     await sleep(900);
     const settingsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="options/options.html"]');
@@ -1496,7 +1498,7 @@ async function main() {
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
-    await clickSel(cdp, ntpSession, "#open-directory");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-directory')?.click(); true`);
     await sleep(900);
     const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
@@ -1504,7 +1506,7 @@ async function main() {
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
-    await clickSel(cdp, ntpSession, "#open-artifacts");
+    await evalIn(cdp, ntpSession, `document.getElementById('open-artifacts')?.click(); true`);
     await sleep(900);
     const artifactsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
@@ -1724,18 +1726,41 @@ async function main() {
     // .agent-config-scroll). The previous failure mode: min-height:auto made
     // the body grow to content height inside the bounded container
     // (overflow:hidden), clipping the skills section and the footer.
-    await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-advanced summary')?.click(); document.querySelector('.skills-collapse summary')?.click(); true`);
+    await evalIn(cdp, ntpSession, `(() => {
+      const adv = document.querySelector('.agent-config-advanced');
+      const sk = document.querySelector('.skills-collapse');
+      if (adv && !adv.open) adv.open = true;
+      if (sk && !sk.open) sk.open = true;
+      return true;
+    })()`);
     await sleep(250);
+    // Force a REALISTIC viewport for the scroll probe: at the suite's tall
+    // window the dialog never overflows, so the wheel assertions were
+    // vacuous — the owner's laptop (~700px) DOES overflow and the nested
+    // skills-list scroll island (180px cap + overscroll-behavior:contain)
+    // ate the wheel and blocked reaching content below it. Emulate a short
+    // window, wheel over BOTH the body center AND the skills list, then clear.
+    await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 700, deviceScaleFactor: 0, mobile: false }, ntpSession);
+    await sleep(300);
     const scrollProbe = await evalIn(cdp, ntpSession, `(() => {
       const el = document.querySelector('.agent-config-scroll');
       const adv = document.querySelector('.agent-config-advanced');
       const sk = document.querySelector('.skills-collapse');
+      const sl = document.querySelector('.skills-list');
+      const mb = document.querySelector('.agent-mcp-box');
       if (!el || !adv || !sk) return { ready: false };
-      if (!adv.open || !sk.open) return { ready: false, advOpen: adv.open, skOpen: sk.open };
       const r = el.getBoundingClientRect();
       const before = el.scrollTop;
+      const slCs = sl ? getComputedStyle(sl) : null;
       return {
         ready: true,
+        advOpen: adv.open,
+        skOpen: sk.open,
+        advH: adv.scrollHeight,
+        skH: sk.scrollHeight,
+        slH: sl?.scrollHeight,
+        slChildren: sl?.children?.length,
+        mbH: mb?.scrollHeight,
         minHeight: getComputedStyle(el).minHeight,
         overflowY: getComputedStyle(el).overflowY,
         scrollHeight: el.scrollHeight,
@@ -1743,28 +1768,127 @@ async function main() {
         scrollTopBefore: before,
         wheelX: r.x + r.width / 2,
         wheelY: r.y + r.height / 2,
+        noInnerScrollTrap: slCs != null &&
+          slCs.maxHeight === "none" &&
+          slCs.overflowY !== "auto" &&
+          slCs.overscrollBehavior !== "contain",
         footerVisible: (() => { const f = document.querySelector('.agent-config-footer')?.getBoundingClientRect(); return f ? f.top > 0 && f.bottom <= innerHeight && f.top < f.bottom : null; })(),
       };
     })()`);
     if (scrollProbe?.ready) {
+      // 1) wheel over the body center
       for (let i = 0; i < 5; i++) {
         await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: scrollProbe.wheelX, y: scrollProbe.wheelY, deltaX: 0, deltaY: 400 }, ntpSession);
         await sleep(100);
       }
       scrollProbe.scrollTopAfterWheel = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+      // Reset the body scrollTop to 0 between phases so the skills-wheel phase
+      // must INDEPENDENTLY advance the outer scroll — a pass can no longer
+      // ride on the body-wheel phase having already moved it.
+      await evalIn(cdp, ntpSession, `const el = document.querySelector('.agent-config-scroll'); if (el) el.scrollTop = 0;`);
+      const scrolledAfterReset = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+      // 2) wheel over the SKILLS LIST — the exact spot that previously trapped
+      // the wheel (inner scroll island). The outer body must advance too. The
+      // wheel coordinate must be VISIBILITY + HIT-TEST validated first: a
+      // coordinate whose element is off-screen or covered would wheel over the
+      // wrong surface and false-pass.
+      const skProbe = await evalIn(cdp, ntpSession, `(() => {
+        const sc = document.querySelector('.agent-config-scroll');
+        const sl = document.querySelector('.skills-list');
+        if (!sl || !sc) return null;
+        const rowCount = sl.querySelectorAll('label, input[type=checkbox]').length;
+        const target = sl.querySelector('label, input, p') || sl;
+        target.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const r = target.getBoundingClientRect();
+        const x = r.left + r.width / 2;
+        const y = r.top + r.height / 2;
+        const inViewport = x >= 0 && y >= 0 && x <= innerWidth && y <= innerHeight && r.width > 0 && r.height > 0;
+        const at = document.elementFromPoint(x, y);
+        // The wheel point must land ON the skills list itself (the element or
+        // one of its descendants) — a hit anywhere else inside the scroll body
+        // would wheel over a sibling surface and false-pass the no-trap gate.
+        const hitSkillsList = !!at && (sl === at || sl.contains(at));
+        return { x, y, inViewport, hitSkillsList, scrollTopBeforeSkillsWheel: sc?.scrollTop ?? null, rowCount, hitTag: at?.tagName?.toLowerCase?.() ?? null, hitCls: typeof at?.className === 'string' ? at.className.slice(0, 60) : null };
+      })()`);
+      scrollProbe.skInViewport = skProbe?.inViewport === true;
+      scrollProbe.skHitTest = skProbe?.hitSkillsList === true;
+      scrollProbe.skHitTag = skProbe?.hitTag ?? null;
+      scrollProbe.skHitCls = skProbe?.hitCls ?? null;
+      scrollProbe.scrollTopBeforeSkillsWheel = skProbe?.scrollTopBeforeSkillsWheel ?? null;
+      scrollProbe.skRect = skProbe ? { x: Math.round(skProbe.x), y: Math.round(skProbe.y) } : null;
+      if (skProbe && skProbe.inViewport && skProbe.hitSkillsList) {
+        for (let i = 0; i < 5; i++) {
+          await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: skProbe.x, y: skProbe.y, deltaX: 0, deltaY: 400 }, ntpSession);
+          await sleep(100);
+        }
+      }
+      scrollProbe.scrollTopAfterSkillsWheel = await evalIn(cdp, ntpSession, `document.querySelector('.agent-config-scroll')?.scrollTop ?? null`);
+      scrollProbe.scrolledAfterReset = scrolledAfterReset;
+      // Evidence: prove content BELOW the skills list is reachable once the
+      // scroll island is gone. Scroll the outer body deep past the skills
+      // section and ASSERT the known follower (.agent-mcp-box — appended to
+      // the Advanced body after the skills section) actually intersects the
+      // scroll viewport; a saved screenshot alone asserts nothing.
+      const belowProbe = await evalIn(cdp, ntpSession, `(() => {
+        const el = document.querySelector('.agent-config-scroll');
+        if (!el) return null;
+        el.scrollTop = el.scrollHeight;
+        const er = el.getBoundingClientRect();
+        const mb = document.querySelector('.agent-mcp-box') || document.querySelector('.skills-collapse');
+        if (!mb) return { scrolledTo: el.scrollTop, mcpFound: false };
+        const mr = mb.getBoundingClientRect();
+        return {
+          scrolledTo: el.scrollTop,
+          mcpFound: true,
+          mcpIntersects: mr.width > 0 && mr.height > 0 && mr.bottom > er.top && mr.top < er.bottom,
+          mcpTop: Math.round(mr.top), mcpBottom: Math.round(mr.bottom),
+          bodyTop: Math.round(er.top), bodyBottom: Math.round(er.bottom),
+        };
+      })()`);
+      await sleep(250);
+      const pastSkills = await captureShot(cdp, ntpSession);
+      if (pastSkills) await writeEvidence("agent-dialog-scroll-past-skills.png", pastSkills);
+      scrollProbe.pastSkillsShot = pastSkills ? pastSkills.length : 0;
+      scrollProbe.mcpFound = belowProbe?.mcpFound === true;
+      scrollProbe.mcpIntersects = belowProbe?.mcpIntersects === true;
+      scrollProbe.belowScrolledTo = belowProbe?.scrolledTo ?? null;
+      // restore a scrolled state for the check that follows if needed
+      await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector('.agent-config-scroll'); if (el) el.scrollTop = 0; return true; })()`);
     }
+    await cdp.send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
+    await sleep(200);
     console.log("create dialog scroll probe:", JSON.stringify(scrollProbe));
     check(
       "create dialog: Advanced+Skills expand and the config body scrolls with them (min-height hardening)",
       scrollProbe?.ready === true &&
         scrollProbe.minHeight === "0px" && scrollProbe.overflowY === "auto" &&
         scrollProbe.footerVisible === true &&
-        // The template SELECT replaced the tall gallery grid, so the dialog may
-        // fit without overflow at this viewport — the hard invariant is that
-        // the body CAN scroll (min-height:0 + overflow-y:auto + footer reachable).
-        (scrollProbe.scrollHeight > scrollProbe.clientHeight
-          ? (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0)
-          : true),
+        scrollProbe.noInnerScrollTrap === true &&
+        // At the emulated 1200x700 viewport the dialog MUST overflow and the
+        // wheel MUST move the body — both over the center AND over the skills
+        // list (the previous trap).
+        scrollProbe.scrollHeight > scrollProbe.clientHeight &&
+        (scrollProbe.scrollTopAfterWheel ?? 0) > (scrollProbe.scrollTopBefore ?? 0) &&
+        // Skills-wheel phase starts from a ZERO baseline (reset after the body
+        // phase) — this must advance on its own, proving the skills area does
+        // NOT trap the wheel.
+        (scrollProbe.scrolledAfterReset ?? 0) === 0 &&
+        // The skills-wheel phase must have wheeled over a VISIBLE, HIT-TESTED
+        // skills list (hit = the point IS on the list, not merely inside the
+        // scroll body) — otherwise the coordinate could have been
+        // off-screen/covered/on a sibling surface and the "no trap" claim is
+        // vacuous.
+        scrollProbe.skInViewport === true &&
+        scrollProbe.skHitTest === true &&
+        // Advancement is measured from the post-scrollIntoView position:
+        // scrollIntoView scrolls the outer body itself, so a bare >0 pass
+        // would be moved by the centering, not by the wheel.
+        (scrollProbe.scrollTopAfterSkillsWheel ?? 0) > (scrollProbe.scrollTopBeforeSkillsWheel ?? 0) &&
+        // Below-skills reachability is ASSERTED, not just screenshotted: the
+        // .agent-mcp-box that follows the skills section must exist and
+        // intersect the scroll viewport once the outer body is fully scrolled.
+        scrollProbe.mcpFound === true &&
+        scrollProbe.mcpIntersects === true,
     );
 
     // CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01 (Part 1 hardening) — the
@@ -1778,7 +1902,7 @@ async function main() {
     // and assert the element is inside the dialog's viewport.
     // Close any open picker from the screenshot block before measuring
     // computed styles (an open popup can detach/overlay the dialog content).
-    await evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
+    await evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} return true; })()`);
     await sleep(200);
     const contrastProbe = (dark) => evalIn(cdp, ntpSession, `(() => {
       const host = [...document.querySelectorAll('agent-dialog')].find((h) => h.shadowRoot?.querySelector('dialog')?.open);
@@ -1817,6 +1941,7 @@ async function main() {
       const sel = document.getElementById('agent-template-select');
       const btn = sel?.querySelector('.agent-template-select-button');
       if (!sel || !btn) return { ready: false, why: 'no-select-button' };
+      btn.scrollIntoView({ block: 'center' });
       const r = btn.getBoundingClientRect();
       const x = r.x + r.width / 2, y = r.y + r.height / 2;
       // A genuine activation path: dispatch a real mouse press/release on the
@@ -1875,7 +2000,7 @@ async function main() {
       return true;
     })()`);
     const removeLowContrast = () => evalIn(cdp, ntpSession, `document.getElementById('__picker-low-contrast')?.remove(); true`);
-    const closePicker = () => evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} document.body?.click(); return true; })()`);
+    const closePicker = () => evalIn(cdp, ntpSession, `(() => { try { document.getElementById('agent-template-select')?.blur(); } catch {} return true; })()`);
     const lightC = (await contrastProbe(false)) ?? { ready: false, why: "eval-undefined" };
     // Functional popup contrast: light scheme, styled (GREEN) then a deliberately
     // low-contrast override (RED), then restored (GREEN). Each measurement
@@ -3318,10 +3443,10 @@ async function main() {
 
     let openaiCard = null;
     for (let i = 0; i < 20 && !openaiCard; i++) {
-      // Radiogroup DOM: the recommended cards render on load in
-      // #provider-recommended — there is no side-tab to select. Make sure the
-      // Providers section is shown, then wait for the OpenAI card's Use/Update
-      // button (which lives in the always-visible card head).
+      // Family-tab DOM: the OpenAI card renders in the default-selected
+      // OpenAI-compatible family panel (fresh profile → recommended family).
+      // Make sure the Providers section is shown, then wait for the OpenAI
+      // card's Use/Update button (which lives in the always-visible card head).
       await evalIn(cdp, optsSession,
         `document.querySelector('.nav-item[data-section="providers"]')?.click(); true`).catch(() => {});
       await sleep(100);
@@ -3443,12 +3568,14 @@ async function main() {
     // "model id missing" (Settings red status + hub strip), never silently
     // falling back to the demo model.
     // ─────────────────────────────────────────────────────────────
-    // Reveal the OpenAI-compatible (BYO, no catalogue) card: it sits under the
-    // "More providers" disclosure, and its endpoint + model live under a
-    // per-card "Advanced" disclosure. Open both so the model picker input and
-    // the Use button are visible + reachable.
+    // Reveal the OpenAI-compatible (BYO, no catalogue) card: it lives in the
+    // OpenAI-compatible family tab's panel (selected by default on a fresh
+    // profile; click the tab anyway so the step is order-independent), and its
+    // endpoint + model live under a per-card "Advanced" disclosure. Open both
+    // so the model picker input and the Use button are visible + reachable.
     await evalOpts(`(() => {
-      document.getElementById('more-providers')?.setAttribute('open','');
+      const tabs = document.querySelector('#provider-tabs segmented-control');
+      tabs?.shadowRoot?.querySelector('[role="tab"][data-val="OpenAI-compatible"]')?.click();
       const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
       card?.querySelector('details.provider-advanced')?.setAttribute('open','');
       return true;
@@ -3520,10 +3647,12 @@ async function main() {
     }
     // Now save with an EMPTY model (no catalogue default for BYO) → the SW
     // route refuses with "model id missing" and keeps the previous model. The
-    // BYO card is now the active provider (its "More providers" disclosure is
-    // auto-opened); reveal it so the Use button stays clickable.
+    // BYO card is now the active provider (its family tab is selected by the
+    // default-family rule after the reload); re-select the tab + open Advanced
+    // so the Use button stays clickable.
     await evalOpts(`(() => {
-      document.getElementById('more-providers')?.setAttribute('open','');
+      const tabs = document.querySelector('#provider-tabs segmented-control');
+      tabs?.shadowRoot?.querySelector('[role="tab"][data-val="OpenAI-compatible"]')?.click();
       const card = document.querySelector('.provider-card[data-provider="openai-compatible"]');
       card?.querySelector('details.provider-advanced')?.setAttribute('open','');
       return true;

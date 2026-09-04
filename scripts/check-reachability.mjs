@@ -61,8 +61,6 @@ export const RETAINED = {
     "CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01 is OPEN, not ABANDONED; the adapter and lib/tabular-diff-artifacts-core.js stay until it lands or closes (tests/tabular-diff-artifacts.test.ts).",
   "lib/code-diff-artifacts.js":
     "Holds the sha256 retention helpers CAP-FB-20260830-ARTIFACT-VERSIONS-01 folds into the versions store; that entry deletes it (tests/code-diff-artifacts.test.ts).",
-  "lib/python-tool.js":
-    "CAP-FB-20260823-PYODIDE-PYTHON-01 (P1, OPEN) decides the Python runtime; python-execution.js is imported by it (tests/python-runtime.test.ts).",
   "lib/python-runtime.js":
     "CAP-FB-20260823-PYODIDE-PYTHON-01 (P1, OPEN) decides the Python runtime (tests/python-runtime.test.ts).",
   // ── only tests import these; cut together with the named tests in a follow-up ──
@@ -74,8 +72,6 @@ export const RETAINED = {
     "Only tests/opfs-tool-workspace.test.ts imports it.",
   "lib/profile-store.js":
     "Only tests/profile-store.test.ts imports it.",
-  "lib/tool-pipeline.js":
-    "Only tests/tool-pipeline.test.ts imports it.",
   "lib/run-log-wal-memory.js":
     "An in-memory WAL double: eight tests import it (durable-runs, memory, failed-runs-lifecycle, thread-log-redesign, thread-reload-fidelity, tool-result-full-json, ux008-failed-dispatch, agent-worker-durability); it belongs under tests/ and moves there with them.",
   "lib/preference-bridge.js":

@@ -139,6 +139,12 @@ const REMEMBER_MARKER = "@demo-remember";
 const RECALL_MARKER = "@demo-recall";
 const RECALL_FINAL_RE = /\[demo model\] recall:/;
 const REMEMBER_FINAL_RE = /\[demo model\] remembered /;
+// @demo-promotion: the demo model reports whether its SYSTEM PROMPT carries the
+// skill promotion section (and which skill names it names). A DI test surface
+// exactly like @demo-recall / @demo-skill-read: the prompt is the only input,
+// so a run proves the promotion actually reached the wire (chrome-agent-platform-ve67).
+const PROMOTION_MARKER = "@demo-promotion";
+const PROMOTION_FINAL_RE = /\[demo model\] promotion:/;
 // @demo-slow: the FIRST model step is delayed (a deterministic mid-run window
 // for abort tests).
 const SLOW_MARKER = "@demo-slow";
@@ -391,6 +397,7 @@ function latestRunSlice(prompt) {
       patchArtifact: lastUser.includes(PATCH_ARTIFACT_MARKER),
       runScript: lastUser.includes(RUN_SCRIPT_MARKER),
       skillRead: lastUser.includes(SKILL_READ_MARKER),
+      promotion: lastUser.includes(PROMOTION_MARKER),
       obeyPage: lastUser.includes(OBEY_PAGE_MARKER),
       remember: lastUser.includes(REMEMBER_MARKER),
       recall: lastUser.includes(RECALL_MARKER),
@@ -485,6 +492,31 @@ function recallAlreadyFinal(prompt) {
     m?.role === "assistant" &&
     Array.isArray(m?.content) &&
     m.content.some((p) => p?.type === "text" && RECALL_FINAL_RE.test(p.text ?? "")));
+}
+
+// ── @demo-promotion helpers (chrome-agent-platform-ve67) ────────────────────
+// Reports what the SYSTEM PROMPT carries about adoptable skills: the promoted
+// names (or none), and whether the section is present at all. The demo model
+// only ever echoes its own prompt — never the catalog — so the report is
+// evidence about the WIRE (the promotion reached the model), not about the
+// catalog. The single-fire guard: once the report is in the history, a
+// resumed/re-driven invocation re-emits the EXACT prior report — the marker
+// can never produce a second, different report (e.g. flipping to "absent"
+// because a later composition stopped promoting).
+function wantsPromotion(prompt) {
+  return !!latestRunSlice(prompt)?.marker?.promotion;
+}
+function promotionFinalText(prompt) {
+  const sys = systemText(prompt);
+  const heading = sys.indexOf("## Skills you can adopt for this task");
+  if (heading < 0) return "[demo model] promotion: absent";
+  const block = sys.slice(heading).split(/\n#{1,6}\s/)[0].split("\n").slice(0, 8).join(" | ");
+  return `[demo model] promotion: present — ${block.slice(0, 220)}`;
+}
+function promotionAlreadyFinal(prompt) {
+  return runSlice(prompt).some((m) =>
+    m?.role === "assistant" && Array.isArray(m?.content) &&
+    m.content.some((p) => p?.type === "text" && PROMOTION_FINAL_RE.test(p.text ?? "")));
 }
 
 // ── @demo-obey-page helpers ─────────────────────────────────────────────────
@@ -1437,6 +1469,13 @@ function siteToolFinalText(prompt) {
   if (!spec) return "[demo model] Site tool request not understood — nothing was performed.";
   const parts = siteToolExecuteParts(prompt);
   if (!parts.length) return `[demo model] Site tool ${spec.tool} was not called — the site may not be a Site Agent yet.`;
+  if (parts.length >= 2) {
+    const first = parts[0];
+    const second = parts[1];
+    const v1 = browserUnwrap(first.output);
+    const errStr = String((v1 && typeof v1 === "object" && v1.error) || first.output?.value || "error").slice(0, 160);
+    return `[demo model] Site tool ${spec.tool} failed (${errStr}). Fallback: fetched documentation directly via read_page. Beads is a dependency-aware, Dolt-backed issue tracker built for AI coding agents that survive context loss.`;
+  }
   const last = parts[parts.length - 1];
   if (last.output?.type === "error-text") {
     return `[demo model] Site tool ${spec.tool} was NOT performed: ${String(last.output.value ?? "error").slice(0, 200)}`;
@@ -1468,14 +1507,29 @@ function siteToolFinalText(prompt) {
 function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board = false, browser = false, mcp = false, siteTool = false, writeFile = false, enumSlip = false, runScript = false, editArtifact = false, patchArtifact = false, skillRead = false, remember = false } = {}) {
   const step = toolResultCount(prompt);
   if (siteTool) {
-    // search(<site tool>) → execute_tool(selectionRef, args) → final. ONE
-    // round: enrollment is the owner's consent for the site's tools, so no
-    // approval card pauses the call; a denial is reported honestly.
+    // search(<site tool>) → execute_tool(selectionRef, args) → final.
+    // If the site tool fails: fall back to search_tools(read_page) → execute_tool(read_page) → final text from docs.
     const spec = siteToolSpec(prompt);
     if (!spec) return null;
     const toolParts = boardToolParts(prompt);
     const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
     const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
+    const executeParts = siteToolExecuteParts(prompt);
+
+    if (executes === 1 && executeParts.length >= 1) {
+      const last = executeParts[0];
+      const v = browserUnwrap(last.output);
+      const isErr = last.output?.type === "error-text" || (v && typeof v === "object" && (v.waitingForPermission === true || v.ok === false || typeof v.error === "string"));
+      if (isErr) {
+        if (searches <= 1) {
+          return { id: `search_site_fallback_1`, name: "search_tools", input: { query: "read_page", limit: 3 } };
+        }
+        const selectionRef = latestSelectionRef(prompt);
+        if (!selectionRef) return null;
+        return { id: `execute_site_fallback_1`, name: "execute_tool", input: { selectionRef, arguments: {} } };
+      }
+    }
+
     if (executes >= 1) return null;
     if (searches <= executes) {
       return { id: `search_site_${searches}`, name: "search_tools", input: { query: spec.tool, limit: 3 } };
@@ -2012,6 +2066,21 @@ export function createDemoModel() {
           warnings: [],
         });
       }
+      if (wantsPromotion(options.prompt)) {
+        // The promotion report: what THIS system prompt carries about adoptable
+        // skills. A resumed invocation re-emits the EXACT prior report — the
+        // marker can never double-fire a second, different one.
+        const prior = runSlice(options.prompt)
+          .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+          .flatMap((m) => m.content)
+          .find((p2) => p2?.type === "text" && PROMOTION_FINAL_RE.test(p2.text ?? ""));
+        return Promise.resolve({
+          content: [{ type: "text", text: prior?.text ?? promotionFinalText(options.prompt) }],
+          finishReason: "stop",
+          usage: { inputTokens: 8, outputTokens: 32, totalTokens: 40 },
+          warnings: [],
+        });
+      }
       if (wantsEditArtifact(options.prompt)) {
         return Promise.resolve({
           content: [{ type: "text", text: editArtifactFinalText(options.prompt) }],
@@ -2279,6 +2348,16 @@ export function createDemoModel() {
               .find((p2) => p2?.type === "text" && re.test(p2.text ?? ""));
             response = prior?.text ??
               (wantsRemember(options.prompt) ? rememberFinalText(options.prompt) : recallFinalText(options.prompt));
+          }
+          else if (wantsPromotion(options.prompt)) {
+            // The promotion report (chrome-agent-platform-ve67): what THIS
+            // system prompt carries about adoptable skills. A continuation
+            // re-emits the prior report so the marker cannot double-fire.
+            const prior = runSlice(options.prompt)
+              .filter((m) => m?.role === "assistant" && Array.isArray(m?.content))
+              .flatMap((m) => m.content)
+              .find((p2) => p2?.type === "text" && PROMOTION_FINAL_RE.test(p2.text ?? ""));
+            response = prior?.text ?? promotionFinalText(options.prompt);
           }
           else if (wantsObeyPage(options.prompt)) {
             // The injection probe's final/continuation text: the REAL tool

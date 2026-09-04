@@ -8,7 +8,6 @@
 // bridges the controlled fetch (URL-validated + size-bounded), and resolves with
 // the result.
 
-import { SCRIPT_BOUNDS } from "./scripts.js";
 
 /** Validate a fetch URL: http/https only, no credentials. */
 function validateUrl(url) {
@@ -67,7 +66,7 @@ export async function runFetch(payload, runId = null) {
   } catch {
     text = "";
   }
-  return { ok: true, status: res.status, url: res.url, text: text.slice(0, SCRIPT_BOUNDS.maxFetchBytes) };
+  return { ok: true, status: res.status, url: res.url, text };
 }
 
 /**

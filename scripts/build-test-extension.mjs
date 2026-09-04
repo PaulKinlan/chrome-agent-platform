@@ -12,14 +12,16 @@
 // Prints the destination dir as the last stdout line.
 
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = path.join(ROOT, "extension");
-// PRIVATE, self-created destination — the only path this script touches.
-const dest = await mkdtemp(path.join(await realpath(tmpdir()), "cap-test-ext-"));
+// PRIVATE, self-created destination on DURABLE scratch (disk, bead chp) — the
+// only path this script touches. tmpfs copies of the extension tree were part
+// of the /tmp inode exhaustion.
+const dest = await mkdtemp(path.join(durableDir("scratch"), "cap-test-ext-"));
 async function realpath(p) { const { realpath } = await import("node:fs/promises"); return realpath(p); }
 
 // OWNED-DEST LIFETIME: on ANY failure before the path is printed, the temp

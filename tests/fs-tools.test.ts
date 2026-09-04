@@ -31,6 +31,9 @@ function fileHandle(name: string, content: string | Uint8Array) {
       size: bytes.byteLength,
       lastModified: 1700000000000,
       arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+      slice: (start: number, end: number) => ({
+        arrayBuffer: async () => bytes.subarray(start, end).slice().buffer,
+      }),
     }),
   };
 }
@@ -165,6 +168,57 @@ Deno.test("read_file tool: a bad path returns { ok:false, error, code, path } �
     assert(typeof bad.error === "string" && bad.error.length > 0, "human-readable message present");
     assertEquals(bad.code, "file_not_found");
     assertEquals(bad.path, "nope.txt");
+  } finally {
+    clearRunContext();
+    await deleteFsGrant(grantId);
+  }
+});
+
+Deno.test("read_file tool: the owner repro — a 9080-byte file reads completely past maxBytes 2000; offset/length window the rest", async () => {
+  // chrome-agent-platform-jb0a: read_file on cairn-gateway/README.md (9080
+  // bytes) was refused with fs_file_too_large at the 2000-byte maxBytes bound.
+  // Reads are local and must never be refused on size: the COMPLETE content
+  // comes back, and offset/length page a file in chunks. Falsification: revert
+  // the read-bound removal and this test goes RED (fs_file_too_large instead
+  // of content).
+  const grantId = `fsg_tool_read_big_${crypto.randomUUID()}`;
+  const head = "cairn-gateway/README.md\n";
+  const text = head + "z".repeat(9080 - head.length);
+  assertEquals(new TextEncoder().encode(text).byteLength, 9080);
+  const tree = dirHandle("project", {
+    "cairn-gateway": dirHandle("cairn-gateway", {
+      "README.md": fileHandle("README.md", text),
+    }),
+  });
+  await saveFsGrant({ grantId, handle: tree, name: "project" });
+  setRunContext({ threadId: "t1", folderGrants: [{ grantId, name: "project" }] });
+  try {
+    const tools = browserToolset(false);
+    const rel = "cairn-gateway/README.md";
+
+    // The legacy maxBytes transport knob is passed at its old 2000-byte value:
+    // the read must still return the COMPLETE 9080 bytes.
+    const whole: any = await tools.read_file.execute({ path: rel, maxBytes: 2000 });
+    assertEquals(whole.ok, true, `the 9080-byte README must read: ${JSON.stringify(whole)}`);
+    assertEquals(whole.size, 9080);
+    assertEquals(whole.content, text, "complete content — no size refusal, no truncation");
+    assert(typeof whole.sha256 === "string" && whole.sha256.length === 64);
+
+    // Chunked reads: offset/length return exactly the requested byte window
+    // with { start, end, size } so the caller can page to EOF.
+    const first: any = await tools.read_file.execute({ path: rel, offset: 0, length: 4000 });
+    assertEquals(first.ok, true, `windowed read must succeed: ${JSON.stringify(first)}`);
+    assertEquals(first.start, 0);
+    assertEquals(first.end, 4000);
+    assertEquals(first.size, 9080);
+    assertEquals(first.content, text.slice(0, 4000));
+
+    const rest: any = await tools.read_file.execute({ path: rel, offset: 4000 });
+    assertEquals(rest.ok, true, `tail read must succeed: ${JSON.stringify(rest)}`);
+    assertEquals(rest.start, 4000);
+    assertEquals(rest.end, 9080);
+    assertEquals(rest.content, text.slice(4000));
+    assertEquals(first.content + rest.content, text, "windows reassemble the complete file");
   } finally {
     clearRunContext();
     await deleteFsGrant(grantId);

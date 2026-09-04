@@ -1,13 +1,14 @@
 // kat-providers-recommended.ts — owner feature KAT (real browser).
 // CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01: the Settings → Providers
-// panel LEADS with a recommended card (OpenAI, gpt-5.6-luna pre-filled) and an
-// alternative (Gemini), the rest under a "More providers" disclosure; the flow
-// is pick → paste key → Test → Use, with Use disabled until Test passes.
+// panel LEADS with a recommended card (OpenAI, gpt-5.6-luna pre-filled) in its
+// family tab and an alternative (Gemini) in the Gemini family tab
+// (CAP-FB-20260902-PROVIDERS-TABBED-UI-01); the flow is pick → paste key →
+// Test → Use, with Use disabled until Test passes.
 //
 // This harness drives the REAL extension options page and captures:
 //   providers-recommended-after.png  — the recommended card block (key field,
-//                                        Test/Use, More providers disclosure)
-//   providers-more-open.png           — the disclosure expanded
+//                                        Test/Use)
+//   providers-family-tabs.png        — the family tab strip
 //   hub-strip-no-model.png            — the hub strip on a fresh profile
 //
 //   deno run -A scripts/kat-providers-recommended.ts <path-to-extension> [<out-dir>]
@@ -69,18 +70,16 @@ await sleep(3000);
 await ev(openProviders);
 await sleep(700);
 
-// ── The recommended card block ─────────────────────────────────────────────
+// ── The recommended card's family panel (OpenAI-compatible family) ─────────
 const lead = await ev(`(() => {
-  const rec = document.getElementById('provider-recommended');
-  const cards = [...rec.querySelectorAll('.provider-card')];
-  const openai = rec.querySelector('.provider-card[data-provider="openai"]');
-  const gemini = rec.querySelector('.provider-card[data-provider="gemini"]');
+  const panel = document.getElementById('provider-family-panel-openai-compatible');
+  const cards = [...panel.querySelectorAll('.provider-card')];
+  const openai = panel.querySelector('.provider-card[data-provider="openai"]');
   const picker = openai?.querySelector('model-picker');
   return {
-    groupRole: rec.getAttribute('role'),
+    groupRole: panel.querySelector('.provider-cards')?.getAttribute('role'),
     leadIds: cards.map((c) => c.dataset.provider),
     openaiBadge: openai?.querySelector('.provider-badge.recommended')?.textContent ?? null,
-    geminiBadge: gemini?.querySelector('.provider-badge')?.textContent ?? null,
     openaiRadio: openai?.getAttribute('role'),
     prefillModel: picker?.getAttribute('value') ?? null,
     getKey: openai?.querySelector('.get-key')?.getAttribute('href') ?? null,
@@ -88,31 +87,38 @@ const lead = await ev(`(() => {
     useDisabled: openai?.querySelector('.set-default')?.disabled ?? null,
   };
 })()`);
-check("the recommended group is a radiogroup", lead?.groupRole === "radiogroup", lead);
-check("OpenAI leads, Gemini second", JSON.stringify(lead?.leadIds) === JSON.stringify(["openai", "gemini"]), lead);
+check("the family's card group is a radiogroup", lead?.groupRole === "radiogroup", lead);
+check("OpenAI leads the OpenAI-compatible family", JSON.stringify(lead?.leadIds) === JSON.stringify(["openai", "deepseek", "openai-compatible"]), lead);
 check("OpenAI carries the Recommended pill", lead?.openaiBadge === "Recommended", lead);
-check("Gemini carries the Alternative pill", lead?.geminiBadge === "Alternative", lead);
 check("each card is a role=radio", lead?.openaiRadio === "radio", lead);
 check("the model field pre-fills gpt-5.6-luna", lead?.prefillModel === "gpt-5.6-luna", lead);
 check("Get a key links the OpenAI key page with rel=noopener", lead?.getKey === "https://platform.openai.com/api-keys" && lead?.getKeyRel === "noopener", lead);
 check("Use is disabled before a Test passes", lead?.useDisabled === true, lead);
 await shot(`${OUT}/providers-recommended-after.png`);
 
-// The Gemini alternative pre-fills gemini-3.7-flash.
-const geminiModel = await ev(`document.querySelector('.provider-card[data-provider="gemini"] model-picker')?.getAttribute('value')`);
-check("the Gemini card pre-fills gemini-3.7-flash", geminiModel === "gemini-3.7-flash", { geminiModel });
-
-// ── The More providers disclosure ─────────────────────────────────────────
-const more = await ev(`(() => {
-  const d = document.getElementById('more-providers');
-  const grp = document.getElementById('provider-more');
-  const ids = [...grp.querySelectorAll('.provider-card')].map((c) => c.dataset.provider);
-  return { hasSummary: !!d.querySelector('summary'), openBefore: d.open, moreIds: ids };
+// The Gemini alternative pre-fills gemini-3.7-flash and carries its pill — it
+// lives in its own family tab's panel now.
+const gemini = await ev(`(() => {
+  const card = document.querySelector('#provider-family-panel-gemini .provider-card[data-provider="gemini"]');
+  return {
+    badge: card?.querySelector('.provider-badge')?.textContent ?? null,
+    model: card?.querySelector('model-picker')?.getAttribute('value') ?? null,
+  };
 })()`);
-check("More providers is a closed disclosure holding the remaining presets", more?.hasSummary === true && more?.openBefore === false && more?.moreIds?.includes("anthropic") && more?.moreIds?.includes("deepseek"), more);
-await ev(`document.getElementById('more-providers').open = true; true`);
-await sleep(300);
-await shot(`${OUT}/providers-more-open.png`);
+check("Gemini carries the Alternative pill", gemini?.badge === "Alternative", gemini);
+check("the Gemini card pre-fills gemini-3.7-flash", gemini?.model === "gemini-3.7-flash", gemini);
+
+// ── The family tabs hold the remaining presets ─────────────────────────────
+const tabs = await ev(`(() => {
+  const rail = document.querySelector('#provider-tabs segmented-control');
+  const labels = [...(rail?.shadowRoot?.querySelectorAll('[role=tab]') ?? [])].map((t) => t.textContent);
+  const anth = [...document.querySelectorAll('#provider-family-panel-anthropic .provider-card')].map((c) => c.dataset.provider);
+  const local = [...document.querySelectorAll('#provider-family-panel-local-ollama .provider-card')].map((c) => c.dataset.provider);
+  return { labels, anth, local };
+})()`);
+check("four family tabs render in order", JSON.stringify(tabs?.labels) === JSON.stringify(["Gemini", "OpenAI-compatible", "Anthropic", "Local/Ollama"]), tabs);
+check("Anthropic's panel holds anthropic; Local/Ollama holds the local servers", JSON.stringify(tabs?.anth) === JSON.stringify(["anthropic"]) && JSON.stringify(tabs?.local) === JSON.stringify(["ollama", "lm-studio"]), tabs);
+await shot(`${OUT}/providers-family-tabs.png`);
 
 // ── Use stays disabled until a test passes; typing a key does not enable it ──
 await ev(`(() => {
@@ -132,7 +138,7 @@ await ev(`(() => {
 })()`);
 await sleep(200);
 const keyed = await ev(`document.activeElement?.dataset?.provider ?? null`);
-check("ArrowDown moves focus to the next card (gemini)", keyed === "gemini", { keyed });
+check("ArrowDown moves focus to the next card (deepseek)", keyed === "deepseek", { keyed });
 
 // ── The hub strip on a fresh profile (no keyed model) ──────────────────────
 await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);

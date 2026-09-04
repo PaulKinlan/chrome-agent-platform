@@ -17,10 +17,13 @@
 //
 // Bounds: per-agent quota (DEFAULT bytes/files) accounted in a `.quota.json`
 // metadata file inside the workspace; writes over quota FAIL with an honest
-// `workspace_quota_exceeded` (never a silent truncation). Path grammar is the
-// same bounded ASCII segment walk as fs-grants (cleanRelativePath).
+// `workspace_quota_exceeded` (never a silent truncation). Individual reads
+// and writes carry NO size cap of their own (post-dptw contract): a read
+// returns the complete content at any size, paged with offset/length; a
+// write's only bound is the workspace quota. Path grammar is the same bounded
+// ASCII segment walk as fs-grants (cleanRelativePath).
 
-import { cleanRelativePath, computeSha256, MAX_FS_WRITE_BYTES } from "./fs-grants.js";
+import { cleanRelativePath, computeSha256 } from "./fs-grants.js";
 import { currentRunContext } from "./run-context.js";
 // The agent-id slug MUST come from the named-agents authority (review round-1
 // P2a): run contexts stamp agentSurfaceRef from slugifyAgentId, so any local
@@ -200,8 +203,11 @@ export async function listWorkspaceEntries(relativePath = "", { limit = 500, cur
   return { ok: true, workspace: ws.key, path: segments.join("/"), entries, truncated, total };
 }
 
-/** Read a text file inside the current agent's workspace. */
-export async function readWorkspaceFile(relativePath = "", { maxBytes = 1024 * 1024, currentRunContext } = {}) {
+/** Read a text file inside the current agent's workspace. Same read
+ * contract as fs-grants (post-dptw): never refused for size — whole-file by
+ * default, offset/length pick a byte window whose edges are widened to whole
+ * UTF-8 characters (`start`/`end` disclose the span returned). */
+export async function readWorkspaceFile(relativePath = "", { offset = null, length = null, currentRunContext } = {}) {
   const ws = await resolveAgentWorkspace({ currentRunContext });
   if (!ws) return { ok: false, error: "no_agent_workspace" };
   let segments = [];
@@ -224,23 +230,49 @@ export async function readWorkspaceFile(relativePath = "", { maxBytes = 1024 * 1
   const file = await fh.getFile().catch(() => null);
   if (!file) return { ok: false, error: "file_not_found" };
   const bytes = new Uint8Array(await file.arrayBuffer().catch(() => new Uint8Array(0)));
-  const effectiveMax = Math.min(Math.max(1, maxBytes || 1024 * 1024), MAX_FS_WRITE_BYTES);
-  if (bytes.byteLength > effectiveMax) {
-    return { ok: false, error: "workspace_file_too_large", bytes: bytes.byteLength, maxBytes: effectiveMax };
+  const fileSize = bytes.byteLength;
+  // Byte window, same contract as readFsGrantFile: whole file by default;
+  // offset/length pick a window clamped to EOF. No size bound lives here.
+  const hasOffset = Number.isInteger(offset);
+  const hasLength = Number.isInteger(length);
+  const explicitWindow = hasOffset || hasLength;
+  const start = explicitWindow ? Math.min(Math.max(0, hasOffset ? offset : 0), fileSize) : 0;
+  const end = explicitWindow ? Math.min(fileSize, start + (hasLength ? Math.max(0, length) : fileSize - start)) : fileSize;
+  // Widen the window to whole UTF-8 characters so a fatal decode never
+  // rejects valid text whose edge split a multi-byte sequence (mirrors
+  // readFsGrantFile's alignment).
+  const isContinuation = (byte) => (byte & 0xc0) === 0x80;
+  const charLengthAt = (byte) =>
+    (byte & 0x80) === 0 ? 1 : (byte & 0xe0) === 0xc0 ? 2 : (byte & 0xf0) === 0xe0 ? 3 : (byte & 0xf8) === 0xf0 ? 4 : 0;
+  let effStart = start;
+  let effEnd = end;
+  if (fileSize > 0 && end > start) {
+    while (effStart > 0 && isContinuation(bytes[effStart])) effStart -= 1;
+    let head = end - 1;
+    while (head > 0 && isContinuation(bytes[head])) head -= 1;
+    const len = charLengthAt(bytes[head]);
+    if (len > 0 && head + len > effEnd) effEnd = Math.min(fileSize, head + len);
   }
-  const sha256 = await computeSha256(bytes);
+  const windowBytes = bytes.subarray(effStart, effEnd);
+  const sha256 = await computeSha256(windowBytes);
   let text = null;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    text = new TextDecoder("utf-8", { fatal: true }).decode(windowBytes);
   } catch {
     return { ok: false, error: "fs_file_not_text" };
   }
-  return { ok: true, workspace: ws.key, path: segments.join("/"), content: text, size: bytes.byteLength, sha256 };
+  const out = { ok: true, workspace: ws.key, path: segments.join("/"), content: text, size: fileSize, sha256 };
+  if (explicitWindow) {
+    out.start = effStart;
+    out.end = effEnd;
+  }
+  return out;
 }
 
 /** Write (create or overwrite) a file inside the current agent's workspace.
  * The agent's own sandbox — no owner approval required (same trust as memory).
- * Bounded by the per-agent quota + the shared per-write byte cap. */
+ * No per-write size cap (post-dptw): the per-agent quota below is the only
+ * bound, and it fails CLOSED with an honest error rather than truncating. */
 export async function writeWorkspaceFile(relativePath = "", content = "", { currentRunContext } = {}) {
   const ws = await resolveAgentWorkspace({ currentRunContext });
   if (!ws) return { ok: false, error: "no_agent_workspace" };
@@ -255,9 +287,6 @@ export async function writeWorkspaceFile(relativePath = "", content = "", { curr
     return { ok: false, error: "max_depth_exceeded", maxDepth: MAX_WORKSPACE_DEPTH };
   }
   const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(String(content ?? ""));
-  if (bytes.byteLength > MAX_FS_WRITE_BYTES) {
-    return { ok: false, error: "fs_file_too_large", bytes: bytes.byteLength, maxBytes: MAX_FS_WRITE_BYTES };
-  }
   const parent = await walkCreate(ws.dir, segments.slice(0, -1));
   const fileName = segments[segments.length - 1];
 

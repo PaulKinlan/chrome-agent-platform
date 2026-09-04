@@ -1,47 +1,39 @@
-// lib/tool-argument-contract.js — one truthful argument-size contract shared by
+// lib/tool-argument-contract.js — one truthful argument contract shared by
 // provider-visible schemas, lazy sanitization, and the underlying content stores.
+//
+// dptw (2026-09-03): there are NO size limits on tool arguments. The old
+// TOOL_ARGUMENT_LIMITS byte/shape ceilings (32 KiB payloads, 16 KiB strings,
+// depth 8, 64 keys, ...) refused complete owner data at self-imposed bounds;
+// they are gone. Arguments must be plain JSON DATA (objects, arrays, strings,
+// finite numbers, booleans, null) — a shape requirement, not a size one. A
+// provider's own request limit, when one exists, surfaces as that provider's
+// honest error instead of a pre-emptive refusal.
 
-export const TOOL_ARGUMENT_LIMITS = Object.freeze({
-  maxJsonUtf8Bytes: 32 * 1024,
-  maxDepth: 8,
-  maxNodes: 256,
-  maxObjectKeys: 64,
-  maxArrayItems: 64,
-  maxKeyUtf8Bytes: 128,
-  maxStringUtf8Bytes: 16 * 1024,
-  maxLargeJsonUtf8Bytes: 288 * 1024,
-  maxAssetContentUtf8Bytes: 256 * 1024,
-  maxScriptSourceUtf8Bytes: 64 * 1024,
-});
-
+// Large-content field designations are kept for CONTENT FIDELITY only: a
+// designated field's text is carried exactly as given (no Unicode
+// normalization), at any size.
 const LARGE_FIELDS = Object.freeze({
   management: Object.freeze({
-    create_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
-    update_asset: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
-    generate_ui: Object.freeze({ field: "html", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
-    create_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),
-    update_script: Object.freeze({ field: "source", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxScriptSourceUtf8Bytes }),
+    create_asset: Object.freeze({ field: "content" }),
+    update_asset: Object.freeze({ field: "content" }),
+    generate_ui: Object.freeze({ field: "html" }),
+    create_script: Object.freeze({ field: "source" }),
+    update_script: Object.freeze({ field: "source" }),
+    python_execute: Object.freeze({ field: "code" }),
   }),
   // A local-file write carries the COMPLETE file body, so it gets the same
-  // large-content allowance an artifact body does
+  // exact-content treatment an artifact body does
   // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
   "chrome-api": Object.freeze({
-    write_file: Object.freeze({ field: "content", maxUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxAssetContentUtf8Bytes }),
+    write_file: Object.freeze({ field: "content" }),
   }),
 });
 
 export function toolArgumentContract(sourceKind, toolId) {
   const large = LARGE_FIELDS[sourceKind]?.[toolId] ?? null;
   return Object.freeze({
-    maxJsonUtf8Bytes: large
-      ? TOOL_ARGUMENT_LIMITS.maxLargeJsonUtf8Bytes
-      : TOOL_ARGUMENT_LIMITS.maxJsonUtf8Bytes,
-    maxDepth: TOOL_ARGUMENT_LIMITS.maxDepth,
-    maxNodes: TOOL_ARGUMENT_LIMITS.maxNodes,
-    maxObjectKeys: TOOL_ARGUMENT_LIMITS.maxObjectKeys,
-    maxArrayItems: TOOL_ARGUMENT_LIMITS.maxArrayItems,
-    maxKeyUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxKeyUtf8Bytes,
-    defaultMaxStringUtf8Bytes: TOOL_ARGUMENT_LIMITS.maxStringUtf8Bytes,
+    // Truthful declaration: no size limits. Plain JSON data, any size.
+    limits: "none",
     ...(large ? { largeContent: large } : {}),
   });
 }

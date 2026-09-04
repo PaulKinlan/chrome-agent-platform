@@ -514,6 +514,18 @@ never enter provider context. Disabled bundled rows remain discoverable metadata
 without a reference or execution affordance. This protected contract follows
 owner-authored prompt text, so customization cannot replace it.
 
+`search_tools` ranks by deterministic exact/alias/prefix evidence first, then
+lexical token matches, with a bounded semantic tier adding recall
+(CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01): every descriptor's searchable text
+(name ×3, aliases ×2, description, capabilities) embeds via a committed word-
+vector table precomputed from a real model at table-generation time
+(`scripts/build-tool-vector-table.mjs`; runtime is lookup + weighted mean +
+common-direction removal + L2-normalize — no network, no model runtime, fully
+offline). A pure-semantic hit is admitted only above a measured cosine floor;
+exact/alias/prefix always win; a nonsense query reports `no-match` honestly;
+a stale or missing table degrades to lexical with diagnostics saying so.
+Retrieval never grants permission — results are projected metadata only.
+
 ## Run error copy (the truth contract)
 
 A failed run says what actually happened and what to do, in that order — the

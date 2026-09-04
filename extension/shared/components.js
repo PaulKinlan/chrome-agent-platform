@@ -345,6 +345,42 @@ export function stripNavigationMeta(html) {
 }
 
 /**
+ * chrome-agent-platform-np64 (2026-09-03): the runtime teaching guard injected
+ * into every generated-document frame. The artifact runs in an origin-opaque
+ * allow-scripts-only frame, so the storage/persistence APIs a normal page
+ * takes for granted THROW raw SecurityErrors there ('The document is sandboxed
+ * and lacks the 'allow-same-origin' flag' — owner report: generated UIs break
+ * at runtime and the agent never learns why). This guard redefines the
+ * known-broken surfaces so the thrown error TEACHES what to do instead — the
+ * exact moment of failure is the teaching moment. Surfaces wrapped (verified
+ * against a real allow-scripts frame): window.localStorage / sessionStorage,
+ * document.cookie writes, indexedDB, caches, OPFS (navigator.storage.
+ * getDirectory), and fetch (the frame CSP connect-src 'none' makes every
+ * fetch fail with an opaque 'Failed to fetch'). Permission-gated APIs are not
+ * enumerable and stay guidance-only (the constraint text + tool schemas);
+ * XHR/EventSource/WebSocket fail under the same CSP and are left to the
+ * native TypeError for now (ponytail: add teaching wrappers if artifacts keep
+ * using them).
+ */
+export function sandboxApiGuardScript() {
+  return `<script data-cap-sandboxguard>${[
+    "(function(){",
+    "var fix='keep state in a variable, or store it with the platform\\'s asset/memory tools';",
+    "function teach(api,msg){return new Error(api+' is unavailable inside sandboxed artifacts - '+msg);}",
+    "function denyStore(host,prop){try{Object.defineProperty(host,prop,{configurable:true,get:function(){throw teach(prop,fix);}});}catch(e){}}",
+    "function denyApi(host,prop,methods){try{Object.defineProperty(host,prop,{configurable:true,get:function(){var o={};for(var i=0;i<methods.length;i++){(function(m){o[m]=function(){throw teach(prop+'.'+m,'the frame has no origin-keyed storage - '+fix);};})(methods[i]);}return o;}});}catch(e){}}",
+    "denyStore(window,'localStorage');",
+    "denyStore(window,'sessionStorage');",
+    "denyApi(window,'indexedDB',['open','deleteDatabase']);",
+    "denyApi(window,'caches',['open','keys','delete','match','has']);",
+    "try{Object.defineProperty(document,'cookie',{configurable:true,get:function(){return '';},set:function(){throw teach('document.cookie','cookies are blocked - '+fix);}});}catch(e){}",
+    "try{if(navigator.storage&&navigator.storage.getDirectory){navigator.storage.getDirectory=function(){return Promise.reject(teach('navigator.storage.getDirectory (OPFS)','the frame has no origin-keyed storage - '+fix));};}}catch(e){}",
+    "try{window.fetch=function(){return Promise.reject(new Error('fetch is unavailable inside sandboxed artifacts - the frame CSP allows no network egress; ask the agent to fetch the data and embed it in the artifact instead'));};}catch(e){}",
+    "})();",
+  ].join("")}</script>`;
+}
+
+/**
  * Inject the CSP <meta> + the navigation guard as early as possible into an
  * untrusted HTML document — PREPENDED before ANY content (never after <head>,
  * so no remote load or navigation can precede them). Returns the guarded HTML.
@@ -403,7 +439,10 @@ export function preferenceBootstrapScript(nonce) {
 export function injectFrameGuards(html, nonce) {
   // injectCspMeta already PREPENDS the navigation guard + the CSP before any
   // content. Prepend the preference bootstrap too (after the guard/CSP, before
-  // the attacker content) — never after a <head>.
+  // the attacker content) — never after a <head>. The sandbox-constraints
+  // guard rides after the bootstrap and before ANY generated code, so every
+  // script in the artifact frame throws teaching errors on the unavailable
+  // storage/network APIs instead of raw SecurityErrors.
   const guarded = injectCspMeta(html);
   const s = String(guarded ?? "");
   // The nav guard + CSP are at the very start; insert the bootstrap after them
@@ -412,9 +451,11 @@ export function injectFrameGuards(html, nonce) {
   if (s.startsWith(navGuard)) {
     const rest = s.slice(navGuard.length);
     const m = rest.match(/^<meta[^>]*Content-Security-Policy[^>]*>/i);
-    if (m) return navGuard + m[0] + preferenceBootstrapScript(nonce) + rest.slice(m[0].length);
+    if (m) {
+      return navGuard + m[0] + preferenceBootstrapScript(nonce) + sandboxApiGuardScript() + rest.slice(m[0].length);
+    }
   }
-  return preferenceBootstrapScript(nonce) + s;
+  return preferenceBootstrapScript(nonce) + sandboxApiGuardScript() + s;
 }
 
 /**
@@ -2822,7 +2863,9 @@ const SOURCE_TOKEN_STYLE = `
 
 /* <artifact-inspector> — source/hex inspection and explicit confined HTML play.
  * Content is property-only and enters the DOM via textContent/srcdoc, never an
- * outer HTML parser. Rendering is bounded while Copy preserves exact content. */
+ * outer HTML parser. Rendering shows the COMPLETE stored content at any size
+ * (a truncated source view read as data loss even when Copy was exact — p45y;
+ * no size-based refusal — r5) while Copy preserves exact content. */
 class ArtifactInspector extends Component {
   constructor() { super(); this._asset = null; this._language = ""; this._frameCleanup = null; this._frameDispose = null; }
   set asset(value) { this._asset = value && typeof value === "object" ? value : null; if (this._rendered) this._render(); }
@@ -2836,8 +2879,6 @@ class ArtifactInspector extends Component {
     const a = this._asset ?? {};
     const type = String(a.type ?? "data");
     const content = String(a.content ?? "");
-    const limit = 65536;
-    const truncated = content.length > limit;
     mountTemplate(this, `
       :host { display:block; min-inline-size:min(76vw,920px); max-inline-size:920px; }
       .bar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-block-end:10px; }
@@ -2855,15 +2896,23 @@ class ArtifactInspector extends Component {
     `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
     this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
     const code = this._root.querySelector("code");
-    const shown = content.slice(0, limit);
     const lang = this.language;
-    // Highlight when a recognised language is known; otherwise the exact source
-    // as one text node. Both paths are markup-free (textContent / createTextNode).
-    if (lang && lang !== "text") code.replaceChildren(highlightSource(shown, lang, document));
-    else code.textContent = shown;
+    // The COMPLETE stored body renders — never a slice and never size-refused
+    // (chrome-agent-platform-p45y: the source view once showed only the first
+    // 64 KiB, and r4's 4 MiB mount refusal could hide an append-grown body;
+    // owner 2026-09-03: no size caps on rendering — whatever the stored or
+    // staged body is, the source view shows all of it, byte for byte).
+    // textContent mounts the multi-MB case as one text node, so there is no
+    // DOM or tokenize cost that needs a size refusal.
+    // Highlighting is the ONLY bounded step, and only because the tokenizer
+    // runs synchronously: a body above the single-call artifact limit renders
+    // as exact plain text instead (tokenizing a multi-MB body would freeze).
+    const MAX_ARTIFACT_HIGHLIGHT_BYTES = 256 * 1024; // the single-call content cap (tool-argument-contract)
+    const rawBytes = new TextEncoder().encode(content).byteLength;
+    if (lang && lang !== "text" && rawBytes <= MAX_ARTIFACT_HIGHLIGHT_BYTES) code.replaceChildren(highlightSource(content, lang, document));
+    else code.textContent = content;
     const note = this._root.querySelector(".note");
-    note.hidden = !truncated;
-    if (truncated) note.textContent = `Inspection is bounded to the first ${limit.toLocaleString()} characters. Copy includes the complete artifact.`;
+    note.hidden = true;
   }
   _wire() {
     this._root.querySelector(".copy")?.addEventListener("click", async () => {
@@ -3240,7 +3289,7 @@ customElements.define("artifact-diff", ArtifactDiff);
  * accent ink. Every label enters via textContent — never an HTML string.
  * ────────────────────────────────────────────────────────────────────────── */
 class SegmentedControl extends Component {
-  static get observedAttributes() { return ["items", "value", "label"]; }
+  static get observedAttributes() { return ["items", "value", "label", "controls-prefix"]; }
   constructor() { super(); this._value = ""; }
   _items() {
     return String(this.getAttribute("items") ?? "")
@@ -3257,6 +3306,12 @@ class SegmentedControl extends Component {
   _render() {
     const items = this._items();
     const value = this.value;
+    // controls-prefix (CAP-FB-20260902-PROVIDERS-TABBED-UI-01): when set, each
+    // tab gains a stable id + aria-controls pointing at the host's tabpanel of
+    // the same slug (the host owns the panels). Slug rule must match
+    // familyTabSlug() in lib/providers-view.js (label lowercase, non-alnum
+    // runs to dashes) — the providers tabs KAT asserts the pair resolves.
+    const prefix = String(this.getAttribute("controls-prefix") ?? "").trim();
     mountTemplate(this, `
       :host { display:inline-block; }
       .tabs { display:inline-flex; gap:2px; padding:3px; border:1px solid var(--border,#e3e0d9);
@@ -3278,6 +3333,11 @@ class SegmentedControl extends Component {
       b.type = "button";
       b.setAttribute("role", "tab");
       b.dataset.val = item;
+      if (prefix) {
+        const slug = item.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+        b.id = `${prefix}-tab-${slug}`;
+        b.setAttribute("aria-controls", `${prefix}-panel-${slug}`);
+      }
       const selected = item === value;
       b.setAttribute("aria-selected", selected ? "true" : "false");
       b.tabIndex = selected ? 0 : -1;
@@ -4826,6 +4886,7 @@ class MessageBubble extends Component {
       :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
       :host(:last-child) { margin-bottom:0; }
       :host([role="user"]) { justify-content:flex-end; }
+      :host([role="steer"]) { justify-content:flex-end; }
       .msg { max-width:78%; border-radius:12px; padding:10px 14px; overflow-wrap:anywhere; }
       /* An assistant turn: the identity header (avatar · name · time) above the bubble. */
       .turn { display:flex; flex-direction:column; gap:6px; max-width:78%; min-width:0; }
@@ -4834,6 +4895,8 @@ class MessageBubble extends Component {
       .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
       .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
       :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
+      :host([role="steer"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--accent,#0e6e63); }
+      :host([role="steer"]) .steer-label { display:block; font-size:11px; font-weight:600; color:var(--accent,#0e6e63); letter-spacing:.04em; text-transform:uppercase; margin:0 0 4px; }
       :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
       :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
       :host([role="error"]) .body { color:var(--danger,#b3261e); }
@@ -5503,6 +5566,19 @@ class AgentConversation extends Component {
     }
   }
   appendSystem(text, ts) { if (ts) this._maybeTsGap(ts); return this._bubble("system", text); }
+  /** chrome-agent-platform-afiu: an OWNER INTERRUPTION — the message the owner
+   *  steered into a running agent. Rendered as its own right-aligned bubble
+   *  (the "You steered" treatment) so a steer reads as guidance the agent is
+   *  now following, never as an assistant or tool row. */
+  appendSteer(text, ts) {
+    if (ts) this._maybeTsGap(ts);
+    const bubble = this._bubble("steer", String(text ?? ""));
+    const label = document.createElement("span");
+    label.className = "steer-label";
+    label.textContent = "You steered";
+    bubble._root?.querySelector(".msg")?.prepend(label);
+    return bubble;
+  }
   appendError(text, { reason, action, category, ts } = {}) {
     if (ts) this._maybeTsGap(ts);
     return this._bubble("error", text, { "error-reason": reason ?? null, "error-action": action ?? null, "error-category": category ?? null });

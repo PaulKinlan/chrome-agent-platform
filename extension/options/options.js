@@ -47,10 +47,11 @@ import {
   renderInternalProviderStatus,
 } from "../lib/provider-visibility.js";
 import {
+  defaultFamilyId,
+  familyTabSlug,
   keyPageFor,
-  leadingProviders,
-  moreProviders,
   prefilledModelFor,
+  providerFamilies,
   useEnabled,
 } from "../lib/providers-view.js";
 import { runOwnerApprovedMutation } from "../lib/owner-approved-mutation.js";
@@ -752,9 +753,10 @@ function effectiveModel(card) {
   return card.querySelector(".model")?.value || "";
 }
 
-// Build ONE provider card — a role=radio in a radiogroup. The recommended and
-// alternative cards LEAD; the rest sit under "More providers". The four-click
-// flow lives here: paste the key, Test connection (which gates), Use.
+// Build ONE provider card — a role=radio in its family's radiogroup. Cards
+// live in their family's tabpanel (recommended/alternative order preserved
+// inside a family). The four-click flow lives here: paste the key, Test
+// connection (which gates), Use.
 function buildProviderCard(p, cfg) {
   const isActive = cfg.provider === p.id;
   const badge = p.recommended
@@ -850,9 +852,9 @@ function buildProviderCard(p, cfg) {
         saveFlash(`${p.name} was not updated — ${outcome.saved.reason || outcome.saved.error || "check the provider settings"}.`);
         card._saveFailed = true;
       } else if (access.status === "pending") {
-        saveFlash(`Saved ${p.name}. Chrome's network-access decision is still pending; provider requests remain blocked until access is granted.`);
+        saveFlash(`Saved ${p.name}. Network access verification is pending; provider requests remain blocked until access is verified.`);
       } else if (access.status === "denied") {
-        saveFlash(`Saved ${p.name}, but network access was not granted — provider requests remain blocked. Re-enable it when Chrome asks.`);
+        saveFlash(`Saved ${p.name}, but network access was not verified — host access was not granted at install.`);
       } else {
         saveFlash(isActive ? `Updated ${p.name}.` : `Set ${p.name} as default.`);
       }
@@ -921,21 +923,26 @@ function buildProviderCard(p, cfg) {
   return card;
 }
 
+// Provider family tabs (CAP-FB-20260902-PROVIDERS-TABBED-UI-01): the SELECTED
+// family is view state (which panel is open); it survives re-renders. The
+// DEFAULT provider's family is only the initial selection.
+let selectedProviderFamily = null;
+
 async function renderProviders(restoreFocus = false) {
   // Route the provider read through the SERVICE WORKER (single authority) — never
   // call lib/provider.js's kv* directly in this page realm (the round-16 split-
   // authority finding). BOUNDED: a killed/suspended worker must not leave
   // Providers blank — settle with an honest error + Retry.
-  const recRoot = $("#provider-recommended");
-  const moreRoot = $("#provider-more");
+  const tabsRoot = $("#provider-tabs");
+  const panelsRoot = $("#provider-panels");
   let cfg;
   try {
     cfg = await boundedSend("provider.get");
   } catch (e) {
-    if (recRoot) {
-      recRoot.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
+    if (panelsRoot) {
+      panelsRoot.innerHTML = `<div class="muted">Couldn't load providers — the agent worker didn't answer (${escapeHtml(String(e?.message ?? e))}).</div>` +
         `<button class="btn small" type="button" id="retry-providers">Retry</button>`;
-      recRoot.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
+      panelsRoot.querySelector("#retry-providers")?.addEventListener("click", () => renderProviders(restoreFocus));
     }
     return;
   }
@@ -945,23 +952,58 @@ async function renderProviders(restoreFocus = false) {
     $("#provider-selection-status"),
     providerSelectionPresentation(cfg, PROVIDERS),
   );
-  if (!recRoot || !moreRoot) return;
-  recRoot.innerHTML = "";
-  moreRoot.innerHTML = "";
+  if (!tabsRoot || !panelsRoot) return;
+  tabsRoot.replaceChildren();
+  panelsRoot.replaceChildren();
 
-  const lead = leadingProviders(PROVIDERS);
-  const rest = moreProviders(PROVIDERS);
-  for (const p of lead) recRoot.appendChild(buildProviderCard(p, cfg));
-  for (const p of rest) moreRoot.appendChild(buildProviderCard(p, cfg));
+  // One tab per provider family (Gemini, OpenAI-compatible, Anthropic,
+  // Local/Ollama). Cards are built ONCE per render into always-mounted panels,
+  // so switching tabs toggles `hidden` and unsaved input survives the switch.
+  const families = providerFamilies(PROVIDERS);
+  if (!families.some((f) => f.id === selectedProviderFamily)) {
+    selectedProviderFamily = defaultFamilyId(PROVIDERS, cfg.provider);
+  }
+  const selected = families.find((f) => f.id === selectedProviderFamily) ?? families[0];
 
-  // If the active default is one of the "More providers", open the disclosure
-  // so the user can see their current selection without hunting for it.
-  const more = $("#more-providers");
-  if (more && rest.some((p) => p.id === cfg.provider)) more.open = true;
+  const tabs = document.createElement("segmented-control");
+  tabs.setAttribute("items", families.map((f) => f.label).join(","));
+  tabs.setAttribute("label", "Provider families");
+  tabs.setAttribute("controls-prefix", "provider-family");
+  tabs.addEventListener("change", (e) => {
+    const fam = families.find((f) => f.label === e.detail?.value);
+    if (!fam) return;
+    selectedProviderFamily = fam.id;
+    for (const panel of panelsRoot.querySelectorAll(".provider-panel")) {
+      panel.hidden = panel.dataset.family !== fam.id;
+    }
+  });
+  tabsRoot.appendChild(tabs);
+  // Set the selection AFTER connect (the attribute-only `value` would race the
+  // custom element's upgrade).
+  if (selected) tabs.value = selected.label;
+
+  for (const fam of families) {
+    const slug = familyTabSlug(fam.label);
+    const panel = document.createElement("div");
+    panel.className = "provider-panel";
+    panel.dataset.family = fam.id;
+    panel.id = `provider-family-panel-${slug}`;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", `provider-family-tab-${slug}`);
+    panel.hidden = fam !== selected;
+    const cards = document.createElement("div");
+    cards.className = "provider-cards";
+    cards.setAttribute("role", "radiogroup");
+    cards.setAttribute("aria-label", `${fam.label} providers`);
+    for (const p of fam.providers) cards.appendChild(buildProviderCard(p, cfg));
+    panel.appendChild(cards);
+    panelsRoot.appendChild(panel);
+  }
 
   // ── radiogroup keyboard: arrow/Home/End move the checked selection + focus
-  // within each group (cards only; an arrow inside a text input is left alone).
-  for (const group of [recRoot, moreRoot]) {
+  // within each family's card group (an arrow inside a text input is left
+  // alone). Tab-strip arrow keys are the segmented-control's own pattern.
+  for (const group of panelsRoot.querySelectorAll(".provider-cards")) {
     group.addEventListener("keydown", (e) => {
       const target = e.target;
       if (!target?.classList?.contains?.("provider-card")) return; // typing in a field
@@ -986,12 +1028,8 @@ async function renderProviders(restoreFocus = false) {
 
   if (restoreFocus) {
     // Rerender replaces the focused subtree — re-focus a STABLE anchor (the
-    // active/checked card, else the first card) so a keyboard/AT user is not
-    // stranded.
-    const anchor = recRoot.querySelector('.provider-card[aria-checked="true"]') ||
-      moreRoot.querySelector('.provider-card[aria-checked="true"]') ||
-      recRoot.querySelector(".provider-card");
-    anchor?.focus();
+    // selected family's tab) so a keyboard/AT user is not stranded.
+    tabs.shadowRoot?.querySelector('[role="tab"][aria-selected="true"]')?.focus();
   }
 }
 
@@ -1280,77 +1318,90 @@ async function renderAgents() {
     saveFlash("Agent mode saved.");
   });
 
-  // Provider server tools (Gemini google_search, Anthropic web_search): the GLOBAL toggle gates
-  // every agent; a per-agent opt-in then admits each agent individually. Both
-  // live in ONE kv record ({ enabled, agents: { [id]: bool } }) so the service
-  // worker reads them atomically at every tool-source snapshot.
-  const stCfg = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-  const stToggle = $("#server-tools-enabled");
-  stToggle.checked = stCfg.enabled === true;
-  const persistServerTools = async (next) => {
-    await storage.set({ "cap:providerServerTools": next });
-    // Availability is read live per snapshot, but the provider LANE is
-    // build-fixed — invalidate so a just-enabled native-lane agent rebuilds.
-    try {
-      await chrome.runtime.sendMessage({ type: "invalidate-agent" });
-    } catch { /* worker may not be running — the setting still persists */ }
-  };
-  stToggle.addEventListener("toggle", async (e) => {
-    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-    await persistServerTools({ ...cur, enabled: e.detail.checked === true });
-    renderServerToolAgents(e.detail.checked === true);
-    saveFlash("Provider server tools saved.");
-  });
-  async function renderServerToolAgents(globalOn) {
-    const box = $("#server-tools-agents");
-    const list = $("#server-tools-agent-list");
-    if (!box || !list) return;
-    box.hidden = !globalOn;
-    list.replaceChildren();
-    if (!globalOn) return;
-    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-    const agents = cur.agents && typeof cur.agents === "object" ? cur.agents : {};
-    let named = [];
-    try {
-      const r = await boundedSend("named-agent.list");
-      named = Array.isArray(r?.agents) ? r.agents : [];
-    } catch { named = []; }
-    const rows = [{ key: "hub", name: "Hub (the main agent)" },
-      // Paid provider-tool authority follows the immutable instance identity.
-      // Legacy agents without one are omitted (fail closed), never slug-keyed.
-      ...named.map((a) => ({ key: String(a?.instanceId ?? ""), name: String(a?.name ?? a?.id ?? "agent") }))]
-      .filter((a) => a.key);
-    for (const a of rows) {
-      const field = document.createElement("div");
-      field.className = "toggle-field";
-      const t = document.createElement("switch-toggle");
-      t.setAttribute("label", a.name);
-      t.checked = agents[a.key] === true;
-      t.addEventListener("toggle", async (e) => {
-        const latest = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-        const latestAgents = latest.agents && typeof latest.agents === "object" ? { ...latest.agents } : {};
-        latestAgents[a.key] = e.detail.checked === true;
-        await persistServerTools({ ...latest, agents: latestAgents });
-        saveFlash(`Provider server tools ${e.detail.checked ? "enabled" : "disabled"} for ${a.name}.`);
-      });
-      const text = document.createElement("div");
-      text.className = "toggle-text";
-      const nm = document.createElement("span");
-      nm.className = "toggle-name";
-      nm.textContent = a.name;
-      const hint = document.createElement("span");
-      hint.className = "muted";
-      hint.textContent = "Can search the web during its runs.";
-      text.append(nm, hint);
-      field.append(t, text);
-      list.appendChild(field);
-    }
-  }
-  await renderServerToolAgents(stToggle.checked);
-
   // Interactive and scheduled agents share one management list. The data
   // models remain separate; this function only joins their presentation.
   await renderUnifiedAgentSettings();
+}
+
+// Provider server tools (Gemini google_search, Anthropic web_search): the GLOBAL toggle gates
+// every agent; a per-agent opt-in then admits each agent individually. Both
+// live in ONE kv record ({ enabled, agents: { [id]: bool } }) so the service
+// worker reads them atomically at every tool-source snapshot.
+const persistProviderServerTools = async (next) => {
+  await storage.set({ "cap:providerServerTools": next });
+  // Availability is read live per snapshot, but the provider LANE is
+  // build-fixed — invalidate so a just-enabled native-lane agent rebuilds.
+  try {
+    await chrome.runtime.sendMessage({ type: "invalidate-agent" });
+  } catch { /* worker may not be running — the setting still persists */ }
+};
+
+async function renderServerToolAgents(globalOn) {
+  const box = $("#server-tools-agents");
+  const list = $("#server-tools-agent-list");
+  if (!box || !list) return;
+  // Sub-panel visibility = global toggle AND the developer flag: the toggle
+  // card is dev-gated (data-developer) and applyDeveloperVisibility force-
+  // closes the panel when the flag is off — never fight it (server tools are
+  // a paid dev feature; dev-off must not make the per-agent opt-ins reachable).
+  box.hidden = !globalOn || !developerFeaturesEnabled;
+  list.replaceChildren();
+  if (!globalOn) return;
+  const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+  const agents = cur.agents && typeof cur.agents === "object" ? cur.agents : {};
+  let named = [];
+  try {
+    const r = await boundedSend("named-agent.list");
+    named = Array.isArray(r?.agents) ? r.agents : [];
+  } catch { named = []; }
+  const rows = [{ key: "hub", name: "Hub (the main agent)" },
+    // Paid provider-tool authority follows the immutable instance identity.
+    // Legacy agents without one are omitted (fail closed), never slug-keyed.
+    ...named.map((a) => ({ key: String(a?.instanceId ?? ""), name: String(a?.name ?? a?.id ?? "agent") }))]
+    .filter((a) => a.key);
+  for (const a of rows) {
+    const field = document.createElement("div");
+    field.className = "toggle-field";
+    const t = document.createElement("switch-toggle");
+    t.setAttribute("label", a.name);
+    t.checked = agents[a.key] === true;
+    t.addEventListener("toggle", async (e) => {
+      const latest = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+      const latestAgents = latest.agents && typeof latest.agents === "object" ? { ...latest.agents } : {};
+      latestAgents[a.key] = e.detail.checked === true;
+      await persistProviderServerTools({ ...latest, agents: latestAgents });
+      saveFlash(`Provider server tools ${e.detail.checked ? "enabled" : "disabled"} for ${a.name}.`);
+    });
+    const text = document.createElement("div");
+    text.className = "toggle-text";
+    const nm = document.createElement("span");
+    nm.className = "toggle-name";
+    nm.textContent = a.name;
+    const hint = document.createElement("span");
+    hint.className = "muted";
+    hint.textContent = "Can search the web during its runs.";
+    text.append(nm, hint);
+    field.append(t, text);
+    list.appendChild(field);
+  }
+}
+
+// The toggle + its state live in the PROVIDERS section HTML, so this init must
+// run when that section renders (ensureSectionRendered("providers")) — NOT
+// inside renderAgents(), which only runs when the agents section is visited
+// (cap-beads-wuvg: reload → providers left the toggle unchecked + unbound).
+async function initProviderServerTools() {
+  const stCfg = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+  const stToggle = $("#server-tools-enabled");
+  if (!stToggle) return;
+  stToggle.checked = stCfg.enabled === true;
+  stToggle.addEventListener("toggle", async (e) => {
+    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+    await persistProviderServerTools({ ...cur, enabled: e.detail.checked === true });
+    renderServerToolAgents(e.detail.checked === true);
+    saveFlash("Provider server tools saved.");
+  });
+  await renderServerToolAgents(stToggle.checked);
 }
 
 /** The per-agent override row: SHARED components (provider-select +
@@ -1883,6 +1934,16 @@ async function renderBrowser() {
   const granted = live?.active === true;
   const toggle = $("#browser-grant");
   toggle.checked = granted;
+  // Lifecycle cleanup (chrome-agent-platform-4ffg): auto-close tabs a
+  // finished task opened — DEFAULT OFF (owner trust). The service worker
+  // reads cap:autoCloseRunTabs at run end; nothing needs invalidating.
+  const autoClose = await storage.get("cap:autoCloseRunTabs");
+  const autoToggle = $("#auto-close-run-tabs");
+  autoToggle.checked = autoClose["cap:autoCloseRunTabs"] === true;
+  autoToggle.addEventListener("toggle", async (e) => {
+    await storage.set({ "cap:autoCloseRunTabs": e.detail.checked === true });
+    saveFlash(e.detail.checked === true ? "Auto-close run tabs on." : "Auto-close run tabs off.");
+  });
   $("#grant-origins").hidden = !granted;
   await renderGrantRows();
   // An Allow on an approval card in a chat adds to the set while this page is
@@ -2811,6 +2872,10 @@ async function renderData() {
 // ── Factory reset / Delete all data (CAP-FB-20260823-FACTORY-RESET-01) ──
 const factoryResetBtn = $("#factory-reset-btn");
 const factoryResetStatus = $("#factory-reset-status");
+const exportAllBtn = $("#export-all-btn");
+const importAllBtn = $("#import-all-btn");
+const importAllFile = $("#import-all-file");
+const backupStatus = $("#backup-status");
 
 // ── Agent data maintenance (owner-reported leftover fix: agents deleted before
 // teardown existed left OPFS dirs + journals behind; journals needed a purge
@@ -2895,6 +2960,76 @@ sweepOrphansBtn?.addEventListener("click", async () => {
     if (maintenanceStatus) maintenanceStatus.textContent = `Sweep failed: ${e?.message ?? e}`;
   } finally {
     sweepOrphansBtn.disabled = false;
+  }
+});
+
+function setBackupStatus(text) {
+  if (!backupStatus) return;
+  backupStatus.hidden = false;
+  backupStatus.textContent = text;
+}
+
+/** One-click owner export: ask the service worker for the full bundle, then
+ * download it as a single inspectable .json file. The SW route is
+ * owner-gated; the bundle never contains provider keys or MCP headers. */
+exportAllBtn?.addEventListener("click", async () => {
+  setBackupStatus("Collecting your agents, memories, artifacts and settings…");
+  exportAllBtn.disabled = true;
+  try {
+    const res = await chrome.runtime.sendMessage({ type: "owner.export.all" });
+    if (!res?.ok || typeof res.bundle !== "string") {
+      throw new Error(res?.error || "Export failed");
+    }
+    const when = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    const blob = new Blob([res.bundle], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cap-export-${when}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    const m = res.manifest || {};
+    setBackupStatus(`Exported ${m.opfsFiles ?? 0} stored files, ${m.kvKeys ?? 0} settings keys and ${m.alarms ?? 0} schedules. Keep the file safe — it contains your agents' memories.`);
+  } catch (err) {
+    setBackupStatus(`Export failed: ${err?.message || err}`);
+  } finally {
+    exportAllBtn.disabled = false;
+  }
+});
+
+/** Owner import: pick a bundle, confirm the replacement explicitly, then let
+ * the service worker restore it transactionally (validate first, verify every
+ * restored byte after). */
+importAllBtn?.addEventListener("click", () => importAllFile?.click());
+importAllFile?.addEventListener("change", async () => {
+  const file = importAllFile?.files?.[0];
+  if (!file) return;
+  importAllFile.value = "";
+  try {
+    const bundle = await file.text();
+    const confirmed = await confirmActionDialog({
+      title: "Import this backup?",
+      body:
+        "Importing replaces your CURRENT profile with the backup's agents, memories, artifacts and settings. Data the backup does not contain will be removed.\n\nProvider API keys and MCP auth headers are never in the file — you will re-enter them in Settings afterwards.\n\nContinue?",
+      confirmLabel: "Replace my data with this backup",
+      destructive: true,
+    });
+    if (!confirmed) {
+      setBackupStatus("Import cancelled — nothing was changed.");
+      return;
+    }
+    setBackupStatus("Validating and restoring the backup…");
+    importAllBtn.disabled = true;
+    const res = await chrome.runtime.sendMessage({ type: "owner.import.all", bundle, overwrite: true });
+    if (!res?.ok) throw new Error(res?.error || "Import failed");
+    const r = res.report?.restored || {};
+    setBackupStatus(`Restored ${r.opfsFiles ?? 0} files, ${r.kvKeys ?? 0} settings keys and ${r.alarms ?? 0} schedules. Re-enter your provider API keys in the Providers section.`);
+  } catch (err) {
+    setBackupStatus(`Import failed: ${err?.message || err}`);
+  } finally {
+    importAllBtn.disabled = false;
   }
 });
 
@@ -3230,9 +3365,47 @@ function hideDeveloperLockedNotice() {
   if (el) el.hidden = true;
 }
 
+const renderedSections = new Set();
+async function ensureSectionRendered(sectionId) {
+  if (renderedSections.has(sectionId)) return;
+  renderedSections.add(sectionId);
+  if (sectionId === "providers") {
+    await renderProviders();
+    // The server-tools toggle + per-agent rows live in the providers section
+    // HTML, so their init runs with this renderer — once, guarded by
+    // renderedSections (cap-beads-wuvg: previously it sat in renderAgents(),
+    // so reload → providers left the toggle unchecked until agents rendered).
+    await initProviderServerTools();
+  } else if (sectionId === "mcp-servers") {
+    await renderMcpServers();
+  } else if (sectionId === "local-folders") {
+    await renderLocalFolders();
+  } else if (sectionId === "tool-library") {
+    if (developerFeaturesEnabled) await renderToolLibrary();
+  } else if (sectionId === "agents") {
+    await renderAgents();
+    await renderEnroll();
+  } else if (sectionId === "browser") {
+    await renderBrowser();
+    await renderActionPolicy();
+  } else if (sectionId === "permissions") {
+    await renderPermissions();
+  } else if (sectionId === "skills") {
+    mountSkillsSection(document.getElementById("skills"));
+  } else if (sectionId === "hooks") {
+    if (developerFeaturesEnabled) await renderHooks();
+  } else if (sectionId === "prompts") {
+    if (developerFeaturesEnabled) await renderPrompts();
+  } else if (sectionId === "usage") {
+    await renderUsage();
+  } else if (sectionId === "about") {
+    await renderAbout();
+  }
+}
+
 // nav active state
-export function handleSettingsHashNavigation(hash, isTraverse = false) {
-  const sectionId = normalizeSettingsSectionId(hash);
+export async function handleSettingsHashNavigation(hash, isTraverse = false) {
+  const sectionId = normalizeSettingsSectionId(hash) || "providers";
   if (!sectionId) return false;
 
   const section = document.getElementById(sectionId);
@@ -3241,10 +3414,15 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   // Developer section requested while the flag is off — show the notice, never
   // a silent scroll to a hidden panel.
   if (!developerFeaturesEnabled && DEVELOPER_SECTIONS_SET.has(sectionId)) {
+    document.querySelectorAll("section.panel").forEach((s) => s.classList.remove("active"));
     showDeveloperLockedNotice();
     return true;
   }
   hideDeveloperLockedNotice();
+
+  document.querySelectorAll("section.panel").forEach((s) => {
+    s.classList.toggle("active", s.id === sectionId);
+  });
 
   document.querySelectorAll(".nav-item").forEach((x) => {
     const match = x.dataset.section === sectionId ||
@@ -3257,10 +3435,8 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   });
 
   if (sectionId === "local-folders") renderLocalFolders();
-  if (sectionId === "mcp-servers") renderMcpServers();
-  if (sectionId === "usage") renderUsage();
-  if (sectionId === "skills") mountSkillsSection(document.getElementById("skills"));
-  if (sectionId === "about") renderAbout(); // lazy: fetched + rendered on first open (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01)
+  await ensureSectionRendered(sectionId);
+  if (sectionId === "usage") await renderUsage(); // keep usage fresh on every visit
 
   section.scrollIntoView({
     behavior: isTraverse ? "auto" : "smooth",
@@ -3387,18 +3563,13 @@ await refreshStoragePermission();
 // reveal them without a reload.
 await readDeveloperFeaturesFlag();
 applyDeveloperVisibility(developerFeaturesEnabled);
-await renderProviders();
-await renderMcpServers();
+
+// CAP-FB-20260827-SETTINGS-MONOLITH-01: multi-section navigation.
+// Only the active section is rendered on boot (and on section switch);
+// the remaining sections are lazy-mounted when navigated to.
 await renderLocalFolders();
-if (developerFeaturesEnabled) await renderToolLibrary();
-await renderAgents();
-await renderEnroll();
-await renderBrowser();
-await renderActionPolicy();
-await renderPermissions();
-if (developerFeaturesEnabled) await renderHooks();
-if (developerFeaturesEnabled) await renderPrompts();
-await renderUsage();
+await navigationController.syncCurrent();
+
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run
 // completing, or the owner clearing), not show a stale count until a manual
 // reload. PUSH-driven (CAP-FB-20260830-HUB-POLLING-01): the SW bumps
@@ -3412,7 +3583,9 @@ await renderUsage();
 // (CAP-FB-20260830-HUB-CHROME-POLISH-01 moved the console here from the hub).
 refreshDiagnostics().catch(() => {});
 subscribeDiagnosticsRevision(() => {
-  renderUsage();
+  if (document.getElementById("usage")?.classList.contains("active")) {
+    renderUsage();
+  }
   refreshDiagnostics().catch(() => {});
 });
 // The detail-toggle is a STATIC control — wire its click EXACTLY ONCE (outside
@@ -3463,6 +3636,15 @@ await renderWebmcpStatus();
         if (!devRendered.has("hooks")) { devRendered.add("hooks"); try { await renderHooks(); } catch { /* idem */ } }
         if (!devRendered.has("prompts")) { devRendered.add("prompts"); try { await renderPrompts(); } catch { /* idem */ } }
         if (!devRendered.has("board-permissions")) { devRendered.add("board-permissions"); try { populateBoardDenyAgents(); } catch { /* idem */ } }
+        // Turning the flag on reveals the providers server-tools card; re-sync
+        // its sub-panel with the persisted global toggle. initProviderServerTools
+        // runs once at providers render (boot), when the flag may still have
+        // been off — the gate folded into renderServerToolAgents kept the panel
+        // closed then, so the flip-on is the moment it may open (cap-beads-wuvg).
+        try {
+          const st = await storage.get("cap:providerServerTools");
+          await renderServerToolAgents(st?.["cap:providerServerTools"]?.enabled === true);
+        } catch { /* providers section absent — nothing to reveal */ }
       }
       // The SW resolves the model + toolset per run from the same kv key; nudge
       // any running orchestrator so the demo model / developer tools switch

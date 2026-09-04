@@ -9,11 +9,13 @@
 //   deno run -A scripts/agent-provider-picker.ts --phase audit   # before evidence
 //   deno run -A scripts/agent-provider-picker.ts                 # full regression
 //
-// Screenshots + a measured-metrics JSON land in /tmp/cap-picker-<phase>-<ts>/.
+// Screenshots + a measured-metrics JSON land in <durable-root>/cap-picker-<phase>-<ts>/
+// (disk; bead chp).
 // @ts-nocheck — dynamic CDP scripting (no types for the raw protocol).
 
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 
@@ -268,7 +270,7 @@ function check(name, cond) {
 // The evidence OUT dir exists BEFORE any resource-producing setup, so even
 // an early failure emits a manifest.
 PHASE = Deno.args.includes("--phase") ? Deno.args[Deno.args.indexOf("--phase") + 1] : "full";
-OUT = `/tmp/cap-picker-${PHASE}-${Date.now()}`;
+OUT = durableDir(`cap-picker-${PHASE}-${Date.now()}`);
 await ensureDir(OUT).catch(() => {});
 try {
 console.log("building the isolated test extension…");

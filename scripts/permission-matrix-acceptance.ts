@@ -46,6 +46,7 @@
 // Default evidence dir: test-artifacts/ (override: PERMISSION_MATRIX_ARTIFACT_DIR).
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -323,7 +324,7 @@ async function main() {
   if (!buildStatus.success) return finish();
 
   // ── PHASE A — shipped manifest, fresh profile ────────────────────────────
-  const profileA = `/tmp/cap-perm-matrix-a-${Date.now()}`;
+  const profileA = durableDir(`cap-perm-matrix-a-${Date.now()}`);
   const { rig: rigA } = await startRig(profileA, EXT);
   try {
     // CLASS 1 — warningless JIT lifecycle (contextMenus auto-grants headless).
@@ -362,7 +363,7 @@ async function main() {
   }
 
   // ── PHASE B — variant pre-held grant path (warned permissions) ──────────
-  const variantDir = `/tmp/cap-perm-matrix-variant-${Date.now()}`;
+  const variantDir = durableDir(`cap-perm-matrix-variant-${Date.now()}`);
   const build2 = new Deno.Command("node", {
     args: [`${ROOT}scripts/permission-variant.mjs`, "--out", variantDir, "--permissions", "tabGroups,history"],
     stdout: "piped",
@@ -412,7 +413,7 @@ async function main() {
     throw new Error(`Integrity verification failed: ${verifyError}`);
   }
 
-  const profileB = `/tmp/cap-perm-matrix-b-${Date.now()}`;
+  const profileB = durableDir(`cap-perm-matrix-b-${Date.now()}`);
   const { rig: rigB } = await startRig(profileB, variantDir);
   try {
     const optsB = await rigB.openOptions();
