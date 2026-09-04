@@ -100,12 +100,16 @@ nav {
   margin: 0;
 }
 .panel {
+  display: none;
   min-inline-size: 0;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: var(--space-5);
   margin-bottom: var(--space-4);
+}
+.panel.active {
+  display: block;
 }
 .panel h2 {
   margin: 0 0 8px;

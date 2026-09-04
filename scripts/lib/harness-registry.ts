@@ -111,6 +111,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-scheduled-next-run-widget.ts": { class: "kat" },
   "kat-scheduled-run-output.ts": { class: "kat" },
   "kat-settings-cleanliness.ts": { class: "kat" },
+  "kat-settings-multi-section.ts": { class: "kat" },
   "kat-task-lifecycle.ts": { class: "kat", ...RED("0/1", "'no service worker target' — the KAT does not wait for the MV3 worker to register") },
   "kat-task-view-simplify.ts": { class: "kat", ...RED("21/1", "'a settled run leaves no debug affordance' — a toggle is still visible") },
   "kat-template-cards.ts": { class: "kat", ...RED("0/6", "the create dialog no longer has the template select the KAT expects (Name / What it does / Run on a schedule)") },
