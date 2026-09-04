@@ -4,8 +4,6 @@
 // reach the model as a MULTIMODAL vision part, and the attachment must be
 // persisted + rendered in the conversation. These are the pure building blocks.
 
-export const MAX_LOCAL_TEXT_BYTES = 1024 * 1024; // 1 MiB
-
 export function isTextLikeAttachment({ name = "", type = "" } = {}) {
   const mime = String(type).toLowerCase().split(";", 1)[0];
   const filename = String(name).toLowerCase();
@@ -70,7 +68,7 @@ export function attachmentContext(attachments) {
         const binary = atob(a.dataURL.split(",")[1] ?? "");
         const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
         const body = new TextDecoder().decode(bytes);
-        parts.push("--- text content ---\n" + body.slice(0, 4000) + "\n---");
+        parts.push("--- text content ---\n" + body + "\n---");
       } catch { /* not decodable */ }
     } else if (a.dataURL && type.startsWith("image/")) {
       parts.push("  (image attached — provided to the model as a vision input)");
@@ -81,6 +79,48 @@ export function attachmentContext(attachments) {
     }
   }
   return "Attachments:\n" + parts.join("\n");
+}
+
+/**
+ * Validate agent.run attachments. Only the dataURL SHAPE is enforced — a
+ * malformed dataURL, bad base64 padding, or a declared-type/parsed-MIME
+ * mismatch is dropped AND REPORTED (never silently accepted; that validation
+ * is the security boundary, not a size limit). There are deliberately no
+ * size or count caps (dptw): the message transport and the OPFS quota surface
+ * their own honest errors when they are truly exceeded.
+ *
+ * Returns { kept, dropped } — kept preserves the original fields; dropped
+ * entries carry { name, reason }.
+ */
+export function validateRunAttachments(attachments) {
+  const kept = [];
+  const dropped = [];
+  for (const a of (Array.isArray(attachments) ? attachments : [])) {
+    const name = String(a?.name ?? "unnamed");
+    const type = String(a?.type ?? "unknown");
+    if (!validAttachmentDataUrl(a)) {
+      dropped.push({ name, reason: "malformed dataURL or type/mime mismatch" });
+      continue;
+    }
+    kept.push({ ...a, name, type });
+  }
+  return { kept, dropped };
+}
+
+/** Accept only data:<mime>;base64,<payload> whose declared type matches the
+ * parsed MIME essence (an image must not be relabelled text/plain). An
+ * attachment with no dataURL has nothing to validate. */
+function validAttachmentDataUrl(a) {
+  if (!a?.dataURL) return true;
+  const m =
+    /^data:([a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*)(?:;\s*[a-z0-9-]+=(?:"[^"]*"|[^;,\s]*))*;base64,([A-Za-z0-9+/]*={0,2})\s*$/
+      .exec(String(a.dataURL));
+  if (!m) return false;
+  const mime = m[1].toLowerCase();
+  const payload = m[2];
+  if (payload.length % 4 !== 0) return false;
+  const declaredBase = String(a?.type ?? "").toLowerCase().split(";")[0].trim();
+  return !declaredBase || declaredBase === mime;
 }
 
 export function buildMultimodalTask(task, attachments) {
@@ -97,14 +137,13 @@ export function buildMultimodalTask(task, attachments) {
 }
 
 /**
- * Persistable attachment shape: keep the metadata + a bounded dataURL (the
- * image bytes for the inline thumbnail) but strip the live File object. Cap
- * the dataURL so a huge screenshot can't blow the OPFS journal/thread quota.
+ * Persistable attachment shape: keep the metadata + the dataURL (the image
+ * bytes for the inline thumbnail) but strip the live File object. No size
+ * cap (dptw) — OPFS quota failures surface honestly from the store write.
  * Returns undefined when there is nothing persistable.
  */
 export function sanitizeAttachments(attachments) {
   if (!Array.isArray(attachments) || attachments.length === 0) return undefined;
-  const MAX_URL = 2 * 1024 * 1024; // 2MB base64 — ample for a thumbnail
   const out = [];
   for (const a of attachments) {
     if (!a) continue;
@@ -114,7 +153,7 @@ export function sanitizeAttachments(attachments) {
       type: typeof a.type === "string" ? a.type : "",
       size: typeof a.size === "number" ? a.size : 0,
       kind: typeof a.kind === "string" ? a.kind : "file",
-      dataURL: url.length > MAX_URL ? "" : url,
+      dataURL: url,
       // local-folder references: the grant identity is the reference — it must
       // survive persistence so the model-facing local-file tools can resolve
       // it (CAP-FB-20260831-FOLDER-COMMAND-01). Bounded like every other field.

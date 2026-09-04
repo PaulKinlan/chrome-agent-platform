@@ -1593,11 +1593,13 @@ Deno.test("terminal: the outbox carries the full thread back-fill beside bounded
   await registry.settle(id, { ok: true, result: full, logicalId: "t" });
   const run = (await registry.list()).runs.find((r) => r.executionId === id);
   assert(run?.terminal, "the settled record carries a terminal");
-  // The journal/registry terminal result is now a SMALL bounded preview (the
-  // ONE full copy lives in the retainedPayloadRef payload; the thread
-  // back-fill below carries the complete text for the task view).
-  assert(run.terminal.result.length <= 300, "terminal.result is a small bounded preview");
-  assert(run.terminal.summary.length <= 240, "terminal.summary stays a preview for lists");
+  // The journal/registry terminal result is a SMALL bounded preview BY DESIGN
+  // (kmpq: the outbox record is digest+ref so a huge result never inflates the
+  // transport record; the ONE full copy lives in the retainedPayloadRef
+  // payload and the thread back-fill resolves it complete — dptw removes
+  // data-losing truncation, not the by-reference transport design).
+  assert(run.terminal.result.length <= 300, "terminal.result is a small bounded preview (kmpq by-design; full copy by reference)");
+  assert(run.terminal.summary.length <= 240, "terminal.summary stays a preview for lists (kmpq by-design)");
   assert(typeof run.terminal.retainedPayloadRef === "string" && run.terminal.retainedPayloadRef.length > 0,
     "the retainedPayloadRef names the authoritative full copy");
   // The thread commit still receives the FULL result (the normal path).
@@ -1730,8 +1732,8 @@ Deno.test("durable runs: a 210KiB terminal never approaches the store bound — 
   const serialized = new TextEncoder().encode(JSON.stringify(outbox)).byteLength;
   assert(serialized < 256 * 1024,
     `outbox must stay under the store per-value bound (serialized ${serialized} bytes >= 256 KiB)`);
-  // The terminal's result is a small preview; the FULL text is in the
-  // retainedPayloadRef payload (the authoritative copy).
+  // The terminal's result is a small preview BY DESIGN (kmpq); the FULL text
+  // is in the retainedPayloadRef payload (the authoritative copy).
   const terminalPreview = outbox.terminal?.result ?? "";
   assert(terminalPreview.length < near.length, "the outbox terminal result is a bounded preview");
   assert(terminalPreview.length <= 300, "the outbox terminal result is genuinely small");
@@ -1965,4 +1967,22 @@ Deno.test("durable runs: an oversized logicalId is stored WHOLE (dptw — no sto
   const outbox = captured[`run-outbox:${executionId}`];
   assert(outbox, "outbox persisted");
   assertEquals(outbox.journalEntry?.id, hostileId, "dptw: journalEntry.id stored whole (unclipped)");
+});
+
+// ── dptw (R4): run previews are no longer truncated at 240 chars ───────────
+Deno.test("durable runs: a taskPreview past 240 chars is stored whole — and still secret-redacted", async () => {
+  const store = new FakeStore();
+  const { registry } = harness(store);
+  const id = "exec_dptw_full_preview";
+  const longTask = `summarise ${"the quarterly report ".repeat(40)} api_key=sk-abc123XYZ789 tail`;
+  await registry.start({
+    executionId: id, kind: "task", taskPreview: longTask, journalTarget: "master",
+    resumeRequest: { id: "t", task: "t", route: "runTask", routeArgs: {}, idempotencyKey: id },
+  });
+  const run = (await registry.list()).runs.find((r) => r.executionId === id);
+  assert(run, "run listed");
+  assert(!run.taskPreview.includes("…"), "no truncation ellipsis");
+  assert(run.taskPreview.includes("the quarterly report"), "full preview text retained");
+  assert(run.taskPreview.length > 240, "past the old 240-char cap");
+  assert(!run.taskPreview.includes("sk-abc123XYZ789"), "secret redaction still applies");
 });

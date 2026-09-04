@@ -358,3 +358,27 @@ Deno.test("reconcile-on-wake: restores durable alive-set on service-worker boot"
   assertEquals(outcome.total, 3);
   assertEquals(ensuredIds, ["agent-1", "agent-2", "background-watcher"]);
 });
+
+// ── dptw (R4): the route must not truncate the result before settle ────────
+Deno.test("agent-worker.result: a result past the old 64 KiB route bound settles byte-complete", async () => {
+  const kv = createMockKv();
+  const { registry } = createTestHarness();
+  const executionId = "exec:99999999-8888-4777-8666-777777777777";
+  await registry.start({ executionId, taskPreview: "big result" });
+  const routes = createAgentWorkerRoutes({
+    ensureOffscreen: async () => ({ ok: true }),
+    kvGet: kv.get,
+    kvSet: kv.set,
+    durableRegistry: registry,
+    markScheduledDone: async () => {},
+  });
+  const full = "result-".repeat(20_000); // 140 KiB — past the old 64 KiB route bound
+  const res = await routes["agent-worker.result"](
+    { executionId, ok: true, result: full },
+    { principal: "extension" },
+  );
+  assertEquals(res.ok, true);
+  const logs = await registry.listLogs(executionId);
+  const terminal = logs.find((row) => row.type === "terminal");
+  assertEquals(terminal?.payload?.result?.length, full.length, "the full result survives the route into the retained terminal payload");
+});

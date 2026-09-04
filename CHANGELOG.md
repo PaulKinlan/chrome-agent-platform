@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- restore the k3-work (60be + 3cb6 + dptw-tr content verified by k3)
+
 ## [0.3.128] — 2026-09-04
 - Pyodide WASM runtime + offscreen host + tool wiring
 

@@ -2818,6 +2818,7 @@ async function openAgentConfig() {
     savedLabel: "Save",
     schedule: agent.schedule?.periodInMinutes ?? null,
     initialMcpServers: agent.mcpServers ?? [],
+    initialTools: agent.tools ?? null,
     onSave: async (v) => {
       // Schedule FIRST: the owner's schedule change applies through the
       // owner-direct schedule path even when the persona edit pends an
@@ -2835,7 +2836,7 @@ async function openAgentConfig() {
         scheduleNote = next == null ? "schedule removed" : `scheduled every ${next} min`;
       }
       const r = await send("named-agent.update", {
-        id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets, canDelegateTo: v.canDelegateTo,
+        id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets, canDelegateTo: v.canDelegateTo, tools: v.tools,
       }).catch(() => ({ ok: false }));
       if (r?.ok === false) {
         return scheduleNote
@@ -2889,7 +2890,7 @@ function openQuickCreateAgent() {
     onSave: async (v) => {
       const r = await send("named-agent.create", {
         name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
-        canDelegateTo: v.canDelegateTo, schedule: v.schedule,
+        canDelegateTo: v.canDelegateTo, schedule: v.schedule, tools: v.tools,
       }).catch(() => ({ ok: false }));
       if (!r?.ok) return { ok: false, error: r?.error ?? "unknown" };
       const id = r.agent?.id ?? v.name;
@@ -3135,6 +3136,53 @@ async function buildAgentConfigDialog(opts) {
   advancedBody.className = "agent-config-advanced-body";
   advancedBody.style.cssText = "display:flex;flex-direction:column;gap:12px;min-width:0;max-width:100%;padding:4px 12px 12px;border-top:1px solid var(--border,#e3e0d9);box-sizing:border-box;";
   advancedBody.append(avatarRow);
+  // Private workspace (CAP-FB-20260831-AGENT-PRIVATE-FS-01): the agent's own
+  // persistent OPFS sandbox — usage + owner Clear, shown only when editing an
+  // existing named agent (create has no id yet).
+  if (opts.selfId) {
+    const wsRow = document.createElement("div");
+    wsRow.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:2px 0;font-size:12px;";
+    const wsLabel = document.createElement("span");
+    wsLabel.style.fontWeight = "600";
+    wsLabel.style.fontSize = "13px";
+    wsLabel.textContent = "Private workspace";
+    const wsHint = document.createElement("span");
+    wsHint.className = "muted";
+    wsHint.style.color = "var(--muted,#635e56)";
+    wsHint.textContent = "The agent's own files — no owner permission needed inside its sandbox.";
+    const wsUsage = document.createElement("span");
+    wsUsage.style.color = "var(--muted,#635e56)";
+    wsUsage.textContent = "…";
+    const wsClear = document.createElement("button");
+    wsClear.type = "button";
+    wsClear.className = "btn small";
+    wsClear.textContent = "Clear workspace";
+    wsClear.style.alignSelf = "flex-start";
+    const refreshUsage = async () => {
+      const u = await send("agent-workspace.usage", { id: opts.selfId }).catch(() => ({ ok: false }));
+      wsUsage.textContent = u?.ok === true
+        ? `${u.filesUsed} file${u.filesUsed === 1 ? "" : "s"} · ${Math.round((u.bytesUsed || 0) / 1024)} KiB of ${Math.round((u.maxBytes || 0) / 1024)} KiB`
+        : "workspace unavailable";
+    };
+    wsClear.addEventListener("click", async () => {
+      const confirmed = await confirmActionDialog({
+        title: "Clear this agent's workspace?",
+        body: "Every file the agent wrote into its private workspace will be deleted. The agent's skills, memory and schedule are unaffected.",
+        confirmLabel: "Clear workspace",
+        destructive: true,
+      });
+      if (!confirmed) return;
+      const r = await send("agent-workspace.clear", { id: opts.selfId }).catch(() => ({ ok: false }));
+      if (r?.ok !== true) {
+        wsUsage.textContent = `clear failed: ${r?.error ?? "unknown"}`;
+        return;
+      }
+      await refreshUsage();
+    });
+    wsRow.append(wsLabel, wsHint, wsUsage, wsClear);
+    advancedBody.append(wsRow);
+    refreshUsage().catch(() => {});
+  }
   advancedDetails.append(advancedSummary, advancedBody);
   scrollBody.append(advancedDetails);
 
@@ -3270,6 +3318,45 @@ async function buildAgentConfigDialog(opts) {
     }
     delegDetails.append(delegList);
     advancedBody.append(delegDetails);
+  }
+
+  // Per-agent tool config (G4): WebMCP origins allow-list + bundled WASM allow-list.
+  const toolsDetails = document.createElement("details");
+  toolsDetails.style.fontSize = "13px";
+  const toolsSummary = document.createElement("summary");
+  toolsSummary.textContent = "Tools & WebMCP allowlists (optional restrictions)";
+  toolsDetails.append(toolsSummary);
+
+  const toolsBody = document.createElement("div");
+  toolsBody.style.display = "flex";
+  toolsBody.style.flexDirection = "column";
+  toolsBody.style.gap = "8px";
+  toolsBody.style.padding = "6px 0 0 4px";
+
+  const webmcpField = configField(
+    "WebMCP origin allowlist (comma-separated origins e.g. https://github.com; blank = allow all)",
+    "textarea",
+    Array.isArray(opts.initialTools?.webmcpOrigins) ? opts.initialTools.webmcpOrigins.join(", ") : "",
+    2,
+  );
+  const bundledWasmField = configField(
+    "Bundled WASM tools allowlist (comma-separated tool IDs e.g. grep, diff, csvtool; blank = allow all)",
+    "textarea",
+    Array.isArray(opts.initialTools?.bundledWasm) ? opts.initialTools.bundledWasm.join(", ") : "",
+    2,
+  );
+
+  toolsBody.append(webmcpField.wrap, bundledWasmField.wrap);
+  toolsDetails.append(toolsBody);
+  advancedBody.append(toolsDetails);
+
+  function collectAgentTools() {
+    const webmcpRaw = webmcpField.el.value.trim();
+    const wasmRaw = bundledWasmField.el.value.trim();
+    if (!webmcpRaw && !wasmRaw) return null;
+    const webmcpOrigins = webmcpRaw ? webmcpRaw.split(/[,\n]+/).map((s) => s.trim().toLowerCase()).filter(Boolean) : null;
+    const bundledWasm = wasmRaw ? wasmRaw.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean) : null;
+    return { webmcpOrigins, bundledWasm };
   }
 
   // Core assets: files whose content becomes part of the agent's context.
@@ -3529,6 +3616,7 @@ async function buildAgentConfigDialog(opts) {
       firstTask: selectedTemplate?.firstTask ?? "",
       canDelegateTo, schedule,
       mcpServers: collectAgentMcpServers(),
+      tools: collectAgentTools(),
     });
     saveBtn.disabled = false;
     if (r?.ok) {

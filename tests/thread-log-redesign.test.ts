@@ -64,7 +64,7 @@ class FakeStore {
   async keys() { return [...this.values.keys()].sort(); }
 }
 
-function makeRegistry(store, bootId = "boot-a") {
+function makeRegistry(store, bootId = "boot-a", { retention = null } = {}) {
   return createDurableRunRegistry({
     store,
     logHandleFor: (store.__logHandles ??= createMemoryRunLogHandles()),
@@ -75,6 +75,7 @@ function makeRegistry(store, bootId = "boot-a") {
     replaceCancellationJournal: async () => {},
     commitThread: (threadId, execId, terminal) => commitThreadTerminal(threadId, execId, terminal),
     replaceCancellationThread: (threadId, execId, terminal) => commitThreadTerminal(threadId, execId, { ...terminal, role: "error", category: "cancelled" }),
+    ...(retention ? { retentionSetting: async () => retention } : {}),
   });
 }
 
@@ -310,9 +311,10 @@ Deno.test("KAT 9: pure projection ordering + pause marker semantics (projectThre
 // The bound is 50 since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01 (the last 50
 // runs of a surface reopen with their full visible history); what lies beyond
 // it is stated in-line, never silently dropped.
-Deno.test("bounded replay: a 55-run thread reads only the 50 recent executions, totals honest and stated", async () => {
+Deno.test("unbounded replay (dptw): a 55-run thread reads ALL 55 executions, totals honest", async () => {
   const store = new FakeStore();
-  const registry = makeRegistry(store);
+  // Retention keeps 60/thread so only the VIEW bound could omit a run.
+  const registry = makeRegistry(store, "boot-dptw-55", { retention: { mode: "bounded", perThread: 60 } });
   const t = await createThread("many-run task");
   let listLogsCalls = 0;
   const spyListLogs = async (id, limit) => { listLogsCalls += 1; return await registry.listLogs(id, limit); };
@@ -330,26 +332,22 @@ Deno.test("bounded replay: a 55-run thread reads only the 50 recent executions, 
   });
 
   assertEquals(view.totalExecutions, 55, "total executions reported honestly");
-  assertEquals(view.truncatedExecutions, 5, "the 5 oldest executions are omitted (55 - 50)");
-  assertEquals(listLogsCalls, 50, "listLogs is called only for the bounded recent executions, not all 55");
-  // What is outside the bound is STATED in-line (never a silent drop).
-  const bound = view.messages.find((m) => m.role === "system" && m.viewBound);
-  assert(bound && /last 50 of 55 runs/.test(bound.content), `the view states its bound: ${bound?.content}`);
-  assertEquals(view.messages.indexOf(bound), 0, "the notice leads the view");
-  // The MOST RECENT execution's tool card is present; the OLDEST (run 1) is not.
+  assertEquals(view.truncatedExecutions, 0, "dptw: no executions omitted from the view");
+  assertEquals(listLogsCalls, 55, "every execution's log is read — no 50-execution bound");
+  assert(!view.messages.some((m) => m.role === "system" && m.viewBound), "no view-bound notice — there is no bound");
   const hasRecent = toolCards(view).some((m) => m.executionId === "exec_bounded_0055");
   const hasOldest = toolCards(view).some((m) => m.executionId === "exec_bounded_0001");
   assert(hasRecent, "the most recent execution's card is rendered");
-  assert(!hasOldest, "the oldest execution (beyond the bound) is not re-read/rendered");
-  assertEquals(view.status, "done", "terminal self-heal still holds on the bounded slice");
+  assert(hasOldest, "the OLDEST execution's card is rendered too (dptw)");
+  assertEquals(view.status, "done", "terminal self-heal still holds");
 });
 
-Deno.test("bounded replay: a single run with >250 log rows still shows the recent cards (log row cap)", async () => {
+Deno.test("unbounded replay (dptw): a single run with >250 log rows shows EVERY card (no row cap)", async () => {
   const store = new FakeStore();
   const registry = makeRegistry(store);
   const t = await createThread("long run");
   await seedRun(registry, "exec_bounded_rows_0001", t.id, 200, { result: "done" }); // 200 calls = 400 log rows
-  let logLimitSeen = null;
+  let logLimitSeen = "unset";
   const thread = await getThread(t.id);
   const view = await buildThreadRunView(thread, {
     listThreadExecutions: (id) => registry.listThreadExecutions(id),
@@ -357,12 +355,10 @@ Deno.test("bounded replay: a single run with >250 log rows still shows the recen
     commitTerminal: commitThreadTerminal,
     recordFailure: () => {},
   });
-  assert(logLimitSeen === 250, "listLogs is asked for the bounded 250-row slice");
-  // 200 calls = 400 log rows; capped to the most-recent 250 rows = 125 tool-call
-  // cards (each call contributes one tool-call + one tool-result row). The bound
-  // drops the OLDEST calls, not the recent ones.
-  assertEquals(toolCards(view).length, 125, "the 250-row cap yields the 125 most-recent cards");
-  assert(view.truncatedLogs === true, "the row-level truncation is flagged honestly");
+  assert(logLimitSeen === undefined, "listLogs is asked for ALL rows (no limit argument)");
+  // 200 calls = 400 log rows; with no row cap every call's card renders.
+  assertEquals(toolCards(view).length, 200, "all 200 cards render — past the old 250-row cap");
+  assert(!view.truncatedLogs, "no row-level truncation to flag");
   assertEquals(view.status, "done");
 });
 

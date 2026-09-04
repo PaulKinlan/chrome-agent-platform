@@ -298,16 +298,15 @@ Deno.test("reserve: the idempotency replay is a no-op + the applied keys are bou
   const cur1 = JSON.parse(await rawText(`tool-jobs/${EX}/${CALL}/.quota.current`));
   assertEquals(cur1.seq, 2);
   assertEquals(cur1.bytesUsed, 5);
-  // The bounded applied keys: 255 more distinct keys fill the cap; the next
-  // NEW key FAILS CLOSED.
+  // dptw: the applied-keys list has NO count cap — 255 more distinct keys
+  // land, and so does the 257th (the expired-key GC below is the only
+  // pruning, and it preserves the replay no-op for LIVE reservations).
   for (let i = 0; i < 255; i++) {
     const r = await w.reserve({ executionId: EX, callIndex: CALL, bytes: 0, files: 1, idempotencyKey: `k${i}` });
     assert(r.ok, `key k${i} lands`);
   }
-  await assertRejects(
-    () => w.reserve({ executionId: EX, callIndex: CALL, bytes: 0, files: 1, idempotencyKey: "overflow" }),
-    (e) => e?.workspaceCode === "applied_keys_full",
-  );
+  const overflow = await w.reserve({ executionId: EX, callIndex: CALL, bytes: 0, files: 1, idempotencyKey: "overflow" });
+  assert(overflow.ok, "the 257th distinct key lands — no applied-keys count cap (dptw)");
   // Advance the clock past the TTL: the expired reservations' keys GC on the
   // next reserve (the replay no-op for the OLD keys is dropped — they're
   // expired) and a NEW key lands.

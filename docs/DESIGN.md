@@ -460,8 +460,17 @@ Three properties make it safe to compose tools this way:
 - **Each step keeps its own gates.** The executor dispatches every step through the
   run's normal tool seam (`LazyToolProtocol.execute`), so a step's owner-approval
   card and untrusted-content fence apply exactly as if the model had called that
-  tool directly; the card shows the RESOLVED args. The fence is preserved as data
-  flows forward (a bound value that was fenced stays fenced).
+  tool directly; the card shows the RESOLVED args. A step that pauses for a
+  capability surfaces the run's REAL approval card (the same `onPermissionRequest`
+  seam the agent loop uses) and, on Allow, re-executes the paused call through the
+  runtime-only resume path — same tool, original validated args, same run fence
+  (chrome-agent-platform-3cb6). A management/destructive step raises its own
+  in-route card via `requireOwnerApproval` exactly as a model-initiated call does.
+  Deny or expiry fails the step closed naming the tool and the requirement, and
+  the pipeline halts. A pipeline is NOT transactional: steps that already ran and
+  committed before the denial stay done — there is no rollback, and the halted
+  pipeline's result says exactly which step stopped it. The fence is preserved as data flows forward (a bound value
+  that was fenced stays fenced).
 - **It fails closed.** `$ref` may reference only an EARLIER step (a linear pipe, no
   cycles by construction); a binding whose path does not resolve halts the
   pipeline with a structured error rather than running a step against a missing

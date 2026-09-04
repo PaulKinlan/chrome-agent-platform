@@ -70,7 +70,6 @@ import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "
 import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 import {
   isTextLikeAttachment,
-  MAX_LOCAL_TEXT_BYTES,
   textToDataUrl,
 } from "./attachments.js";
 
@@ -99,6 +98,7 @@ export const ICONS = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
   external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
+  activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -1697,10 +1697,15 @@ class AttachButton extends Component {
       }
       const file = await this._pickFile(kind);
       if (!file) return;
+      // Honest refusal: an over-ceiling pick or a failed read is reported with
+      // the real reason — never attached as a silent empty dataURL.
       if (file.overLimit) {
-        // Rejected at select time (the client-side bound): surface a clear
-        // status instead of attaching an over-budget file.
-        this._emit("attach-error", { message: `${file.name} is over the 8 MiB limit` });
+        const mib = Math.round(file.size / (1024 * 1024));
+        this._emit("attach-error", { message: `${file.name} is ${mib} MiB — over the 32 MiB attach ceiling (the bytes travel to the model as base64 in a single message)` });
+        return;
+      }
+      if (file.readError) {
+        this._emit("attach-error", { message: `Couldn't read ${file.name}: ${file.readError}` });
         return;
       }
       this._emit("attach", file);
@@ -1742,20 +1747,25 @@ class AttachButton extends Component {
       input.onchange = async () => {
         const file = input.files?.[0] ?? null;
         if (!file) return resolve(null);
-        // CLIENT-SIDE bound BEFORE the eager FileReader read (the wider-goal
-        // review's transport finding: the dataURL crossed runtime messaging
-        // before the SW bound could protect anything, so a large selected file
-        // could allocate + base64 + exceed the message limit first). Reject an
-        // over-budget file at select time — never materialize it.
-        const MAX_RAW_BYTES = 8 * 1024 * 1024; // 8 MiB raw (~10.7 MiB dataURL)
-        if (file.size > MAX_RAW_BYTES) {
+        // dptw note: the old arbitrary 8 MiB select-time refuse is gone. What
+        // remains is a TRANSPORT ceiling, not a size cap: the bytes cross to
+        // the service worker as a base64 dataURL inside ONE runtime message —
+        // base64 inflates by 4/3 and the practical runtime-messaging envelope
+        // is ~64 MiB, so 32 MiB raw (~43 MiB on the wire) is the generous
+        // edge with headroom; past it the send itself risks failing, and
+        // FileReader would build a 40+ MiB string on the main thread first
+        // (tab freeze). Over the ceiling: refuse HONESTLY (attach-error with
+        // the real reason), never a silent empty dataURL.
+        const MAX_PICK_BYTES = 32 * 1024 * 1024; // 32 MiB raw (~43 MiB base64)
+        if (file.size > MAX_PICK_BYTES) {
           resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL: "", overLimit: true });
           return;
         }
         // Read the bytes as a dataURL so the service worker can actually send
-        // TEXT content to the model (and label media honestly). The SW bounds
-        // the payload; we only pass the decoded data through.
+        // TEXT content to the model (and label media honestly). A read failure
+        // is carried as readError and surfaced by the caller — never silent.
         let dataURL = "";
+        let readError = null;
         try {
           dataURL = await new Promise((res, rej) => {
             const fr = new FileReader();
@@ -1763,8 +1773,10 @@ class AttachButton extends Component {
             fr.onerror = () => rej(fr.error);
             fr.readAsDataURL(file);
           });
-        } catch { /* non-fatal — the SW still labels the attachment */ }
-        resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL });
+        } catch (err) {
+          readError = String(err?.message ?? err ?? "the file could not be read");
+        }
+        resolve({ name: file.name, size: file.size, type: file.type, kind, file, dataURL, readError });
       };
       input.oncancel = () => resolve(null);
       input.click();
@@ -6865,7 +6877,9 @@ class AgentComposer extends Component {
       return;
     }
     const textLike = isTextLikeAttachment(file);
-    let attachAsText = textLike && Number(file.size) <= MAX_LOCAL_TEXT_BYTES;
+    // dptw: text files attach as text at ANY size — no 1 MiB gate. If the read
+    // fails (permissions, transport), the honest status below says why.
+    let attachAsText = textLike;
     let dataURL = "";
     let type = String(file.type || (textLike ? "text/plain" : "application/octet-stream"));
     if (attachAsText) {
@@ -6874,7 +6888,6 @@ class AgentComposer extends Component {
           grantId: file.grantId,
           relativePath: file.relativePath,
           asText: true,
-          maxBytes: MAX_LOCAL_TEXT_BYTES,
         }).catch((err) => ({ ok: false, error: String(err?.message ?? err) }))
         : { ok: false, error: "extension runtime unavailable" };
       if (read?.error === "fs_file_not_text") {
@@ -6900,7 +6913,7 @@ class AgentComposer extends Component {
     });
     this.setStatus(attachAsText
       ? `Attached ${file.name} from ${file.folderName} as text context.`
-      : `Attached ${file.name} as a reference (${textLike && Number(file.size) > MAX_LOCAL_TEXT_BYTES ? "over 1 MiB" : "binary"}; contents weren't read).`);
+      : `Attached ${file.name} as a reference (binary; contents weren't read).`);
   }
 
   // /folder — a granted FOLDER attaches as a REFERENCE ONLY: never read or
@@ -9298,6 +9311,30 @@ class PanelButton extends Component {
       .shield-body .vkind { flex:0 0 auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--warning,#9a6700); }
       .shield-body .vmsg { flex:1; word-break:break-word; }
       .shield-body .vts { flex:0 0 auto; color:var(--muted,#635e56); }
+      .diag-body .sect { padding:10px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
+      .diag-body .sect:last-child { border-bottom:0; }
+      .diag-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:6px; }
+      .diag-metrics { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
+      @media (max-width: 480px) { .diag-metrics { grid-template-columns:repeat(2, 1fr); } }
+      .diag-card { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:8px 6px; background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9); border-radius:8px; text-align:center; }
+      .diag-card-num { font-size:18px; font-weight:700; color:var(--text,#1d1b18); }
+      .diag-card-num.has-error { color:var(--danger,#b3261e); }
+      .diag-card-num.has-running { color:var(--accent,#0e6e63); }
+      .diag-card-label { font-size:11px; color:var(--muted,#635e56); margin-top:2px; }
+      .diag-tools-list { display:flex; flex-wrap:wrap; gap:6px; }
+      .diag-tool-chip { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); color:var(--text,#1d1b18); }
+      .diag-tool-chip .count { font-weight:600; color:var(--accent,#0e6e63); margin-left:4px; }
+      .diag-errors-list { display:flex; flex-direction:column; gap:4px; }
+      .diag-error-row { display:flex; gap:8px; font-size:12px; align-items:baseline; padding:2px 0; }
+      .diag-error-time { flex:0 0 auto; color:var(--muted,#635e56); font-size:11px; }
+      .diag-error-level { flex:0 0 auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+      .lvl-error .diag-error-level { color:var(--danger,#b3261e); }
+      .lvl-warn .diag-error-level { color:var(--warning,#9a6700); }
+      .diag-error-msg { flex:1; word-break:break-word; }
+      .diag-active-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+      .diag-active-item { display:flex; gap:8px; align-items:center; font-size:12px; }
+      .diag-active-badge { font-size:10px; font-weight:600; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--on-accent-muted,#d7f0ea); color:var(--accent,#0e6e63); }
+      .diag-active-preview { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       @media (prefers-reduced-motion: reduce) { .panel { transition:none; } }
     `, `
       <button class="trigger" type="button" aria-label="${escapeHtml(label)}" data-attention="${attention}" aria-expanded="${this._open}">${this.triggerIcon}${badge}</button>
@@ -9311,6 +9348,7 @@ class PanelButton extends Component {
     this._panel?.querySelector("[data-close]")?.addEventListener("click", () => this._close());
     this._panel?.querySelector("[data-clear]")?.addEventListener("click", () => this._clear());
     this._panel?.querySelector("[data-copy-all]")?.addEventListener("click", () => this._copyAll());
+    this._panel?.querySelector("[data-refresh]")?.addEventListener("click", () => this._refreshPanel());
     // Close on Escape + outside click (light-dismiss, like a native dialog).
     this._bindDocument("keydown", (e) => { if (e.key === "Escape") this._close(); });
     this._bindDocument("pointerdown", (e) => {
@@ -9521,6 +9559,219 @@ class SecurityShield extends PanelButton {
   }
 }
 customElements.define("security-shield", SecurityShield);
+
+/* vocab:advanced:start — <diagnostics-panel> is a developer/diagnostic tool
+ * overlay that monitors key platform metrics and captured events. */
+class DiagnosticsPanel extends PanelButton {
+  get triggerIcon() { return ICONS.activity; }
+  _panelMarkup() {
+    return `
+      <div class="phead">
+        <span class="t">Diagnostics</span>
+        <button type="button" data-refresh title="Refresh">Refresh</button>
+        <button type="button" data-copy-all title="Copy summary">Copy summary</button>
+        <button type="button" data-clear title="Clear errors">Clear errors</button>
+        <button type="button" data-close aria-label="Close">${ICONS.close}</button>
+      </div>
+      <div class="pbody diag-body">
+        <div class="diag-metrics">
+          <div class="diag-card">
+            <span class="diag-card-num" id="diag-metric-running">0</span>
+            <span class="diag-card-label">Agents running</span>
+          </div>
+          <div class="diag-card">
+            <span class="diag-card-num" id="diag-metric-completed">0</span>
+            <span class="diag-card-label">Tasks completed</span>
+          </div>
+          <div class="diag-card">
+            <span class="diag-card-num" id="diag-metric-errors">0</span>
+            <span class="diag-card-label">Errors captured</span>
+          </div>
+          <div class="diag-card">
+            <span class="diag-card-num" id="diag-metric-tools">0</span>
+            <span class="diag-card-label">Tool calls</span>
+          </div>
+        </div>
+        <div class="sect" id="diag-active-sect" hidden>
+          <div class="sect-h">Active Runs</div>
+          <ul class="diag-active-list"></ul>
+        </div>
+        <div class="sect">
+          <div class="sect-h">Tool Usage</div>
+          <div class="diag-tools-list"></div>
+        </div>
+        <div class="sect">
+          <div class="sect-h">Errors & Warnings</div>
+          <div class="diag-errors-list"></div>
+        </div>
+      </div>`;
+  }
+  async _refreshPanel() {
+    const body = this._panel.querySelector(".diag-body");
+    if (!body) return;
+
+    let runs = this._demoRuns ?? null;
+    let entries = this._demoEntries ?? null;
+    let tools = this._demoTools ?? null;
+    let totals = this._demoTotals ?? null;
+
+    if (!runs) {
+      try {
+        const res = await backendBounded("run.list", {}, 6000);
+        if (Array.isArray(res?.runs)) runs = res.runs;
+      } catch { runs = []; }
+    }
+    if (!entries) {
+      try {
+        const res = await backendBounded("diagnostics.list", {}, 6000);
+        if (Array.isArray(res?.entries)) entries = res.entries;
+      } catch { entries = []; }
+    }
+    if (!tools || !totals) {
+      try {
+        const res = await backendBounded("usage.get", {}, 6000);
+        if (Array.isArray(res?.tools)) tools = res.tools;
+        if (res?.totals) totals = res.totals;
+      } catch { tools = tools || []; totals = totals || { calls: 0 }; }
+    }
+
+    runs = runs || [];
+    entries = entries || [];
+    tools = tools || [];
+    totals = totals || { calls: 0 };
+
+    this._entries = entries;
+    this._runs = runs;
+    this._tools = tools;
+    this._totals = totals;
+
+    const runningRuns = runs.filter((r) => ["running", "settling", "active"].includes(r.phase));
+    const completedRuns = runs.filter((r) => ["completed", "done"].includes(r.phase));
+    const errorEntries = entries.filter((e) => e.level === "error" || e.level === "warn");
+    const errorCount = errorEntries.length || entries.length;
+    const toolCallCount = tools.reduce((sum, t) => sum + (Number(t.calls) || 0), 0) || Number(totals.calls) || 0;
+
+    const runningEl = this._panel.querySelector("#diag-metric-running");
+    const completedEl = this._panel.querySelector("#diag-metric-completed");
+    const errorsEl = this._panel.querySelector("#diag-metric-errors");
+    const toolsEl = this._panel.querySelector("#diag-metric-tools");
+
+    if (runningEl) {
+      runningEl.textContent = String(runningRuns.length);
+      runningEl.classList.toggle("has-running", runningRuns.length > 0);
+    }
+    if (completedEl) completedEl.textContent = String(completedRuns.length);
+    if (errorsEl) {
+      errorsEl.textContent = String(errorCount);
+      errorsEl.classList.toggle("has-error", errorCount > 0);
+    }
+    if (toolsEl) toolsEl.textContent = String(toolCallCount);
+
+    this.setAttribute("count", String(errorCount));
+    if (errorCount > 0) this.setAttribute("attention", "true");
+    else this.removeAttribute("attention");
+
+    const activeSect = this._panel.querySelector("#diag-active-sect");
+    const activeList = this._panel.querySelector(".diag-active-list");
+    if (activeSect && activeList) {
+      if (runningRuns.length > 0) {
+        activeSect.hidden = false;
+        activeList.innerHTML = runningRuns.slice(0, 5).map((r) => `
+          <li class="diag-active-item">
+            <span class="diag-active-badge">${escapeHtml(r.kind || "run")}</span>
+            <span class="diag-active-preview">${escapeHtml(r.taskPreview || r.executionId || "active task")}</span>
+          </li>
+        `).join("");
+      } else {
+        activeSect.hidden = true;
+        activeList.innerHTML = "";
+      }
+    }
+
+    const toolsList = this._panel.querySelector(".diag-tools-list");
+    if (toolsList) {
+      if (tools.length > 0) {
+        toolsList.innerHTML = tools.slice(0, 10).map((t) => `
+          <span class="diag-tool-chip">${escapeHtml(t.tool || "tool")}<span class="count">${escapeHtml(String(t.calls || 0))}</span></span>
+        `).join("");
+      } else {
+        toolsList.innerHTML = `<div class="empty">No tool calls recorded yet.</div>`;
+      }
+    }
+
+    const errorsList = this._panel.querySelector(".diag-errors-list");
+    if (errorsList) {
+      if (entries.length > 0) {
+        errorsList.innerHTML = entries.slice(0, 10).map((e) => `
+          <div class="diag-error-row lvl-${escapeHtml(e.level || "info")}">
+            <span class="diag-error-time">${escapeHtml(fmtTime(e.ts))}</span>
+            <span class="diag-error-level">${escapeHtml(e.level || "info")}</span>
+            <span class="diag-error-msg">${escapeHtml(e.message || "")}</span>
+          </div>
+        `).join("");
+      } else {
+        errorsList.innerHTML = `<div class="empty">No errors or warnings captured.</div>`;
+      }
+    }
+  }
+
+  async _clear() {
+    await backend("diagnostics.clear");
+    this._entries = [];
+    this._demoEntries = [];
+    await this._refreshPanel();
+    this._emit("cleared");
+  }
+
+  async _copyAll() {
+    const running = this._runs ? this._runs.filter((r) => ["running", "settling", "active"].includes(r.phase)).length : 0;
+    const completed = this._runs ? this._runs.filter((r) => ["completed", "done"].includes(r.phase)).length : 0;
+    const errors = this._entries ? this._entries.length : 0;
+    const toolCalls = this._tools ? this._tools.reduce((sum, t) => sum + (Number(t.calls) || 0), 0) : (this._totals?.calls ?? 0);
+
+    const lines = [
+      "Chrome Agent Platform — Diagnostics Summary",
+      `Agents running: ${running}`,
+      `Tasks completed: ${completed}`,
+      `Errors captured: ${errors}`,
+      `Tool calls: ${toolCalls}`,
+    ];
+
+    if (this._tools && this._tools.length > 0) {
+      lines.push("", "Top Tools:");
+      for (const t of this._tools.slice(0, 10)) {
+        lines.push(`  - ${t.tool}: ${t.calls} calls`);
+      }
+    }
+
+    if (this._entries && this._entries.length > 0) {
+      lines.push("", "Recent Errors:");
+      for (const e of this._entries.slice(0, 10)) {
+        lines.push(`  [${fmtTime(e.ts)}] ${e.level}${e.source ? ` (${e.source})` : ""}: ${e.message}`);
+      }
+    }
+
+    const text = lines.join("\n");
+    const btn = this._panel?.querySelector("[data-copy-all]");
+    if (await this._writeClipboard(text)) {
+      if (btn) { btn.textContent = "Copied"; setTimeout(() => { btn.textContent = "Copy summary"; }, 1400); }
+    }
+  }
+
+  async refresh() {
+    return await this._refreshPanel();
+  }
+
+  set demoData(data) {
+    if (data?.runs !== undefined) this._demoRuns = data.runs;
+    if (data?.entries !== undefined) this._demoEntries = data.entries;
+    if (data?.tools !== undefined) this._demoTools = data.tools;
+    if (data?.totals !== undefined) this._demoTotals = data.totals;
+    this._refreshPanel();
+  }
+}
+customElements.define("diagnostics-panel", DiagnosticsPanel);
+/* vocab:advanced:end */
 
 /* ──────────────────────────────────────────────────────────────────────────
  * <activity-explorer agent? limit?> — the browsable/searchable activity log

@@ -19,10 +19,12 @@
 //   - pipeline    → runPipeline (lib/tool-pipeline.js) with a dispatcher bound
 //                   to the RUN'S live lazy tool catalog — every step goes
 //                   through the run's normal executor (validation, run
-//                   ownership, capability gates). A step that would need an
-//                   owner approval card FAILS CLOSED naming the tool and the
-//                   requirement — nested execution never shows a silent card
-//                   and never corrupts the run's approval-resume state.
+//                   ownership, capability gates). A step that needs an owner
+//                   approval card shows the run's REAL card and re-executes
+//                   on Allow (slice-2, chrome-agent-platform-3cb6); a denial
+//                   fails the step closed naming the tool and the
+//                   requirement. Contexts without an approval surface
+//                   (workers, SCOPED hook runs) still fail closed.
 //   - instructions → never executed; read with workflow_get and follow them.
 //   - script-python → fails closed (runtime not admitted).
 //
@@ -125,58 +127,23 @@ export async function runWorkflowRoute({ name, kind, source, description, gate, 
   return { ok: run?.ok ?? false, result: run?.result ?? null, error: run?.error, logs: run?.logs ?? [] };
 }
 
-/** The exact step-tool names whose model dispatch can RAISE an owner card and
- * await the decision (REVISE P1): their SW routes call requireOwnerApproval
- * with the model principal (management deletes/updates/script routes, the
- * Destructive browser class, the cookie-value reader, the file-write diff
- * card, per-agent schedule controls) or the run's own workflow_run route.
- * A pipeline step naming one of these must fail closed BEFORE dispatch — the
- * executor would otherwise show a card mid-pipeline and EXECUTE once approved
- * (the fail-closed premise). Keep in lock-step with owner-approval.js's
- * DESTRUCTIVE_ACTIONS / SOURCE_DISCLOSING_ACTIONS and the browser toolset's
- * gates: a tool whose route joins the approvable set belongs HERE. Remote MCP
- * tools (mcp__*) are matched by prefix in the dispatcher (per-server
- * first-use approval is never reachable from a pipeline step either). */
-export const PIPELINE_STEP_OWNER_APPROVAL_TOOLS = Object.freeze([
-  // management tools routed to owner-approvable actions (agent/asset/named-agent/script/hooks/task)
-  "update_agent",
-  "delete_agent",
-  // delete_agent's sibling route alias: disenroll_origin posts the SAME
-  // agent.delete action, which awaits an owner card — a pipeline step naming
-  // it must fail closed pre-dispatch like delete_agent itself.
-  "disenroll_origin",
-  "update_asset",
-  // update_asset's cheap sibling: patch_asset posts asset.patch, whose route
-  // awaits the SAME asset.update owner approval card (the edits resolve to a
-  // body behind the gate) — a pipeline step naming it must fail closed.
-  "patch_asset",
-  "delete_asset",
-  "create_named_agent",
-  "update_named_agent",
-  "delete_named_agent",
-  "set_agent_provider",
-  "subscribe_hook",
-  "unsubscribe_hook",
-  "create_script",
-  "update_script",
-  "delete_script",
-  "run_script",
-  "schedules_pause",
-  "schedules_resume",
-  "schedules_update",
-  // the run's own script-js workflow runner (a workflow step that recurses
-  // into workflow_run would raise the workflow.run owner card)
+/** The step-tool names that must NEVER dispatch from a pipeline step:
+ * `workflow_run` (a pipeline recursing into the workflow runner could loop a
+ * workflow into itself — the owner card is no brake against a workflow that
+ * re-enters itself between clicks) and `mcp__*` remote-server tools (matched
+ * by PREFIX in the dispatcher; a nested per-server first-use approval is out
+ * of the pipeline contract). Every OTHER gated tool keeps its gate THROUGH
+ * the normal owner card (slice-2, chrome-agent-platform-3cb6): a capability
+ * pause surfaces the run's real approval card and resumes on Allow (the
+ * requestApproval/resume pair below), and a management/destructive route
+ * (delete_named_agent, run_script, close_tab, …) raises its own card
+ * in-route via requireOwnerApproval exactly as it does for a model-initiated
+ * execute_tool call — approved executes, denied fails the step with the
+ * requirement named. Keep the never-dispatch set minimal: a tool whose route
+ * joins the approvable set does NOT belong here. */
+export const PIPELINE_STEP_NEVER_DISPATCH_TOOLS = Object.freeze([
+  // the run's own script-js workflow runner (recursion guard)
   "workflow_run",
-  // browser Destructive class + cookie-value reader + file-write diff card
-  "close_tab",
-  "close_window",
-  "wipe_browsing_data",
-  "remove_bookmark",
-  "set_cookie",
-  "remove_cookie",
-  "get_cookie",
-  "write_file",
-  "schedule_task",
 ]);
 
 /** The production pipeline run path: parse + validate the record's body, then
@@ -204,28 +171,35 @@ export async function runPipelineWorkflow({ name, kind, content, dispatchStep })
  * tool by EXACT name against the run's live lazy catalog (search), then
  * executes through the protocol (execute) — validation, run-ownership and
  * capability gates all apply exactly as for a model-initiated execute_tool
- * call. A step whose result is a structured owner-approval pause FAILS CLOSED
- * naming the tool + requirement (nested execution never shows a silent card,
- * and the paused call is settled so it cannot dangle or be resumed later). */
-export function createWorkflowPipelineDispatcher({ search, execute, settle, context, ownerApprovalTools = PIPELINE_STEP_OWNER_APPROVAL_TOOLS } = {}) {
-  const gated = new Set(ownerApprovalTools && typeof ownerApprovalTools[Symbol.iterator] === "function"
-    ? [...ownerApprovalTools]
+ * call.
+ *
+ * OWNER APPROVAL (slice-2, chrome-agent-platform-3cb6): a step whose result
+ * is a structured owner-approval pause surfaces the run's REAL approval card
+ * through `requestApproval` (the run's onPermissionRequest seam — the same
+ * one the agent loop's post-tool hook uses) and, on Allow, re-executes the
+ * paused call through `resume` (the runtime-only resumeApprovedCall path:
+ * same tool, original validated args, same run fence, every live authority
+ * check — ledger entries and the untrusted-content projection apply exactly
+ * as for a first-time call, because the resume ends in the ordinary
+ * execute). On deny/expiry the paused call is settled and the step FAILS
+ * CLOSED naming the tool and the requirement — the pipeline halts. Without
+ * the requestApproval/resume pair (workers, SCOPED hook runs) a pause fails
+ * closed exactly as before. A re-run that pauses on a FURTHER requirement
+ * loops, bounded at 4 rounds (mirroring the agent loop). */
+export function createWorkflowPipelineDispatcher({ search, execute, settle, context, requestApproval = null, resume = null, neverDispatchTools = PIPELINE_STEP_NEVER_DISPATCH_TOOLS } = {}) {
+  const blocked = new Set(neverDispatchTools && typeof neverDispatchTools[Symbol.iterator] === "function"
+    ? [...neverDispatchTools]
     : []);
   return async (toolName, args, stepIndex) => {
     // The FULL declared name is searched — never truncated: a truncated name
     // could silently match a different tool than the pipeline declared.
     const want = String(toolName ?? "");
-    // PRE-DISPATCH guard (REVISE P1): an owner-approval-gated step must fail
-    // closed BEFORE the executor runs. Model-routed tools (delete_named_agent,
-    // run_script, the Destructive browser class, …) AWAIT the owner decision
-    // inside requireOwnerApproval and would otherwise publish an owner card
-    // mid-pipeline and EXECUTE once approved — the exact behaviour the
-    // fail-closed premise forbids. The guard names the step and the tool;
-    // nothing is searched, executed or settled, so no approval event can fire.
-    if (gated.has(want) || want.startsWith("mcp__")) {
+    // PRE-DISPATCH guard: recursion (workflow_run) and remote MCP tools never
+    // dispatch from a pipeline step. Zero search/execute/settle events.
+    if (blocked.has(want) || want.startsWith("mcp__")) {
       return {
         ok: false,
-        error: `step ${stepIndex} (${want}) needs owner approval — pipeline steps never raise an owner card; run this workflow interactively or run the step directly`,
+        error: `step ${stepIndex} (${want}) cannot run inside a pipeline — run this workflow interactively or run the step directly`,
       };
     }
     const ctx = typeof context === "function" ? await context().catch(() => null) : null;
@@ -252,15 +226,51 @@ export function createWorkflowPipelineDispatcher({ search, execute, settle, cont
       const msg = envelope && typeof envelope.error === "string" ? envelope.error : "unknown failure";
       return { ok: false, error: `step ${stepIndex} (${want}) failed: ${msg}` };
     }
-    const result = envelope.result;
-    if (result && typeof result === "object" && result.waitingForPermission === true) {
+    let result = envelope.result;
+    let pausedRef = typeof envelope.selectionRef === "string" ? envelope.selectionRef : found.selectionRef;
+    // The owner-approval loop (slice-2): a capability pause shows the run's
+    // real card and awaits the decision; Allow re-executes through the
+    // runtime-only resume path. Bounded at 4 pauses per step.
+    for (let round = 0; result && typeof result === "object" && result.waitingForPermission === true; round++) {
       const req = result.permissionRequirement;
       const reason = req && typeof req.reason === "string" ? req.reason : "owner approval";
-      try { if (typeof settle === "function") await settle(found.selectionRef); } catch { /* best effort */ }
-      return {
-        ok: false,
-        error: `step ${stepIndex} (${want}) needs owner approval (${reason}) — run this workflow interactively or run the step directly`,
-      };
+      const canAsk = typeof requestApproval === "function" && typeof resume === "function";
+      if (!canAsk) {
+        try { if (typeof settle === "function") await settle(pausedRef); } catch { /* best effort */ }
+        return {
+          ok: false,
+          error: `step ${stepIndex} (${want}) needs owner approval (${reason}) — run this workflow interactively or run the step directly`,
+        };
+      }
+      if (round >= 4) {
+        try { if (typeof settle === "function") await settle(pausedRef); } catch { /* best effort */ }
+        return {
+          ok: false,
+          error: `step ${stepIndex} (${want}) still needs owner approval after 4 approval rounds (${reason}) — run the step directly`,
+        };
+      }
+      let decision;
+      try { decision = await requestApproval(result); } catch { decision = "denied"; }
+      if (decision !== "approved") {
+        try { if (typeof settle === "function") await settle(pausedRef); } catch { /* best effort */ }
+        return {
+          ok: false,
+          error: decision === "expired"
+            ? `step ${stepIndex} (${want}): approval expired (${reason}) — the pipeline stopped; the step was not performed`
+            : `step ${stepIndex} (${want}): the owner denied the request (${reason}) — the pipeline stopped; the step was not performed`,
+        };
+      }
+      let resumed = null;
+      try { resumed = await resume(pausedRef); } catch { resumed = null; }
+      const protocolFailure = !resumed || (resumed.ok !== true && typeof resumed.selectedTool !== "string");
+      if (protocolFailure) {
+        return {
+          ok: false,
+          error: `step ${stepIndex} (${want}): the owner approved (${reason}), but the step could not be re-run (${resumed && typeof resumed.error === "string" ? resumed.error : "the tool is no longer available"}) — run the step directly`,
+        };
+      }
+      result = resumed.result;
+      pausedRef = typeof resumed.selectionRef === "string" ? resumed.selectionRef : pausedRef;
     }
     // NESTED tool-result failure (REVISE P1): the lazy protocol reports the
     // OUTER envelope ok:true even when the tool that ran reported its own

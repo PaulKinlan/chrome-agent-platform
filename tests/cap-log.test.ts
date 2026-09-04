@@ -82,7 +82,7 @@ Deno.test("cap-log: lines are namespaced + timestamped with an elapsed delta", a
   }
 });
 
-Deno.test("cap-log: redaction masks token-shaped strings and bounds length", () => {
+Deno.test("cap-log: redaction masks token-shaped strings; no length cap (dptw)", () => {
   const longHex = "a1b2c3d4e5f6".repeat(4); // 48 hex chars — grant-id shaped
   assertEquals(scrubLogValue(`grant ${longHex}`), "grant «redacted»");
   assertStringIncludes(scrubLogValue("key sk-abc123def456ghi789"), "«redacted»");
@@ -91,11 +91,10 @@ Deno.test("cap-log: redaction masks token-shaped strings and bounds length", () 
   assertStringIncludes(scrubLogValue("Bearer abcdef1234567890"), "«redacted»");
   // short ordinary strings survive untouched
   assertEquals(scrubLogValue("ordinary message"), "ordinary message");
-  // bounding (a long ORDINARY string — word-separated so it is not a token run)
+  // dptw: a long ORDINARY string (word-separated, not a token run) is kept
+  // WHOLE — the old 800-char truncation is gone.
   const long = "lorem ipsum dolor sit amet ".repeat(200);
-  const scrubbed = scrubLogValue(long);
-  assert(scrubbed.length < 900, `bounded: ${scrubbed.length}`);
-  assertStringIncludes(scrubbed, "chars)");
+  assertEquals(scrubLogValue(long), long);
   // a single 5000-char token-shaped run is masked as a secret instead
   assertEquals(scrubLogValue("x".repeat(5000)), "«redacted»");
   // objects are serialised with the same scrub, bounded
@@ -106,6 +105,23 @@ Deno.test("cap-log: redaction masks token-shaped strings and bounds length", () 
   const err = scrubLogValue(new TypeError(`bad token ${longHex}`));
   assertStringIncludes(err, "TypeError");
   assertStringIncludes(err, "«redacted»");
+});
+
+Deno.test("cap-log: values past the old 800/1200-char caps log whole (dptw R5)", () => {
+  // String past 800 chars (word-separated so it is not a token run).
+  const big = "log line ".repeat(200); // ~1800 chars
+  assertEquals(scrubLogValue(big), big);
+  // Object whose JSON form is past the old 1200-char JSON cap (fewer than 20
+  // keys — the descriptor-shape guard for untrusted objects is not a size cap).
+  const wide = {};
+  for (let i = 0; i < 18; i++) wide[`field_${i}`] = `value number ${i} with some longer descriptive text attached here`;
+  const json = JSON.stringify(wide);
+  assert(json.length > 1200, "fixture past the old JSON cap");
+  const scrubbed = scrubLogValue(wide);
+  assertEquals(scrubbed, json, "the full object JSON is logged, not truncated");
+  // Error message past 800 chars keeps its full text.
+  const err = scrubLogValue(new Error(big));
+  assertStringIncludes(err, big, "error message logged whole");
 });
 
 Deno.test("cap-log: export ring redacts short values under secret-bearing keys", async () => {

@@ -7,6 +7,7 @@ export { createProviderRoutes } from "./provider.js";
 export { createMcpRoutes } from "./mcp.js";
 export { createSchedulerRoutes } from "./scheduler.js";
 export { createFsGrantRoutes } from "./fs-grants.js";
+export { createAgentWorkspaceRoutes } from "./agent-workspace.js";
 export { createAgentScheduleRoutes, createApplyAgentSchedule, createNamedAgentDeleteGate, normalizeScheduleTask } from "./agent-schedule.js";
 export { createActivityRoutes, filterActivityEntries, ACTIVITY_STORE_CAPS } from "./activity.js";
 export { closeAgentWorkerFor, createAgentWorkerRoutes, reconcileAgentWorkers } from "./agent-worker.js";

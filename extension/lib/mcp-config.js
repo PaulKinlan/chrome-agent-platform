@@ -39,23 +39,13 @@ const MCP_ID_RE = /^(?!.*__)[a-zA-Z0-9_-]+$/;
 // An HTTP header name is an RFC 7230 token.
 const HEADER_NAME_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/;
 
-// Bounds (Constitution §4): generous for a real owner, still FINITE so a
-// hostile prompt cannot grow the chrome.storage-backed lists without limit.
-const MAX_MCP_SERVERS = 32;
-const MAX_ID_LEN = 64;
-const MAX_NAME_LEN = 120;
-const MAX_URL_LEN = 2048;
-const MAX_HEADER_NAME_LEN = 128;
-const MAX_TOKEN_LEN = 8192;
-
 /** Slugify a free-text name into a valid MCP id segment (single-dash, no `__`). */
 function slugifyMcpId(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, MAX_ID_LEN);
+    .replace(/^-+|-+$/g, "");
 }
 
 /**
@@ -73,9 +63,10 @@ export function normalizeMcpServer(value) {
   const transport = String(value.transport ?? "").trim().toLowerCase();
   if (!MCP_TRANSPORTS.has(transport)) return null;
 
-  // URL: must be a parseable http(s) URL. Rejects ws/file/data and garbage.
+  // URL: must be a parseable http(s) URL of ANY length (dptw). Rejects
+  // ws/file/data and garbage.
   const rawUrl = String(value.url ?? "").trim();
-  if (!rawUrl || rawUrl.length > MAX_URL_LEN) return null;
+  if (!rawUrl) return null;
   let parsed;
   try {
     parsed = new URL(rawUrl);
@@ -84,16 +75,17 @@ export function normalizeMcpServer(value) {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
 
-  // Id: an explicit valid segment, else derived from the name.
+  // Id: an explicit valid segment (charset grammar — not a length cap, dptw),
+  // else derived from the name.
   let id = String(value.id ?? "").trim();
   if (id) {
-    if (id.length > MAX_ID_LEN || !MCP_ID_RE.test(id)) return null;
+    if (!MCP_ID_RE.test(id)) return null;
   } else {
     id = slugifyMcpId(value.name);
     if (!id || !MCP_ID_RE.test(id)) return null;
   }
 
-  const name = String(value.name ?? "").trim().slice(0, MAX_NAME_LEN) || id;
+  const name = String(value.name ?? "").trim() || id;
   const enabled = value.enabled === false ? false : true;
 
   const server = { id, name, transport, url: rawUrl, enabled };
@@ -104,10 +96,10 @@ export function normalizeMcpServer(value) {
   if (value.auth != null) {
     if (typeof value.auth !== "object") return null;
     const headerName = String(value.auth.headerName ?? "").trim();
-    if (!headerName || headerName.length > MAX_HEADER_NAME_LEN || !HEADER_NAME_RE.test(headerName)) {
+    if (!headerName || !HEADER_NAME_RE.test(headerName)) {
       return null;
     }
-    const token = String(value.auth.token ?? "").slice(0, MAX_TOKEN_LEN);
+    const token = String(value.auth.token ?? "");
     server.auth = { headerName, token };
   }
 
@@ -116,7 +108,7 @@ export function normalizeMcpServer(value) {
 
 /**
  * Normalize a LIST of servers: drop invalid entries, dedup by id (LAST write
- * wins), and cap the count. Never throws on hostile input.
+ * wins). dptw: no count cap. Never throws on hostile input.
  */
 export function normalizeMcpServerList(list) {
   if (!Array.isArray(list)) return [];
@@ -125,9 +117,8 @@ export function normalizeMcpServerList(list) {
     const s = normalizeMcpServer(raw);
     if (!s) continue;
     byId.set(s.id, s); // last write wins
-    if (byId.size > MAX_MCP_SERVERS && !byId.has(s.id)) break;
   }
-  return [...byId.values()].slice(0, MAX_MCP_SERVERS);
+  return [...byId.values()];
 }
 
 /**

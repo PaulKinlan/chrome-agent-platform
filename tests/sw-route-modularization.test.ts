@@ -6,6 +6,7 @@ import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/asse
 import * as acorn from "npm:acorn";
 import {
   createActivityRoutes,
+  createAgentWorkspaceRoutes,
   createMemoryRoutes,
   createAgentScheduleRoutes,
   createProviderRoutes,
@@ -69,6 +70,10 @@ const BASELINE_ROUTES = [
   "fs-grant.scan",
   "fs-grant.grep",
   "fs-grant.write-file-approved",
+  // The owner surface's window into an agent's private workspace
+  // (CAP-FB-20260831-AGENT-PRIVATE-FS-01, review round-1 P1).
+  "agent-workspace.usage",
+  "agent-workspace.clear",
   "named-agent.list",
   "named-agent.get",
   "named-agent.create",
@@ -76,6 +81,7 @@ const BASELINE_ROUTES = [
   "named-agent.update",
   "named-agent.set-provider",
   "named-agent.set-mcp-servers",
+  "named-agent.set-tools",
   "named-agent.delete",
   "named-agent.grep",
   "named-agent.avatar",
@@ -433,6 +439,8 @@ Deno.test("sw routes: AST verification of route registration across service-work
       // routes/memory.js in the teardown r5 extraction).
       if (arg.callee.name === "createMemoryRoutes") {
         registeredRouteKeys.push(...Object.keys(createMemoryRoutes()));
+      } else if (arg.callee.name === "createAgentWorkspaceRoutes") {
+        registeredRouteKeys.push(...Object.keys(createAgentWorkspaceRoutes()));
       }
     }
   }

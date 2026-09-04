@@ -41,6 +41,7 @@ import {
   createMcpRoutes,
   createSchedulerRoutes,
   createFsGrantRoutes,
+  createAgentWorkspaceRoutes,
   createMemoryRoutes,
   resolveMemory,
   awaitMemoryQuiescence,
@@ -81,7 +82,7 @@ import {
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
-import { attachmentContext, buildMultimodalTask } from "../lib/attachments.js";
+import { attachmentContext, buildMultimodalTask, validateRunAttachments } from "../lib/attachments.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
 import {
   canonicalOrigin,
@@ -175,9 +176,11 @@ import {
   generateAvatarForCreatedAgent,
   getNamedAgent,
   getNamedAgentProvider,
+  getNamedAgentToolsConfig,
   grepAgentMemory,
   listNamedAgents,
   normalizeAgentProvider,
+  normalizeAgentToolsConfig,
   normalizeCoreAssets,
   normalizeProfileGrants,
   validateProfileGrants,
@@ -188,6 +191,7 @@ import {
   resolveNamedAgentStore,
   setNamedAgentProvider,
   setNamedAgentMcpServers,
+  setNamedAgentToolsConfig,
   slugifyAgentId,
   updateNamedAgent,
   withNamedAgentsLock,
@@ -1285,14 +1289,14 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub") {
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null) {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
   // memory instead of the agent's own tier. A custom prompt scope (a named
   // agent's own system-prompt customization) takes the same fresh-build path —
   // the cached shared master carries the hub's composition, not the agent's.
-  if (memoryOverride || promptScope || approvalExecutionId) {
+  if (memoryOverride || promptScope || approvalExecutionId || agentTools) {
     // A management-capable run receives a FRESH toolset whose closure captures
     // this immutable execution id. Cached/global mutable cells would let a
     // stale tool call borrow a later run's authority.
@@ -1307,6 +1311,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       runMaxIterations,
       iterationGuard,
       providerServerAgentId,
+      agentTools,
     );
   }
   while (true) {
@@ -1359,7 +1364,7 @@ async function lazyPermissionDigest() {
   }
 }
 
-async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null }) {
+async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null, agentTools = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
   const permissionDigest = await lazyPermissionDigest();
@@ -1422,11 +1427,19 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
       : []),
     // Admitted bundled Wasm packages provide spec-derived validation, run-bound
     // authorization, and task execution dispatch closures through the shared core.
-    ...executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
-      scope,
-      sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
-      closureGeneration: "task-execution-core",
-    }),
+    ...executableBundledToolRecords(
+      agentTools?.bundledWasm != null
+        ? BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => {
+            const allowed = new Set(agentTools.bundledWasm);
+            return allowed.has(row.packageId) || allowed.has(row.toolId);
+          })
+        : BUNDLED_TOOL_PACKAGE_ROWS,
+      {
+        scope,
+        sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
+        closureGeneration: "task-execution-core",
+      },
+    ),
     // Provider-EXECUTED (server-side) tools — discovery through the same lazy
     // index; "execution" latches the provider-defined tool onto the run (the
     // agent-core proxy declares it on the next model call). Availability is
@@ -1561,7 +1574,7 @@ async function readSiteLazySources(origin, runGenCell) {
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub") {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null) {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -1588,7 +1601,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     });
     const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole, runtimeContext });
     // Workers = enrolled site origins, each with its own memory + skills.
-    const origins = await listOrigins();
+    const allOrigins = await listOrigins();
+    const allowedWebmcpOrigins = agentTools?.webmcpOrigins != null
+      ? new Set(agentTools.webmcpOrigins.map((o) => canonicalOrigin(o) || o.toLowerCase()))
+      : null;
+    const origins = allowedWebmcpOrigins == null
+      ? allOrigins
+      : allOrigins.filter((origin) => allowedWebmcpOrigins.has(origin) || allowedWebmcpOrigins.has(canonicalOrigin(origin)));
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
     // created INSIDE this build and never shared across builds. The old code used
     // a module-global `runGenCells` Map, so two concurrent same-generation builds
@@ -1804,9 +1823,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
           readSwitches: readServerToolSwitches,
           latchRegistry: serverToolLatchRegistry,
         },
+        agentTools,
       }),
       serverTooling,
       delegateGuard: async (origin) => {
+        if (allowedWebmcpOrigins != null && !allowedWebmcpOrigins.has(origin) && !allowedWebmcpOrigins.has(canonicalOrigin(origin))) {
+          return { ok: false, error: `origin ${origin} is not in this agent's WebMCP origin allow-list` };
+        }
         // The model-facing delegate_task must revalidate LIVE enrollment before
         // running a cached worker (the internal path previously bypassed the
         // lifecycle gate — the round-15 finding). Use the ATOMIC snapshot (enrolled
@@ -2481,7 +2504,7 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null }) {
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null, agentTools = null }) {
   // skipRunLock is ONLY for the delegation child path (agent.delegate): the
   // child builds a FRESH orchestrator (its own memory + abort controller via
   // the memoryOverride/promptScope/executionId path below), so the shared-
@@ -2927,6 +2950,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         delegationState ? delegationState.maxIterations : boundedIterations(maxIterations),
         delegationState ? (step) => canStartDelegationIteration(delegationState, step) : null,
         providerServerAgentId,
+        agentTools,
       );
       durableRunAborters.set(executionId, () => {
         try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -4134,10 +4158,14 @@ function namedCandidatePayload(candidate) {
     // Delegation edges are authorization grants — the owner approval must bind
     // them exactly, never let them ride unapproved inside another change.
     canonicalField("canDelegateTo", payloadStringArray(candidate.canDelegateTo)),
+    canonicalField("tools", candidate.tools ? canonicalRecord(
+      canonicalField("webmcpOrigins", payloadStringArray(candidate.tools.webmcpOrigins ?? [])),
+      canonicalField("bundledWasm", payloadStringArray(candidate.tools.bundledWasm ?? [])),
+    ) : canonicalScalar(null)),
   );
 }
 
-function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo }) {  const patch = Object.create(null);
+function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools }) {  const patch = Object.create(null);
   patch.name = name === undefined ? undefined : String(name).trim();
   patch.role = role === undefined ? undefined : String(role).trim();
   patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
@@ -4152,6 +4180,9 @@ function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileG
     }
     patch.profileGrants = validated.grants;
   }  patch.canDelegateTo = canDelegateTo === undefined ? undefined : normalizeCanDelegateTo(canDelegateTo);
+  if (tools !== undefined) {
+    patch.tools = tools === null ? null : normalizeAgentToolsConfig(tools);
+  }
   return patch;
 }
 
@@ -4167,6 +4198,16 @@ function namedPatchPayload(id, patch) {
     canonicalField("content", canonicalScalar(asset.content)),
   )))));
   fields.push(canonicalField("profileGrants", patch.profileGrants === undefined ? canonicalScalar(undefined) : payloadStringArray(patch.profileGrants)));
+  if (patch.tools === undefined) {
+    fields.push(canonicalField("tools", canonicalScalar(undefined)));
+  } else if (patch.tools === null) {
+    fields.push(canonicalField("tools", canonicalScalar(null)));
+  } else {
+    fields.push(canonicalField("tools", canonicalRecord(
+      canonicalField("webmcpOrigins", payloadStringArray(patch.tools.webmcpOrigins ?? [])),
+      canonicalField("bundledWasm", payloadStringArray(patch.tools.bundledWasm ?? [])),
+    )));
+  }
   return canonicalRecord(...fields);
 }
 
@@ -4458,6 +4499,7 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
       attachments: attachments ?? [],
       memory: mem,
       modelOverride,
+      agentTools: agent.tools ? normalizeAgentToolsConfig(agent.tools) : null,
       providerBinding: overrideConfig ? providerResumeIdentity(overrideConfig) : null,
       providerGateConfig: overrideConfig,
       clientCorrelationId: runId ?? null,
@@ -4908,6 +4950,9 @@ const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
   fsGrantRoutes,
+  // The owner surface's window into an agent's private workspace (usage +
+  // Clear in Settings; CAP-FB-20260831-AGENT-PRIVATE-FS-01, review round-1 P1).
+  createAgentWorkspaceRoutes(),
   boardRoutes.routes,
   createMemoryRoutes(),
   agentScheduleRoutes,
@@ -5376,74 +5421,12 @@ const handlers = mergeRouteMaps(
     }
   },
   async "agent.run"(m) {
-    // Bound the attachment payload: measure the ACTUAL dataURL bytes (never trust
-    // a client-claimed size), enforce per-item AND aggregate limits + a count cap,
-    // and report (not silently drop) anything over budget.
-    const MAX_ITEM_BYTES = 8 * 1024 * 1024; // 8 MiB per attachment (encoded)
-    const MAX_TOTAL_BYTES = 16 * 1024 * 1024; // 16 MiB aggregate (encoded)
-    const MAX_ITEM_DECODED = 6 * 1024 * 1024; // 6 MiB per attachment (decoded)
-    const MAX_TOTAL_DECODED = 12 * 1024 * 1024; // 12 MiB aggregate (decoded)
-    const MAX_COUNT = 8;
-    // Validate the dataURL SHAPE + measure BOTH the encoded transport size (the
-    // WHOLE dataURL string, which travels through runtime messaging) AND the
-    // decoded payload size (from validated base64 length/padding). Accept only
-    // data:<mime>;base64,<payload>. The declared a.type must match the parsed
-    // MIME — an image must not be relabelled text/plain.
-    const measured = (a) => {
-      if (!a?.dataURL) return { bytes: 0, decoded: 0, valid: true };
-      const m =
-        /^data:([a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*)(?:;\s*[a-z0-9-]+=(?:"[^"]*"|[^;,\s]*))*;base64,([A-Za-z0-9+/]*={0,2})\s*$/
-          .exec(
-            String(a.dataURL),
-          );
-      if (!m) return { bytes: 0, decoded: 0, valid: false }; // malformed → rejected
-      const mime = m[1].toLowerCase();
-      const payload = m[2];
-      if (payload.length % 4 !== 0) return { bytes: 0, decoded: 0, valid: false };
-      // Bind the declared type to the parsed MIME (no image labelled text/plain).
-      // Compare the ESSENCE (base type/subtype) — a declared `audio/webm;codecs=opus`
-      // must match the parsed `audio/webm`, not be rejected for its parameters.
-      const declaredType = String(a?.type ?? "").toLowerCase();
-      const declaredBase = declaredType.split(";")[0].trim();
-      if (declaredBase && declaredBase !== mime) {
-        return { bytes: 0, decoded: 0, valid: false };
-      }
-      // Encoded size = the complete dataURL string (ASCII, so length ≈ bytes).
-      const encoded = String(a.dataURL).length;
-      // Decoded size = (base64_len / 4) * 3 minus padding characters.
-      const padding = payload.endsWith("==") ? 2 : payload.endsWith("=") ? 1 : 0;
-      const decoded = (payload.length / 4) * 3 - padding;
-      return { bytes: encoded, decoded, valid: true };
-    };
-    let total = 0;
-    let totalDecoded = 0;
-    const bounded = [];
-    const dropped = [];
-    // Enforce MAX_COUNT exactly (not MAX_COUNT * 4).
-    for (const a of (m.attachments ?? []).slice(0, MAX_COUNT)) {
-      const { bytes, decoded, valid } = measured(a);
-      const name = String(a?.name ?? "unnamed").slice(0, 200);
-      const type = String(a?.type ?? "unknown").slice(0, 100);
-      if (!valid) {
-        dropped.push({ name, reason: "malformed dataURL or type/mime mismatch" });
-        continue;
-      }
-      if (bytes > MAX_ITEM_BYTES || decoded > MAX_ITEM_DECODED) {
-        dropped.push({ name, reason: "over per-item limit" });
-        continue;
-      }
-      if (total + bytes > MAX_TOTAL_BYTES || totalDecoded + decoded > MAX_TOTAL_DECODED) {
-        dropped.push({ name, reason: "over aggregate limit" });
-        continue;
-      }
-      bounded.push({ ...a, name, type });
-      total += bytes;
-      totalDecoded += decoded;
-    }
-    const overCount = (m.attachments ?? []).length - MAX_COUNT;
-    for (let i = 0; i < overCount; i++) {
-      dropped.push({ reason: "over count limit" });
-    }
+    // Validate the attachment dataURL SHAPE only (dptw: the 8 MiB/16 MiB/8-count
+    // caps are gone — the message transport and OPFS quota surface their own
+    // honest errors). Malformed dataURLs and declared-type/parsed-MIME
+    // mismatches are still dropped AND REPORTED — that validation is the
+    // security boundary, not a size limit.
+    const { kept: bounded, dropped } = validateRunAttachments(m.attachments);
 
     // ── the task-thread model ────────────────────────────────────────────
     // A task is a DISTINCT THREAD. If the caller passed a threadId, continue
@@ -5680,13 +5663,13 @@ const handlers = mergeRouteMaps(
     const [enriched] = await enrichAgentsWithSchedules([agent]);
     return { ok: true, agent: enriched };
   },
-  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule, profileGrants, canDelegateTo }, context) {
+  async "named-agent.create"({ id, name, role, avatar, skills, coreAssets, schedule, profileGrants, canDelegateTo, tools }, context) {
     if (profileGrants !== undefined) {
       const validated = validateProfileGrants(profileGrants);
       if (!validated.ok) return validated;
     }
     const r = await createNamedAgent(
-      { id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo },
+      { id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools },
       {
         gateOnReplace: async ({ slug, existing, candidate }) => {
           let payload;
@@ -5737,10 +5720,10 @@ const handlers = mergeRouteMaps(
     }
     return r;
   },
-  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo }, context) {
+  async "named-agent.update"({ id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools }, context) {
     let patch;
     try {
-      patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo });
+      patch = normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools });
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -5759,6 +5742,15 @@ const handlers = mergeRouteMaps(
     });
     if (r?.ok !== false) broadcastProgress({ type: "named-agent-changed" });
     broadcastRegistryChanged();
+    return r;
+  },
+  async "named-agent.set-tools"({ id, tools }, context) {
+    if (!id || typeof id !== "string") return { ok: false, error: "agent id required" };
+    const r = await setNamedAgentToolsConfig(id, tools);
+    if (r?.ok !== false) {
+      broadcastProgress({ type: "named-agent-changed" });
+      broadcastRegistryChanged();
+    }
     return r;
   },
   async "named-agent.set-provider"({ id, config }, context) {

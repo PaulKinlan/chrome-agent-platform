@@ -41,8 +41,6 @@ const LEVELS = Object.freeze({ off: 0, normal: 1, verbose: 2 });
 const STORAGE_KEY = "cap:logVerbosity";
 const FULL_DETAIL_STORAGE_KEY = "cap:logFullDetail";
 const MAX_RING = 500;
-const MAX_STRING_CHARS = 800;
-const MAX_JSON_CHARS = 1200;
 
 /** Build-time default injected by esbuild define; "off" outside the bundles. */
 const BUILD_DEFAULT =
@@ -170,16 +168,13 @@ function maskTokens(text) {
     .replace(TOKEN_RUN_RE, (m) => (m.length >= 24 ? "«redacted»" : m));
 }
 
-function boundString(text, max = MAX_STRING_CHARS) {
-  return text.length > max ? `${text.slice(0, max)}…(+${text.length - max} chars)` : text;
-}
-
 export function scrubLogValue(value, depth = 0) {
   if (value == null) return value;
-  if (typeof value === "string") return boundString(maskTokens(value));
+  // dptw: no length truncation — secrets are masked, text is kept whole.
+  if (typeof value === "string") return maskTokens(value);
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (value instanceof Error) {
-    return `${value.name}: ${boundString(maskTokens(value.message ?? ""))}`;
+    return `${value.name}: ${maskTokens(value.message ?? "")}`;
   }
   if (depth >= 3) return "[…]";
   if (typeof value === "object") {
@@ -200,7 +195,7 @@ export function scrubLogValue(value, depth = 0) {
       const total = Object.keys(descriptors).filter((key) => key !== "length").length;
       if (total > keys.length) out[Array.isArray(out) ? out.length : "…"] = `…(+${total - keys.length} items)`;
       const json = JSON.stringify(out);
-      return boundString(json ?? "[object]", MAX_JSON_CHARS);
+      return json ?? "[object]";
     } catch {
       return "[unserialisable]";
     }
