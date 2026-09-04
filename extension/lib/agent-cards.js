@@ -325,6 +325,19 @@ export function exportAgentCard(agent, { schedule = null, exportedAt = null } = 
     }
   }
 
+  if (agent.tools && typeof agent.tools === "object" && !Array.isArray(agent.tools)) {
+    const normTools = {};
+    if (Array.isArray(agent.tools.webmcpOrigins)) {
+      normTools.webmcpOrigins = agent.tools.webmcpOrigins.map((s) => String(s ?? "").trim().toLowerCase()).filter(Boolean);
+    }
+    if (Array.isArray(agent.tools.bundledWasm)) {
+      normTools.bundledWasm = agent.tools.bundledWasm.map((s) => String(s ?? "").trim()).filter(Boolean);
+    }
+    if (Object.keys(normTools).length > 0) {
+      card.tools = normTools;
+    }
+  }
+
   if (agent.avatar && typeof agent.avatar === "string" && agent.avatar.trim()) {
     card.avatar = agent.avatar.trim().slice(0, MAX_AVATAR_LEN);
   }
@@ -528,6 +541,31 @@ export function validateAgentCard(card, options = {}) {
       if (cleanAvatar) avatar = cleanAvatar;
     }
 
+    // tools (WebMCP origins + bundled WASM allowlists)
+    let tools = null;
+    const rawTools = Object.hasOwn(card, "tools") ? card.tools : undefined;
+    if (rawTools !== undefined && rawTools !== null) {
+      if (typeof rawTools !== "object" || Array.isArray(rawTools)) {
+        return { ok: false, error: "tools must be an object" };
+      }
+      const normTools = {};
+      if (Object.hasOwn(rawTools, "webmcpOrigins") && rawTools.webmcpOrigins !== undefined && rawTools.webmcpOrigins !== null) {
+        if (!Array.isArray(rawTools.webmcpOrigins)) {
+          return { ok: false, error: "webmcpOrigins must be an array of origin strings" };
+        }
+        normTools.webmcpOrigins = rawTools.webmcpOrigins.map((s) => String(s ?? "").trim().toLowerCase()).filter(Boolean);
+      }
+      if (Object.hasOwn(rawTools, "bundledWasm") && rawTools.bundledWasm !== undefined && rawTools.bundledWasm !== null) {
+        if (!Array.isArray(rawTools.bundledWasm)) {
+          return { ok: false, error: "bundledWasm must be an array of package/tool strings" };
+        }
+        normTools.bundledWasm = rawTools.bundledWasm.map((s) => String(s ?? "").trim()).filter(Boolean);
+      }
+      if (Object.keys(normTools).length > 0) {
+        tools = normTools;
+      }
+    }
+
     // exportedAt validation
     let exportedAt = null;
     if (Object.hasOwn(card, "exportedAt") && card.exportedAt !== undefined && card.exportedAt !== null) {
@@ -545,6 +583,7 @@ export function validateAgentCard(card, options = {}) {
       role: boundedRole,
       skills: validSkills,
       coreAssets,
+      ...(tools ? { tools } : {}),
       ...(schedule ? { schedule } : {}),
       ...(createdFrom ? { createdFrom } : {}),
       ...(avatar ? { avatar } : {}),

@@ -26,14 +26,17 @@ export function setPythonRuntimeProvider(provider) {
   if (typeof provider === "function") runtimeProvider = provider;
 }
 
-/** The ONE bounded python tool (stdin ≤2 KiB, stdout ≤64 KiB, top-level-only,
- * non-eval entrypoint, fresh per run, no network). */
-export const pythonTool = tool({
+export function getPythonRuntimeProvider() {
+  return runtimeProvider;
+}
+
+/** The ONE bounded python tool (top-level only, non-eval entrypoint, fresh per run, no network). */
+export const pythonExecuteTool = tool({
   description:
-    "Run a small, bounded Python program (top-level only) in an in-browser Python runtime. Input is source code (≤2 KiB) + optional stdin (≤2 KiB); output is the captured stdout (≤64 KiB). The runtime is isolated, fresh per run, has no network, and is unavailable until the Python runtime is enabled.",
+    "Run a Python program in the in-browser Pyodide runtime. Input is Python source code (code: string) and optional standard input (stdin: string). Output is captured standard output. The runtime is isolated, fresh per run, has no network, and runs sandboxed.",
   inputSchema: z.object({
-    code: z.string().min(1).max(PYTHON_EXEC_BOUNDS.maxStdinBytes).describe("the Python program source, top-level only (≤2 KiB)"),
-    stdin: z.string().max(PYTHON_EXEC_BOUNDS.maxStdinBytes).optional().describe("optional stdin bytes (≤2 KiB)"),
+    code: z.string().min(1).describe("the Python program source, top-level only"),
+    stdin: z.string().optional().describe("optional standard input passed to the Python program"),
   }),
   execute: async ({ code, stdin }) => {
     const runtime = await runtimeProvider();
@@ -45,3 +48,5 @@ export const pythonTool = tool({
     return { ok: true, stdout: result.stdout, stdoutBytes: new TextEncoder().encode(result.stdout).byteLength };
   },
 });
+
+export const pythonTool = pythonExecuteTool;

@@ -292,3 +292,80 @@ Deno.test("threads: a described provider error persists REDACTED into thread sto
   const readBack = JSON.stringify(stored);
   assert(!readBack.includes("sk-thread-leak-777777"), `the stored thread error is key-free: ${readBack}`);
 });
+
+// ── vj4s review P0: the bounded scheme run ({0,63}) must not leak long-scheme
+// userinfo passwords the unbounded pre-vj4s regex masked. The match window
+// only slides onto a LETTER start — a scheme run whose trailing 64 chars are
+// all digits/signs has no valid start inside the window (the reviewer's
+// counterexample). A linear indexOf("://")-anchored covering pass restores
+// exact parity. The OLD unbounded regex is inlined as the reference oracle.
+
+const OLD_USERINFO = (s) =>
+  String(s).replace(/([a-z][a-z0-9+.-]*:\/\/[^:\/\s]+:)([^@\s]{4,})@/gi, "$1[REDACTED]@");
+
+Deno.test("redaction: long-scheme userinfo regression — digit-tail scheme leaks nothing (vj4s P0)", () => {
+  // The reviewer's exact counterexample: masked by the old regex, leaked by
+  // the naive {0,63} bound (positions 1-64 are digits — no [a-z] match start).
+  const hostile = "a" + "0".repeat(64) + "://user:supersecret99@example.com";
+  const out = redactSecretText(hostile);
+  assert(!out.includes("supersecret99"), `password must be masked: ${out.slice(-80)}`);
+  assert(out.includes("[REDACTED]@"), `mask marker present: ${out.slice(-80)}`);
+});
+
+Deno.test("redaction: scheme-length boundary family masks exactly like the unbounded regex", () => {
+  for (const len of [4, 63, 64, 65, 66, 100]) {
+    // letter-ful tail: the window slides — the bounded pass alone covers it.
+    const letterful = "a".repeat(len) + "://user:hunter2pw@example.com";
+    // letter-less tail: one letter then digits — needs the covering pass >64.
+    const digitTail = "a" + "0".repeat(len - 1) + "://user:hunter2pw@example.com";
+    // sign/dot mix tail.
+    const signTail = "a" + "+.-0".repeat(Math.ceil((len - 1) / 4)).slice(0, len - 1) + "://user:hunter2pw@example.com";
+    for (const [label, input] of [["letterful", letterful], ["digit-tail", digitTail], ["sign-tail", signTail]]) {
+      const out = redactSecretText(input);
+      assert(!out.includes("hunter2pw"), `${label} scheme len ${len}: password masked (got …${out.slice(-60)})`);
+      assertEquals(
+        OLD_USERINFO(input).includes("[REDACTED]@"),
+        true,
+        `oracle sanity: the old regex masked ${label} len ${len}`,
+      );
+    }
+  }
+  // Parity NEGATIVE (no over-redaction): a scheme run with NO letter anywhere
+  // is not a URL scheme — the old regex leaves it alone, and so must we.
+  const noLetter = "1" + "0".repeat(70) + "://user:hunter2pw@example.com";
+  assertEquals(OLD_USERINFO(noLetter).includes("[REDACTED]"), false, "oracle: old regex does not mask letter-less runs");
+  assert(redactSecretText(noLetter).includes("hunter2pw"), "letter-less scheme run is NOT masked (no over-redaction)");
+});
+
+Deno.test("redaction: userinfo subset-match parity with the pre-vj4s regex over a corpus", () => {
+  const corpus = [
+    // every boundary length × tail shape, with and without surrounding prose
+    ...[1, 2, 4, 32, 63, 64, 65, 66, 128].flatMap((len) => [
+      "a".repeat(len) + "://user:password123@example.com",
+      "a" + "0".repeat(len - 1) + "://user:password123@example.com",
+      `fetch ${"a" + "9".repeat(len - 1)}://u:p@ssw0rd@example.com failed`, // first @ terminates (pw "p" <4… covered below)
+    ]),
+    // tail-shape edges the oracle treats specifically
+    "https://user:abc@example.com", // password <4 chars — never masked
+    "https://:password123@example.com", // empty user — never masked
+    "https://user:password123example.com", // no @ — never masked
+    "https://user:password123 @example.com", // whitespace before @ — never masked
+    "0".repeat(80) + "://user:password123@example.com", // no letter — never masked
+    "a.b-c+d".repeat(20) + "://user:password123@example.com", // long mixed run, letters throughout
+  ];
+  for (const input of corpus) {
+    const oldMasked = OLD_USERINFO(input).includes("[REDACTED]@");
+    const out = redactSecretText(input);
+    const newMasked = out.includes("[REDACTED]@");
+    if (oldMasked) {
+      assert(newMasked, `subset-match: old masked, new must too — ${input.slice(0, 50)}…`);
+      assert(!out.includes("password123"), `password gone — ${input.slice(0, 50)}…`);
+    }
+    if (!oldMasked && input.includes("password123") && !/api[_-]?key|token|secret|password|bearer/i.test(input.split("://")[0])) {
+      // no NEW over-redaction of the userinfo shape (other passes may still
+      // mask credential-KEYWORD text — excluded here by the keyword guard).
+      assert(newMasked === false || !out.includes("[REDACTED]@"),
+        `no over-redaction beyond the oracle — ${input.slice(0, 50)}…`);
+    }
+  }
+});

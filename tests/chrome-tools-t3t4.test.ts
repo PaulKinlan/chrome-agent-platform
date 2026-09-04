@@ -146,7 +146,7 @@ Deno.test("T3/T4: browserToolset has exactly 136 tools matching BROWSER_TOOL_NAM
   assertEquals(Object.keys(browser), BROWSER_TOOL_NAMES);
   assertEquals(BROWSER_TOOL_NAMES.length, 137);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.browserTools, 137);
-  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 179);
+  assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS.totalTools, 181);
   for (const name of ["list_tab_groups", "group_tabs", "update_tab_group", "ungroup_tabs", "move_tab_to_group", "download_file", "list_downloads", "pause_download", "resume_download", "cancel_download", "erase_download", "show_download", "open_download", "remove_download_file"]) {
     assert(name in browser, `${name} present`);
   }

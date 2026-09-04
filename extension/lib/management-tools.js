@@ -26,6 +26,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "create_asset",
   "update_asset",
   "patch_asset",
+  "append_asset",
   "delete_asset",
   "list_assets",
   "get_asset",
@@ -47,6 +48,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "list_scripts",
   "get_script",
   "run_script",
+  "python_execute",
   "schedules_list",
   "schedules_pause",
   "schedules_resume",
@@ -176,6 +178,18 @@ export function managementToolset({ callRoute }) {
       }),
       execute: ({ origin, id, edits, expectVersion }) =>
         call("asset.patch", { origin, id, edits, expectVersion }),
+    }),
+    append_asset: tool({
+      description:
+        "Append text to the END of an artifact's content (the chunked build path for one artifact larger than a single call can carry). One call appends at most 64 KiB of UTF-8 text; call it repeatedly to grow an artifact — the body accumulates across calls up to the 4 MiB artifact storage ceiling, and every append is an immutable version. Prefer this over update_asset when you are building a large body incrementally: you never resend what is already stored. Pass expectVersion (the version you last read) to refuse the append if the artifact changed underneath you. The owner approves a model append like any other artifact edit.",
+      inputSchema: z.object({
+        origin: z.string().default("master").describe("'master' or an https origin"),
+        id: z.string().min(1).describe("the artifact id (from list_assets — the artifact you are growing)"),
+        content: z.string().min(1).describe(`the text to append to the end of the artifact (max ${ASSET_BOUNDS.maxAppendBytes} UTF-8 bytes per call; append in pieces for more)`),
+        expectVersion: z.number().int().optional().describe("the version you last saw; the append is refused if the head has moved"),
+      }),
+      execute: ({ origin, id, content, expectVersion }) =>
+        call("asset.append", { origin, id, content, expectVersion }),
     }),
     delete_asset: tool({
       description: "Delete an artifact.",
@@ -444,6 +458,16 @@ export function managementToolset({ callRoute }) {
         "Run a script NOW (sandboxed, no model re-invocation) and return its result. REQUIRES OWNER APPROVAL: the owner sees the script's source and the hosts it fetches on an approval card; the run waits for that decision.",
       inputSchema: z.object({ id: z.string(), origin: z.string().default("master") }),
       execute: ({ id, origin }) => call("script.run", { origin, id }),
+    }),
+
+    python_execute: tool({
+      description:
+        "Execute a Python program in the sandboxed in-browser Pyodide runtime. Input is Python source code (code: string) and optional standard input (stdin: string). Output is captured standard output. The runtime runs sandboxed with no DOM access and no network.",
+      inputSchema: z.object({
+        code: z.string().min(1).describe("the Python program source, top-level only"),
+        stdin: z.string().optional().describe("optional standard input passed to the Python program"),
+      }),
+      execute: ({ code, stdin }) => call("python.execute", { code, stdin }),
     }),
 
     // ---- schedules (per-agent alarm visibility + control) ----

@@ -21,6 +21,7 @@
 //   deno run -A scripts/kat-webmcp-honest-errors.ts [<out-dir>]
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -58,7 +59,7 @@ check("fixture server answers on 127.0.0.1:8934 (/errors)", fixtureUp);
 
 // Headless Chrome does not settle the JIT scripting grant — the variant
 // pregrants scripting+tabs (the webmcp-acceptance.ts headless pattern).
-const VARIANT = `/tmp/cap-kat-honest-errors-${Date.now()}`;
+const VARIANT = durableDir(`cap-kat-honest-errors-${Date.now()}`);
 {
   const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", VARIANT] }).spawn();
   await cp.status;
@@ -159,11 +160,103 @@ try {
     evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: ${JSON.stringify(name)}, args: ${JSON.stringify(args)} })`);
 
   // 3. The directory must carry the fixture tools before invocation.
+  //    READ-ONLY readiness (tools.list): a tools.invoke here poisons the
+  //    delegated demo-model run below with selection-scope-mismatch
+  //    (chrome-agent-platform-rg01 — the race is pre-existing, filed).
   const dirReady = await until(async () => {
-    const r = await invoke("happy_echo", { query: "warm" });
-    return r && !(typeof r?.error === "string" && r.error.includes("no such tool")) ? true : null;
+    const r = await evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.list", origin: ${JSON.stringify(PAGE_ORIGIN)} })`);
+    const tools = Array.isArray(r) ? r : r?.tools;
+    return Array.isArray(tools) && tools.some((t) => t.name === "happy_echo") ? true : null;
   }, 30000);
   check("the directory carries the errors-fixture tools", dirReady === true, dirReady);
+
+  // Settle: the bridge re-polls its tool collection at 800/2000/4000ms after
+  // injection; each accepted snapshot bumps the directory generation, and a
+  // bump landing BETWEEN the delegated run's search_tools and execute_tool
+  // trips the pre-existing selection-scope race (chrome-agent-platform-rg01).
+  // Wait for the directory to be STABLE (three consecutive identical reads,
+  // ~3s) before the agent run.
+  const settled = await until(async () => {
+    const reads: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.list", origin: ${JSON.stringify(PAGE_ORIGIN)} })`);
+      const tools = Array.isArray(r) ? r : r?.tools;
+      reads.push(Array.isArray(tools) ? tools.length : -1);
+      await sleep(1000);
+    }
+    return reads.every((n) => n === reads[0] && n > 0) ? true : null;
+  }, 30000);
+  check("922q fallback: the site directory settled (no re-collect in flight)", settled === true);
+
+  // 12. The DOCS FALLBACK through a REAL agent run: the demo model addresses
+  //     the enrolled site agent, the failing tool triggers the fallback, the
+  //     SW fetches the fixture origin's /llms.txt + doc pages, and the
+  //     answer cites the documentation with attribution.
+  const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+  const opts = (await send("Target.attachToTarget", { targetId: optT.result.targetId, flatten: true })).result?.sessionId;
+  await send("Runtime.enable", {}, opts);
+  await sleep(800);
+  const devFlag = await until(async () => {
+    const r = await evalIn(opts, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:developerFeatures": true } })`);
+    return r?.ok === true ? r : null;
+  }, 10000, 500);
+  check("922q fallback: the developer-flag demo model is enabled (no API key)", devFlag?.ok === true, devFlag);
+  await send("Target.closeTarget", { targetId: optT.result.targetId }).catch(() => {});
+  await send("Target.activateTarget", { targetId: nT.result.targetId });
+  await sleep(500);
+
+  const focused = await clickSelector(ns, `document.querySelector("#task-input")`);
+  check("922q fallback: focused the composer via a real click", focused);
+  await send("Input.insertText", { text: "@127" }, ns);
+  const mentionClicked = await until(async () => {
+    const has = await evalIn(ns, `(() => {
+      const rows = [...document.querySelectorAll('agent-composer#composer .popup .item[role="option"]')];
+      return rows.some((r) => (r.textContent || "").includes("127.0.0.1:8934")) ? true : null;
+    })()`);
+    if (!has) return null;
+    return await clickSelector(ns, `[...document.querySelectorAll('agent-composer#composer .popup .item[role="option"]')].find((r) => (r.textContent || "").includes("127.0.0.1:8934"))`) ? true : null;
+  }, 15000);
+  check("922q fallback: the enrolled site is addressable as an agent mention", mentionClicked === true);
+  const mentionSelected = await until(() => evalIn(ns, `(() => { const a = document.querySelector("agent-composer#composer")?.selectedAgent; return a && a.kind === "site" ? a : null; })()`), 5000);
+  check("922q fallback: the composer routes the task to the site agent (selected kind = site)", mentionSelected?.id === PAGE_ORIGIN, mentionSelected);
+  await send("Input.insertText", { text: ` search the docs @demo-site-tool dispatch_broken_handler_throws {}` }, ns);
+  const ran = await clickSelector(ns, `document.querySelector("#run-task")`);
+  check("922q fallback: clicked Run task via a real click", ran);
+
+  const finalBubble = await until(() => evalIn(ns, `(() => {
+    const bubbles = [...document.querySelectorAll('message-bubble')].filter((b) => b.getAttribute("role") !== "tool" && b.getAttribute("role") !== "user");
+    const texts = bubbles.map((b) => (b.shadowRoot?.querySelector(".msg")?.textContent ?? b.textContent ?? ""));
+    const hit = texts.find((t) => t.includes("[demo model] Site tool dispatch_broken_handler_throws"));
+    return hit ? hit.replace(/\\s+/g, " ").trim() : null;
+  })()`), 45000);
+  check("922q fallback: the site agent's run completed with the docs answer (attribution in the final bubble)",
+    typeof finalBubble === "string" &&
+    // The demo model display-slices the tool result at 200 chars — the
+    // fallback's attribution prefix is what fits; the full docs content is
+    // asserted on the tool card below.
+    finalBubble.includes("succeeded") &&
+    finalBubble.includes("The site's dispatch_broken_handler_throws tool failed"),
+    String(finalBubble).slice(0, 400));
+  const toolCardText = await until(() => evalIn(ns, `(() => {
+    const cards = [...document.querySelectorAll('message-bubble[role="tool"]')];
+    const text = cards.map((b) => b.shadowRoot?.textContent ?? "").join("\\n");
+    return text.includes("FROBNICATE") ? text : null;
+  })()`), 15000);
+  check("922q fallback: the fetched documentation CONTENT reached the transcript (fixture markers present)",
+    typeof toolCardText === "string" &&
+    toolCardText.includes("FROBNICATE-INSTALL-MARKER") &&
+    toolCardText.includes("FROBNICATE-CLI-MARKER"),
+    String(toolCardText).length);
+  check("922q fallback: the tool result says it answered from documentation (full attribution in the transcript)",
+    typeof toolCardText === "string" &&
+    toolCardText.includes("documentation") &&
+    toolCardText.includes("2 of 2"),
+    String(toolCardText ?? "").slice(0, 200));
+  // Full transcript into evidence — the demo run's steps are the audit trail
+  // when a fallback check fails (which search/execute ran, with what result).
+  const transcript = await evalIn(ns, `[...document.querySelectorAll('message-bubble')].map((b) => ({ role: b.getAttribute("role"), tool: b.getAttribute("tool-name"), text: (b.shadowRoot?.querySelector(".msg")?.textContent ?? b.shadowRoot?.textContent ?? b.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 600) }))`);
+  evidence.docsFallback = { finalBubble: String(finalBubble ?? "").slice(0, 500), markersSeen: typeof toolCardText === "string", transcript };
+
 
   // 4. Happy path — the success round-trip is untouched.
   const happy = await invoke("happy_echo", { query: "round-trip" });
@@ -270,8 +363,41 @@ try {
     { error: nc?.error, phase: nc?.errorDetail?.phase });
   check("return_noncloneable: the honest failure arrives well before the 15s timeout", ncMs < 12000, { ncMs });
 
+  // ── chrome-agent-platform-922q: the dispatch-chain fall-through ─────────
+  // The owner's beads.gascity.com failure: the NATIVE WebMCP dispatch
+  // (modelContext.executeTool) throws DOMException: UnknownError while the
+  // page's own handler is healthy. The fixture's dispatch_broken_* tools
+  // simulate exactly that. The dispatcher must fall through to the
+  // descriptor's own execute and only fail when EVERY path has failed —
+  // naming each path and its real cause.
+
+  // 10. Broken native dispatch + HEALTHY handler: the call SUCCEEDS via the
+  //     descriptor's own execute (pre-fix this returned the bare
+  //     UnknownError — the owner-observed failure).
+  const recovered = await invoke("dispatch_broken_handler_ok");
+  evidence.dispatch_broken_handler_ok = recovered;
+  check("922q fall-through: a broken native dispatch falls through to the page's own handler (the call succeeds)",
+    recovered?.ok === true && recovered?.result?.answer === "handler-direct-result-922q", recovered);
+
+  // 11. Broken native dispatch + THROWING handler: the honest error names
+  //     the REAL cause (the handler's TypeError), not the native layer's
+  //     bare UnknownError — and says what was tried.
+  const composite = await invoke("dispatch_broken_handler_throws");
+  evidence.dispatch_broken_handler_throws = composite;
+  check("922q fall-through: all paths failing names the real cause (TypeError: the docs index is not a function)",
+    typeof composite?.error === "string" &&
+    composite.error.includes("TypeError") &&
+    composite.error.includes("the docs index is not a function"),
+    composite?.error);
+  check("922q fall-through: the composite names every path tried (executeTool + tool.execute)",
+    typeof composite?.error === "string" &&
+    composite.error.includes("every dispatch path failed") &&
+    composite.error.includes("modelContext.executeTool") &&
+    composite.error.includes("tool.execute"),
+    composite?.error);
+
   await Deno.writeTextFile(`${OUT}/honest-errors-evidence.json`, JSON.stringify({
-    ts: new Date().toISOString(), bead: "chrome-agent-platform-ajcc", evidence,
+    ts: new Date().toISOString(), bead: "chrome-agent-platform-ajcc+922q", evidence,
   }, null, 2) + "\n");
 } finally {
   try { fixture.kill("SIGKILL"); } catch { /* already dead */ }

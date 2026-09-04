@@ -14,10 +14,11 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import { durableDir } from "./lib/durable-root.mjs";
 
 export const CANONICAL_LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
 export const SLOT_POISON = "/tmp/cap-chrome-slot-POISON";
-export const PROFILE_ROOT = "/tmp/cap-sec-profiles";
+export const PROFILE_ROOT = durableDir("cap-sec-profiles");
 export const PRODUCTION_TIMEOUT_MS = 120_000;
 export const SELF_TEST_TOKEN = "security-suite-custody-v1";
 
@@ -420,7 +421,7 @@ export async function resolveSupervisorConfig({
     timeoutMs,
     termWaitMs: 250,
     killWaitMs: 1_000,
-    evidenceRoot: "/tmp/cap-sec-selftest-evidence",
+    evidenceRoot: durableDir("cap-sec-selftest-evidence"),
     profileRoot: PROFILE_ROOT,
     forceAttestationMismatch: scenario === "pgid-mismatch" &&
       env.CAP_SECURITY_TEST_FORCE_ATTEST_MISMATCH === "1",

@@ -8,10 +8,11 @@
 // usage.recordToolCall) evaluated in the options page — the real storage
 // contracts, no test-only routes.
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const OUT = Deno.args[1] ?? "/tmp/cap-usage-viz-kats";
+const OUT = Deno.args[1] ?? durableDir("cap-usage-viz-kats");
 const CHROMIUM = "/usr/bin/chromium";
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {

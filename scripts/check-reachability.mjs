@@ -61,8 +61,6 @@ export const RETAINED = {
     "CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01 is OPEN, not ABANDONED; the adapter and lib/tabular-diff-artifacts-core.js stay until it lands or closes (tests/tabular-diff-artifacts.test.ts).",
   "lib/code-diff-artifacts.js":
     "Holds the sha256 retention helpers CAP-FB-20260830-ARTIFACT-VERSIONS-01 folds into the versions store; that entry deletes it (tests/code-diff-artifacts.test.ts).",
-  "lib/python-tool.js":
-    "CAP-FB-20260823-PYODIDE-PYTHON-01 (P1, OPEN) decides the Python runtime; python-execution.js is imported by it (tests/python-runtime.test.ts).",
   "lib/python-runtime.js":
     "CAP-FB-20260823-PYODIDE-PYTHON-01 (P1, OPEN) decides the Python runtime (tests/python-runtime.test.ts).",
   // ── only tests import these; cut together with the named tests in a follow-up ──

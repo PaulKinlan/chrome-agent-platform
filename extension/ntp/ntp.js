@@ -102,6 +102,20 @@ let currentAgentKind = null;
 let latestDurableRuns = [];
 // Declared before subscribeRunRegistry(), which emits its current snapshot synchronously.
 let liveClientRunId = null;
+// chrome-agent-platform-afiu run-control state (declared before the registry
+// subscription — it emits synchronously and the subscription writes these).
+let liveSurfaceRun = null; // registry row: the actionable run on the OPEN surface
+let pendingChips = [];
+// Module-init gate: the registry subscription emits SYNCHRONOUSLY mid-import
+// (before the thread-view DOM consts initialize) — run-control renders only
+// after those consts exist (flipped on below), so the initial emit cannot hit
+// a TDZ; later registry writes (run starts/settles/heartbeats) render live.
+let runControlReady = false;
+// The run-control DOM (also declared pre-subscription — renderRunControlBar
+// is called from the subscription's synchronous snapshot emit).
+const runControlBar = document.getElementById("run-control-bar");
+const pendingChipStrip = document.getElementById("pending-chips");
+const runControlHint = document.getElementById("run-control-hint");
 
 function setRunDebugOpen(open, { pin = false, focusToggle = false } = {}) {
   if (!runDebugPanel || !runDebugToggle) return;
@@ -186,6 +200,10 @@ if (durableRunRegistry) {
       ? surfaceRuns.find((run) => run?.clientCorrelationId === liveClientRunId)
       : surfaceRuns.find((run) => run?.executionId === runTranscriptExecutionId);
     threadConversation?.bindLiveStatusExecution?.(boundRun?.executionId ?? null);
+    // chrome-agent-platform-afiu: the composer's steer/queue bar tracks the
+    // open surface's LIVE run (the same durable row the Stop button binds).
+    liveSurfaceRun = boundRun ?? null;
+    if (runControlReady) renderRunControlBar();
     // Terminal reconciliation for the live status row: the registry is the
     // durable authority. When the open surface's latest run has SETTLED and
     // nothing actionable remains, resolve the row — the live terminal event
@@ -235,6 +253,163 @@ if (durableRunRegistry) {
     event.detail.complete(result);
     setStatus(result.ok ? "Retained logs loaded." : `Log load failed: ${result.error}`, result.ok === true);
   });
+}
+
+// ── run-control: STEER + QUEUE while the open surface's task runs
+// (chrome-agent-platform-afiu) ─────────────────────────────────────────────
+// The composer offers the two owner interactions EXPLICITLY when the task the
+// owner is watching is running: steer (inject this message into the in-flight
+// run between model steps), queue (persisted per-thread FIFO drained at run
+// end — chips above the composer, reorderable/removable), and send-now
+// (stop the live run, then send as a fresh turn). All routes are run.control.*
+// (the SW authority); the bar reflects the DURABLE registry's live row.
+
+function runControlRadios() {
+  return [...document.querySelectorAll('#run-control-bar input[name="run-control-mode"]')];
+}
+function selectedRunControlMode() {
+  return runControlRadios().find((r) => r.checked)?.value || "steer";
+}
+function syncRunControlHint() {
+  if (!runControlHint) return;
+  const mode = selectedRunControlMode();
+  if (mode === "queue") runControlHint.textContent = "Queued messages run in order after this task finishes — remove or reorder them any time.";
+  else if (mode === "send-now") runControlHint.textContent = "Stops the running task, then sends this message as a new turn.";
+  else runControlHint.textContent = "The task is running — this message steers the agent at its next step; nothing is lost.";
+}
+// Live hint updates when the owner switches steer/queue/send-now.
+runControlRadios().forEach((radio) => radio.addEventListener("change", syncRunControlHint));
+function runControlQueueAvailable() {
+  return currentAgentId === null && !!currentThreadId && !threadView.hidden;
+}
+/** The composer's current send behavior while a run is live: "steer" |
+ * "queue" | "send-now". Exposed for the unit-free DOM wiring only. */
+function activeRunControlMode() {
+  const mode = selectedRunControlMode();
+  if (mode === "queue" && !runControlQueueAvailable()) return "steer"; // no thread → no queue
+  return mode;
+}
+/** Show/hide the mode bar + chip strip for the open surface's live run. */
+function renderRunControlBar() {
+  if (!runControlBar || !pendingChipStrip) return;
+  const taskOpen = !threadView.hidden && (currentAgentId !== null || !!currentThreadId);
+  const live = liveSurfaceRun && taskOpen;
+  runControlBar.hidden = !live;
+  if (live) {
+    // A task (thread) run can queue; a named/background agent run cannot (its
+    // surface has no thread queue) — hide the Queue option honestly.
+    for (const r of runControlRadios()) {
+      const disabled = r.value === "queue" && !runControlQueueAvailable();
+      r.disabled = disabled;
+      if (disabled && r.checked) {
+        const steer = runControlRadios().find((x) => x.value === "steer");
+        if (steer) steer.checked = true;
+      }
+    }
+    syncRunControlHint();
+  }
+  renderPendingChips();
+}
+/** One chip per queued follow-up: preview, reorder (↑/↓), remove. */
+async function renderPendingChips() {
+  if (!pendingChipStrip) return;
+  const taskOpen = currentAgentId === null && !!currentThreadId && !threadView.hidden;
+  if (!taskOpen) {
+    pendingChips = [];
+    pendingChipStrip.hidden = true;
+    pendingChipStrip.replaceChildren();
+    return;
+  }
+  const res = await send("run.control.queue.list", { threadId: currentThreadId }).catch(() => ({ ok: false }));
+  pendingChips = res?.ok === true ? (Array.isArray(res.items) ? res.items : []) : [];
+  pendingChipStrip.hidden = pendingChips.length === 0;
+  pendingChipStrip.replaceChildren();
+  if (pendingChips.length === 0) return;
+  const label = document.createElement("span");
+  label.className = "pending-chips-label";
+  label.textContent = pendingChips.length === 1 ? "1 queued message" : `${pendingChips.length} queued messages`;
+  pendingChipStrip.appendChild(label);
+  pendingChips.forEach((item, index) => {
+    const chip = document.createElement("span");
+    chip.className = "pending-chip";
+    chip.title = "Runs after the current task finishes";
+    const text = document.createElement("span");
+    text.className = "pending-chip-text";
+    text.textContent = String(item.text ?? "");
+    chip.appendChild(text);
+    const up = document.createElement("button");
+    up.type = "button";
+    up.textContent = "↑";
+    up.className = "chip-action";
+    up.setAttribute("aria-label", "Move earlier");
+    up.disabled = index === 0;
+    up.addEventListener("click", async () => {
+      await send("run.control.queue.move", { threadId: currentThreadId, id: item.id, delta: -1 }).catch(() => ({ ok: false }));
+      await renderPendingChips();
+    });
+    chip.appendChild(up);
+    const down = document.createElement("button");
+    down.type = "button";
+    down.textContent = "↓";
+    down.className = "chip-action";
+    down.setAttribute("aria-label", "Move later");
+    down.disabled = index === pendingChips.length - 1;
+    down.addEventListener("click", async () => {
+      await send("run.control.queue.move", { threadId: currentThreadId, id: item.id, delta: 1 }).catch(() => ({ ok: false }));
+      await renderPendingChips();
+    });
+    chip.appendChild(down);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "✕";
+    remove.className = "chip-action chip-remove";
+    remove.setAttribute("aria-label", "Remove queued message");
+    remove.addEventListener("click", async () => {
+      await send("run.control.queue.remove", { threadId: currentThreadId, id: item.id }).catch(() => ({ ok: false }));
+      await renderPendingChips();
+    });
+    chip.appendChild(remove);
+    pendingChipStrip.appendChild(chip);
+  });
+}
+/** Route a composer send by the active mode when a run is live. */
+async function runControlSend(text, attachments, agent) {
+  const run = liveSurfaceRun;
+  if (!run) return { ok: false, error: "run_not_live" };
+  const mode = activeRunControlMode();
+  if (mode === "queue") {
+    const res = await send("run.control.queue.enqueue", { threadId: currentThreadId, text }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    if (res?.ok === true) {
+      setStatus("Queued — it runs after this task finishes.");
+      await renderPendingChips();
+    } else {
+      setStatus(`Queue failed — ${res?.error ?? "unknown"}`, false);
+    }
+    return res;
+  }
+  if (mode === "send-now") {
+    // Stop the live run cleanly (the SW's cancel settles the durable run —
+    // nothing orphaned), then send as a fresh turn of the same surface.
+    const stopped = await cancelDurableRun(run.executionId, "stopped by owner — send now").catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    if (stopped?.ok !== true && stopped?.error !== "run_already_terminal") {
+      setStatus(`Could not stop the running task — ${stopped?.error ?? "unknown"}`, false);
+      return stopped;
+    }
+    liveSurfaceRun = null;
+    renderRunControlBar();
+    await runThreadTurn(text, attachments, agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name } : null);
+    return { ok: true };
+  }
+  // steer (default): inject into the in-flight run; the message appears in the
+  // transcript as an owner interruption (its own visual treatment).
+  const res = await send("run.control.steer", { executionId: run.executionId, mode: "inject", text }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  if (res?.ok === true) {
+    appendBubble(threadConversation, "steer", text);
+    setStatus("Steered — the running agent sees it at its next step.");
+  } else {
+    setStatus(`Steer failed — ${res?.error ?? "unknown"}`, false);
+  }
+  return res;
 }
 
 // Debug overlay wiring: click pins it open (click again closes), hover reveals
@@ -1925,6 +2100,9 @@ function renderTaskRows(threads, activeId = null) {
 // ── the full-screen thread surface ────────────────────────────────────────
 const threadView = document.getElementById("thread-view");
 const threadTitle = document.getElementById("thread-title");
+// chrome-agent-platform-afiu: the thread-view consts above are the last
+// run-control dependency — from here the bar may render on registry writes.
+runControlReady = true;
 // The docked composer's height feeds the conversation's sticky live-status
 // row (`--conversation-dock`) so the "Working — …" banner pins just above the
 // composer rather than under it (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
@@ -2064,6 +2242,8 @@ function syncFooterCurrent(currentRoute) {
 function hideThreadViewInner() {
   runSurfaceOwner.claim(); // leaving fences any in-flight run (its outcome still journals)
   setRunDebugOpen(false); // the debug overlay never outlives its surface
+  liveSurfaceRun = null;
+  void renderPendingChips();
   if (statusOwner !== 0) {
     statusOwner = 0;
     setStatus("ready"); // reset an orphaned "running…" (a parked run never resets itself)
@@ -2260,6 +2440,9 @@ async function openThread(id) {
       ? { state: "failed", errorCategory: "budget", errorReason: budgetStop.reason, message: budgetStop.content, ...(budgetStop.executionId ? { executionId: budgetStop.executionId } : {}) }
       : { state: "idle" });
   renderTasks(id);
+  // chrome-agent-platform-afiu: an open task surfaces its persisted queued
+  // follow-ups (the chips above the composer survive reloads).
+  void renderPendingChips();
   openSpan.end("ok");
 }
 
@@ -2635,6 +2818,7 @@ async function openAgentConfig() {
     savedLabel: "Save",
     schedule: agent.schedule?.periodInMinutes ?? null,
     initialMcpServers: agent.mcpServers ?? [],
+    initialTools: agent.tools ?? null,
     onSave: async (v) => {
       // Schedule FIRST: the owner's schedule change applies through the
       // owner-direct schedule path even when the persona edit pends an
@@ -2652,7 +2836,7 @@ async function openAgentConfig() {
         scheduleNote = next == null ? "schedule removed" : `scheduled every ${next} min`;
       }
       const r = await send("named-agent.update", {
-        id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets, canDelegateTo: v.canDelegateTo,
+        id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets, canDelegateTo: v.canDelegateTo, tools: v.tools,
       }).catch(() => ({ ok: false }));
       if (r?.ok === false) {
         return scheduleNote
@@ -2706,7 +2890,7 @@ function openQuickCreateAgent() {
     onSave: async (v) => {
       const r = await send("named-agent.create", {
         name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets,
-        canDelegateTo: v.canDelegateTo, schedule: v.schedule,
+        canDelegateTo: v.canDelegateTo, schedule: v.schedule, tools: v.tools,
       }).catch(() => ({ ok: false }));
       if (!r?.ok) return { ok: false, error: r?.error ?? "unknown" };
       const id = r.agent?.id ?? v.name;
@@ -2945,7 +3129,6 @@ async function buildAgentConfigDialog(opts) {
   advancedDetails.style.background = "var(--panel,#ffffff)";
   advancedDetails.style.minWidth = "0";
   advancedDetails.style.maxWidth = "100%";
-  advancedDetails.style.overflow = "hidden";
   const advancedSummary = document.createElement("summary");
   advancedSummary.textContent = "Advanced";
   advancedSummary.style.cssText = "cursor:pointer;font-size:13px;font-weight:600;padding:10px 12px;";
@@ -2966,7 +3149,6 @@ async function buildAgentConfigDialog(opts) {
   skillsDetails.style.background = "var(--panel,#ffffff)";
   skillsDetails.style.minWidth = "0";
   skillsDetails.style.maxWidth = "100%";
-  skillsDetails.style.overflow = "hidden";
 
   const skillsSummary = document.createElement("summary");
   skillsSummary.style.padding = "10px 12px";
@@ -2988,9 +3170,12 @@ async function buildAgentConfigDialog(opts) {
   const skillsList = document.createElement("div");
   skillsList.className = "skills-list";
   skillsList.style.padding = "8px 12px 10px";
-  skillsList.style.maxHeight = "180px";
-  skillsList.style.overflowY = "auto";
-  skillsList.style.overscrollBehavior = "contain";
+  // The skills list is NOT its own scroll island: it flows into the dialog's
+  // single scroll body (agent-config-scroll, min-height:0) so every skill and
+  // everything below stays reachable by ONE scrollbar. The previous 180px cap
+  // + overflow-y:auto + overscroll-behavior:contain made the wheel scroll the
+  // inner list and then STOP — the outer dialog never advanced past it (the
+  // owner's "nothing underneath it is accessible" report).
   skillsList.style.display = "flex";
   skillsList.style.flexDirection = "column";
   skillsList.style.gap = "6px";
@@ -3086,6 +3271,45 @@ async function buildAgentConfigDialog(opts) {
     }
     delegDetails.append(delegList);
     advancedBody.append(delegDetails);
+  }
+
+  // Per-agent tool config (G4): WebMCP origins allow-list + bundled WASM allow-list.
+  const toolsDetails = document.createElement("details");
+  toolsDetails.style.fontSize = "13px";
+  const toolsSummary = document.createElement("summary");
+  toolsSummary.textContent = "Tools & WebMCP allowlists (optional restrictions)";
+  toolsDetails.append(toolsSummary);
+
+  const toolsBody = document.createElement("div");
+  toolsBody.style.display = "flex";
+  toolsBody.style.flexDirection = "column";
+  toolsBody.style.gap = "8px";
+  toolsBody.style.padding = "6px 0 0 4px";
+
+  const webmcpField = configField(
+    "WebMCP origin allowlist (comma-separated origins e.g. https://github.com; blank = allow all)",
+    "textarea",
+    Array.isArray(opts.initialTools?.webmcpOrigins) ? opts.initialTools.webmcpOrigins.join(", ") : "",
+    2,
+  );
+  const bundledWasmField = configField(
+    "Bundled WASM tools allowlist (comma-separated tool IDs e.g. grep, diff, csvtool; blank = allow all)",
+    "textarea",
+    Array.isArray(opts.initialTools?.bundledWasm) ? opts.initialTools.bundledWasm.join(", ") : "",
+    2,
+  );
+
+  toolsBody.append(webmcpField.wrap, bundledWasmField.wrap);
+  toolsDetails.append(toolsBody);
+  advancedBody.append(toolsDetails);
+
+  function collectAgentTools() {
+    const webmcpRaw = webmcpField.el.value.trim();
+    const wasmRaw = bundledWasmField.el.value.trim();
+    if (!webmcpRaw && !wasmRaw) return null;
+    const webmcpOrigins = webmcpRaw ? webmcpRaw.split(/[,\n]+/).map((s) => s.trim().toLowerCase()).filter(Boolean) : null;
+    const bundledWasm = wasmRaw ? wasmRaw.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean) : null;
+    return { webmcpOrigins, bundledWasm };
   }
 
   // Core assets: files whose content becomes part of the agent's context.
@@ -3345,6 +3569,7 @@ async function buildAgentConfigDialog(opts) {
       firstTask: selectedTemplate?.firstTask ?? "",
       canDelegateTo, schedule,
       mcpServers: collectAgentMcpServers(),
+      tools: collectAgentTools(),
     });
     saveBtn.disabled = false;
     if (r?.ok) {
@@ -3522,6 +3747,13 @@ composer.addEventListener("send", async (ev) => {
   // owner's P0: "he should have all been in that one task"). A NEW task is
   // started only when the hub surface is showing (no open task view).
   if (!threadView.hidden && currentThreadId) {
+    // chrome-agent-platform-afiu: when the OPEN task is running the composer
+    // offers steer / queue / send-now instead of silently forking another run
+    // (plain text only — attachments/@mentions keep the ordinary path).
+    if (runControlBar && !runControlBar.hidden && liveSurfaceRun && !attachments?.length && !agent?.ref) {
+      await runControlSend(task, attachments, agent);
+      return;
+    }
     // A send with an @mention while a task view is open CONTINUES the thread
     // too — the mention rides along as a delegation to the referenced agent
     // (same shape as the new-task mention path below); it must never fork the
@@ -3558,6 +3790,12 @@ composer.addEventListener("status", (ev) => {
 
 threadComposer.addEventListener("send", async (ev) => {
   const { text, attachments, agent } = ev.detail;
+  // chrome-agent-platform-afiu: steer / queue / send-now while the open task
+  // runs (the task composer's explicit affordances — plain text only).
+  if (runControlBar && !runControlBar.hidden && liveSurfaceRun && !attachments?.length && !agent?.ref) {
+    await runControlSend(text, attachments, agent);
+    return;
+  }
   if (agent?.ref && !currentAgentKind) {
     // An @mention in a task's follow-up: delegate to the referenced agent and
     // bring the result BACK into THIS thread (the task stays the hub's task —

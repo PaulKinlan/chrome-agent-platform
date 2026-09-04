@@ -1,122 +1,294 @@
 # Changelog
 
-## [0.3.39] — 2026-09-03
+## [0.3.133] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.132] — 2026-09-04
 - a denied pipeline step stops the workflow, but the steps that already ran stay done — pipelines do not roll back
 
-## [0.3.38] — 2026-09-03
+## [0.3.131] — 2026-09-04
 - Prove the pipeline approval path end to end: a real agent run whose saved pipeline hits a gated step shows the owner card, and Allow re-executes the step through the runtime's resume path (the step ran twice — paused once, approved once — and its real result reached the model); Not now stops the workflow at that step with the tool and reason named, and the step never runs again.
 
-## [0.3.37] — 2026-09-03
+## [0.3.130] — 2026-09-04
 - Pipeline steps that need your approval now ask: a step needing a capability or a destructive action shows the same approval card a directly-asked tool shows, and Allow runs the step right there (same tool, same checked inputs); Not now stops the pipeline at that step with the reason named. Previously such steps always failed with 'run this workflow interactively'. Only two kinds never run inside a pipeline: a workflow running itself, and remote MCP tools.
 
+## [0.3.129] — 2026-09-04
+- cap-beads-fw8 (UI flash fix — encapsulated panel renderers, eliminated duplicate boot renders)
+
+## [0.3.128] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.127] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.126] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.125] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.124] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.123] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.122] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.121] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.120] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.119] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.118] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.117] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.116] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.115] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.114] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.113] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.112] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.111] — 2026-09-04
+- python_execute works in the shipped build again — restored the runtime-provider wiring and matched the tool counts to the catalog
+
+## [0.3.110] — 2026-09-04
+- Remove the python-tool RETAINED entry — the tool is now reachable via management-tools
+
+## [0.3.109] — 2026-09-04
+- Run Python programs in the browser: the python_execute tool is available again, executing code sandboxed in the built-in runtime with no DOM or network access.
+
+## [0.3.108] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.103] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.102] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.101] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.100] — 2026-09-04
+- The docs-fallback module is now imported by the service worker — drop the RETAINED entry
+
+## [0.3.99] — 2026-09-04
+- Wire the docs-fallback module into the service worker — import + integration reference in readSiteLazySources (922q)
+
+## [0.3.98] — 2026-09-04
+- znx9 test: assert content stored complete (no-limits) instead of 240KiB cap + truncation marker
+
+## [0.3.97] — 2026-09-04
+- cap-beads-8zlu (test cascade cleanup + site docs fallback wiring + changelog semver fix)
+
+## [0.3.96] — 2026-09-04
+- cap-beads-brv (Python in the browser via Pyodide)
+
+## [0.3.95] — 2026-09-04
+- remove MAX_MESSAGE_BYTES import from task-view-full-response-contract test
+
+## [0.3.94] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.93] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.92] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.91] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.90] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.89] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.88] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.87] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.86] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.85] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.84] — 2026-09-04
+- Fix the build lock file for fresh checkouts — the dist-complete validator needs it to pass
+
+## [0.3.83] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.82] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.81] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.80] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.79] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.78] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.77] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.76] — 2026-09-04
+- Register the site-docs-fallback module in RETAINED (922q docs-fallback utility; integration wiring follows in dptw phase-2)
+
+## [0.3.75] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.74] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.73] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.72] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.71] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.70] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.69] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.68] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.67] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.66] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.65] — 2026-09-04
+- Build and test evidence now survives restarts, and the recurring check flake is fixed
+
+## [0.3.64] — 2026-09-04
+- Build and test evidence now survives restarts — nothing is stored on volatile temp storage anymore, and the recurring check flake is fixed
+
+## [0.3.63] — 2026-09-04
+- Build and test evidence now survives restarts — nothing is stored on volatile temp storage anymore, and the recurring custody check flake is fixed
+
+## [0.3.62] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.61] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.60] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.59] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.58] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.57] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.56] — 2026-09-04
+- The browser grant persistence check is now a registered automated check that runs in real Chromium across reloads
+
+## [0.3.55] — 2026-09-03
+- Running a single test file through the npm shortcut works for every file, including the one that turns away the slow full sweep
+
+## [0.3.54] — 2026-09-03
+- The release notes read in plain language again — one entry no longer uses an internal term
+
+## [0.3.53] — 2026-09-03
+- Running the whole unit suite the slow way is no longer possible: the repo points you at the fast npm commands instead
+
+## [0.3.52] — 2026-09-03
+- The changelog reads like release notes again — every entry describes what the user gets, and the version hook strips bare branch names and merge subjects so this never recurs
+
+## [0.3.51] — 2026-09-03
+- The MCP SDK is properly declared as a dependency — installs can no longer accidentally lose it
+
+## [0.3.50] — 2026-09-03
+- The changelog's shipped copy materializes automatically in fresh checkouts, nine version notes are rewritten in plain user language, and the version hook stops writing bare ids as release notes
+
+## [0.3.49] — 2026-09-03
+- A regression suite no longer breaks when temp storage is cleaned between sessions
+
+## [0.3.48] — 2026-09-03
+- No self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
+
+## [0.3.47] — 2026-09-03
+- The hub's own working copy and directory entries survive temporary-file cleanup
+
+## [0.3.46] — 2026-09-03
+- The task view shows long responses in full, exactly as they were generated — byte-true bounds, escapes handled, no broken characters
+
+## [0.3.45] — 2026-09-03
+- Embedded views share one content left edge at any viewport — the content-edge probes now use real visible elements and the embedded Artifacts title count is exact
+
+## [0.3.44] — 2026-09-03
+- Interactive artifacts are reliable — clicks reach the artifact, generated code no longer cuts off at size bounds, and the source view shows the complete stored body
+
+## [0.3.43] — 2026-09-03
+- Site-tool errors tell you the real cause — tool, phase, redacted message/stack, realm, and origin — with a docs-fallback that fetches the site's documentation when its tools fail
+
+## [0.3.42] — 2026-09-03
+- Pipeline workflows run with per-step owner approval — capability-paused steps show a real approval card and destructive steps fail closed
+
+## [0.3.41] — 2026-09-03
+- Worker runs can be steered and stopped safely — the stop-run path requires an exact run match and refuses wrong-run aborts
+
+## [0.3.40] — 2026-09-03
+- The unit test suite finishes in about a quarter of the time: test files run in parallel, and very long text no longer stalls secret redaction
+
+## [0.3.39] — 2026-09-03
+- The targeted npm run test:changed, test:fast and test:file shortcuts work again, and provider host-access checks no longer leave an 8-second timer running after a fast grant
+
+## [0.3.38] — 2026-09-03
+- The changelog reads like release notes instead of a git log — every entry describes what the user gets, not what branch was merged
+
+## [0.3.37] — 2026-09-03
+- The changelog reads like release notes instead of a git log — every entry describes what the user gets, not what branch was merged
+
 ## [0.3.36] — 2026-09-03
-- Merge remote-tracking branch 'origin/main' into cap-beads-9ve7
-
-## [0.3.35] — 2026-09-03
-- cap-beads-9ve7
-
-## [0.3.34] — 2026-09-03
-- work-p45y-r5
-
-## [0.3.33] — 2026-09-03
-- cap-beads-znx9
-
-## [0.3.32] — 2026-09-03
-- cap-beads-yop8
-
-## [0.3.31] — 2026-09-03
-- cap-beads-afiu
-
-## [0.3.30] — 2026-09-03
-- cap-beads-dptw-tr
-
-## [0.3.29] — 2026-09-03
-- cap-beads-60be
-
-## [0.3.28] — 2026-09-03
-- cap-beads-4ffg
-
-## [0.3.27] — 2026-09-03
-- no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
-
-## [0.3.26] — 2026-09-03
-- no self-imposed size caps in tools and storage — argument contracts, catalogs, fs-grants, memory, journals (archive-to-file), profiles, and usage all read and write without artificial bounds
-
-## [0.3.25] — 2026-09-03
-- no self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
-
-## [0.3.24] — 2026-09-03
-- agents tidy up after themselves — restored-window lifecycle tracking, keeper exclusions, and honest run-end notes
-
-## [0.3.23] — 2026-09-03
-- sandbox rules lead tool discovery, teaching errors fire in the real sandbox, and the persistence recommendation is recorded
-
-## [0.3.22] — 2026-09-03
-- site-tool errors carry the real cause — tool, phase, redacted message/stack, realm, and origin instead of a bare UnknownError
-
-## [0.3.21] — 2026-09-03
-- the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
-
-## [0.3.20] — 2026-09-03
-- the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
-
-## [0.3.19] — 2026-09-03
-- the Providers settings restore the tabbed interface — one tab per provider family with a real ARIA tablist
-
-## [0.3.18] — 2026-09-03
-
-## [0.3.17] — 2026-09-03
-- The hub's left rail no longer stacks 32px gaps between its sections — flex-gap is the only spacing there
-
-## [0.3.16] — 2026-09-03
-- read_file delivers every requested byte — no size-cap refusals in the reader, multibyte-safe windows, transport decides delivery
-
-## [0.3.15] — 2026-09-03
-- targeted test gates — a dependency-aware picker runs only the tests your change exercises, and fails closed to the full suite when coverage can't be proven
-
-## [0.3.14] — 2026-09-03
-- skill promotion — agents with no skills attached get a bounded, fenced pointer at relevant catalog skills, with a falsification-proven eval suite
-
-## [0.3.13] — 2026-09-03
-- the model picker gains Gemini 3.8 Flash and Fable 5.1, with every price audited against published sources
-
-## [0.3.12] — 2026-09-03
-- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
-
-## [0.3.11] — 2026-09-02
-- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
-
-## [0.3.10] — 2026-09-02
-- embedded Settings Test connection fixed at the root — embedded views boot at their canonical URL (owner-options binds again), and a surface refusal never blames the API key
-
-## [0.3.9] — 2026-09-02
-
-## [0.3.8] — 2026-09-02
-- Embedded views keep their owner identity: the boot strips ?embedded=1 after marking the document, so exact-document authorization matches the real Settings surface again
-
-## [0.3.7] — 2026-09-02
-- CSP lint: require whitespace before src so data-src cannot smuggle an inline script
-
-## [0.3.6] — 2026-09-02
-- No shipped page runs an inline script: the embedded boot moves to a shared external file and a lint pins CSP hygiene
-
-## [0.3.5] — 2026-09-02
-- Task board: the privacy page and the reset repair are complete.
-
-## [0.3.4] — 2026-09-02
-- A new Privacy page says exactly what the extension sends and stores, and Reset everything now really does clear everything.
-
-## [0.3.3] — 2026-09-02
-- Task board: the running-cost work is complete.
-
-## [0.3.2] — 2026-09-02
-- Tasks now cost less to run: the instructions sent with every message are a quarter of their old size, and a task that stops making progress is stopped instead of looping.
-
-## [0.3.1] — 2026-09-02
-- deduplicate changelog entries and bump version after merge conflict resolution
-
-## [0.3.0] — 2026-09-02
-- Reachability gate fix: skip generated *.bundle.js artifacts
+- Workflows: agents can create, save, recall, and run reusable workflows — recipes that run again whenever you need them, with owner approval for anything destructive
+- The task view shows long responses in full, exactly as they were generated — no truncation, no broken characters
+- Interactive artifacts are reliable — clicks reach the artifact, and generated code no longer cuts off at size bounds
+- Embedded Settings works from the hub — saving API keys, tool diagnostics, and factory reset all work without switching surfaces
+- The hub's left rail no longer wastes 32px between sections
+- No self-imposed size caps: files of any size can be read, large artifacts grow by appending, and complete responses are stored in the journal instead of truncated
+- Site-tool errors tell you the real cause — not just "UnknownError"
+- Agents get a private file workspace, real tab-cleanup guidance, and a searchable provider picker
+- Targeted test gates: `npm run test:changed` runs only the tests your change exercises
 
 ## [0.2.653] — 2026-09-02
 - Task board: the delegation checks are complete.

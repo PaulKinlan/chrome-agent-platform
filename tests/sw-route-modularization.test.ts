@@ -76,6 +76,7 @@ const BASELINE_ROUTES = [
   "named-agent.update",
   "named-agent.set-provider",
   "named-agent.set-mcp-servers",
+  "named-agent.set-tools",
   "named-agent.delete",
   "named-agent.grep",
   "named-agent.avatar",
@@ -97,9 +98,15 @@ const BASELINE_ROUTES = [
   "agent.directory",
   "system.factoryReset",
   "system.factoryResetEnumerate",
+  // Owner export/import of all agent data (chrome-agent-platform-ykb):
+  // owner-gesture only, never model-callable — a full memory export is a
+  // high-value exfiltration target.
+  "owner.export.all",
+  "owner.import.all",
   // The privacy page's inputs (CAP-FB-20260830-PRIVACY-STATEMENT-01): the
   // provider hosts the code really resolves + the run-log policy in force.
   "privacy.statement",
+  "python.execute",
   "memory.purgeJournals",
   "memory.sweepOrphans",
   "agent.registry",
@@ -140,6 +147,9 @@ const BASELINE_ROUTES = [
   "asset.update",
   // Exact search/replace editing (CAP-FB-20260830-PATCH-ASSET-TOOL-01).
   "asset.patch",
+  // Chunked body growth: bounded appends build one artifact past the single-call
+  // bound (CAP p45y acceptance B).
+  "asset.append",
   "asset.delete",
   "asset.list",
   "asset.get",
@@ -166,6 +176,13 @@ const BASELINE_ROUTES = [
   "run.list",
   "run.cancel",
   "run.resume",
+  // chrome-agent-platform-afiu: the composer's run-control protocol (steer a
+  // live run / durable per-thread follow-up queue).
+  "run.control.steer",
+  "run.control.queue.list",
+  "run.control.queue.enqueue",
+  "run.control.queue.remove",
+  "run.control.queue.move",
   // CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01: "Budget reached — Continue"
   // runs the continuation turn on the stopped run's thread.
   "run.continue",
