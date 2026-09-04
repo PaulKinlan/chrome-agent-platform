@@ -93,3 +93,40 @@ Deno.test("settings multi-section: provider server tools init is bound to the pr
   const htmlSection = HTML.slice(HTML.indexOf('id="providers"'), HTML.indexOf('id="mcp-servers"'));
   assert(htmlSection.includes('id="server-tools-enabled"'), "the server-tools toggle lives in the providers section HTML");
 });
+
+// P0 cap-hy91 — the FIRST Settings click (hub opens options.html with NO
+// section hash) must land on the full provider LIST, not an unrendered panel
+// whose only visible content is the static provider server-tools card.
+// syncCurrent() treats an empty hash as "no route" and never reaches
+// handleSettingsHashNavigation, so the boot must resolve the default
+// #providers section itself and run the normal section-render path.
+Deno.test("settings first click: boot with no hash defaults to the providers section render", () => {
+  // The boot resolves an absent/unknown hash to the providers default and
+  // navigates through the shared handler (which lazy-renders the section).
+  const bootDefault = 'const bootSectionId = normalizeSettingsSectionId(location.hash) ?? "providers";';
+  assert(JS.includes(bootDefault), "options.js boot must default an empty hash to #providers");
+  assert(
+    JS.includes('await handleSettingsHashNavigation(`#${bootSectionId}`);'),
+    "the boot must run the normal section-navigation path for the defaulted section",
+  );
+  const bootRegion = JS.slice(JS.indexOf(bootDefault), JS.indexOf("// The OPEN Usage panel"));
+  assert(!bootRegion.includes("navigationController.syncCurrent()"), "boot must not hand the empty hash to syncCurrent (it no-ops)");
+
+  // The providers render path (list of provider cards) is what the default
+  // navigation must reach — the server-tools sub-panel is a subsection INSIDE
+  // the providers section that only opens via its own toggle.
+  const ensure = JS.slice(JS.indexOf("async function ensureSectionRendered"), JS.indexOf("// nav active state"));
+  const providersBranch = ensure.slice(ensure.indexOf('if (sectionId === "providers")'), ensure.indexOf('else if (sectionId === "mcp-servers")'));
+  assert(providersBranch.includes("await renderProviders();"), "the providers branch must render the provider list");
+  assert(
+    providersBranch.indexOf("await renderProviders();") < providersBranch.indexOf("await initProviderServerTools();"),
+    "the provider list must render BEFORE the server-tools init/sub-panel work",
+  );
+
+  // The server-tools agents sub-panel starts hidden in the providers section
+  // markup — it is not a landing surface for the first Settings click.
+  assert(
+    HTML.includes('<div id="server-tools-agents" class="server-tools-agents" hidden>'),
+    "the server-tools sub-panel must be hidden in the providers section HTML",
+  );
+});

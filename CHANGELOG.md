@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.131] — 2026-09-04
+- Settings first open lands on the providers list, not the server-tools view
+
 ## [0.3.130] — 2026-09-04
 - Maintenance and fixes.
 

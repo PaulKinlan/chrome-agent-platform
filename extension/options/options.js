@@ -3568,7 +3568,16 @@ applyDeveloperVisibility(developerFeaturesEnabled);
 // Only the active section is rendered on boot (and on section switch);
 // the remaining sections are lazy-mounted when navigated to.
 await renderLocalFolders();
-await navigationController.syncCurrent();
+// First Settings click: the hub opens options.html with NO section hash.
+// syncCurrent() treats an empty hash as "no route" and bails before
+// onNavigate, leaving #providers .active but UNRENDERED — an empty panel
+// whose only static content is the provider server-tools card (P0 cap-hy91:
+// "first click lands on a blank provider server tools view"). Resolve the
+// boot hash against the providers default and run the normal section render
+// path so the full provider list (API-key fields, model pickers) is what a
+// first open lands on. A valid deep-link hash still wins.
+const bootSectionId = normalizeSettingsSectionId(location.hash) ?? "providers";
+await handleSettingsHashNavigation(`#${bootSectionId}`);
 
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run
 // completing, or the owner clearing), not show a stale count until a manual

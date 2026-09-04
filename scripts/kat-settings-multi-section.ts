@@ -1,7 +1,12 @@
 // scripts/kat-settings-multi-section.ts — CAP-FB-20260827-SETTINGS-MONOLITH-01 / q94
+// + P0 cap-hy91 (first Settings open must land on the provider LIST, not an
+//   unrendered panel showing only the provider server-tools card).
 //
 // Drives real Chromium with loaded extension:
-// 1. Load Settings (#providers by default) -> assert only #providers is visible (.panel.active), others hidden.
+// 1. Load Settings with NO hash (the hub's first Settings click) -> assert the
+//    full #providers list is visible: family tabs + provider cards rendered,
+//    and the server-tools sub-panel stays hidden (it only appears when the
+//    global server-tools toggle is explicitly enabled).
 // 2. Click sidebar nav for "Browser control" -> assert #browser is visible, #providers is hidden.
 // 3. Navigate directly to #skills deep link -> assert #skills is visible, others hidden.
 // 4. Navigate directly to #about deep link -> assert #about is visible, others hidden.
@@ -17,6 +22,15 @@ function check(name: string, cond: boolean, detail?: unknown) {
   else { fail++; console.log(`FAIL: ${name} — ${JSON.stringify(detail)?.slice(0, 800)}`); }
 }
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const pollUntil = async (sid: string, expr: string, timeoutMs = 8000, stepMs = 250) => {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const v = await evalIn(sid, expr);
+    if (v === true) return true;
+    await sleep(stepMs);
+  }
+  return false;
+};
 
 const profile = `${ROOT}.cache/kat-settings-multi-section-${Date.now()}`;
 const { proc, wsUrl } = await launchChrome({
@@ -66,6 +80,25 @@ try {
 
   const visiblePanels1 = await evalIn(opts, `[...document.querySelectorAll("section.panel")].filter(s => getComputedStyle(s).display !== "none").map(s => s.id)`);
   check("initial load: only #providers panel is visible", JSON.stringify(visiblePanels1) === JSON.stringify(["providers"]), visiblePanels1);
+
+  // cap-hy91 (P0): the FIRST Settings open must land on the full provider
+  // LIST — not an empty panel whose only visible content is the static
+  // provider server-tools card. The first click boots options.html with NO
+  // hash; boot must default to the #providers section and render it.
+  const cardsReady = await pollUntil(opts, `(document.querySelector("#provider-tabs")?.childElementCount ?? 0) > 0 && (document.querySelectorAll("#provider-panels .provider-card").length ?? 0) > 0`);
+  const firstContent = await evalIn(opts, `(() => {
+    const panels = document.querySelector("#provider-panels");
+    return {
+      hash: location.hash,
+      tabsRendered: (document.querySelector("#provider-tabs")?.childElementCount ?? 0) > 0,
+      cards: panels?.querySelectorAll(".provider-card").length ?? 0,
+      serverToolsCardHidden: document.querySelector("#server-tools-card")?.hidden ?? null,
+      serverToolsSubPanelHidden: document.querySelector("#server-tools-agents")?.hidden ?? null,
+    };
+  })()`);
+  check("first open (no hash): provider list rendered (family tabs)", firstContent?.tabsRendered === true, firstContent);
+  check("first open (no hash): provider cards (API-key/model rows) are visible", cardsReady && (firstContent?.cards ?? 0) > 0, firstContent);
+  check("first open (no hash): server-tools sub-panel hidden (not the landing view)", firstContent?.serverToolsSubPanelHidden === true, firstContent);
 
   // 2. Click "Browser control" nav link
   const clickedBrowser = await clickSelector(opts, `document.querySelector('.nav-item[data-section="browser"]')`);
