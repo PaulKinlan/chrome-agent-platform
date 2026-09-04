@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.98] — 2026-09-04
+- znx9 test: assert content stored complete (no-limits) instead of 240KiB cap + truncation marker
+
 ## [0.3.97] — 2026-09-04
 - cap-beads-8zlu (test cascade cleanup + site docs fallback wiring + changelog semver fix)
 

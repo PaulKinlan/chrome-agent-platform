@@ -153,7 +153,7 @@ Deno.test("znx9: thread store capacity is 240 KiB UTF-8 bytes and preserves belo
   assertEquals(new TextEncoder().encode(last.content).byteLength, 120 * 1024);
 });
 
-Deno.test("znx9: over-cap messages carry dynamic non-silent truncation marker stating actual cap", async () => {
+Deno.test("znx9: over-cap messages stored COMPLETE (owner no-limits directive)", async () => {
   const overCap = "x".repeat((240 * 1024) + 5000);
   const thread = await createThread("seed");
   await appendThreadMessage(thread.id, { role: "assistant", content: overCap });
@@ -161,9 +161,7 @@ Deno.test("znx9: over-cap messages carry dynamic non-silent truncation marker st
   const stored = await getThread(thread.id);
   const last = stored.messages.at(-1);
   const bytes = new TextEncoder().encode(last.content).byteLength;
-  assert(bytes <= 240 * 1024, `content must stay <= 240 KiB, got ${bytes}`);
-  assert(last.content.includes("truncated to 240 KiB"), "marker specifies 240 KiB cap");
-  assert(last.content.includes("complete text is in the run log"), "points to run log");
+  assertEquals(bytes, overCap.length, "content is stored COMPLETE — no truncation");
 });
 
 Deno.test("znx9: surrogate-safe code-point slicing never leaves split high surrogates", async () => {
