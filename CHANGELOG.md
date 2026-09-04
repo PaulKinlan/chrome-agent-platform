@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.98] — 2026-09-04
+- docs(settings-cleanliness): mark the permission-reality rows resolved by the lanes that fixed them
+
 ## [0.3.97] — 2026-09-04
 - The changelog reads like release notes — every entry describes what the user gets
 
