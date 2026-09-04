@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.66] — 2026-09-04
+- Fix provider server tools toggle resetting on reload
+
 ## [0.3.65] — 2026-09-04
 - Build and test evidence now survives restarts, and the recurring check flake is fixed
 

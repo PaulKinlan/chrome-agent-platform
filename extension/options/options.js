@@ -1318,77 +1318,90 @@ async function renderAgents() {
     saveFlash("Agent mode saved.");
   });
 
-  // Provider server tools (Gemini google_search, Anthropic web_search): the GLOBAL toggle gates
-  // every agent; a per-agent opt-in then admits each agent individually. Both
-  // live in ONE kv record ({ enabled, agents: { [id]: bool } }) so the service
-  // worker reads them atomically at every tool-source snapshot.
-  const stCfg = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-  const stToggle = $("#server-tools-enabled");
-  stToggle.checked = stCfg.enabled === true;
-  const persistServerTools = async (next) => {
-    await storage.set({ "cap:providerServerTools": next });
-    // Availability is read live per snapshot, but the provider LANE is
-    // build-fixed — invalidate so a just-enabled native-lane agent rebuilds.
-    try {
-      await chrome.runtime.sendMessage({ type: "invalidate-agent" });
-    } catch { /* worker may not be running — the setting still persists */ }
-  };
-  stToggle.addEventListener("toggle", async (e) => {
-    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-    await persistServerTools({ ...cur, enabled: e.detail.checked === true });
-    renderServerToolAgents(e.detail.checked === true);
-    saveFlash("Provider server tools saved.");
-  });
-  async function renderServerToolAgents(globalOn) {
-    const box = $("#server-tools-agents");
-    const list = $("#server-tools-agent-list");
-    if (!box || !list) return;
-    box.hidden = !globalOn;
-    list.replaceChildren();
-    if (!globalOn) return;
-    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-    const agents = cur.agents && typeof cur.agents === "object" ? cur.agents : {};
-    let named = [];
-    try {
-      const r = await boundedSend("named-agent.list");
-      named = Array.isArray(r?.agents) ? r.agents : [];
-    } catch { named = []; }
-    const rows = [{ key: "hub", name: "Hub (the main agent)" },
-      // Paid provider-tool authority follows the immutable instance identity.
-      // Legacy agents without one are omitted (fail closed), never slug-keyed.
-      ...named.map((a) => ({ key: String(a?.instanceId ?? ""), name: String(a?.name ?? a?.id ?? "agent") }))]
-      .filter((a) => a.key);
-    for (const a of rows) {
-      const field = document.createElement("div");
-      field.className = "toggle-field";
-      const t = document.createElement("switch-toggle");
-      t.setAttribute("label", a.name);
-      t.checked = agents[a.key] === true;
-      t.addEventListener("toggle", async (e) => {
-        const latest = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
-        const latestAgents = latest.agents && typeof latest.agents === "object" ? { ...latest.agents } : {};
-        latestAgents[a.key] = e.detail.checked === true;
-        await persistServerTools({ ...latest, agents: latestAgents });
-        saveFlash(`Provider server tools ${e.detail.checked ? "enabled" : "disabled"} for ${a.name}.`);
-      });
-      const text = document.createElement("div");
-      text.className = "toggle-text";
-      const nm = document.createElement("span");
-      nm.className = "toggle-name";
-      nm.textContent = a.name;
-      const hint = document.createElement("span");
-      hint.className = "muted";
-      hint.textContent = "Can search the web during its runs.";
-      text.append(nm, hint);
-      field.append(t, text);
-      list.appendChild(field);
-    }
-  }
-  await renderServerToolAgents(stToggle.checked);
-
   // Interactive and scheduled agents share one management list. The data
   // models remain separate; this function only joins their presentation.
   await renderUnifiedAgentSettings();
+}
+
+// Provider server tools (Gemini google_search, Anthropic web_search): the GLOBAL toggle gates
+// every agent; a per-agent opt-in then admits each agent individually. Both
+// live in ONE kv record ({ enabled, agents: { [id]: bool } }) so the service
+// worker reads them atomically at every tool-source snapshot.
+const persistProviderServerTools = async (next) => {
+  await storage.set({ "cap:providerServerTools": next });
+  // Availability is read live per snapshot, but the provider LANE is
+  // build-fixed — invalidate so a just-enabled native-lane agent rebuilds.
+  try {
+    await chrome.runtime.sendMessage({ type: "invalidate-agent" });
+  } catch { /* worker may not be running — the setting still persists */ }
+};
+
+async function renderServerToolAgents(globalOn) {
+  const box = $("#server-tools-agents");
+  const list = $("#server-tools-agent-list");
+  if (!box || !list) return;
+  // Sub-panel visibility = global toggle AND the developer flag: the toggle
+  // card is dev-gated (data-developer) and applyDeveloperVisibility force-
+  // closes the panel when the flag is off — never fight it (server tools are
+  // a paid dev feature; dev-off must not make the per-agent opt-ins reachable).
+  box.hidden = !globalOn || !developerFeaturesEnabled;
+  list.replaceChildren();
+  if (!globalOn) return;
+  const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+  const agents = cur.agents && typeof cur.agents === "object" ? cur.agents : {};
+  let named = [];
+  try {
+    const r = await boundedSend("named-agent.list");
+    named = Array.isArray(r?.agents) ? r.agents : [];
+  } catch { named = []; }
+  const rows = [{ key: "hub", name: "Hub (the main agent)" },
+    // Paid provider-tool authority follows the immutable instance identity.
+    // Legacy agents without one are omitted (fail closed), never slug-keyed.
+    ...named.map((a) => ({ key: String(a?.instanceId ?? ""), name: String(a?.name ?? a?.id ?? "agent") }))]
+    .filter((a) => a.key);
+  for (const a of rows) {
+    const field = document.createElement("div");
+    field.className = "toggle-field";
+    const t = document.createElement("switch-toggle");
+    t.setAttribute("label", a.name);
+    t.checked = agents[a.key] === true;
+    t.addEventListener("toggle", async (e) => {
+      const latest = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+      const latestAgents = latest.agents && typeof latest.agents === "object" ? { ...latest.agents } : {};
+      latestAgents[a.key] = e.detail.checked === true;
+      await persistProviderServerTools({ ...latest, agents: latestAgents });
+      saveFlash(`Provider server tools ${e.detail.checked ? "enabled" : "disabled"} for ${a.name}.`);
+    });
+    const text = document.createElement("div");
+    text.className = "toggle-text";
+    const nm = document.createElement("span");
+    nm.className = "toggle-name";
+    nm.textContent = a.name;
+    const hint = document.createElement("span");
+    hint.className = "muted";
+    hint.textContent = "Can search the web during its runs.";
+    text.append(nm, hint);
+    field.append(t, text);
+    list.appendChild(field);
+  }
+}
+
+// The toggle + its state live in the PROVIDERS section HTML, so this init must
+// run when that section renders (ensureSectionRendered("providers")) — NOT
+// inside renderAgents(), which only runs when the agents section is visited
+// (cap-beads-wuvg: reload → providers left the toggle unchecked + unbound).
+async function initProviderServerTools() {
+  const stCfg = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+  const stToggle = $("#server-tools-enabled");
+  if (!stToggle) return;
+  stToggle.checked = stCfg.enabled === true;
+  stToggle.addEventListener("toggle", async (e) => {
+    const cur = ((await storage.get("cap:providerServerTools"))["cap:providerServerTools"]) ?? {};
+    await persistProviderServerTools({ ...cur, enabled: e.detail.checked === true });
+    renderServerToolAgents(e.detail.checked === true);
+    saveFlash("Provider server tools saved.");
+  });
+  await renderServerToolAgents(stToggle.checked);
 }
 
 /** The per-agent override row: SHARED components (provider-select +
@@ -3358,6 +3371,11 @@ async function ensureSectionRendered(sectionId) {
   renderedSections.add(sectionId);
   if (sectionId === "providers") {
     await renderProviders();
+    // The server-tools toggle + per-agent rows live in the providers section
+    // HTML, so their init runs with this renderer — once, guarded by
+    // renderedSections (cap-beads-wuvg: previously it sat in renderAgents(),
+    // so reload → providers left the toggle unchecked until agents rendered).
+    await initProviderServerTools();
   } else if (sectionId === "mcp-servers") {
     await renderMcpServers();
   } else if (sectionId === "local-folders") {
@@ -3618,6 +3636,15 @@ await renderWebmcpStatus();
         if (!devRendered.has("hooks")) { devRendered.add("hooks"); try { await renderHooks(); } catch { /* idem */ } }
         if (!devRendered.has("prompts")) { devRendered.add("prompts"); try { await renderPrompts(); } catch { /* idem */ } }
         if (!devRendered.has("board-permissions")) { devRendered.add("board-permissions"); try { populateBoardDenyAgents(); } catch { /* idem */ } }
+        // Turning the flag on reveals the providers server-tools card; re-sync
+        // its sub-panel with the persisted global toggle. initProviderServerTools
+        // runs once at providers render (boot), when the flag may still have
+        // been off — the gate folded into renderServerToolAgents kept the panel
+        // closed then, so the flip-on is the moment it may open (cap-beads-wuvg).
+        try {
+          const st = await storage.get("cap:providerServerTools");
+          await renderServerToolAgents(st?.["cap:providerServerTools"]?.enabled === true);
+        } catch { /* providers section absent — nothing to reveal */ }
       }
       // The SW resolves the model + toolset per run from the same kv key; nudge
       // any running orchestrator so the demo model / developer tools switch
