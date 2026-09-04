@@ -3278,9 +3278,42 @@ function hideDeveloperLockedNotice() {
   if (el) el.hidden = true;
 }
 
+const renderedSections = new Set();
+async function ensureSectionRendered(sectionId) {
+  if (renderedSections.has(sectionId)) return;
+  renderedSections.add(sectionId);
+  if (sectionId === "providers") {
+    await renderProviders();
+  } else if (sectionId === "mcp-servers") {
+    await renderMcpServers();
+  } else if (sectionId === "local-folders") {
+    await renderLocalFolders();
+  } else if (sectionId === "tool-library") {
+    if (developerFeaturesEnabled) await renderToolLibrary();
+  } else if (sectionId === "agents") {
+    await renderAgents();
+    await renderEnroll();
+  } else if (sectionId === "browser") {
+    await renderBrowser();
+    await renderActionPolicy();
+  } else if (sectionId === "permissions") {
+    await renderPermissions();
+  } else if (sectionId === "skills") {
+    mountSkillsSection(document.getElementById("skills"));
+  } else if (sectionId === "hooks") {
+    if (developerFeaturesEnabled) await renderHooks();
+  } else if (sectionId === "prompts") {
+    if (developerFeaturesEnabled) await renderPrompts();
+  } else if (sectionId === "usage") {
+    await renderUsage();
+  } else if (sectionId === "about") {
+    await renderAbout();
+  }
+}
+
 // nav active state
-export function handleSettingsHashNavigation(hash, isTraverse = false) {
-  const sectionId = normalizeSettingsSectionId(hash);
+export async function handleSettingsHashNavigation(hash, isTraverse = false) {
+  const sectionId = normalizeSettingsSectionId(hash) || "providers";
   if (!sectionId) return false;
 
   const section = document.getElementById(sectionId);
@@ -3289,10 +3322,15 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   // Developer section requested while the flag is off — show the notice, never
   // a silent scroll to a hidden panel.
   if (!developerFeaturesEnabled && DEVELOPER_SECTIONS_SET.has(sectionId)) {
+    document.querySelectorAll("section.panel").forEach((s) => s.classList.remove("active"));
     showDeveloperLockedNotice();
     return true;
   }
   hideDeveloperLockedNotice();
+
+  document.querySelectorAll("section.panel").forEach((s) => {
+    s.classList.toggle("active", s.id === sectionId);
+  });
 
   document.querySelectorAll(".nav-item").forEach((x) => {
     const match = x.dataset.section === sectionId ||
@@ -3305,10 +3343,8 @@ export function handleSettingsHashNavigation(hash, isTraverse = false) {
   });
 
   if (sectionId === "local-folders") renderLocalFolders();
-  if (sectionId === "mcp-servers") renderMcpServers();
-  if (sectionId === "usage") renderUsage();
-  if (sectionId === "skills") mountSkillsSection(document.getElementById("skills"));
-  if (sectionId === "about") renderAbout(); // lazy: fetched + rendered on first open (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01)
+  await ensureSectionRendered(sectionId);
+  if (sectionId === "usage") await renderUsage(); // keep usage fresh on every visit
 
   section.scrollIntoView({
     behavior: isTraverse ? "auto" : "smooth",
@@ -3435,18 +3471,13 @@ await refreshStoragePermission();
 // reveal them without a reload.
 await readDeveloperFeaturesFlag();
 applyDeveloperVisibility(developerFeaturesEnabled);
-await renderProviders();
-await renderMcpServers();
+
+// CAP-FB-20260827-SETTINGS-MONOLITH-01: multi-section navigation.
+// Only the active section is rendered on boot (and on section switch);
+// the remaining sections are lazy-mounted when navigated to.
 await renderLocalFolders();
-if (developerFeaturesEnabled) await renderToolLibrary();
-await renderAgents();
-await renderEnroll();
-await renderBrowser();
-await renderActionPolicy();
-await renderPermissions();
-if (developerFeaturesEnabled) await renderHooks();
-if (developerFeaturesEnabled) await renderPrompts();
-await renderUsage();
+await navigationController.syncCurrent();
+
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run
 // completing, or the owner clearing), not show a stale count until a manual
 // reload. PUSH-driven (CAP-FB-20260830-HUB-POLLING-01): the SW bumps
@@ -3460,7 +3491,9 @@ await renderUsage();
 // (CAP-FB-20260830-HUB-CHROME-POLISH-01 moved the console here from the hub).
 refreshDiagnostics().catch(() => {});
 subscribeDiagnosticsRevision(() => {
-  renderUsage();
+  if (document.getElementById("usage")?.classList.contains("active")) {
+    renderUsage();
+  }
   refreshDiagnostics().catch(() => {});
 });
 // The detail-toggle is a STATIC control — wire its click EXACTLY ONCE (outside
