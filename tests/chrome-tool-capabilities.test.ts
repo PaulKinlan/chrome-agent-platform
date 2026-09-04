@@ -66,7 +66,7 @@ Deno.test("chrome capability table is exact and complete for 138 browser + 44 ma
   assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 182);
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 138);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 42);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 44);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS, {
     browserTools: 138,
     managementTools: 44,
@@ -207,7 +207,7 @@ Deno.test("unbound lazy browser/management records preserve source closure and v
   const browserRecords = executableBrowserToolRecords(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") });
   const managementRecords = executableManagementToolRecords(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") });
   assertEquals(browserRecords.length, 138);
-  assertEquals(managementRecords.length, 42);
+  assertEquals(managementRecords.length, 44);
   for (const record of [...browserRecords, ...managementRecords]) {
     const name = record.descriptorInput.toolId;
     const sourceMap = record.descriptorInput.sourceKind === "chrome-api" ? browser : management;

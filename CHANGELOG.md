@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.132] — 2026-09-04
+- Correct the merged management-tool count pins (44 on current main)
+
 ## [0.3.131] — 2026-09-04
 - Maintenance and fixes.
 
