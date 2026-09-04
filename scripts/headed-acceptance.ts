@@ -28,6 +28,7 @@
 // refused). Every step is labelled MANUAL (a human completed required browser UI) or
 // AUTOMATED, in the printed log AND in headed-acceptance-manifest.json.
 // The headless suites are untouched and still assert fail-closed denial.
+// Full documentation: docs/HEADED-ACCEPTANCE.md.
 //
 // Pre-flight (fail-closed, before any browser launch):
 //   1. --headed must be passed.
@@ -255,38 +256,10 @@ async function clickSel(cdp: Cdp, session: string, selector: string) {
   return true;
 }
 
-// The control lives inside <capability-row>'s shadow root (the ghost "Turn on"
-// button, or the shared <switch-toggle> when on) and its group may be
-// collapsed (CAP-FB-20260830-SETTINGS-HOOKS-PERMISSIONS-TABLES-01).
-async function capabilityControlBox(cdp: Cdp, session: string, label: string, text: string) {
-  const box = await evalIn(cdp, session, `(() => {
-    const row = [...document.querySelectorAll('#permission-list capability-row')]
-      .find((r) => r.getAttribute('name') === ${JSON.stringify(label)});
-    if (!row) return null;
-    const group = row.closest('details');
-    if (group && !group.open) group.open = true;
-    let el = null;
-    if (${JSON.stringify(text)} === 'Turn off') {
-      el = row.shadowRoot?.querySelector('switch-toggle')?.shadowRoot?.querySelector('.sw') ?? null;
-    } else {
-      const btn = row.shadowRoot?.querySelector('button.run');
-      el = btn && btn.textContent.trim() === ${JSON.stringify(text)} ? btn : null;
-    }
-    if (!el) return null;
-    el.scrollIntoView({ block: 'center', inline: 'center' });
-    const r = el.getBoundingClientRect();
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-  })()`);
-  return box && typeof box === "object" && typeof box.x === "number" ? box : null;
-}
-
-async function clickCapability(cdp: Cdp, session: string, label: string, text: string) {
-  const b = await capabilityControlBox(cdp, session, label, text);
-  if (!b) return false;
-  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: b.x, y: b.y, button: "left", buttons: 1, clickCount: 1 }, session);
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: b.x, y: b.y, button: "left", buttons: 0, clickCount: 1 }, session);
-  return true;
-}
+// The capability grant/turn-off lifecycle moved to the headless matrix
+// (scripts/permission-matrix-acceptance.ts) — this macro drives only the
+// enrollment lifecycle + the action-icon gesture, so no capability-row
+// controls appear in its steps.
 
 async function typeText(cdp: Cdp, session: string, text: string) {
   for (const ch of text) {
@@ -333,14 +306,11 @@ async function writeEvidence(name: string, bytes: Uint8Array) {
 
 // ── chrome launch (HEADED) ───────────────────────────────────────────────────
 // The shared launcher owns the debugging port (kernel-assigned, read back from
-// this child's own stderr — CAP-FB-20260829-FIXED-DEBUG-PORTS-01). This macro
-// keeps its own HEADED argv (no --headless; a real window on the display) and
-// hands it over without any port flag.
-//
-// The launcher has no per-child `env`, so the display variables the pre-flight
-// resolved (WAYLAND_DISPLAY / XDG_RUNTIME_DIR / HYPRLAND_INSTANCE_SIGNATURE or
-// DISPLAY) are exported into this process's environment right before the
-// spawn, which the child then inherits.
+// this child's own stderr). This macro keeps its own HEADED argv (no
+// --headless; a real window on the display) and hands it over without any port
+// flag. The display variables the pre-flight resolved (WAYLAND_DISPLAY /
+// XDG_RUNTIME_DIR / HYPRLAND_INSTANCE_SIGNATURE or DISPLAY) go to the browser
+// child ONLY, through the launcher's per-child `env`.
 function launchHeadedChrome(profile: string) {
   const args = [
     "--no-sandbox",
@@ -355,8 +325,7 @@ function launchHeadedChrome(profile: string) {
     args.push("--ozone-platform=wayland", "--ozone-platform-hint=wayland");
   }
   args.push("about:blank");
-  for (const [k, v] of Object.entries(displayEnv)) Deno.env.set(k, v);
-  return launchChrome({ binary: CHROMIUM, args, timeoutMs: 30000 });
+  return launchChrome({ binary: CHROMIUM, args, timeoutMs: 30000, env: displayEnv });
 }
 
 // ── the journey ──────────────────────────────────────────────────────────────
@@ -392,8 +361,10 @@ async function main() {
 
     const msgSw = (msg: unknown) => evalIn(cdp, sws, `chrome.runtime.sendMessage(${JSON.stringify(msg)})`);
 
-    // Hub (NTP) + Settings sessions.
-    const optT = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+    // Hub (NTP) + Settings sessions. The options page renders its sections
+    // LAZILY — the site-agent enroll controls only exist once the agents
+    // section is active, so the macro deep-links straight to it.
+    const optT = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#agents` });
     const opts = (await cdp.send("Target.attachToTarget", { targetId: optT.result!.targetId, flatten: true })).result!.sessionId as string;
     await cdp.send("Runtime.enable", {}, opts);
     await cdp.send("Page.enable", {}, opts);
@@ -440,13 +411,19 @@ async function main() {
         const j = await msgNs({ type: "memory.get", origin: "master", key: "journal" }).catch(() => null);
         return Array.isArray(j) && j.filter((e: any) => e?.type === "screenshot").length > shotsBefore;
       });
-    check("screenshot: owner action click journaled a REAL screenshot entry to the hub memory (the headless auto-denied path)", actionShot, "manual-user-click");
-    // (b) the exact-host path: with the install-granted host access from STEP E, capture.tab
-    // returns real PNG bytes (headless asserts this FAILS — see the journeys'
-    // screenshot matrix; headed asserts the SUCCESS here).
+    check("screenshot: owner action click journaled a REAL screenshot entry to the hub memory (no CDP mechanism can synthesize the toolbar click)", actionShot, "manual-user-click");
+    // (b) the exact-host path: capture.tab additionally needs an ORIGIN-SCOPED
+    // browser-control grant (the headless journeys cover this exact
+    // grant → success / wrong-origin / expiry / revoke matrix; here it is
+    // eyeball evidence in the headed window). Grant for the fixture origin,
+    // capture, then revoke so the profile ends clean.
+    const bcGrant = await msgSw({ type: "browser-control.set", origins: [PAGE_ORIGIN], expiryMs: 120000 });
+    check("browser control: origin-scoped grant accepted for the fixture origin", bcGrant?.grant != null);
     const capture = await msgNs({ type: "capture.tab", tabId: fixtureTabId });
     const pngOk = typeof capture?.screenshot === "string" && capture.screenshot.startsWith("data:image/png") && capture.screenshot.length > 200;
-    check("screenshot: capture.tab returns real PNG bytes with install-granted host access", pngOk);
+    check("screenshot: capture.tab returns real PNG bytes with install-granted host access + the origin's browser-control grant", pngOk);
+    const bcRevoke = await msgSw({ type: "browser-control.revoke", origin: PAGE_ORIGIN });
+    check("browser control: the fixture origin's grant revoked after the capture", bcRevoke?.grant?.revoked === true);
     await grimShot("fixture-page-with-extension");
     const shot = await captureShot(cdp, wsess);
     if (shot) await writeEvidence("fixture-page-cdp.png", shot);

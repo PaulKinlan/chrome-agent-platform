@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- Update the optional headed evidence run for the current settings layout and capture grants
+
 ## [0.3.128] — 2026-09-04
 - Maintenance and fixes.
 
