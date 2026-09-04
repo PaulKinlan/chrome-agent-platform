@@ -416,21 +416,10 @@ async function repairPendingLocked(store, origin) {
 }
 
 export const ASSET_BOUNDS = {
-  // no-limits (owner directive 2026-09-03)
+  // no-limits (owner directive 2026-09-03): a body of ANY size stores
+  // complete. Kept as a named constant because tabular/code-diff retention
+  // modules still reference it in their own preflight arithmetic.
   maxContentBytes: Infinity,
-  // A single append call carries at most this many UTF-8 bytes (a bounded
-  // chunk of a body an artifact grows across calls); it is also the tool
-  // argument transport bound for append_asset (tool-argument-contract.js).
-  // no-limits (owner directive 2026-09-03)
-  maxAppendBytes: Infinity,
-  // The CEILING for ONE artifact body, measured the way the memory store
-  // measures the asset-blob value it is written to (serialized JSON bytes,
-  // memory.js MAX_ASSET_BLOB_VALUE_BYTES): append-grown bodies exceed the
-  // 256 KiB single-call bound but never this one. This is a STORE write-path
-  // ceiling only (p45y r5: the inspector mounts any stored or staged body in
-  // full — rendering has no size cap of its own).
-  // no-limits (owner directive 2026-09-03)
-  maxBodySerializedBytes: Infinity,
   maxNameLength: 200,
   maxAssetsPerOrigin: 200,
   // The index byte bound used to be PER ORIGIN. The library is now one shared
@@ -725,27 +714,18 @@ async function readIndexStrict(store) {
 // `getAsset` serve both shapes. The head blob is the head VERSION's blob
 // (every write stages its version first), so it is refcounted, byte-budgeted
 // and never evicted while the row lives — exactly like today's bodies.
-function boundAssetMeta({ type, name, content }, { allowBodyGrowth = false } = {}) {
+function boundAssetMeta({ type, name, content }) {
   const at = type == null || type === "" ? "data" : String(type);
   if (!ASSET_TYPES.has(at)) return { error: `asset type must be one of ${[...ASSET_TYPES].join(", ")}` };
   const nm = String(name ?? "").trim();
   if (nm.length === 0) return { error: "asset needs a name" };
   if (nm.length > ASSET_BOUNDS.maxNameLength) return { error: `asset name exceeds ${ASSET_BOUNDS.maxNameLength} chars` };
   if (typeof content !== "string") return { error: "asset content must be a string" };
+  // no-limits (owner directive 2026-09-03): there is NO content size check
+  // here — not on the single-call path, not on the append-grown path. A body
+  // of any size validates; a genuine store failure surfaces as the store's
+  // own honest error, never a self-imposed refusal.
   const size = utf8Bytes(content);
-  if (!allowBodyGrowth) {
-    // The single-call bound: create_asset / update_asset / write_file carry one
-    // COMPLETE body per call, so the advertised 256 KiB is the honest per-call
-    // limit AND the full cap must actually store (the body lives in the blob
-    // side of the head/version pair, which the memory store admits up to
-    // maxBodySerializedBytes — CAP p45y r4).
-    if (size > ASSET_BOUNDS.maxContentBytes) return { error: `asset content exceeds ${ASSET_BOUNDS.maxContentBytes} bytes` };
-  } else if (utf8Bytes(JSON.stringify(content)) > ASSET_BOUNDS.maxBodySerializedBytes) {
-    // The aggregate path (append/patch/restore on an already-grown body): the
-    // body may exceed the single-call bound, but the blob write must still fit
-    // the store's per-value bound — measured in the SAME unit the store uses.
-    return { error: `asset body exceeds the ${ASSET_BOUNDS.maxBodySerializedBytes}-byte storage bound` };
-  }
   return { ok: true, type: at, name: nm, size };
 }
 
@@ -1057,11 +1037,9 @@ async function updateAssetLocked(store, origin, id, patch, opts = {}) {
   if (typeof nextContent !== "string") {
     return { ok: false, error: "asset body missing — repair in progress" };
   }
-  // The aggregate write path (append/patch/restore on a body that may exceed
-  // the single-call bound) validates against the BLOB storage bound instead of
-  // the 256 KiB single-call cap; a single-call update_asset is still transport-
-  // capped at maxContentBytes by the tool argument contract.
-  const meta = boundAssetMeta({ type: nextType, name: nextName, content: nextContent }, { allowBodyGrowth: true });
+  // no-limits (owner directive 2026-09-03): append/patch/restore-grown bodies
+  // and single-call replacements validate identically — shape only, no size.
+  const meta = boundAssetMeta({ type: nextType, name: nextName, content: nextContent });
   if (meta.error) return { ok: false, error: meta.error };
   const updated = {
     ...existing, type: meta.type, name: meta.name, content: nextContent,
@@ -1438,15 +1416,11 @@ export function resolveAssetPatch(oldBody, edits) {
   return { ok: true, content: body };
 }
 
-/** The per-call append bound (exported for the tools + the contract tests):
- * one append carries at most 64 KiB of UTF-8 text; an artifact body grows
- * across calls up to ASSET_BOUNDS.maxBodySerializedBytes. */
-export const APPEND_MAX_BYTES = ASSET_BOUNDS.maxAppendBytes;
-
 /** S0→S3 — append `text` to an artifact's body as a NEW head version (the
- * model's chunked write path: CAP p45y acceptance B — a body larger than any
- * single-call bound is built across bounded calls instead of one giant tool
- * argument). Runs the SAME compensated update as any edit (WAL + immutable
+ * model's chunked write path: a body can be built across several calls instead
+ * of one giant tool argument — a CONVENIENCE, not a cap; no-limits per the
+ * owner directive 2026-09-03, so one append may carry any size). Runs the SAME
+ * compensated update as any edit (WAL + immutable
  * version + head reference via updateAssetLocked), so the store contract is
  * shared. `expectVersion`, when supplied, refuses a stale append (the head has
  * moved since the model last saw the body) — mirrors patch_asset. The owner
@@ -1456,9 +1430,6 @@ export const APPEND_MAX_BYTES = ASSET_BOUNDS.maxAppendBytes;
 export async function appendAsset(origin, id, text, opts = {}) {
   if (!id || typeof id !== "string") return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
   if (typeof text !== "string" || text.length === 0) return { ok: false, error: "append_asset needs the text to append" };
-  if (utf8Bytes(text) > APPEND_MAX_BYTES) {
-    return { ok: false, error: `one append carries at most ${APPEND_MAX_BYTES} UTF-8 bytes (append in pieces)` };
-  }
   const store = assetStore();
   return withAssetLock(origin, async () => {
     const existing = await store.get(`asset:${id}`);

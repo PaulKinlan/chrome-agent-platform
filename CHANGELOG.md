@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.141] — 2026-09-04
+- Tool descriptions now tell the truth about size: there is no size limit, and adding to a saved artifact keeps your exact text
+
 ## [0.3.140] — 2026-09-04
 - add safeCaptureScreenshot with quiesced frame fallback
 

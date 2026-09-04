@@ -264,7 +264,6 @@ import {
 } from "../lib/system-prompts.js";
 import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
-  APPEND_MAX_BYTES,
   appendAsset,
   assetLibraryCapacity,
   createAsset,
@@ -7017,10 +7016,10 @@ const handlers = mergeRouteMaps(
       : res;
   },
   // Append text to an artifact's END — the chunked build path for a body
-  // larger than one call can carry (p45y acceptance B: a generated artifact
-  // grows across bounded calls instead of one giant tool argument). Same
-  // approval class as every artifact edit (asset.update): the payload binds
-  // the APPENDED text (bounded per call), and expectVersion binds the base the
+  // built across several calls instead of one giant tool argument (a
+  // convenience, not a cap: no-limits per the owner directive 2026-09-03).
+  // Same approval class as every artifact edit (asset.update): the payload
+  // binds the APPENDED text, and expectVersion binds the base the
   // model read, so an approval can never land silently on a body that moved
   // while the owner decided.
   async "asset.append"({ origin, id, content, expectVersion }, context) {
@@ -7030,9 +7029,6 @@ const handlers = mergeRouteMaps(
     }
     if (typeof content !== "string" || content.length === 0) {
       return { ok: false, error: "append_asset needs the text to append" };
-    }
-    if (new TextEncoder().encode(content).byteLength > APPEND_MAX_BYTES) {
-      return { ok: false, error: `one append carries at most ${APPEND_MAX_BYTES} UTF-8 bytes (append in pieces)` };
     }
     const exists = await getAsset(scope, id);
     if (!exists.ok) {

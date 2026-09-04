@@ -16,6 +16,9 @@ const LARGE_FIELDS = Object.freeze({
   management: Object.freeze({
     create_asset: Object.freeze({ field: "content" }),
     update_asset: Object.freeze({ field: "content" }),
+    // The chunked build path carries the SAME body bytes create_asset would —
+    // a chunk is exact content, never NFKC-rewritten (gpw).
+    append_asset: Object.freeze({ field: "content" }),
     generate_ui: Object.freeze({ field: "html" }),
     create_script: Object.freeze({ field: "source" }),
     update_script: Object.freeze({ field: "source" }),

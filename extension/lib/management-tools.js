@@ -137,7 +137,7 @@ export function managementToolset({ callRoute }) {
         type: z.enum([...ASSET_TYPES]).default("text"),
         key: z.string().max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 ._\-]{0,63}$/u).optional().describe("idempotency key (letters, digits, dot, dash, underscore, space; max 64 chars) — pass the same key to create-or-update the SAME artifact instead of duplicating"),
         name: z.string().max(ASSET_BOUNDS.maxNameLength).describe(`a short, clear name (max ${ASSET_BOUNDS.maxNameLength} characters)`),
-        content: z.string().describe(`the complete artifact content (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; use this field directly, never truncate)`),
+        content: z.string().describe("the complete artifact content (no size limit — pass the complete body in this field, never truncate; for very large bodies you may also build incrementally with append_asset)"),
       }),
       execute: ({ origin, type, key, name, content }) =>
         call("asset.create", { origin, assetType: type, key, name, content }),
@@ -151,7 +151,7 @@ export function managementToolset({ callRoute }) {
         id: z.string(),
         name: z.string().max(ASSET_BOUNDS.maxNameLength).optional(),
         type: z.enum([...ASSET_TYPES]).optional(),
-        content: z.string().optional().describe(`complete replacement content (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; never truncate)`),
+        content: z.string().optional().describe("complete replacement content (no size limit; never truncate)"),
       }),
       execute: (args) =>
         call("asset.update", {
@@ -181,11 +181,11 @@ export function managementToolset({ callRoute }) {
     }),
     append_asset: tool({
       description:
-        "Append text to the END of an artifact's content (the chunked build path for one artifact larger than a single call can carry). One call appends at most 64 KiB of UTF-8 text; call it repeatedly to grow an artifact — the body accumulates across calls up to the 4 MiB artifact storage ceiling, and every append is an immutable version. Prefer this over update_asset when you are building a large body incrementally: you never resend what is already stored. Pass expectVersion (the version you last read) to refuse the append if the artifact changed underneath you. The owner approves a model append like any other artifact edit.",
+        "Append text to the END of an artifact's content (the chunked build path for growing one artifact across several calls). There is no size limit: one call may carry any amount of text, and the body accumulates across calls with every append stored as an immutable version. Prefer this over update_asset when you are building a large body incrementally: you never resend what is already stored. Pass expectVersion (the version you last read) to refuse the append if the artifact changed underneath you. The owner approves a model append like any other artifact edit.",
       inputSchema: z.object({
         origin: z.string().default("master").describe("'master' or an https origin"),
         id: z.string().min(1).describe("the artifact id (from list_assets — the artifact you are growing)"),
-        content: z.string().min(1).describe(`the text to append to the end of the artifact (max ${ASSET_BOUNDS.maxAppendBytes} UTF-8 bytes per call; append in pieces for more)`),
+        content: z.string().min(1).describe("the text to append to the end of the artifact (no size limit; sent complete, never truncated)"),
         expectVersion: z.number().int().optional().describe("the version you last saw; the append is refused if the head has moved"),
       }),
       execute: ({ origin, id, content, expectVersion }) =>
@@ -398,7 +398,7 @@ export function managementToolset({ callRoute }) {
         "Generate an interactive HTML UI (a page, a widget, a data visualization, a small app) for the owner. It is saved as an html artifact AND rendered LIVE in a sandboxed double-iframe in the conversation. The UI may use inline scripts + styles (interactive) but runs in an ORIGIN-OPAQUE SANDBOX: no localStorage/sessionStorage/cookies, no network, no permission-gated APIs are available inside it (the frame is allow-scripts-only and its CSP blocks all egress). Write the UI to keep its state IN-MEMORY (JS variables — state resets on reload), or store state with the platform (a saved-state artifact/memory key) and load it back at start — never generate code that needs storage, cookies, or network at runtime. The owner's theme/locale is percolated in automatically.",
       inputSchema: z.object({
         name: z.string().max(ASSET_BOUNDS.maxNameLength).describe("a short, clear name for the generated UI"),
-        html: z.string().describe(`the complete HTML (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; never truncate)`),
+        html: z.string().describe("the complete HTML (no size limit; never truncate)"),
         origin: z.string().default("master").describe("'master' for a hub-level artifact, or an https origin"),
       }),
       execute: ({ name, html, origin }) =>
