@@ -307,6 +307,7 @@ import {
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
+import { offerTabToolsBundle, stampTabToolsBundle } from "../lib/tab-tools-bundle.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
 import { resolveSkillRef } from "../lib/skill-resolve.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
@@ -1840,10 +1841,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         return { ok: true, gen: snap.gen };
       },
       onProgress,
-      onPermissionRequest: (result) => waitForInlinePermissionDecision(
+      onPermissionRequest: (result, toolName) => waitForInlinePermissionDecision(
         approvalExecutionId,
         result,
         onProgress,
+        toolName,
       ),
     });
     // Bind each worker's run-generation getter into ITS OWN build-local cell
@@ -3901,9 +3903,46 @@ const ownerApprovalStore = createApprovalStore();
 const inlinePermissionWaiters = new Map();
 const INLINE_PERMISSION_TTL_MS = 60_000;
 
-async function waitForInlinePermissionDecision(executionId, result, onProgress) {
+/** The task-level "tab tools" bundle (OPEN-QUESTIONS #22): when a TAB-FAMILY
+ * tool denies, offer ONE task-level requirement (see/list tabs + group tabs +
+ * browser control on the owner's open-tab sites) instead of the tool's own
+ * narrower ask — so list_tabs then group_tabs is ONE card, not two. The
+ * per-tool ask remains the safety floor: any failure here leaves the denial
+ * untouched. The stamp happens IN PLACE on the denial's requirement object —
+ * the agent loop, the live approval event, the journaled tool-result row and
+ * the reopened thread share that exact object, so every surface shows the
+ * same one card. The bundle grants NOTHING: only the owner's real click on
+ * the card runs chrome.permissions.request + the grant set. */
+async function maybeOfferTabToolsBundle(executionId, result, toolName) {
+  const requirement = result?.permissionRequirement;
+  if (!requirement || typeof requirement !== "object" || Array.isArray(requirement)) return;
+  try {
+    let openTabOrigins = [];
+    try {
+      for (const tab of await chrome.tabs.query({})) {
+        if (typeof tab?.url === "string" && tab.url) {
+          const origin = canonicalOrigin(tab.url);
+          if (origin) openTabOrigins.push(origin);
+        }
+      }
+    } catch { /* no tab enumeration → the per-tool floor */ }
+    const bundle = await offerTabToolsBundle(executionId, requirement, {
+      toolName: typeof toolName === "string" ? toolName : "",
+      openTabOrigins,
+      hasPermission: async (permission) => {
+        try { return (await chrome.permissions.contains({ permissions: [permission] })) === true; } catch { return false; }
+      },
+      isControlGranted: (origin) => isBrowserControlGranted(origin),
+      isExecutionActive: (id) => activeExecutions.has(id),
+    });
+    if (bundle) stampTabToolsBundle(requirement, bundle);
+  } catch { /* the per-tool floor is the fallback */ }
+}
+
+async function waitForInlinePermissionDecision(executionId, result, onProgress, toolName = "") {
   if (!executionId || !activeExecutions.has(executionId) || typeof onProgress !== "function") return "denied";
   if (inlinePermissionWaiters.size >= 64) return "denied";
+  await maybeOfferTabToolsBundle(executionId, result, toolName);
   const requestId = `rp_${crypto.randomUUID()}`;
   return await new Promise(async (resolve) => {
     let settled = false;

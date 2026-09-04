@@ -28,8 +28,8 @@ Deno.test("production wiring blocks agent-do on the run decision and exposes onl
     Deno.readTextFile(new URL("../extension/lib/agent.js", import.meta.url)),
     Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url)),
   ]);
-  assertEquals(agent.includes("const decision = await onPermissionRequest(permissionDenial)"), true,
-    "agent-do's awaited post-tool hook is the pause point");
+  assertEquals(agent.includes("const decision = await onPermissionRequest(permissionDenial, selectedBeforeRewrite ?? e.toolName)"), true,
+    "agent-do's awaited post-tool hook is the pause point (carrying the selected tool's name)");
   assertEquals(worker.includes('async "run.resolve-inline-approval"'), true,
     "the originating conversation has a bounded decision route");
   assertEquals(worker.includes("INLINE_PERMISSION_TTL_MS = 60_000"), true,

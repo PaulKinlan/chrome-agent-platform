@@ -1583,7 +1583,10 @@ export function createAgent({
         // A re-run can pause on a FURTHER requirement (a second capability the
         // same tool needs): each pause is one card and one decision, bounded.
         for (let round = 0; permissionDenial && typeof onPermissionRequest === "function" && round < 4; round++) {
-          const decision = await onPermissionRequest(permissionDenial);
+          // The SELECTED tool's name rides the hook so the worker's denial
+          // path can gate task-level offers (the tab-tools bundle) on the
+          // family the denial actually came from.
+          const decision = await onPermissionRequest(permissionDenial, selectedBeforeRewrite ?? e.toolName);
           permissionDecision = decision;
           // agent-do records this same normalized object after the awaited hook.
           const selected = selectedToolFromResult(e.result) ?? e.toolName;

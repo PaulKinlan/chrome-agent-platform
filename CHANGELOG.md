@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.129] — 2026-09-04
+- Tab tasks now ask for permission once: one approval card covers seeing your open tabs, grouping them, and controlling the browser on the sites you have open, instead of a separate card per tool; individual tool asks remain the fallback
+
 ## [0.3.128] — 2026-09-04
 - Maintenance and fixes.
 
