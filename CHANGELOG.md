@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.109] — 2026-09-04
+- Wire the Python/Pyodide tool back in — the multi-lane merge lost the management-tools, capabilities, and SW-route wiring
+
 ## [0.3.108] — 2026-09-04
 - Version 0.3.107 — restore correct version ordering after the multi-lane merge
 

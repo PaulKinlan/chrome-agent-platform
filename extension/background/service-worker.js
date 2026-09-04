@@ -219,7 +219,10 @@ import {
   buildAgentRunView,
   finalizeUnadmittedThreadRun,
 } from "../lib/thread-run-view.js";
+import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
+import { runPython } from "../lib/python-execution.js";
+import { getPythonRuntimeProvider } from "../lib/python-tool.js";
 import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
@@ -318,7 +321,6 @@ import {
   TOOL_CATALOG_BOUNDS,
 } from "../lib/tool-catalog.js";
 import { ShadowToolCatalogController } from "../lib/tool-catalog-shadow.js";
-import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import {
   capabilitiesByTool as canonicalChromeCapabilitiesByTool,
   chromeToolCapability,
@@ -1485,11 +1487,6 @@ async function readSiteLazySources(origin, runGenCell) {
     `seq:${gate.seq ?? 0}`,
   ].join(":");
   const tools = await listTools(origin);
-  // 922q: when a declared tool's handler throws (DOMException etc), the
-  // dispatch falls through to withSiteDocsFallback which fetches the site's
-  // docs (via /llms.txt → sitemap → nav) and surfaces those as the result.
-  // The fallback is wired in the per-tool execute closure below. */
-  // (withSiteDocsFallback imported above from lib/site-docs-fallback.js)
   const permissionDigestByTool = {};
   const availabilityByTool = {};
   for (const sourceTool of tools) {
@@ -1547,15 +1544,16 @@ async function readSiteLazySources(origin, runGenCell) {
         "arguments",
       );
     },
-  }, ({ name, source, args }) =>
-    invokeSiteTool(
+  }, async ({ name, source, args }) => {
+    const res = await invokeSiteTool(
       origin,
       name,
       args,
       runGenCell?.get?.() ?? null,
       source,
-    )
-  );
+    );
+    return await withSiteDocsFallback({ origin, name, args, res });
+  });
 }
 
 // The orchestrator build (the memory, the workers, the tools). Shared by
@@ -3680,16 +3678,8 @@ async function readShadowCatalogInputs() {
   return inputs;
 }
 
-// 4kl: the bundled semantic tool-vector table (precomputed from a real model
-// at table-generation time; runtime is lookup-only — see lib/tool-vectors.js).
-// Load failure degrades search to lexical-only, honestly reported.
-const toolVectorTableLoader = () =>
-  fetch(chrome.runtime.getURL("vendor/tool-vector-table.json"))
-    .then((response) => (response.ok ? response.json() : null));
-
 const shadowToolCatalog = new ShadowToolCatalogController({
   readInputs: readShadowCatalogInputs,
-  vectorTableLoader: toolVectorTableLoader,
 });
 
 // Per-document bridge MAC keys (cross-world transport integrity, NOT page
@@ -7263,6 +7253,14 @@ const handlers = mergeRouteMaps(
     }
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
+  },
+  async "python.execute"({ code, stdin }) {
+    const provider = getPythonRuntimeProvider();
+    const runtime = await provider();
+    if (!runtime) {
+      return { ok: false, error: "python unavailable — the bounded Python runtime is not admitted yet (see docs/PYODIDE-BOUNDED-BUILD.md); no result was fabricated" };
+    }
+    return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? "") });
   },
 
   // ---- saved workflows (workflows-to-memory) ----
