@@ -222,7 +222,8 @@ import {
 import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
 import { runPython } from "../lib/python-execution.js";
-import { getPythonRuntimeProvider } from "../lib/python-tool.js";
+import { getPythonRuntimeProvider, setPythonRuntimeProvider } from "../lib/python-tool.js";
+import { createPythonRuntimeProvider } from "../lib/python-runtime.js";
 import {
   MAX_DELEGATION_DEPTH,
   MAX_DELEGATION_DESCENDANTS,
@@ -9448,6 +9449,15 @@ reconcileThreadQueueClaims().catch((e) =>
 );
 reconcileAgentWorkers({ ensureOffscreen, kvGet }).catch((e) =>
   console.error("reconcileAgentWorkers:", e?.message ?? e)
+);
+
+// The admitted local Pyodide runtime (CAP-FB-20260823-PYODIDE-PYTHON-01): the
+// python.execute route + python tool run through the setPythonRuntimeProvider
+// seam; this provider lazily ensures the offscreen host on the first
+// python_execute call and transports each run to a fresh classic Pyodide
+// worker there (lib/python-runtime.js + lib/python-host.js).
+setPythonRuntimeProvider(
+  createPythonRuntimeProvider({ ensureHost: ensureOffscreen }).provider,
 );
 
 // ---- keyboard commands (manifest `commands`) ---------------------------

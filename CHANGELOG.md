@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.127] — 2026-09-04
+- python_execute now runs real Pyodide 0.26.4, bundled and served from the extension package ()
+
 ## [0.3.126] — 2026-09-04
 - Maintenance and fixes.
 
