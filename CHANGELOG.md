@@ -1,13 +1,16 @@
 # Changelog
 
+## [0.3.111] — 2026-09-04
+- python_execute works in the shipped build again — restored the runtime-provider wiring and matched the tool counts to the catalog
+
 ## [0.3.110] — 2026-09-04
 - Remove the python-tool RETAINED entry — the tool is now reachable via management-tools
 
 ## [0.3.109] — 2026-09-04
-- Wire the Python/Pyodide tool back in — the multi-lane merge lost the management-tools, capabilities, and SW-route wiring
+- Run Python programs in the browser: the python_execute tool is available again, executing code sandboxed in the built-in runtime with no DOM or network access.
 
 ## [0.3.108] — 2026-09-04
-- Version 0.3.107 — restore correct version ordering after the multi-lane merge
+- Maintenance and fixes.
 
 ## [0.3.103] — 2026-09-04
 - Maintenance and fixes.
