@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.98] — 2026-09-04
+- Wire python_execute into the management toolset, capability catalog, and service-worker route
+
 ## [0.3.97] — 2026-09-04
 - The changelog reads like release notes — every entry describes what the user gets
 

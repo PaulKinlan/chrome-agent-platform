@@ -8,8 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 137,
-  managementTools: 43,
-  totalTools: 180,
+  managementTools: 44,
+  totalTools: 181,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -196,6 +196,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "list_scripts",
   "get_script",
   "run_script",
+  "python_execute",
   "schedules_list",
   "schedules_pause",
   "schedules_resume",
@@ -514,6 +515,7 @@ const rows = [
   record("list_scripts", "management", ["management.script.list"], [], "none", "read-only", false, "read", "management.scripts"),
   record("get_script", "management", ["management.script.get"], [], "none", "read-only", false, "read", "management.scripts"),
   record("run_script", "management", ["management.script.run"], [], "none", "mutating", false, "mutating", "management.scripts"),
+  record("python_execute", "management", ["management.python.execute"], [], "none", "mutating", false, "mutating", "management.compute"),
   // Per-agent schedule visibility + control (pause/resume/update are gated
   // owner-approved mutations; list is a read, scoped to the calling agent).
   record("schedules_list", "management", ["management.schedules.list"], [], "none", "read-only", false, "read", "management.schedules"),

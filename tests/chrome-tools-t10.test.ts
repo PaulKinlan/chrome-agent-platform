@@ -127,7 +127,7 @@ Deno.test("T10: the 8 tools are present and truthfully classified", () => {
   assertEquals(chromeToolCapability("add_network_rule", "chrome-api").optionalPermissions, ["declarativeNetRequest"]);
   assertEquals(chromeToolCapability("get_navigation_frames", "chrome-api").optionalPermissions, ["webNavigation"]);
   assertEquals(chromeToolCapability("get_request_activity", "chrome-api").optionalPermissions, ["webRequest"]);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 180);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 181);
 });
 
 // ──────────────────────────────────────────────────────────────────────────

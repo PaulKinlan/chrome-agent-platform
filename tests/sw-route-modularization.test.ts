@@ -163,6 +163,7 @@ const BASELINE_ROUTES = [
   "script.list",
   "script.get",
   "script.run",
+  "python.execute",
   // The owner-approved script-js leg of workflow_run (workflows-to-memory):
   // reuses the script sandbox host + source-disclosing approval card.
   "workflow.run",
