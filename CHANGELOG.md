@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.61] — 2026-09-04
+- Maintenance and fixes.
+
+## [0.3.60] — 2026-09-04
+- Maintenance and fixes.
+
 ## [0.3.59] — 2026-09-04
 - Maintenance and fixes.
 
@@ -10,7 +16,7 @@
 - Maintenance and fixes.
 
 ## [0.3.56] — 2026-09-04
-- register kat-browser-grant-persistence in the harness registry
+- The browser grant persistence check is now a registered automated check that runs in real Chromium across reloads
 
 ## [0.3.55] — 2026-09-03
 - Running a single test file through the npm shortcut works for every file, including the one that turns away the slow full sweep
