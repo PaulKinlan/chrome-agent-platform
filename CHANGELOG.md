@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.264] — 2026-09-06
+- Internal cleanup: remove a leftover one-off probe with outdated assumptions
+
 ## [0.3.263] — 2026-09-05
 - Internal cleanup: stop checking the retired task file's layout on every full test run
 
