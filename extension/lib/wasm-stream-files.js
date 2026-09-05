@@ -64,8 +64,13 @@ async function removeStreamDirectory(id, storage) {
 async function writeJson(directory, name, value) {
   const handle = await directory.getFileHandle(name, { create: true });
   const writer = await handle.createWritable();
-  await writer.write(JSON.stringify(value));
-  await writer.close();
+  try {
+    await writer.write(JSON.stringify(value));
+    await writer.close();
+  } catch (error) {
+    await writer.abort?.().catch(() => {});
+    throw error;
+  }
 }
 
 async function readJson(directory, name) {
