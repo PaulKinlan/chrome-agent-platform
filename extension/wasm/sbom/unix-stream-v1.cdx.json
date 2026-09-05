@@ -1,0 +1,91 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.5",
+ "version": 1,
+ "metadata": {
+  "component": {
+   "type": "application",
+   "name": "cap-bundled-unix-stream-v1",
+   "version": "2.0.0",
+   "licenses": [
+    {
+     "expression": "MIT"
+    }
+   ]
+  }
+ },
+ "components": [
+  {
+   "type": "application",
+   "name": "base64",
+   "version": "2.0.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "grep",
+   "version": "2.0.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "sort",
+   "version": "2.0.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "tr",
+   "version": "2.0.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "uniq",
+   "version": "2.0.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ]
+  },
+  {
+   "type": "application",
+   "name": "wc",
+   "version": "2.0.0",
+   "licenses": [
+    {
+     "license": {
+      "id": "MIT"
+     }
+    }
+   ]
+  }
+ ]
+}
