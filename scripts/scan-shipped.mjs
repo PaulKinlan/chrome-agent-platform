@@ -270,6 +270,12 @@ const STREAM_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 const TABLE_WORKER_HOST_CANONICAL_PATH = "extension/lib/table-worker-host.js";
 const TABLE_WORKER_HOST_CANONICAL_LOCATION = { line: 89, column: 13 };
 const TABLE_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
+// Owner upload storage (not execution): one packaged Worker keeps streaming
+// hashing/I/O off the Settings thread. Pin its source node AND exact getURL
+// argument; user bytes and metadata can never select executable code.
+const USER_WASM_STORE_CLIENT_PATH = "extension/lib/user-wasm-store-client.js";
+const USER_WASM_STORE_CLIENT_LOCATION = { line: 10, column: 19 };
+const USER_WASM_STORE_CLIENT_ALLOWED_RE = /new\s+Worker\s*\(/g;
 
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
@@ -458,6 +464,7 @@ export async function scanShippedJs(files, {
         const workerSink = sinkName(node.callee, sinkAliases);
         if (workerSink === "Worker" || workerSink === "SharedWorker" || workerSink === "WorkerCtor") {
           const value = foldString(node.arguments?.[0]);
+          const urlCall = node.arguments?.[0];
           const isCanonicalWorkerHost = (
             isCanonicalScannedPath(file, WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "Worker" &&
@@ -514,6 +521,18 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === TABLE_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, USER_WASM_STORE_CLIENT_PATH) &&
+            workerSink === "Worker" &&
+            node.loc?.start?.line === USER_WASM_STORE_CLIENT_LOCATION.line &&
+            node.loc?.start?.column === USER_WASM_STORE_CLIENT_LOCATION.column &&
+            (text.match(USER_WASM_STORE_CLIENT_ALLOWED_RE) ?? []).length === 1 &&
+            urlCall?.type === "CallExpression" &&
+            memberPropertyName(urlCall.callee) === "getURL" &&
+            memberPropertyName(urlCall.callee?.object) === "runtime" &&
+            urlCall.callee?.object?.object?.name === "chrome" &&
+            urlCall.arguments?.length === 1 &&
+            foldString(urlCall.arguments[0]) === "lib/user-wasm-store-worker.js"
           );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);

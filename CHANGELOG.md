@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.255] — 2026-09-05
+- Merge commit '55fd033d' into HEAD
+
+## [0.3.254] — 2026-09-05
+- Save your own WebAssembly files in Settings: upload tools you trust, keep them locally with their name and description, and remove them any time
+
 ## [0.3.253] — 2026-09-05
 - WebMCP tool execution formats arguments as JSON for browser compatibility.
 

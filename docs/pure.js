@@ -618,47 +618,85 @@ function rotr32(x, n) {
   return ((x >>> n) | (x << (32 - n))) >>> 0;
 }
 
+// The same compression round serves both whole-buffer and incremental hashing.
+function sha256Compress(H, w, bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < 16; i++) w[i] = dv.getUint32(i * 4);
+  for (let i = 16; i < 64; i++) {
+    const s0 = (rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >>> 3)) >>> 0;
+    const s1 = (rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >>> 10)) >>> 0;
+    w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+  }
+  let a = H[0], b = H[1], c = H[2], d = H[3],
+    e = H[4], f = H[5], g = H[6], h = H[7];
+  for (let i = 0; i < 64; i++) {
+    const S1 = (rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)) >>> 0;
+    const ch = ((e & f) ^ (~e & g)) >>> 0;
+    const t1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
+    const S0 = (rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)) >>> 0;
+    const maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
+    const t2 = (S0 + maj) >>> 0;
+    h = g; g = f; f = e; e = (d + t1) >>> 0;
+    d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+  }
+  H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0;
+  H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
+  H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0;
+  H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
+}
+
+/** Incremental SHA-256: retains one block, never the full input.
+ * Run large-file hashing in a Worker: update() is synchronous CPU work.
+ */
+export function createSha256() {
+  const H = new Uint32Array(SHA256_H0);
+  const w = new Uint32Array(64);
+  const pending = new Uint8Array(64);
+  let used = 0, length = 0n, result = null;
+  return {
+    update(data) {
+      if (result) throw new Error("SHA-256 is already finalized");
+      const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+      length += BigInt(bytes.byteLength);
+      let offset = 0;
+      if (used) {
+        const count = Math.min(64 - used, bytes.length);
+        pending.set(bytes.subarray(0, count), used);
+        used += count;
+        offset = count;
+        if (used === 64) { sha256Compress(H, w, pending); used = 0; }
+      }
+      for (; offset + 64 <= bytes.length; offset += 64) {
+        sha256Compress(H, w, bytes.subarray(offset, offset + 64));
+      }
+      if (offset < bytes.length) {
+        pending.set(bytes.subarray(offset), used);
+        used += bytes.length - offset;
+      }
+      return this;
+    },
+    digest() {
+      if (!result) {
+        const tail = new Uint8Array(used < 56 ? 64 : 128);
+        tail.set(pending.subarray(0, used));
+        tail[used] = 0x80;
+        new DataView(tail.buffer).setBigUint64(tail.length - 8, length * 8n);
+        for (let offset = 0; offset < tail.length; offset += 64) {
+          sha256Compress(H, w, tail.subarray(offset, offset + 64));
+        }
+        result = new Uint8Array(32);
+        const view = new DataView(result.buffer);
+        for (let i = 0; i < 8; i++) view.setUint32(i * 4, H[i]);
+      }
+      return result.slice();
+    },
+    hex() { return bytesToHex(this.digest()); },
+  };
+}
+
 /** SHA-256 over a Uint8Array → the 32-byte digest. */
 export function sha256Bytes(data) {
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  const H = new Uint32Array(SHA256_H0);
-  const bitLen = bytes.length * 8;
-  const total = Math.ceil((bytes.length + 9) / 64) * 64;
-  const msg = new Uint8Array(total);
-  msg.set(bytes);
-  msg[bytes.length] = 0x80;
-  const dv = new DataView(msg.buffer);
-  dv.setUint32(total - 8, Math.floor(bitLen / 0x100000000));
-  dv.setUint32(total - 4, bitLen >>> 0);
-  const w = new Uint32Array(64);
-  for (let off = 0; off < total; off += 64) {
-    for (let i = 0; i < 16; i++) w[i] = dv.getUint32(off + i * 4);
-    for (let i = 16; i < 64; i++) {
-      const s0 = (rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >>> 3)) >>> 0;
-      const s1 = (rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >>> 10)) >>> 0;
-      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
-    }
-    let a = H[0], b = H[1], c = H[2], d = H[3],
-      e = H[4], f = H[5], g = H[6], h = H[7];
-    for (let i = 0; i < 64; i++) {
-      const S1 = (rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)) >>> 0;
-      const ch = ((e & f) ^ (~e & g)) >>> 0;
-      const t1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0;
-      const S0 = (rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)) >>> 0;
-      const maj = ((a & b) ^ (a & c) ^ (b & c)) >>> 0;
-      const t2 = (S0 + maj) >>> 0;
-      h = g; g = f; f = e; e = (d + t1) >>> 0;
-      d = c; c = b; b = a; a = (t1 + t2) >>> 0;
-    }
-    H[0] = (H[0] + a) >>> 0; H[1] = (H[1] + b) >>> 0;
-    H[2] = (H[2] + c) >>> 0; H[3] = (H[3] + d) >>> 0;
-    H[4] = (H[4] + e) >>> 0; H[5] = (H[5] + f) >>> 0;
-    H[6] = (H[6] + g) >>> 0; H[7] = (H[7] + h) >>> 0;
-  }
-  const out = new Uint8Array(32);
-  const odv = new DataView(out.buffer);
-  for (let i = 0; i < 8; i++) odv.setUint32(i * 4, H[i]);
-  return out;
+  return createSha256().update(data).digest();
 }
 
 function bytesToHex(bytes) {
@@ -775,6 +813,7 @@ export const SETTINGS_SECTIONS = Object.freeze([
   "providers",
   "mcp-servers",
   "local-folders",
+  "user-wasm",
   "tool-library",
   "skills",
   "agents",
@@ -821,7 +860,7 @@ export function normalizeSettingsSectionId(hash) {
 }
 
 export const OPTIONS_PRODUCT_HASHES = new Set([
-  "#providers", "#mcp-servers", "#local-folders", "#tool-library", "#skills", "#agents", "#background",
+  "#providers", "#mcp-servers", "#local-folders", "#user-wasm", "#tool-library", "#skills", "#agents", "#background",
   "#background-agents", "#board-permissions",
   "#browser", "#permissions", "#hooks",
   "#prompts", "#usage", "#data", "#about",
