@@ -49,6 +49,10 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     follow-up (this cut does not touch tests/). Each such line names the
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
+  // def.2: table-join-pivot — deterministic joins and pivots over cap.table/1;
+  // service-worker integration is a follow-up (chrome-agent-platform-def.2).
+  "lib/table-join-pivot.js":
+    "def.2 table-join-pivot — joinTables/pivotTable over the canonical strict table core",
   // ── owner directives (TASKS.md CAP-FB-20260830-DEAD-CODE-CUT-01 Acceptance, 2026-08-30) ──
   "lib/agent-cards.js":
     "Owner directive 2026-08-30: adopted by CAP-FB-20260830-AGENT-SHARING-01; tests/agent-cards.test.ts pins it.",

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.213] — 2026-09-05
+- Add RETAINED entry for table-join-pivot.js (SW integration is a follow-up)
+
 ## [0.3.212] — 2026-09-05
 - Implement bounded deterministic table joins and pivots over the canonical strict table core
 
