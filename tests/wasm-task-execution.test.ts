@@ -101,17 +101,19 @@ Deno.test("executableBundledToolRecords: validateArguments validates valid and r
   assertEquals((await diffRec.validateArguments({ inputRef: ref })).ok, false,
     "non-stream packages do not acquire an unsupported file-backed execution profile");
 
-  // 0alg: pin the literal nine — deriving the expectation FROM the module
-  // under test lets a tenth member (e.g. cat) pass both sides silently.
-  const expectedStreamIds = ["awk", "base64", "grep", "jq", "sed", "sort", "tr", "uniq", "wc"];
+  // 0alg/6s2c: pin the literal ten — deriving the expectation FROM the module
+  // under test lets an eleventh member (e.g. cat) pass both sides silently.
+  // imageops joined for live execution (6s2c): without stream-backing a
+  // bundled tool cannot execute in a run at all (wasi_task_host_unavailable).
+  const expectedStreamIds = ["awk", "base64", "grep", "imageops", "jq", "sed", "sort", "tr", "uniq", "wc"];
   assertEquals(JSON.stringify([...STREAM_BACKED_BUNDLED_TOOL_IDS].sort()), JSON.stringify(expectedStreamIds),
-    "the streamed allowlist itself is exactly the pinned nine");
+    "the streamed allowlist itself is exactly the pinned ten");
   const schemaStreamIds = records
     .filter((record) => Object.hasOwn(record.descriptorInput.inputSchema.properties, "inputRef"))
     .map((record) => record.descriptorInput.toolId)
     .sort();
   assertEquals(JSON.stringify(schemaStreamIds), JSON.stringify(expectedStreamIds),
-    "only the nine streamed Unix packages advertise opaque input references");
+    "only the ten streamed packages advertise opaque input references");
 });
 
 Deno.test("executeBundledWasiJob: real manifest and CAS bytes revalidation with typed error envelope on absent host", async () => {

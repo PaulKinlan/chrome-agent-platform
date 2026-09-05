@@ -115,33 +115,28 @@ export const CHROMIUM = "/usr/bin/chromium";
 //     holder itself within a second of this process dying (no orphaned lock).
 export const CHROME_LOCK_PATH = Deno.env.get("CAP_CHROME_LOCK_PATH") ?? "/tmp/cap-serialized-chrome-acceptance.lock";
 
-// Lock state is PER PATH (chrome-agent-platform-51x4): the canonical lock
-// serializes real browsers; fake-browser unit fixtures take their own
-// isolated scope (launchChrome's lockPath option) so they never queue behind
-// a real lane's 20-minute gate — and never dilute the real serialization.
-const lockStates = new Map<string, { holder: Deno.ChildProcess | null; refs: number }>();
+let lockHolder: Deno.ChildProcess | null = null;
+let lockRefs = 0;
 
-async function acquireChromeLock(lockPath: string = CHROME_LOCK_PATH): Promise<{ waitedMs: number; release: () => void }> {
+async function acquireChromeLock(): Promise<{ waitedMs: number; release: () => void }> {
   const noop = () => {};
   if (Deno.env.get("CAP_SECURITY_NONCE") || Deno.env.get("CAP_CHROME_LOCK_HELD") === "1") {
     return { waitedMs: 0, release: noop };
   }
-  const state = lockStates.get(lockPath) ?? { holder: null, refs: 0 };
-  lockStates.set(lockPath, state);
   const release = () => {
-    state.refs = Math.max(0, state.refs - 1);
-    if (state.refs === 0 && state.holder) {
+    lockRefs = Math.max(0, lockRefs - 1);
+    if (lockRefs === 0 && lockHolder) {
       // Closing the holder's stdin is the release: `cat` sees EOF, the shell
       // exits, flock exits, the kernel drops the lock. The same EOF happens
       // by itself when this process dies, so a crashed harness never leaves
       // the lock held.
-      const h = state.holder;
-      state.holder = null;
+      const h = lockHolder;
+      lockHolder = null;
       try { h.stdin.close().catch(() => {}); } catch { /* already closed */ }
     }
   };
-  if (state.holder) {
-    state.refs++;
+  if (lockHolder) {
+    lockRefs++;
     return { waitedMs: 0, release };
   }
   const waitMs = Number(Deno.env.get("CAP_CHROME_LOCK_WAIT_MS") ?? 20 * 60_000);
@@ -151,7 +146,7 @@ async function acquireChromeLock(lockPath: string = CHROME_LOCK_PATH): Promise<{
   const holder = new Deno.Command("flock", {
     args: [
       "-w", String(Math.max(1, Math.ceil(waitMs / 1000))),
-      lockPath,
+      CHROME_LOCK_PATH,
       "sh", "-c",
       "echo CAP_CHROME_LOCK_ACQUIRED; exec cat >/dev/null",
     ],
@@ -166,7 +161,7 @@ async function acquireChromeLock(lockPath: string = CHROME_LOCK_PATH): Promise<{
   const deadline = t0 + waitMs + 2000;
   while (!seen.includes("CAP_CHROME_LOCK_ACQUIRED") && Date.now() < deadline) {
     if (notice === undefined) {
-      notice = setTimeout(() => console.error(`launchChrome: waiting for the serialized-Chrome lock (${lockPath}) — another lane is driving a browser`), 1500);
+      notice = setTimeout(() => console.error(`launchChrome: waiting for the serialized-Chrome lock (${CHROME_LOCK_PATH}) — another lane is driving a browser`), 1500);
     }
     let chunk: ReadableStreamReadResult<Uint8Array>;
     try { chunk = await withTimeout(reader.read(), deadline - Date.now()); } catch { break; }
@@ -181,16 +176,16 @@ async function acquireChromeLock(lockPath: string = CHROME_LOCK_PATH): Promise<{
     try { holder.kill("SIGKILL"); } catch { /* gone */ }
     try { await holder.status; } catch { /* reaped */ }
     throw new Error(
-      `launchChrome: could not take the serialized-Chrome lock within ${waitMs} ms (${lockPath} is held by another lane's browser). ` +
+      `launchChrome: could not take the serialized-Chrome lock within ${waitMs} ms (${CHROME_LOCK_PATH} is held by another lane's browser). ` +
         "Not started — a run that cannot get the browser is a failed run, not a skipped one.",
     );
   }
   if (waitedMs > 1500) console.error(`launchChrome: took the serialized-Chrome lock after ${waitedMs} ms`);
   // Drain the holder's stdout in the background (it prints nothing more).
   (async () => { try { for await (const _ of holder.stdout) { /* drain */ } } catch { /* gone */ } })();
-  state.holder = holder;
-  state.refs = 1;
-  holder.status.then(() => { if (state.holder === holder) { state.holder = null; state.refs = 0; } }).catch(() => {});
+  lockHolder = holder;
+  lockRefs = 1;
+  holder.status.then(() => { if (lockHolder === holder) { lockHolder = null; lockRefs = 0; } }).catch(() => {});
   return { waitedMs, release };
 }
 
@@ -245,11 +240,6 @@ export async function launchChrome(opts: {
   env?: Record<string, string>;
   /** Pre-seed Chrome's Preferences with granted permissions before launch. */
   grantPermissions?: string[];
-  /** Lock scope for this launch. Default: the canonical serialized-Chrome
-   *  lock every real harness shares. Fake-browser unit fixtures pass their own
-   *  path so they never queue behind (or block) the real browser queue
-   *  (chrome-agent-platform-51x4). Never set this in a real acceptance run. */
-  lockPath?: string;
 }): Promise<LaunchedChrome> {
   if (Array.isArray(opts.grantPermissions) && opts.grantPermissions.length && opts.profile && opts.extension) {
     await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
@@ -270,7 +260,7 @@ export async function launchChrome(opts: {
     ]
     : extras;
 
-  const lock = await acquireChromeLock(opts.lockPath);
+  const lock = await acquireChromeLock();
   const proc = new Deno.Command(opts.binary ?? CHROMIUM, {
     args: [...args, "--remote-debugging-port=0"],
     stdout: opts.stdout ?? "null",

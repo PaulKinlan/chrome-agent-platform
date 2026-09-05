@@ -541,7 +541,11 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
       origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
         ? new URL(context.origin).origin
         : "https://agent.cap",
-      documentId: String(context?.documentId ?? runId),
+      // 6s2c: documentId arrives as "" on hub runs (the run identity seeds an
+      // empty documentId) — "" is NOT nullish, so ?? never fell back to the
+      // runId, and the stream host's fence (validateAuthorityRecord rejects
+      // empty values) failed every live bundled-tool run with authority-shape.
+      documentId: String(context?.documentId || runId),
     });
     if (result?.ok) {
       try {

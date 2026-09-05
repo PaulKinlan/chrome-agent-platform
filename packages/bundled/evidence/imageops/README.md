@@ -12,6 +12,6 @@ Contents:
 - src/main.rs — the CAP-authored tool (Apache-2.0)
 - build.sh — exact reproducible build (rustc/cargo 1.97.1, wasm32-wasip1)
 - build-a/imageops.wasm, build-b/imageops.wasm — two independent builds,
-  byte-identical (sha256 89ffdccb…, 721,475 bytes; WASI imports only: 8)
+  byte-identical (sha256 89ffdccb…, 725,870 bytes; WASI imports only: 8)
 - sbom/cyclonedx-1.5.json — 22 dependency components from Cargo.lock
 - LICENSES/ — image crate licence texts (Apache-2.0 + MIT)

@@ -13,3 +13,6 @@ TC="${RUSTUP_TOOLCHAIN_BIN:-$HOME/.rustup/toolchains/stable-x86_64-unknown-linux
 export RUSTFLAGS="-C link-arg=--max-memory=134217728 --remap-path-prefix=$(pwd)=/evidence/imageops --remap-path-prefix=$HOME/.cargo/registry=/cargo-registry"
 PATH="$TC:$PATH" "$TC/cargo" build --release --target wasm32-wasip1 --locked
 cp target/wasm32-wasip1/release/imageops.wasm ./imageops.wasm
+# target/ is an intermediate: it embeds builder-local paths in fingerprint
+# metadata and is never committed. Remove it after copying the artifact.
+rm -rf target

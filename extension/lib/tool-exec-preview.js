@@ -87,7 +87,9 @@ export const PREVIEW_SPECS = Object.freeze(
           // Default output policy is immutable spec authority. gzip always uses
           // the lossless binary arm; base64 decode selects that same arm from
           // its validated trusted argv through previewStdoutEncoding().
-          stdoutEncoding: row.toolId === "gzip" ? "base64" : "utf8",
+          // Binary-at-the-pipe tools emit base64 (gzip always; imageops except
+          // its info subcommand, resolved per-argv in previewStdoutEncoding).
+          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" ? "base64" : "utf8",
           ...(row.toolId === "gzip" ? {
             allowedArgs: Object.freeze([
               Object.freeze([]),
@@ -127,8 +129,11 @@ export const PREVIEW_SPECS = Object.freeze(
   ),
 );
 export const PREVIEW_TOOL_IDS = Object.freeze(Object.keys(PREVIEW_SPECS).sort());
+// 6s2c: imageops joins the stream-backed set — the ONLY live-execution lane for
+// bundled tools in a run (the Settings-preview worker path cannot exist in the
+// service worker, so a non-stream tool fails closed as wasi_task_host_unavailable).
 export const STREAM_BACKED_BUNDLED_TOOL_IDS = Object.freeze([
-  "awk", "base64", "grep", "jq", "sed", "sort", "tr", "uniq", "wc",
+  "awk", "base64", "grep", "imageops", "jq", "sed", "sort", "tr", "uniq", "wc",
 ]);
 export function isStreamBackedBundledTool(toolId) {
   return STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId);
@@ -141,6 +146,11 @@ export function previewSpecFor(toolId) {
 export function previewStdoutEncoding(toolId, inputArgs = []) {
   const spec = previewSpecFor(toolId);
   if (!spec || !Array.isArray(inputArgs)) fail("preview_args");
+  if (toolId === "imageops") {
+    // info emits a small JSON line (utf8); resize/convert emit image bytes
+    // (base64 at the tool boundary).
+    return inputArgs[0] === "info" ? "utf8" : "base64";
+  }
   return toolId === "base64" && inputArgs.length === 1 &&
       (inputArgs[0] === "-d" || inputArgs[0] === "--decode")
     ? "base64"

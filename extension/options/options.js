@@ -77,7 +77,6 @@ import {
   mcpServerRow as buildMcpServerRow,
 } from "../lib/mcp-server-editor.js";
 import { mountSkillsSection } from "../skills/skills-panel.js";
-import { mountUserWasmPanel } from "./user-wasm-panel.js";
 import {
   capLogReady,
   getLogFullDetail,
@@ -3580,8 +3579,6 @@ async function renderSection(sectionId) {
     await renderLocalFolders();
   } else if (sectionId === "tool-library") {
     if (developerFeaturesEnabled) await renderToolLibrary();
-  } else if (sectionId === "user-wasm") {
-    await mountUserWasmPanel(document.getElementById("user-wasm-manager"));
   } else if (sectionId === "agents") {
     await renderAgents();
     await renderEnroll();

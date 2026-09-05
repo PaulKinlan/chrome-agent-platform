@@ -267,7 +267,10 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assert(typeof spec.casSha === "string" && /^[0-9a-f]{64}$/.test(spec.casSha), `${spec.toolId} casSha`);
     assert(Number.isSafeInteger(spec.size) && spec.size > 0, `${spec.toolId} size`);
     assertEquals(spec.argv0, spec.toolId, "argv0 == the exact toolId");
-    assertEquals(spec.stdoutEncoding, spec.toolId === "gzip" ? "base64" : "utf8", `${spec.toolId}: immutable output encoding`);
+    // Binary-at-the-pipe tools emit base64: gzip always; imageops except its
+    // info subcommand (per-argv, previewStdoutEncoding).
+    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" ? "base64" : "utf8";
+    assertEquals(spec.stdoutEncoding, expectedEncoding, `${spec.toolId}: immutable output encoding`);
   }
 });
 
@@ -602,19 +605,19 @@ Deno.test("R12 sqlite input: the exact-key {sql,params,database,readOnly} JSON; 
 // The nine-member pin as a shared literal — wasm-task-execution.test.ts uses
 // the same literal to pin the SCHEMA side, so a tenth member fails even if its
 // package schema never advertises inputRef.
-const EXPECTED_STREAM_IDS = ["awk", "base64", "grep", "jq", "sed", "sort", "tr", "uniq", "wc"];
+const EXPECTED_STREAM_IDS = ["awk", "base64", "grep", "imageops", "jq", "sed", "sort", "tr", "uniq", "wc"];
 
-Deno.test("preview: the streamed Unix tool allowlist is EXACTLY nine members (0alg)", () => {
+Deno.test("preview: the streamed bundled-tool allowlist is EXACTLY ten members (9 Unix + imageops, 6s2c)", () => {
   // chrome-agent-platform-0alg: the independent review found non-listed tools
   // are correctly refused, but nothing failed if an extra tool (e.g. cat)
   // silently acquired the OPFS streaming profile. Pin the exact membership:
   // adding OR removing a member must fail this test.
-  assertEquals(STREAM_BACKED_BUNDLED_TOOL_IDS.length, 9, "exactly nine streamed tools");
-  assertEquals(new Set(STREAM_BACKED_BUNDLED_TOOL_IDS).size, 9, "no duplicate members");
+  assertEquals(STREAM_BACKED_BUNDLED_TOOL_IDS.length, 10, "exactly ten streamed tools");
+  assertEquals(new Set(STREAM_BACKED_BUNDLED_TOOL_IDS).size, 10, "no duplicate members");
   assertEquals(
     [...STREAM_BACKED_BUNDLED_TOOL_IDS].sort(),
     EXPECTED_STREAM_IDS,
-    "the allowlist is exactly awk, base64, grep, jq, sed, sort, tr, uniq, wc",
+    "the allowlist is exactly awk, base64, grep, imageops, jq, sed, sort, tr, uniq, wc",
   );
   assert(Object.isFrozen(STREAM_BACKED_BUNDLED_TOOL_IDS), "the allowlist is frozen");
 });

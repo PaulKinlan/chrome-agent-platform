@@ -534,34 +534,22 @@
       // The observed native failure happens BEFORE the handler is reached,
       // and the dominant declared tools (search/read) are idempotent.
       const dispatchPaths = [];
-      const jsonArgs = typeof args === "string" ? args : JSON.stringify(args ?? {});
-      const objectArgs = (typeof args === "object" && args !== null)
-        ? args
-        : (() => { try { return JSON.parse(args); } catch { return {}; } })();
-
       if (tool) {
         if (typeof mc?.executeTool === "function") {
-          // Native WebMCP IDL executeTool(RegisteredTool tool, DOMString inputArguments)
-          // expects a JSON string. Try string form first, then object fallback.
-          dispatchPaths.push(["modelContext.executeTool", () => mc.executeTool(tool, jsonArgs)]);
-          dispatchPaths.push(["modelContext.executeTool (object)", () => mc.executeTool(tool, objectArgs)]);
+          dispatchPaths.push(["modelContext.executeTool", () => mc.executeTool(tool, args ?? {})]);
         }
         if (typeof tool.execute === "function") {
-          dispatchPaths.push(["tool.execute", () => tool.execute(objectArgs)]);
-          dispatchPaths.push(["tool.execute (json)", () => tool.execute(jsonArgs)]);
+          dispatchPaths.push(["tool.execute", () => tool.execute(args ?? {})]);
         }
         if (typeof tool._execute === "function") {
-          dispatchPaths.push(["tool._execute", () => tool._execute(objectArgs)]);
-          dispatchPaths.push(["tool._execute (json)", () => tool._execute(jsonArgs)]);
+          dispatchPaths.push(["tool._execute", () => tool._execute(args ?? {})]);
         }
       }
       if (typeof mc?.callTool === "function") {
-        dispatchPaths.push(["modelContext.callTool", () => mc.callTool(name, jsonArgs)]);
-        dispatchPaths.push(["modelContext.callTool (object)", () => mc.callTool(name, objectArgs)]);
+        dispatchPaths.push(["modelContext.callTool", () => mc.callTool(name, args ?? {})]);
       }
       if (typeof mc?.invoke === "function") {
-        dispatchPaths.push(["modelContext.invoke", () => mc.invoke(name, jsonArgs)]);
-        dispatchPaths.push(["modelContext.invoke (object)", () => mc.invoke(name, objectArgs)]);
+        dispatchPaths.push(["modelContext.invoke", () => mc.invoke(name, args ?? {})]);
       }
       if (dispatchPaths.length === 0) {
         throw internalError(

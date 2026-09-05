@@ -89,8 +89,8 @@ function memoryStorage() {
   return { storage: { async getDirectory() { return root; } } };
 }
 
-const IMAGEOPS_SHA256 = "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a";
-const IMAGEOPS_BYTES = 721475;
+const IMAGEOPS_SHA256 = "b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32";
+const IMAGEOPS_BYTES = 725870;
 
 // A real 2x2 red RGB PNG (73 bytes).
 const RED_2X2_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
@@ -155,9 +155,12 @@ Deno.test("imageops: runs through the REAL stream worker — info, resize, conve
   const owner = "agent:run-imageops:hub";
   const authority = buildPreviewAuthority({ origin: "https://agent.cap", documentId: "run-imageops", now: () => 1 });
 
+  // Production contract (6s2c): image bytes ride stdin as BASE64 TEXT (the
+  // tool protocol's stdin is a JSON string); the tool decodes in-wasm.
   async function run(args, inputBytes) {
     const inputRef = await createWasmStreamInput({ owner, storage });
-    await appendWasmStreamInput({ ref: inputRef, owner, bytes: inputBytes, storage });
+    const b64 = new TextEncoder().encode(btoa(String.fromCharCode(...inputBytes)));
+    await appendWasmStreamInput({ ref: inputRef, owner, bytes: b64, storage });
     await sealWasmStreamInput({ ref: inputRef, owner, storage });
     const outputRef = await createWasmStreamOutput({ owner, storage });
     const job = buildPreviewJob({
@@ -200,8 +203,9 @@ Deno.test("imageops: runs through the REAL stream worker — info, resize, conve
   assertEquals(webpInfo.format, "webp");
 
   // garbage input fails CLOSED (non-zero exit), never a silent empty output.
+  // (base64 text that does not decode to an image)
   const badRef = await createWasmStreamInput({ owner, storage });
-  await appendWasmStreamInput({ ref: badRef, owner, bytes: new TextEncoder().encode("not an image"), storage });
+  await appendWasmStreamInput({ ref: badRef, owner, bytes: new TextEncoder().encode(btoa("not an image")), storage });
   await sealWasmStreamInput({ ref: badRef, owner, storage });
   const badOut = await createWasmStreamOutput({ owner, storage });
   const bad = await executeWasmStreamJob({
@@ -221,4 +225,14 @@ Deno.test("imageops: runs through the REAL stream worker — info, resize, conve
 
 Deno.test("imageops: resolves to the media-images purpose group", () => {
   assertEquals(toolPurposeGroup("imageops"), "media-images");
+});
+
+Deno.test("imageops: is stream-backed — the ONLY live-execution lane in a run (6s2c regression pin)", async () => {
+  // The P0: a bundled tool NOT in STREAM_BACKED_BUNDLED_TOOL_IDS falls through
+  // to the Settings-preview executor in the service worker, where no Worker
+  // can exist — the run fails wasi_task_host_unavailable. This pin goes RED if
+  // imageops ever leaves the stream-backed set.
+  const { isStreamBackedBundledTool } = await import("../extension/lib/tool-exec-preview.js");
+  assert(isStreamBackedBundledTool("imageops"), "imageops must be stream-backed to execute live");
+  assert(!isStreamBackedBundledTool("csvtool"), "csvtool stays preview-only (the known gap class)");
 });

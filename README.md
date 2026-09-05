@@ -74,12 +74,6 @@ isolated OPFS memory, run history, skills, and avatar.
   and licence record, verified at build time by a bounded raw import/memory scan.
   Separate Rust/C candidate lanes (htmlq, numbat, bttf, sed, jq, xan, tokei) are not
   part of this shipped set; their own admission records remain authoritative.
-- **Your WebAssembly files** — Settings → WebAssembly files stores owner-selected
-  files locally with a name and description. Upload size and file count have no
-  product-imposed caps. Files stream into digest-keyed OPFS storage; identical
-  bytes update the existing labels, while different files may share a name.
-  This increment is storage only: uploads are not run or registered as callable
-  tools. See [user-uploaded WebAssembly storage](docs/USER-WASM-STORAGE.md).
 - **Usage + cost accounting** — per-call token/cost records against the bundled
   llm-prices table, aggregated per run and per agent. Providers that don't report usage
   are recorded as unknown, never faked.

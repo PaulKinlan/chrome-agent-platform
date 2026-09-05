@@ -912,7 +912,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "imageops",
   "displayName": "imageops",
   "category": "media",
-  "description": "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: image bytes stdin to image bytes (info prints JSON) stdout. Subcommands: info; resize --width N --height M; convert --format.",
+  "description": "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
   "caveats": [
    "png/jpeg/webp only; stdin/stdout; no EXIF editing.",
    "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
@@ -927,8 +927,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "notices": null
   },
   "binary": {
-   "sha256": "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a",
-   "bytes": 721475,
+   "sha256": "b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32",
+   "bytes": 725870,
    "tier": "default",
    "initialPages": 18,
    "maxPages": 2048

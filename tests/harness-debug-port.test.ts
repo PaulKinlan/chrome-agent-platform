@@ -12,13 +12,7 @@
 // The guard is mechanical: the ONLY debugging-port literal allowed anywhere in
 // scripts/ is `=0`, and it may only be written by the shared launcher.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { CHROME_LOCK_PATH, launchChrome } from "../scripts/lib/chrome-launch.ts";
-
-// chrome-agent-platform-51x4: these fixtures launch STAND-IN "browsers"
-// (/bin/true, a shell script) — no real Chrome starts, so they take an
-// ISOLATED lock scope and never queue behind (or block) the real browser
-// queue. The canonical lock stays the default for every real harness.
-const FAKE_LOCK = await Deno.makeTempFile({ prefix: "cap-fake-browser-lock-" });
+import { launchChrome } from "../scripts/lib/chrome-launch.ts";
 
 const SCRIPTS = new URL("../scripts/", import.meta.url).pathname;
 const LAUNCHER = "lib/chrome-launch.ts";
@@ -71,7 +65,7 @@ Deno.test("the shared launcher is the ONLY writer of the debugging-port flag", (
 
 Deno.test("launchChrome refuses a caller-chosen port rather than overriding it", async () => {
   await assertRejects(
-    () => launchChrome({ binary: "/bin/true", args: ["--remote-debugging-port=9351"], lockPath: FAKE_LOCK }),
+    () => launchChrome({ binary: "/bin/true", args: ["--remote-debugging-port=9351"] }),
     Error,
     "refusing a caller-chosen debugging port",
   );
@@ -81,7 +75,7 @@ Deno.test("launchChrome fails honestly when the browser prints no endpoint", asy
   // /bin/true exits immediately and never prints a DevTools line. The launcher
   // must say so rather than hang or hand back a bogus URL.
   const err = await assertRejects(
-    () => launchChrome({ binary: "/bin/true", args: [], timeoutMs: 3000, lockPath: FAKE_LOCK }),
+    () => launchChrome({ binary: "/bin/true", args: [], timeoutMs: 3000 }),
     Error,
   );
   assert(
@@ -100,7 +94,7 @@ Deno.test("launchChrome reads the real port back out of the child's own stderr",
     "#!/bin/sh\necho \"DevTools listening on ws://127.0.0.1:31337/devtools/browser/abc\" 1>&2\nsleep 5\n",
   );
   await Deno.chmod(fake, 0o755);
-  const { proc, wsUrl, port } = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, lockPath: FAKE_LOCK });
+  const { proc, wsUrl, port } = await launchChrome({ binary: fake, args: [], timeoutMs: 5000 });
   assertEquals(port, 31337);
   assertEquals(wsUrl, "ws://127.0.0.1:31337/devtools/browser/abc");
   try { proc.kill("SIGKILL"); } catch { /* already gone */ }

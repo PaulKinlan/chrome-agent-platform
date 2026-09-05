@@ -6,6 +6,7 @@
 //   imageops resize --width N --height M       → re-encoded image (same format)
 //   imageops convert --format png|jpeg|webp
 
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use std::io::{Read, Write};
 
 fn fail(msg: &str) -> ! {
@@ -31,6 +32,15 @@ fn read_stdin() -> Vec<u8> {
     buf
 }
 
+// Image bytes ride the tool protocol as base64 TEXT (stdin is a JSON string at
+// the agent boundary — raw binary cannot). Whitespace-tolerant decode.
+fn read_stdin_image() -> Vec<u8> {
+    let raw = read_stdin();
+    let text = String::from_utf8(raw).unwrap_or_else(|_| fail("stdin is not base64 text"));
+    let clean: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    B64.decode(clean.as_bytes()).unwrap_or_else(|_| fail("stdin is not valid base64 image bytes"))
+}
+
 fn write_stdout(bytes: &[u8]) {
     if std::io::stdout().write_all(bytes).is_err() {
         fail("could not write stdout");
@@ -42,7 +52,9 @@ fn main() {
     let Some(cmd) = args.first() else {
         fail("usage: imageops info | resize --width N --height M | convert --format png|jpeg|webp");
     };
-    let input = read_stdin();
+    // The agent path sends base64 text (stdin is a JSON string at the tool
+    // boundary — raw binary cannot ride it).
+    let input = read_stdin_image();
     match cmd.as_str() {
         "info" => {
             let img = image::load_from_memory(&input).unwrap_or_else(|e| fail(&format!("unreadable image: {e}")));

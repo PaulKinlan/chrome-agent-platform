@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.5",
-  "serialNumber": "urn:uuid:cbcf9ec3-f51d-4b82-83c0-3e306696cf1c",
+  "serialNumber": "urn:uuid:b86d327e-1d17-4dce-8a07-fb92a43fb151",
   "version": 1,
   "metadata": {
     "timestamp": "1970-01-01T00:00:00Z",
@@ -27,7 +27,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a"
+          "content": "b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32"
         }
       ],
       "licenses": [
@@ -79,6 +79,23 @@
         {
           "type": "distribution",
           "url": "https://crates.io/crates/autocfg/1.5.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:base64@0.22.1",
+      "name": "base64",
+      "version": "0.22.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/base64/0.22.1"
         }
       ]
     },

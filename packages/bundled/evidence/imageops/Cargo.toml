@@ -7,6 +7,7 @@ description = "CAP-authored WASI image tool: info/resize/convert over stdin/stdo
 
 [dependencies]
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+base64 = "=0.22.1"
 
 [profile.release]
 opt-level = 2

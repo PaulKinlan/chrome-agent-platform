@@ -143,7 +143,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   touch: "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
   truncate: "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
-  imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: image bytes stdin to image bytes (info prints JSON) stdout. Subcommands: info; resize --width N --height M; convert --format.",
+  imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
@@ -238,7 +238,7 @@ for (const toolId of LANES.c2.tools) {
 }
 { // imageops (CAP-authored clean-room over the pure-Rust image crate; owner decision: Apache-2.0; e5o8 option B)
   const wasm = readFileSync(join(PATHS.imageops, "build-a/imageops.wasm"));
-  if (sha256(wasm) !== "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a" || wasm.byteLength !== 721475) throw new Error("imageops hash/size mismatch");
+  if (sha256(wasm) !== "b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32" || wasm.byteLength !== 725870) throw new Error("imageops hash/size mismatch");
   const buildB = readFileSync(join(PATHS.imageops, "build-b/imageops.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("imageops reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "imageops", lane: "imageops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.imageops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/imageops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "imageops", displayName: "imageops", category: "media", description: AGENT_DESCRIPTIONS.imageops, caveats: ["png/jpeg/webp only; stdin/stdout; no EXIF editing."], replayClass: "read-only", capabilities: ["compute"] });

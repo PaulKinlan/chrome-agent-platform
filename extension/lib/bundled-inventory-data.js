@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.256",
+ "release": "0.3.257",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -66,7 +66,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.imageops",
    "version": "1.0.0",
-   "digest": "ca7fca80edcf7bea49634273a1ef17827a77b18fe2227dc42ca02b48c4ed4361"
+   "digest": "b112b86bb865622ac8585fadf90d7208ae27088776158ae9fd6ade86ef592328"
   },
   {
    "pkg": "cap.bundled.jq",
@@ -256,6 +256,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 150630
   },
   {
+   "rel": "extension/wasm/cas/b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32.wasm",
+   "sha256": "b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32",
+   "size": 725870
+  },
+  {
    "rel": "extension/wasm/cas/b8d396f708ac70bf19dd94255119b13ab53450c7c5f4edff9646b9fa8e6f9335.wasm",
    "sha256": "b8d396f708ac70bf19dd94255119b13ab53450c7c5f4edff9646b9fa8e6f9335",
    "size": 33269
@@ -274,11 +279,6 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91.wasm",
    "sha256": "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91",
    "size": 186886
-  },
-  {
-   "rel": "extension/wasm/cas/cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a.wasm",
-   "sha256": "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a",
-   "size": 721475
   },
   {
    "rel": "extension/wasm/cas/cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f.wasm",
@@ -452,8 +452,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.imageops-1.0.0.manifest.json",
-   "sha256": "ca7fca80edcf7bea49634273a1ef17827a77b18fe2227dc42ca02b48c4ed4361",
-   "size": 1855
+   "sha256": "b112b86bb865622ac8585fadf90d7208ae27088776158ae9fd6ade86ef592328",
+   "size": 1843
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.jq-1.0.0.manifest.json",
@@ -597,8 +597,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/sbom/imageops.cdx.json",
-   "sha256": "c367e68f72d68df472f248538560878eff2e830629e85b31e6c4e15c4b40bcfe",
-   "size": 9353
+   "sha256": "6b0a406e666b8aa419d478c3a9418802bb5313bf75c43782028519a1b2f27ff5",
+   "size": 9725
   },
   {
    "rel": "extension/wasm/sbom/jq.cdx.json",
