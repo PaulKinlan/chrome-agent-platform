@@ -294,6 +294,18 @@ import {
   recordScriptRun,
   updateScript,
 } from "../lib/scripts.js";
+import {
+  createWasmStreamInput,
+  appendWasmStreamInput,
+  sealWasmStreamInput,
+  removeWasmStream,
+  discardWasmStream,
+} from "../lib/wasm-stream-files.js";
+import {
+  stageAttachmentAsWasmStream,
+  stageAssetAsWasmStream,
+  promoteWasmStreamToArtifact,
+} from "../lib/tool-stream-platform.js";
 import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
@@ -8885,6 +8897,67 @@ const handlers = mergeRouteMaps(
     perfClear();
     pageMeasuresBuffer.length = 0;
     swLog.info("trace cleared");
+    return { ok: true };
+  },
+
+  // ---- tool streaming platform (CAP-FB-20260822-WASM-TOOL-PLATFORM-01) ----
+  async "tool-stream.input.create"({ owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    const inputRef = await createWasmStreamInput({ owner });
+    return { ok: true, inputRef };
+  },
+  async "tool-stream.input.append"({ ref, bytes, owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    const chunk = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const res = await appendWasmStreamInput({ ref, owner, bytes: chunk });
+    return { ok: true, bytes: res.bytes };
+  },
+  async "tool-stream.input.seal"({ ref, owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    const res = await sealWasmStreamInput({ ref, owner });
+    return { ok: true, ref: res.ref, bytes: res.bytes };
+  },
+  async "tool-stream.stage-attachment"({ attachment, owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    const res = await stageAttachmentAsWasmStream(attachment, { owner });
+    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
+  },
+  async "tool-stream.stage-asset"({ assetId, origin = "master", owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    const assetRes = await getAsset(origin, assetId);
+    if (!assetRes?.ok || !assetRes.asset) return { ok: false, error: "asset not found" };
+    const res = await stageAssetAsWasmStream(assetRes.asset, { owner });
+    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
+  },
+  async "tool-stream.promote-output"({ outputRef, name, type = "text", origin = "master", owner = "hub", force = false }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    const res = await promoteWasmStreamToArtifact(outputRef, { origin, name, type, owner, force });
+    return res;
+  },
+  async "tool-stream.remove"({ ref, owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    await removeWasmStream({ ref, owner });
+    return { ok: true };
+  },
+  async "tool-stream.discard"({ ref, owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    await discardWasmStream({ ref, owner });
     return { ok: true };
   },
   async "observability.setVerbosity"({ level } = {}) {

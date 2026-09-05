@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.161] — 2026-09-05
+- feat(9tg): Milestone 1 — platform streaming I/O and artifact promotion layer
+
+## [0.3.160] — 2026-09-05
+- Platform streaming I/O connects attachments and files directly to tool execution and promotes results to permanent artifacts
+
 ## [0.3.159] — 2026-09-05
 - feat(14l1): seed warning permissions and seeded-profile budgets into check and perf gates
 
