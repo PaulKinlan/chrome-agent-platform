@@ -147,6 +147,46 @@ export function lastExecuteResult(req: ScriptedRequest, selectedTool: string): a
   return null;
 }
 
+/** The `{ ok, selectedTool, result, … }` envelope of the most recent
+ *  execute_tool call for `selectedTool`, tolerating the agent-loop adapter's
+ *  double-JSON-encoded tool content (parseLoose stops at the first string
+ *  that parses; the adapter sometimes stringifies the envelope a second
+ *  time, so keep parsing while the value stays a JSON string). Harnesses
+ *  asserting on the exact tool payload the MODEL saw should use this. */
+export function executeEnvelope(req: ScriptedRequest, selectedTool: string): any {
+  const msgs = Array.isArray(req.messages) ? req.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.role !== "tool") continue;
+    let v: any = parseLoose(m.content);
+    for (let d = 0; d < 4 && typeof v === "string"; d++) {
+      try { v = JSON.parse(v); } catch { break; }
+    }
+    if (v && typeof v === "object" && v.selectedTool === selectedTool) return v;
+  }
+  return null;
+}
+
+/** The `results[].name` list of the most recent search_tools result the model
+ *  has seen in this request's messages — the membership probe for "is this
+ *  tool in the run's toolset" (a tool the catalog holds is the top hit for
+ *  its own name; a removed tool never appears). */
+export function searchResultNames(req: ScriptedRequest): string[] {
+  const msgs = Array.isArray(req.messages) ? req.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.role !== "tool") continue;
+    let v: any = parseLoose(m.content);
+    for (let d = 0; d < 4 && typeof v === "string"; d++) {
+      try { v = JSON.parse(v); } catch { break; }
+    }
+    if (v && typeof v === "object" && Array.isArray(v.results)) {
+      return v.results.map((r: any) => String(r?.name ?? "")).filter(Boolean);
+    }
+  }
+  return [];
+}
+
 function sse(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }

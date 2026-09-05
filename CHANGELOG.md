@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.230] — 2026-09-05
+- Browser checks now exercise real model runs instead of simulated messages, so what they prove matches what a model actually experiences.
+
 ## [0.3.229] — 2026-09-05
 - chrome-agent-platform-qazo: docs/wasm-tool-catalogue.md — Wasm library catalogue (12 categories, ~25 admits, cited)
 
