@@ -28,6 +28,9 @@ export const SERIAL_REASONS = {
   "tests/reachability.test.ts": "asserts the repo tree's generated-artifact state",
   "tests/tool-exec-preview.test.ts": "revalidates the REAL shipped bytes (races with rebuilds)",
   "tests/package-extension-freshness.test.ts": "driver packages dist + writes the dist-complete marker",
+  // 76hu guard caught this post-merge arrival from main (390b2b3a): it stats
+  // the built SW bundle and the dist.complete marker — shared build artifacts.
+  "tests/bundle-budget.test.ts": "asserts the built dist bundle size + dist-complete marker (races with rebuilds)",
   // 76hu: the guard's reads-extension/dist class pins these two (previously
   // parallel; both consume the built diff-core bundle, a shared artifact).
   "tests/diff-core.test.ts": "imports/reads the built extension/dist diff-core bundle (shared build artifact)",

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.150] — 2026-09-05
+- The test safety split now covers the new bundle size gate too, so it runs one at a time with the other build checks instead of racing them
+
 ## [0.3.149] — 2026-09-05
 - The safety split that decides which tests must run one at a time is now shared by the full suite and the quick per-change runs, is pinned so it cannot drift unnoticed, and quick runs now parallelize their safe tests — a typical provider-change quick run dropped from 30 seconds to about 18
 
