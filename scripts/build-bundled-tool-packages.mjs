@@ -58,6 +58,7 @@ const PATHS = {
   c2: join(EVIDENCE, "c2"),
   csvtool: join(EVIDENCE, "csvtool"),
   imageops: join(EVIDENCE, "imageops"),
+  compressops: join(EVIDENCE, "compressops"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
   stream: join(REPO, "packages/bundled/unix-stream-v1"),
@@ -144,6 +145,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   truncate: "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
   imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
+  compressops: "compressops - compress or decompress data with zstd or brotli. Use to compress and decompress data streams or check frame formats. In/out: bytes stdin to bytes stdout. Subcommands: zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
@@ -242,6 +244,13 @@ for (const toolId of LANES.c2.tools) {
   const buildB = readFileSync(join(PATHS.imageops, "build-b/imageops.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("imageops reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "imageops", lane: "imageops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.imageops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/imageops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "imageops", displayName: "imageops", category: "media", description: AGENT_DESCRIPTIONS.imageops, caveats: ["png/jpeg/webp only; stdin/stdout; no EXIF editing."], replayClass: "read-only", capabilities: ["compute"] });
+}
+{ // compressops (pure-Rust zstd + brotli WASI CLI): Apache-2.0
+  const wasm = readFileSync(join(PATHS.compressops, "build-a/compressops.wasm"));
+  if (sha256(wasm) !== "3eb5e7391eefe588758169d012186064577c9e9060af8e027c33702e2aa207ce" || wasm.byteLength !== 1411911) throw new Error("compressops hash/size mismatch");
+  const buildB = readFileSync(join(PATHS.compressops, "build-b/compressops.wasm"));
+  if (sha256(buildB) !== sha256(wasm)) throw new Error("compressops reproducibility broken (build-a != build-b)");
+  packages.push({ toolId: "compressops", lane: "compressops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.compressops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/compressops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "compressops", displayName: "compressops", category: "data", description: AGENT_DESCRIPTIONS.compressops, caveats: ["zstd and brotli only; stdin/stdout; no in-place archive manipulation."], replayClass: "read-only", capabilities: ["compute"] });
 }
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));
@@ -396,7 +405,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "compressops", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };

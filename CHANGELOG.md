@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.258] — 2026-09-05
+- The toolbox gains compressops — compress and decompress data with zstd and brotli on-device
+
 ## [0.3.257] — 2026-09-05
 - Image tools now run in live tasks, not just the Settings preview
 

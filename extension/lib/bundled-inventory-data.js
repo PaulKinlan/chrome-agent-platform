@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.257",
+ "release": "0.3.258",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -22,6 +22,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "pkg": "cap.bundled.base64",
    "version": "2.0.0",
    "digest": "383721407a8268454306cab7bec26cf659279cc0f1934ac712e754bff2e5e7df"
+  },
+  {
+   "pkg": "cap.bundled.compressops",
+   "version": "1.0.0",
+   "digest": "536a10aeff857c0746f9510ddb621ad9ff8987a006de7d3da07e1bccab4a3eb4"
   },
   {
    "pkg": "cap.bundled.csvtool",
@@ -204,6 +209,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438.wasm",
    "sha256": "3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438",
    "size": 49977
+  },
+  {
+   "rel": "extension/wasm/cas/3eb5e7391eefe588758169d012186064577c9e9060af8e027c33702e2aa207ce.wasm",
+   "sha256": "3eb5e7391eefe588758169d012186064577c9e9060af8e027c33702e2aa207ce",
+   "size": 1411911
   },
   {
    "rel": "extension/wasm/cas/4235e8273af38787b39997d0aaae5a9c56b8a4101ea9c887c1477f73595dfcb1.wasm",
@@ -411,6 +421,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1779
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.compressops-1.0.0.manifest.json",
+   "sha256": "536a10aeff857c0746f9510ddb621ad9ff8987a006de7d3da07e1bccab4a3eb4",
+   "size": 1856
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json",
    "sha256": "4711cfcd4eb89849789f074f421e06a104effe59decd5eb893d1b9c38b1e73c2",
    "size": 1831
@@ -579,6 +594,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/sbom/c2.spdx.json",
    "sha256": "1a4c4067baf74dfaa3690b6ea7e348aef3f2c80d2ec6f4e0f839697e959a5d02",
    "size": 8211
+  },
+  {
+   "rel": "extension/wasm/sbom/compressops.cdx.json",
+   "sha256": "c56ad4717495810d5f4abe26b06d782ae1c6ae0fed147e265d6ed153ba2ba736",
+   "size": 1314
   },
   {
    "rel": "extension/wasm/sbom/csvtool.cdx.json",

@@ -230,6 +230,7 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "touch": "files-data",
   "truncate": "files-data",
   "gzip": "files-data",
+  "compressops": "files-data",
   // Bundled packages — text & documents.
   "head": "text-documents",
   "tail": "text-documents",

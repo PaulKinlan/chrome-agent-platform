@@ -1,0 +1,17 @@
+[package]
+name = "compressops"
+version = "1.0.0"
+edition = "2021"
+description = "Deterministic WASI compression tool for zstd and brotli"
+license = "Apache-2.0"
+
+[dependencies]
+brotli = { version = "9.0", default-features = false, features = ["std"] }
+zstd = { version = "0.14", default-features = false }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

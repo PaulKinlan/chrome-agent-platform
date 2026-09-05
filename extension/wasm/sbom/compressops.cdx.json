@@ -1,0 +1,64 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:3eb5e739-1eef-e588-7581-69d012186064",
+  "version": 1,
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "rustc",
+          "version": "1.97.1"
+        },
+        {
+          "type": "application",
+          "name": "cargo",
+          "version": "1.97.1"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "compressops@1.0.0",
+      "name": "compressops",
+      "version": "1.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3eb5e7391eefe588758169d012186064577c9e9060af8e027c33702e2aa207ce"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "brotli@9.0.0",
+      "name": "brotli",
+      "version": "9.0.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "zstd@0.14.0",
+      "name": "zstd",
+      "version": "0.14.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ]
+    }
+  ]
+}

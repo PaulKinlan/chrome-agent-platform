@@ -79,14 +79,18 @@ not captured during research it is marked *pin sha at admission time*.
 
 ## 2. Compression (general)
 
-### @bokuweb/zstd-wasm — ADMIT-NOW
+### @bokuweb/zstd-wasm + brotli-wasm — SUPERSEDED / SHIPPED AS COMPRESSOPS (2026-09-05, y75s owner decision: option B)
+- Measured at admission: npm `@bokuweb/zstd-wasm` and `brotli-wasm` rely on JS wrappers (Emscripten / wasm-bindgen) not supported directly by the bundled WASI-preview1 streaming runner.
+- Shipped instead: **compressops** (cap.bundled.compressops 1.0.0) — CAP-authored clean-room WASI preview-1 tool over the pure-Rust `zstd` (MIT OR Apache-2.0) and `brotli` (MIT OR Apache-2.0) crates: zstd and brotli compression/decompression + info frame inspector, stdin→stdout, 1,411,911 bytes, 8 WASI imports, sha256 3eb5e7391eefe588758169d012186064577c9e9060af8e027c33702e2aa207ce, byte-reproducible (build-a == build-b). Evidence: packages/bundled/evidence/compressops/.
+
+### @bokuweb/zstd-wasm — ADMIT-NOW (catalogue verdict history — see SUPERSEDED note above)
 - Repo: https://github.com/bokuweb/zstd-wasm · npm: https://www.npmjs.com/package/@bokuweb/zstd-wasm
 - License: MIT (TS glue) + BSD-3-Clause (zstd, Facebook)
 - Size: zstd.wasm 245.9 KB
 - WASI: no — Emscripten-style browser/Node/Deno module
 - Determinism: npm pin; *pin sha at admission*
 
-### brotli-wasm — ADMIT-NOW
+### brotli-wasm — ADMIT-NOW (catalogue verdict history — see SUPERSEDED note above)
 - Repo: https://github.com/httptoolkit/brotli-wasm · npm: https://www.npmjs.com/package/brotli-wasm
 - License: Apache-2.0
 - Version: 3.0.1 (2024-06) · 1.27M weekly downloads

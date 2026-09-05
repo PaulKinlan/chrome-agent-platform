@@ -942,6 +942,42 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.compressops",
+  "version": "1.0.0",
+  "toolId": "compressops",
+  "lane": "compressops",
+  "displayName": "compressops",
+  "category": "data",
+  "description": "compressops - compress or decompress data with zstd or brotli. Use to compress and decompress data streams or check frame formats. In/out: bytes stdin to bytes stdout. Subcommands: zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
+  "caveats": [
+   "zstd and brotli only; stdin/stdout; no in-place archive manipulation.",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+  ],
+  "capabilities": [
+   "compute"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "Apache-2.0",
+   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "3eb5e7391eefe588758169d012186064577c9e9060af8e027c33702e2aa207ce",
+   "bytes": 1411911,
+   "tier": "default",
+   "initialPages": 28,
+   "maxPages": 2048
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.compressops-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.gzip",
   "version": "1.0.0",
   "toolId": "gzip",
