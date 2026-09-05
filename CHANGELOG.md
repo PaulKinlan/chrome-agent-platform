@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.149] — 2026-09-05
+- perf(4epo): reintroduce windowed loading with pagination for thread and agent open
+
+## [0.3.148] — 2026-09-05
+- Reopening long threads or agents loads quickly with windowed history and on-demand pagination for older runs
+
 ## [0.3.147] — 2026-09-05
 - The packaged extension is half the size: store bundles are minified, and the build fails if the background worker outgrows its budget
 

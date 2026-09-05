@@ -35,11 +35,12 @@ async function mapBounded(items, limit, fn) {
   return out;
 }
 
-// dptw: NO view bound — the view reads every execution the retention policy
-// kept (the retention keep-rule is the store-side bound, and it is reported
-// honestly via the compacted markers). The name stays exported so existing
-// pins read it: Infinity means "unbounded".
-export const MAX_VIEW_EXECUTIONS = Number.POSITIVE_INFINITY;
+// Default view bound: the newest 50 runs of a surface reopen with full visible
+// history (CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01), matching RUN_RETENTION_POLICY.perThread.
+// Windowed loading keeps open latency bounded (O(1) with history). Older runs
+// load on demand via pagination options ({ limit, offset, all }).
+export const MAX_VIEW_EXECUTIONS = 50;
+export const DEFAULT_VIEW_EXECUTIONS = 50;
 // Bounded fan-out across executions (each page read is itself bounded).
 // 16 since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01: the view reads up to 50
 // executions (each a lock-shared bounded page read); measured 109 ms for a
@@ -111,7 +112,7 @@ async function readExecutionLogs(e, listLogs, recordFailure) {
  * Never throws for log/reconciliation failures — the returned view carries
  * honest markers + `repairFailed` flags instead.
  */
-export async function buildThreadRunView(thread, deps) {
+export async function buildThreadRunView(thread, deps, options = {}) {
   const {
     listThreadExecutions,
     listLogs,
@@ -129,9 +130,24 @@ export async function buildThreadRunView(thread, deps) {
     return { ...thread, viewDegraded: true };
   }
   // Bound the replay: listThreadExecutions is already chronological (ascending
-  // by startedAt) — only the most-recent executions are read for logs.
+  // by startedAt) — only the most-recent executions are read for logs by default.
+  // Windowed loading / pagination: supports limit, offset, and all on demand.
   const totalExecutions = executions.length;
-  const viewedExecutions = executions.slice(-MAX_VIEW_EXECUTIONS);
+  const opts = typeof options === "object" && options !== null ? options : {};
+  const all = opts.all === true || deps?.all === true;
+  const rawLimit = opts.limit ?? deps?.limit;
+  const bound = all ? Infinity : (Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : (rawLimit === Infinity ? Infinity : MAX_VIEW_EXECUTIONS));
+  const offset = Math.max(0, Number.isInteger(opts.offset ?? deps?.offset) ? (opts.offset ?? deps?.offset) : 0);
+
+  let viewedExecutions;
+  let start = 0;
+  if (!Number.isFinite(bound)) {
+    viewedExecutions = executions;
+  } else {
+    const end = Math.max(0, totalExecutions - offset);
+    start = Math.max(0, end - bound);
+    viewedExecutions = executions.slice(start, end);
+  }
   const truncatedExecutions = totalExecutions - viewedExecutions.length;
   // Executions are read CONCURRENTLY with a bounded pool
   // (CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01). Measured: 97% of
@@ -295,6 +311,8 @@ export async function buildThreadRunView(thread, deps) {
     status,
     totalExecutions,
     truncatedExecutions,
+    viewedExecutions: viewedExecutions.length,
+    hasMore: start > 0,
     ...(withLogs.some((e) => e.truncatedLogs) ? { truncatedLogs: true } : {}),
     ...(repairFailed ? { repairFailed: true } : {}),
     ...(withLogs.some((e) => e.logFailed) ? { viewDegraded: true } : {}),
@@ -317,9 +335,9 @@ export async function buildThreadRunView(thread, deps) {
  *  - recordFailure(kind, detail) → diagnostics sink (never swallowed)
  * Never throws: a failed read degrades to an honest marker.
  */
-export async function buildAgentRunView({ agentId, limit = MAX_VIEW_EXECUTIONS } = {}, deps) {
+export async function buildAgentRunView({ agentId, limit = MAX_VIEW_EXECUTIONS, offset = 0, all = false } = {}, deps) {
   const { listRuns, listLogs, recordFailure = () => {} } = deps ?? {};
-  const empty = { id: agentId ?? null, messages: [], totalExecutions: 0, truncatedExecutions: 0, viewedExecutions: 0 };
+  const empty = { id: agentId ?? null, messages: [], totalExecutions: 0, truncatedExecutions: 0, viewedExecutions: 0, hasMore: false };
   if (!agentId || typeof listRuns !== "function" || typeof listLogs !== "function") return empty;
   let runs = [];
   try {
@@ -332,8 +350,19 @@ export async function buildAgentRunView({ agentId, limit = MAX_VIEW_EXECUTIONS }
     .filter((r) => r && typeof r.executionId === "string" && r.agentId === agentId)
     .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || a.executionId.localeCompare(b.executionId));
   const totalExecutions = mine.length;
-  const bound = Number.isInteger(limit) && limit > 0 ? limit : MAX_VIEW_EXECUTIONS;
-  const viewed = mine.slice(-bound);
+  const isAll = all === true || limit === Infinity;
+  const bound = isAll ? Infinity : (Number.isFinite(limit) && limit > 0 ? limit : MAX_VIEW_EXECUTIONS);
+  const effOffset = Math.max(0, Number.isInteger(offset) ? offset : 0);
+
+  let viewed;
+  let start = 0;
+  if (!Number.isFinite(bound)) {
+    viewed = mine;
+  } else {
+    const end = Math.max(0, totalExecutions - effOffset);
+    start = Math.max(0, end - bound);
+    viewed = mine.slice(start, end);
+  }
   const truncatedExecutions = totalExecutions - viewed.length;
   const withLogs = await mapBounded(
     viewed.map((record) => ({ executionId: record.executionId, record })),
@@ -403,6 +432,7 @@ export async function buildAgentRunView({ agentId, limit = MAX_VIEW_EXECUTIONS }
     totalExecutions,
     truncatedExecutions,
     viewedExecutions: viewed.length,
+    hasMore: start > 0,
     ...(withLogs.some((e) => e.truncatedLogs) ? { truncatedLogs: true } : {}),
     ...(withLogs.some((e) => e.logFailed) ? { viewDegraded: true } : {}),
   };

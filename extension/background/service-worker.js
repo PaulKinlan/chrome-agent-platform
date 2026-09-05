@@ -5586,12 +5586,17 @@ const handlers = mergeRouteMaps(
     // turn is visible on reopen, and a stuck "running" thread self-heals.
     // BOUNDED: the view reads only the recent executions + recent log rows
     // (owner P0 thread-open perf — the full replay took ~10s).
+    // Windowed loading: supports pagination via limit, offset, and all.
     const viewSpan = perfSpan("thread.get:view");
     const view = await buildThreadRunView(thread, {
       listThreadExecutions: (id) => durableRuns.listThreadExecutions(id),
       listLogs: (id, limit) => durableRuns.listLogs(id, limit),
       commitTerminal: commitThreadTerminal,
       recordFailure: (kind, detail) => pushDiagnostic("error", `[thread] ${kind}: ${detail}`),
+    }, {
+      limit: m?.limit,
+      offset: m?.offset,
+      all: m?.all,
     });
     viewSpan.end("ok");
     return { ok: true, thread: view };
@@ -5994,7 +5999,7 @@ const handlers = mergeRouteMaps(
   // runs, with an in-line notice for anything older or compacted. The
   // journal routes above stay the LIST surface (and the fallback for runs
   // that predate the durable log).
-  async "agent.history-view"({ kind, id }) {
+  async "agent.history-view"({ kind, id, limit, offset, all }) {
     let agentId = null;
     if (kind === "named") {
       const agent = await getNamedAgent(id);
@@ -6009,7 +6014,12 @@ const handlers = mergeRouteMaps(
     }
     await durableRecoveryReady;
     const viewSpan = perfSpan("agent.history-view");
-    const view = await buildAgentRunView({ agentId }, {
+    const view = await buildAgentRunView({
+      agentId,
+      limit,
+      offset,
+      all,
+    }, {
       listRuns: async () => (await durableRuns.list()).runs,
       listLogs: (executionId, limit) => durableRuns.listLogs(executionId, limit),
       recordFailure: (k, detail) => pushDiagnostic("error", `[agent-view] ${k}: ${detail}`),
