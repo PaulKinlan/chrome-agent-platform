@@ -384,3 +384,744 @@ Rust wasm core, Python + JS; new)
 - Pin version + sha256 for every admitted artifact (marked *pin at admission*).
 - Verify hash-wasm LICENSE file (npm says MIT, GitHub badge NOASSERTION).
 - ffmpeg.wasm only behind a real transcode use-case; WebCodecs first.
+
+---
+
+# v2 expansion — deep sweep (2026-09-05, cap-wasm-deep-sweep lane, k3)
+
+Same admission criteria as v1 (license = recorded field only; verdicts
+technical). Sizes unverified → *measure at admission*.
+
+## 13. Syntax highlighting / editor parsing
+
+### web-tree-sitter — ADMIT-NOW
+- Repo: https://github.com/tree-sitter/tree-sitter (JS/WASM bindings) · npm: https://www.npmjs.com/package/web-tree-sitter
+- License: MIT (tree-sitter core; each grammar carries its own, mostly MIT)
+- Size: runtime small; each grammar is a separate .wasm (~0.3–2 MB class) — *measure per grammar at admission*
+- WASI: no — Emscripten browser/Node module
+- Memory: 32-bit · Determinism: npm pin + per-grammar pins
+- Notes: incremental parsing; grammars compiled with tree-sitter CLI to .wasm
+  and loaded by path/URL — fits per-language lazy loading in module workers.
+- Sources: https://www.npmjs.com/package/web-tree-sitter · https://tree-sitter-tree-sitter.mintlify.app/api/javascript/overview
+
+### vscode-oniguruma / oniguruma wasm (TextMate grammars) — INVESTIGATE
+- Repo: https://github.com/microsoft/vscode-oniguruma
+- License: MIT · Size: onig.wasm ~1.4 MB class — *measure at admission*
+- Notes: only needed for TextMate-grammar compat (Shiki default engine).
+  Shiki alternative: oniguruma-to-es translates to native JS RegExp (no
+  wasm) — and v1's rregex already covers ReDoS-safe general regex.
+  Admit only if TextMate grammar support becomes a product requirement.
+- Sources: https://shiki.style/guide/regex-engines
+
+### Shiki / highlight.js / Prism — REJECT-AS-WASM (JS libs; the wasm inside Shiki is oniguruma above)
+
+## 14. Parsers & grammars
+Covered by §13 web-tree-sitter (grammar-per-language wasm model). No separate
+admit needed. Kaitai Struct → see §57.
+
+## 15. Formatters & linters
+
+### dprint wasm plugins — ADMIT-NOW (sandboxed-plugin model matches the platform)
+- Repo: https://github.com/dprint/dprint · plugins: https://dprint.dev/plugins/
+- License: MIT (dprint + markdown/json/toml/typescript plugins)
+- Size: per-plugin .wasm (~1–3 MB class) — *measure at admission*
+- WASI: dprint wasm-plugin ABI (not preview1; needs @dprint/formatter JS host)
+- Notes: plugins for markdown, JSON, TOML, TypeScript; some languages still
+  process-plugin only (not wasm). The JS host API: @dprint/formatter.
+- Sources: https://dprint.dev/plugins/ · https://www.npmjs.com/package/@dprint/formatter
+
+### @wasm-fmt/* family (clang-format, ruff_fmt, gofmt, zig_fmt, …) — ADMIT-NOW (clang-format); family INVESTIGATE
+- Repo: https://github.com/wasm-fmt (per-tool repos, e.g. wasm-fmt/clang-format)
+- License: Apache-2.0 WITH LLVM-exception (clang-format); per-repo for others
+- Size: per-tool wasm — *measure at admission*
+- WASI: no — wasm-bindgen-style browser/Node/bundler builds
+- Notes: browser usage needs explicit WASM init. Single-author org (tamasfe);
+  provenance moderate → verify build reproducibility at admission.
+- Sources: https://www.npmjs.com/package/@wasm-fmt/clang-format · https://github.com/wasm-fmt/ruff_fmt · https://github.com/wasm-fmt/gofmt · https://github.com/wasm-fmt/zig_fmt
+
+### @biomejs/wasm-web — INVESTIGATE
+- Repo: https://github.com/biomejs/biome · npm: https://www.npmjs.com/package/@biomejs/wasm-web
+- License: MIT OR Apache-2.0
+- Notes: formats/lints JS/TS/JSX/JSON/HTML/CSS/GraphQL in-browser; API is
+  version-locked to the matching wasm distribution; verify size + API
+  stability. (Prettier/Biome-in-JS remain the pure-JS fallback.)
+
+### @ruff-wasm (Astral) — INVESTIGATE (browser Python lint+format; experimental API)
+- Repo: https://github.com/astral-sh/ruff/tree/main/crates/ruff_wasm
+- License: MIT · Notes: per-target builds (web/bundler/nodejs); API explicitly
+  experimental — pin exact version. Sources: https://github.com/astral-sh/ruff/blob/main/crates/ruff_wasm/README.md
+
+## 16. Language runtimes / REPLs
+
+### quickjs-emscripten — ADMIT-NOW (sandboxed JS-in-JS for untrusted agent snippets)
+- Repo: https://github.com/justjake/quickjs-emscripten · npm: https://www.npmjs.com/package/quickjs-emscripten
+- License: MIT · Variants incl. small release builds — *measure at admission*
+- WASI: no — Emscripten; browser+Node. Memory: 32-bit.
+- Sources: https://www.npmjs.com/package/quickjs-emscripten
+
+### wasmoon (Lua 5.4) — ADMIT-NOW
+- Repo: https://github.com/ceifa/wasmoon · License: MIT
+- Notes: small wasm; browser+Node; Lua glue API. *Measure at admission.*
+
+### ruby.wasm (@ruby/*-wasm-wasi) — INVESTIGATE (large; WASI-first)
+- Repo: https://github.com/ruby/ruby.wasm · License: Ruby (BSD-2-Clause-style)
+- Notes: official CRuby ports for browser + WASI (e.g. @ruby/4.0-wasm-wasi);
+  multi-MB — *measure at admission*; WASI preview1 builds exist.
+
+### @php-wasm/web — INVESTIGATE (30 MB unpacked per npm; WordPress Playground lineage)
+- npm: https://www.npmjs.com/package/@php-wasm/web · License: *record at admission*
+- Notes: 30 MB unpacked is download-inflated; Playground uses chunked/lazy
+  builds. Admit only behind a real "run PHP snippets" use-case.
+
+### javy (Bytecode Alliance) — INVESTIGATE (JS→WASI component toolchain, not a browser runtime per se)
+- Repo: https://github.com/bytecodealliance/javy · License: Apache-2.0
+
+### Pyodide — see dedicated §58–60 (three-tier section per owner scope expansion).
+
+## 17. Assemblers / disassemblers / binary tooling
+
+### wabt.js (WABT) — ADMIT-NOW
+- Repo: https://github.com/WebAssembly/wabt · npm: wabt
+- License: Apache-2.0 · Notes: wat2wasm/wasm2wat/wasm-objdump etc. in browser;
+  canonical Bytecode-Alliance-adjacent provenance. *Measure at admission.*
+
+### binaryen (npm) — ADMIT-NOW
+- Repo: https://github.com/WebAssembly/binaryen · npm: https://www.npmjs.com/package/binaryen
+- License: Apache-2.0 · Notes: wasm-opt + full IR toolchain as JS/wasm build.
+
+### capstone.js / disasm-web — INVESTIGATE (native-code disassembly in browser)
+- Repos: https://github.com/capstone-engine/capstone (upstream, BSD-3) ·
+  capstone.js Emscripten port · https://github.com/ColinIanKing/disasm-web class projects
+- Notes: verify port freshness (Capstone 5) + multi-arch size before admit.
+
+## 18. Code search / indexing
+
+### ripgrep-wasm — INVESTIGATE
+- Repo: https://github.com/NathanHimpens/ripgrep-wasm
+- Notes: WASI-targeted rg; browser fit (fs shimming, stdin/stdout) unverified.
+  v1's rregex + OPFS streams may cover most need. *Verify browser path at admission.*
+
+### tree-sitter based structural search — reuse §13 (no separate admit).
+
+## 19. Markup pipelines
+
+### pandoc-wasm — INVESTIGATE (huge; official; universal converter)
+- Repo: https://github.com/pandoc/pandoc-wasm
+- License: GPL-2.0-or-later (recorded; not gating per owner directive)
+- Size: ~55.7 MB unpacked — the size problem is real; *measure/lazy-load at admission*
+- WASI: Asterius/GHC wasm build; browser+Node; no post-install download needed
+- Notes: converts Markdown/DOCX/HTML/TeX/EPUB/ODT and dozens more. The
+  "any-format ↔ any-format" tool Paul described (Calibre-ish flows). Size makes
+  it an on-demand OPFS-cached tool, never bundled.
+- Sources: https://github.com/pandoc/pandoc-wasm/ · https://pandoc.org/app/
+
+### typst.ts (@myriaddreamin/typst-ts-web-compiler) — ADMIT-NOW (modern LaTeX-class typesetting)
+- Repo: https://github.com/Myriad-Dreamin/typst.ts · npm: @myriaddreamin/typst-ts-web-compiler
+- License: Apache-2.0 (Typst) · Size: compiler wasm ~12 MB incl. fonts — *measure at admission*
+- WASI: no — wasm-bindgen browser builds; separate renderer module
+- Sources: https://www.npmjs.com/package/@myriaddreamin/typst-ts-web-compiler · https://myriad-dreamin.github.io/typst.ts/cookery/get-started.html
+
+### Asciidoctor.js — REJECT-AS-WASM (Opal-compiled JS, not wasm; adequate as JS if ever needed)
+
+## 20. TeX / LaTeX
+
+### SwiftLaTeX — INVESTIGATE (full PdfTeX/XeTeX in browser)
+- Repo: https://github.com/swiftlatex/swiftlatex
+- License: AGPL-3.0 (recorded) · Size: large TeX trees — lazy-fetch model
+- Notes: complete browser LaTeX→PDF. Heavy; alternative: typst.ts (§19) covers
+  most "typeset a document" needs at 1/5 the weight.
+
+### tectonic-wasm — INVESTIGATE (single-result provenance; verify)
+- Repo: https://github.com/nl5887/tectonic-wasm
+- Notes: claims browser LaTeX→PDF with bundled+CDN packages; single-author;
+  Tectonic's Rust core is wasm-friendly in principle. Verify freshness.
+
+## 21. Typography / fonts
+
+### harfbuzzjs — ADMIT-NOW (text shaping)
+- Repo: https://github.com/harfbuzz/harfbuzzjs
+- License: MIT (HarfBuzz "old MIT") · Size: hb.wasm ~800 KB class — *measure at admission*
+- WASI: yes — WASI build loaded with a tiny JS shim. Memory: 32-bit.
+- Notes: official HarfBuzz wasm distribution.
+
+### subset-font (HarfBuzz-based) — ADMIT-NOW (font subsetting, TTF/OTF/WOFF/WOFF2, variable axes)
+- npm: https://www.npmjs.com/package/subset-font · License: MIT
+- Notes: built on harfbuzzjs; fits "generate a subset font for this document".
+
+### woff2 (Google) — covered by subset-font for subset/encode; standalone woff2 wasm = INVESTIGATE if needed.
+
+## 22. E-books
+
+### kepubify (browser build) — ADMIT-NOW (EPUB→KEPUB)
+- Site: https://pgaskin.net/kepubify/try/ · Repo: https://github.com/pgaskin/kepubify
+- License: MIT · Notes: Go→wasm browser build already shipping; small.
+
+### ebook-converter-wasm (Calibre ebook-convert port) — INVESTIGATE
+- Repo: https://github.com/Luc4sguilherme/ebook-converter-wasm
+- Notes: ports Calibre's converter (DOCX/EPUB inputs); maturity unverified —
+  if real, this is the Calibre-ish flow Paul asked for. Verify build + size.
+
+### EPUB structure handling — covered by pandoc-wasm (§19) + zip tooling (§55); epub.js/foliate are JS (no wasm need).
+
+## 23. Office formats
+
+### LibreOffice wasm (core/static) — INVESTIGATE (tech-preview, enormous, but strategic)
+- Repo: https://github.com/LibreOffice/core/blob/master/static/README.wasm.md
+- License: MPL-2.0 (recorded)
+- Notes: Emscripten build of LO core ("LibreOffice Technology"); ZetaOffice/
+  ZetaJS (allotropia, Collabora-adjacent) packages it commercially. Not a
+  near-term admit; watch. Sources: https://blog.allotropia.de/2024/11/08/announcing-zetaoffice-a-new-libreoffice-technology-product-for-web-mobile-desktop/
+
+### docx-wasm (bokuweb/docx-rs) — ADMIT-NOW (DOCX generation)
+- Repo: https://github.com/bokuweb/docx-rs · npm: docx-wasm
+- License: MIT · Notes: Rust docx writer compiled to wasm; browser+Node.
+  (Reading DOCX: pandoc-wasm §19, or JS mammoth.)
+- Sources: https://github.com/bokuweb/docx-rs
+
+### XLSX/PPTX — REJECT-AS-WASM (SheetJS/exceljs/pptxgenjs are adequate JS; revisit if a native engine appears)
+
+## 24. PDF deepen (v1 §12 admitted @embedpdf/pdfium; mupdf investigate)
+
+### qpdf-wasm — ADMIT-NOW (PDF structure surgery: split/merge/encrypt/linearize)
+- Repo: https://github.com/neslinesli93/qpdf-wasm · npm: qpdf-wasm
+- License: Apache-2.0 (QPDF) · Notes: browser-ready build; qpdf-run wrapper
+  does typed-array in/out in Web Workers. Complements pdfium (render) with
+  structure ops. *Measure at admission.*
+
+### pdfcpu wasm — INVESTIGATE (Go pdfcpu wasm examples exist; freshness flagged)
+- Repo: https://github.com/pdfcpu/pdfcpu · License: Apache-2.0
+- Notes: overlaps qpdf-wasm; keep as fallback.
+
+### OCRmyPDF-style flow — COMPOSITION, not a candidate: tesseract-wasm (§25) + qpdf-wasm + pdfium cover it in-pipeline.
+
+## 25. OCR
+
+### tesseract-wasm — ADMIT-NOW
+- Repo: https://github.com/robertknight/tesseract-wasm
+- License: Apache-2.0 (Tesseract) · Size: eng traineddata ~2.1 MB compressed +
+  engine wasm — *measure at admission*
+- WASI: no — Emscripten; browser+Node; SIMD where available; multilingual models
+- Sources: https://github.com/robertknight/tesseract-wasm
+
+### ocrs (RTen) — INVESTIGATE (modern ML OCR; browser path unverified)
+- Repo: https://github.com/robertknight/ocrs
+- License: MIT/Apache-2.0 · Notes: Rust OCR on RTen runtime + ONNX models;
+  browser wasm demos exist in repo history; verify model packaging.
+
+### PaddleOCR wasm — NOT-FOUND (no maintained browser wasm build located)
+
+## 26. Diagramming
+
+### @hpcc-js/wasm-graphviz — ADMIT-NOW (DOT→SVG)
+- Repo: https://github.com/hpcc-systems/hpcc-js-wasm
+- License: Apache-2.0 · Notes: maintained Graphviz wasm; Viz.js v3 is a thin
+  wrapper over it. Browser+Node. *Measure at admission.*
+- Sources: https://hpcc-systems.github.io/hpcc-js-wasm/packages/graphviz/README.html
+
+### plantuml-wasm — INVESTIGATE (TeaVM/JVM→wasm class projects; no canonical build)
+- Notes: most PlantUML-in-browser demos route through a server; Graphviz covers
+  the layout substrate. Mark server-dependency risk.
+
+### mermaid/d3 — REJECT-AS-WASM (pure JS, adequate natively)
+
+## 27. Databases — deepen (v1 §9: sqlite-wasm + wa-sqlite admitted; duckdb-wasm investigate)
+
+### PGlite (Postgres in wasm) — ADMIT-NOW
+- Repo: https://github.com/electric-sql/pglite
+- License: Apache-2.0 · Size: ~3–3.7 MB gzipped (dist ~10 MB class) — *measure at admission*
+- WASI: no — Emscripten wasm of Postgres + JS host; browser/Node/Bun/Deno
+- Memory: 32-bit · Notes: real Postgres wire semantics + extensions (pgvector,
+  PostGIS). OPFS persistence is an open upstream request (issue #9) — today
+  persistence is IndexedDB; verify OPFS at admission.
+- Sources: https://github.com/electric-sql/pglite · https://github.com/electric-sql/pglite/issues/9
+
+### duckdb-wasm — remains INVESTIGATE (v1; ~71 MB unpacked). Analytics-grade; httpfs range-request streaming is its superpower — admit when a real OLAP use-case lands.
+
+## 28. Vector search
+
+### sqlite-vec — ADMIT-NOW (vectors inside the already-admitted SQLite)
+- Repo: https://github.com/asg017/sqlite-vec
+- License: MIT/Apache-2.0 · Size: tiny extension wasm — *measure at admission*
+- Notes: float/int8/binary vectors; compiles into official sqlite-wasm builds;
+  pre-v1 (breaking-change warning recorded). Fits OPFS-persisted agent memory.
+
+### hnswlib-wasm — INVESTIGATE (early-stage per own docs)
+- Repo: https://github.com/ShravanSunder/hnswlib-wasm · License: Apache-2.0 (hnswlib)
+
+### usearch-wasm — INVESTIGATE (unum-cloud/usearch has JS/wasm builds; single-binary SIMD ANN)
+- Repo: https://github.com/unum-cloud/usearch · License: Apache-2.0
+
+## 29. Notebooks
+
+### JupyterLite + xeus — ADMIT-NOW (the notebook surface; Pyodide kernel covers §58)
+- Repos: https://github.com/jupyterlite/jupyterlite · https://github.com/jupyterlite/xeus
+- License: BSD-3-Clause · Notes: fully client-side Jupyter, statically served;
+  wasm kernels (xeus-python via emscripten-forge, xeus-lua, xeus-sqlite…);
+  no server. Fits the hub as an artifact surface. Size per-kernel — *measure at admission*.
+- Sources: https://github.com/jupyterlite/xeus
+
+## 30. Visualization / renderers
+
+### canvaskit-wasm (Skia) — INVESTIGATE (6 MB wasm / 24.4 MB unpacked; only if HTML Canvas genuinely insufficient)
+- npm: https://www.npmjs.com/package/canvaskit-wasm · License: BSD-3-Clause (Skia, Google)
+- Notes: WebGL-backed Skia Canvas API; bundler config needed to serve
+  canvaskit.wasm. Native Canvas2D covers most agent needs — admit for
+  pixel-exact rendering/font shaping parity use-cases.
+- Sources: https://www.npmjs.com/package/canvaskit-wasm · https://blog.form.dev/canvaskit/topics/bundler-integration
+
+### vega/plotly/echarts — REJECT-AS-WASM (pure JS, adequate natively)
+
+## 31. Columnar / dataframes
+
+### parquet-wasm — ADMIT-NOW (read/write Parquet via Arrow)
+- Repo: https://github.com/kylebarron/parquet-wasm
+- License: MIT/Apache-2.0 · Notes: sync API needs whole buffer upfront;
+  async/HTTP-range reads available; IPC + experimental zero-copy FFI back to JS.
+  *Measure at admission.* Sources: https://kylebarron.dev/parquet-wasm/
+
+### apache-arrow JS — REJECT-AS-WASM (arrow-js is pure JS and adequate for IPC/FFI glue)
+
+### polars wasm — NOT-FOUND (nodejs-polars is native N-API; no maintained browser wasm build located)
+
+## 32. Search engines
+
+### tantivy-wasm (phiresky) — ADMIT-NOW (the tantivy Paul named)
+- Repo: https://github.com/phiresky/tantivy-wasm
+- License: MIT/Apache-2.0 (Tantivy) · Size: release wasm ~1.5 MB (demo-reported)
+- Notes: on-demand index loading via HTTP Range requests — demo queried a 14 GB
+  index downloading ~1.5 MB (project-reported, verify). Pairs with OPFS-cached
+  per-origin indexes. Sources: https://github.com/phiresky/tantivy-wasm
+
+### pagefind — ADMIT-NOW (static-site search; wasm + chunked index)
+- Repo: https://github.com/CloudCannon/pagefind · License: MIT
+- Notes: index built at publish time, queried via wasm with lazy chunks.
+
+### stork — INVESTIGATE (Rust+wasm prebuilt-index search; maintenance slowed)
+- Repo: https://github.com/jameslittle230/stork · License: Apache-2.0
+
+### xapian-wasm — NOT-FOUND (no maintained browser wasm port located)
+
+### flexsearch/minisearch/lunr — REJECT-AS-WASM (pure JS, adequate for small corpora)
+
+## 33. Scientific data formats
+
+### h5wasm — ADMIT-NOW (HDF5 read/write)
+- Repo: https://github.com/usnistgov/h5wasm
+- License: MIT (NIST; public-domain-ish USGov portions) · Notes: browser+Node
+  HDF5 via wasm-compiled HDF5; *measure at admission*.
+- Sources: https://github.com/usnistgov/h5wasm
+
+### netcdf/GRIB2/Zarr wasm ecosystem — INVESTIGATE (sibling projects by h5wasm author and others; maturity varies; netcdfjs is pure JS for classic NetCDF-3)
+
+### FITS (astronomy) — INVESTIGATE (JS FITS parsers exist; no canonical wasm build found)
+
+## 34. Audio — deepen (v1 §10 admitted eshaz/wasm-audio-decoders)
+
+### @wasm-audio-decoders/flac et al. — ADMIT-NOW (deepen v1 entry with sizes)
+- Repo: https://github.com/eshaz/wasm-audio-decoders
+- License: LGPL-2.1 (FLAC core; recorded) · Size: FLAC pkg 67.2 KiB minified
+- Notes: sync + Web Worker modes; FLAC/Ogg-FLAC full bit depths. Boundary:
+  WebCodecs decodes common codecs natively — wasm decoders fill gaps +
+  gapless/streaming control.
+- Sources: https://www.npmjs.com/package/@wasm-audio-decoders/flac
+
+## 35. Video — deepen (v1: ffmpeg.wasm INVESTIGATE)
+
+### @ffmpeg/core-mt — remains INVESTIGATE, size now captured
+- npm: https://www.npmjs.com/package/@ffmpeg/core-mt
+- License: GPL-2.0-or-later (recorded) · Size: 32.6 MB wasm, 62.7 MB unpacked
+- Notes: WebCodecs first for decode/encode; ffmpeg.wasm only for mux/filter
+  graphs WebCodecs can't express. If admitted: OPFS-cached, never bundled.
+
+### mediabunny/mp4box — REJECT-AS-WASM (pure JS mux/demux, adequate natively)
+
+## 36. Image — deepen (v1 §1)
+
+### opencv.js (official OpenCV wasm build) — INVESTIGATE (size is build-config dependent)
+- Docs: https://docs.opencv.org/5.0/js_tutorials/js_setup/js_setup/js_setup.html
+- License: Apache-2.0 · Notes: official build tooling produces wasm by default;
+  --disable_single_file separates .wasm. Admit only a purpose-built minimal
+  module set (full builds are 8+ MB). *Measure per build at admission.*
+
+### @uswriting/exiftool (ExifTool via Perl→wasm) — INVESTIGATE (metadata read/write, any format)
+- npm: https://www.npmjs.com/package/@uswriting/exiftool
+- License: Perl Artistic/GPL dual (ExifTool; recorded)
+- Notes: zeroperl-class Perl wasm runtime; covers every metadata format —
+  the metadata tool. Verify size + startup cost.
+
+### libraw-wasm / dcraw-wasm — INVESTIGATE (camera RAW: CR2/NEF/ARW/DNG)
+- npm: https://www.npmjs.com/package/libraw-wasm · https://www.npmjs.com/package/dcraw-wasm
+- License: LGPL-2.1 OR CDDL-1.0 (LibRaw; recorded) · dcraw: public-domain-style
+- Notes: decode + thumbnails + metadata. vips/jSquash don't do RAW — real gap.
+
+## 37. 3D / CAD
+
+### draco3d (Google Draco wasm) — ADMIT-NOW (mesh/point-cloud compression)
+- Repo: https://github.com/google/draco · npm: draco3d
+- License: Apache-2.0 · Notes: official wasm decoders/encoders ship in npm pkg.
+- Sources: https://google.github.io/draco/
+
+### meshoptimizer (meshopt_decoder.wasm) — ADMIT-NOW
+- Repo: https://github.com/zeux/meshoptimizer · License: MIT
+- Notes: ships wasm decoder; glTF EXT_meshopt_compression standard path.
+- Sources: https://meshoptimizer.org/
+
+### basis-universal wasm transcoder — ADMIT-NOW (GPU texture transcode)
+- Repo: https://github.com/BinomialLLC/basis_universal · License: Apache-2.0
+- Notes: official wasm transcoder build in-tree.
+
+### occt-wasm / opencascade.js / brepjs — INVESTIGATE (real CAD kernel in browser: STEP/B-Rep)
+- npm: https://www.npmjs.com/package/occt-wasm · https://ocjs.org/ · https://brepjs.dev/
+- License: LGPL-2.1 with linking exception (OpenCascade; recorded)
+- Notes: huge kernel; brepjs is a higher-level TS API over occt-wasm. Admit
+  behind a CAD-viewer use-case; measure per-build.
+
+## 38. Speech
+
+### sherpa-onnx wasm (k2-fsa) — ADMIT-NOW (STT + TTS, ONNX models, documented wasm builds)
+- Docs: https://k2-fsa.github.io/sherpa/onnx/tts/wasm/build.html
+- License: Apache-2.0 · Notes: official wasm build docs; models fetched
+  separately (OPFS-cacheable). *Measure runtime at admission.*
+
+### whisper.cpp wasm wrappers — INVESTIGATE (wrapper maturity varies; models multi-hundred-MB)
+- Repo: https://github.com/ggerganov/whisper.cpp (emscripten examples) +
+  TS wrappers (e.g. whisper.wasm-class packages)
+- License: MIT · Notes: platform LOCAL-MODELS architecture may subsume this —
+  coordinate before admitting.
+
+### piper-tts-web — INVESTIGATE (Piper TTS in browser)
+- Repo: https://github.com/Poket-Jony/piper-tts-web · License: MIT (Piper)
+- Notes: manual asset copying today; verify packaging.
+
+### vosk-browser — INVESTIGATE (from prior knowledge: Apache-2.0 browser wasm STT; verify freshness)
+- Repo: https://github.com/alphacep/vosk-browser
+
+## 39. Retro emulation
+
+### js-dos (DOSBox + DOSBox-X wasm) — ADMIT-NOW
+- Repo: https://github.com/caiiiycuk/js-dos · https://js-dos.com/dosbox-x.html
+- License: GPL-2.0 (DOSBox; recorded)
+- Notes: DOS + Win9x-class software in browser/Node; DOSBox-X backend reaches
+  Windows 98/ME. Mature, maintained, the standard for in-browser DOS.
+
+### EmulatorJS (RetroArch wasm cores) — ADMIT-NOW
+- Repo: https://github.com/EmulatorJS/EmulatorJS
+- License: GPL-3.0 (recorded) · Notes: self-hosted frontend over RetroArch wasm
+  cores (NES/SNES/GBA/PSX/arcade…). Core-per-system lazy loading fits OPFS.
+
+### MAME wasm / Emularity — INVESTIGATE (archive.org's Emularity bundles JS/wasm MAME; heavyweight)
+- Source: https://archive.org/details/emularity_engine_v1
+
+## 40. Game engines
+
+### Godot/Defold/Bevy wasm exports — REJECT-AS-WASM (application frameworks, not callable agent tools; the agent platform ships tools, not games)
+
+## 41. Browser-in-browser — the "kite" investigation
+
+### Identification (for Paul to confirm)
+No single canonical "Kite browser in wasm" exists. Candidates found:
+1. **kite-project/hope** (2015–2016, archived): a literal "Kite" browser
+   project — a Boot2Gecko/Firefox-OS-derived web experience. Dead since 2016.
+   https://github.com/kite-project/hope
+2. **Kiwix JS** — offline ZIM web reader (PWA + browser extension); the
+   "offline web inside the browser" tool. Likely the name-match if Paul
+   remembers offline reading. https://github.com/kiwix/kiwix-js
+3. **The current browser-in-browser state of the art (HN, 2026)** — most
+   likely what Paul saw recently:
+   - **Firefox compiled to WASM (Puter/coolelectronics)** — full Gecko + XUL UI
+     in wasm; WASM JSPI + WebGL passthrough; networking via wisp-protocol
+     TCP-over-WebSocket relay (TLS done by OpenSSL-in-wasm client-side).
+     Ran firefox-wasm inside firefox-wasm. HN: https://news.ycombinator.com/item?id=48926939
+   - **WebkitWasm (theogbob)** — working WebKit port to wasm.
+     https://github.com/theogbob/WebkitWasm
+   - **trevorlinton/webkit.js** — the older WebKit-in-browser ancestor.
+
+### firefox-wasm (Puter) — INVESTIGATE (flagship browser-in-browser; single-process, relay-dependent, JSPI required)
+- License: MPL-2.0 (Firefox; recorded) · Notes: enormous engineering; network
+  requires a TCP relay (wisp); sandboxing degraded (no fission/multiprocess) —
+  fine as a tool surface, wrong as a security boundary.
+
+### WebkitWasm — INVESTIGATE (less polished than the Firefox port; no JIT)
+
+### Kiwix JS — ADMIT-NOW (offline ZIM web reader — Wikipedia/StackExchange/etc. offline)
+- Repo: https://github.com/kiwix/kiwix-js · License: GPL-3.0 (recorded)
+- Notes: wasm decoders (zstd/lzma) inside; ZIM archives are OPFS-cacheable;
+  gives every agent an offline web corpus. This is a knowledge-worker tool,
+  not a novelty.
+
+### v86 (x86 PC emulator, wasm JIT) — ADMIT-NOW (run real Linux/BSD + old browsers in a tab)
+- Repo: https://github.com/copy/v86 · License: BSD-2-Clause
+- Notes: wasm-JIT x86 emulator; boots Linux (32-bit); can run legacy browsers
+  (old Netscape/Mosaic via oldweb.today-style images). The general
+  "computer inside the browser" primitive.
+- Sources: https://github.com/copy/v86 · https://copy.sh/v86/
+
+### BrowserBox / Hyperbeam / neko — REJECT-AS-WASM (remote-browser streaming services, not wasm; different product)
+- Sources: https://github.com/m1k1o/neko
+
+### oldweb.today / WRP — DOCUMENTED, not candidates (server-rendered legacy browsing proxies)
+- Sources: https://github.com/oldweb-today/oldweb-today · https://github.com/tenox7/wrp
+
+## 42. Terminal / shells / coreutils
+
+### wasmer-js (WASIX) — INVESTIGATE (run WASI/WASIX pkgs incl. bash/coreutils in browser)
+- Docs: https://docs.wasmer.io/runtime/js/ · License: MIT (Wasmer)
+- Notes: SharedArrayBuffer + threads needed; MV3 CSP check at admission.
+
+### coreutils/busybox wasm — INVESTIGATE (via WASIX packages or direct ports; provenance per-package)
+
+## 43. Version control
+
+### wasm-git (libgit2→wasm) — INVESTIGATE
+- Repo: https://github.com/petersalomonsen/wasm-git
+- License: GPL-2.0-with-linking-exception (libgit2; recorded)
+- Notes: real git in browser; compare isomorphic-git (pure JS, mature).
+  Admit wasm-git only if libgit2 behaviors (worktrees, filters) are needed.
+
+### isomorphic-git — REJECT-AS-WASM (pure JS, adequate)
+
+## 44. Computer algebra (CAS)
+
+### Giac (giacwasm.js) — ADMIT-NOW (serious CAS; Xcas engine)
+- Site: https://www-fourier.univ-grenoble-alpes.fr/~parisse/giacjs/README.md
+- License: GPL-3.0 (recorded) · Notes: official browser wasm build + worker
+  model; full symbolic CAS (algebra, calculus, solve). *Measure at admission.*
+
+### SymEngine.js — ADMIT-NOW (fast symbolic core, ES module + TS types)
+- Site: http://symengine.fizzwizzledazzle.dev/ · Repo: symengine/symengine (wasm build)
+- License: MIT · Notes: lighter than Giac; pair with MathJax/KaTeX for display.
+
+### Maxima-on-wasm (ECL+Emscripten) — INVESTIGATE
+- Site: https://maxima-on-wasm.pages.dev/ · License: GPL (recorded)
+
+### SymPy — via Pyodide (§58 tier 1); no separate admit.
+
+## 45. R / statistics
+
+### webR — ADMIT-NOW (R in wasm, browser+Node)
+- Docs: https://docs.r-wasm.org/webr/latest/ · npm: webr
+- License: GPL-2.0-or-later (R; recorded) · Notes: runs R locally, no server;
+  growing wasm package repo; API under active development (pin versions).
+  The knowledge-worker stats tool.
+
+### jstat / simple-statistics — REJECT-AS-WASM (pure JS, adequate for small stats)
+
+## 46. Plotting
+
+### gnuplot-wasm — INVESTIGATE (experimental; v0.1.0-class, SVG output)
+- Repo: https://github.com/stereobooster/gnuplot-wasm · License: gnuplot license (recorded)
+
+### matplotlib — via Pyodide (§58). vega/plotly JS — REJECT-AS-WASM (§30).
+
+## 47. Physics engines
+
+### @dimforge/rapier2d / rapier3d — ADMIT-NOW (official wasm builds)
+- Docs: https://rapier.rs/docs/user_guides/javascript/getting_started_js/
+- License: Apache-2.0 · Notes: official npm wasm packages; async init;
+  deterministic-cross-platform physics. *Measure at admission.*
+
+### box2d-wasm — ADMIT-NOW
+- Repo: https://github.com/Birch-san/box2d-wasm · License: MIT/Zlib (Box2D; recorded)
+
+### ammo.js — INVESTIGATE (older Emscripten Bullet port; maintenance unclear)
+- Repo: https://github.com/kripken/ammo.js/ · License: Zlib (Bullet; recorded)
+
+## 48. Simulation / circuits
+
+### ngspice wasm (EEcircuit, spice-ts) — INVESTIGATE (real SPICE in browser)
+- Repos: https://github.com/eelab-dev/EEcircuit · https://github.com/mfiumara/spice-ts
+- License: BSD-3-Clause (ngspice; recorded) · Notes: multiple independent
+  ngspice→wasm efforts; spice-ts offers a TS solver + optional ngspice backend.
+  Verify which has the cleanest module boundary.
+
+### Fluid sims — NOT-FOUND as libraries (WebGL demos, not reusable wasm modules)
+
+## 49. Math deepen (v1 §8 admitted gmp-wasm + @emnudge/wat-fft)
+
+### wasm-flint (sagemathinc) — INVESTIGATE (FLINT/MPIR/MPFR; number theory)
+- Repo: https://github.com/sagemathinc/wasm-flint
+- License: LGPL-2.1-or-later (FLINT; recorded) · Notes: SageMath-adjacent
+  provenance; admit if number-theory use-cases land. gmp-wasm covers bignum.
+
+## 50. Calendars / dates
+
+### ical.js (Mozilla kewisch) — REJECT-AS-WASM (pure JS, adequate; parses iCalendar RFC 5545 + jCal + vCard + jCard)
+- Repo: https://github.com/kewisch/ical.js/ · License: MPL-2.0
+
+### libical wasm — NOT-FOUND (C lib exists; no browser-ready wasm build located)
+
+## 51. Finance math
+
+### quantlib-wasm — INVESTIGATE (real QuantLib via Emscripten)
+- npm: https://www.npmjs.com/package/quantlib-wasm · License: BSD-3-Clause (QuantLib; recorded)
+- Notes: browser+Node; verify maintenance + size. quantlib.js is a partial JS
+  reimplementation (not wasm) — fallback.
+
+## 52. Units / conversion — REJECT-AS-WASM (convert-units JS adequate; Pint via Pyodide §58 tier 2 for heavy cases)
+
+## 53. i18n / dictionaries / spellcheck
+
+### hunspell-wasm — ADMIT-NOW (the hunspell Paul named)
+- npm: https://www.npmjs.com/package/hunspell-wasm
+- License: GPL-2.0/LGPL-2.1/MPL-1.1 tri (Hunspell; recorded)
+- Notes: wasm bindings, browser-ready; dictionaries (.dic/.aff) are OPFS-cacheable data.
+
+### harper.js (Automattic) — ADMIT-NOW (offline grammar checker — beyond spellcheck)
+- Repo: https://github.com/automattic/harper
+- License: Apache-2.0 · Notes: Rust→wasm, runs fully offline, harper.js
+  browser integration. Strong provenance (Automattic). Fits agent text QA.
+
+### ICU4X — remains INVESTIGATE (v1 §5; needs icu4x-datagen trimming)
+
+## 54. Email / contacts
+
+### postal-mime — REJECT-AS-WASM (pure JS, browser/worker/serverless; adequate for RFC 822/MIME)
+- Repo: https://github.com/postalsys/postal-mime/ · License: MIT
+
+### wasm email-parser projects — INVESTIGATE (exist as apps, not clean libs; postal-mime likely sufficient)
+
+## 55. Archives
+
+### libarchive.js — ADMIT-NOW (ZIP/7z/RAR v4+v5/TAR + gzip/bzip2/xz…)
+- npm: https://www.npmjs.com/package/libarchive.js
+- License: BSD-2-Clause (libarchive; recorded)
+- Notes: the universal extractor; worker model; *measure at admission*.
+
+### 7z-wasm — INVESTIGATE (7-Zip proper in wasm; needed only for 7z WRITE — libarchive reads 7z)
+- License: LGPL-2.1 (7-Zip; recorded)
+
+### unrar wasm — NOT-FOUND as maintained standalone (libarchive.js covers RAR v4/v5 read)
+
+## 56. Security tooling
+
+### @kanru/rage-wasm — ADMIT-NOW (age-compatible encryption, Rust rage→wasm)
+- npm: https://registry.npmjs.org/@kanru/rage-wasm
+- License: MIT OR Apache-2.0 (rage; recorded) · Notes: kanru (Mozilla) provenance;
+  browser-ready. The modern file-encryption tool.
+
+### age-encryption (FiloSottile) — REJECT-AS-WASM (official age JS lib is pure TS and adequate); wage — INVESTIGATE (beta)
+
+### yara-x wasm bindings — INVESTIGATE (official VirusTotal direction, PR #598; browser playground exists)
+- Repo: https://github.com/VirusTotal/yara-x · License: BSD-3-Clause (recorded)
+- Sources: https://github.com/VirusTotal/yara-x/pull/598
+
+### minisign wasm — NOT-FOUND (no maintained build located)
+
+### clamav wasm — NOT-FOUND (no viable browser build; yara-x covers pattern scanning)
+
+## 57. Networking / protocols
+
+### libcurl.js (ading2210) — INVESTIGATE (libcurl+wolfSSL→wasm, HTTPS over wisp TCP-relay)
+- Repo: https://github.com/ading2210/libcurl.js/
+- License: curl license (recorded) · Notes: the real-TLS-in-browser trick behind
+  firefox-wasm (§41); relay-dependent. Sources: https://news.ycombinator.com/item?id=48926939
+
+### sshclient-wasm — INVESTIGATE (SSH over WebSocket relay; packet-level hooks)
+- Repo: https://github.com/VerdigrisTech/sshclient-wasm · License: *record at admission*
+
+### wpcapng (libpcapng→wasm) — INVESTIGATE (in-browser PCAP/PCAPNG parsing)
+- Repo: https://github.com/stricaud/wpcapng · License: BSD-3-Clause (libpcap; recorded)
+
+### kaitai-struct wasm — INVESTIGATE (binary-format parsing DSL; JS runtime is pure JS and adequate for most; wasm parser project exists)
+
+### ping/traceroute/telnet — NOT-FOUND (impossible without raw sockets; relay-dependent only — document as platform limitation)
+
+## 58. Python / Pyodide — TIER 1 (built set via loadPackage; per owner scope expansion 2026-09-05)
+
+### Pyodide core + built packages — ADMIT-NOW (pre-bundle tier)
+- Docs: https://pyodide.org/en/stable/usage/packages-in-pyodide.html · https://pyodide.org/en/stable/usage/loading-packages.html
+- License: MPL-2.0 (Pyodide; each package its own — numpy BSD-3, pandas BSD-3,
+  scipy BSD-3, scikit-learn BSD-3, matplotlib PSF-based, regex Apache-2.0,
+  PyYAML MIT, cryptography Apache-2.0/BSD-3 — all recorded, none gating)
+- Import mechanics: `pyodide.loadPackage([...])` from JS — prebuilt, pinned per
+  Pyodide release, less overhead than micropip. **Pre-bundle the core +
+  lazy-OPFS-cache the package set**, pinned to an exact Pyodide version.
+- Built set includes: numpy, pandas, scipy, scikit-learn, matplotlib, regex,
+  PyYAML, cryptography (+ ~100 more; exact set varies per Pyodide release —
+  pin the release and snapshot its manifest at admission).
+- Sizes: multi-MB per scientific package — *measure per package at admission*;
+  packages load on demand, never all upfront.
+- Sources: https://pyodide.org/en/stable/usage/packages-in-pyodide.html
+
+## 59. Python / Pyodide — TIER 2 (micropip, PyPI pure wheels)
+
+### micropip — ADMIT-NOW (per-run install tier)
+- Docs: https://micropip.pyodide.org/en/stable/project/usage.html
+- License: MIT (recorded)
+- Import mechanics: `micropip.install(...)` from Python — installs pure-Python
+  wheels from PyPI at run time, plus wasm/emscripten wheels when available.
+  **Per-run install into an OPFS-backed venv; never pre-bundle.** Packages with
+  unsupported native extensions fail — honest error, suggest tier 3 path.
+- Long-tail coverage: this is the "every Python library a knowledge worker
+  knows" story for pure-Python (requests-free flows, dateutil, rich, typer,
+  attrs, pydantic…).
+
+## 60. Python / Pyodide — TIER 3 (pyodide-build, C/Rust extensions)
+
+### pyodide-build + cibuildwheel pyodide platform — INVESTIGATE / DEFER (PEP 783 pending)
+- Docs: https://pyodide-build.readthedocs.io/en/latest/how-to/cibuildwheel.html · https://peps.python.org/pep-0783/
+- License: MPL-2.0 (recorded)
+- Import mechanics: out-of-tree wheels built per-Pyodide-version via
+  `pyodide build` or `CIBW_PLATFORM=pyodide`; served and micropip-installed.
+  **Defer until PEP 783 (wasm wheel tagging) lands**; wheels are
+  Pyodide-version-specific, so admission = version-locked build pipeline.
+  Decision: build infra needed before any tier-3 admit.
+
+## 61. AI / ML inference (boundary with LOCAL-MODELS architecture)
+
+### onnxruntime-web (wasm backend) — ADMIT-NOW (universal ONNX runner; all ONNX ops on wasm/CPU)
+- Docs: https://onnxruntime.ai/docs/tutorials/web/
+- License: MIT · Notes: wasm backend = full op coverage; WebGL/WebGPU/WebNN
+  are subsets. The fallback engine when LOCAL-MODELS doesn't cover a model.
+
+### transformers.js — ADMIT-NOW (model zoo glue over onnxruntime-web)
+- Docs: https://huggingface.co/docs/transformers.js/api/backends/onnx
+- License: Apache-2.0 · Notes: defaults to CPU/wasm in browser; models are
+  OPFS-cacheable HF artifacts. Cross-ref whisper/§38.
+
+### tflite wasm — INVESTIGATE (only if a TF-Lite-specific model is required)
+
+## 62. Bioinformatics
+
+### biowasm (samtools, bcftools, bedtools, minimap2, seqtk…) — ADMIT-NOW
+- Docs: https://biowasm.com/documentation
+- License: MIT (biowasm glue; per-tool licenses recorded: samtools/bcftools MIT/Expat…)
+- Notes: the canonical genomics-to-wasm project; Aioli runtime runs tools in
+  Web Workers on local files — no upload. Exactly the platform's model.
+
+## 63. Chemistry
+
+### RDKit.js (@rdkit/rdkit) — ADMIT-NOW (official RDKit wasm/JS)
+- Repo: https://github.com/rdkit/rdkit-js
+- License: BSD-3-Clause (RDKit; recorded)
+- Notes: SMILES parse, depiction (SVG), descriptors, substructure. Maintenance
+  governance in transition — pin a release and record maintainer state.
+
+### Indigo wasm — INVESTIGATE (EPAM Indigo toolkit has wasm builds; overlaps RDKit)
+
+## 64. Geo — deepen (v1 §11 admitted h3-js + h3o-wasm)
+
+### gdal3.js — ADMIT-NOW (GDAL in browser: gdal_translate/ogr2ogr/gdalwarp/gdaltransform)
+- Site: https://gdal3.js.org/ · License: MIT/X11 (GDAL; recorded)
+- Notes: raster+vector conversion/reprojection in wasm; the geo ETL tool.
+  *Measure at admission* (GDAL is big; check which drivers are in the build).
+
+### geotiff.js — REJECT-AS-WASM boundary note (pure JS with wasm codec plugins; adequate natively; gdal3.js covers the heavy cases)
+- Site: https://geotiffjs.github.io/geotiff.js/
+
+## 65. PRODUCTIVITY (owner scope expansion 2026-09-05)
+
+The category is real but mostly JS-boundary — the wasm value comes from
+composition of already-catalogued admits:
+
+- **Calendars/tasks**: ical.js (§50, JS adequate) + libical-wasm NOT-FOUND;
+  taskwarrior-wasm NOT-FOUND. Cron/rrule: JS adequate.
+- **Notes/writing QA**: harper.js (§53) + hunspell-wasm (§53) + v1 markdown
+  admits (pulldown-cmark, comrak) + typst.ts (§19) for publishable output.
+- **Personal search**: tantivy-wasm (§32) + sqlite-vec (§28) over OPFS —
+  the "search my stuff" primitive.
+- **Contacts/email**: ical.js vCard support (§50) + postal-mime (§54, JS).
+- **Time/date math**: Temporal is now native-ish; JS libs adequate — REJECT-AS-WASM.
+- Verdict for the category itself: **no new wasm admits needed**; document the
+  composition map above in the catalogue so the product team wires admits
+  into productivity flows.

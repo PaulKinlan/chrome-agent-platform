@@ -1,10 +1,10 @@
 # Changelog
 
+## [0.3.239] — 2026-09-05
+- The built-in tool catalogue research now covers many more areas (developer tools, documents, data, media, science, Python via Pyodide, and everyday productivity), ready for future tool additions
+
 ## [0.3.236] — 2026-09-05
 - Websites can no longer tell the extension is installed: the artifact viewer files are no longer exposed to web pages, and the page-tool detector now uses a random, per-page hook name instead of a fixed one.
-
-## [0.3.235] — 2026-09-05
-- : origin-bound skills + per-origin site notes
 
 ## [0.3.234] — 2026-09-05
 - Site playbooks: a skill can now be bound to a website so it is only offered and only applied on that site, and each enrolled site gets its own "Site instructions" note in Settings that the agent follows when you are on that site
