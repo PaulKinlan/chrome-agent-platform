@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.246] — 2026-09-05
+- Resetting site access closes its open approval card
+
 ## [0.3.245] — 2026-09-05
 - Resetting site tool decisions cancels pending approvals
 

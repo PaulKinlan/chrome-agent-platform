@@ -267,6 +267,14 @@ Deno.test("first-use consent SW wiring: exact state drives availability, guard, 
   assert(sw.includes('async "webmcp.consent.tool.set"'));
   assert(sw.includes("requireSettingsSender(context)"));
   assert(sw.includes('const affected = states.filter((state) => resetMode === "all" || state.state !== "denied");'));
+  assert(sw.includes("if (pending?.origin !== canonical) continue;"));
+  assert(sw.includes("pending.cancelled = true;"));
+  assert(sw.includes("cancelPendingApproval("));
+  assert(
+    sw.indexOf("const decisionWait = waitForApprovalDecision(ownerApprovalStore, pending.approvalId);") <
+      sw.indexOf("await context.onApprovalEvent({"),
+    "the cancellation waiter exists before the card is published",
+  );
   assert(!sw.includes("if (affected.length) await invalidateSiteToolWork(canonical);"));
   assert(!sw.includes("if (enrolled) return true;"), "enrollment blanket approval is gone");
   assertEquals((await listTools("https://consent-a.example.com")).length, 1);

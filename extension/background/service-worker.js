@@ -886,6 +886,7 @@ import {
   canonicalRecord,
   canonicalScalar,
   bindModelApprovalDispatcher,
+  cancelPendingApproval,
   cancelPendingApprovalsForRun,
   consumeApproved,
   approvalCardDenial,
@@ -1447,6 +1448,9 @@ const MAX_RUN_ATTESTATIONS = 100;
 // WeakSet makes an object copied from a request body useless even if every
 // visible field happens to match.
 const trustedSiteToolAuthorizations = new WeakSet();
+// revision-bound key → mutable { origin, executionId, approvalId, cancelled,
+// promise }. The record exists before the approval row does, so a Settings
+// reset can fence work even while its required audit write is still queued.
 const pendingSiteToolConsent = new Map();
 const cancellingApprovalExecutions = new Set();
 let siteToolProfileEpoch = 0;
@@ -1676,6 +1680,20 @@ function abortWorker(origin) {
 async function invalidateSiteToolWork(origin) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return;
+  // The origin worker does not own a first-use card that is still paused in
+  // its parent model run. Settle that exact approval separately and
+  // synchronously; revision fencing still protects a click racing this loop.
+  for (const pending of pendingSiteToolConsent.values()) {
+    if (pending?.origin !== canonical) continue;
+    pending.cancelled = true;
+    if (pending.approvalId) {
+      cancelPendingApproval(
+        ownerApprovalStore,
+        pending.approvalId,
+        "site tool consent changed — invocation cancelled",
+      );
+    }
+  }
   abortWorker(canonical);
   // MAIN-world calls already inside page code cannot be undone, but the
   // immutable cancel epoch prevents their result from crossing back. Calls
@@ -4731,7 +4749,12 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
       resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
       return { ok: false, error: "Owner approval was required but no originating conversation could show it." };
     }
+    // Register the waiter BEFORE exposing the card. A synchronous revocation
+    // during card publication can then settle cancellation durably instead of
+    // racing a waiter that does not exist yet.
+    const decisionWait = waitForApprovalDecision(ownerApprovalStore, pending.approvalId);
     try {
+      context.onApprovalPending?.(pending.approvalId);
       await context.onApprovalEvent({
         type: "approval-request",
         approvalId: pending.approvalId,
@@ -4742,9 +4765,10 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
       });
     } catch {
       resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
+      await decisionWait;
       return { ok: false, error: "Owner approval could not be shown in the originating conversation." };
     }
-    const decision = await waitForApprovalDecision(ownerApprovalStore, pending.approvalId);
+    const decision = await decisionWait;
     if (decision.decision === "approved") {
       const exact = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
       if (exact.ok) {
@@ -4811,7 +4835,15 @@ async function requestSiteToolFirstUse(context, canonical, tool, consent, argDig
   const pendingKey = `${target}\u0000${consent.identityDigest}\u0000${consent.enrollmentGen}\u0000${consent.revision}`;
   let pending = pendingSiteToolConsent.get(pendingKey);
   if (!pending) {
-    pending = (async () => {
+    pending = {
+      origin: canonical,
+      executionId: context.executionId,
+      approvalId: null,
+      cancelled: false,
+      promise: null,
+    };
+    const entry = pending;
+    entry.promise = (async () => {
       if (!profileIsCurrent()) return { ok: false, reason: "authority-changed", error: "the browser profile was reset" };
       if (consent.recordRevision > 0) {
         await appendRequiredSiteToolAudit(auditRecordFor(consent, {
@@ -4847,7 +4879,19 @@ async function requestSiteToolFirstUse(context, canonical, tool, consent, argDig
         return { ok: false, error: "this site tool is not approvable" };
       }
       const decision = await requireOwnerApproval(
-        context,
+        {
+          ...context,
+          onApprovalPending(approvalId) {
+            entry.approvalId = approvalId;
+            if (entry.cancelled) {
+              cancelPendingApproval(
+                ownerApprovalStore,
+                approvalId,
+                "site tool consent changed — invocation cancelled",
+              );
+            }
+          },
+        },
         "webmcp.use-tool",
         target,
         payload,
@@ -4930,15 +4974,24 @@ async function requestSiteToolFirstUse(context, canonical, tool, consent, argDig
       }
       const denied = decision.approvalDenied === true;
       const expired = decision.approvalExpired === true;
+      const cancelled = decision.approvalCancelled === true;
       await appendRequiredSiteToolAudit(auditRecordFor(consent, {
-        event: "consent-decided",
-        direction: denied ? "owner-to-agent" : "agent-to-owner",
-        actor: denied ? "owner" : "agent",
-        outcome: denied ? "denied" : expired ? "expired" : "unavailable",
-        reason: denied ? "owner-denied" : expired ? "owner-expired" : "no-owner-channel",
+        event: cancelled ? "consent-invalidated" : "consent-decided",
+        direction: cancelled ? "settings-to-agent" : denied ? "owner-to-agent" : "agent-to-owner",
+        actor: cancelled ? "system" : denied ? "owner" : "agent",
+        outcome: cancelled ? "revoked" : denied ? "denied" : expired ? "expired" : "unavailable",
+        reason: cancelled ? "authority-changed" : denied ? "owner-denied" : expired ? "owner-expired" : "no-owner-channel",
         context,
         argDigest,
       }));
+      if (cancelled) {
+        return {
+          ok: false,
+          approvalCancelled: true,
+          reason: "authority-changed",
+          error: "site tool consent changed while approval was pending",
+        };
+      }
       if (denied) {
         try {
           if (!profileIsCurrent()) throw new Error("site_tool_profile_reset");
@@ -4987,10 +5040,14 @@ async function requestSiteToolFirstUse(context, canonical, tool, consent, argDig
         reason: expired ? "owner-approval-expired" : "owner-approval-channel-missing",
         error: decision.error ?? "the site tool was not allowed",
       };
-    })().finally(() => pendingSiteToolConsent.delete(pendingKey));
-    pendingSiteToolConsent.set(pendingKey, pending);
+    })().finally(() => {
+      if (pendingSiteToolConsent.get(pendingKey) === entry) {
+        pendingSiteToolConsent.delete(pendingKey);
+      }
+    });
+    pendingSiteToolConsent.set(pendingKey, entry);
   }
-  const result = await pending;
+  const result = await pending.promise;
   if (result?.ok && !activeExecutions.has(context.executionId)) {
     return { ok: false, reason: "run-not-live", error: "the model run ended before site tool consent settled" };
   }

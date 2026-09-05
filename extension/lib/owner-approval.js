@@ -540,14 +540,21 @@ export function createPendingApproval(store, runId, action, target, digest, ttlM
   return { ok: true, approvalId, deduped: false, status: "pending" };
 }
 
+export function cancelPendingApproval(store, approvalId, error = "run cancelled before approval") {
+  if (!store?.approvals || typeof approvalId !== "string" || !approvalId) return false;
+  const entry = store.approvals.get(approvalId);
+  if (!entry) return false;
+  removeApproval(store, approvalId, entry);
+  settleWaiters(store, approvalId, { ok: false, decision: "cancelled", error });
+  return true;
+}
+
 export function cancelPendingApprovalsForRun(store, runId, error = "run cancelled before approval") {
   if (!store?.approvals || typeof runId !== "string" || !runId) return 0;
   let cancelled = 0;
   for (const [approvalId, entry] of [...store.approvals]) {
     if (entry.runId !== runId) continue;
-    removeApproval(store, approvalId, entry);
-    settleWaiters(store, approvalId, { ok: false, decision: "cancelled", error });
-    cancelled++;
+    if (cancelPendingApproval(store, approvalId, error)) cancelled++;
   }
   return cancelled;
 }

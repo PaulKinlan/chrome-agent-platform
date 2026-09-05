@@ -9,6 +9,7 @@ import {
   approvalCardDenial,
   approvalPendingCount,
   bindModelApprovalDispatcher,
+  cancelPendingApproval,
   cancelPendingApprovalsForRun,
   canonicalArray,
   canonicalBinary,
@@ -281,6 +282,22 @@ Deno.test("run cancellation settles its outstanding card without turning cancell
   });
   assertEquals(resolvePendingApproval(store, pending.approvalId, true).ok, false, "late Allow has no approval row to resolve");
   assertEquals(approvalPendingCount(store), 0);
+});
+
+Deno.test("exact approval cancellation settles only its waiter, even beside another card in the same run", async () => {
+  const store = createApprovalStore();
+  const first = createPendingApproval(store, "exec:shared", "webmcp.use-tool", target, "a".repeat(64));
+  const second = createPendingApproval(store, "exec:shared", "webmcp.use-tool", target, "b".repeat(64));
+  const firstDecision = waitForApprovalDecision(store, first.approvalId);
+  assertEquals(cancelPendingApproval(store, first.approvalId, "site consent reset"), true);
+  assertEquals(await firstDecision, {
+    ok: false,
+    decision: "cancelled",
+    error: "site consent reset",
+  });
+  assertEquals(approvalPendingCount(store), 1, "the sibling approval remains pending");
+  assertEquals(resolvePendingApproval(store, second.approvalId, false).decision, "denied");
+  assertEquals(cancelPendingApproval(store, first.approvalId), false, "the cancellation is one-shot");
 });
 
 Deno.test("approval grants bind run/action/target/digest, expire, and consume exactly once", async () => {
