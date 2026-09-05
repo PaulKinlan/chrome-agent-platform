@@ -1,38 +1,5 @@
 # Changelog
 
-## [0.3.190] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.189] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.188] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.187] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.186] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.185] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.184] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.183] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.182] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.181] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.180] — 2026-09-05
-- Maintenance and fixes.
-
 ## [0.3.179] — 2026-09-05
 - Maintenance and fixes.
 
