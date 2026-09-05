@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.189] — 2026-09-05
-- Maintenance and fixes.
+- Table previews safely display special characters and tags as plain text, and format canonical column headers and types.
 
 ## [0.3.188] — 2026-09-05
 - Maintenance and fixes.

@@ -3430,10 +3430,18 @@ function normalizeTableInput(input) {
     if (Array.isArray(parsed.columns) && Array.isArray(parsed.rows)) {
       const columns = parsed.columns.map((c, idx) => {
         if (typeof c === "string") return { id: `c${idx + 1}`, name: c, type: "string" };
+        let typeStr = "string";
+        if (c.type && typeof c.type === "object") {
+          typeStr = c.type.kind === "decimal" && typeof c.type.scale === "number"
+            ? `decimal(${c.type.scale})`
+            : String(c.type.kind ?? "string");
+        } else if (c.type != null) {
+          typeStr = String(c.type);
+        }
         return {
           id: c.id ?? `c${idx + 1}`,
-          name: String(c.name ?? c.id ?? `col_${idx + 1}`),
-          type: String(c.type ?? "string"),
+          name: String(c.header ?? c.name ?? c.id ?? `col_${idx + 1}`),
+          type: typeStr,
         };
       });
       return { columns, rows: parsed.rows };

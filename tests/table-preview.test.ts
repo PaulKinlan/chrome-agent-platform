@@ -212,3 +212,109 @@ Deno.test("table-preview: custom element registration and structural accessibili
   assertStringIncludes(componentsSrc, 'const isTable = a.type === "table" || a.type === "cap.table/1"');
   assertStringIncludes(componentsSrc, 'document.createElement("table-preview")');
 });
+
+Deno.test("table-preview: canonical cap.table/1 columns with {id, header, type: {kind, scale?}} format correctly", () => {
+  const canonical = {
+    version: "cap.table/1",
+    localeProfile: "canonical-v1",
+    columns: [
+      { id: "c1", header: "Transaction ID", type: { kind: "text" } },
+      { id: "c2", header: "Amount", type: { kind: "decimal", scale: 2 } },
+      { id: "c3", header: "Count", type: { kind: "int64" } },
+      { id: "c4", header: "Settled", type: { kind: "boolean" } },
+    ],
+    rows: [
+      ["tx_1001", "49.99", "10", true],
+      ["tx_1002", "150.00", "3", false],
+    ],
+  };
+
+  const model = buildTablePreviewModel(canonical);
+  assertEquals(model.columns.length, 4);
+
+  // Column headers must use canonical .header (not fall back to .id like "c1")
+  assertEquals(model.columns[0].name, "Transaction ID");
+  assertEquals(model.columns[1].name, "Amount");
+  assertEquals(model.columns[2].name, "Count");
+  assertEquals(model.columns[3].name, "Settled");
+
+  // Column types must format type.kind (not "[object Object]")
+  assertEquals(model.columns[0].type, "text");
+  assertEquals(model.columns[1].type, "decimal(2)");
+  assertEquals(model.columns[2].type, "int64");
+  assertEquals(model.columns[3].type, "boolean");
+});
+
+Deno.test("table-preview (R1 / ar1y): cell content and headers render escaped against XSS injection", () => {
+  const TablePreviewCls = registry.get("table-preview");
+  assert(TablePreviewCls !== undefined);
+
+  // 1. Canonical cap.table/1 with hostile tags and attribute breakouts
+  const hostileTable = {
+    schema: "cap.table/1",
+    columns: [
+      { id: "c1", name: "<script>alert('header-xss')</script>", type: '"><script>alert("type-xss")</script>' },
+      { id: "c2", name: 'Col" onmouseover="alert(1)', type: "string" },
+    ],
+    rows: [
+      ["<img src=x onerror=window.__xssPwned=true>", "<svg onload=alert(1)>"],
+      ["' onclick='alert(1)", '"><b>injected</b>'],
+    ],
+  };
+
+  const el = Object.create(TablePreviewCls.prototype);
+  el._attrs = new Map([["name", "<script>alert('caption')</script>"]]);
+  el.getAttribute = (k) => el._attrs.get(k) ?? null;
+  el._data = hostileTable;
+  el._page = 1;
+  el._root = {
+    innerHTML: "",
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+
+  el._render();
+  const markup = String(el._root.innerHTML);
+
+  // Assert malicious markup tags are strictly escaped and never present in raw form
+  assert(!markup.includes("<script>"), "raw <script> tag must not exist in output");
+  assert(!markup.includes("<img"), "raw <img> tag must not exist in output");
+  assert(!markup.includes("<svg"), "raw <svg> tag must not exist in output");
+  assert(!markup.includes("<b>injected</b>"), "raw <b> element must not be injected");
+
+  // Assert attribute breakout is prevented: quotes are escaped so attributes cannot break out of title="..."
+  assert(!/title="[^"]*"\s+onmouseover=/i.test(markup), "onmouseover attribute breakout must be prevented");
+  assert(!/title="[^"]*"\s+onclick=/i.test(markup), "onclick attribute breakout must be prevented");
+  assert(!/title="[^"]*"\s+onerror=/i.test(markup), "onerror attribute breakout must be prevented");
+  assert(!/title="[^"]*"\s+onload=/i.test(markup), "onload attribute breakout must be prevented");
+
+  // Assert escaped representations are present
+  assertStringIncludes(markup, "&lt;script&gt;alert(&#39;header-xss&#39;)&lt;/script&gt;");
+  assertStringIncludes(markup, "&lt;script&gt;alert(&quot;type-xss&quot;)&lt;/script&gt;");
+  assertStringIncludes(markup, "&lt;img src=x onerror=window.__xssPwned=true&gt;");
+  assertStringIncludes(markup, "&lt;svg onload=alert(1)&gt;");
+  assertStringIncludes(markup, "&lt;b&gt;injected&lt;/b&gt;");
+  assertStringIncludes(markup, "&lt;script&gt;alert(&#39;caption&#39;)&lt;/script&gt;");
+
+  // 2. CSV input with hostile HTML injection
+  const hostileCsv = 'Col1,Col2\n"<img src=x onerror=alert(2)>","<script>alert(3)</script>"\n';
+  el._data = hostileCsv;
+  el._render();
+  const csvMarkup = String(el._root.innerHTML);
+  assert(!csvMarkup.includes("<img"), "raw <img> tag must not exist in CSV preview output");
+  assert(!csvMarkup.includes("<script>"), "raw <script> tag must not exist in CSV preview output");
+  assertStringIncludes(csvMarkup, "&lt;img src=x onerror=alert(2)&gt;");
+  assertStringIncludes(csvMarkup, "&lt;script&gt;alert(3)&lt;/script&gt;");
+
+  // 3. Array of objects with hostile key names and values
+  const hostileObjs = [
+    { '<iframe src="javascript:alert(4)">': '"><script>alert(5)</script>' },
+  ];
+  el._data = hostileObjs;
+  el._render();
+  const objMarkup = String(el._root.innerHTML);
+  assert(!objMarkup.includes("<iframe"), "raw <iframe> tag must not exist in object preview output");
+  assert(!objMarkup.includes("<script>"), "raw <script> tag must not exist in object preview output");
+  assertStringIncludes(objMarkup, "&lt;iframe src=&quot;javascript:alert(4)&quot;&gt;");
+  assertStringIncludes(objMarkup, "&lt;script&gt;alert(5)&lt;/script&gt;");
+});
