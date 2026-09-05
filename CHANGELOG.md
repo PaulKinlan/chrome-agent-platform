@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.217] — 2026-09-05
+- Maintenance and fixes.
+
 ## [0.3.216] — 2026-09-05
 - Add private local spreadsheet tools
 
