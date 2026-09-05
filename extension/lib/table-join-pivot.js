@@ -87,12 +87,15 @@
 // key-cell hash/comparison or one emitted cell): join charges the key-pair
 // count per scanned key-pass row (left and right: each key cell of each row
 // is hashed once) plus the output width per emitted row (every emitted cell,
-// null padding included). Pivot charges one per discovery input row (group
-// visit), the metric count per aggregation input row (category/metric
-// aggregate visits), and the output width per emitted group row (emitted
-// cells). The multiplicity/discovery passes are row/cell-bounded by
-// construction and are not separately charged. maxWorkUnits stays a coarse
-// backstop that the output bounds outrun.
+// null padding included). Pivot charges rowGroupBy.length + 1 per discovery
+// input row (one hash/visit for EACH group-key cell plus one pivot-category
+// cell comparison), the metric count per aggregation input row (every metric
+// aggregate visit), and the output width per emitted group row (every emitted
+// cell). The multiplicity/index passes are row/cell-bounded by construction
+// and are not separately charged. maxWorkUnits stays a coarse backstop that
+// the output bounds outrun: the pivot's known output work (groups × width) is
+// preflighted against maxCells before aggregation, so emission can never
+// exceed it.
 
 import {
   TABLE_LIMITS,
@@ -584,7 +587,10 @@ export function pivotTable(tableInput, request) {
   const groups = [];
   const groupByKey = new Map();
   for (const row of table.rows) {
-    budget.work();
+    // One unit per group-key cell hash/visit plus one for the pivot-category
+    // cell comparison — exactly rowGroupBy.length + 1 per input row (a
+    // [] rowGroupBy still pays the single category visit).
+    budget.work(groupPos.length + 1);
     const categoryValue = row[pivotPos];
     if (!categorySet.has(categoryValue)) fail("table_category_unknown", String(categoryValue));
     const groupKey = JSON.stringify(groupPos.map((pos) => [table.columns[pos].type.kind, row[pos]]));

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.222] — 2026-09-05
+- Charge pivot work units for each row-group key cell plus the category visit
+
 ## [0.3.221] — 2026-09-05
 - chrome-agent-platform-def.2 r8: dense ID-string join projections + cell-level work units
 

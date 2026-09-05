@@ -22,8 +22,10 @@
 //   * workUnits follow the toolkit unit definition (a unit is one key-cell
 //     hash/comparison or one emitted cell): join charges the key-pair count
 //     per scanned key-pass row plus the output width per emitted row; pivot
-//     charges one per discovery input row plus the metric count per
-//     aggregation input row plus the output width per emitted group row.
+//     charges rowGroupBy.length + 1 per discovery input row (each group-key
+//     cell hash plus the pivot-category cell comparison) plus the metric
+//     count per aggregation input row plus the output width per emitted
+//     group row.
 //   * pivot request { rowGroupBy ([] allowed), pivotColumn, categories,
 //     metrics } with ops count_rows | count_values | sum | avg | min | max;
 //     category and metric headers are REQUIRED; avg requires an explicit
@@ -1441,13 +1443,80 @@ Deno.test("def2 r8 pivot: decimal categories must be canonical strict-core cells
 });
 
 Deno.test("def2 r8 pivot: work units equal input visits plus emitted cells", () => {
-  // 6 discovery input rows (group visits) + 6 rows × 6 metrics (aggregation
-  // visits) + 2 group rows × 13 emitted cells (1 group column + 2 categories
-  // × 6 metrics) = 6 + 36 + 26 = 68.
-  assertEquals(pivotTable(PIVOT_DATA, pivotRequest).workUnits, 68);
-  // Whole-table pivot of the same data: 6 + 36 + 1 group × 12 cells (2
-  // categories × 6 metrics, no group column).
+  // 6 discovery input rows × (1 rowGroupBy cell + 1 category visit) + 6 rows
+  // × 6 metrics (aggregation visits) + 2 group rows × 13 emitted cells (1
+  // group column + 2 categories × 6 metrics) = 12 + 36 + 26 = 74.
+  assertEquals(pivotTable(PIVOT_DATA, pivotRequest).workUnits, 74);
+  // Whole-table pivot of the same data: [] rowGroupBy charges only the
+  // category visit per row, so 6 × 1 + 36 + 1 group × 12 cells (2 categories
+  // × 6 metrics, no group column) = 6 + 36 + 12 = 54.
   assertEquals(pivotTable(PIVOT_DATA, { ...pivotRequest, rowGroupBy: [] }).workUnits, 54);
+});
+
+Deno.test("def2 r8 pivot: work units charge every group-key cell, the category visit, every metric visit and every emitted cell", () => {
+  // The known cross-slice sample: 3 input rows, ONE rowGroupBy column, two
+  // metrics, two categories → 2 output groups × 5 output columns (1 group
+  // cell + 2 categories × 2 metric cells). Exact accounting:
+  //   discovery:    3 rows × (1 group-key cell hash + 1 pivot-category cell
+  //                 comparison)          = 6
+  //   aggregation:  3 rows × 2 metric visits = 6
+  //   emission:     2 groups × 5 emitted cells = 10
+  //   total = 22. (A discovery pass charging one unit per row returns 19.)
+  const cross = table([
+    { header: "g", type: { kind: "text" } },
+    { header: "p", type: { kind: "text" } },
+    { header: "v", type: { kind: "int64" } },
+  ], [
+    ["g1", "A", "1"],
+    ["g1", "B", "2"],
+    ["g2", "A", "3"],
+  ]);
+  const crossRequest = {
+    rowGroupBy: ["c1"],
+    pivotColumn: "c2",
+    categories: [{ value: "A", header: "Alpha" }, { value: "B", header: "Beta" }],
+    metrics: [
+      { op: "count_rows", header: "Rows" },
+      { op: "sum", column: "c3", header: "Total" },
+    ],
+  };
+  const crossOut = canonical(pivotTable(cross, crossRequest));
+  assertEquals(crossOut.table.rows.length, 2);
+  assertEquals(crossOut.table.columns.length, 5);
+  assertEquals(crossOut.workUnits, 22);
+
+  // TWO rowGroupBy columns: discovery must charge each group-key cell, so
+  // 4 rows × (2 key cells + 1 category visit) — a per-row discovery unit can
+  // never reproduce this. Exact accounting:
+  //   discovery:    4 rows × (2 + 1)       = 12
+  //   aggregation:  4 rows × 2 metric visits = 8
+  //   emission:     2 groups × (2 group cells + 2 categories × 2 metric
+  //                 cells) = 2 × 6          = 12
+  //   total = 32.
+  const multi = table([
+    { header: "g", type: { kind: "text" } },
+    { header: "h", type: { kind: "text" } },
+    { header: "p", type: { kind: "text" } },
+    { header: "v", type: { kind: "int64" } },
+  ], [
+    ["a", "x", "A", "1"],
+    ["a", "x", "A", "2"],
+    ["b", "y", "A", "3"],
+    ["b", "y", "B", "4"],
+  ]);
+  const multiRequest = {
+    rowGroupBy: ["c1", "c2"],
+    pivotColumn: "c3",
+    categories: [{ value: "A", header: "Alpha" }, { value: "B", header: "Beta" }],
+    metrics: [
+      { op: "count_rows", header: "Rows" },
+      { op: "sum", column: "c4", header: "Total" },
+    ],
+  };
+  const multiOut = canonical(pivotTable(multi, multiRequest));
+  assertEquals(multiOut.table.rows.length, 2);
+  assertEquals(multiOut.table.columns.length, 6);
+  assertEquals(multiOut.workUnits, 32);
 });
 
 // ---------------------------------------------------------------------------
