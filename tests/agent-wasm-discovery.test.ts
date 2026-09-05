@@ -82,7 +82,11 @@ Deno.test("list_tools: category filter returns only the requested category", asy
 });
 
 Deno.test("list_tools: returns every complete descriptor without the retired 32 KiB truncation cap", async () => {
-  const bundledRecords = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+  const overRetiredCapMarker = "complete-description-proof:" + "x".repeat(8192);
+  const overCapRows = BUNDLED_TOOL_PACKAGE_ROWS.map((row) => row.toolId === "wc"
+    ? { ...row, description: `${row.description} ${overRetiredCapMarker}` }
+    : row);
+  const bundledRecords = executableBundledToolRecords(overCapRows, {
     scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
   });
@@ -104,8 +108,10 @@ Deno.test("list_tools: returns every complete descriptor without the retired 32 
   assertEquals(result.ok, true);
   assertEquals(result.truncated, false);
   assertEquals(result.tools["bundled-wasm"].length, 31);
-  const jsonBytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
+  const serialized = JSON.stringify(result);
+  const jsonBytes = new TextEncoder().encode(serialized).byteLength;
   assert(jsonBytes > 32 * 1024, `fixture must falsify the retired 32 KiB cap (${jsonBytes} bytes)`);
+  assert(serialized.includes(overRetiredCapMarker), "the over-cap descriptor description returns complete");
 });
 
 Deno.test("master-skill: operating manual truthfully includes list_tools and the 31 bundled Wasm tools", () => {
