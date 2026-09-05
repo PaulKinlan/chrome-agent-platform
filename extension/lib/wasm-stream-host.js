@@ -2,7 +2,7 @@
 // revalidates the shipped manifest/CAS, then gives one fresh Worker only opaque
 // OPFS references plus the audited executable bytes.
 
-import { isStreamBackedBundledTool, previewSpecFor, previewWasiArgs, revalidatePreviewExecution } from "./tool-exec-preview.js";
+import { isStreamBackedBundledTool, previewSpecFor, previewStdoutEncoding, previewWasiArgs, revalidatePreviewExecution } from "./tool-exec-preview.js";
 import { createWasiJob } from "./wasm-host-types.js";
 import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 import { validateAuthorityRecord } from "./wasm-executor.js";
@@ -82,7 +82,7 @@ export async function executeWasmStreamRequest(raw, {
     args: previewWasiArgs(request.toolId, request.args),
     stdin: new Uint8Array(0),
     acceptedExitCodes: request.spec.acceptedExitCodes,
-    stdoutEncoding: request.spec.stdoutEncoding,
+    stdoutEncoding: previewStdoutEncoding(request.toolId, request.args),
     workspaceSeed: request.spec.workspaceSeed,
     quota: {
       hostCalls: Number.POSITIVE_INFINITY,

@@ -85,12 +85,36 @@ Deno.test("stream host revalidates shipped assets and posts canonical jq argv to
     });
     assert(result.ok, result.error);
     equal(posted.job.args, ["jq", "-M", "-c", "."], "file-backed stdout defaults jq to monochrome");
+    equal(posted.job.stdoutEncoding, "utf8");
     equal(posted.inputRef.kind, "input");
     equal(posted.outputRef.kind, "stdout");
     assert(posted.wasmBytes instanceof Uint8Array && posted.wasmBytes.byteLength > 500_000,
       "exact admitted jq CAS bytes reach the worker");
     equal(transferred.length, 1);
     assert(terminated >= 1, "fresh worker is terminated after settlement");
+  } finally {
+    globalThis.chrome = realChrome;
+    globalThis.fetch = realFetch;
+  }
+});
+
+Deno.test("stream host carries base64 decode's binary mode into the worker job", async () => {
+  globalThis.chrome = { runtime };
+  globalThis.fetch = fileFetch;
+  let posted = null;
+  class FakeWorker {
+    postMessage(message) {
+      posted = message;
+      queueMicrotask(() => this.onmessage({ data: validResult(message) }));
+    }
+    terminate() {}
+  }
+  try {
+    const result = await executeWasmStreamRequest(request("base64", ["-d"]), {
+      createWorker: () => new FakeWorker(), wallMs: 1000,
+    });
+    assert(result.ok, result.error);
+    equal(posted.job.stdoutEncoding, "base64");
   } finally {
     globalThis.chrome = realChrome;
     globalThis.fetch = realFetch;

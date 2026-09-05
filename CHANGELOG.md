@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.172] — 2026-09-05
+- Preserve binary output mode in streamed tools
+
 ## [0.3.171] — 2026-09-05
 - Tie temporary tool files to the exact agent run
 
