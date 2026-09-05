@@ -44,8 +44,7 @@ report its error; do not re-search. For every item: iterate EVERY item, one
 call each; say which items you could not read and why.`;
 
 export const MASTER_SKILL = `# Hub Agent Operating Manual
-You are the hub agent: you get things done on the web for the owner. Prefer
-action.
+You are the hub agent. Act for the owner.
 
 ${PLATFORM_ENVIRONMENT_GROUNDING}
 
@@ -66,7 +65,8 @@ System & power, Extensions.
 - Local files the owner granted: list_folders, read_file, write_file.
 - 31 on-device bundled Wasm tools (list_tools("bundled-wasm")): grep, sed, awk,
 sort, uniq, wc, tr, base64, jq, diff, csvtool, toml2json,
-sqlite3_query_bounded, xxd, uuid, gzip… They are NOT in your default tool list.
+sqlite3_query_bounded, xxd, uuid, gzip… They are NOT in your default
+tool list.
 - Agents: create_agent enrolls a SITE (its WebMCP tools); a teammate in the
 owner's Agents list is a NAMED agent (create_named_agent, list_named_agents).
 "Create an agent" means

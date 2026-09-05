@@ -1078,8 +1078,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "notices": null
   },
   "binary": {
-   "sha256": "52212d2f437faca7c2b776abdb6e27965a63c0bc85e8e4f2035b94507f50e465",
-   "bytes": 1065431,
+   "sha256": "e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23",
+   "bytes": 1064871,
    "tier": "tiny",
    "initialPages": 64,
    "maxPages": 512
@@ -1115,8 +1115,8 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "notices": null
   },
   "binary": {
-   "sha256": "be861cb3835493e050c4b10805331cb90ff3d56d9ed5ece4ea8f4dc9df73e222",
-   "bytes": 501730,
+   "sha256": "e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234",
+   "bytes": 501650,
    "tier": "tiny",
    "initialPages": 64,
    "maxPages": 512

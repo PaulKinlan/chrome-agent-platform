@@ -169,7 +169,7 @@ function cdxBytes(name, version, license, components) {
 
 const NEW_SOURCE = {
   repo: "https://github.com/PaulKinlan/chrome-agent-platform",
-  commit: "b58721e5aa7b1d93510e542bad897ffb57462229",
+  commit: "8d55e82e2f6e1dcd62684632e53d290419b40414",
 };
 const STREAM_EXPECT = Object.freeze({
   base64: ["20d6324f4925ee8263322bb74eb818861f13fbd0d4ce080b13c2140b213232cf", 15346],
@@ -284,8 +284,8 @@ for (const [toolId, lane] of [["awk_filter_bounded", "awk"], ["date_formatter_bo
 }
 { // Canonical awk: upstream posixutils-rs parser/interpreter with a WASI adaptation.
   const bytes = readFileSync(join(PATHS.awkFull, "binaries/awk.wasm"));
-  if (sha256(bytes) !== "52212d2f437faca7c2b776abdb6e27965a63c0bc85e8e4f2035b94507f50e465" ||
-      bytes.byteLength !== 1065431) throw new Error("awk identity mismatch");
+  if (sha256(bytes) !== "e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23" ||
+      bytes.byteLength !== 1064871) throw new Error("awk identity mismatch");
   packages.push({
     toolId: "awk", lane: "awk-posixutils-v1", version: "1.0.0", bytes, row: null,
     spdx: "MIT", licenseFile: "extension/wasm/licenses/posixutils-rs-MIT.txt", notices: null,
@@ -303,8 +303,8 @@ for (const [toolId, lane] of [["awk_filter_bounded", "awk"], ["date_formatter_bo
 { // Canonical jq 1.8.2, single-threaded WASI adaptation without Oniguruma.
   const bytes = readFileSync(join(PATHS.jq, "binaries/jq.wasm"));
   const rebuild = readFileSync(join(PATHS.jq, "metadata/rebuild-jq.wasm"));
-  if (sha256(bytes) !== "be861cb3835493e050c4b10805331cb90ff3d56d9ed5ece4ea8f4dc9df73e222" ||
-      bytes.byteLength !== 501730 || !bytes.equals(rebuild)) throw new Error("jq identity/rebuild mismatch");
+  if (sha256(bytes) !== "e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234" ||
+      bytes.byteLength !== 501650 || !bytes.equals(rebuild)) throw new Error("jq identity/rebuild mismatch");
   packages.push({
     toolId: "jq", lane: "jq", version: "1.0.0", bytes, row: null,
     spdx: "MIT", licenseFile: "extension/wasm/licenses/jq-MIT.txt", notices: null,

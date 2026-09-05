@@ -28,7 +28,7 @@ Deno.test("jq: the pinned sha256 is the real committed artifact", async () => {
   const bytes = await Deno.readFile("docs/admissions/jq-filter-bounded/binaries/jq.wasm");
   const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)))
     .map((b) => b.toString(16).padStart(2, "0")).join("");
-  assertEquals(digest, "be861cb3835493e050c4b10805331cb90ff3d56d9ed5ece4ea8f4dc9df73e222", "pinned sha256 matches");
+  assertEquals(digest, "e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234", "pinned sha256 matches");
 });
 
 Deno.test("jq: the spec contract separates stream size from finite execution resources", async () => {

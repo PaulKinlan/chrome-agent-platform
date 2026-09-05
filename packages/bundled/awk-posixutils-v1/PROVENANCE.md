@@ -6,7 +6,7 @@
 - **License:** MIT (`source/LICENSE`)
 - **Target:** `wasm32-wasip1`, WASI Preview 1
 - **Toolchain:** rustup stable Rust 1.97.1 for the recorded build
-- **Binary:** `binaries/awk.wasm`, 1,064,871 bytes, SHA-256 `e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23`; build and dependency paths are remapped, with no `/home/` or `/tmp/` path in the binary.
+- **Binary:** `binaries/awk.wasm`, 1,064,871 bytes, SHA-256 `e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23`; build and dependency paths are remapped, with no absolute build-host path in the binary.
 - **Memory declaration:** 64 initial pages, 512 maximum pages (4–32 MiB)
 
 ## Auditable WASI adaptation
