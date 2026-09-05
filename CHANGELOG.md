@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.213] — 2026-09-05
+- The production build stably verifies package integrity during developer build cycles.
+
 ## [0.3.212] — 2026-09-05
 - Add bounded table formulas
 
