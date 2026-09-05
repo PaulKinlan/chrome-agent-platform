@@ -108,14 +108,16 @@ export async function stageAssetAsWasmStream(asset, { owner, storage } = {}) {
   }
 
   // Reference-preserving transfer: if the asset is already backed by a sealed OPFS
-  // stream reference, chain it directly without reading or duplicating bytes.
+  // stream reference, revalidate the sealed stream and chain it directly without reading
+  // or duplicating bytes.
   if (asset.meta?.streamRef) {
-    const validated = validateStreamChaining(asset.meta.streamRef);
+    const streamOwner = asset.meta.streamOwner ?? owner;
+    const validated = await validateSealedWasmStream({ ref: asset.meta.streamRef, owner: streamOwner, storage });
     return Object.freeze({
       ok: true,
       inputRef: validated.ref,
       name: asset.name ?? "stream.bin",
-      bytes: asset.size ?? asset.meta.bytes ?? 0,
+      bytes: validated.bytes ?? asset.meta.streamBytes ?? asset.meta.bytes ?? asset.size ?? 0,
       chained: true,
     });
   }
@@ -198,10 +200,21 @@ export async function promoteWasmStreamToArtifact(outputRef, {
     });
   }
 
+  // Mark stream metadata as promoted so orphan GC never sweeps it
+  try {
+    const metaHandle = await validated.directory.getFileHandle("authority.json");
+    const metaObj = JSON.parse(await (await metaHandle.getFile()).text());
+    metaObj.promoted = true;
+    const metaWriter = await metaHandle.createWritable();
+    await metaWriter.write(JSON.stringify(metaObj));
+    await metaWriter.close();
+  } catch { /* best effort */ }
+
   // Reference-preserving artifact promotion: large or binary outputs must NEVER
   // be whole-buffered into JS strings or re-encoded as UTF-8. The artifact records
   // the bounded preview for UI display and retains the immutable, sealed OPFS stream
   // reference under meta.streamRef (zero-copy, binary-safe).
+  const isComplete = validated.bytes <= STREAM_PLATFORM_LIMITS.inlineThresholdBytes;
   const content = previewData.preview;
   const promotionKey = `stream-promo:${outputRef.id}`;
   const assetResult = await createAssetKeyed(origin, {
@@ -212,8 +225,13 @@ export async function promoteWasmStreamToArtifact(outputRef, {
     meta: {
       streamRef: outputRef,
       streamId: outputRef.id,
+      streamOwner: owner,
       bytes: validated.bytes,
       isStreamBacked: true,
+      fileBacked: true,
+      contentComplete: isComplete,
+      contentIncomplete: !isComplete,
+      streamBytes: validated.bytes,
     },
   });
 
@@ -275,6 +293,8 @@ export async function gcOrphanStreams({ maxAgeMs = 3600_000, storage } = {}) {
   let collected = 0;
   for (const entry of entries) {
     const meta = entry.meta;
+    // Promoted artifact streams are permanent — never sweep them!
+    if (meta?.promoted === true) continue;
     const createdAt = meta && Number.isSafeInteger(meta.createdAt) ? meta.createdAt : 0;
     const isOld = (now - createdAt) > maxAgeMs;
     if (!meta || (!meta.sealed && isOld)) {

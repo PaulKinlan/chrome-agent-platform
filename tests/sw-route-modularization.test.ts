@@ -265,6 +265,7 @@ const BASELINE_ROUTES = [
   "tool-stream.promote-output",
   "tool-stream.remove",
   "tool-stream.discard",
+  "tool-stream.tabular-transform",
   "observability.page-measures",
   "observability.setVerbosity",
   "diagnostics.report",

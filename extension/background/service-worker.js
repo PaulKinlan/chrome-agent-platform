@@ -306,6 +306,7 @@ import {
   stageAssetAsWasmStream,
   promoteWasmStreamToArtifact,
 } from "../lib/tool-stream-platform.js";
+import { streamTabularTransform } from "../lib/tool-tabular-contracts.js";
 import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
@@ -8959,6 +8960,13 @@ const handlers = mergeRouteMaps(
     }
     await discardWasmStream({ ref, owner });
     return { ok: true };
+  },
+  async "tool-stream.tabular-transform"({ inputRef, operations, outputFormat, delimiter, owner = "hub" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    const res = await streamTabularTransform(inputRef, { operations, outputFormat, delimiter, owner });
+    return res;
   },
   async "observability.setVerbosity"({ level } = {}) {
     try {

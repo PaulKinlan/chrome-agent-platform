@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.165] — 2026-09-05
+- feat(9tg): Milestone 3 — tabular & structured data contracts, def alignment, and stream promotion hardening
+
+## [0.3.164] — 2026-09-05
+- Tabular data contracts add streaming CSV and JSONL transformations with formula injection defenses
+
 ## [0.3.163] — 2026-09-05
 - reference-preserving artifact promotion and zero-copy asset stream transfer
 
