@@ -14,6 +14,7 @@ import {
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
+import { hydrateI18n } from "../shared/i18n.js";
 import { recipeAsTemplate } from "../lib/agent-templates.js";
 import {
   agentScheduleMarker,
@@ -3949,3 +3950,8 @@ function initBoardDenyUI() {
 if (typeof document !== "undefined" && document.getElementById("board-deny-list")) {
   initBoardDenyUI();
 }
+// Static Settings copy resolves through the catalogue (chrome.i18n →
+// embedded fallback); the markup keeps the English text as the no-JS fallback
+// and the catalogue values are byte-identical, so rendering is unchanged.
+hydrateI18n(document);
+

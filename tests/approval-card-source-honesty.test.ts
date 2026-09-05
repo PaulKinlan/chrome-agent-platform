@@ -90,10 +90,18 @@ Deno.test("ArtifactInspector component: renders honest preview notice and copy b
   assertStringIncludes(components, "const isFileBacked = a.meta?.fileBacked === true || a.meta?.isStreamBacked === true;");
   assertStringIncludes(components, "const isIncomplete = a.meta?.contentIncomplete === true || a.meta?.contentComplete === false;");
 
-  // Verifies honest button text and note message
-  assertStringIncludes(components, 'if (copyBtn) copyBtn.textContent = "Copy preview content";');
-  assertStringIncludes(components, 'Preview showing initial 64 KiB. Complete file is retained in OPFS stream');
+  // Verifies honest button text and note message — since the i18n foundation
+  // (chrome-agent-platform-54q) these strings resolve through the catalogue;
+  // the pin asserts the component uses the catalogue keys AND that the
+  // catalogue values are still the honest, byte-identical user copy.
+  assertStringIncludes(components, 'copyBtn.textContent = t("components_copy_preview_content");');
+  assertStringIncludes(components, 't("components_preview_initial_note", String(totalBytes))');
+  const catalogue = JSON.parse(await Deno.readTextFile(
+    new URL("../extension/_locales/en/messages.json", import.meta.url).pathname,
+  ));
+  assertStringIncludes(catalogue.components_preview_initial_note.message, "Preview showing initial 64 KiB. Complete file is retained in OPFS stream");
 
   // Verifies honest copy status message
-  assertStringIncludes(components, "Copied preview content (file-backed stream in OPFS).");
+  assertStringIncludes(components, 't("components_copied_preview")');
+  assertEquals(catalogue.components_copied_preview.message, "Copied preview content (file-backed stream in OPFS).");
 });

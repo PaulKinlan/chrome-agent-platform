@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Settings — Chrome Agent Platform</title>
+    <title data-i18n="options_settings_chrome_agent_platform">Settings — Chrome Agent Platform</title>
     <link rel="icon" href="../icons/icon16.png">
     <script src="../shared/embedded-boot.js"></script>
     <link rel="stylesheet" href="../shared/theme.css">
@@ -13,62 +13,62 @@
   <body>
     <div class="options-shell">
       <aside class="side" aria-label="Settings navigation">
-      <div class="brand">Chrome <span>Agent</span> Platform</div>
+      <div class="brand" data-i18n="options_chrome">Chrome <span data-i18n="options_agent">Agent</span data-i18n="options_platform"> Platform</div>
       <nav>
         <a href="#providers" class="nav-item" data-section="providers">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 0 0-10 10c0 5.5 4.5 10 10 10s10-4.5 10-10A10 10 0 0 0 12 2z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 0 0-10 10c0 5.5 4.5 10 10 10s10-4.5 10-10A10 10 0 0 0 12 2z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg data-i18n="options_providers">
         Providers</a>
         <a href="#mcp-servers" class="nav-item" data-section="mcp-servers">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg data-i18n="options_mcp_servers">
         MCP servers</a>
         <a href="#local-folders" class="nav-item" data-section="local-folders">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg data-i18n="options_local_folders">
         Local folders</a>
         <a href="#tool-library" class="nav-item" data-section="tool-library" data-developer="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg data-i18n="options_tool_library">
         Tool library</a>
         <a href="#agents" class="nav-item" data-section="agents">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg data-i18n="options_agents">
         Agents</a>
         <a href="#board-permissions" class="nav-item" data-section="board-permissions" data-developer="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" aria-hidden="true"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg data-i18n="options_board_permissions">
         Board permissions</a>
         <a href="#browser" class="nav-item" data-section="browser">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg data-i18n="options_browser_control">
         Browser control</a>
         <a href="#permissions" class="nav-item" data-section="permissions">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg data-i18n="options_permissions">
         Permissions</a>
         <a href="#skills" class="nav-item" data-section="skills">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2l2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.5-4.8 2.5.9-5.4L4.2 7.7l5.4-.8z"/></svg data-i18n="options_skills">
         Skills</a>
         <a href="#hooks" class="nav-item" data-section="hooks" data-developer="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg data-i18n="options_hooks">
         Hooks</a>
         <a href="#prompts" class="nav-item" data-section="prompts" data-developer="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg data-i18n="options_advanced">
         Advanced</a>
         <a href="#usage" class="nav-item" data-section="usage">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg data-i18n="options_usage">
         Usage</a>
         <a href="#data" class="nav-item" data-section="data">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg data-i18n="options_data_memory">
         Data & memory</a>
         <a href="#about" class="nav-item" data-section="about">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg data-i18n="options_about">
         About</a>
       </nav>
     </aside>
 
     <main class="content">
       <header class="head">
-        <h1>Settings</h1>
+        <h1 data-i18n="options_settings">Settings</h1>
         <p id="save-status" class="save-status" role="status"
-          aria-live="polite">Changes save automatically.</p>
+          aria-live="polite" data-i18n="options_changes_save_automatically">Changes save automatically.</p>
       </header>
 
       <section id="providers" class="panel active">
-        <h2>Providers</h2>
+        <h2 data-i18n="options_providers_1">Providers</h2>
         <p
           class="muted">Choose the model the hub agent uses. Pick a provider, paste your key, test it, and click Use. Your API key stays on this device only — never in the bundle or receipts. Logs are redacted unless you explicitly enable full local detail under Advanced.</p>
         <div id="provider-tabs" class="provider-tabs"></div>
@@ -77,24 +77,24 @@
         <div class="toggle-field" id="server-tools-card" data-developer="true">
           <switch-toggle id="server-tools-enabled" label="Provider server tools"></switch-toggle>
           <div class="toggle-text">
-            <span class="toggle-name">Provider server tools</span>
+            <span class="toggle-name" data-i18n="options_provider_server_tools">Provider server tools</span>
             <span class="muted">Let agents activate tools the provider executes inside the model call (no local code runs). Today: Google Search grounding (Gemini) and web search (Anthropic).
-              <strong>Cost:</strong> 5,000 free searches/mo shared (Gemini 3.x), then $14 per 1,000 searches — CAP shows estimates only; the provider's free-tier meter is not visible here.</span>
+              <strong data-i18n="options_cost">Cost:</strong> 5,000 free searches/mo shared (Gemini 3.x), then $14 per 1,000 searches — CAP shows estimates only; the provider's free-tier meter is not visible here.</span>
           </div>
         </div>
         <div id="server-tools-agents" class="server-tools-agents" hidden>
-          <h3>Agents that may use provider-run tools</h3>
+          <h3 data-i18n="options_agents_that_may_use_provider_run_tools">Agents that may use provider-run tools</h3>
           <p class="muted">Each enabled agent can run provider-side web searches during its tasks. Usage is billed by the provider; estimates appear below.</p>
           <div id="server-tools-agent-list"></div>
         </div>
       </section>
 
       <section id="mcp-servers" class="panel">
-        <h2>MCP servers</h2>
-        <p class="muted">Connect a remote <abbr title="Model Context Protocol">MCP</abbr> server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an <code>https://</code> URL. An auth token stays on this device only — never in the bundle, logs, or receipts — and is never shown again after you save it.</p>
+        <h2 data-i18n="options_mcp_servers_1">MCP servers</h2>
+        <p class="muted" data-i18n="options_connect_a_remote">Connect a remote <abbr title="Model Context Protocol">MCP</abbr> server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an <code>https://</code> URL. An auth token stays on this device only — never in the bundle, logs, or receipts — and is never shown again after you save it.</p>
         <div class="mcp-toolbar">
           <button type="button" class="btn primary" id="mcp-add-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg data-i18n="options_add_server">
             Add server
           </button>
         </div>
@@ -103,28 +103,28 @@
       </section>
 
       <section id="local-folders" class="panel">
-        <h2>Local folders & files</h2>
+        <h2 data-i18n="options_local_folders_files">Local folders & files</h2>
         <p class="muted">Manage persistent access to local directories and files granted to agents or tasks. Access is restricted to the specific folder or file subtree and can be revoked at any time.</p>
         
         <div class="local-folders-toolbar">
           <div class="toolbar-controls">
             <label class="field fs-mode-field">
-              <span class="field-label">Access Mode</span>
+              <span class="field-label" data-i18n="options_access_mode">Access Mode</span>
               <select id="fs-pick-mode" class="input-select">
-                <option value="read" selected>Read-only</option>
-                <option value="readwrite">Read/Write</option>
+                <option value="read" selected data-i18n="options_read_only">Read-only</option>
+                <option value="readwrite" data-i18n="options_read_write">Read/Write</option>
               </select>
             </label>
             <button type="button" class="btn primary" id="fs-add-directory-btn">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg data-i18n="options_add_folder">
               Add folder
             </button>
             <button type="button" class="btn" id="fs-add-file-btn">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg data-i18n="options_add_file">
               Add file
             </button>
           </div>
-          <div id="fs-picker-unsupported-notice" class="chip avail-disabled" style="display:none;">
+          <div id="fs-picker-unsupported-notice" class="chip avail-disabled" style="display:none;" data-i18n="options_file_system_access_api_is_unavailable_in_this_brow">
             File System Access API is unavailable in this browser environment
           </div>
         </div>
@@ -133,45 +133,45 @@
       </section>
 
       <section id="tool-library" class="panel" data-developer="true">
-        <h2>Tool library</h2>
+        <h2 data-i18n="options_tool_library_1">Tool library</h2>
         <p class="muted">Read-only diagnostics: the tools the platform can see, grouped by what they are for. Nothing here runs, installs, grants, updates, or removes tools.</p>
         <tool-library id="tool-library-view"></tool-library>
       </section>
 
       <section id="agents" class="panel">
-        <h2>Agents</h2>
+        <h2 data-i18n="options_agents_1">Agents</h2>
         <p class="muted">Interactive and scheduled agents live together here. The marker shows which agents run automatically; use each row to manage its persona, provider, schedule, or enabled state.</p>
         <div id="background-agent-add" class="background-agent-add"></div>
         <div id="unified-agent-list" class="unified-agent-list" aria-live="polite"></div>
         <div class="toggle-field">
           <switch-toggle id="multi-agent" label="Multiple agents"></switch-toggle>
           <div class="toggle-text">
-            <span class="toggle-name">Multiple agents</span>
-            <span class="muted">Let the hub hand parts of a task to your Site Agents.</span>
+            <span class="toggle-name" data-i18n="options_multiple_agents">Multiple agents</span>
+            <span class="muted" data-i18n="options_let_the_hub_hand_parts_of_a_task_to_your_site_agen">Let the hub hand parts of a task to your Site Agents.</span>
           </div>
         </div>
         <div class="enroll">
-          <h3>Add a Site Agent</h3>
+          <h3 data-i18n="options_add_a_site_agent">Add a Site Agent</h3>
           <p
-            class="muted">Chrome grants <code>&lt;all_urls&gt;</code> host access when the extension is installed; page tools require it. The capabilities in Permissions are separate optional permissions, requested only when you enable or use them.</p>
+            class="muted" data-i18n="options_chrome_grants">Chrome grants <code>&lt;all_urls&gt;</code> host access when the extension is installed; page tools require it. The capabilities in Permissions are separate optional permissions, requested only when you enable or use them.</p>
           <div id="discovered-tabs" class="origin-list" style="margin-bottom:12px; display:none;"></div>
           <div class="enroll-row">
-            <label class="field" style="flex:1"><span class="field-label">Site origin</span>
+            <label class="field" style="flex:1"><span class="field-label" data-i18n="options_site_origin">Site origin</span>
               <input type="text" id="enroll-origin" placeholder="https://github.com">
             </label>
-            <button class="btn" id="enroll-btn" type="button">Add Site Agent</button>
+            <button class="btn" id="enroll-btn" type="button" data-i18n="options_add_site_agent">Add Site Agent</button>
           </div>
           <div id="enrolled-sites" class="origin-list"></div>
         </div>
         <div class="webmcp-status" data-vocab="advanced">
-          <h3>Site Agent diagnostics</h3>
+          <h3 data-i18n="options_site_agent_diagnostics">Site Agent diagnostics</h3>
           <p
-            class="muted">Check what each enrolled site reports when a tool you expect is missing.</p>
+            class="muted" data-i18n="options_check_what_each_enrolled_site_reports_when_a_tool_">Check what each enrolled site reports when a tool you expect is missing.</p>
           <div class="toggle-field">
             <switch-toggle id="webmcp-diagnostics" label="Diagnostics logs"></switch-toggle>
             <div class="toggle-text">
-              <span class="toggle-name">Diagnostics logs</span>
-              <span class="muted">Write a <code>[WebMCP]</code> line to the page's DevTools console each time a site's tools are checked.</span>
+              <span class="toggle-name" data-i18n="options_diagnostics_logs">Diagnostics logs</span>
+              <span class="muted" data-i18n="options_write_a">Write a <code>[WebMCP]</code> line to the page's DevTools console each time a site's tools are checked.</span>
             </div>
           </div>
           <div id="webmcp-status-body" class="origin-list" aria-live="polite"></div>
@@ -179,81 +179,81 @@
       </section>
 
       <section id="board-permissions" class="panel" data-developer="true">
-        <h2>Board permissions</h2>
-        <p class="muted">Every named agent and the hub can post and claim jobs on the shared board. A rule blocks one specific edge.</p>
+        <h2 data-i18n="options_board_permissions_1">Board permissions</h2>
+        <p class="muted" data-i18n="options_every_named_agent_and_the_hub_can_post_and_claim_j">Every named agent and the hub can post and claim jobs on the shared board. A rule blocks one specific edge.</p>
         <div id="board-deny-list" role="list" aria-live="polite" aria-label="Board deny rules"></div>
         <form class="board-deny-add" id="board-deny-form" aria-label="Add a board rule">
           <provider-select id="board-deny-agent" label="Agent" placeholder="Choose an agent"></provider-select>
           <provider-select id="board-deny-action" label="Cannot" placeholder="Choose what is blocked" providers='[{"id":"claim","name":"claim jobs from"},{"id":"post","name":"post jobs targeting"}]'></provider-select>
           <provider-select id="board-deny-peer" label="Peer" placeholder="Choose a peer"></provider-select>
-          <button id="board-deny-add-btn" class="btn small" type="submit">Add rule</button>
+          <button id="board-deny-add-btn" class="btn small" type="submit" data-i18n="options_add_rule">Add rule</button>
         </form>
       </section>
 
       <section id="browser" class="panel">
-        <h2>Browser control</h2>
+        <h2 data-i18n="options_browser_control_1">Browser control</h2>
         <p
           class="muted">Open, navigate, and close tabs, and capture screenshots need your explicit, scoped permission. Reading page text and listing tabs are always available.</p>
         <div class="toggle-field">
           <switch-toggle id="browser-grant" label="Allow the agent to control the browser"></switch-toggle>
           <div class="toggle-text">
-            <span class="toggle-name">Allow the agent to control the browser</span>
-            <span class="muted">Open, navigate, and close tabs, and capture screenshots.</span>
+            <span class="toggle-name" data-i18n="options_allow_the_agent_to_control_the_browser">Allow the agent to control the browser</span>
+            <span class="muted" data-i18n="options_open_navigate_and_close_tabs_and_capture_screensho">Open, navigate, and close tabs, and capture screenshots.</span>
           </div>
         </div>
         <div class="toggle-field">
           <switch-toggle id="auto-close-run-tabs" label="Auto-close tabs a finished task opened"></switch-toggle>
           <div class="toggle-text">
-            <span class="toggle-name">Auto-close run tabs</span>
+            <span class="toggle-name" data-i18n="options_auto_close_run_tabs">Auto-close run tabs</span>
             <span class="muted">When a task finishes, close the tabs that task opened (the run summary lists them), except tabs the agent opened as the task's result to leave for you. Off by default; windows a task opened are never closed automatically, and tabs it already closed itself are never touched.</span>
           </div>
         </div>
         <div id="grant-origins" class="grant-origins" hidden>
-          <h3>Allowed origins</h3>
-          <p id="grant-origin-summary" class="muted">Every site you allow keeps its own grant; turn one off without touching the others.</p>
+          <h3 data-i18n="options_allowed_origins">Allowed origins</h3>
+          <p id="grant-origin-summary" class="muted" data-i18n="options_every_site_you_allow_keeps_its_own_grant_turn_one_">Every site you allow keeps its own grant; turn one off without touching the others.</p>
           <div id="grant-origin-rows" class="grant-origin-rows" aria-live="polite"></div>
-          <label for="grant-origin-list" class="muted">Allow more origins (one per line):</label>
+          <label for="grant-origin-list" class="muted" data-i18n="options_allow_more_origins_one_per_line">Allow more origins (one per line):</label>
           <textarea id="grant-origin-list" rows="4"
             placeholder="https://github.com"></textarea>
-          <p class="muted">Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on.</p>
+          <p class="muted" data-i18n="options_adding_origins_scopes_control_to_the_listed_sites_">Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on.</p>
         </div>
         <div id="action-policy" class="action-policy">
-          <h3>Action policy</h3>
-          <p class="muted">What the agent may do once Browser control is on, in three classes.</p>
+          <h3 data-i18n="options_action_policy">Action policy</h3>
+          <p class="muted" data-i18n="options_what_the_agent_may_do_once_browser_control_is_on_i">What the agent may do once Browser control is on, in three classes.</p>
           <ul class="policy-classes">
             <li>
-              <span class="policy-name">Read</span>
-              <span class="muted">Read page text, list tabs. Allowed after consent — never interrupts.</span>
+              <span class="policy-name" data-i18n="options_read">Read</span>
+              <span class="muted" data-i18n="options_read_page_text_list_tabs_allowed_after_consent_nev">Read page text, list tabs. Allowed after consent — never interrupts.</span>
             </li>
             <li>
-              <span class="policy-name">Act</span>
-              <span class="muted">Open, navigate and manage tabs, groups, bookmarks and page actions. Asks once per site, then runs automatically.</span>
+              <span class="policy-name" data-i18n="options_act">Act</span>
+              <span class="muted" data-i18n="options_open_navigate_and_manage_tabs_groups_bookmarks_and">Open, navigate and manage tabs, groups, bookmarks and page actions. Asks once per site, then runs automatically.</span>
             </li>
             <li>
-              <span class="policy-name">Destructive</span>
+              <span class="policy-name" data-i18n="options_destructive">Destructive</span>
               <span class="muted">Close a tab it didn't open, close a window, wipe browsing data, remove a bookmark, or set/remove a cookie. Always asks — each action shows an approval card.</span>
             </li>
           </ul>
           <div class="policy-control">
-            <label for="destructive-policy" class="policy-name">Destructive actions</label>
+            <label for="destructive-policy" class="policy-name" data-i18n="options_destructive_actions">Destructive actions</label>
             <select id="destructive-policy" class="input-select">
-              <option value="ask" selected>Always ask (recommended)</option>
-              <option value="never">Never allow</option>
+              <option value="ask" selected data-i18n="options_always_ask_recommended">Always ask (recommended)</option>
+              <option value="never" data-i18n="options_never_allow">Never allow</option>
             </select>
           </div>
         </div>
       </section>
 
       <section id="permissions" class="panel">
-        <h2>Permissions</h2>
+        <h2 data-i18n="options_permissions_1">Permissions</h2>
         <p
           class="muted">Capability permissions are optional and requested just-in-time from your click (the chat offers the same Enable inline). Host access and the permissions the extension needs to run are granted at install. This is the live, verified state of each grant.</p>
         <div id="permission-list" class="permission-list"></div>
       </section>
 
       <section id="skills" class="panel">
-        <h2>Skills</h2>
-        <p class="skills-sub">
+        <h2 data-i18n="options_skills_1">Skills</h2>
+        <p class="skills-sub" data-i18n="options_reusable_capabilities_each_documented_below_a_skil">
           Reusable capabilities, each documented below. A skill is included in a
           task — type <span class="muted">/skill:name</span> anywhere in the
           composer on the hub, or attach it to an agent. Use one here to start a
@@ -261,27 +261,27 @@
         </p>
         <div class="skills-import">
           <input class="import-url" type="url" placeholder="Import a skill — a GitHub repo or a SKILL.md URL" aria-label="Skill URL">
-          <button class="import-btn btn" type="button">Import</button>
+          <button class="import-btn btn" type="button" data-i18n="options_import">Import</button>
           <span class="import-status" role="status"></span>
         </div>
         <div class="skills-list"></div>
       </section>
 
       <section id="hooks" class="panel" data-developer="true">
-        <h2>System hooks</h2>
+        <h2 data-i18n="options_system_hooks">System hooks</h2>
         <p
           class="muted">Every chrome.* event an agent can listen to and respond to. Turn a hook off to stop the agent ever using it — the deny-list is authoritative and the agent cannot break past it. A hook's permission is granted at install; the deny-list is the control here.</p>
         <div class="hooks-toolbar">
           <span id="hooks-summary" class="muted" role="status"></span>
-          <button id="hooks-deny-all" class="btn small ghost" type="button">Deny all</button>
+          <button id="hooks-deny-all" class="btn small ghost" type="button" data-i18n="options_deny_all">Deny all</button>
         </div>
         <div class="hooks-table-wrap">
           <table id="hook-list" class="hooks-table">
             <thead>
               <tr>
-                <th scope="col">Event</th>
-                <th scope="col" class="col-api">Chrome API</th>
-                <th scope="col" class="col-state">Allowed</th>
+                <th scope="col" data-i18n="options_event">Event</th>
+                <th scope="col" class="col-api" data-i18n="options_chrome_api">Chrome API</th>
+                <th scope="col" class="col-state" data-i18n="options_allowed">Allowed</th>
               </tr>
             </thead>
           </table>
@@ -289,43 +289,43 @@
       </section>
 
       <section id="prompts" class="panel" data-developer="true">
-        <h2>Advanced</h2>
-        <h3>Observability</h3>
+        <h2 data-i18n="options_advanced_1">Advanced</h2>
+        <h3 data-i18n="options_observability">Observability</h3>
         <p class="muted">Control local DevTools diagnostics. Tool calls log a paired start and end with their name, arguments, outcome, and duration at Verbose.</p>
         <div class="toggle-field">
           <label class="field" for="log-verbosity">
-            <span class="field-label">Log verbosity</span>
+            <span class="field-label" data-i18n="options_log_verbosity">Log verbosity</span>
             <select id="log-verbosity" class="input-select">
-              <option value="off">Off</option>
-              <option value="normal">Normal</option>
-              <option value="verbose">Verbose</option>
+              <option value="off" data-i18n="options_off">Off</option>
+              <option value="normal" data-i18n="options_normal">Normal</option>
+              <option value="verbose" data-i18n="options_verbose">Verbose</option>
             </select>
           </label>
           <div class="toggle-text">
-            <span class="toggle-name">Console logging</span>
-            <span class="muted">Choose Verbose to see every tool-call start and outcome in the extension console.</span>
+            <span class="toggle-name" data-i18n="options_console_logging">Console logging</span>
+            <span class="muted" data-i18n="options_choose_verbose_to_see_every_tool_call_start_and_ou">Choose Verbose to see every tool-call start and outcome in the extension console.</span>
           </div>
         </div>
         <div class="toggle-field">
           <switch-toggle id="log-full-detail" label="Full detail in local logs"></switch-toggle>
           <div class="toggle-text">
-            <span class="toggle-name">Full detail in local logs</span>
+            <span class="toggle-name" data-i18n="options_full_detail_in_local_logs">Full detail in local logs</span>
             <span class="muted">Shows unredacted prompts, page content, tool arguments, results, and errors in DevTools on this machine. Trace dumps, exports, shared bundles, and reports stay redacted.</span>
           </div>
         </div>
-        <h3>Diagnostics</h3>
+        <h3 data-i18n="options_diagnostics">Diagnostics</h3>
         <p class="muted">Errors, warnings, and unhandled rejections the extension captured on this machine. The badge counts what is waiting; the hub keeps capturing while you work there.</p>
         <div class="toggle-field" id="diagnostics-console">
           <error-console count="0" label="Console (errors + warnings)"></error-console>
           <div class="toggle-text">
-            <span class="toggle-name">Console</span>
-            <span class="muted">Open the captured entries, copy them for a bug report, or clear them.</span>
+            <span class="toggle-name" data-i18n="options_console">Console</span>
+            <span class="muted" data-i18n="options_open_the_captured_entries_copy_them_for_a_bug_repo">Open the captured entries, copy them for a bug report, or clear them.</span>
           </div>
         </div>
-        <h3>System prompts</h3>
+        <h3 data-i18n="options_system_prompts">System prompts</h3>
         <p
           class="muted">The system prompt each agent runs with, layer by layer: the versioned built-in prompt, your customization, and the protected runtime policy (never editable, always applied last). The preview is the exact platform composition; every run also records a run-bound attestation of the exact provider-bound system message (digest + bytes, never content).</p>
-        <label class="field prompt-scope-field"><span class="field-label">Agent scope</span>
+        <label class="field prompt-scope-field"><span class="field-label" data-i18n="options_agent_scope">Agent scope</span>
           <select id="prompt-scope" aria-label="System prompt scope"></select>
         </label>
         <p class="muted" id="prompt-scope-hint"></p>
@@ -333,7 +333,7 @@
       </section>
 
       <section id="usage" class="panel">
-        <h2>Usage</h2>
+        <h2 data-i18n="options_usage_1">Usage</h2>
         <div class="usage-head">
           <div class="usage-ranges" role="tablist" aria-label="Usage time range">
             <button class="usage-range" type="button" role="tab" data-range="24h" aria-selected="false">24h</button>
@@ -342,65 +342,65 @@
           <span class="muted usage-cost-note">costs are estimates (bundled per-1M-token pricing)</span>
         </div>
         <div id="usage-cards" class="usage-cards"></div>
-        <h3>Tokens per day</h3>
+        <h3 data-i18n="options_tokens_per_day">Tokens per day</h3>
         <div id="usage-chart-days" class="usage-chart-mount"></div>
         <div class="usage-legend" aria-hidden="true"><span class="usage-swatch usage-bar-in"></span> input <span class="usage-swatch usage-bar-out"></span> output</div>
-        <h3>By model</h3>
+        <h3 data-i18n="options_by_model">By model</h3>
         <div id="usage-chart-models" class="usage-chart-mount"></div>
-        <h3>By agent</h3>
+        <h3 data-i18n="options_by_agent">By agent</h3>
         <div id="usage-chart-agents" class="usage-chart-mount"></div>
-        <h3>Tool calls</h3>
+        <h3 data-i18n="options_tool_calls">Tool calls</h3>
         <div id="usage-chart-tools" class="usage-chart-mount"></div>
         <button class="btn ghost" id="usage-detail-toggle"
-          type="button">Show detail</button>
+          type="button" data-i18n="options_show_detail">Show detail</button>
         <div id="usage-detail" class="usage-detail" hidden></div>
       </section>
 
       <section id="data" class="panel">
-        <h2>Data & memory</h2>
+        <h2 data-i18n="options_data_memory_1">Data & memory</h2>
         <p
           class="muted">Per-origin memory is stored in OPFS, keyed by origin — one site can never read another. Browse each agent's memory below.</p>
         <div id="memory-explorer" class="memory-explorer"></div>
         <div id="origin-list" class="origin-list"></div>
 
         <div class="retention-zone" id="run-retention" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
-          <h3 style="margin: 0 0 6px;">Run logs</h3>
+          <h3 style="margin: 0 0 6px;" data-i18n="options_run_logs">Run logs</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
             Every run keeps its record and its answer. Its step-by-step tool detail is kept in full for the newest runs and folded into a one-line summary for older ones, so storage stays bounded.
           </p>
           <div class="toggle-field">
             <switch-toggle id="run-retention-keep-all" label="Keep every run log"></switch-toggle>
             <div class="toggle-text">
-              <span class="toggle-name">Keep every run log</span>
+              <span class="toggle-name" data-i18n="options_keep_every_run_log">Keep every run log</span>
               <span class="muted" id="run-retention-bound">Off: full detail for the newest 50 runs per task and the newest 500 runs overall (up to 32 MiB); older runs keep a summary line.</span>
             </div>
           </div>
         </div>
 
         <div class="maintenance-zone" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
-          <h3 style="margin: 0 0 6px;">Agent data maintenance</h3>
+          <h3 style="margin: 0 0 6px;" data-i18n="options_agent_data_maintenance">Agent data maintenance</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
             Purge agent journals (the running activity logs — memory content and artifacts are kept), or clean up leftover files from agents that were removed before deletion cleaned up after itself.
           </p>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-            <label class="muted" for="purge-journal-agent" style="font-size:13px;">Agent</label>
+            <label class="muted" for="purge-journal-agent" style="font-size:13px;" data-i18n="options_agent">Agent</label>
             <select id="purge-journal-agent" class="btn" style="max-width:260px;">
-              <option value="">All agents</option>
+              <option value="" data-i18n="options_all_agents">All agents</option>
             </select>
-            <button type="button" class="btn" id="purge-journals-btn">Purge journals…</button>
-            <button type="button" class="btn" id="sweep-orphans-btn">Clean up leftover files…</button>
+            <button type="button" class="btn" id="purge-journals-btn" data-i18n="options_purge_journals">Purge journals…</button>
+            <button type="button" class="btn" id="sweep-orphans-btn" data-i18n="options_clean_up_leftover_files">Clean up leftover files…</button>
           </div>
           <p id="maintenance-status" role="status" aria-live="polite" class="muted" style="margin: 10px 0 0; font-size: 13px;"></p>
         </div>
 
         <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
-          <h3 style="margin: 0 0 6px;">Backup &amp; restore</h3>
+          <h3 style="margin: 0 0 6px;" data-i18n="options_backup_amp_restore">Backup &amp; restore</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
             Export everything you have built — agents, memories, threads, artifacts, schedules and settings — as one inspectable file. Provider API keys and MCP auth headers are never included; the file only records which providers were configured.
           </p>
-          <button type="button" class="btn" id="export-all-btn">Export all data…</button>
-          <button type="button" class="btn" id="import-all-btn">Import from file…</button>
-          <label style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">
+          <button type="button" class="btn" id="export-all-btn" data-i18n="options_export_all_data">Export all data…</button>
+          <button type="button" class="btn" id="import-all-btn" data-i18n="options_import_from_file">Import from file…</button>
+          <label style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);" data-i18n="options_import_a_backup_file">
             Import a backup file
             <input type="file" id="import-all-file" accept=".json,application/json" hidden>
           </label>
@@ -408,56 +408,56 @@
         </div>
 
         <div class="danger-zone" style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border,#e3e0d9);">
-          <h3 style="color: var(--danger,#b3261e); margin: 0 0 6px;">Factory reset</h3>
+          <h3 style="color: var(--danger,#b3261e); margin: 0 0 6px;" data-i18n="options_factory_reset">Factory reset</h3>
           <p class="muted" style="margin: 0 0 12px; font-size: 13px;">
             Permanently delete all extension data — agents, tasks, artifacts, memory, schedules, downloaded models, provider settings, and permissions. Restores the clean first-run onboarding state.
           </p>
-          <button type="button" class="btn danger" id="factory-reset-btn">Reset all data…</button>
+          <button type="button" class="btn danger" id="factory-reset-btn" data-i18n="options_reset_all_data">Reset all data…</button>
           <p id="factory-reset-status" class="hint" role="status" aria-live="polite" hidden></p>
         </div>
       </section>
 
       <section id="about" class="panel">
-        <h2>About</h2>
+        <h2 data-i18n="options_about_1">About</h2>
         <div class="about-card">
-          <div class="about-brand" id="about-brand-home" role="link" tabindex="0" title="Back to home" style="cursor:pointer">Chrome Agent Platform</div>
+          <div class="about-brand" id="about-brand-home" role="link" tabindex="0" title="Back to home" style="cursor:pointer" data-i18n="options_chrome_agent_platform">Chrome Agent Platform</div>
           <p class="muted">Chrome as the agent platform — a new-tab hub, Site Agents (WebMCP), origin-keyed memory, skills, generative UI, and scripts.</p>
           <div class="about-meta">
-            <span>Version <strong id="about-version">v0.0.0</strong></span>
+            <span data-i18n="options_version">Version <strong id="about-version">v0.0.0</strong></span>
           </div>
         </div>
-        <h3>Developer features</h3>
+        <h3 data-i18n="options_developer_features">Developer features</h3>
         <div class="toggle-field" id="developer-features-field">
           <switch-toggle id="developer-features" label="Show developer features"></switch-toggle>
           <div class="toggle-text">
-            <span class="toggle-name">Show developer features</span>
+            <span class="toggle-name" data-i18n="options_show_developer_features">Show developer features</span>
             <span class="muted">Off by default. Reveals the platform-building surfaces — the Tool library, Board permissions, Hooks, Advanced (system prompts) and provider server tools — plus the demo test model and its markers. Turning this off never removes anything you built; it only hides these lanes from the default Settings.</span>
           </div>
         </div>
 
-        <h3>Keyboard shortcuts</h3>
+        <h3 data-i18n="options_keyboard_shortcuts">Keyboard shortcuts</h3>
         <p class="muted">Three shortcuts, none of them destructive and none able to grant a
           permission. Chrome owns the bindings — change or clear any of them in Chrome's own
           shortcuts page.</p>
         <dl id="shortcut-list" class="shortcut-list">
-          <p class="muted">Loading shortcuts…</p>
+          <p class="muted" data-i18n="options_loading_shortcuts">Loading shortcuts…</p>
         </dl>
-        <button id="open-shortcut-settings" class="btn small" type="button">Change shortcuts in Chrome</button>
+        <button id="open-shortcut-settings" class="btn small" type="button" data-i18n="options_change_shortcuts_in_chrome">Change shortcuts in Chrome</button>
 
-        <h3>Privacy</h3>
-        <p class="muted">One page says what this extension sends, what it keeps on this computer, and how to remove it.</p>
-        <p class="privacy-link"><a href="../privacy/privacy.html" id="open-privacy-statement" target="_blank" rel="noreferrer">What this extension sends and stores</a></p>
+        <h3 data-i18n="options_privacy">Privacy</h3>
+        <p class="muted" data-i18n="options_one_page_says_what_this_extension_sends_what_it_ke">One page says what this extension sends, what it keeps on this computer, and how to remove it.</p>
+        <p class="privacy-link"><a href="../privacy/privacy.html" id="open-privacy-statement" target="_blank" rel="noreferrer" data-i18n="options_what_this_extension_sends_and_stores">What this extension sends and stores</a></p>
 
-        <h3>What's new</h3>
+        <h3 data-i18n="options_what_s_new">What's new</h3>
         <p class="muted">The most recent user-facing changes; older or internal notes are behind the disclosure below. The complete list is in the release notes file.</p>
         <div id="changelog" class="changelog" aria-live="polite" tabindex="0">
-          <p class="muted">Loading the changelog…</p>
+          <p class="muted" data-i18n="options_loading_the_changelog">Loading the changelog…</p>
         </div>
-        <p class="changelog-full-link"><a href="#" id="full-release-notes" target="_blank" rel="noreferrer">Full release notes</a></p>
+        <p class="changelog-full-link"><a href="#" id="full-release-notes" target="_blank" rel="noreferrer" data-i18n="options_full_release_notes">Full release notes</a></p>
       </section>
 
       <footer class="foot">
-        <span>Chrome Agent Platform</span>
+        <span data-i18n="options_chrome_agent_platform">Chrome Agent Platform</span>
         <span id="app-version" class="muted">v0.0.0</span>
       </footer>
     </main>

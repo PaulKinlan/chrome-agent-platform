@@ -1,2 +1,400 @@
 {
+  "components_copied_exact": {
+    "message": "Copied exact artifact content."
+  },
+  "components_copied_preview": {
+    "message": "Copied preview content (file-backed stream in OPFS)."
+  },
+  "components_copy_exact_content": {
+    "message": "Copy exact content"
+  },
+  "components_copy_failed_manual": {
+    "message": "Copy failed. Select the source and copy it manually."
+  },
+  "components_copy_preview_content": {
+    "message": "Copy preview content"
+  },
+  "components_preview_initial_note": {
+    "message": "Preview showing initial 64 KiB. Complete file is retained in OPFS stream ($1 bytes).",
+    "placeholders": {
+      "1": {
+        "content": "$1"
+      }
+    }
+  },
+  "components_sandbox_preview_opened": {
+    "message": "Interactive preview opened in a restricted sandbox."
+  },
+  "components_table_preview_opened": {
+    "message": "Interactive table preview opened."
+  },
+  "options_about": {
+    "message": "\n        About"
+  },
+  "options_about_1": {
+    "message": "About"
+  },
+  "options_access_mode": {
+    "message": "Access Mode"
+  },
+  "options_act": {
+    "message": "Act"
+  },
+  "options_action_policy": {
+    "message": "Action policy"
+  },
+  "options_add_a_site_agent": {
+    "message": "Add a Site Agent"
+  },
+  "options_add_file": {
+    "message": "\n              Add file\n            "
+  },
+  "options_add_folder": {
+    "message": "\n              Add folder\n            "
+  },
+  "options_add_rule": {
+    "message": "Add rule"
+  },
+  "options_add_server": {
+    "message": "\n            Add server\n          "
+  },
+  "options_add_site_agent": {
+    "message": "Add Site Agent"
+  },
+  "options_adding_origins_scopes_control_to_the_listed_sites_": {
+    "message": "Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on."
+  },
+  "options_advanced": {
+    "message": "\n        Advanced"
+  },
+  "options_advanced_1": {
+    "message": "Advanced"
+  },
+  "options_agent": {
+    "message": "Agent"
+  },
+  "options_agent_data_maintenance": {
+    "message": "Agent data maintenance"
+  },
+  "options_agent_scope": {
+    "message": "Agent scope"
+  },
+  "options_agents": {
+    "message": "\n        Agents"
+  },
+  "options_agents_1": {
+    "message": "Agents"
+  },
+  "options_agents_that_may_use_provider_run_tools": {
+    "message": "Agents that may use provider-run tools"
+  },
+  "options_all_agents": {
+    "message": "All agents"
+  },
+  "options_allow_more_origins_one_per_line": {
+    "message": "Allow more origins (one per line):"
+  },
+  "options_allow_the_agent_to_control_the_browser": {
+    "message": "Allow the agent to control the browser"
+  },
+  "options_allowed": {
+    "message": "Allowed"
+  },
+  "options_allowed_origins": {
+    "message": "Allowed origins"
+  },
+  "options_always_ask_recommended": {
+    "message": "Always ask (recommended)"
+  },
+  "options_auto_close_run_tabs": {
+    "message": "Auto-close run tabs"
+  },
+  "options_backup_amp_restore": {
+    "message": "Backup &amp; restore"
+  },
+  "options_board_permissions": {
+    "message": "\n        Board permissions"
+  },
+  "options_board_permissions_1": {
+    "message": "Board permissions"
+  },
+  "options_browser_control": {
+    "message": "\n        Browser control"
+  },
+  "options_browser_control_1": {
+    "message": "Browser control"
+  },
+  "options_by_agent": {
+    "message": "By agent"
+  },
+  "options_by_model": {
+    "message": "By model"
+  },
+  "options_change_shortcuts_in_chrome": {
+    "message": "Change shortcuts in Chrome"
+  },
+  "options_changes_save_automatically": {
+    "message": "Changes save automatically."
+  },
+  "options_check_what_each_enrolled_site_reports_when_a_tool_": {
+    "message": "Check what each enrolled site reports when a tool you expect is missing."
+  },
+  "options_choose_verbose_to_see_every_tool_call_start_and_ou": {
+    "message": "Choose Verbose to see every tool-call start and outcome in the extension console."
+  },
+  "options_chrome": {
+    "message": "Chrome "
+  },
+  "options_chrome_agent_platform": {
+    "message": "Chrome Agent Platform"
+  },
+  "options_chrome_api": {
+    "message": "Chrome API"
+  },
+  "options_chrome_grants": {
+    "message": "Chrome grants "
+  },
+  "options_clean_up_leftover_files": {
+    "message": "Clean up leftover files…"
+  },
+  "options_connect_a_remote": {
+    "message": "Connect a remote "
+  },
+  "options_console": {
+    "message": "Console"
+  },
+  "options_console_logging": {
+    "message": "Console logging"
+  },
+  "options_cost": {
+    "message": "Cost:"
+  },
+  "options_data_memory": {
+    "message": "\n        Data & memory"
+  },
+  "options_data_memory_1": {
+    "message": "Data & memory"
+  },
+  "options_deny_all": {
+    "message": "Deny all"
+  },
+  "options_destructive": {
+    "message": "Destructive"
+  },
+  "options_destructive_actions": {
+    "message": "Destructive actions"
+  },
+  "options_developer_features": {
+    "message": "Developer features"
+  },
+  "options_diagnostics": {
+    "message": "Diagnostics"
+  },
+  "options_diagnostics_logs": {
+    "message": "Diagnostics logs"
+  },
+  "options_event": {
+    "message": "Event"
+  },
+  "options_every_named_agent_and_the_hub_can_post_and_claim_j": {
+    "message": "Every named agent and the hub can post and claim jobs on the shared board. A rule blocks one specific edge."
+  },
+  "options_every_site_you_allow_keeps_its_own_grant_turn_one_": {
+    "message": "Every site you allow keeps its own grant; turn one off without touching the others."
+  },
+  "options_export_all_data": {
+    "message": "Export all data…"
+  },
+  "options_factory_reset": {
+    "message": "Factory reset"
+  },
+  "options_file_system_access_api_is_unavailable_in_this_brow": {
+    "message": "\n            File System Access API is unavailable in this browser environment\n          "
+  },
+  "options_full_detail_in_local_logs": {
+    "message": "Full detail in local logs"
+  },
+  "options_full_release_notes": {
+    "message": "Full release notes"
+  },
+  "options_hooks": {
+    "message": "\n        Hooks"
+  },
+  "options_import": {
+    "message": "Import"
+  },
+  "options_import_a_backup_file": {
+    "message": "\n            Import a backup file\n            "
+  },
+  "options_import_from_file": {
+    "message": "Import from file…"
+  },
+  "options_keep_every_run_log": {
+    "message": "Keep every run log"
+  },
+  "options_keyboard_shortcuts": {
+    "message": "Keyboard shortcuts"
+  },
+  "options_let_the_hub_hand_parts_of_a_task_to_your_site_agen": {
+    "message": "Let the hub hand parts of a task to your Site Agents."
+  },
+  "options_loading_shortcuts": {
+    "message": "Loading shortcuts…"
+  },
+  "options_loading_the_changelog": {
+    "message": "Loading the changelog…"
+  },
+  "options_local_folders": {
+    "message": "\n        Local folders"
+  },
+  "options_local_folders_files": {
+    "message": "Local folders & files"
+  },
+  "options_log_verbosity": {
+    "message": "Log verbosity"
+  },
+  "options_mcp_servers": {
+    "message": "\n        MCP servers"
+  },
+  "options_mcp_servers_1": {
+    "message": "MCP servers"
+  },
+  "options_multiple_agents": {
+    "message": "Multiple agents"
+  },
+  "options_never_allow": {
+    "message": "Never allow"
+  },
+  "options_normal": {
+    "message": "Normal"
+  },
+  "options_observability": {
+    "message": "Observability"
+  },
+  "options_off": {
+    "message": "Off"
+  },
+  "options_one_page_says_what_this_extension_sends_what_it_ke": {
+    "message": "One page says what this extension sends, what it keeps on this computer, and how to remove it."
+  },
+  "options_open_navigate_and_close_tabs_and_capture_screensho": {
+    "message": "Open, navigate, and close tabs, and capture screenshots."
+  },
+  "options_open_navigate_and_manage_tabs_groups_bookmarks_and": {
+    "message": "Open, navigate and manage tabs, groups, bookmarks and page actions. Asks once per site, then runs automatically."
+  },
+  "options_open_the_captured_entries_copy_them_for_a_bug_repo": {
+    "message": "Open the captured entries, copy them for a bug report, or clear them."
+  },
+  "options_permissions": {
+    "message": "\n        Permissions"
+  },
+  "options_permissions_1": {
+    "message": "Permissions"
+  },
+  "options_platform": {
+    "message": " Platform"
+  },
+  "options_privacy": {
+    "message": "Privacy"
+  },
+  "options_provider_server_tools": {
+    "message": "Provider server tools"
+  },
+  "options_providers": {
+    "message": "\n        Providers"
+  },
+  "options_providers_1": {
+    "message": "Providers"
+  },
+  "options_purge_journals": {
+    "message": "Purge journals…"
+  },
+  "options_read": {
+    "message": "Read"
+  },
+  "options_read_only": {
+    "message": "Read-only"
+  },
+  "options_read_page_text_list_tabs_allowed_after_consent_nev": {
+    "message": "Read page text, list tabs. Allowed after consent — never interrupts."
+  },
+  "options_read_write": {
+    "message": "Read/Write"
+  },
+  "options_reset_all_data": {
+    "message": "Reset all data…"
+  },
+  "options_reusable_capabilities_each_documented_below_a_skil": {
+    "message": "\n          Reusable capabilities, each documented below. A skill is included in a\n          task — type "
+  },
+  "options_run_logs": {
+    "message": "Run logs"
+  },
+  "options_settings": {
+    "message": "Settings"
+  },
+  "options_settings_chrome_agent_platform": {
+    "message": "Settings — Chrome Agent Platform"
+  },
+  "options_show_detail": {
+    "message": "Show detail"
+  },
+  "options_show_developer_features": {
+    "message": "Show developer features"
+  },
+  "options_site_agent_diagnostics": {
+    "message": "Site Agent diagnostics"
+  },
+  "options_site_origin": {
+    "message": "Site origin"
+  },
+  "options_skills": {
+    "message": "\n        Skills"
+  },
+  "options_skills_1": {
+    "message": "Skills"
+  },
+  "options_system_hooks": {
+    "message": "System hooks"
+  },
+  "options_system_prompts": {
+    "message": "System prompts"
+  },
+  "options_tokens_per_day": {
+    "message": "Tokens per day"
+  },
+  "options_tool_calls": {
+    "message": "Tool calls"
+  },
+  "options_tool_library": {
+    "message": "\n        Tool library"
+  },
+  "options_tool_library_1": {
+    "message": "Tool library"
+  },
+  "options_usage": {
+    "message": "\n        Usage"
+  },
+  "options_usage_1": {
+    "message": "Usage"
+  },
+  "options_verbose": {
+    "message": "Verbose"
+  },
+  "options_version": {
+    "message": "Version "
+  },
+  "options_what_s_new": {
+    "message": "What's new"
+  },
+  "options_what_the_agent_may_do_once_browser_control_is_on_i": {
+    "message": "What the agent may do once Browser control is on, in three classes."
+  },
+  "options_what_this_extension_sends_and_stores": {
+    "message": "What this extension sends and stores"
+  },
+  "options_write_a": {
+    "message": "Write a "
+  }
 }

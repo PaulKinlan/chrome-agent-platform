@@ -90,3 +90,52 @@ Deno.test("i18n: hydrateI18n fills data-i18n text and data-i18n-attr attributes 
   assertEquals(textEl._text, messages[first].message, "data-i18n text must come from the catalogue");
   assertEquals(attrEl.attrs["aria-label"], messages[first].message, "data-i18n-attr must come from the catalogue");
 });
+
+Deno.test("i18n: every data-i18n leaf in Settings markup resolves to a catalogue message byte-identical to its no-JS fallback text", async () => {
+  // The Settings migration contract: the markup keeps the English text as the
+  // no-JS fallback, the catalogue value is the EXACT same bytes, so rendering
+  // is unchanged whether or not chrome.i18n/hydration runs. A drift in either
+  // direction (key without catalogue entry, or catalogue value ≠ markup text)
+  // is the silent-copy-change this pin exists to stop.
+  const html = new URL("../extension/options/options.html", import.meta.url);
+  const src = await Deno.readTextFile(html);
+  const code = src
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/g, "");
+  const leaf = /<([a-zA-Z][a-zA-Z0-9-]*)\b[^<>]*\bdata-i18n="([^"]+)"[^<>]*>([^<>]*)<\//g;
+  let checked = 0;
+  for (const m of code.matchAll(leaf)) {
+    const [, tag, key, staticText] = m;
+    const entry = messages[key];
+    assert(entry, `data-i18n key ${key} on <${tag}> has no catalogue entry`);
+    assertEquals(
+      entry.message,
+      staticText,
+      `catalogue message for ${key} drifted from the static markup fallback text`,
+    );
+    checked++;
+  }
+  assert(checked >= 100, `expected the Settings migration to have wired ~120 leaves, found ${checked}`);
+});
+
+Deno.test("i18n: hydrating the migrated Settings leaves renders the catalogue value, and mutating the catalogue changes the render (falsification)", async () => {
+  const html = new URL("../extension/options/options.html", import.meta.url);
+  const src = await Deno.readTextFile(html);
+  const m = src.match(/<h2[^<>]*\bdata-i18n="([^"]+)"[^<>]*>([^<>]*)<\/h2>/);
+  assert(m, "expected at least one migrated <h2> heading in Settings");
+  const [, key, staticText] = m;
+  // Simulate hydration with the REAL catalogue value.
+  const el = {
+    _text: staticText,
+    get textContent() { return this._text; },
+    set textContent(v) { this._text = v; },
+    getAttribute: (n) => (n === "data-i18n" ? key : null),
+    setAttribute() {},
+  };
+  const root = { querySelectorAll: (sel) => (sel === "[data-i18n]" ? [el] : []) };
+  hydrateI18n(root);
+  assertEquals(el._text, messages[key].message, "hydration must render the catalogue message");
+  // FALSIFICATION: the catalogue value must be byte-identical to the static
+  // markup text — if a migration ever reworded a string, this is the tripwire.
+  assertEquals(messages[key].message, staticText, "catalogue value drifted from the original rendered text — migrations must be byte-identical");
+});

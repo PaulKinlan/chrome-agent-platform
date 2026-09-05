@@ -12,6 +12,7 @@
 // visual/behavioral consistency is structural (one component, everywhere).
 // docs/ keeps a synced copy (see build.mjs → copy:docs).
 
+import { t } from "./i18n.js";
 import {
   canonicalRef,
   candidatesFromGroups,
@@ -2962,11 +2963,11 @@ class ArtifactInspector extends Component {
     const copyBtn = this._root.querySelector(".copy");
     const note = this._root.querySelector(".note");
     if (isFileBacked && isIncomplete) {
-      if (copyBtn) copyBtn.textContent = "Copy preview content";
+      if (copyBtn) copyBtn.textContent = t("components_copy_preview_content");
       note.hidden = false;
-      note.textContent = `Preview showing initial 64 KiB. Complete file is retained in OPFS stream (${totalBytes} bytes).`;
+      note.textContent = t("components_preview_initial_note", String(totalBytes));
     } else {
-      if (copyBtn) copyBtn.textContent = "Copy exact content";
+      if (copyBtn) copyBtn.textContent = t("components_copy_exact_content");
       note.hidden = true;
     }
   }
@@ -2977,10 +2978,10 @@ class ArtifactInspector extends Component {
       const isFileBacked = a.meta?.fileBacked === true || a.meta?.isStreamBacked === true;
       const isIncomplete = a.meta?.contentIncomplete === true || a.meta?.contentComplete === false;
       const successMsg = (isFileBacked && isIncomplete)
-        ? "Copied preview content (file-backed stream in OPFS)."
-        : "Copied exact artifact content.";
+        ? t("components_copied_preview")
+        : t("components_copied_exact");
       try { await navigator.clipboard.writeText(String(this._asset?.content ?? "")); status.textContent = successMsg; }
-      catch { status.textContent = "Copy failed. Select the source and copy it manually."; }
+      catch { status.textContent = t("components_copy_failed_manual"); }
     });
     this._root.querySelector(".play")?.addEventListener("click", () => this.startPreview());
   }
@@ -2996,7 +2997,7 @@ class ArtifactInspector extends Component {
       tbl.setAttribute("name", a.name ?? "Table");
       host.replaceChildren(tbl);
       host.hidden = false;
-      this._root.querySelector(".status").textContent = "Interactive table preview opened.";
+      this._root.querySelector(".status").textContent = t("components_table_preview_opened");
       return;
     }
     const frame = createHtmlFrame(this._asset.content ?? "", { title:`Interactive preview of ${this._asset.name ?? "HTML artifact"}` });
@@ -3005,7 +3006,7 @@ class ArtifactInspector extends Component {
     this._frameCleanup = wireHtmlFramePreference(frame.wrapper, { nonce:frame.nonce, ...currentFramePreference() });
     this._frameDispose = frame.dispose;
     frame.iframe.focus();
-    this._root.querySelector(".status").textContent = "Interactive preview opened in a restricted sandbox.";
+    this._root.querySelector(".status").textContent = t("components_sandbox_preview_opened");
   }
   stopPreview() {
     this._frameCleanup?.();
