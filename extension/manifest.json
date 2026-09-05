@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
+  "default_locale": "en",
   "name": "Chrome Agent Platform",
-  "version": "0.3.157",
+  "version": "0.3.158",
   "description": "Chrome as the agent platform: a multi-agent hub that orchestrates the web via WebMCP, with sites-as-sub-agents, origin-keyed OPFS memory, alarms, and usage accounting.",
   "permissions": [
     "alarms",
@@ -106,7 +107,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "version_name": "0.3.157",
+  "version_name": "0.3.158",
   "sandbox": {
     "pages": [
       "sandbox/script-sandbox.html",

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.158] — 2026-09-05
+- Settings, hub and components carry their copy as hardcoded English today — this inventory counts the candidates surface by surface and proposes the catalogue key shape, so the migration knows what it is moving before it moves anything
+
 ## [0.3.157] — 2026-09-05
 - Merge bookkeeping: union changelog with the site-agent delegation entries, regenerate the bundled inventory after the merge
 
