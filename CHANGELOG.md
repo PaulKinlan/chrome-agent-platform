@@ -1,6 +1,14 @@
 # Changelog
 
-<<<<<<< HEAD
+## [0.3.157] — 2026-09-05
+- Merge bookkeeping: union changelog with the site-agent delegation entries, regenerate the bundled inventory after the merge
+
+## [0.3.156] — 2026-09-05
+- feat(0ks): add attachment and live progress support to site-agent delegation
+
+## [0.3.155] — 2026-09-05
+- Delegating tasks to site agents supports attachments and streams live progress without dropping files
+
 ## [0.3.154] — 2026-09-05
 - Maintenance and fixes.
 
@@ -18,13 +26,6 @@
 
 ## [0.3.149] — 2026-09-05
 - Reopening long threads or agents loads quickly with windowed history and on-demand pagination for older runs
-=======
-## [0.3.150] — 2026-09-05
-- feat(0ks): add attachment and live progress support to site-agent delegation
-
-## [0.3.149] — 2026-09-05
-- Delegating tasks to site agents supports attachments and streams live progress without dropping files
->>>>>>> origin/main
 
 ## [0.3.148] — 2026-09-05
 - perf(4epo): reintroduce windowed loading with pagination for thread and agent open
