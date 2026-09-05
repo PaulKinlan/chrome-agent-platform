@@ -337,10 +337,10 @@ export async function resetSiteToolConsents(origin, enrollmentGen, mode = "all",
     }
     const envelope = await readEnvelope(canonical, enrollmentGen);
     const removed = envelope.records.filter((record) => mode === "all" || record.state === "allowed");
-    if (!removed.length) {
-      return Object.freeze({ ok: true, origin: canonical, enrollmentGen, revision: envelope.revision, removed: Object.freeze([]) });
-    }
+    // The owner action is an authority boundary even when every tool is ASK.
+    // Persist a new revision so an outstanding card cannot save a late Allow.
     const revision = envelope.revision + 1;
+    if (!Number.isSafeInteger(revision)) fail("site_tool_consent_revision");
     const kept = mode === "all"
       ? []
       : envelope.records.filter((record) => record.state !== "allowed");

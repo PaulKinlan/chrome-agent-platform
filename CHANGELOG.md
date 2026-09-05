@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.245] — 2026-09-05
+- Resetting site tool decisions cancels pending approvals
+
 ## [0.3.244] — 2026-09-05
 - Require owner consent before site tools run
 

@@ -106,6 +106,24 @@ Deno.test("first-use consent: later tool asks separately; site automatic reset l
   assertEquals((await toolConsentSnapshot(origin, late.name)).state, "ask");
 });
 
+Deno.test("first-use consent: every site reset fences a stale ASK even when no decision changes", async () => {
+  for (const mode of ["all", "automatic"]) {
+    const origin = `https://consent-empty-reset-${mode}.example.com`;
+    await enrollOrigin(origin);
+    await replaceTools(origin, [BOOK]);
+    const stale = await toolConsentSnapshot(origin, BOOK.name);
+    const reset = await resetToolConsents(origin, mode);
+    assert(reset.revision > stale.revision);
+    assertEquals(reset.removed, []);
+    await assertRejects(
+      () => setToolConsentDecision(origin, BOOK.name, "allowed", { expected: stale }),
+      Error,
+      "site_tool_consent_changed",
+    );
+    assertEquals((await toolConsentSnapshot(origin, BOOK.name)).state, "ask");
+  }
+});
+
 Deno.test("first-use consent: descriptor drift rearms Allow but cannot evade sticky Deny", async () => {
   const origin = "https://consent-d.example.com";
   await enrollOrigin(origin);
@@ -248,6 +266,8 @@ Deno.test("first-use consent SW wiring: exact state drives availability, guard, 
   assert(sw.includes("verifySiteToolAuthorization"));
   assert(sw.includes('async "webmcp.consent.tool.set"'));
   assert(sw.includes("requireSettingsSender(context)"));
+  assert(sw.includes('const affected = states.filter((state) => resetMode === "all" || state.state !== "denied");'));
+  assert(!sw.includes("if (affected.length) await invalidateSiteToolWork(canonical);"));
   assert(!sw.includes("if (enrolled) return true;"), "enrollment blanket approval is gone");
   assertEquals((await listTools("https://consent-a.example.com")).length, 1);
 });

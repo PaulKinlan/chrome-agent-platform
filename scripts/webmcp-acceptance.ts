@@ -945,10 +945,76 @@ async function main() {
       })()`), 10000, 100);
       check("Settings: site-wide reset rearms every exact tool to ASK", allAsk === true);
 
+      // A second site-wide reset while every materialized decision is ASK is
+      // still an authority boundary. Start a genuine first-use call, reset the
+      // site from Settings, and prove the old card cannot save Allow or reach
+      // the page; only a fresh run may ask again.
+      await front(hubT.targetId, ns);
+      const resetFenceCartBefore = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
+      const resetFenceCardsBefore = await approvalCardCount();
+      const resetFenceRan = await runSiteTask(`reset fence probe @demo-site-tool add_to_cart {"sku":"widget-basic"}`);
+      check("site reset ASK fence: submitted a genuine first-use call", resetFenceRan);
+      const resetFencePending = await c.until(() => c.evalIn(ns, `(() => {
+        const cards = [...document.querySelectorAll("approval-card")].filter((card) => card.getAttribute("title")?.includes("add_to_cart"));
+        const card = cards.at(-1);
+        const state = card?.getAttribute("state");
+        return card && !["granted", "denied", "expired", "cancelled"].includes(state) ? { count: cards.length, state } : null;
+      })()`), 15000, 100);
+      check("site reset ASK fence: the old run is waiting on its first-use card",
+        resetFencePending?.count > 0 && await approvalCardCount() === resetFenceCardsBefore + 1, resetFencePending);
+      const resetFencePreDispatch = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
+      check("site reset ASK fence: no page side effect crossed before reset", resetFencePreDispatch === resetFenceCartBefore,
+        { resetFenceCartBefore, resetFencePreDispatch });
+      await front(consentSettingsT.targetId, consentSettings);
+      const resetWhileAsk = await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector('[data-reset="all"]')`);
+      check("site reset ASK fence: clicked Reset decisions while every stored decision was ASK", resetWhileAsk);
+      await front(hubT.targetId, ns);
+      const resetFenceCancelled = await c.until(() => c.evalIn(ns, `(() => {
+        const cards = [...document.querySelectorAll("approval-card")].filter((card) => card.getAttribute("title")?.includes("add_to_cart"));
+        const card = cards.at(-1);
+        return card?.getAttribute("state") === "cancelled"
+          ? { state: "cancelled", allowPresent: !!card.shadowRoot?.querySelector(".approve") }
+          : null;
+      })()`), 15000, 100);
+      check("site reset ASK fence: reset cancels the old first-use card", resetFenceCancelled?.state === "cancelled", resetFenceCancelled);
+      const staleResetAllowClicked = await c.clickExpr(ns, `(() => {
+        const cards = [...document.querySelectorAll("approval-card")].filter((card) => card.getAttribute("title")?.includes("add_to_cart"));
+        return cards.at(-1)?.shadowRoot?.querySelector(".approve");
+      })()`);
+      check("site reset ASK fence: the cancelled card cannot save a late Allow", staleResetAllowClicked === false,
+        { staleResetAllowClicked, resetFenceCancelled });
+      await waitForComposer();
+      const resetFenceCartAfter = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
+      check("site reset ASK fence: the cancelled call never dispatches", resetFenceCartAfter === resetFenceCartBefore,
+        { resetFenceCartBefore, resetFenceCartAfter });
+      const resetFenceFreshRan = await runSiteTask(`fresh reset fence probe @demo-site-tool add_to_cart {"sku":"widget-basic"}`);
+      check("site reset ASK fence: submitted a fresh use after reset", resetFenceFreshRan);
+      const resetFenceFreshCard = await c.until(() => c.evalIn(ns, `(() => {
+        const cards = [...document.querySelectorAll("approval-card")].filter((card) => card.getAttribute("title")?.includes("add_to_cart"));
+        const card = cards.at(-1);
+        const state = card?.getAttribute("state");
+        return cards.length > ${Number(resetFencePending?.count ?? 0)} && card && !["granted", "denied", "expired", "cancelled"].includes(state)
+          ? { count: cards.length, state }
+          : null;
+      })()`), 15000, 100);
+      check("site reset ASK fence: fresh use asks again on a new card", !!resetFenceFreshCard, resetFenceFreshCard);
+      const resetFenceFreshDenied = await c.clickExpr(ns, `(() => {
+        const cards = [...document.querySelectorAll("approval-card")].filter((card) => card.getAttribute("title")?.includes("add_to_cart"));
+        return cards.at(-1)?.shadowRoot?.querySelector(".deny");
+      })()`);
+      check("site reset ASK fence: denied the fresh card to settle the proof run", resetFenceFreshDenied);
+      await waitForComposer();
+      const resetFenceFinalCart = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
+      check("site reset ASK fence: neither the stale nor denied fresh card mutated the page", resetFenceFinalCart === resetFenceCartBefore,
+        { resetFenceCartBefore, resetFenceFinalCart });
+      await front(consentSettingsT.targetId, consentSettings);
+      await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector(".refresh")`);
+      await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.sites?.flatMap((site) => site.tools || []).find((tool) => tool.name === "add_to_cart")?.state === "denied" ? true : null`), 10000, 100);
+
       // In-flight revocation/result suppression. Re-allow add_to_cart from
       // Settings, replace only its page implementation with a same-descriptor
       // delayed result, start the production route, then revoke while pending.
-      const allowAdd = await c.clickExpr(consentSettings, toolButtonExpr("add_to_cart", "Allow automatically"));
+      const allowAdd = await c.clickExpr(consentSettings, toolButtonExpr("add_to_cart", "Allow / try again"));
       check("in-flight revocation: re-allowed add_to_cart in Settings", allowAdd);
       const addAllowed = await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.sites?.flatMap((site) => site.tools || []).find((tool) => tool.name === "add_to_cart")?.state === "allowed" ? true : null`), 10000, 100);
       check("in-flight revocation: exact Allow persisted", addAllowed === true);

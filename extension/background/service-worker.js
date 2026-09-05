@@ -7779,7 +7779,9 @@ const handlers = mergeRouteMaps(
     if (siteToolResetting > 0) return { ok: false, error: "site tool profile reset in progress" };
     try {
       const states = await toolConsentStates(canonical);
-      const affected = states.filter((state) => resetMode === "all" ? state.state !== "ask" : state.state === "allowed");
+      // Resetting an ASK tool invalidates any card already shown for that
+      // revision. Sticky Deny remains untouched by the automatic-only mode.
+      const affected = states.filter((state) => resetMode === "all" || state.state !== "denied");
       for (const consent of affected) {
         await appendRequiredSiteToolAudit(auditRecordFor(consent, {
           event: "consent-reset",
@@ -7796,7 +7798,7 @@ const handlers = mergeRouteMaps(
       const applied = await resetToolConsents(canonical, resetMode, {
         expectedProfileEpoch: consentWriterEpoch,
       });
-      if (affected.length) await invalidateSiteToolWork(canonical);
+      await invalidateSiteToolWork(canonical);
       return { ok: true, reset: applied };
     } catch (error) {
       return { ok: false, error: String(error?.code ?? error?.message ?? error) };
