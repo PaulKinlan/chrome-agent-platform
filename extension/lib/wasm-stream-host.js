@@ -9,7 +9,7 @@ import { validateAuthorityRecord } from "./wasm-executor.js";
 import { validateWasmStreamRef, WASM_STREAM_ROOT_NAME } from "./wasm-stream-files.js";
 
 export const WASM_STREAM_RUN_TYPE = "cap:wasm-stream-run";
-export const WASM_STREAM_WALL_MS = 180_000;
+export const WASM_STREAM_WALL_MS = 180_000; export const WASM_STREAM_SERVICE_WORKER_PATH = "dist/background/service-worker.js";
 
 function plain(value) {
   return Boolean(value && typeof value === "object" && !Array.isArray(value) &&
@@ -224,9 +224,12 @@ export function isTrustedWasmStreamSender(sender, runtime = chrome.runtime) {
   if (sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
   const url = typeof sender?.url === "string" ? sender.url : "";
   if (url === "") return true;
-  const serviceWorker = runtime.getManifest?.()?.background?.service_worker;
-  return typeof serviceWorker === "string" && serviceWorker.length > 0 &&
-    url === runtime.getURL(serviceWorker);
+  // Chrome strips the background section from getManifest() in an offscreen
+  // document, so this path is pinned and separately tested against the shipped
+  // manifest rather than inferred from attacker-controlled sender fields.
+  const declared = runtime.getManifest?.()?.background?.service_worker;
+  if (typeof declared === "string" && declared.length > 0 && declared !== WASM_STREAM_SERVICE_WORKER_PATH) return false;
+  return url === runtime.getURL("dist/background/service-worker.js");
 }
 
 export function registerWasmStreamHost() {

@@ -4,6 +4,7 @@ import {
   executeWasmStreamRequest,
   isTrustedWasmStreamSender,
   WASM_STREAM_RUN_TYPE,
+  WASM_STREAM_SERVICE_WORKER_PATH,
 } from "../extension/lib/wasm-stream-host.js";
 
 function assert(condition, message = "assertion failed") { if (!condition) throw new Error(message); }
@@ -139,9 +140,14 @@ Deno.test("stream host has a finite cancellation deadline", async () => {
   }
 });
 
-Deno.test("offscreen stream listener trusts only the extension service worker sender", () => {
+Deno.test("offscreen stream listener trusts only the extension service worker sender", async () => {
+  const manifest = JSON.parse(await Deno.readTextFile("extension/manifest.json"));
+  equal(manifest.background.service_worker, WASM_STREAM_SERVICE_WORKER_PATH, "sender pin matches the shipped manifest");
   assert(isTrustedWasmStreamSender({ id: runtime.id }, runtime));
   assert(isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("dist/background/service-worker.js") }, runtime));
+  const offscreenRuntime = { ...runtime, getManifest() { return { manifest_version: 3 }; } };
+  assert(isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("dist/background/service-worker.js") }, offscreenRuntime),
+    "Chrome's offscreen-sanitized manifest falls back to the separately pinned shipped path");
   assert(!isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("background/service-worker.js") }, runtime));
   assert(!isTrustedWasmStreamSender({ id: "other" }, runtime));
   assert(!isTrustedWasmStreamSender({ id: runtime.id, documentId: "options-document", url: runtime.getURL("options/options.html") }, runtime));
