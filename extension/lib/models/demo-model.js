@@ -172,6 +172,14 @@ const FENCE_OPEN_RE = /^<<<UNTRUSTED run:([A-Za-z0-9]+)>>>\n/;
 // DEMO_STREAM_CHUNK_MS) so a keyless journey can watch the assistant bubble
 // grow across many samples, exactly as a hosted provider's tokens arrive.
 const STREAM_MARKER = "@demo-stream";
+// @demo-think: emit a PACED reasoning stream (reasoning-start, 24-char
+// reasoning-delta chunks, reasoning-end) BEFORE the answer — the same shape a
+// thinking-capable provider (Anthropic extended thinking, Gemini thought
+// parts, DeepSeek reasoning_content) normalizes to. Drives the conversation's
+// live thinking trace end-to-end (chrome-agent-platform-h0iy). Product
+// behavior like @demo-slow/@demo-stream — not a hidden test seam.
+const THINK_MARKER = "@demo-think";
+export const DEMO_THINKING_TRACE = ("Thinking through the request: first I consider what the owner asked for, then I check what I already know, then I decide whether any tool call is needed before answering. ").repeat(3);
 // @demo-long-answer: emit a deterministic answer ABOVE the long-response
 // collapse threshold (> 4000 chars) so the full-response surface can be
 // driven end-to-end (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01). Product
@@ -292,6 +300,12 @@ function wantsStream(prompt) {
   const msgs = Array.isArray(prompt) ? prompt : [];
   const last = [...msgs].reverse().find((m) => m?.role === "user");
   return extractText([last]).toLowerCase().includes(STREAM_MARKER);
+}
+
+function wantsThink(prompt) {
+  const msgs = Array.isArray(prompt) ? prompt : [];
+  const last = [...msgs].reverse().find((m) => m?.role === "user");
+  return extractText([last]).toLowerCase().includes(THINK_MARKER);
 }
 
 function wantsLongAnswer(prompt) {
@@ -2571,7 +2585,11 @@ export function createDemoModel() {
             response = demoAlreadyFinal(options.prompt)
               ? "[demo model] Task complete — nothing more to do."
               : "[demo model] Tool calls executed in sequence: memory_set wrote the shopping list, then memory_get read it back twice.";
-          } else if (wantsStream(options.prompt)) {
+          } else if (wantsStream(options.prompt) || wantsThink(options.prompt)) {
+            // @demo-think answers with the SAME long paced answer as
+            // @demo-stream: the thinking trace stays collapsible THROUGH the
+            // answer phase, which is the window the conversation journey
+            // exercises (a 150 ms default answer would settle mid-click).
             response = DEMO_STREAM_ANSWER;
           } else if (wantsLongAnswer(options.prompt)) {
             // A deterministic answer ABOVE the long-response collapse
@@ -2587,8 +2605,35 @@ export function createDemoModel() {
             // preview strips it before a person sees it.
             response = "[demo model] I'm the built-in demo, so I can't do this yet. Connect a model in Settings and ask again.";
           }
-          controller.enqueue({ type: "text-start", id });
+          const thinking = wantsThink(options.prompt) ? (DEMO_THINKING_TRACE.match(/.{1,24}/g) ?? [DEMO_THINKING_TRACE]) : null;
           const chunks = response.match(/.{1,24}/g) ?? [response];
+          if (thinking) {
+            // Paced reasoning BEFORE the answer: reasoning-start, the trace in
+            // 24-char deltas (one per macrotask), reasoning-end, then the
+            // paced answer — exactly a thinking provider's part order.
+            (async () => {
+              try {
+                controller.enqueue({ type: "reasoning-start", id: `${id}-r` });
+                for (const chunk of thinking) {
+                  await abortableDelay(DEMO_STREAM_CHUNK_MS, options.abortSignal);
+                  controller.enqueue({ type: "reasoning-delta", id: `${id}-r`, delta: chunk });
+                }
+                controller.enqueue({ type: "reasoning-end", id: `${id}-r` });
+                controller.enqueue({ type: "text-start", id });
+                for (const chunk of chunks) {
+                  await abortableDelay(DEMO_STREAM_CHUNK_MS, options.abortSignal);
+                  controller.enqueue({ type: "text-delta", id, delta: chunk });
+                }
+                controller.enqueue({ type: "text-end", id });
+                controller.enqueue({ type: "finish", usage, finishReason: "stop" });
+                controller.close();
+              } catch (err) {
+                controller.error(err);
+              }
+            })();
+            return;
+          }
+          controller.enqueue({ type: "text-start", id });
           if (wantsStream(options.prompt)) {
             // Paced delivery: each chunk lands in its own macrotask so the
             // transcript can grow visibly (and abort cuts the stream short).

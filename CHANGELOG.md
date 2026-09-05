@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.251] — 2026-09-05
+- When your model thinks before answering (supported on Gemini, Claude, DeepSeek and others), you can now watch it happen: a collapsed “Thinking” panel appears under the status line while the model works — tap it to read the live thinking as it streams. It tucks itself away when the answer starts.
+
 ## [0.3.250] — 2026-09-05
 - The release notes are repaired and now guarded: every note describes a real change, version numbers run in order with no gaps, and the versioning helper can no longer invent placeholder entries — commits with nothing user-visible simply do not consume a version.
 

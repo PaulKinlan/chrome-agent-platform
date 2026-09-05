@@ -417,8 +417,11 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         }
         break;
       }
+      case "thinking-delta":
+        c.thinkingDelta?.({ delta: ev.delta, start: ev.start === true });
+        break;
       case "text-delta":
-        if (streamer.onDelta(ev)) onStatus?.({ state: "running", activity: "Writing the answer…" });
+        if (streamer.onDelta(ev)) { c.collapseThinkingTrace?.(); onStatus?.({ state: "running", activity: "Writing the answer…" }); }
         break;
       case "text":
         if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
@@ -2312,10 +2315,17 @@ export async function runConversationTurn(container, { text, attachments = [], h
         maybeRenderApproval(src);
         break;
       }
+      case "thinking-delta":
+        // The provider's thinking tokens, streaming live under the
+        // "Thinking…" row (chrome-agent-platform-h0iy). The trace mounts on
+        // the first delta — a provider with no thinking stream never shows it.
+        c.thinkingDelta?.({ delta: ev.delta, start: ev.start === true });
+        break;
       case "text-delta":
         // The first visible token replaces "Thinking…" in the live-status row;
-        // later deltas only grow the bubble (no per-delta announcement).
-        if (streamer.onDelta(ev)) { lastActivity = "Writing the answer"; status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity) }); }
+        // later deltas only grow the bubble (no per-delta announcement). The
+        // answer starting also collapses the thinking trace (its job is done).
+        if (streamer.onDelta(ev)) { c.collapseThinkingTrace?.(); lastActivity = "Writing the answer"; status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity) }); }
         break;
       case "text":
         if (ev.hidden === true) { streamer.finalize(ev.step, ""); break; }
@@ -2335,6 +2345,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // queue once; a later response is a no-op. An ABORTED run must never
         // report a successful "done" status.
         terminal.onPortDone(ev.aborted === true);
+        // The thinking trace is live-only: it never outlives its run.
+        c.clearThinkingTrace?.();
         // Settle the plan strip into its collapsed "N steps" summary (an aborted
         // run marks any unfinished step as errored).
         c.planEvent?.({ type: ev.aborted === true ? "fail" : "settle" });

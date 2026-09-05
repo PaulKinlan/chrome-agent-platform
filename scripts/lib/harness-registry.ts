@@ -104,6 +104,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-fingerprint-surface.ts": { class: "kat" },
   "kat-notify-icon.ts": { class: "kat" },
   "kat-noun-discipline.ts": { class: "kat" },
+  "kat-thinking-trace.ts": { class: "kat" },
   "kat-patch-asset.ts": { class: "kat" },
   "kat-permission-approval.ts": { class: "kat", ...RED("8/1", "'Approvals section displays pending revocation' finds 0 approvals") },
   "kat-pipeline-steps.ts": { class: "kat" },

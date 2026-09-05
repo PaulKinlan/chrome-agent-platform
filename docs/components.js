@@ -5909,6 +5909,17 @@ class AgentConversation extends Component {
          belongs inline at the bottom of the chat, not as a separate banner
          duplicating the running entry beneath it). */
       agent-conversation .live-status { position: sticky; bottom: var(--conversation-dock, 0px); z-index: 2; margin-block-start: 8px; flex: 0 0 auto; }
+      /* The live thinking trace (chrome-agent-platform-h0iy): a collapsible
+         region under the live-status row, present only while a provider is
+         streaming thinking tokens. Muted, monospace-free, bounded height. */
+      agent-conversation .thinking-trace { flex: 0 0 auto; margin-block-start: 4px; border: 1px solid var(--border-subtle, #e3e1dc); border-radius: 8px; background: var(--bg-subtle, #f6f5f2); overflow: hidden; }
+      agent-conversation .thinking-trace-toggle { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 6px 10px; font: inherit; font-size: 12px; color: var(--text-muted, #6b675f); cursor: pointer; text-align: left; }
+      agent-conversation .thinking-trace-toggle:hover { color: var(--text, #24231f); }
+      agent-conversation .thinking-trace-toggle:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: -2px; }
+      agent-conversation .thinking-trace-body { padding: 0 10px 8px; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; color: var(--text-muted, #6b675f); }
+      agent-conversation .thinking-trace[data-open="false"] .thinking-trace-body { display: none; }
+      agent-conversation .thinking-trace[data-open="false"] .thinking-trace-caret { display: inline-block; transform: rotate(0deg); }
+      agent-conversation .thinking-trace[data-open="true"] .thinking-trace-caret { display: inline-block; transform: rotate(90deg); }
     `);
     const msgs = this.getAttribute("messages");
     if (msgs != null) this.setMessages(parseJSONAttr(msgs, []));
@@ -6298,6 +6309,12 @@ class AgentConversation extends Component {
     // Append LAST so the row is the newest thing in the flow; the sticky
     // bottom pin keeps it visible even when the owner scrolls up.
     this.appendChild(row);
+    // The thinking trace belongs DIRECTLY under the row: the row re-appends
+    // itself on every status change, so re-pin the trace after it.
+    if (this._thinkingTrace?.isConnected) this.appendChild(this._thinkingTrace);
+    // A terminal/paused state ends thinking — the trace is a live-only
+    // surface and never outlives it.
+    if (!["running", "retrying", "queued"].includes(next.state)) this.clearThinkingTrace();
     this._scrollToBottom();
   }
   bindLiveStatusExecution(executionId) {
@@ -6313,6 +6330,83 @@ class AgentConversation extends Component {
     this._liveStatusKey = null;
     this._liveStatusRow?.remove();
     this._liveStatusRow = null;
+  }
+
+  /* ── the live thinking trace (chrome-agent-platform-h0iy) ──────────────
+   * When the provider streams thinking tokens, they appear in a collapsible
+   * region directly under the live-status row: collapsed by default with a
+   * live character count, expanding streams the trace (auto-scroll pinned to
+   * the bottom until the owner scrolls up). The trace exists ONLY while its
+   * run is live — it is never persisted and is dropped at settle. */
+  thinkingDelta({ delta, start } = {}) {
+    if (typeof delta !== "string" || !delta) return;
+    if (start === true) {
+      this._thinkingText = "";
+      this._thinkingUserScrolled = false;
+      if (this._thinkingTraceBody) this._thinkingTraceBody.textContent = "";
+    }
+    let trace = this._thinkingTrace;
+    if (!trace || !trace.isConnected) {
+      trace = document.createElement("div");
+      trace.className = "thinking-trace";
+      trace.dataset.open = "false";
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "thinking-trace-toggle";
+      toggle.setAttribute("aria-expanded", "false");
+      const caret = document.createElement("span");
+      caret.className = "thinking-trace-caret";
+      caret.textContent = "▸";
+      caret.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.className = "thinking-trace-label";
+      toggle.append(caret, label);
+      const body = document.createElement("div");
+      body.className = "thinking-trace-body";
+      body.addEventListener("scroll", () => {
+        // Unpin when the owner scrolls up; re-pin at the bottom edge.
+        this._thinkingUserScrolled = body.scrollHeight - body.scrollTop - body.clientHeight > 24;
+      });
+      toggle.addEventListener("click", () => {
+        const open = trace.dataset.open !== "true";
+        trace.dataset.open = open ? "true" : "false";
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        if (open) body.scrollTop = body.scrollHeight;
+      });
+      trace.append(toggle, body);
+      this._thinkingTrace = trace;
+      this._thinkingTraceBody = body;
+      this._thinkingTraceLabel = label;
+      this._thinkingText = "";
+      this._thinkingUserScrolled = false;
+    }
+    this._thinkingText += delta;
+    if (this._thinkingTraceBody) {
+      this._thinkingTraceBody.textContent = this._thinkingText;
+      if (trace.dataset.open === "true" && !this._thinkingUserScrolled) {
+        this._thinkingTraceBody.scrollTop = this._thinkingTraceBody.scrollHeight;
+      }
+    }
+    if (this._thinkingTraceLabel) {
+      this._thinkingTraceLabel.textContent = `Thinking · ${this._thinkingText.length} characters`;
+    }
+    // Mount directly under the live-status row (which re-appends itself on
+    // every status change, so append AFTER it here too).
+    this.appendChild(trace);
+  }
+  collapseThinkingTrace() {
+    const trace = this._thinkingTrace;
+    if (!trace) return;
+    trace.dataset.open = "false";
+    trace.querySelector(".thinking-trace-toggle")?.setAttribute("aria-expanded", "false");
+  }
+  clearThinkingTrace() {
+    this._thinkingTrace?.remove();
+    this._thinkingTrace = null;
+    this._thinkingTraceBody = null;
+    this._thinkingTraceLabel = null;
+    this._thinkingText = "";
+    this._thinkingUserScrolled = false;
   }
 
   // ── the plan strip ────────────────────────────────────────────────────
@@ -6362,6 +6456,11 @@ class AgentConversation extends Component {
     // from the durable log does not wipe the just-settled "N steps" summary.
     const liveRow = this._liveStatusRow;
     const planStrip = this._planStrip?.isConnected ? this._planStrip : null;
+    // The live thinking trace (h0iy) survives a MID-RUN re-projection exactly
+    // like the live row — a thread reconcile can land while the provider is
+    // still streaming. At settle the trace is already cleared, so nothing
+    // live-only is ever restored into a persisted view.
+    const thinkingTrace = this._thinkingTrace?.isConnected ? this._thinkingTrace : null;
     this.replaceChildren();
     this._lastTs = null;
     this._approvalKeys = new Map();
@@ -6397,6 +6496,8 @@ class AgentConversation extends Component {
       }
     }
     if (liveRow) this.appendChild(liveRow);
+    // Directly under the live-status row, as in the live flow.
+    if (thinkingTrace) this.appendChild(thinkingTrace);
     // The plan strip pins to the TOP — re-insert it as the first child so it
     // survives the rebuild in place.
     if (planStrip) this.insertBefore(planStrip, this.firstChild);

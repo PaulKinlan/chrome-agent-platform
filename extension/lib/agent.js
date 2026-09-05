@@ -1136,6 +1136,19 @@ export function createAgent({
       first = false;
       try { progressCb?.(ev); } catch { /* a progress failure never breaks the stream */ }
     });
+    // THINKING TRACE (chrome-agent-platform-h0iy): reasoning-delta parts ride
+    // the same observed branch as their own bounded event stream so the
+    // conversation can show the provider's live thinking under the "Thinking…"
+    // row. Same discipline as text deltas: first delta at once with
+    // start:true (a within-run retry restarts the trace), coalesced after,
+    // never persisted, and a provider that emits no reasoning parts simply
+    // produces no events — the surface never appears.
+    let thinkingFirst = true;
+    const thinkingCoalescer = createTextDeltaCoalescer((delta) => {
+      const ev = { type: "thinking-delta", delta, step, ...(thinkingFirst ? { start: true } : {}) };
+      thinkingFirst = false;
+      try { progressCb?.(ev); } catch { /* a progress failure never breaks the stream */ }
+    });
     let consumed;
     let observed;
     try { [consumed, observed] = value.stream.tee(); } catch { return value; }
@@ -1146,10 +1159,12 @@ export function createAgent({
           const { done, value: part } = await reader.read();
           if (done) break;
           if (part && part.type === "text-delta" && typeof part.delta === "string") coalescer.push(part.delta);
+          else if (part && part.type === "reasoning-delta" && typeof part.delta === "string") thinkingCoalescer.push(part.delta);
         }
       } catch { /* the consumed branch reports the failure */ } finally {
         try { reader.releaseLock(); } catch { /* ignore */ }
         coalescer.flush();
+        thinkingCoalescer.flush();
       }
     })();
     return { ...value, stream: consumed };
