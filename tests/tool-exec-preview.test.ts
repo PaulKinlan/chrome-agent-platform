@@ -11,6 +11,7 @@ import {
   PREVIEW_LIMITS,
   PREVIEW_SPECS,
   PREVIEW_TOOL_IDS,
+  STREAM_BACKED_BUNDLED_TOOL_IDS,
   boundPreviewResult,
   buildPreviewAuthority,
   buildPreviewJob,
@@ -592,4 +593,24 @@ Deno.test("R12 sqlite input: the exact-key {sql,params,database,readOnly} JSON; 
   assertEquals(bigSql.toolId, "sqlite3_query_bounded");
   const overOldBounds = validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "x".repeat(1793), params: ["p".repeat(600)], database: "test.db", readOnly: true }) });
   assertEquals(overOldBounds.toolId, "sqlite3_query_bounded", "sql past the removed 1792 bound and params past 512 are accepted");
+});
+
+// The nine-member pin as a shared literal — wasm-task-execution.test.ts uses
+// the same literal to pin the SCHEMA side, so a tenth member fails even if its
+// package schema never advertises inputRef.
+const EXPECTED_STREAM_IDS = ["awk", "base64", "grep", "jq", "sed", "sort", "tr", "uniq", "wc"];
+
+Deno.test("preview: the streamed Unix tool allowlist is EXACTLY nine members (0alg)", () => {
+  // chrome-agent-platform-0alg: the independent review found non-listed tools
+  // are correctly refused, but nothing failed if an extra tool (e.g. cat)
+  // silently acquired the OPFS streaming profile. Pin the exact membership:
+  // adding OR removing a member must fail this test.
+  assertEquals(STREAM_BACKED_BUNDLED_TOOL_IDS.length, 9, "exactly nine streamed tools");
+  assertEquals(new Set(STREAM_BACKED_BUNDLED_TOOL_IDS).size, 9, "no duplicate members");
+  assertEquals(
+    [...STREAM_BACKED_BUNDLED_TOOL_IDS].sort(),
+    EXPECTED_STREAM_IDS,
+    "the allowlist is exactly awk, base64, grep, jq, sed, sort, tr, uniq, wc",
+  );
+  assert(Object.isFrozen(STREAM_BACKED_BUNDLED_TOOL_IDS), "the allowlist is frozen");
 });

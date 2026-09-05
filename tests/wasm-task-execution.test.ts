@@ -101,7 +101,11 @@ Deno.test("executableBundledToolRecords: validateArguments validates valid and r
   assertEquals((await diffRec.validateArguments({ inputRef: ref })).ok, false,
     "non-stream packages do not acquire an unsupported file-backed execution profile");
 
-  const expectedStreamIds = [...STREAM_BACKED_BUNDLED_TOOL_IDS].sort();
+  // 0alg: pin the literal nine — deriving the expectation FROM the module
+  // under test lets a tenth member (e.g. cat) pass both sides silently.
+  const expectedStreamIds = ["awk", "base64", "grep", "jq", "sed", "sort", "tr", "uniq", "wc"];
+  assertEquals(JSON.stringify([...STREAM_BACKED_BUNDLED_TOOL_IDS].sort()), JSON.stringify(expectedStreamIds),
+    "the streamed allowlist itself is exactly the pinned nine");
   const schemaStreamIds = records
     .filter((record) => Object.hasOwn(record.descriptorInput.inputSchema.properties, "inputRef"))
     .map((record) => record.descriptorInput.toolId)

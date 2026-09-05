@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.240] — 2026-09-05
+- Internal hardening: the list of built-in tools allowed to read large files is now pinned by a test, so it cannot silently gain or lose a tool.
+
 ## [0.3.239] — 2026-09-05
 - The built-in tool catalogue research now covers many more areas (developer tools, documents, data, media, science, Python via Pyodide, and everyday productivity), ready for future tool additions
 
