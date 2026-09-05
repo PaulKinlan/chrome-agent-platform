@@ -82,7 +82,7 @@ import {
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
-import { attachmentContext, buildMultimodalTask, validateRunAttachments } from "../lib/attachments.js";
+import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
 import {
   canonicalOrigin,
@@ -5468,7 +5468,7 @@ const handlers = mergeRouteMaps(
         // events (incl. tool permission denials → approval cards) are accepted
         // by the conversation's exact-runId fence; execId stays the durable
         // authority for the run itself.
-        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null });
+        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null, attachments: bounded });
       } else if (mentionRoute) {
         result = await handlers[mentionRoute]({
           id: mention.id,
@@ -7422,7 +7422,7 @@ const handlers = mergeRouteMaps(
     let result;
     try {
       if (request.route === "agent.delegate") {
-        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, threadId: request.threadId ?? null, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
+        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, attachments: request.attachments ?? [], threadId: request.threadId ?? null, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
       } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
         result = await handlers[request.route]({
           ...(request.routeArgs ?? {}), task: request.task, attachments: request.attachments ?? [],
@@ -8522,13 +8522,14 @@ const handlers = mergeRouteMaps(
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };
   },
-  async "agent.delegate"({ origin, task, threadId = null, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId = null }) {
+  async "agent.delegate"({ origin, task, threadId = null, attachments = [], _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId: callerUiRunId = null, runId = null }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
     // memory. Preemptive revocation: the generation is captured up front, the
     // worker run happens WITHOUT holding the origin lifecycle lock (a hung
     // provider/model must never block agent.delete), and the generation is
     // revalidated BEFORE committing the journal write.
+    const uiRunId = callerUiRunId ?? runId ?? null;
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     const snap = await enrollmentSnapshot(canonical);
@@ -8540,6 +8541,19 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: "delegation enrollment changed; interrupted run cannot resume against a different generation" };
     }
     const execId = _executionId || newExecutionId();
+    // Validate attachments: Site Agents accept text/data and multimodal image
+    // attachments. Host filesystem grants (local-folder) are host-only and
+    // cannot be delegated to Site Agents.
+    const { kept: rawAttachments, dropped: malformedDropped } = validateRunAttachments(attachments);
+    const validAttachments = [];
+    const dropped = [...malformedDropped];
+    for (const a of rawAttachments) {
+      if (a?.kind === "local-folder") {
+        dropped.push({ name: a?.name ?? "folder", reason: "local folder grants are host-only and cannot be delegated to Site Agents" });
+      } else {
+        validAttachments.push(a);
+      }
+    }
     // Capture the provider config once. The durable resume request, gate, pause,
     // and eventual dispatch are all bound to this exact non-secret identity and
     // requested host scope.
@@ -8552,17 +8566,15 @@ const handlers = mergeRouteMaps(
       clientCorrelationId: logicalId,
       kind: "delegate",
       agentId: canonical,
-      taskPreview: task,
-      // An @mention task keeps the HUB thread as its home: the delegate run's
-      // durable outbox commits the terminal row into THAT thread (idempotent by
-      // executionId), so the result lands back in the task — and survives an
-      // SW crash between dispatch and commit.
       threadId: threadId ?? null,
+      taskPreview: task,
+      attachmentCount: validAttachments.length,
+      attachments: sanitizeAttachments(validAttachments) ?? [],
       // The canonical terminal journal is master-owned so restart recovery can
       // never recreate a site store after disenrollment. The per-site audit row
       // below remains generation-fenced telemetry.
       journalTarget: "master",
-      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), generation: gen, threadId: threadId ?? null, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
+      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: threadId ?? null, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
     });
     // Failed admission was already compensated by start(); no readable
     // authority exists, so rollback would be both unnecessary and unsafe.
@@ -8591,7 +8603,17 @@ const handlers = mergeRouteMaps(
         task,
         delegated: true,
         executionId: execId,
+        attachmentCount: validAttachments.length,
+        ...(validAttachments.length ? { attachments: sanitizeAttachments(validAttachments) } : {}),
       }, delegateJournalGuard);
+      await durableRuns.appendLog(execId, {
+        type: "task",
+        id: logicalId,
+        task,
+        executionId: execId,
+        attachmentCount: validAttachments.length,
+        ...(validAttachments.length ? { attachments: sanitizeAttachments(validAttachments) } : {}),
+      }, "task").catch(() => {});
       dispatched = await dispatchDurableProviderRun({
       executionId: execId,
       providerConfig: delegateProviderConfig,
@@ -8676,11 +8698,13 @@ const handlers = mergeRouteMaps(
             try { a.abort?.(); } catch { /* already stopped */ }
           });
         });
-        // Thread the captured generation into a.run so the worker's memory/usage
-        // commits revalidate THAT immutable identity (the round-22 ABA blocker).
+        // Thread the captured generation and attachments into a.run. Text attachments
+        // are formatted into context; images become vision parts in a multimodal task.
+        const delegateContext = attachmentContext(validAttachments);
+        const promptTask = buildMultimodalTask(task, validAttachments);
         return await a.run(
-          task,
-          "",
+          promptTask,
+          delegateContext,
           [],
           gen,
           undefined,
@@ -8772,10 +8796,10 @@ const handlers = mergeRouteMaps(
         }
       });
       return delegatedAborted
-        ? { ok: false, aborted: true, executionId: execId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted" }
+        ? { ok: false, aborted: true, executionId: execId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted", ...(dropped.length ? { droppedAttachments: dropped } : {}) }
         : delegatedOk
-          ? { ok: true, origin: canonical, result, executionId: execId }
-          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId };
+          ? { ok: true, origin: canonical, result, executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) }
+          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) };
         });
       },
     });
@@ -8909,6 +8933,7 @@ async function resumeInterruptedRuns() {
         result = await handlers["agent.delegate"]({
           origin: request.origin,
           task: request.task,
+          attachments: request.attachments ?? [],
           threadId: request.threadId ?? null,
           _executionId: run.executionId,
           _resumeGeneration: request.generation,

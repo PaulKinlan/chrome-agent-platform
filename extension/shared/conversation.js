@@ -2384,9 +2384,6 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // deterministically to the referenced agent (its own sandbox), whose
       // result is committed back into THIS task thread. This is NOT the
       // agent-chat surface (which still routes directly via agentId/agentKind).
-      if (mention.kind === "site" && attachments.length && typeof c.appendSystem === "function") {
-        c.appendSystem("Attachments aren't delivered to Site Agents yet — the text was sent.");
-      }
       res = await send("agent.run", {
         approvalBinding: approvalBinding ?? null,
         task: text,
@@ -2400,14 +2397,13 @@ export async function runConversationTurn(container, { text, attachments = [], h
     } else if (agentKind === "site") {
       // A Site Agent: direct delegation to the enrolled origin's worker agent
       // (agent.delegate — generation-fenced, journaled to the site's OWN OPFS
-      // store). Site delegation carries the task TEXT only (no attachments yet,
-      // no live per-run progress) — say so honestly when attachments exist.
-      if (attachments.length && typeof c.appendSystem === "function") {
-        c.appendSystem("Attachments aren't delivered to Site Agents yet — the text was sent.");
-      }
+      // store). Supports attachments and live progress streaming.
       res = await send("agent.delegate", {
         origin: agentId,
         task: text,
+        runId,
+        attachments,
+        threadId,
       });
     } else if (agentKind === "background") {
       res = await send("background-agent.run", {
