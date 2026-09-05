@@ -67,6 +67,19 @@ try {
   const visiblePanels1 = await evalIn(opts, `[...document.querySelectorAll("section.panel")].filter(s => getComputedStyle(s).display !== "none").map(s => s.id)`);
   check("initial load: only #providers panel is visible", JSON.stringify(visiblePanels1) === JSON.stringify(["providers"]), visiblePanels1);
 
+  // rfca/hy91: visibility alone was GREEN for the whole life of the P0 blank-
+  // boot — options.html marks #providers class="panel active" STATICALLY, so a
+  // section whose renderer never ran still passed. Assert the CONTENT a first
+  // user looks for: provider tabs, rendered provider panels, and an API-key
+  // field (all produced by renderProviders(), never present in static HTML).
+  const providerContent = await evalIn(opts, `(() => ({
+    tabs: document.querySelectorAll("#provider-tabs > *").length,
+    panels: document.getElementById("provider-panels")?.children.length ?? 0,
+    keyFields: document.querySelectorAll("#providers input.api-key").length,
+  }))()`);
+  check("initial load: providers panel shows real content (tabs, rendered provider panels, an API-key field) — never a blank shell",
+    (providerContent?.tabs ?? 0) > 0 && (providerContent?.panels ?? 0) > 0 && (providerContent?.keyFields ?? 0) > 0, providerContent);
+
   // 2. Click "Browser control" nav link
   const clickedBrowser = await clickSelector(opts, `document.querySelector('.nav-item[data-section="browser"]')`);
   check("clicked Browser control nav link", clickedBrowser);
