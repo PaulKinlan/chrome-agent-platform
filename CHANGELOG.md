@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.242] — 2026-09-05
+- Fixed the permissions health check: it was looking for parts of the Settings page that no longer exist, so it reported nothing. It now checks the real capability list and turns a capability off the same way you would — including the confirmation step.
+
 ## [0.3.241] — 2026-09-05
 - Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
 
