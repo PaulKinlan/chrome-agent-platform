@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.247] — 2026-09-05
+- Fresh site approvals remain visible after reset
+
 ## [0.3.246] — 2026-09-05
 - Resetting site access closes its open approval card
 

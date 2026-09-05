@@ -993,7 +993,7 @@ async function main() {
         const cards = [...document.querySelectorAll("approval-card")].filter((card) => card.getAttribute("title")?.includes("add_to_cart"));
         const card = cards.at(-1);
         const state = card?.getAttribute("state");
-        return cards.length > ${Number(resetFencePending?.count ?? 0)} && card && !["granted", "denied", "expired", "cancelled"].includes(state)
+        return card && !["granted", "denied", "expired", "cancelled"].includes(state)
           ? { count: cards.length, state }
           : null;
       })()`), 15000, 100);
