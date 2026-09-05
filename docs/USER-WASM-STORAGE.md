@@ -98,6 +98,8 @@ Unicode/HTML-like labels, streamed inputs above 64 MiB, concurrent contexts,
 write/close/move faults, restart cleanup, deletion-intent faults, path traversal,
 Settings-only client access, and the narrow Worker scanner exemption. Incremental
 hashes are compared with native WebCrypto and the FIPS million-`a` vector.
+Settings navigation tests pin all 15 panels, exactly one upload panel, matching
+navigation links, and Providers as the only initially active panel.
 
 `scripts/kat-user-wasm-store.ts` drives the real extension with a native chooser and
 keyboard/mouse input. It checks actual row contents, real OPFS byte hashes, reload
