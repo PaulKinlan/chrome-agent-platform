@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.248] — 2026-09-05
+- The behind-the-scenes live test now cleans up fully: it used to leave pieces of the test browser running after it finished.
+
 ## [0.3.247] — 2026-09-05
 - Release identity aligned at 0.3.246 after the i18n merge; bundled inventory regenerated
 

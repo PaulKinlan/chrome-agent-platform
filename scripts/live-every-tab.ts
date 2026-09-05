@@ -28,6 +28,7 @@
 // port, endpoint read from this process's own stderr). The extension is the
 // REAL built bundle; the tabs are served by a local fixture with one unique
 // FACT per page so "cited" is a verifiable count, not an impression.
+import { killProcessTree } from "./lib/process-tree.ts";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -128,10 +129,15 @@ function dumpSwConsole(label: string, n = 40) {
   console.log(`SW console (${label}, last ${tail.length} of ${swConsole.length}):`);
   for (const line of tail) console.log("  " + line);
 }
+// Killing only the Chromium parent leaves orphaned children behind — they keep
+// the temp profile alive and outlive the script (CAP-FB-20260902-LIVE-SCRIPT-
+// CLEANUP-01). Kill the whole tree, verified, before the profile dir goes.
 async function kill() {
-  try { proc?.kill("SIGKILL"); } catch { /* gone */ }
-  try { await proc?.status; } catch { /* reaped */ }
   try { ws?.close(); } catch { /* closed */ }
+  // NOTE: the match must not start with "-" (pkill would parse it as an
+  // option); the unique profile path identifies this run's whole tree.
+  await killProcessTree(proc, `user-data-dir=${profile}`);
+  proc = null;
 }
 async function attach(url: string, waitMs = 1500) {
   const t = (await send("Target.createTarget", { url })).result.targetId;
