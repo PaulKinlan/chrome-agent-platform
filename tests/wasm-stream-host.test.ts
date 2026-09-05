@@ -16,6 +16,7 @@ function equal(actual, expected, message = "values differ") {
 const runtime = {
   id: "cap-kat",
   getURL(path) { return `chrome-extension://cap-kat/${path}`; },
+  getManifest() { return { background: { service_worker: "dist/background/service-worker.js" } }; },
 };
 const realChrome = globalThis.chrome;
 const realFetch = globalThis.fetch;
@@ -140,7 +141,8 @@ Deno.test("stream host has a finite cancellation deadline", async () => {
 
 Deno.test("offscreen stream listener trusts only the extension service worker sender", () => {
   assert(isTrustedWasmStreamSender({ id: runtime.id }, runtime));
-  assert(isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("background/service-worker.js") }, runtime));
+  assert(isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("dist/background/service-worker.js") }, runtime));
+  assert(!isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("background/service-worker.js") }, runtime));
   assert(!isTrustedWasmStreamSender({ id: "other" }, runtime));
   assert(!isTrustedWasmStreamSender({ id: runtime.id, documentId: "options-document", url: runtime.getURL("options/options.html") }, runtime));
   assert(!isTrustedWasmStreamSender({ id: runtime.id, tab: { id: 7 }, url: "https://example.test/" }, runtime));

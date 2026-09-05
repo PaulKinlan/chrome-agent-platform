@@ -223,7 +223,10 @@ function validateWorkerResult(result, request) {
 export function isTrustedWasmStreamSender(sender, runtime = chrome.runtime) {
   if (sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
   const url = typeof sender?.url === "string" ? sender.url : "";
-  return url === "" || url === runtime.getURL("background/service-worker.js");
+  if (url === "") return true;
+  const serviceWorker = runtime.getManifest?.()?.background?.service_worker;
+  return typeof serviceWorker === "string" && serviceWorker.length > 0 &&
+    url === runtime.getURL(serviceWorker);
 }
 
 export function registerWasmStreamHost() {
