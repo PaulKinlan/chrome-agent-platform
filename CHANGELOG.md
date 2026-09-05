@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.228] — 2026-09-05
+- Pipeline dispatcher now fails closed when two tools share a name
+
 ## [0.3.227] — 2026-09-05
 - Changelog: sync the extension copy and give the four recovery-merge releases distinct user-language entries
 
