@@ -78,6 +78,12 @@ try {
   await sleep(1600);
   check("dev-off boot: providers panel is the visible one",
     (await evalIn(s0, `document.getElementById("providers").classList.contains("active")`)) === true);
+  // rfca: visibility alone passed for the whole life of the hy91 blank-boot
+  // P0 (the panel is statically active; its renderer may never have run).
+  // Assert the rendered CONTENT: provider tabs + panels (renderProviders()).
+  const bootContent = await evalIn(s0, `(() => ({ tabs: document.querySelectorAll("#provider-tabs > *").length, panels: document.getElementById("provider-panels")?.children.length ?? 0 }))()`);
+  check("dev-off boot: providers panel shows rendered content (tabs + panels), not a blank shell",
+    (bootContent?.tabs ?? 0) > 0 && (bootContent?.panels ?? 0) > 0, bootContent);
   const seeded = await kvSet(s0, `{ "cap:developerFeatures": false, "cap:providerServerTools": { enabled: true, agents: {} } }`);
   check("seeded persisted state (dev off, server tools enabled)", !String(seeded).includes("error"), seeded);
   const t1 = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#providers` });
@@ -127,8 +133,12 @@ try {
   const s3 = (await send("Target.attachToTarget", { targetId: t3.result.targetId, flatten: true })).result?.sessionId;
   await send("Runtime.enable", {}, s3);
   await sleep(1800);
-  check("agents deep link renders the multi-agent toggle",
-    (await evalIn(s3, `!!document.getElementById("multi-agent")`)) === true);
+  // rfca: #multi-agent is STATIC HTML — its existence proves nothing about
+  // the agents renderer. Assert the rendered CONTENT: #unified-agent-list is
+  // populated by renderAgents() (empty in the static markup).
+  const agentsContent = await evalIn(s3, `(() => ({ toggle: !!document.getElementById("multi-agent"), rows: document.getElementById("unified-agent-list")?.children.length ?? 0 }))()`);
+  check("agents deep link renders the multi-agent toggle AND the rendered agent list",
+    agentsContent?.toggle === true && agentsContent?.rows > 0, agentsContent);
   const clickedNav = await clickSelector(s3, `document.querySelector('.nav-item[data-section="providers"]')`);
   check("clicked the Providers nav link", clickedNav);
   await sleep(900);

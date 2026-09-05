@@ -59,6 +59,10 @@ const PATHS = {
   csvtool: join(EVIDENCE, "csvtool"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
+  stream: join(REPO, "packages/bundled/unix-stream-v1"),
+  awkFull: join(REPO, "packages/bundled/awk-posixutils-v1"),
+  sed: join(REPO, "docs/admissions/t3-trio/sed"),
+  jq: join(REPO, "docs/admissions/jq-filter-bounded"),
   awk: join(REPO, "docs/admissions/t3-trio/awk"),
   date: join(REPO, "docs/admissions/t3-trio/date"),
   catalog: join(EVIDENCE, "catalog", "inventory.json"),
@@ -111,20 +115,23 @@ function catalogRow(toolId) {
 // Each description carries: plain function, when to choose, in/out shape, key flags,
 // bounds, and a concrete example. Provenance/library names stay in SBOM/licence fields.
 export const AGENT_DESCRIPTIONS = Object.freeze({
-  base64: "base64 - encode or decode base64 text and binary data. Use to encode binary as text or decode base64 strings. In/out: stdin (<=2 KiB) to stdout. Key flag: -d (decode). Example: stdin 'hello' -> 'aGVsbG8=\\n'.",
+  base64: "base64 - stream binary data to base64 text or decode it. Use for lossless text/binary conversion. In/out: file-backed stdin to chainable output. Flag: -d. Example: 'hello' -> 'aGVsbG8=\\n'.",
   md5sum: "md5sum - compute legacy 128-bit MD5 hash checksums. Use for non-security file verification. In/out: stdin (<=2 KiB) to 32-hex digest. No flags. Example: stdin 'hello' -> '5d41402abc4b2a76b9719d911017c592'.",
   sha256sum: "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure integrity. In/out: stdin (<=2 KiB) to 64-hex digest. No flags. Example: stdin 'hello' -> '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
   sha512sum: "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security hashing. In/out: stdin (<=2 KiB) to 128-hex digest. No flags. Example: stdin 'hello' -> the 128-hex digest.",
   xxd: "xxd - convert binary data to hex dumps and reconstruct it. Use for byte-level inspection. In/out: stdin (<=2 KiB) to hex stdout. Key flag: -p (plain hex). Example: -p + stdin 'Hi' -> '4869\\n'.",
   uuid: "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs. In/out: empty stdin to UUID stdout. Key flag: -n <count> (max 64). Example: -n 2 -> two UUID lines.",
-  wc: "wc - count lines, words, characters, and bytes in text. Use to measure file length and text size. In/out: stdin (<=2 KiB) to count tuple. Flags: -l, -w, -c. Example: stdin 'a b\\n' -> '1 2 4\\n'.",
+  wc: "wc - stream and count lines, words, and bytes. Use to measure arbitrarily large text without loading it whole. In/out: file-backed stdin to counts. Flags: -l, -w, -c. Example: 'a b\\n' -> '1 2 4\\n'.",
   head: "head - extract the leading lines from a text stream. Use to inspect the start of a file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'a\\nb'.",
   tail: "tail - extract the trailing lines from a text stream. Use to inspect the end of a log file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'b\\nc'.",
   cut: "cut - extract columns or delimiter-separated fields from text. Use to parse CSV or TSV columns. In/out: stdin (<=2 KiB) to column stdout. Flags: -d, -f. Example: -d , -f 2 + stdin 'a,b,c' -> 'b'.",
-  sort: "sort - sort lines of text alphabetically or numerically in C locale. Use to order list data. In/out: stdin (<=2 KiB) to sorted stdout. Flags: -r, -n. Example: stdin 'b\\na\\n' -> 'a\\nb\\n'.",
-  uniq: "uniq - remove adjacent duplicate lines from sorted text. Use to deduplicate lists. In/out: stdin (<=2 KiB) to unique stdout. Flags: -c, -d. Example: stdin 'a\\na\\nb' -> 'a\\nb'.",
-  tr: "tr - translate, replace, delete, or squeeze characters in text. Use to search and replace characters or shift case. In/out: stdin (<=2 KiB) to stdout. Flags: -d, -s. Example: 'a-z' 'A-Z' + stdin 'hi' -> 'HI'.",
-  grep: "grep - search and find matching lines using regular expressions. Use to search, find, or filter text. In/out: stdin (<=2 KiB) to matching lines. Flags: -i, -v, -n. Example: -n 'foo' -> '1:foo'.",
+  sort: "sort - external merge-sort file-backed text in the C byte locale. Use to order data larger than Wasm memory. In/out: chainable references. Flags: -r, -n, -u. Example: 'b\\na\\n' -> 'a\\nb\\n'.",
+  uniq: "uniq - stream adjacent lines and remove or count duplicates. Use after sort for deduplication. In/out: file-backed stdin to chainable output. Flags: -c, -d, -u. Example: 'a\\na\\nb' -> 'a\\nb'.",
+  tr: "tr - stream byte translation, deletion, and squeezing in the C locale. Use for case shifts and character maps. In/out: file-backed stdin to chainable output. Flags: -c, -d, -s. Example: 'a-z' 'A-Z' maps 'hi' to 'HI'.",
+  grep: "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
+  sed: "sed - stream-edit text with minised 1.16. Use for substitutions, selection, deletion, and standard sed scripts. In/out: file-backed stdin to chainable output. Flags: -e, -n. Example: 's/a/b/g'.",
+  awk: "awk - run the posixutils-rs parser and interpreter over streaming records. Use for fields, expressions, regex, arrays, and reports. In/out: file-backed stdin to chainable output. Command pipes and system() are unavailable.",
+  jq: "jq - parse and transform JSON with upstream jq 1.8.2. Use for object, array, filter, reduction, and formatting operations over JSON streams. In/out: file-backed stdin to chainable output. Oniguruma regex built-ins are unavailable.",
   diff: "diff - compare text documents and calculate diff changes. Use to compare revisions by viewing differences, or for file editing. In/out: two text args (<=1 KiB each) to unified diff. No flags. Example: 'a\\nb\\n' and 'a\\nc\\n' -> hunk diff.",
   patch: "patch - apply unified diff hunks to a source text document. Use to update files or do editing from patches. In/out: source text arg + diff arg (<=1 KiB each) to patched stdout. No flags. Example: source 'a\\nb\\n' + diff -> 'a\\nc\\n'.",
   toml2json: "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config data. In/out: valid TOML stdin (<=2 KiB) to JSON stdout. No flags. Example: stdin 'a = 1' -> '{\"a\":1}\\n'.",
@@ -150,14 +157,65 @@ function verifiedBinary(lane, toolId, rel, expectedSha, expectedBytes) {
   return bytes;
 }
 
+function cdxBytes(name, version, license, components) {
+  return enc.encode(JSON.stringify({
+    bomFormat: "CycloneDX",
+    specVersion: "1.5",
+    version: 1,
+    metadata: { component: { type: "application", name, version, licenses: [{ expression: license }] } },
+    components,
+  }, null, 1) + "\n");
+}
+
+const NEW_SOURCE = {
+  repo: "https://github.com/PaulKinlan/chrome-agent-platform",
+  commit: "ad670c717f70b6df1bc63aeefa13023422619581",
+};
+const STREAM_EXPECT = Object.freeze({
+  base64: ["20d6324f4925ee8263322bb74eb818861f13fbd0d4ce080b13c2140b213232cf", 15346],
+  grep: ["04d32c115c9e3a979d59cfe27ea0e5ece616efd64ff958d4fcc96bb217191588", 83434],
+  sort: ["e0543d170ac9bd0cd55b274604b55add18c17c5d87169ebfdf25b4b7245a386a", 35917],
+  tr: ["bec02b43bdeb1997f9616d95499ce91010e124aecb1cad6e6bd97102c0956f3f", 37263],
+  uniq: ["973d78aa28f825019fbfb4aa9463dc6940a65d7da6de80590ba1a691443154df", 32627],
+  wc: ["ce303be0226d2675019191dddbcded6d83de100922fcc10e5ee48a058c0d27d5", 28861],
+});
+const STREAM_SBOM = {
+  bytes: cdxBytes("cap-bundled-unix-stream-v1", "2.0.0", "MIT",
+    Object.keys(STREAM_EXPECT).map((name) => ({ type: "application", name, version: "2.0.0", licenses: [{ license: { id: "MIT" } }] }))),
+  rel: "extension/wasm/sbom/unix-stream-v1.cdx.json",
+  format: "cyclonedx-json@1.5",
+};
+function streamPackage(toolId, row) {
+  const [expectedSha, expectedBytes] = STREAM_EXPECT[toolId];
+  const bytes = readFileSync(join(PATHS.stream, "binaries", `${toolId}.wasm`));
+  if (sha256(bytes) !== expectedSha || bytes.byteLength !== expectedBytes) throw new Error(`${toolId}: streaming binary drift`);
+  return {
+    toolId, lane: "unix-stream-v1", version: "2.0.0", bytes,
+    row: {
+      ...row,
+      caveats: ["Stdin/stdout only; file operands are rejected.", "C byte-locale semantics."],
+      metaStatus: "file-stream-enabled",
+      metaNote: "source, deterministic rebuild, and streaming profile: packages/bundled/unix-stream-v1",
+    },
+    spdx: "MIT", licenseFile: "extension/wasm/licenses/MIT.txt", notices: null,
+    sbom: STREAM_SBOM, toolchain: "wasi-sdk clang 18.1.2", buildScriptLane: "unix-stream-v1",
+    sourceAnchor: NEW_SOURCE, metaStatus: "file-stream-enabled",
+    metaNote: "source, deterministic rebuild, and streaming profile: packages/bundled/unix-stream-v1",
+  };
+}
+
 const packages = [];
 for (const toolId of LANES.a2.tools) {
   const row = catalogRow(toolId);
-  packages.push({ toolId, lane: "a2", bytes: verifiedBinary("a2", toolId, row.binary.path, row.binary.sha256, row.binary.bytes), row, spdx: LANES.a2.spdx, licenseFile: LANES.a2.licenseFile, notices: null, sbom: LANES.a2.sbom, toolchain: LANES.a2.toolchain, buildScriptLane: "a2" });
+  packages.push(STREAM_EXPECT[toolId]
+    ? streamPackage(toolId, row)
+    : { toolId, lane: "a2", bytes: verifiedBinary("a2", toolId, row.binary.path, row.binary.sha256, row.binary.bytes), row, spdx: LANES.a2.spdx, licenseFile: LANES.a2.licenseFile, notices: null, sbom: LANES.a2.sbom, toolchain: LANES.a2.toolchain, buildScriptLane: "a2" });
 }
 for (const toolId of LANES.b2.tools) {
   const row = catalogRow(toolId);
-  packages.push({ toolId, lane: "b2", bytes: verifiedBinary("b2", toolId, row.binary.path, row.binary.sha256, row.binary.bytes), row, spdx: "Apache-2.0", licenseFile: LANES.b2.licenseFile, notices: null, sbom: LANES.b2.sbom, toolchain: LANES.b2.toolchain, buildScriptLane: "b2" });
+  packages.push(STREAM_EXPECT[toolId]
+    ? streamPackage(toolId, row)
+    : { toolId, lane: "b2", bytes: verifiedBinary("b2", toolId, row.binary.path, row.binary.sha256, row.binary.bytes), row, spdx: "Apache-2.0", licenseFile: LANES.b2.licenseFile, notices: null, sbom: LANES.b2.sbom, toolchain: LANES.b2.toolchain, buildScriptLane: "b2" });
 }
 { // toml2json: exact dual composite (tomlc99 MIT + CAP-authored Apache-2.0)
   const row = catalogRow("toml2json");
@@ -203,6 +261,61 @@ for (const [toolId, lane] of [["awk_filter_bounded", "awk"], ["date_formatter_bo
       ? ["Bounded clean-room subset, not canonical awk; literal patterns with optional ^/$ edge anchors only.", "CAP preview is stdin-only; no owner files are projected."]
       : ["Bounded clean-room formatter, not canonical date; exact numeric epoch and ISO date inputs only."],
     replayClass: "read-only", capabilities: ["compute", "text.transform"],
+  });
+}
+
+{ // Canonical sed: minised 1.16, BSD-3-Clause, byte-identical rebuild retained.
+  const bytes = readFileSync(join(PATHS.sed, "binaries/sed.wasm"));
+  const rebuild = readFileSync(join(PATHS.sed, "metadata/rebuild-sed.wasm"));
+  if (sha256(bytes) !== "3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438" ||
+      bytes.byteLength !== 49977 || !bytes.equals(rebuild)) throw new Error("sed identity/rebuild mismatch");
+  packages.push({
+    toolId: "sed", lane: "sed", version: "1.0.0", bytes, row: null,
+    spdx: "BSD-3-Clause", licenseFile: "extension/wasm/licenses/minised-BSD-3-Clause.txt", notices: null,
+    sbom: { bytes: cdxBytes("cap.bundled.sed", "1.0.0", "BSD-3-Clause", [
+      { type: "application", name: "minised", version: "1.16", licenses: [{ license: { id: "BSD-3-Clause" } }] },
+    ]), rel: "extension/wasm/sbom/sed.cdx.json", format: "cyclonedx-json@1.5" },
+    toolchain: "clang 22.1.8; wasi-sysroot 22.0", buildScriptLane: "sed", sourceAnchor: NEW_SOURCE,
+    displayName: "sed", category: "text", description: AGENT_DESCRIPTIONS.sed,
+    caveats: ["Stdin/stdout only; file operands and in-place editing are unavailable."],
+    replayClass: "read-only", capabilities: ["compute", "text.transform"],
+    metaStatus: "file-stream-enabled",
+  });
+}
+{ // Canonical awk: upstream posixutils-rs parser/interpreter with a WASI adaptation.
+  const bytes = readFileSync(join(PATHS.awkFull, "binaries/awk.wasm"));
+  if (sha256(bytes) !== "e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23" ||
+      bytes.byteLength !== 1064871) throw new Error("awk identity mismatch");
+  packages.push({
+    toolId: "awk", lane: "awk-posixutils-v1", version: "1.0.0", bytes, row: null,
+    spdx: "MIT", licenseFile: "extension/wasm/licenses/posixutils-rs-MIT.txt", notices: null,
+    sbom: { bytes: cdxBytes("cap.bundled.awk", "1.0.0", "MIT", [
+      { type: "application", name: "posixutils-awk", version: "0.8.0", licenses: [{ license: { id: "MIT" } }] },
+      { type: "library", name: "revera", version: "0.2.1", licenses: [{ license: { id: "MIT" } }] },
+    ]), rel: "extension/wasm/sbom/awk-posixutils-v1.cdx.json", format: "cyclonedx-json@1.5" },
+    toolchain: "Rust 1.97.1; wasm32-wasip1", buildScriptLane: "awk-posixutils-v1", sourceAnchor: NEW_SOURCE,
+    displayName: "awk", category: "text", description: AGENT_DESCRIPTIONS.awk,
+    caveats: ["Stdin record input only; command pipes are unavailable and system() returns -1."],
+    replayClass: "read-only", capabilities: ["compute", "text.transform"],
+    memoryOverride: { initialPages: 64, maxPages: 512 }, metaStatus: "file-stream-enabled",
+  });
+}
+{ // Canonical jq 1.8.2, single-threaded WASI adaptation without Oniguruma.
+  const bytes = readFileSync(join(PATHS.jq, "binaries/jq.wasm"));
+  const rebuild = readFileSync(join(PATHS.jq, "metadata/rebuild-jq.wasm"));
+  if (sha256(bytes) !== "e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234" ||
+      bytes.byteLength !== 501650 || !bytes.equals(rebuild)) throw new Error("jq identity/rebuild mismatch");
+  packages.push({
+    toolId: "jq", lane: "jq", version: "1.0.0", bytes, row: null,
+    spdx: "MIT", licenseFile: "extension/wasm/licenses/jq-MIT.txt", notices: null,
+    sbom: { bytes: cdxBytes("cap.bundled.jq", "1.0.0", "MIT", [
+      { type: "application", name: "jq", version: "1.8.2", licenses: [{ license: { id: "MIT" } }] },
+    ]), rel: "extension/wasm/sbom/jq.cdx.json", format: "cyclonedx-json@1.5" },
+    toolchain: "clang 22.1.8; wasi-sysroot 22.0", buildScriptLane: "jq", sourceAnchor: NEW_SOURCE,
+    displayName: "jq", category: "data", description: AGENT_DESCRIPTIONS.jq,
+    caveats: ["Oniguruma-dependent regex built-ins are unavailable in this WASI profile."],
+    replayClass: "read-only", capabilities: ["compute", "text.transform"],
+    memoryOverride: { initialPages: 64, maxPages: 512 }, metaStatus: "file-stream-enabled",
   });
 }
 
@@ -256,6 +369,9 @@ const LICENSE_WRITES = {
   "extension/wasm/licenses/0BSD.txt": enc.encode(`Copyright (C) 2026 Chrome Agent Platform Authors\n\nPermission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.\n\nTHE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.\n`),
   "extension/wasm/licenses/awk-NOTICES.txt": readFileSync(join(PATHS.awk, "NOTICES.md")),
   "extension/wasm/licenses/date-NOTICES.txt": readFileSync(join(PATHS.date, "NOTICES.md")),
+  "extension/wasm/licenses/minised-BSD-3-Clause.txt": readFileSync(join(PATHS.sed, "NOTICES.md")),
+  "extension/wasm/licenses/posixutils-rs-MIT.txt": readFileSync(join(PATHS.awkFull, "source/LICENSE")),
+  "extension/wasm/licenses/jq-MIT.txt": readFileSync(join(PATHS.jq, "COPYING-jq.txt")),
 };
 
 // ── Manifests (authority-schema-exact; canonical bytes; re-validated) ───────
@@ -271,7 +387,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
@@ -385,6 +501,7 @@ const SQLITE_EXPECT = {
 for (const [rel, bytes] of Object.entries(LICENSE_WRITES)) ship(rel, bytes);
 
 for (const pkg of packages) {
+  const pkgVersion = pkg.version ?? "1.0.0";
   const wasmSha = sha256(pkg.bytes);
   ship(`extension/wasm/cas/${wasmSha}.wasm`, pkg.bytes);
   const sbomBytes = pkg.sbom.bytes ?? readFileSync(pkg.sbom.src);
@@ -415,7 +532,7 @@ for (const pkg of packages) {
     schemaVersion: 1,
     // package.id derives from toolId with '-' → '.' (PACKAGE_ID_RE admits only
     // [a-z0-9.-]); e.g. sqlite3-query-bounded → cap.bundled.sqlite3.query.bounded.
-    package: { id: `cap.bundled.${pkg.toolId.replace(/-/g, ".").replace(/_/g, ".")}`, version: "1.0.0", name: `cap_bundled_${pkg.toolId.replace(/-/g, "_")}`, type: "tool-bundle" },
+    package: { id: `cap.bundled.${pkg.toolId.replace(/-/g, ".").replace(/_/g, ".")}`, version: pkgVersion, name: `cap_bundled_${pkg.toolId.replace(/-/g, "_")}`, type: "tool-bundle" },
     tools: [{ toolId: pkg.toolId, digest: wasmSha, capabilityDigest, replayClass: meta.replayClass, capabilities }],
     executables: [{ id: pkg.toolId, sha256: wasmSha, size: pkg.bytes.byteLength, imports: { allowed, disallowed: [] }, memory: { tier, initialPages, maxPages }, runtimeCompat: ["wasm32"], replayClass: meta.replayClass, capabilities, capabilityDigest }],
     signer: { lane: SIGNER.lane, keyId: SIGNER.keyId, alg: "none" },
@@ -430,9 +547,9 @@ for (const pkg of packages) {
   if (!validated.ok) throw new Error(`generated manifest failed validation for ${pkg.toolId}: ${validated.error} ${validated.path ?? ""} ${validated.detail ?? ""}`);
   // Re-audit with the FINAL declared values exactly as admission will.
   auditWasmBinary(pkg.bytes, manifest.executables[0], {});
-  const manifestRel = `extension/wasm/manifests/${manifest.package.id}-1.0.0.manifest.json`;
+  const manifestRel = `extension/wasm/manifests/${manifest.package.id}-${pkgVersion}.manifest.json`;
   ship(manifestRel, enc.encode(canonical));
-  inventoryManifests.push({ pkg: manifest.package.id, version: "1.0.0", digest: validated.manifestDigest });
+  inventoryManifests.push({ pkg: manifest.package.id, version: pkgVersion, digest: validated.manifestDigest });
 
   const settingsPreview = SETTINGS_PREVIEW_LANES.has(pkg.toolId);
   // The ADMITTED rows keep their TRUE per-tool caveats; ONLY the stale
@@ -449,22 +566,24 @@ for (const pkg of packages) {
     "Requires future reviewed execution adapter to restrict writes to mutable path classes and enforce traversal and quota fail-closed rules. Not currently executable/admitted.",
     "Requires future reviewed execution adapter to restrict writes to approved mutable path classes (scratch/output, never immutable inputs), and enforce symlink, cross-job, and over-quota rejection fail closed. Not currently executable/admitted.",
   ];
+  const FILE_STREAM_TOOLS = new Set(["base64", "wc", "tr", "grep", "uniq", "sort", "sed", "awk", "jq"]);
+  const FILE_STREAM_CAVEAT =
+    "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference.";
   const GENERIC_ADMITTED_CAVEAT =
-    "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority.";
+    "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation.";
   const STAT_ADMITTED_CAVEAT =
-    "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed (explicit owner click); no provider, page or OPFS authority.";
+    "Settings preview requires an explicit owner click and model execution requires live run ownership; both read only the immutable in-memory inputs/f.bin job seed.";
   const DU_ADMITTED_CAVEAT =
-    "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed, using /job by default (explicit owner click); no provider, page or OPFS authority.";
+    "Settings preview requires an explicit owner click and model execution requires live run ownership; both enumerate only the immutable inputs/f.bin job seed, using /job by default.";
   const TREE_ADMITTED_CAVEAT =
-    "Settings-only bounded read-only preview over the immutable nested in-memory /job/inputs seed (explicit owner click); no provider, page or OPFS authority.";
+    "Settings preview requires an explicit owner click and model execution requires live run ownership; both enumerate only the immutable nested /job/inputs seed.";
   const GZIP_ADMITTED_CAVEAT =
-    "Settings-only bounded text/canonical-base64 preview (explicit owner click); lossless binary output is canonical base64; no provider, page, filesystem or OPFS authority.";
+    "Settings preview represents lossless binary output as canonical base64; file-backed model execution keeps binary stdout as an owner-bound OPFS reference.";
   const TRUNCATE_ADMITTED_CAVEAT =
-    "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.";
-  const TOUCH_ADMITTED_CAVEAT =
-    "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.";
+    "Execution is confined to the spec-owned scratch/touched fixture; the observable mutation is the post-run stat readback. Settings requires an owner click and model execution requires live run ownership.";
+  const TOUCH_ADMITTED_CAVEAT = TRUNCATE_ADMITTED_CAVEAT;
   const SQLITE_ADMITTED_CAVEAT =
-    "Settings-only bounded read-only SQL preview over the spec-owned scratch/test.db fixture (explicit owner click); readOnly is forced — the guest authorizer denies writes; no provider, page, filesystem or OPFS authority.";
+    "Execution is confined to the spec-owned scratch/test.db fixture; readOnly is forced and the guest authorizer denies writes. Settings requires an owner click and model execution requires live run ownership.";
   const FILE_READ_DECLARED_CAVEAT = pkg.toolId === "stat"
     ? "file.read is confined to the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
     : pkg.toolId === "du"
@@ -488,7 +607,8 @@ for (const pkg of packages) {
   }).filter(Boolean);
   const admittedCaveats = [
     ...cleanedCaveats,
-    pkg.toolId === "stat" ? STAT_ADMITTED_CAVEAT
+    FILE_STREAM_TOOLS.has(pkg.toolId) ? FILE_STREAM_CAVEAT
+      : pkg.toolId === "stat" ? STAT_ADMITTED_CAVEAT
       : pkg.toolId === "du" ? DU_ADMITTED_CAVEAT
       : pkg.toolId === "tree" ? TREE_ADMITTED_CAVEAT
       : pkg.toolId === "gzip" ? GZIP_ADMITTED_CAVEAT
@@ -500,7 +620,7 @@ for (const pkg of packages) {
   ];
   const disabledCaveats = Array.isArray(meta.caveats) ? meta.caveats : [];
   descriptorRows.push({
-    packageId: manifest.package.id, version: "1.0.0", toolId: pkg.toolId, lane: pkg.lane,
+    packageId: manifest.package.id, version: pkgVersion, toolId: pkg.toolId, lane: pkg.lane,
     displayName: String(pkg.toolId), category: String(meta.category),
     description, caveats: settingsPreview ? admittedCaveats : disabledCaveats,
     capabilities, replayClass: meta.replayClass,
@@ -562,6 +682,18 @@ for (const lane of ["awk", "date"]) {
   emit(join(REPO, `packages/bundled/${lane}/source/main.c`), readFileSync(join(PATHS[lane], "source/main.c")));
   emit(join(REPO, `packages/bundled/${lane}/PROVENANCE.md`), readFileSync(join(PATHS[lane], "PROVENANCE.md")));
 }
+if (!VERIFY) mkdirSync(join(REPO, "packages/bundled/sed/source"), { recursive: true });
+emit(join(REPO, "packages/bundled/sed/build.sh"), readFileSync(join(PATHS.sed, "build.sh")));
+for (const file of ["sed.h", "sedcomp.c", "sedexec.c"]) {
+  emit(join(REPO, `packages/bundled/sed/source/${file}`), readFileSync(join(PATHS.sed, `source/${file}`)));
+}
+emit(join(REPO, "packages/bundled/sed/PROVENANCE.md"), readFileSync(join(PATHS.sed, "PROVENANCE.md")));
+if (!VERIFY) mkdirSync(join(REPO, "packages/bundled/jq/source"), { recursive: true });
+emit(join(REPO, "packages/bundled/jq/build.sh"), readFileSync(join(PATHS.jq, "build.sh")));
+for (const file of ["pthread-shim.c", "pthread-shim.h"]) {
+  emit(join(REPO, `packages/bundled/jq/source/${file}`), readFileSync(join(PATHS.jq, `source/${file}`)));
+}
+emit(join(REPO, "packages/bundled/jq/PROVENANCE.md"), readFileSync(join(PATHS.jq, "PROVENANCE.md")));
 if (!VERIFY) {
   mkdirSync(join(REPO, "packages/bundled/sqlite3/src"), { recursive: true });
   mkdirSync(join(REPO, "packages/bundled/sqlite3/host"), { recursive: true });
@@ -616,9 +748,9 @@ grant, or catalog entry
 consumes this package. Node host sources under host/ are public Apache-2.0
 provenance only — they are not shipped runtime code.
 `);
-emit(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable; 28-tool Settings-preview tranche)
+emit(join(REPO, "packages/bundled/README.md"), `# Bundled tool packages (immutable; 31-tool execution tranche)
 
-28 single-tool Wasm packages generated by \`scripts/build-bundled-tool-packages.mjs\`
+31 single-tool Wasm packages generated by \`scripts/build-bundled-tool-packages.mjs\`
 from the pinned, independently reviewed evidence trees committed under
 \`packages/bundled/evidence/\` (catalog inventory sha256 ${catalogSha}).
 
@@ -631,14 +763,16 @@ from the pinned, independently reviewed evidence trees committed under
   \`tail\`, \`cut\`, \`base64\`, \`md5sum\`, \`sha256sum\`, \`sha512sum\`, \`wc\`,
   \`xxd\`, \`sort\`, \`uniq\`, \`tr\`, \`grep\`, \`toml2json\`, \`markdown\`,
   \`diff\`, \`patch\`, \`stat\`, \`du\`, \`tree\`, \`gzip\`, \`truncate\`,
-  \`touch\`, \`sqlite3_query_bounded\`, \`awk_filter_bounded\`, and
-  \`date_formatter_bounded\`. These are Settings-only bounded previews with an
-  explicit owner click and argv0 equal to the exact toolId; they grant no
-  catalog/provider selection authority.
-- The ONLY execution route is \`tool.preview.run\` (exact Settings options
-  document sender; the toolId resolves through the immutable spec map +
-  revalidation of manifest/CAS/imports/memory/caps at every run). No provider
-  route, no selection authority, no other executor.
+  \`touch\`, \`sqlite3_query_bounded\`, \`awk_filter_bounded\`,
+  \`date_formatter_bounded\`, \`sed\`, \`awk\`, and \`jq\`.
+- Settings preview execution requires an explicit owner click. Model calls use
+  the lazy selection authority and live run fence. Both resolve the toolId
+  through the immutable spec map and revalidate manifest, inventory, CAS,
+  imports, memory, and capabilities at every run.
+- \`base64\`, \`wc\`, \`sort\`, \`uniq\`, \`tr\`, \`grep\`, \`sed\`, \`awk\`, and
+  \`jq\` use owner-bound OPFS stdin/stdout. Large results are complete
+  file-backed artifacts with byte count and SHA-256 receipts and can chain by
+  opaque reference; no result is silently sliced to fit a Chrome message.
 
 Provenance anchor: source.repo is the public platform repo at commit
 5e086c1fb0847ddccf1a16ba3129a4cf900eac8f (the landing base); binary identity is
@@ -674,7 +808,9 @@ if (VERIFY) {
     for (const rel of walk(rootRel)) {
       // packages/bundled/evidence/** is generator INPUT (the pinned evidence
       // trees), not generated output — exclude it from the ungenerated sweep.
-      if (rel.startsWith("packages/bundled/evidence/")) continue;
+      if (rel.startsWith("packages/bundled/evidence/") ||
+          rel.startsWith("packages/bundled/unix-stream-v1/") ||
+          rel.startsWith("packages/bundled/awk-posixutils-v1/")) continue;
       if (!emitted.has(rel)) drift.push(`ungenerated file present: ${rel}`);
     }
   }

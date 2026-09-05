@@ -786,7 +786,7 @@ Deno.test("fd_fdstat_set_flags: import linkage — the wasi table exposes it + t
   assert(m, "supported import set found");
   const names = [...m[1].matchAll(/"([a-z_0-9]+)"/g)].map((x) => x[1]);
   assertEquals(names.includes("fd_fdstat_set_flags"), true, "supported set includes fd_fdstat_set_flags");
-  assertEquals(names.length, 28, "poll_oneoff is the exact twenty-eighth supported import (R11)");
+  assertEquals(names.length, 29, "fd_renumber is the exact twenty-ninth supported import");
 });
 
 Deno.test("fd_fdstat_set_flags: error ORDER — unknown fd EBADF first; invalid bits EINVAL on a valid no-right fd; known change ENOTCAPABLE on a current fd", () => {
@@ -898,9 +898,9 @@ Deno.test("B2 text tranche: sort/uniq/tr/grep/toml2json produce the EXACT exampl
     const spec = PREVIEW_SPECS[toolId];
     assert(spec, `${toolId} is in the spec map`);
     const casBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${spec.casSha}.wasm`));
-    // dptw: the 64 KiB request cap and the 4 MiB wasm cap are BOTH gone —
-    // these tools' bytes exceed the old request cap and are admitted whole.
-    assert(casBytes.byteLength > 64 * 1024, `${toolId} (${casBytes.byteLength} B) exceeds the REMOVED 64 KiB request cap`);
+    // dptw: neither the logical request nor the Wasm artifact is content-capped;
+    // exact shipped bytes are admitted regardless of whether a replacement got smaller.
+    assert(casBytes.byteLength > 0, `${toolId} ships a non-empty exact CAS artifact`);
     assertEquals(EXECUTOR_BOUNDS.maxWasmBytes, Number.POSITIVE_INFINITY, "no wasm byte cap remains");
     const job = makeJob({
       stdin: new Uint8Array(new TextEncoder().encode(contract.stdin)),

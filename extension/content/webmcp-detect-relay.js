@@ -8,6 +8,11 @@
   let armed = false;
   let lastSequence = -1;
   let messages = Promise.resolve();
+  // The per-document MAIN probe hook name (f62c): learned from the probe's
+  // one-time channel announcement, forwarded with the arm request so the SW
+  // never depends on a static global name.
+  let hookName = null;
+  const HOOK_NAME_RE = /^capWebmcpDetectBootstrap_[0-9a-f]{32}$/;
 
   async function sign(value) {
     const key = await subtle.importKey(
@@ -24,6 +29,20 @@
   window.addEventListener("message", (event) => {
     const data = event.data;
     if (event.source !== window || !data || data[CHANNEL] !== 1) return;
+    // The MAIN probe announces its per-document, unguessable bootstrap hook
+    // name once at document_start (unauthenticated — no nonce exists yet).
+    // First-write-wins and shape-validated: a page script can only ever point
+    // the arm call at a same-prefix function in its own document, and the
+    // nonce it might learn scopes to its own detection feed (self-impact).
+    if (data.type === "hook") {
+      if (hookName === null && typeof data.hook === "string" && HOOK_NAME_RE.test(data.hook)) {
+        hookName = data.hook;
+        // Arm as soon as BOTH pieces exist (the announcement can land after
+        // the bootstrap nonce — the two worlds race at document_start).
+        if (nonce && !armed) arm();
+      }
+      return;
+    }
     messages = messages.then(async () => {
       if (
         !nonce || data.type !== "snapshot" ||
@@ -43,9 +62,11 @@
   });
 
   function arm() {
+    if (hookName === null) return; // no probe announcement yet — stay unarmed
     chrome.runtime.sendMessage({
       type: "webmcp.detect.arm",
       origin: location.origin,
+      hook: hookName,
     }).then((result) => {
       armed = result?.ok === true;
     }).catch(() => {});

@@ -81,6 +81,19 @@ const TOOL_DESCRIPTOR_RESULT = {
     selectionRef: { type: ["string", "null"] },
   },
 };
+const TABLE_RESULT = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" }, artifactId: { type: "string" },
+    schema: { type: "string" }, sha256: { type: "string" },
+    rows: { type: "number" }, columns: { type: "number" },
+    inputBytes: { type: "number" }, outputBytes: { type: "number" },
+    workUnits: { type: "number" }, warnings: { type: "array", items: { type: "string" } },
+    previewAvailableLocally: { type: "boolean" }, deduped: { type: "boolean" },
+    code: { type: "string" }, error: ERROR,
+  },
+  "x-cap-output-shape": "provider-safe-table-metadata",
+};
 const PROVIDER_SEARCH_RESULT = {
   type: "object",
   properties: {
@@ -164,6 +177,12 @@ export const TOOL_OUTPUT_SCHEMA_REGISTRY = Object.freeze({
     },
   },
   get_asset: ARTIFACT_RESULT,
+  table_filter: TABLE_RESULT,
+  table_select: TABLE_RESULT,
+  table_join: TABLE_RESULT,
+  table_group_aggregate: TABLE_RESULT,
+  table_pivot: TABLE_RESULT,
+  table_formula: TABLE_RESULT,
   "provider-server/gemini/google_search": PROVIDER_SEARCH_RESULT,
   "provider-server/anthropic/web_search": PROVIDER_SEARCH_RESULT,
 });

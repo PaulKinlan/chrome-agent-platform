@@ -1297,6 +1297,45 @@ async function renderWebmcpStatus() {
     row.appendChild(err);
   }
   body.appendChild(row);
+
+  // Site playbook note (CAP-FB-20260830-SITE-PLAYBOOKS-01): the owner's
+  // per-origin instruction ("On this site, always …"), composed into the
+  // skills boundary layer for runs whose active tab is this origin. Bounded
+  // to 2,000 chars; stored under the origin key.
+  const origin = String(s.origin ?? "");
+  if (origin) {
+    const NOTE_MAX = 2000;
+    const field = document.createElement("div");
+    field.className = "webmcp-site-note";
+    const label = document.createElement("label");
+    const noteId = `site-note-${origin.replace(/[^a-z0-9]+/gi, "-")}`;
+    label.setAttribute("for", noteId);
+    label.textContent = "Site instructions (" + origin + ")";
+    const textarea = document.createElement("textarea");
+    textarea.id = noteId;
+    textarea.rows = 3;
+    textarea.maxLength = NOTE_MAX;
+    textarea.placeholder = "On this site, always …";
+    try {
+      const cur = await chrome.runtime.sendMessage({ type: "site-skills.get", origin });
+      textarea.value = String(cur?.notes ?? "");
+    } catch { /* SW not ready */ }
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.textContent = "Save site instructions";
+    saveBtn.addEventListener("click", async () => {
+      try {
+        await chrome.runtime.sendMessage({ type: "site-skills.set", origin, notes: textarea.value });
+        saveFlash("Site instructions saved.");
+      } catch {
+        saveFlash("Could not save site instructions.");
+      }
+    });
+    field.appendChild(label);
+    field.appendChild(textarea);
+    field.appendChild(saveBtn);
+    body.appendChild(field);
+  }
 }
 
 // ── Agents ──
@@ -3456,7 +3495,7 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
 // for Settings sections and deep links (CAP-FB-20260823-NAVIGATION-BACK-01).
 export const navigationController = createNavigationController({
   win: window,
-  normalizeHash: normalizeSettingsSectionId,
+  normalizeHash: (h) => normalizeSettingsSectionId(h) || "providers",
   isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
   onNavigate: async ({ hash, sectionId, isTraverse }) => {
     return handleSettingsHashNavigation(hash || `#${sectionId}`, isTraverse);
@@ -3568,6 +3607,14 @@ applyDeveloperVisibility(developerFeaturesEnabled);
 // Only the active section is rendered on boot (and on section switch);
 // the remaining sections are lazy-mounted when navigated to.
 await renderLocalFolders();
+// Skills panel: mount EAGERLY at load, exactly like mcp-servers and
+// local-folders. The mount wires the Import button + list; without this,
+// reaching the panel by SCROLLING (no nav event, no hash change) leaves the
+// Import button dead — the nav handler's mount never fires, and the owner's
+// click does nothing (CAP-FB-20260901-SKILLS-IMPORT-BUTTON-01). The
+// dataset.skillsMounted guard makes the later nav-handler call a no-op.
+mountSkillsSection(document.getElementById("skills"));
+if (developerFeaturesEnabled) await renderToolLibrary();
 await navigationController.syncCurrent();
 
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run

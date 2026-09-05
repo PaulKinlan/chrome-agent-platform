@@ -37,7 +37,7 @@
 
 import { inspectExactProfile, verifyRunnerGuard } from "./security-suite-custody.mjs";
 import { launchChrome, openCdp, type CdpClient } from "./lib/chrome-launch.ts";
-import { SCRIPTED_DUMMY_KEY, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
+import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -218,7 +218,13 @@ async function main() {
   // ONE browser, launched through the shared launcher WITH the extension: the
   // renderHtmlFrame fixture and the extension checks share it (the supervisor
   // issues exactly one profile).
-  const chrome = await launchChrome({ extension: EXT, profile: providedProfile, windowSize: "1440,900", timeoutMs: 20000 });
+  // The cookie-redaction probe (check 7) needs the cookies capability granted
+  // so list_cookies EXECUTES. Seed it into the fresh profile's Preferences
+  // before launch (the established headless-honest pattern — Chrome never
+  // shows optional-permission prompts headless, and a second in-flight
+  // permission card in a run is the m6id defect; neither is a dependency a
+  // security gate may take).
+  const chrome = await launchChrome({ extension: EXT, profile: providedProfile, windowSize: "1440,900", timeoutMs: 20000, grantPermissions: ["cookies"] });
   console.log(`security-suite: launched ${chrome.wsUrl.replace(/\/devtools\/browser\/.*/, "/devtools/browser/…")} with --load-extension=${EXT}`);
   const cdp = await openCdp(chrome.wsUrl);
 
@@ -373,12 +379,90 @@ async function main() {
     await sleep(1500);
 
     // 7. COOKIE REDACTION — list_cookies output never carries a value.
-    const cookies = await sendFrom(cdp, ntp.sessionId, { type: "agent-worker.tool", toolName: "list_cookies", args: { domain: "127.0.0.1" } });
-    const cookiesJson = JSON.stringify(cookies ?? null);
+    // Driven through a GENUINE run: a fresh scripted provider plays the
+    // model, the composer opens a real foreground run (the runTask model
+    // path), and the run's live context carries the call (never the background
+    // agent-worker.tool Worker RPC route def.4 fences). The cookies capability
+    // is seeded into the fresh profile before launch (the headless-honest
+    // stand-in for Chrome's optional-permission prompt, which never renders
+    // headless) — no card appears, the tool EXECUTES, and the assertion
+    // requires the real executed envelope (ok, a cookies array,
+    // valuesRedacted: true) plus the run's durable terminal record, never a
+    // vacuous pass on an expired/absent one.
+    const cookieProvider = await startScriptedProvider({
+      steps: [
+        { tool: "search_tools", args: { query: "list_cookies", limit: 1 } },
+        { tool: "execute_tool", args: (req: any) => ({ selectionRef: selectionRefOf(req), arguments: { domain: "127.0.0.1" } }) },
+        { text: "Listed." },
+      ],
+    });
+    let cookiesEnv: any = null;
+    let cookieModelContent = "";
+    try {
+      await sendFrom(cdp, opts.sessionId, { type: "provider.set", config: { provider: "openai-compatible", baseURL: cookieProvider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } });
+      await cdp.send("Target.activateTarget", { targetId: ntp.targetId }).catch(() => {});
+      await cdp.send("Page.bringToFront", {}, ntp.sessionId).catch(() => {});
+      // Snapshot the known durable executions BEFORE the click: the terminal
+      // wait below must bind to THIS run's exact execution (provider request
+      // arrival proves the transcript reached the model, not that the run
+      // consumed the final response or settled).
+      const cookieRunsBefore = new Set((((await sendFrom(cdp, opts.sessionId, { type: "run.list" }).catch(() => null))?.runs ?? []).map((r: any) => r?.executionId).filter(Boolean)));
+      let cookieComposer = false;
+      // Start a NEW task from the hub home view (check 6 left its thread open;
+      // typing there would continue it). Genuine clicks + real input events.
+      await cdp.eval(ntp.sessionId, `document.querySelector("#home")?.click(); "home"`).catch(() => null);
+      await sleep(700);
+      for (let i = 0; i < 20 && !cookieComposer; i++) {
+        cookieComposer = await clickAt(cdp, ntp.sessionId, centerOf("#task-input"));
+        if (!cookieComposer) await sleep(250);
+      }
+      let cookieRunClicked = false;
+      if (cookieComposer) {
+        for (const ch of "list the cookies for 127.0.0.1") {
+          await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch }, ntp.sessionId);
+        }
+        await sleep(300);
+        cookieRunClicked = await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("#run-task"); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+      }
+      // The cookies capability was seeded into the profile before launch —
+      // assert the grant is live, then the run's list_cookies executes with no
+      // card at all. A pending/expired/absent envelope must FAIL the check
+      // below, never pass vacuously (the 86oj round-1 false-green).
+      const cookiesGranted = await cdp.eval(opts.sessionId, `chrome.permissions.contains({ permissions: ["cookies"] }).then(v => v, () => "err")`).catch(() => "err");
+      for (let i = 0; i < 120 && cookieProvider.requests.length < 3; i++) await sleep(500);
+      // Then await the EXACT run's durable terminal record before any
+      // close/restore — the run must have consumed the provider's final
+      // answer and settled (terminal.ok), not merely produced requests.
+      let cookieRunRecord: any = null;
+      const t0 = Date.now();
+      while (Date.now() - t0 < 120000) {
+        const runs = await sendFrom(cdp, opts.sessionId, { type: "run.list" }).catch(() => null);
+        const rows = runs?.runs ?? [];
+        if (!cookieRunRecord) {
+          cookieRunRecord = rows.find((r: any) => r?.executionId && !cookieRunsBefore.has(r.executionId) && typeof r?.taskPreview === "string" && r.taskPreview.includes("list the cookies for 127.0.0.1".slice(0, 32))) ?? null;
+        }
+        if (cookieRunRecord) {
+          cookieRunRecord = rows.find((r: any) => r?.executionId === cookieRunRecord.executionId) ?? cookieRunRecord;
+          if (cookieRunRecord.phase === "terminal" || cookieRunRecord.phase === "cancelled") break;
+        }
+        await sleep(500);
+      }
+      const lastCookieReq = cookieProvider.requests[cookieProvider.requests.length - 1];
+      cookiesEnv = lastCookieReq ? executeEnvelope(lastCookieReq, "list_cookies") : null;
+      cookieModelContent = JSON.stringify((lastCookieReq?.messages ?? []).filter((m: any) => m?.role === "tool").map((m: any) => m.content));
+      check("cookies: the redaction probe run executed list_cookies for real (capability granted, envelope settled, run terminal)",
+        cookiesGranted === true && cookieComposer === true && cookieRunClicked === true && cookieProvider.requests.length === 3 && cookieProvider.overflow === 0 &&
+          cookieRunRecord?.phase === "terminal" && cookieRunRecord?.terminal?.ok === true &&
+          cookiesEnv?.ok === true && Array.isArray(cookiesEnv?.result?.cookies) && cookiesEnv?.result?.valuesRedacted === true,
+        { granted: cookiesGranted, composer: cookieComposer, runClicked: cookieRunClicked, requests: cookieProvider.requests.length, overflow: cookieProvider.overflow, runPhase: cookieRunRecord?.phase ?? null, terminalOk: cookieRunRecord?.terminal?.ok ?? null, env: JSON.stringify(cookiesEnv)?.slice(0, 300) });
+    } finally {
+      await cookieProvider.close();
+      await sendFrom(cdp, opts.sessionId, { type: "provider.set", config: { provider: "demo", apiKey: "" } }).catch(() => {});
+    }
     check(
-      "cookies: list_cookies returns no value field (metadata only)",
-      cookies?.error !== "unknown tool: list_cookies" && !/"value"/.test(cookiesJson),
-      { cookies: cookiesJson.slice(0, 300) },
+      "cookies: list_cookies returns no value field (metadata only) — in the model's own context",
+      cookiesEnv?.ok === true && !/"value"/.test(cookieModelContent),
+      { env: JSON.stringify(cookiesEnv)?.slice(0, 300) },
     );
 
     for (const id of createdScripts) await sendFrom(cdp, opts.sessionId, { type: "script.delete", origin: "master", id }).catch(() => {});

@@ -435,17 +435,14 @@ export const ASSET_BOUNDS = {
   // CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01.
   maxIndexBytes: 2 * 1024 * 1024,
   // Immutable per-artifact versions (CAP-FB-20260830-ARTIFACT-VERSIONS-01):
-  // the last 20 versions of each artifact are kept; the bodies behind them are
-  // content-addressed blobs whose total is capped library-wide. Over either
-  // bound the OLDEST versions are evicted (never the head) and the eviction
-  // is visible as `versionsTruncated` on the row — the same evict-versus-
-  // refuse choice as CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01: a version
-  // is a convenience the head does not depend on, so evicting one loses
-  // history, not work, and the head is never refused for lack of history
-  // space. Only a body that cannot fit even after every evictable version is
-  // gone refuses (fail closed, readable error).
+  // retain the last 20 versions of each artifact. There is no self-imposed
+  // aggregate byte ceiling: the head itself is stored in the content-addressed
+  // version blob, so a smaller library-wide byte cap contradicted the no-size-
+  // limit artifact contract and refused complete bodies (including an 8 MiB
+  // bounded table) before the physical store did. Count retention remains
+  // deterministic; genuine OPFS/storage failure still surfaces fail-closed.
   maxVersionsPerAsset: 20,
-  maxVersionBytes: 4 * 1024 * 1024,
+  maxVersionBytes: Infinity,
 };
 
 // ---- immutable versions: rows, content-addressed blobs, refcounts ----

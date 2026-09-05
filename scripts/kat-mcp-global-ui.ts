@@ -139,6 +139,10 @@ async function main() {
       const addBtn = document.getElementById('mcp-add-btn');
       return Boolean(nav && panel && addBtn);
     })()`);
+    // rfca justification: the nav item, section shell, and Add button are
+    // STATIC options.html markup — existence is intentional here (it gates the
+    // nav scaffolding). The renderer (renderMcpServers) is proven by CONTENT
+    // below: the added server's card must appear in #mcp-server-list.
     check("Settings shows an MCP servers section with an Add button", sectionOk === true, sectionOk);
     await shot(cdp, ps, "01-mcp-section.png");
 

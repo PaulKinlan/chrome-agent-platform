@@ -24,6 +24,8 @@
 // stderr; it is strictly weaker (probe-then-bind still races) and should not
 // be reached for by default.
 
+import { crypto } from "jsr:@std/crypto@1";
+
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
   proc: Deno.ChildProcess;
@@ -40,6 +42,61 @@ export interface LaunchedChrome {
 const TAIL_LIMIT = 8192;
 
 /** The browser every harness drives. */
+export async function computeUnpackedExtensionId(path: string): Promise<string> {
+  const absPath = Deno.realPathSync(path);
+  const data = new TextEncoder().encode(absPath);
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+  let id = "";
+  for (let i = 0; i < 16; i++) {
+    const byte = hash[i];
+    const high = (byte >> 4) & 0x0f;
+    const low = byte & 0x0f;
+    id += String.fromCharCode(97 + high) + String.fromCharCode(97 + low);
+  }
+  return id;
+}
+
+export async function seedGrantedPermissions(
+  profileDir: string,
+  extIdOrPath: string,
+  apis: string[] = ["tabs", "notifications"],
+): Promise<string> {
+  const isId = /^[a-p]{32}$/.test(extIdOrPath);
+  const extId = isId ? extIdOrPath : await computeUnpackedExtensionId(extIdOrPath);
+  const extPath = isId ? "" : (() => { try { return Deno.realPathSync(extIdOrPath); } catch { return ""; } })();
+
+  const defaultDir = `${profileDir}/Default`;
+  await Deno.mkdir(defaultDir, { recursive: true });
+  const prefsPath = `${defaultDir}/Preferences`;
+  let prefs: any = {};
+  try {
+    prefs = JSON.parse(await Deno.readTextFile(prefsPath));
+  } catch {
+    prefs = {};
+  }
+  prefs.extensions ??= {};
+  prefs.extensions.settings ??= {};
+  prefs.extensions.settings[extId] = {
+    active_permissions: {
+      api: apis,
+      explicit_host: ["<all_urls>"],
+      manifest_permissions: [],
+      scriptable_host: [],
+    },
+    granted_permissions: {
+      api: apis,
+      explicit_host: ["<all_urls>"],
+      manifest_permissions: [],
+      scriptable_host: [],
+    },
+    location: 8,
+    ...(extPath ? { path: extPath } : {}),
+    withholding_permissions: false,
+  };
+  await Deno.writeTextFile(prefsPath, JSON.stringify(prefs, null, 2));
+  return extId;
+}
+
 export const CHROMIUM = "/usr/bin/chromium";
 
 // ── the serialized-Chrome lock ──────────────────────────────────────────────
@@ -181,7 +238,12 @@ export async function launchChrome(opts: {
   clearEnv?: boolean;
   /** Environment for the browser (with clearEnv: the whole environment — an allowlist). */
   env?: Record<string, string>;
+  /** Pre-seed Chrome's Preferences with granted permissions before launch. */
+  grantPermissions?: string[];
 }): Promise<LaunchedChrome> {
+  if (Array.isArray(opts.grantPermissions) && opts.grantPermissions.length && opts.profile && opts.extension) {
+    await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
+  }
   const extras = opts.args ?? [];
   const fixed = extras.find((a) => a.startsWith("--remote-debugging-port"));
   if (fixed) {

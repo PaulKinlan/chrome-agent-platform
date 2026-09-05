@@ -3,15 +3,19 @@
 // JIT request and the journey suite can only assert the honest denial. This
 // harness seeds the grant into a FRESH profile's extension prefs BEFORE launch
 // (the extension id of an unpacked extension is sha256(path) in the a–p
-// alphabet), then drives the REAL `notify` tool through the REAL executor route
-// (agent-worker.tool) from an extension page and asserts
-// `{ ok: true, notificationId }` — the exact call that failed with
-// "Unable to download all specified images." while the default icon path was
-// wrong.
+// alphabet), then drives the REAL `notify` tool through a REAL run — the
+// scripted provider plays the model, `agent.run` opens a genuine foreground
+// run (the runTask model path), and the run's live context issues the tool
+// call (never the background agent-worker.tool Worker RPC route — the seam
+// def.4 fences). The tool result the model saw is read back from the
+// provider's recorded requests. Asserts `{ ok: true, notificationId }` — the exact call
+// that failed with "Unable to download all specified images." while the
+// default icon path was wrong.
 //
 //   deno run -A scripts/kat-notify-icon.ts [<path-to-extension>] [<out-dir>]
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -75,15 +79,37 @@ try {
   const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
   const { result: { sessionId: pageSession } } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Runtime.enable", {}, pageSession);
+  // provider.set is restricted to the Settings surface — the options page.
+  const { result: { targetId: optsTarget } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+  const { result: { sessionId: optsSession } } = await send("Target.attachToTarget", { targetId: optsTarget, flatten: true });
+  await send("Runtime.enable", {}, optsSession);
   await sleep(1500);
 
   const granted = await evalIn(`chrome.permissions.contains({ permissions: ["notifications"] })`, pageSession);
   check("seeded profile: notifications is granted at boot", granted === true, granted);
 
-  const res = await evalIn(`chrome.runtime.sendMessage({ type: "agent-worker.tool", toolName: "notify", args: { title: "KAT", message: "notify icon path" } }).then(v => ({ v }), e => ({ err: String(e?.message ?? e) }))`, pageSession);
-  const out = res?.v ?? res;
-  console.log("notify ->", JSON.stringify(out));
-  await Deno.writeTextFile(`${OUT}/notify-result.json`, JSON.stringify(out, null, 2));
+  // The model's side of one genuine run: find notify, call it, answer.
+  const provider = await startScriptedProvider({
+    steps: [
+      { tool: "search_tools", args: { query: "notify", limit: 1 } },
+      { tool: "execute_tool", args: (req: any) => ({ selectionRef: selectionRefOf(req), arguments: { title: "KAT", message: "notify icon path" } }) },
+      { text: "Notification shown." },
+    ],
+  });
+  let out: any = null;
+  try {
+    await evalIn(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "openai-compatible", baseURL: provider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`, optsSession);
+    const run = await evalIn(`chrome.runtime.sendMessage(${JSON.stringify({ type: "agent.run", task: "show the KAT notification" })}).then(v => ({ v }), e => ({ err: String(e?.message ?? e) }))`, pageSession);
+    check("notify: the probe run completed under the scripted provider", run?.v?.ok === true && provider.requests.length === 3 && provider.overflow === 0, { run: run?.v ?? run, requests: provider.requests.length, overflow: provider.overflow });
+    // The tool result the MODEL saw (in the answer request's messages).
+    const env = provider.requests.length > 0 ? executeEnvelope(provider.requests[provider.requests.length - 1], "notify") : null;
+    out = env?.result ?? null;
+    console.log("notify ->", JSON.stringify(env));
+    await Deno.writeTextFile(`${OUT}/notify-result.json`, JSON.stringify(env, null, 2));
+  } finally {
+    await provider.close();
+    await evalIn(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).catch(() => {})`, optsSession).catch(() => {});
+  }
   check("notify: returns ok with notifications seeded", out?.ok === true && typeof out?.notificationId === "string", out);
 
   // Belt and braces: every packaged icon path the BUILT service worker hands

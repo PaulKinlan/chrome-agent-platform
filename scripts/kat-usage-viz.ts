@@ -7,6 +7,14 @@
 // Seeding goes through the extension's OWN modules (usage-store.usageWrite +
 // usage.recordToolCall) evaluated in the options page — the real storage
 // contracts, no test-only routes.
+//
+// DOCUMENTED SCOPE (86oj review): this KAT deliberately uses the owner/options
+// production seam and NO model run. The tool-usage counter is incremented on
+// the owner/route path; a model run's tool executions do NOT increment it
+// (that bookkeeping split is the product question tracked as
+// chrome-agent-platform-q2we). What this harness proves: the Usage panel
+// renders honestly from real stored data. Counter-on-run behavior, if the
+// product decision changes, needs a run-driven probe then.
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
@@ -84,16 +92,19 @@ await evaluate(`(async () => {
   await store.usageWrite(${JSON.stringify(seedRows)});
   return "ledger-seeded";
 })()`);
-// Tool counters are written in the SW realm — the REAL counting path: real
-// tool RPCs through `agent-worker.tool` (owner-options principal) execute in
-// the SW and increment the counter there. Read-only tools, real executions.
+// Tool counters are seeded through the extension's OWN usage module — the
+// REAL counting function (usage.recordToolCall) evaluated in the options
+// page, the same module the SW imports; pure kv storage, no test-only route.
+// (A live run's tool executions do not increment this counter — that is the
+// worker-bridge route's behavior, not this KAT's subject: this KAT charts
+// seeded usage data.)
 const toolSeed = await evaluate(`(async () => {
-  const call = (toolName) => chrome.runtime.sendMessage({ type: "agent-worker.tool", toolName, args: {} }).catch((e) => ({ ok: false, error: String(e) }));
-  await call("list_tabs"); await call("list_tabs");
-  await call("list_agents"); await call("list_agents"); await call("list_agents");
+  const usage = await import(chrome.runtime.getURL("lib/usage.js"));
+  await usage.recordToolCall("list_tabs"); await usage.recordToolCall("list_tabs");
+  await usage.recordToolCall("list_agents"); await usage.recordToolCall("list_agents"); await usage.recordToolCall("list_agents");
   return "tools-seeded";
 })()`);
-check("tool calls dispatched through the real SW route", toolSeed === "tools-seeded", toolSeed);
+check("tool counters seeded through the extension's own usage module", toolSeed === "tools-seeded", toolSeed);
 
 // Open the Usage section (the nav click is the real user path).
 await evaluate(`(() => { document.querySelector('[data-section="usage"]')?.click(); return document.querySelector("#usage")?.classList?.contains("active") ?? "clicked"; })()`);

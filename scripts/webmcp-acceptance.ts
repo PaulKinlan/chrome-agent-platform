@@ -467,6 +467,10 @@ async function main() {
       const ns = await c.attach(hubT.targetId);
       await c.send("Page.enable", {}, ns);
       const hubReady = await c.until(() => c.evalIn(ns, `(() => { const el = document.getElementById("site-offer"); return el ? { hidden: el.hidden } : null; })()`), 10000);
+      // rfca justification: hidden-while-empty IS the contract under test
+      // (the chip must not advertise before any site offers tools); the
+      // offer-present direction is content-checked by the showcase probes
+      // below (5 products, cart contents).
       check("showcase: the hub declares the site-offer chip, hidden while nothing offers tools", hubReady?.hidden === true, hubReady);
       // Real clicks need the tab in front (a user activation comes from a
       // focused frame), and screenshots of a backgrounded tab are unreliable.

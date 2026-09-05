@@ -33,30 +33,34 @@ if (!globalThis.CustomEvent) {
   };
 }
 
-Deno.test("Manifest WAR: only minimal artifact resources are exposed", async () => {
+Deno.test("Manifest WAR: NO artifact resources are web-exposed (fingerprint surface removed)", async () => {
   const raw = await Deno.readTextFile(`${ROOT}extension/manifest.json`);
   const manifest = JSON.parse(raw);
 
-  assert(Array.isArray(manifest.web_accessible_resources), "web_accessible_resources must be declared");
-  assertEquals(manifest.web_accessible_resources.length, 1);
-
-  const entry = manifest.web_accessible_resources[0];
-  const resources = entry.resources ?? [];
-
-  // Minimal set only
-  assertEquals(resources.sort(), [
+  // chrome-agent-platform-f62c: artifact/artifact.html, artifact/artifact.js
+  // and sandbox/artifact-preview.html were exposed to <all_urls> — every web
+  // page could probe the extension's presence by fetching one. All three are
+  // only ever loaded from EXTENSION pages (ntp/artifacts/artifact viewers),
+  // which need no web match, so the web_accessible_resources block is GONE.
+  const exposed = (manifest.web_accessible_resources ?? []).flatMap((entry) =>
+    (entry.resources ?? []).map((res) => ({ res, matches: entry.matches ?? [] }))
+  );
+  for (const gone of [
     "artifact/artifact.html",
     "artifact/artifact.js",
     "sandbox/artifact-preview.html",
-  ].sort());
-
-  // Verify sensitive paths are NEVER in WAR
-  for (const path of resources) {
-    assert(!path.startsWith("background/"), `background path ${path} must not be in WAR`);
-    assert(!path.startsWith("lib/"), `lib path ${path} must not be in WAR`);
-    assert(!path.startsWith("dist/"), `dist path ${path} must not be in WAR`);
-    assert(!path.startsWith("options/"), `options path ${path} must not be in WAR`);
-    assert(!path.includes("service-worker"), `service worker must not be in WAR`);
+  ]) {
+    assert(
+      !exposed.some((e) => e.res === gone),
+      `${gone} must not be web-accessible (the existence probe)`,
+    );
+  }
+  // No resource may be exposed to <all_urls> at all (the finding's shape).
+  for (const e of exposed) {
+    assert(
+      !e.matches.includes("<all_urls>") && !e.matches.includes("*://*/*"),
+      `${e.res} must not be exposed to every web page`,
+    );
   }
 });
 

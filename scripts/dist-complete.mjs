@@ -21,6 +21,9 @@ export const DIST_COMPLETE_OUTPUTS = Object.freeze([
   "background/service-worker.js",
   "options.bundle.js",
 ]);
+export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
+  "docs/diff-core.bundle.js",
+]));
 
 const SHA256_RE = /^[0-9a-f]{64}$/u;
 const COMMIT_RE = /^[0-9a-f]{40,64}$/u;
@@ -102,7 +105,7 @@ function indexedRows(root) {
       throw markerError(`non-portable indexed source path: ${repoPath}`);
     }
     return { mode, repoPath };
-  });
+  }).filter((row) => !INDEXED_SOURCE_EXCLUDED_PATHS.has(row.repoPath));
   rows.sort((a, b) =>
     Buffer.compare(
       Buffer.from(a.repoPath, "utf8"),

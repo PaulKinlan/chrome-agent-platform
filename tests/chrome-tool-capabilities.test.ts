@@ -48,7 +48,7 @@ function refFactory() {
   return () => `sel_${(++value).toString(16).padStart(36, "0")}`;
 }
 
-Deno.test("chrome capability table is exact and complete for 138 browser + 44 management tools", () => {
+Deno.test("chrome capability table is exact and complete for 138 browser + 50 management tools", () => {
   // The capability table describes the SHIPPED inventory, which is the
   // developer build: the developer-only tools keep their rows because the
   // build genuinely contains them (CAP-FB-20260830-COOKIE-TOOLS-CUT-01).
@@ -64,13 +64,13 @@ Deno.test("chrome capability table is exact and complete for 138 browser + 44 ma
   assertEquals(DEVELOPER_ONLY_TOOL_NAMES, ["get_cookie", "set_cookie", "remove_cookie"]);
   assertEquals(MANAGEMENT_TOOL_NAMES, MANAGEMENT_CAPABILITY_TOOL_NAMES);
   assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 182);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 188);
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 138);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 44);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 50);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS, {
     browserTools: 138,
-    managementTools: 44,
-    totalTools: 182,
+    managementTools: 50,
+    totalTools: 188,
     maxCapabilityTokens: 4,
     maxCapabilityTokenBytes: 96,
     maxPermissions: 8,
@@ -187,7 +187,7 @@ Deno.test("catalog descriptors consume exact canonical capabilities and capabili
     ...adaptManagementTools(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") }),
   ];
   const catalog = buildToolCatalog(inputs);
-  assertEquals(catalog.descriptors.length, 182);
+  assertEquals(catalog.descriptors.length, 188);
   for (const descriptor of catalog.descriptors) {
     const row = chromeToolCapability(descriptor.name, descriptor.sourceKind);
     assertEquals(descriptor.capabilities, row.capabilityTokens);
@@ -207,7 +207,7 @@ Deno.test("unbound lazy browser/management records preserve source closure and v
   const browserRecords = executableBrowserToolRecords(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") });
   const managementRecords = executableManagementToolRecords(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") });
   assertEquals(browserRecords.length, 138);
-  assertEquals(managementRecords.length, 44);
+  assertEquals(managementRecords.length, 50);
   for (const record of [...browserRecords, ...managementRecords]) {
     const name = record.descriptorInput.toolId;
     const sourceMap = record.descriptorInput.sourceKind === "chrome-api" ? browser : management;
@@ -250,7 +250,7 @@ Deno.test("shadow capture discloses bounded selected capability summaries and on
   assertEquals(capture.canExecute, false);
   assertEquals(capture.canGrant, false);
   assertEquals(capture.selectedCount, capture.selectedDescriptors.length);
-  assertEquals(capture.nonSelectedCount, 182 - capture.selectedCount);
+  assertEquals(capture.nonSelectedCount, 188 - capture.selectedCount);
   assertEquals(capture.omittedNonSelected, true);
   assert(capture.selectedCount > 0 && capture.selectedCount <= 2);
   for (const selected of capture.selectedDescriptors) {
@@ -284,15 +284,15 @@ Deno.test("selected capability summary is bounded for non-Chrome catalog sources
   assertEquals(summary.replayClass, "unknown");
 });
 
-Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 182-record catalog", () => {
+Deno.test("unsafe-for-cutover list remains policy metadata and does not filter the 188-record catalog", () => {
   for (const name of ["run_script", "schedule_task", "set_agent_provider", "capture_screenshot"]) {
     assert(FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes(name));
   }
   // open_side_panel was removed 2026-08-30 (CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01),
   // so it is gone from the cutover list as well as the catalog.
   assert(!FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes("open_side_panel"));
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 182);
-  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 182);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 188);
+  assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 188);
 });
 
 Deno.test("Tranche 2 tools: permission-gated execution fails closed when permission is missing", async () => {
@@ -372,7 +372,7 @@ Deno.test("shadow summary: toolsBySource is a bounded read-only per-tool list (n
     assert(rows.length <= 64, "bounded rows per source");
     for (const row of rows) {
       for (const key of Object.keys(row)) {
-        assert(["toolId", "name", "sourceLabel", "version", "available", "description"].includes(key), `only summary fields: ${key}`);
+        assert(["toolId", "name", "sourceLabel", "purpose", "version", "available", "description"].includes(key), `only summary fields: ${key}`);
       }
       assertEquals(typeof row.name, "string");
       assertEquals(typeof row.description, "string");
@@ -397,9 +397,9 @@ Deno.test("shadow summary: an empty catalog yields an empty toolsBySource (empty
 
 // ──────────────────────────────────────────────────────────────────────────
 // Details-slice product fix: the production shadow catalog projects the
-// bundled tools, so the Settings <details> bundled category lists all 28.
+// bundled tools, so the Settings <details> bundled category lists all 31.
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (28 rows in toolsBySource[bundled-package])", async () => {
+Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (31 rows in toolsBySource[bundled-package])", async () => {
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const { adaptBundledTools } = await import("../extension/lib/tool-catalog.js");
   const inputs = adaptBundledTools(BUNDLED_TOOL_PACKAGE_ROWS, {
@@ -413,8 +413,8 @@ Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (2
   });
   const summary = await controller.inspect({ action: "summary" });
   const bundled = summary.toolsBySource["bundled-package"] ?? [];
-  assertEquals(bundled.length, 28, "all 28 bundled rows are listed");
-  assertEquals(summary.bySource["bundled-package"], 28, "the bySource count matches");
+  assertEquals(bundled.length, 31, "all 31 bundled rows are listed");
+  assertEquals(summary.bySource["bundled-package"], 31, "the bySource count matches");
   // every row carries the summary-only fields + the admitted-preview availability
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((r) => r.admitted === true && r.settingsPreview === true).length;
   assertEquals(bundled.filter((r) => r.available === true).length, admitted, "the available count equals the admitted previews");

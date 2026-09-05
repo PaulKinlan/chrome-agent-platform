@@ -1,6 +1,6 @@
 // lib/tool-exec-preview.js — Settings-only bounded Wasm tool execution
 // (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01/02/03/04). The technically-admitted
-// static allowlist of bundled packages (28 tools) may be run ONLY from the
+// static allowlist of bundled packages (31 tools) may be run from the
 // exact Settings options document by an EXPLICIT owner click.
 //
 // Invariants:
@@ -78,13 +78,15 @@ export const PREVIEW_SPECS = Object.freeze(
           size: row.binary?.bytes,
           caps: Object.freeze([...(row.capabilities ?? [])].sort()),
           argv0: row.toolId,
-          // The immutable acceptedExitCodes: diff's exit 1 is the NORMAL
-          // "differences found" result (the hunk on stdout); everything else
-          // accepts only exit 0. NEVER request-borne — the SW copies this into
-          // the trusted job envelope.
-          acceptedExitCodes: row.toolId === "diff" ? Object.freeze([0, 1]) : Object.freeze([0]),
-          // Output policy is immutable spec authority. gzip alone uses the
-          // lossless binary arm; every predecessor remains byte-identical UTF-8.
+          // The immutable acceptedExitCodes: diff's exit 1 means differences
+          // found; grep's exit 1 means no selected lines. Both are normal,
+          // useful results. Everything else accepts only exit 0. This is never
+          // request-borne — the SW copies it into the trusted job envelope.
+          acceptedExitCodes: row.toolId === "diff" || row.toolId === "grep"
+            ? Object.freeze([0, 1]) : Object.freeze([0]),
+          // Default output policy is immutable spec authority. gzip always uses
+          // the lossless binary arm; base64 decode selects that same arm from
+          // its validated trusted argv through previewStdoutEncoding().
           stdoutEncoding: row.toolId === "gzip" ? "base64" : "utf8",
           ...(row.toolId === "gzip" ? {
             allowedArgs: Object.freeze([
@@ -125,8 +127,49 @@ export const PREVIEW_SPECS = Object.freeze(
   ),
 );
 export const PREVIEW_TOOL_IDS = Object.freeze(Object.keys(PREVIEW_SPECS).sort());
+export const STREAM_BACKED_BUNDLED_TOOL_IDS = Object.freeze([
+  "awk", "base64", "grep", "jq", "sed", "sort", "tr", "uniq", "wc",
+]);
+export function isStreamBackedBundledTool(toolId) {
+  return STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId);
+}
 export function previewSpecFor(toolId) {
   return PREVIEW_SPECS[toolId] ?? null;
+}
+
+/** Resolve mode-sensitive output typing from trusted, validated argv. */
+export function previewStdoutEncoding(toolId, inputArgs = []) {
+  const spec = previewSpecFor(toolId);
+  if (!spec || !Array.isArray(inputArgs)) fail("preview_args");
+  return toolId === "base64" && inputArgs.length === 1 &&
+      (inputArgs[0] === "-d" || inputArgs[0] === "--decode")
+    ? "base64"
+    : spec.stdoutEncoding;
+}
+
+export function wasmStreamOutputDescriptor(toolId, inputArgs = []) {
+  const encoding = previewStdoutEncoding(toolId, inputArgs);
+  return Object.freeze(encoding === "base64"
+    ? { type: "binary", mediaType: "application/octet-stream" }
+    : { type: "utf8", mediaType: "text/plain;charset=utf-8" });
+}
+
+/** Resolve the exact argv vector used by both inline preview and file-backed
+ * execution. Defaults therefore cannot drift between the two hosts. jq runs
+ * against file-backed stdout, so disable terminal colour unless the caller
+ * explicitly requests colour with -C/--color-output. */
+export function previewWasiArgs(toolId, inputArgs) {
+  const spec = previewSpecFor(toolId);
+  if (!spec || !Array.isArray(inputArgs)) fail("preview_args");
+  const selected = inputArgs.length === 0 && spec.defaultArgs
+    ? [...spec.defaultArgs]
+    : [...inputArgs];
+  if (toolId === "jq") {
+    const explicitColour = selected.some((arg) => arg === "--color-output" || /^-[^-]*C/u.test(arg));
+    const explicitMono = selected.some((arg) => arg === "--monochrome-output" || /^-[^-]*M/u.test(arg));
+    if (!explicitColour && !explicitMono) selected.unshift("-M");
+  }
+  return Object.freeze([spec.argv0, ...selected]);
 }
 // The reserved https origin representing the exact Settings surface in the WASI
 // job context (boundedOrigin accepts http(s) only — chrome-extension:// cannot
@@ -348,10 +391,7 @@ export function buildPreviewJob({ input, authority, quota = null }) {
   // by the UI and never request-borne beyond the allowlisted toolId.
   const spec = previewSpecFor(input.toolId);
   if (!spec) fail("preview_unknown_tool");
-  const effectiveArgs = input.args.length === 0 && spec.defaultArgs
-    ? spec.defaultArgs
-    : input.args;
-  const args = [spec.argv0, ...effectiveArgs];
+  const args = previewWasiArgs(input.toolId, input.args);
   let stdinBytes;
   if (input.toolId === "gzip" && input.args.length === 1) {
     try { stdinBytes = decodeCanonicalBase64(input.stdin); }
@@ -371,7 +411,7 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     args,
     stdin: stdinBytes,
     acceptedExitCodes: spec.acceptedExitCodes,
-    stdoutEncoding: spec.stdoutEncoding,
+    stdoutEncoding: previewStdoutEncoding(input.toolId, input.args),
     workspaceSeed: spec.workspaceSeed,
     quota: quota ?? {
       // dptw: byte quotas are unbounded; the count guards stay (runaway guard).
@@ -580,18 +620,20 @@ export async function executeBundledWasiJob({
   }
 
   let input;
+  let stdoutEncoding = spec.stdoutEncoding;
   try {
     input = validatePreviewInput({
       toolId,
       args: Array.isArray(args) ? args : [],
       stdin: typeof stdin === "string" ? stdin : "",
     });
+    stdoutEncoding = previewStdoutEncoding(input.toolId, input.args);
   } catch (err) {
     return Object.freeze({
       ok: false,
       phase: "failed",
       error: `invalid_input: ${err.message || err}`,
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -623,7 +665,7 @@ export async function executeBundledWasiJob({
       ok: false,
       phase: "failed",
       error: `asset_fetch_failed: ${err.message || err}`,
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -646,7 +688,7 @@ export async function executeBundledWasiJob({
       ok: false,
       phase: "failed",
       error: `revalidation_failed: ${err.code || err.message || err}`,
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -694,15 +736,15 @@ export async function executeBundledWasiJob({
       const rawResult = await host.handleJob({
         type: "wasm.job",
         job: { ...job, stdin: new Uint8Array(job.stdin) },
-        wasmBytes,
+        wasmBytes: casBytes,
       });
-      return boundPreviewResult(rawResult, { stdoutEncoding: spec.stdoutEncoding });
+      return boundPreviewResult(rawResult, { stdoutEncoding });
     } catch (err) {
       return Object.freeze({
         ok: false,
         phase: "failed",
         error: `execution_worker_failed: ${err.message || err}`,
-        stdoutEncoding: spec.stdoutEncoding,
+        stdoutEncoding,
         stdout: "",
         stdoutBase64: null,
         stdoutBytes: 0,
@@ -735,13 +777,13 @@ export async function executeBundledWasiJob({
     });
 
     if (envelope?.ok && envelope.result) {
-      return boundPreviewResult(envelope.result, { stdoutEncoding: spec.stdoutEncoding });
+      return boundPreviewResult(envelope.result, { stdoutEncoding });
     }
     return Object.freeze({
       ok: false,
       phase: "failed",
       error: envelope?.error || "execution_failed",
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -756,7 +798,7 @@ export async function executeBundledWasiJob({
     ok: false,
     phase: "failed",
     error: "wasi_task_host_unavailable",
-    stdoutEncoding: spec.stdoutEncoding,
+    stdoutEncoding,
     stdout: "",
     stdoutBase64: null,
     stdoutBytes: 0,

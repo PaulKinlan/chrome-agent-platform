@@ -64,6 +64,14 @@ export const DESTRUCTIVE_ACTIONS = new Set([
   // model provider, so the owner approves the exact origin + cookie name
   // before the value is read at all.
   "browser.cookie-value",
+  // ONE invocation of an "ask"-policy site's WebMCP tool
+  // (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01): the per-site enrollment
+  // policy "ask" makes every call to that site's tools pay an in-conversation
+  // Allow-once / Deny card before the page call runs. Membership here is
+  // load-bearing exactly as for the destructive actions — without it
+  // createPendingApproval refuses and an ask-policy tool could never obtain a
+  // card (fail closed, never a silent run).
+  "webmcp.use-tool",
   // Using a REMOTE MCP server's tools (CAP-FB-20260831-MCP-TOOL-INJECTION-01):
   // the model reaches OUT to an owner-configured server whose results are
   // untrusted external content, so the owner approves the server on first use —
@@ -352,6 +360,15 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
       values = [id];
       break;
     }
+    case "webmcp-tool": {
+      // An ask-policy site tool's identity is its origin + its exact tool name
+      // (verbatim, bounded — two tools on one site are two different calls and
+      // must not share an approval row); the digest binds the full payload.
+      const webmcpOrigin = normalizedOrigin(parts.origin);
+      const webmcpTool = typeof parts.name === "string" ? parts.name.trim() : "";
+      values = [webmcpOrigin, webmcpTool.slice(0, 200)];
+      break;
+    }
     case "browser-action": {
       // A destructive browser action's identity is the action name plus a
       // bounded ref that names exactly what it acts on — a tab/window id, a
@@ -429,13 +446,18 @@ export async function opaqueTargetRef(target) {
   return await opaqueTargetRefWithKey(target, await installKeyPromise);
 }
 
-/** Build-local model dispatcher: the execution id is captured once forever. */
-export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEvent = null) {
+/** Build-local model dispatcher: the authoritative run envelope is captured once forever. */
+export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEvent = null, runEnvelope = null) {
   if (typeof dispatch !== "function") throw new TypeError("dispatch function required");
   const captured = typeof executionId === "string" ? executionId : "";
+  const agentId = typeof runEnvelope?.agentId === "string" && runEnvelope.agentId.length <= 200
+    ? runEnvelope.agentId
+    : "";
   const context = Object.freeze({
     principal: "model",
     executionId: captured,
+    runId: captured,
+    agentId,
     onApprovalEvent: typeof onApprovalEvent === "function" ? onApprovalEvent : null,
   });
   return (type, args) => dispatch(type, args, context);

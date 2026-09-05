@@ -3,15 +3,16 @@
 export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.base64",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "toolId": "base64",
-  "lane": "a2",
+  "lane": "unix-stream-v1",
   "displayName": "base64",
   "category": "data",
-  "description": "base64 - encode or decode base64 text and binary data. Use to encode binary as text or decode base64 strings. In/out: stdin (<=2 KiB) to stdout. Key flag: -d (decode). Example: stdin 'hello' -> 'aGVsbG8=\\n'.",
+  "description": "base64 - stream binary data to base64 text or decode it. Use for lossless text/binary conversion. In/out: file-backed stdin to chainable output. Flag: -d. Example: 'hello' -> 'aGVsbG8=\\n'.",
   "caveats": [
-   "Stdin-only stream filter; supports encode and decode. Invalid padding or characters rejected fail-closed with exit code 1.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Stdin/stdout only; file operands are rejected.",
+   "C byte-locale semantics.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
   ],
   "capabilities": [
    "compute",
@@ -24,13 +25,13 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "notices": null
   },
   "binary": {
-   "sha256": "8a834cd33c5ab8ac9e84e3427ab0c826c38ff4ee879bbc0955fdb930ec9d9b59",
-   "bytes": 33507,
+   "sha256": "20d6324f4925ee8263322bb74eb818861f13fbd0d4ce080b13c2140b213232cf",
+   "bytes": 15346,
    "tier": "tiny",
-   "initialPages": 2,
+   "initialPages": 64,
    "maxPages": 512
   },
-  "manifestRef": "extension/wasm/manifests/cap.bundled.base64-1.0.0.manifest.json",
+  "manifestRef": "extension/wasm/manifests/cap.bundled.base64-2.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
   "admitted": true,
@@ -48,7 +49,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "md5sum - compute legacy 128-bit MD5 hash checksums. Use for non-security file verification. In/out: stdin (<=2 KiB) to 32-hex digest. No flags. Example: stdin 'hello' -> '5d41402abc4b2a76b9719d911017c592'.",
   "caveats": [
    "Legacy checksum matching/non-adversarial accidental-corruption detection only; never signatures, content trust, or collision-resistant integrity.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -85,7 +86,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure integrity. In/out: stdin (<=2 KiB) to 64-hex digest. No flags. Example: stdin 'hello' -> '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
   "caveats": [
    "Implements the FIPS 180-4 SHA-256 cryptographic hash contract; emits lowercase 64-hex digest string from stdin",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -122,7 +123,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security hashing. In/out: stdin (<=2 KiB) to 128-hex digest. No flags. Example: stdin 'hello' -> the 128-hex digest.",
   "caveats": [
    "Implements the FIPS 180-4 SHA-512 cryptographic hash contract; emits lowercase 128-hex digest string from stdin",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -159,7 +160,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "xxd - convert binary data to hex dumps and reconstruct it. Use for byte-level inspection. In/out: stdin (<=2 KiB) to hex stdout. Key flag: -p (plain hex). Example: -p + stdin 'Hi' -> '4869\\n'.",
   "caveats": [
    "Supports plain dump/reverse and traditional 16-byte hex dump round-trip modes from stdin.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -196,7 +197,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs. In/out: empty stdin to UUID stdout. Key flag: -n <count> (max 64). Example: -n 2 -> two UUID lines.",
   "caveats": [
    "Backed by WASI random_get (crypto.getRandomValues). Replay is read-only (zero external mutation) but output is intentionally nondeterministic (replaying produces a fresh UUID).",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -225,15 +226,16 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  },
  {
   "packageId": "cap.bundled.wc",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "toolId": "wc",
-  "lane": "a2",
+  "lane": "unix-stream-v1",
   "displayName": "wc",
   "category": "text",
-  "description": "wc - count lines, words, characters, and bytes in text. Use to measure file length and text size. In/out: stdin (<=2 KiB) to count tuple. Flags: -l, -w, -c. Example: stdin 'a b\\n' -> '1 2 4\\n'.",
+  "description": "wc - stream and count lines, words, and bytes. Use to measure arbitrarily large text without loading it whole. In/out: file-backed stdin to counts. Flags: -l, -w, -c. Example: 'a b\\n' -> '1 2 4\\n'.",
   "caveats": [
-   "Counts lines, whitespace-delimited words, and bytes. Input bounded by the exact 8 MiB stdin ceiling.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Stdin/stdout only; file operands are rejected.",
+   "C byte-locale semantics.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
   ],
   "capabilities": [
    "compute",
@@ -246,13 +248,13 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
    "notices": null
   },
   "binary": {
-   "sha256": "08a0cac5cf4d872b0727fa52dcc4fca2c05ab225056486b55454f041baf497ca",
-   "bytes": 32960,
+   "sha256": "ce303be0226d2675019191dddbcded6d83de100922fcc10e5ee48a058c0d27d5",
+   "bytes": 28861,
    "tier": "tiny",
-   "initialPages": 2,
+   "initialPages": 64,
    "maxPages": 512
   },
-  "manifestRef": "extension/wasm/manifests/cap.bundled.wc-1.0.0.manifest.json",
+  "manifestRef": "extension/wasm/manifests/cap.bundled.wc-2.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
   "admitted": true,
@@ -270,7 +272,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "head - extract the leading lines from a text stream. Use to inspect the start of a file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'a\\nb'.",
   "caveats": [
    "Extracts first N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -307,7 +309,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "tail - extract the trailing lines from a text stream. Use to inspect the end of a log file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'b\\nc'.",
   "caveats": [
    "Extracts last N lines (-n N, default 10). Buffers stdin subject to the exact 8 MiB input ceiling.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -344,7 +346,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "cut - extract columns or delimiter-separated fields from text. Use to parse CSV or TSV columns. In/out: stdin (<=2 KiB) to column stdout. Flags: -d, -f. Example: -d , -f 2 + stdin 'a,b,c' -> 'b'.",
   "caveats": [
    "Extracts single column via -d <delim> -f <col>. Stdin-only; zero file operands.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -373,15 +375,16 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  },
  {
   "packageId": "cap.bundled.sort",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "toolId": "sort",
-  "lane": "b2",
+  "lane": "unix-stream-v1",
   "displayName": "sort",
   "category": "text",
-  "description": "sort - sort lines of text alphabetically or numerically in C locale. Use to order list data. In/out: stdin (<=2 KiB) to sorted stdout. Flags: -r, -n. Example: stdin 'b\\na\\n' -> 'a\\nb\\n'.",
+  "description": "sort - external merge-sort file-backed text in the C byte locale. Use to order data larger than Wasm memory. In/out: chainable references. Flags: -r, -n, -u. Example: 'b\\na\\n' -> 'a\\nb\\n'.",
   "caveats": [
-   "Stdin-only line sort in the C byte locale. Options: -n (numeric, no exponent notation), -r (reverse), -u (unique). File operands rejected.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Stdin/stdout only; file operands are rejected.",
+   "C byte-locale semantics.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
   ],
   "capabilities": [
    "compute",
@@ -389,18 +392,18 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   ],
   "replayClass": "read-only",
   "licence": {
-   "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "spdx": "MIT",
+   "file": "extension/wasm/licenses/MIT.txt",
    "notices": null
   },
   "binary": {
-   "sha256": "9b3e8fd857cafb99d975254c542a0571e05249fd8cf1f49f4310918b821fa1b4",
-   "bytes": 174496,
+   "sha256": "e0543d170ac9bd0cd55b274604b55add18c17c5d87169ebfdf25b4b7245a386a",
+   "bytes": 35917,
    "tier": "tiny",
-   "initialPages": 3,
+   "initialPages": 64,
    "maxPages": 512
   },
-  "manifestRef": "extension/wasm/manifests/cap.bundled.sort-1.0.0.manifest.json",
+  "manifestRef": "extension/wasm/manifests/cap.bundled.sort-2.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
   "admitted": true,
@@ -410,15 +413,16 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  },
  {
   "packageId": "cap.bundled.uniq",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "toolId": "uniq",
-  "lane": "b2",
+  "lane": "unix-stream-v1",
   "displayName": "uniq",
   "category": "text",
-  "description": "uniq - remove adjacent duplicate lines from sorted text. Use to deduplicate lists. In/out: stdin (<=2 KiB) to unique stdout. Flags: -c, -d. Example: stdin 'a\\na\\nb' -> 'a\\nb'.",
+  "description": "uniq - stream adjacent lines and remove or count duplicates. Use after sort for deduplication. In/out: file-backed stdin to chainable output. Flags: -c, -d, -u. Example: 'a\\na\\nb' -> 'a\\nb'.",
   "caveats": [
-   "Filters adjacent duplicate lines without field/character skipping. Options: -c (count), -d (repeated only), -u (unique only). Stdin-only.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Stdin/stdout only; file operands are rejected.",
+   "C byte-locale semantics.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
   ],
   "capabilities": [
    "compute",
@@ -426,18 +430,18 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   ],
   "replayClass": "read-only",
   "licence": {
-   "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "spdx": "MIT",
+   "file": "extension/wasm/licenses/MIT.txt",
    "notices": null
   },
   "binary": {
-   "sha256": "80a4c45e0df58f78cfe8f0079260f57ddd2eb0ca36fe987785d265a828f56205",
-   "bytes": 164080,
+   "sha256": "973d78aa28f825019fbfb4aa9463dc6940a65d7da6de80590ba1a691443154df",
+   "bytes": 32627,
    "tier": "tiny",
-   "initialPages": 3,
+   "initialPages": 64,
    "maxPages": 512
   },
-  "manifestRef": "extension/wasm/manifests/cap.bundled.uniq-1.0.0.manifest.json",
+  "manifestRef": "extension/wasm/manifests/cap.bundled.uniq-2.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
   "admitted": true,
@@ -447,15 +451,16 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  },
  {
   "packageId": "cap.bundled.tr",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "toolId": "tr",
-  "lane": "b2",
+  "lane": "unix-stream-v1",
   "displayName": "tr",
   "category": "text",
-  "description": "tr - translate, replace, delete, or squeeze characters in text. Use to search and replace characters or shift case. In/out: stdin (<=2 KiB) to stdout. Flags: -d, -s. Example: 'a-z' 'A-Z' + stdin 'hi' -> 'HI'.",
+  "description": "tr - stream byte translation, deletion, and squeezing in the C locale. Use for case shifts and character maps. In/out: file-backed stdin to chainable output. Flags: -c, -d, -s. Example: 'a-z' 'A-Z' maps 'hi' to 'HI'.",
   "caveats": [
-   "Translates, deletes (-d), or squeezes (-s) characters in byte locale with complement and POSIX character classes. Unsupported equivalence classes and repeat expressions rejected.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Stdin/stdout only; file operands are rejected.",
+   "C byte-locale semantics.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
   ],
   "capabilities": [
    "compute",
@@ -463,18 +468,18 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   ],
   "replayClass": "read-only",
   "licence": {
-   "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "spdx": "MIT",
+   "file": "extension/wasm/licenses/MIT.txt",
    "notices": null
   },
   "binary": {
-   "sha256": "3604f52153226edfaeabbadfb8a157a1340c90fa8270016a3aa4e10a6bdb69de",
-   "bytes": 170919,
+   "sha256": "bec02b43bdeb1997f9616d95499ce91010e124aecb1cad6e6bd97102c0956f3f",
+   "bytes": 37263,
    "tier": "tiny",
-   "initialPages": 3,
+   "initialPages": 64,
    "maxPages": 512
   },
-  "manifestRef": "extension/wasm/manifests/cap.bundled.tr-1.0.0.manifest.json",
+  "manifestRef": "extension/wasm/manifests/cap.bundled.tr-2.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
   "admitted": true,
@@ -484,15 +489,16 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  },
  {
   "packageId": "cap.bundled.grep",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "toolId": "grep",
-  "lane": "b2",
+  "lane": "unix-stream-v1",
   "displayName": "grep",
   "category": "text",
-  "description": "grep - search and find matching lines using regular expressions. Use to search, find, or filter text. In/out: stdin (<=2 KiB) to matching lines. Flags: -i, -v, -n. Example: -n 'foo' -> '1:foo'.",
+  "description": "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
   "caveats": [
-   "Stdin text selection filter. Options: -i, -v, -n, -c, -F, -E. NUL input and file operands are rejected.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Stdin/stdout only; file operands are rejected.",
+   "C byte-locale semantics.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
   ],
   "capabilities": [
    "compute",
@@ -500,18 +506,18 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   ],
   "replayClass": "read-only",
   "licence": {
-   "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "spdx": "MIT",
+   "file": "extension/wasm/licenses/MIT.txt",
    "notices": null
   },
   "binary": {
-   "sha256": "0f049d7a43c39af2f035d805b0b92b80cdb1dc2525b4973cfd6f2d13ad043038",
-   "bytes": 325572,
+   "sha256": "04d32c115c9e3a979d59cfe27ea0e5ece616efd64ff958d4fcc96bb217191588",
+   "bytes": 83434,
    "tier": "tiny",
-   "initialPages": 3,
+   "initialPages": 64,
    "maxPages": 512
   },
-  "manifestRef": "extension/wasm/manifests/cap.bundled.grep-1.0.0.manifest.json",
+  "manifestRef": "extension/wasm/manifests/cap.bundled.grep-2.0.0.manifest.json",
   "sourceKind": "bundled-package",
   "canonicalNameClaim": false,
   "admitted": true,
@@ -529,7 +535,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "diff - compare text documents and calculate diff changes. Use to compare revisions by viewing differences, or for file editing. In/out: two text args (<=1 KiB each) to unified diff. No flags. Example: 'a\\nb\\n' and 'a\\nc\\n' -> hunk diff.",
   "caveats": [
    "Two literal document arguments, one full-context hunk, 16 MiB LCS workspace cap. Exits 0 (match), 1 (diff), 2 (syntax error).",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -566,7 +572,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "patch - apply unified diff hunks to a source text document. Use to update files or do editing from patches. In/out: source text arg + diff arg (<=1 KiB each) to patched stdout. No flags. Example: source 'a\\nb\\n' + diff -> 'a\\nc\\n'.",
   "caveats": [
    "Exact-position literal-text transform over two arguments (original text, unified diff). No fuzz, offsets, reverse application, multi-file patching, or filesystem mutation.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -603,7 +609,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config data. In/out: valid TOML stdin (<=2 KiB) to JSON stdout. No flags. Example: stdin 'a = 1' -> '{\"a\":1}\\n'.",
   "caveats": [
    "Parses TOML from stdin using pinned tomlc99 and emits formatted JSON on stdout. TOML input bounded by 8 MiB ceiling; NUL and non-finite values rejected. Composite licence: tomlc99 is MIT, wrapper is Apache-2.0.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -641,7 +647,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "markdown - convert Markdown formatted text into safe HTML. Use to render and view formatted content. In/out: Markdown stdin (<=2 KiB) to HTML stdout. No flags; safe mode is enforced. Example: stdin '# Hi' -> '<h1>Hi</h1>\\n'.",
   "caveats": [
    "Based on pinned cmark 0.31.1 (BSD-2-Clause). Source accepts cmark-compatible input files or stdin. Raw HTML and dangerous javascript: URLs are omitted/disabled for XSS protection",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority.",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation.",
    "file.read remains declared in the manifest; the route projects NO files into the fresh empty per-job workspace, so a file operand cannot read owner data and fails closed (path normalization prevents escape/cross-job)."
   ],
   "capabilities": [
@@ -680,7 +686,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "du - measure disk usage and file sizes across directories. Use to check file and folder space. In/out: optional /job path operand (default /job) to usage stdout. Bounded to 4096 entries. No flags. Example: empty args -> '1\\t/job'.",
   "caveats": [
    "Reports apparent bytes rounded to 1 KiB (or human units), not physical blocks. Bounded to depth 64, 100,000 entries; symlink directories are not followed",
-   "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed, using /job by default (explicit owner click); no provider, page or OPFS authority.",
+   "Settings preview requires an explicit owner click and model execution requires live run ownership; both enumerate only the immutable inputs/f.bin job seed, using /job by default.",
    "file.read is confined to bounded recursive enumeration of the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
   "capabilities": [
@@ -718,7 +724,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "stat - inspect file and directory metadata including size and type. Use to check file existence and details. In/out: /job path operand to stat stdout. Read-only. No flags. Example: '/job/inputs/f.bin' -> 'size=2\\ntype=regular file'.",
   "caveats": [
    "Reports stable path, type, size, and mtime fields; POSIX permission bits are omitted. Explicitly not GNU formatting/options",
-   "Settings-only bounded read-only preview over the immutable in-memory inputs/f.bin job seed (explicit owner click); no provider, page or OPFS authority.",
+   "Settings preview requires an explicit owner click and model execution requires live run ownership; both read only the immutable in-memory inputs/f.bin job seed.",
    "file.read is confined to the immutable per-job inputs/f.bin seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
   "capabilities": [
@@ -756,7 +762,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "tree - display directory file structures as visual text trees. Use to explore workspace and folder layout. In/out: optional /job path operand to tree stdout. Bounded to 4096 nodes. No flags. Example: empty args -> directory tree.",
   "caveats": [
    "Emits a sorted Unicode directory tree with counts. Bounded to depth 64 and 100,000 entries; symlink directories are not followed",
-   "Settings-only bounded read-only preview over the immutable nested in-memory /job/inputs seed (explicit owner click); no provider, page or OPFS authority.",
+   "Settings preview requires an explicit owner click and model execution requires live run ownership; both enumerate only the immutable nested /job/inputs seed.",
    "file.read is confined to bounded recursive enumeration of the immutable nested per-job inputs seed; path normalization and read-only inputs rights prevent escape, mutation, persistence, and cross-job access."
   ],
   "capabilities": [
@@ -794,7 +800,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
   "caveats": [
    "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed",
-   "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.",
+   "Execution is confined to the spec-owned scratch/touched fixture; the observable mutation is the post-run stat readback. Settings requires an owner click and model execution requires live run ownership.",
    "file.read/write is confined to the spec-owned scratch/touched fixture (bounded epoch timestamps); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
@@ -833,7 +839,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   "caveats": [
    "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed",
-   "Settings-only bounded preview over the spec-owned scratch/touched fixture (explicit owner click); the mutation is the post-run stat readback; no provider, page, filesystem or OPFS authority.",
+   "Execution is confined to the spec-owned scratch/touched fixture; the observable mutation is the post-run stat readback. Settings requires an owner click and model execution requires live run ownership.",
    "file.read/write is confined to the spec-owned scratch/touched fixture (0..10 MiB); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
@@ -872,7 +878,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
   "caveats": [
    "Stdin/stdout only; no file operands.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -910,7 +916,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "caveats": [
    "Stdin/stdout only; rejects file operands, recursion, unknown options.",
    "Experimental candidate; not the canonical full gzip.",
-   "Settings-only bounded text/canonical-base64 preview (explicit owner click); lossless binary output is canonical base64; no provider, page, filesystem or OPFS authority."
+   "Settings preview represents lossless binary output as canonical base64; file-backed model execution keeps binary stdout as an owner-bound OPFS reference."
   ],
   "capabilities": [
    "compute",
@@ -948,7 +954,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "caveats": [
    "Bounded clean-room subset, not canonical awk; literal patterns with optional ^/$ edge anchors only.",
    "CAP preview is stdin-only; no owner files are projected.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -985,7 +991,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "date_formatter_bounded - format current time, numeric epochs, or exact ISO dates. Use for UTC and ISO formatting. In/out: up to four bounded args to one stdout line. Invalid or missing date specs fail nonzero.",
   "caveats": [
    "Bounded clean-room formatter, not canonical date; exact numeric epoch and ISO date inputs only.",
-   "Settings-only bounded stdin preview (explicit owner click); no provider, page or OPFS authority."
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute",
@@ -1013,6 +1019,117 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.sed",
+  "version": "1.0.0",
+  "toolId": "sed",
+  "lane": "sed",
+  "displayName": "sed",
+  "category": "text",
+  "description": "sed - stream-edit text with minised 1.16. Use for substitutions, selection, deletion, and standard sed scripts. In/out: file-backed stdin to chainable output. Flags: -e, -n. Example: 's/a/b/g'.",
+  "caveats": [
+   "Stdin/stdout only; file operands and in-place editing are unavailable.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
+  ],
+  "capabilities": [
+   "compute",
+   "text.transform"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "BSD-3-Clause",
+   "file": "extension/wasm/licenses/minised-BSD-3-Clause.txt",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438",
+   "bytes": 49977,
+   "tier": "tiny",
+   "initialPages": 64,
+   "maxPages": 512
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.sed-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
+  "packageId": "cap.bundled.awk",
+  "version": "1.0.0",
+  "toolId": "awk",
+  "lane": "awk-posixutils-v1",
+  "displayName": "awk",
+  "category": "text",
+  "description": "awk - run the posixutils-rs parser and interpreter over streaming records. Use for fields, expressions, regex, arrays, and reports. In/out: file-backed stdin to chainable output. Command pipes and system() are unavailable.",
+  "caveats": [
+   "Stdin record input only; command pipes are unavailable and system() returns -1.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
+  ],
+  "capabilities": [
+   "compute",
+   "text.transform"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "MIT",
+   "file": "extension/wasm/licenses/posixutils-rs-MIT.txt",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23",
+   "bytes": 1064871,
+   "tier": "tiny",
+   "initialPages": 64,
+   "maxPages": 512
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.awk-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
+  "packageId": "cap.bundled.jq",
+  "version": "1.0.0",
+  "toolId": "jq",
+  "lane": "jq",
+  "displayName": "jq",
+  "category": "data",
+  "description": "jq - parse and transform JSON with upstream jq 1.8.2. Use for object, array, filter, reduction, and formatting operations over JSON streams. In/out: file-backed stdin to chainable output. Oniguruma regex built-ins are unavailable.",
+  "caveats": [
+   "Oniguruma-dependent regex built-ins are unavailable in this WASI profile.",
+   "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference."
+  ],
+  "capabilities": [
+   "compute",
+   "text.transform"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "MIT",
+   "file": "extension/wasm/licenses/jq-MIT.txt",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234",
+   "bytes": 501650,
+   "tier": "tiny",
+   "initialPages": 64,
+   "maxPages": 512
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.jq-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.sqlite3.query.bounded",
   "version": "1.0.0",
   "toolId": "sqlite3_query_bounded",
@@ -1023,7 +1140,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "caveats": [
    "Memory tranche has no external persistence.",
    "Package-level capability union is intentionally conservative.",
-   "Settings-only bounded read-only SQL preview over the spec-owned scratch/test.db fixture (explicit owner click); readOnly is forced — the guest authorizer denies writes; no provider, page, filesystem or OPFS authority.",
+   "Execution is confined to the spec-owned scratch/test.db fixture; readOnly is forced and the guest authorizer denies writes. Settings requires an owner click and model execution requires live run ownership.",
    "file.read/write is confined to the spec-owned scratch/test.db fixture (readOnly forced — the DB file is never written); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [

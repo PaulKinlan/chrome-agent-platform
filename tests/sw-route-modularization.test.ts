@@ -127,6 +127,12 @@ const BASELINE_ROUTES = [
   "tools.approve",
   "tools.pending",
   "tools.allOrigins",
+  // Per-site enrollment policy (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01):
+  // the Directory's policy read + set routes and the owner-approval leg an
+  // "ask"-policy site tool pays before its page call runs.
+  "tools.policies",
+  "tools.policy.set",
+  "webmcp.use-tool",
   "webmcp.diagnostics.get",
   "webmcp.diagnostics.set",
   "webmcp.status",
@@ -164,6 +170,8 @@ const BASELINE_ROUTES = [
   "asset.versions",
   "asset.version-get",
   "asset.restore",
+  // Run-bound local spreadsheet transforms; full tables never cross to the model.
+  "table.run",
   "script.create",
   "script.update",
   "script.delete",
@@ -222,6 +230,10 @@ const BASELINE_ROUTES = [
   "skill.list",
   "skill.import",
   "skill.delete",
+  // CAP-FB-20260830-SITE-PLAYBOOKS-01: the owner's per-origin site note
+  // (set is Settings-sender-only; get is read-back for surfaces).
+  "site-skills.set",
+  "site-skills.get",
   "recipe.run",
   "background-agent.list",
   "background-agent.set",
@@ -257,6 +269,19 @@ const BASELINE_ROUTES = [
   "diagnostics.clear",
   "observability.dumpTrace",
   "observability.clearTrace",
+  "tool-stream.input.create",
+  "tool-stream.input.append",
+  "tool-stream.input.seal",
+  "tool-stream.run",
+  "tool-stream.output.read",
+  "tool-stream.output.receipt",
+  "tool-stream.stage-attachment",
+  "tool-stream.stage-asset",
+  "tool-stream.promote-output",
+  "tool-stream.remove",
+  "tool-stream.discard",
+  "tool-stream.tabular-transform",
+  "observability.page-measures",
   "observability.setVerbosity",
   "diagnostics.report",
   "security.state",

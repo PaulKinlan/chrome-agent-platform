@@ -169,7 +169,7 @@ try {
   // Diagnostics for the enrollment path: is the passive detector installed in
   // the page, did the site's tools register, what does the SW offer registry
   // hold, and what rows does the picker actually render?
-  const detectHook = await evalIn(site, `typeof window.capWebmcpDetectBootstrap`);
+  const detectHook = await evalIn(site, `Object.getOwnPropertyNames(window).filter(n => n.startsWith("capWebmcpDetectBootstrap_")).length > 0 ? "function(randomized)" : typeof window.capWebmcpDetectBootstrap`);
   const pageToolCount = await evalIn(site, `document.modelContext.getTools().then(ts => ts.length).catch(() => -1)`);
   const offers = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.tool-offers" })`);
   const pickerRows = await evalIn(ns, `[...document.querySelectorAll("agent-dialog capability-row")].map(r => r.getAttribute("description"))`);

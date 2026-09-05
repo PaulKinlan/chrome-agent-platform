@@ -154,7 +154,10 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   on the long-lived surfaces (the hub, the chat) regularly.
 - **Performance budgets**: the SW must register fast (<500ms); the NTP/chat
   render fast (<1s); the agent loop doesn't block the UI thread; bundles stay
-  reasonable (the SW bundle is ~2.5mb — watch it).
+  reasonable (the SW bundle is ~2.5mb — watch it). On a seeded profile (5 agents,
+  50 artifacts, 60 runs): `agent.run` p50 < 400ms, `thread.get` < 40ms,
+  `run.list` < 40ms, composer-ready < 150ms, data-visible < 250ms, zero long tasks > 50ms,
+  CLS 0, and hub CPU non-idle < 150ms.
 - **Performance traces**: capture a trace on the key journeys (hub load, task
   run, directory) + check for long tasks.
 

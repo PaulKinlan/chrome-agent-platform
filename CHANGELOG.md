@@ -1,16 +1,256 @@
 # Changelog
 
-## [0.3.159] — 2026-09-05
+## [0.3.241] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.242] — 2026-09-05
 - Settings and the shared components get an internationalisation foundation: a default locale and an en catalogue, one lookup seam every surface resolves copy through, a regenerable fallback so the docs gallery renders the same words, and a drift pin that fails the moment the two separate
 
-## [0.3.158] — 2026-09-05
+## [0.3.241] — 2026-09-05
 - Settings, hub and components carry their copy as hardcoded English today — this inventory counts the candidates surface by surface and proposes the catalogue key shape, so the migration knows what it is moving before it moves anything
+
+## [0.3.240] — 2026-09-05
+- Internal hardening: the list of built-in tools allowed to read large files is now pinned by a test, so it cannot silently gain or lose a tool.
+
+## [0.3.239] — 2026-09-05
+- The built-in tool catalogue research now covers many more areas (developer tools, documents, data, media, science, Python via Pyodide, and everyday productivity), ready for future tool additions
+
+## [0.3.236] — 2026-09-05
+- Websites can no longer tell the extension is installed: the artifact viewer files are no longer exposed to web pages, and the page-tool detector now uses a random, per-page hook name instead of a fixed one.
+
+## [0.3.234] — 2026-09-05
+- Site playbooks: a skill can now be bound to a website so it is only offered and only applied on that site, and each enrolled site gets its own "Site instructions" note in Settings that the agent follows when you are on that site
+
+## [0.3.233] — 2026-09-05
+- Closed four long-open safety verifications with real tests: memory writes can't be rolled back by a stale run, the first connection message must name its enrollment, concurrent agent builds no longer share run bookkeeping, and a cancelled page action can never report late — each proven by breaking the protection and watching the test fail.
+
+## [0.3.232] — 2026-09-05
+- Fixed a browser check that failed depending on how fast test tabs loaded: it now waits for the tabs to show their titles before reading the picker.
+
+## [0.3.231] — 2026-09-05
+- Settings checks now verify each panel shows its real content, not just that the panel is visible — an empty panel can no longer pass.
+
+## [0.3.230] — 2026-09-05
+- Browser checks now exercise real model runs instead of simulated messages, so what they prove matches what a model actually experiences.
+
+## [0.3.229] — 2026-09-05
+- chrome-agent-platform-qazo: docs/wasm-tool-catalogue.md — Wasm library catalogue (12 categories, ~25 admits, cited)
+
+## [0.3.228] — 2026-09-05
+- Pipeline dispatcher now fails closed when two tools share a name
+
+## [0.3.227] — 2026-09-05
+- Changelog: sync the extension copy and give the four recovery-merge releases distinct user-language entries
+
+## [0.3.226] — 2026-09-05
+- Merge afiu task-composer and znx9 test-cascade branches
+
+## [0.3.225] — 2026-09-05
+- Merge np64 and changelog-reland branches
+
+## [0.3.224] — 2026-09-05
+- Merge lock-sync, def2 lineage and 8jh branch bookkeeping
+
+## [0.3.223] — 2026-09-05
+- Merge agent-fs, 2qy0, 4dg, 9h4u, brv, fw8, h0iy, p43i, qklv-jgho and changelog 60em branches
+
+## [0.3.222] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.221] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.220] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.219] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.218] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.217] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.216] — 2026-09-05
+- Add private local spreadsheet tools
+
+## [0.3.215] — 2026-09-05
+- Add exact table joins and pivots
+
+## [0.3.214] — 2026-09-05
+- Ensure web tool permissions and settings views initialize consistently.
+
+## [0.3.213] — 2026-09-05
+- The production build stably verifies package integrity during developer build cycles.
+
+## [0.3.212] — 2026-09-05
+- Add bounded table formulas
+
+## [0.3.211] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.210] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.209] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.208] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.207] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.206] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.205] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.204] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.203] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.202] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.201] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.200] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.199] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.198] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.197] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.196] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.195] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.194] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.193] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.192] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.191] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.190] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.189] — 2026-09-05
+- Table previews safely display special characters and tags as plain text, and format canonical column headers and types.
+
+## [0.3.188] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.187] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.186] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.185] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.184] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.183] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.182] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.181] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.180] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.179] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.178] — 2026-09-05
+- Add a strict local table engine
+
+## [0.3.176] — 2026-09-05
+- The artifact viewer displays tables in clean pages with warnings for formula exports
+
+## [0.3.175] — 2026-09-05
+- The Settings page opens directly to sections and keeps agents and permissions accessible
+
+## [0.3.174] — 2026-09-05
+- The Settings page opens directly to sections and keeps agents and permissions accessible
+
+## [0.3.173] — 2026-09-05
+- Nine familiar Unix tools now process large files without truncating their input or output
+
+## [0.3.172] — 2026-09-05
+- Preserve binary output mode in streamed tools
+
+## [0.3.171] — 2026-09-05
+- Tie temporary tool files to the exact agent run
+
+## [0.3.170] — 2026-09-05
+- Keep binary stream results byte exact
+
+## [0.3.169] — 2026-09-05
+- Verify every Unix tool rebuild byte for byte
+
+## [0.3.168] — 2026-09-05
+- Tool execution complies with store security policies using built-in verified components
+
+## [0.3.167] — 2026-09-05
+- Large tool outputs remain completely available in storage while the artifact viewer clearly labels truncated previews
+
+## [0.3.166] — 2026-09-05
+- The tool library groups tools by what they are for — 'Running the browser' and 'Doing the work' — instead of by technical source
+
+## [0.3.165] — 2026-09-05
+- feat(9tg): Milestone 3 — tabular & structured data contracts, def alignment, and stream promotion hardening
+
+## [0.3.164] — 2026-09-05
+- Tabular data contracts add streaming CSV and JSONL transformations with formula injection defenses
+
+## [0.3.163] — 2026-09-05
+- reference-preserving artifact promotion and zero-copy asset stream transfer
+
+## [0.3.162] — 2026-09-05
+- feat(9tg): Milestone 2 — continuous abuse and resource quota gates
+
+## [0.3.161] — 2026-09-05
+- Added continuous abuse, quota, and lifecycle gates for the tool streaming platform
+
+## [0.3.160] — 2026-09-05
+- Platform streaming I/O connects attachments and files directly to tool execution and promotes results to permanent artifacts
+
+## [0.3.159] — 2026-09-05
+- Seeded warning permissions and verified seeded-profile budgets in performance gates
+
+## [0.3.158] — 2026-09-05
+- Performance gates verify seeded profile budgets and headless tests can pre-seed Chrome permissions
 
 ## [0.3.157] — 2026-09-05
 - Merge bookkeeping: union changelog with the site-agent delegation entries, regenerate the bundled inventory after the merge
 
 ## [0.3.156] — 2026-09-05
-- feat(0ks): add attachment and live progress support to site-agent delegation
+- Site agent delegation supports attachments and live progress streams without dropping files
 
 ## [0.3.155] — 2026-09-05
 - Delegating tasks to site agents supports attachments and streams live progress without dropping files

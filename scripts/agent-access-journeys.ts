@@ -519,6 +519,9 @@ async function main() {
 
     // The strict parser (the round-2 free-text false positive): prose / URLs /
     // a leading space must NEVER open the command UI. Cleared with real keys.
+    // rfca justification: the subject here is NON-appearance — staying hidden
+    // is the content. The positive direction (the UI opening with real agent
+    // rows) is content-checked by the surrounding slash-command probes.
     await clearField(ntp, NTP_INPUT);
     await typeText(ntp, "please inspect /agent:pr");
     await sleep(700);

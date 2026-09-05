@@ -1,4 +1,7 @@
 // kat-narrow-toggle.ts — UX-AUDIT-2026-08-28 UX-004 REVISE KAT (real browser).
+// rfca note: this harness's subject IS layout/geometry (rail width, overflow,
+// scrim, aria-expanded) — computed-style/visibility assertions are the content
+// here, not a proxy for a renderer.
 // The gpt-5.6-sol review P1: the native side-toggle bypassed the width policy
 // and restored the inline 240px rail at narrow width (376px layout in a 360px
 // viewport). This harness loads the REAL extension and proves the revised

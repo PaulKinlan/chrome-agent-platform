@@ -24,6 +24,8 @@ const FILES = [
   ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
   ["extension/shared/command-parser.js", "docs/command-parser.js"],
   ["extension/shared/composer-commands.js", "docs/composer-commands.js"],
+  // The pure match-pattern matcher (composer-commands.js imports it).
+  ["extension/shared/match-patterns.js", "docs/match-patterns.js"],
   ["extension/shared/run-status.js", "docs/run-status.js"],
   // The pure plan-strip reducer (components.js imports it).
   ["extension/shared/plan-strip.js", "docs/plan-strip.js"],

@@ -6,7 +6,7 @@ Deno.test("t3-trio: sed wasm is reproducible + pure-WASI + real provenance", asy
   const bin = await Deno.readFile("docs/admissions/t3-trio/sed/binaries/sed.wasm");
   const d = await crypto.subtle.digest("SHA-256", bin);
   const hex = [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  assertEquals(hex, "d95860b960d73af024b05c20d13410d7b942ff33ac0502de97ec4f24525c107a",
+  assertEquals(hex, "3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438",
     "binary sha256 must match PROVENANCE.md");
   const rb = await Deno.readFile("docs/admissions/t3-trio/sed/metadata/rebuild-sed.wasm");
   assertEquals(new Uint8Array(rb).length, bin.length, "rebuild size matches");

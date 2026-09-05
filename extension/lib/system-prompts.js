@@ -909,15 +909,24 @@ function renderBoundarySkills(skills, untrustedToken = null) {
  * may adopt one (/skill:<id>) or read it on demand (skill_read). It sits
  * between the skills block and the protected constraints, so promoted
  * (catalog-derived, deterministic) text can never override the policy.
+ *
+ * `siteNote` (CAP-FB-20260830-SITE-PLAYBOOKS-01) is an optional
+ * { origin, note } pair: the owner's per-origin note, rendered under a
+ * bounded "## On <origin>" heading INSIDE the skills boundary layer (between
+ * the skills block and the promotion/policy) — owner text, never fenced as
+ * untrusted, and structurally incapable of sitting after the protected block.
  */
-export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null, promotion = null) {
+export function appendSkillsLayer(systemText, skills, registry = PROMPT_REGISTRY, untrustedToken = null, promotion = null, siteNote = null) {
   const sys = String(systemText ?? "");
   const skillsText = renderBoundarySkills(skills, untrustedToken).trim();
   const promoText = String(promotion ?? "").trim();
+  const noteOrigin = String(siteNote?.origin ?? "").trim();
+  const noteText = String(siteNote?.note ?? "").trim();
+  const siteNoteText = noteOrigin && noteText ? `## On ${noteOrigin}\n${noteText}` : "";
   const constraints = registryEntry(CONSTRAINTS_ID, registry);
   const protectedText = constraints ? String(constraints.content ?? "") : "";
   let out = sys;
-  const middle = [skillsText, promoText].filter(Boolean).join("\n\n");
+  const middle = [skillsText, siteNoteText, promoText].filter(Boolean).join("\n\n");
   if (middle) {
     if (protectedText && sys.endsWith(protectedText)) {
       const head = sys.slice(0, sys.length - protectedText.length).replace(/\s+$/, "");

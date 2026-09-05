@@ -1,0 +1,21 @@
+[package]
+name = "plib"
+version = "0.8.0"
+authors = ["Jeff Garzik"]
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cfg-if = "1.0"
+libc.workspace = true
+errno.workspace = true
+gettext-rs.workspace = true
+revera = "=0.2.1"
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false

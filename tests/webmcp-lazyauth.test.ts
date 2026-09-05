@@ -149,7 +149,7 @@ Deno.test("lazyauth: evaluateWebmcpAuthority names every conjunct (unit)", () =>
 
 Deno.test("lazyauth SW wiring: the shipped guard is the tested factory; no unbound ownData remains (source pins)", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
-  assert(sw.includes('createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js"'), "the SW imports the tested factory");
+  assert(sw.includes('from "../lib/webmcp-authority.js"') && sw.includes("createWebmcpAuthorizationGuard"), "the SW imports the tested factory");
   assert(sw.includes("const authorizationGuard = createWebmcpAuthorizationGuard({"), "readSiteLazySources builds the guard via the factory");
   assert(sw.includes('pushDiagnostic(') && sw.includes("WebMCP tool authorization denied:"), "denials surface to the diagnostics ring");
   // The bug pin: no BARE ownData CALL may remain in the SW (it was never

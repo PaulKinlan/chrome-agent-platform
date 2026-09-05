@@ -34,6 +34,26 @@ export function withEnrollmentLock(fn) {
   return run;
 }
 
+/** The per-site enrollment policy — the Directory's tool-use control
+ * (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01). Enrollment itself remains the
+ * coarse ALLOW (the owner's enroll gesture consents to the origin's tools as a
+ * class — WEBMCP-AUTOAPPROVE-01); this column layers the tool-use decision on
+ * top WITHOUT un-enrolling the site:
+ *  - "allow" (default): the site's tools flow to agent toolsets unchanged.
+ *  - "deny": the site stays enrolled (agent record + memory + discovery) but
+ *    its tools are EXCLUDED from every agent toolset and every invocation fails
+ *    closed with the named reason "site-policy-denied".
+ *  - "ask": the site's tools stay discoverable but every invocation pays an
+ *    in-conversation owner card (webmcp.use-tool) before the page call runs;
+ *    a run with no owner conversation fails closed (never auto-runs).
+ * Unknown/legacy entries read as "allow" (fail-closed would silently break
+ * every already-enrolled site). */
+export const SITE_TOOL_POLICIES = Object.freeze(["allow", "deny", "ask"]);
+export function isSiteToolPolicy(value) {
+  return typeof value === "string" && SITE_TOOL_POLICIES.includes(value);
+}
+export const DEFAULT_SITE_TOOL_POLICY = "allow";
+
 /** A MONOTONIC, never-reused enrollment generation counter (the round-17 ABA
  * blocker: deriving `gen` from the current registry entry meant a pruned
  * tombstone reset the origin to generation 1, letting a stale in-flight
@@ -330,18 +350,59 @@ export async function enrollmentGeneration(origin) {
   return map[canonical]?.gen ?? 0;
 }
 
-/** An ATOMIC snapshot of an origin's enrollment (enrolled + generation) read
- * under the global enrollment lock — so a delete (which tombstones + bumps the
- * generation under the SAME lock) can never interleave with the read (the
- * round-16 generation-commit race: `isEnrolled` + `enrollmentGeneration` were
- * read as two separate unlocked kv reads, so a delete could slip between them). */
+/** An ATOMIC snapshot of an origin's enrollment (enrolled + generation +
+ * policy) read under the global enrollment lock — so a delete (which tombstones
+ * + bumps the generation under the SAME lock) can never interleave with the
+ * read (the round-16 generation-commit race: `isEnrolled` + `enrollmentGeneration`
+ * were read as two separate unlocked kv reads, so a delete could slip between
+ * them). Policy rides the same atomic snapshot so a policy flip is never seen
+ * half-applied (the deny-toolset gate). */
 export async function enrollmentSnapshot(origin) {
   const canonical = canonicalOrigin(origin);
-  if (!canonical) return { enrolled: false, gen: 0 };
+  if (!canonical) return { enrolled: false, gen: 0, policy: DEFAULT_SITE_TOOL_POLICY };
   return withEnrollmentLock(async () => {
     const map = await enrolledMap();
     const e = map[canonical];
-    return { enrolled: Boolean(e && e.enrolled === true), gen: e?.gen ?? 0 };
+    return {
+      enrolled: Boolean(e && e.enrolled === true),
+      gen: e?.gen ?? 0,
+      policy: isSiteToolPolicy(e?.policy) ? e.policy : DEFAULT_SITE_TOOL_POLICY,
+    };
+  });
+}
+
+/** The CURRENT tool-use policy for an origin ("allow" when not enrolled — the
+ * site has no tools in any agent toolset either way). */
+export async function enrollmentPolicy(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return DEFAULT_SITE_TOOL_POLICY;
+  const snap = await enrollmentSnapshot(canonical);
+  return snap.enrolled ? snap.policy : DEFAULT_SITE_TOOL_POLICY;
+}
+
+/** Set an enrolled origin's tool-use policy (allow | deny | ask). The registry
+ * entry is updated under the GLOBAL enrollment lock (same RMW discipline as
+ * enroll/delete), and the generation is bumped like a disenroll: an owner
+ * policy flip is a revocation fence — any in-flight catalog/run captured under
+ * the old policy is rejected at its next revalidation, so a flip to "deny" can
+ * never leave a stale run with live tool access. Returns the new policy; throws
+ * on an invalid policy or a non-enrolled origin (there is nothing to gate). */
+export async function setEnrollmentPolicy(origin, policy) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) throw new Error(`invalid origin: ${origin}`);
+  if (!isSiteToolPolicy(policy)) {
+    throw new Error(`invalid site tool policy: ${String(policy)}`);
+  }
+  return withEnrollmentLock(async () => {
+    const map = await enrolledMap();
+    const entry = map[canonical];
+    if (!entry || entry.enrolled !== true) {
+      throw new Error(`origin ${canonical} is not enrolled`);
+    }
+    const next = { ...entry, policy, gen: await nextGeneration() };
+    map[canonical] = next;
+    await kvSet({ [ENROLL_KEY]: map });
+    return next.policy;
   });
 }
 
@@ -360,6 +421,10 @@ export async function enrollOrigin(origin) {
       enrolled: true,
       at: Date.now(),
       gen: await nextGeneration(),
+      // The site's tool-use policy defaults to allow (enrollment = consent;
+      // the owner can switch it in the Directory). A legacy entry without the
+      // column reads as "allow" via isSiteToolPolicy's default.
+      policy: DEFAULT_SITE_TOOL_POLICY,
     };
     await kvSet({ [ENROLL_KEY]: map });
     return Object.keys(map).filter((o) => map[o]?.enrolled === true);

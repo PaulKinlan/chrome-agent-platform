@@ -13,6 +13,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { ASSET_BOUNDS, ASSET_TYPES } from "./artifacts.js";
+import { TABLE_LIMITS, TABLE_LOCALE_PROFILES } from "./table-core.js";
+import { TABLE_TOOL_NAMES } from "./table-tool-runtime.js";
 import { tagUntrusted } from "./untrusted-fence.js";
 
 /** The fixed management tool names (for the orchestrator introspection route). */
@@ -61,7 +63,66 @@ export const MANAGEMENT_TOOL_NAMES = [
   "board_list",
   "board_read",
   "board_read_messages",
+  ...TABLE_TOOL_NAMES,
 ];
+
+const TableArtifactIdSchema = z.string().min(1).max(200);
+const TableColumnIdSchema = z.string().regex(/^c(?:[1-9]\d*)$/u);
+const TableHeaderSchema = z.string().max(TABLE_LIMITS.maxHeaderBytes);
+const TableTypeSchema = z.union([
+  z.object({ kind: z.enum(["text", "boolean", "int64", "date", "datetime"]) }).strict(),
+  z.object({ kind: z.literal("decimal"), scale: z.number().int().min(0).max(18) }).strict(),
+]);
+const TableExplicitColumnSchema = z.object({
+  type: TableTypeSchema,
+  header: TableHeaderSchema.optional(),
+}).strict();
+const CanonicalTableSourceSchema = z.object({
+  artifactId: TableArtifactIdSchema,
+  format: z.literal("cap.table/1"),
+}).strict();
+const DelimitedTableSourceBase = {
+  artifactId: TableArtifactIdSchema,
+  format: z.enum(["csv", "tsv"]),
+  hasHeader: z.boolean(),
+  localeProfile: z.enum(Object.keys(TABLE_LOCALE_PROFILES)),
+};
+const DelimitedTableSourceSchema = z.union([
+  z.object({ ...DelimitedTableSourceBase, schemaMode: z.enum(["text", "infer"]) }).strict(),
+  z.object({
+    ...DelimitedTableSourceBase,
+    schemaMode: z.literal("explicit"),
+    columns: z.array(TableExplicitColumnSchema).max(TABLE_LIMITS.maxColumns),
+  }).strict(),
+]);
+const TableSourceSchema = z.union([CanonicalTableSourceSchema, DelimitedTableSourceSchema]);
+const TableOutputFields = {
+  outputName: z.string().min(1).max(ASSET_BOUNDS.maxNameLength).optional(),
+  timeoutMs: z.number().int().min(100).max(180_000).optional(),
+};
+const TableMetricSchema = z.object({
+  op: z.enum(["count_rows", "count_values", "sum", "avg", "min", "max"]),
+  column: TableColumnIdSchema.optional(),
+  header: TableHeaderSchema,
+  scale: z.number().int().min(0).max(18).optional(),
+}).strict().superRefine((metric, ctx) => {
+  if ((metric.op === "count_rows") === (metric.column !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["column"], message: "count_rows omits column; every other metric requires it" });
+  }
+  if ((metric.op === "avg") !== (metric.scale !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["scale"], message: "avg requires scale; every other metric omits it" });
+  }
+});
+const TableRangeSchema = z.object({
+  r1: z.number().int().min(1),
+  c1: z.number().int().min(1),
+  r2: z.number().int().min(1),
+  c2: z.number().int().min(1),
+}).strict();
+const TableTargetRowsSchema = z.object({
+  r1: z.number().int().min(1),
+  r2: z.number().int().min(1),
+}).strict();
 
 export function managementToolset({ callRoute }) {
   const call = (type, args) => Promise.resolve(callRoute(type, args ?? {}));
@@ -205,7 +266,7 @@ export function managementToolset({ callRoute }) {
       execute: ({ origin }) => call("asset.list", { origin }),
     }),
     get_asset: tool({
-      description: "Read one artifact's content.",
+      description: "Read one artifact's content. Canonical cap.table/1 artifacts are local-only: this returns their id, digest, dimensions, and local-preview availability but never headers, rows, or cells.",
       inputSchema: z.object({
         origin: z.string().default("master"),
         id: z.string(),
@@ -468,6 +529,81 @@ export function managementToolset({ callRoute }) {
         stdin: z.string().optional().describe("optional standard input passed to the Python program"),
       }),
       execute: ({ code, stdin }) => call("python.execute", { code, stdin }),
+    }),
+
+    // ---- local table engine (full cells stay in artifacts; model sees metadata) ----
+    table_filter: tool({
+      description: "Filter a local table artifact with a strict typed predicate. The complete result is a new immutable cap.table/1 artifact; this tool returns only its id, digest, dimensions, and work/byte counts — never rows or cells.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        predicate: z.unknown().describe("strict all/any/not tree or typed leaf {column,op,value}; is_missing/is_present omit value"),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_filter", args }),
+    }),
+    table_select: tool({
+      description: "Project and reorder columns from a local table artifact. Repeated source columns and duplicate display headers are allowed; output ids are regenerated c1..cN. Returns metadata only.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        columns: z.array(z.object({ column: TableColumnIdSchema, header: TableHeaderSchema.optional() }).strict()).max(TABLE_LIMITS.maxColumns),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_select", args }),
+    }),
+    table_join: tool({
+      description: "Join two local table artifacts with exact typed keys and deterministic input order. Missing keys never match; duplicate keys produce the full Cartesian result or the whole job fails its bounds. Returns metadata only.",
+      inputSchema: z.object({
+        leftSource: TableSourceSchema,
+        rightSource: TableSourceSchema,
+        kind: z.enum(["inner", "left", "right", "full"]),
+        keys: z.array(z.object({ left: TableColumnIdSchema, right: TableColumnIdSchema }).strict()).min(1).max(8),
+        leftColumns: z.array(TableColumnIdSchema).max(TABLE_LIMITS.maxColumns),
+        rightColumns: z.array(TableColumnIdSchema).max(TABLE_LIMITS.maxColumns),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_join", args }),
+    }),
+    table_group_aggregate: tool({
+      description: "Group a local table by stable first-seen typed keys and compute exact count/sum/average/min/max metrics. Decimal math is BigInt-scaled with explicit half-even average scale. Returns metadata only.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        groupBy: z.array(TableColumnIdSchema).max(8),
+        metrics: z.array(TableMetricSchema).max(TABLE_LIMITS.maxMetrics),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_group_aggregate", args }),
+    }),
+    table_pivot: tool({
+      description: "Pivot a local table into explicit ordered categories and exact aggregate metrics. Unknown or missing undeclared categories fail the complete job; no rows or cells are returned to the provider.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        rowGroupBy: z.array(TableColumnIdSchema).max(8),
+        pivotColumn: TableColumnIdSchema,
+        categories: z.array(z.object({
+          value: z.union([z.string().max(TABLE_LIMITS.maxCellBytes), z.boolean()]),
+          header: TableHeaderSchema,
+        }).strict()).min(1).max(128),
+        metrics: z.array(TableMetricSchema).min(1).max(TABLE_LIMITS.maxMetrics),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_pivot", args }),
+    }),
+    table_formula: tool({
+      description: "Evaluate one closed, explicit-range formula over a local table. No JavaScript, SQL, network, volatile/indirect/external or whole-row references are available. Produces a materialized cap.table/1 artifact and returns metadata only.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        mode: z.enum(["append_column", "scalar"]),
+        readRange: TableRangeSchema,
+        targetRows: TableTargetRowsSchema.optional(),
+        expression: z.string().min(1).max(4096),
+        result: z.object({ header: TableHeaderSchema, type: TableTypeSchema }).strict(),
+        numericPolicy: z.object({
+          divisionScale: z.number().int().min(0).max(18),
+          rounding: z.literal("half_even"),
+        }).strict(),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_formula", args }),
     }),
 
     // ---- schedules (per-agent alarm visibility + control) ----

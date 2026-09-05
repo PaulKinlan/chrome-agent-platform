@@ -13,9 +13,11 @@ import {
   backgroundRecipes,
   getRecipe,
   intentOf,
+  invalidRecipeOrigins,
   onDemandRecipes,
   recipesByCategory,
   recipesByMode,
+  recipesForOrigin,
 } from "../extension/lib/recipes.js";
 
 // The 27 source recipe ids from prompt-in-a-box/examples.
@@ -103,6 +105,27 @@ Deno.test("mode + category accessors are consistent", () => {
     );
     assertEquals(recipesByMode("background"), bg);
   }
+});
+
+Deno.test("origins on a skill are valid match patterns and bounded to 8", () => {
+  // CAP-FB-20260830-SITE-PLAYBOOKS-01: the registry's origin bindings are
+  // validated match patterns, bounded — an invalid declaration fails CLOSED
+  // (the skill never composes) rather than silently becoming global.
+  assertEquals(invalidRecipeOrigins(), []);
+});
+
+Deno.test("the fixture-triage skill is bound to the loopback fixture origin (any port)", () => {
+  const r = getRecipe("fixture-triage");
+  assert(r, "fixture-triage present");
+  assertEquals(r.origins, ["http://127.0.0.1/*"]);
+  // It is offered on the fixture origin and nowhere else.
+  const onFixture = recipesForOrigin("http://127.0.0.1:8934/shop");
+  assert(onFixture.some((x) => x.id === "fixture-triage"), "offered on the fixture origin");
+  const elsewhere = recipesForOrigin("https://example.com/");
+  assert(!elsewhere.some((x) => x.id === "fixture-triage"), "absent on example.com");
+  // Global recipes remain offered on both.
+  assert(onFixture.some((x) => x.id === "tab-hygiene"));
+  assert(elsewhere.some((x) => x.id === "tab-hygiene"));
 });
 
 Deno.test("every recipe resolves to a valid intent", () => {
