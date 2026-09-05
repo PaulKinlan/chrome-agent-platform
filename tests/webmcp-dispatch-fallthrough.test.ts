@@ -88,3 +88,11 @@ Deno.test("docs fallback: the fixture declares the broken-dispatch tools and the
   assert(FIXTURE.includes('tool.name.startsWith("dispatch_broken")'), "the fixture's executeTool simulates the broken native dispatch");
   assert(FIXTURE.includes('"UnknownError"'), "the simulated native failure is the owner-observed shape");
 });
+
+Deno.test("dispatch: modelContext.executeTool formats JSON string arguments for native WebMCP WebIDL compatibility (french-bistro)", () => {
+  assert(BLOCK.includes("const jsonArgs = typeof args === \"string\" ? args : JSON.stringify(args ?? {});"), "jsonArgs stringifies args for native DOMString IDL");
+  assert(BLOCK.includes("const objectArgs ="), "objectArgs normalizes parsed object for JS tool handlers");
+  assert(BLOCK.includes("mc.executeTool(tool, jsonArgs)"), "modelContext.executeTool receives jsonArgs first");
+  assert(BLOCK.includes("mc.executeTool(tool, objectArgs)"), "modelContext.executeTool object fallback exists for polyfills");
+  assert(BLOCK.includes("tool.execute(objectArgs)"), "tool.execute receives objectArgs");
+});

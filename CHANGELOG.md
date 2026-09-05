@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.253] — 2026-09-05
+- WebMCP tool execution formats arguments as JSON for browser compatibility.
+
 ## [0.3.252] — 2026-09-05
 - Test runs are quicker to give results: checks that only pretend to launch a browser no longer wait in line behind real browser tests.
 
