@@ -16,10 +16,11 @@ import { registerTableWorkerHost } from "../lib/table-worker-host.js";
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
   handleScriptRunMessage(message, sendResponse, document, "offscreen")
 );
-
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
-  handleScriptRunMessage(message, sendResponse, document, "offscreen")
-);
+// (czwz) This listener was registered TWICE — identical handler, two
+// addListener calls. The announce phase survived it (Chrome honors the first
+// sendResponse), but an addressed `cap:script-run` matched BOTH listeners and
+// runScriptInIframe fired TWICE per run — every scheduled script's side
+// effects double-executed. One listener, one handling.
 
 // Agent shared workers (CAP-FB-20260826-AGENT-WORKERS-01): this offscreen doc
 // is the worker host — the SW can't construct workers, so it asks this host to

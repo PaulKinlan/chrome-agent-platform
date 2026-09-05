@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.243] — 2026-09-05
+- Fixed a bug where a scheduled task's script could run twice instead of once.
+
 ## [0.3.242] — 2026-09-05
 - Fixed the permissions health check: it was looking for parts of the Settings page that no longer exist, so it reported nothing. It now checks the real capability list and turns a capability off the same way you would — including the confirmation step.
 
