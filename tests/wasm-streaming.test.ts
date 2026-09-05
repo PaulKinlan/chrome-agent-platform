@@ -197,6 +197,8 @@ Deno.test("WASI stdio adapters stream complete input/output without runtime accu
 
 Deno.test("service worker exposes one owner-derived stream lifecycle instead of shadowing routes", async () => {
   const source = await Deno.readTextFile("extension/background/service-worker.js");
+  equal(source.split('from "../lib/wasm-stream-files.js";').length - 1, 1,
+    "the service worker imports the stream lifecycle authority exactly once");
   for (const route of [
     "tool-stream.input.create",
     "tool-stream.input.append",
