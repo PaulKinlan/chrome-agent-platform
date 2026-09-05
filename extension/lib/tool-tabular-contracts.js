@@ -1,430 +1,277 @@
-// lib/tool-tabular-contracts.js — Tabular & structured data streaming contracts.
-// CAP-FB-20260822-WASM-TOOL-PLATFORM-01 (Pillar 3: Tabular & Structured Data, def alignment).
-//
-// Provides:
-//   1. RFC 4180 CSV / TSV streaming parser and formatter with typed values
-//   2. JSONL (ndjson) line-by-line parser and serializer
-//   3. Tabular operations: select, filter, sort, aggregate (group-by), and slice
-//   4. Spreadsheet formula injection defense (safe CSV export neutralizing =, +, -, @, \t, \r)
-//   5. Stream-to-stream tabular transformations across OPFS capability references
+// lib/tool-tabular-contracts.js — OPFS facade for the strict bounded table engine.
+// The model-facing toolkit and the owner-only tool-stream route share table-core;
+// this file owns only compatibility helpers and stream publication.
 
 import {
   createWasmStreamOutput,
-  appendWasmStreamInput,
+  discardWasmStream,
   sealWasmStreamOutput,
   validateSealedWasmStream,
-  readWasmStreamWindow,
-  discardWasmStream,
 } from "./wasm-stream-files.js";
-import { decodeCanonicalBase64 } from "./wasm-base64.js";
+import {
+  assertCanonicalTable,
+  canonicalTableJson,
+  filterTable,
+  formatTableDelimited,
+  groupAggregateTable,
+  parseTableBytes,
+  parseTableFile,
+  runBasicTableTool,
+  sanitizeFormulaCell,
+  selectTable,
+  TABLE_LIMITS,
+  TABLE_LOCALE_PROFILES,
+  TABLE_MEDIA_TYPE,
+  TABLE_VERSION,
+  TableError,
+} from "./table-core.js";
 
-export const TABULAR_LIMITS = Object.freeze({
-  maxCellBytes: 16 * 1024,
-  maxColumns: 1024,
-  maxPreviewRows: 100,
-  chunkSize: 64 * 1024,
-});
+export {
+  assertCanonicalTable,
+  canonicalTableJson,
+  filterTable,
+  formatTableDelimited,
+  groupAggregateTable,
+  parseTableBytes,
+  parseTableFile,
+  runBasicTableTool,
+  sanitizeFormulaCell,
+  selectTable,
+  TABLE_LOCALE_PROFILES,
+  TABLE_MEDIA_TYPE,
+  TABLE_VERSION,
+  TableError,
+};
 
-/**
- * Neutralize dangerous formula characters that could execute arbitrary commands
- * or trigger DDE/formula execution when a CSV is opened in Excel, LibreOffice, or Calc.
- */
-export function sanitizeFormulaCell(val) {
-  if (typeof val !== "string") return val;
-  if (/^\s*[=+\-@|]/.test(val) || /^[\t\r\n]/.test(val)) {
-    return `'${val}`;
-  }
-  return val;
+// Compatibility name retained for the landed Pillar-3 and Unix-isolation KATs.
+export const TABULAR_LIMITS = TABLE_LIMITS;
+
+const encoder = new TextEncoder();
+
+function fail(code, detail = "") {
+  throw new TableError(code, detail);
 }
 
-/**
- * Parse an RFC 4180 CSV string into headers and rows with automatic type preservation.
- */
+function legacyValue(value, type) {
+  if (value == null) return null;
+  if (type.kind === "int64" || type.kind === "decimal") return Number(value);
+  return value;
+}
+
+function legacyCast(value, autoCast) {
+  if (!autoCast || value == null) return value;
+  const text = String(value);
+  const trimmed = text.trim();
+  if (trimmed === "") return null;
+  if (trimmed === "true") return true;
+  if (trimmed === "false") return false;
+  if (trimmed === "null") return null;
+  if (/^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/u.test(trimmed)) {
+    const number = Number(trimmed);
+    if (Number.isFinite(number)) return number;
+  }
+  return text;
+}
+
+/** Compatibility parser. Product execution uses parseTableBytes directly. */
 export function parseCsv(text, { delimiter = ",", hasHeader = true, autoCast = true } = {}) {
-  const input = String(text ?? "");
-  const rows = [];
-  let currentRow = [];
-  let currentCell = "";
-  let inQuotes = false;
-  let i = 0;
-
-  while (i < input.length) {
-    const c = input[i];
-
-    if (inQuotes) {
-      if (c === '"') {
-        if (i + 1 < input.length && input[i + 1] === '"') {
-          currentCell += '"';
-          i += 2;
-          continue;
-        } else {
-          inQuotes = false;
-          i++;
-          continue;
-        }
-      } else {
-        currentCell += c;
-        i++;
-        continue;
-      }
-    }
-
-    if (c === '"') {
-      inQuotes = true;
-      i++;
-    } else if (c === delimiter) {
-      if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
-        throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
-      }
-      currentRow.push(castValue(currentCell, autoCast));
-      currentCell = "";
-      i++;
-    } else if (c === "\r" || c === "\n") {
-      if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
-        throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
-      }
-      currentRow.push(castValue(currentCell, autoCast));
-      currentCell = "";
-      if (currentRow.length > 1 || currentRow[0] !== null) {
-        rows.push(currentRow);
-      }
-      currentRow = [];
-      if (c === "\r" && i + 1 < input.length && input[i + 1] === "\n") {
-        i += 2;
-      } else {
-        i++;
-      }
-    } else {
-      currentCell += c;
-      if (currentCell.length > TABULAR_LIMITS.maxCellBytes) {
-        throw new Error(`Cell size exceeds ${TABULAR_LIMITS.maxCellBytes} bytes`);
-      }
-      i++;
-    }
-  }
-
-  if (currentCell.length > 0 || currentRow.length > 0) {
-    currentRow.push(castValue(currentCell, autoCast));
-    if (currentRow.length > 1 || currentRow[0] !== null) {
-      rows.push(currentRow);
-    }
-  }
-
-  if (!rows.length) {
-    return { headers: [], rows: [] };
-  }
-
-  if (hasHeader) {
-    const rawHeaders = rows[0].map((h, idx) => (h != null ? String(h).trim() : `col_${idx}`));
-    return { headers: rawHeaders, rows: rows.slice(1) };
-  } else {
-    const headers = rows[0].map((_, idx) => `col_${idx}`);
-    return { headers, rows };
+  try {
+    const table = parseTableBytes(encoder.encode(String(text ?? "")), {
+      delimiter,
+      hasHeader,
+      schemaMode: "text",
+      localeProfile: "canonical-v1",
+    });
+    return {
+      headers: table.columns.map((column) => column.header),
+      rows: table.rows.map((row) => row.map((value) => legacyCast(value, autoCast))),
+    };
+  } catch (error) {
+    if (error?.code === "table_cell_bound") throw new Error(`Cell size exceeds ${TABLE_LIMITS.maxCellBytes} bytes`);
+    if (error?.code === "table_column_bound") throw new Error(`Column count exceeds ${TABLE_LIMITS.maxColumns}`);
+    throw error;
   }
 }
 
-function castValue(str, autoCast) {
-  if (!autoCast) return str;
-  const s = str.trim();
-  if (s === "") return null;
-  if (s === "true") return true;
-  if (s === "false") return false;
-  if (s === "null") return null;
-  if (/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(s)) {
-    const num = Number(s);
-    if (!Number.isNaN(num)) return num;
-  }
-  return str;
-}
-
-/**
- * Format a single CSV row into a string line with formula sanitization.
- */
 export function formatCsvRow(row, { delimiter = ",", sanitizeFormulas = true } = {}) {
-  const formatCell = (val) => {
-    if (val === null || val === undefined) return "";
-    let s = sanitizeFormulas ? String(sanitizeFormulaCell(val)) : String(val);
-    if (s.includes('"') || s.includes(delimiter) || s.includes("\n") || s.includes("\r")) {
-      return `"${s.replaceAll('"', '""')}"`;
+  if (delimiter !== "," && delimiter !== "\t") fail("table_delimiter_invalid");
+  if (!Array.isArray(row)) fail("table_bad_request", "row");
+  const cells = row.map((value) => {
+    if (value == null) return "";
+    let text = String(sanitizeFormulas ? sanitizeFormulaCell(value) : value);
+    if (text.includes('"') || text.includes(delimiter) || text.includes("\n") || text.includes("\r")) {
+      text = `"${text.replaceAll('"', '""')}"`;
     }
-    return s;
-  };
-  return row.map(formatCell).join(delimiter) + "\n";
+    return text;
+  });
+  return cells.join(delimiter) + "\n";
 }
 
-/**
- * Read and parse CSV rows in chunks from an OPFS FileHandle or File slice.
- * Never whole-buffers the file into a single JS string.
- */
-export async function* streamCsvRows(file, { delimiter = ",", autoCast = true, chunkSize = TABULAR_LIMITS.chunkSize } = {}) {
-  let offset = 0;
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  let buffer = "";
-  let inQuotes = false;
-  let currentRow = [];
-  let currentCell = "";
-
-  while (offset < file.size || buffer.length > 0) {
-    if (buffer.length < chunkSize && offset < file.size) {
-      const end = Math.min(file.size, offset + chunkSize);
-      const chunkBytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
-      buffer += decoder.decode(chunkBytes, { stream: end < file.size });
-      offset = end;
-    }
-
-    let i = 0;
-    let yielded = false;
-
-    while (i < buffer.length) {
-      const c = buffer[i];
-      if (inQuotes) {
-        if (c === '"') {
-          if (i + 1 < buffer.length) {
-            if (buffer[i + 1] === '"') {
-              currentCell += '"';
-              i += 2;
-              continue;
-            } else {
-              inQuotes = false;
-              i++;
-              continue;
-            }
-          } else if (offset < file.size) {
-            // Need more data from next chunk to disambiguate quote escape
-            break;
-          } else {
-            inQuotes = false;
-            i++;
-            continue;
-          }
-        } else {
-          currentCell += c;
-          if (currentCell.length > TABULAR_LIMITS.maxCellBytes) {
-            throw new Error(`Cell size exceeds ${TABULAR_LIMITS.maxCellBytes} bytes`);
-          }
-          i++;
-          continue;
-        }
-      }
-
-      if (c === '"') {
-        inQuotes = true;
-        i++;
-      } else if (c === delimiter) {
-        if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
-          throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
-        }
-        currentRow.push(castValue(currentCell, autoCast));
-        currentCell = "";
-        i++;
-      } else if (c === "\r" || c === "\n") {
-        if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
-          throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
-        }
-        currentRow.push(castValue(currentCell, autoCast));
-        currentCell = "";
-        const rowToYield = currentRow;
-        currentRow = [];
-        if (c === "\r" && i + 1 < buffer.length && buffer[i + 1] === "\n") {
-          i += 2;
-        } else {
-          i++;
-        }
-        buffer = buffer.slice(i);
-        i = 0;
-        if (rowToYield.length > 1 || rowToYield[0] !== null) {
-          yield rowToYield;
-          yielded = true;
-          break;
-        }
-      } else {
-        currentCell += c;
-        if (currentCell.length > TABULAR_LIMITS.maxCellBytes) {
-          throw new Error(`Cell size exceeds ${TABULAR_LIMITS.maxCellBytes} bytes`);
-        }
-        i++;
-      }
-    }
-
-    if (!yielded) {
-      if (i > 0) buffer = buffer.slice(i);
-      if (offset >= file.size && buffer.length === 0) {
-        if (currentRow.length > 0 || currentCell.length > 0) {
-          if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
-            throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
-          }
-          currentRow.push(castValue(currentCell, autoCast));
-          yield currentRow;
-        }
-        break;
-      }
-    }
-  }
-}
-
-/**
- * Format a tabular dataset into CSV or TSV, escaping quotes, commas, newlines,
- * and neutralizing formula injection characters.
- */
+/** Compatibility formatter. Safe formula neutralization remains mandatory by default. */
 export function formatCsv(headers, rows, { delimiter = ",", sanitizeFormulas = true } = {}) {
-  const lines = [];
-
-  const formatCell = (val) => {
-    if (val === null || val === undefined) return "";
-    let s = sanitizeFormulas ? String(sanitizeFormulaCell(val)) : String(val);
-    if (s.includes('"') || s.includes(delimiter) || s.includes("\n") || s.includes("\r")) {
-      return `"${s.replaceAll('"', '""')}"`;
-    }
-    return s;
-  };
-
-  if (Array.isArray(headers) && headers.length > 0) {
-    lines.push(headers.map(formatCell).join(delimiter));
-  }
-
-  for (const row of rows) {
-    if (!Array.isArray(row)) continue;
-    lines.push(row.map(formatCell).join(delimiter));
-  }
-
-  return lines.join("\n") + "\n";
+  if (!Array.isArray(headers) || !Array.isArray(rows)) fail("table_bad_request");
+  return [
+    ...(headers.length ? [formatCsvRow(headers, { delimiter, sanitizeFormulas })] : []),
+    ...rows.map((row) => formatCsvRow(row, { delimiter, sanitizeFormulas })),
+  ].join("");
 }
 
-/**
- * Parse JSONL (newline-delimited JSON) into row objects.
- */
 export function parseJsonl(text) {
-  const lines = String(text ?? "").split("\n");
   const rows = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      rows.push(JSON.parse(trimmed));
-    } catch { /* skip corrupted lines in streaming recovery */ }
+  for (const [index, line] of String(text ?? "").split("\n").entries()) {
+    if (!line.trim()) continue;
+    try { rows.push(JSON.parse(line)); }
+    catch { fail("table_jsonl_syntax", String(index + 1)); }
   }
   return rows;
 }
 
-/**
- * Format array of objects into JSONL string.
- */
 export function formatJsonl(rows) {
-  return (Array.isArray(rows) ? rows : [])
-    .map((r) => JSON.stringify(r))
-    .join("\n") + "\n";
+  if (!Array.isArray(rows)) fail("table_bad_request", "rows");
+  return rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
 }
 
 /**
- * Transform tabular data in memory across filtering, projection, sorting, and grouping.
+ * Compatibility row iterator. It now inherits the strict fatal-UTF8 parser and
+ * byte/count bounds instead of maintaining a second permissive CSV parser.
  */
-export function transformTabularData({ headers = [], rows = [] }, operations = []) {
-  let currentHeaders = [...headers];
-  let currentRows = rows.map((r) => [...r]);
+export async function* streamCsvRows(file, { delimiter = ",", autoCast = true } = {}) {
+  const table = await parseTableFile(file, {
+    delimiter,
+    hasHeader: false,
+    schemaMode: autoCast ? "infer" : "text",
+    localeProfile: "canonical-v1",
+  });
+  for (const row of table.rows) {
+    yield row.map((value, index) => legacyValue(value, table.columns[index].type));
+  }
+}
 
-  for (const op of operations) {
-    if (!op || typeof op !== "object") continue;
+function uniqueHeaderIndex(headers, header) {
+  const matches = [];
+  headers.forEach((value, index) => { if (value === header) matches.push(index); });
+  if (!matches.length) fail("table_unknown_column", String(header));
+  if (matches.length !== 1) fail("table_ambiguous_header", String(header));
+  return matches[0];
+}
 
-    switch (op.op) {
-      case "filter": {
-        const colIdx = currentHeaders.indexOf(op.column);
-        if (colIdx >= 0) {
-          currentRows = currentRows.filter((row) => {
-            const val = row[colIdx];
-            switch (op.comparison) {
-              case "eq": return val === op.value;
-              case "neq": return val !== op.value;
-              case "gt": return val > op.value;
-              case "gte": return val >= op.value;
-              case "lt": return val < op.value;
-              case "lte": return val <= op.value;
-              case "contains": return String(val ?? "").toLowerCase().includes(String(op.value ?? "").toLowerCase());
-              default: return true;
-            }
-          });
-        }
-        break;
-      }
-      case "select": {
-        if (Array.isArray(op.columns) && op.columns.length > 0) {
-          const colIndices = op.columns.map((c) => currentHeaders.indexOf(c)).filter((i) => i >= 0);
-          currentHeaders = colIndices.map((i) => currentHeaders[i]);
-          currentRows = currentRows.map((r) => colIndices.map((i) => r[i]));
-        }
-        break;
-      }
-      case "sort": {
-        const colIdx = currentHeaders.indexOf(op.column);
-        if (colIdx >= 0) {
-          const mult = op.direction === "desc" ? -1 : 1;
-          currentRows.sort((a, b) => {
-            const va = a[colIdx];
-            const vb = b[colIdx];
-            if (va === vb) return 0;
-            if (va == null) return 1;
-            if (vb == null) return -1;
-            if (typeof va === "number" && typeof vb === "number") return (va - vb) * mult;
-            return String(va).localeCompare(String(vb)) * mult;
-          });
-        }
-        break;
-      }
-      case "slice":
-      case "limit": {
-        const offset = Math.max(0, Number.isInteger(op.offset) ? op.offset : 0);
-        const count = Number.isInteger(op.count) && op.count >= 0 ? op.count : currentRows.length;
-        currentRows = currentRows.slice(offset, offset + count);
-        break;
-      }
-      case "aggregate": {
-        if (Array.isArray(op.groupBy) && Array.isArray(op.metrics)) {
-          const groupIndices = op.groupBy.map((c) => currentHeaders.indexOf(c)).filter((i) => i >= 0);
-          const groups = new Map();
+function typeForLegacyColumn(rows, index) {
+  const present = rows.map((row) => row[index]).filter((value) => value != null);
+  if (present.length && present.every((value) => typeof value === "boolean")) return { kind: "boolean" };
+  if (present.length && present.every((value) => typeof value === "number" && Number.isSafeInteger(value))) return { kind: "int64" };
+  if (present.length && present.every((value) => typeof value === "number" && Number.isFinite(value))) {
+    const scale = Math.min(18, Math.max(...present.map((value) => (String(value).split(".")[1] ?? "").length)));
+    return { kind: "decimal", scale };
+  }
+  return { kind: "text" };
+}
 
-          for (const row of currentRows) {
-            const key = groupIndices.map((i) => String(row[i] ?? "")).join(":::");
-            if (!groups.has(key)) {
-              groups.set(key, { keyValues: groupIndices.map((i) => row[i]), items: [] });
-            }
-            groups.get(key).items.push(row);
-          }
+function canonicalFromLegacy({ headers = [], rows = [] }) {
+  if (!Array.isArray(headers) || !Array.isArray(rows)) fail("table_bad_request");
+  const columns = headers.map((header, index) => ({ id: `c${index + 1}`, header: String(header), type: typeForLegacyColumn(rows, index) }));
+  const canonicalRows = rows.map((row) => row.map((value, index) => {
+    if (value == null) return null;
+    const type = columns[index].type;
+    if (type.kind === "int64") return String(value);
+    if (type.kind === "decimal") return Number(value).toFixed(type.scale);
+    if (type.kind === "text") return String(value);
+    return value;
+  }));
+  return assertCanonicalTable({ version: TABLE_VERSION, localeProfile: "canonical-v1", columns, rows: canonicalRows });
+}
 
-          const newHeaders = [
-            ...groupIndices.map((i) => currentHeaders[i]),
-            ...op.metrics.map((m) => m.as || `${m.metric}_${m.column}`),
-          ];
+function legacyFromCanonical(table) {
+  return {
+    headers: table.columns.map((column) => column.header),
+    rows: table.rows.map((row) => row.map((value, index) => legacyValue(value, table.columns[index].type))),
+  };
+}
 
-          const newRows = [];
-          for (const group of groups.values()) {
-            const aggRow = [...group.keyValues];
-            for (const m of op.metrics) {
-              const cIdx = currentHeaders.indexOf(m.column);
-              const vals = group.items.map((r) => (cIdx >= 0 ? r[cIdx] : null)).filter((v) => v != null);
-              switch (m.metric) {
-                case "count": aggRow.push(group.items.length); break;
-                case "sum": aggRow.push(vals.reduce((acc, v) => acc + (Number(v) || 0), 0)); break;
-                case "avg": aggRow.push(vals.length ? Math.round((vals.reduce((acc, v) => acc + (Number(v) || 0), 0) / vals.length) * 100) / 100 : 0); break;
-                case "min": aggRow.push(vals.length ? Math.min(...vals.map(Number)) : null); break;
-                case "max": aggRow.push(vals.length ? Math.max(...vals.map(Number)) : null); break;
-                default: aggRow.push(vals.length); break;
-              }
-            }
-            newRows.push(aggRow);
-          }
-          currentHeaders = newHeaders;
-          currentRows = newRows;
-        }
-        break;
+function compareCanonical(left, right, type) {
+  if (type.kind === "int64") {
+    const a = BigInt(left);
+    const b = BigInt(right);
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+  if (type.kind === "decimal") {
+    const a = BigInt(left.replace(".", ""));
+    const b = BigInt(right.replace(".", ""));
+    return a < b ? -1 : a > b ? 1 : 0;
+  }
+  const a = [...String(left)];
+  const b = [...String(right)];
+  for (let index = 0; index < Math.min(a.length, b.length); index++) {
+    const difference = a[index].codePointAt(0) - b[index].codePointAt(0);
+    if (difference) return difference;
+  }
+  return a.length - b.length;
+}
+
+function applyCompatibilityOperations(inputTable, operations) {
+  let table = assertCanonicalTable(inputTable);
+  if (!Array.isArray(operations) || operations.length > 16) fail("table_bad_request", "operations");
+  for (const operation of operations) {
+    if (!operation || typeof operation !== "object") fail("table_bad_request", "operation");
+    const headers = table.columns.map((column) => column.header);
+    if (operation.op === "filter") {
+      const index = uniqueHeaderIndex(headers, operation.column);
+      const comparison = operation.comparison;
+      const type = table.columns[index].type;
+      let value = operation.value;
+      if ((type.kind === "int64" || type.kind === "decimal") && typeof value === "number") {
+        value = type.kind === "int64" ? String(value) : Number(value).toFixed(type.scale);
       }
+      table = filterTable(table, { predicate: { column: `c${index + 1}`, op: comparison, value } }).table;
+    } else if (operation.op === "select") {
+      if (!Array.isArray(operation.columns) || !operation.columns.length) fail("table_bad_request", "select.columns");
+      table = selectTable(table, { columns: operation.columns.map((header) => ({ column: `c${uniqueHeaderIndex(headers, header) + 1}` })) }).table;
+    } else if (operation.op === "aggregate") {
+      const groupBy = (operation.groupBy ?? []).map((header) => `c${uniqueHeaderIndex(headers, header) + 1}`);
+      const metrics = (operation.metrics ?? []).map((metric) => ({
+        op: metric.metric === "count" ? "count_rows" : metric.metric,
+        ...(metric.metric === "count" ? {} : { column: `c${uniqueHeaderIndex(headers, metric.column) + 1}` }),
+        header: metric.as || `${metric.metric}_${metric.column}`,
+        ...(metric.metric === "avg" ? { scale: 2 } : {}),
+      }));
+      table = groupAggregateTable(table, { groupBy, metrics }).table;
+    } else if (operation.op === "sort") {
+      const index = uniqueHeaderIndex(headers, operation.column);
+      const direction = operation.direction === "desc" ? -1 : operation.direction === "asc" || operation.direction == null ? 1 : fail("table_bad_request", "sort.direction");
+      const rows = table.rows.map((row, order) => ({ row, order }));
+      rows.sort((a, b) => {
+        const left = a.row[index];
+        const right = b.row[index];
+        if (left === right) return a.order - b.order;
+        if (left == null) return 1;
+        if (right == null) return -1;
+        return compareCanonical(left, right, table.columns[index].type) * direction || a.order - b.order;
+      });
+      table = assertCanonicalTable({ ...table, rows: rows.map((entry) => entry.row) });
+    } else if (operation.op === "slice" || operation.op === "limit") {
+      const offset = Number.isInteger(operation.offset) && operation.offset >= 0 ? operation.offset : 0;
+      const count = Number.isInteger(operation.count) && operation.count >= 0 ? operation.count : table.rows.length;
+      table = assertCanonicalTable({ ...table, rows: table.rows.slice(offset, offset + count) });
+    } else {
+      fail("table_tool_unknown", String(operation.op));
     }
   }
+  return table;
+}
 
-  return { headers: currentHeaders, rows: currentRows };
+/** Compatibility operation pipeline, now fail-closed and routed through strict operations. */
+export function transformTabularData(input, operations = []) {
+  return legacyFromCanonical(applyCompatibilityOperations(canonicalFromLegacy(input), operations));
+}
+
+async function writeChunks(writer, bytes) {
+  for (let offset = 0; offset < bytes.byteLength; offset += TABLE_LIMITS.chunkSize) {
+    await writer.write(bytes.subarray(offset, Math.min(bytes.byteLength, offset + TABLE_LIMITS.chunkSize)));
+  }
 }
 
 /**
- * Execute a streaming tabular transformation reading from inputRef and writing to outputRef.
- * Streams in chunked reads via streamCsvRows — never buffers whole files with file.text().
+ * Owner/run-authorized OPFS transformation facade. The caller derives owner;
+ * this function never accepts custody from table content or asset metadata.
  */
 export async function streamTabularTransform(inputRef, {
   operations = [],
@@ -432,81 +279,71 @@ export async function streamTabularTransform(inputRef, {
   delimiter = ",",
   owner,
   storage,
+  schemaMode = "infer",
+  columns = [],
+  localeProfile = "canonical-v1",
 } = {}) {
   const validated = await validateSealedWasmStream({ ref: inputRef, owner, storage });
-  const fileHandle = await validated.directory.getFileHandle(validated.fileName);
-  const file = await fileHandle.getFile();
-
-  // Chunked stream reader: never read whole file into a string
-  const rows = [];
-  for await (const row of streamCsvRows(file, { delimiter })) {
-    rows.push(row);
-  }
-
-  let table;
-  if (rows.length > 0) {
-    const headers = rows[0].map((h, idx) => (h != null ? String(h).trim() : `col_${idx}`));
-    table = { headers, rows: rows.slice(1) };
-  } else {
-    table = { headers: [], rows: [] };
-  }
-
-  const transformed = transformTabularData(table, operations);
-
+  if (validated.bytes > TABLE_LIMITS.maxInputBytes) fail("table_input_bound", String(TABLE_LIMITS.maxInputBytes));
+  const file = await (await validated.directory.getFileHandle(validated.fileName)).getFile();
+  const parsed = await parseTableFile(file, {
+    delimiter,
+    schemaMode,
+    columns,
+    localeProfile,
+  });
+  const transformed = applyCompatibilityOperations(parsed, operations);
   const outputRef = await createWasmStreamOutput({ owner, storage });
+  let writer = null;
   try {
-    const dir = await storage?.getDirectory ? await storage.getDirectory() : await navigator.storage.getDirectory();
-    const streams = await dir.getDirectoryHandle("wasm-tool-streams-v1");
-    const streamDir = await streams.getDirectoryHandle(outputRef.id);
-    const stdoutFile = await streamDir.getFileHandle("stdout.bin");
-    const writer = await stdoutFile.createWritable();
-
-    let totalBytesWritten = 0;
-    const encoder = new TextEncoder();
-
-    if (outputFormat === "jsonl") {
-      for (const row of transformed.rows) {
-        const obj = {};
-        transformed.headers.forEach((h, idx) => { obj[h] = row[idx]; });
-        const lineBytes = encoder.encode(JSON.stringify(obj) + "\n");
-        await writer.write(lineBytes);
-        totalBytesWritten += lineBytes.byteLength;
-      }
+    const root = storage?.getDirectory ? await storage.getDirectory() : await navigator.storage.getDirectory();
+    const streams = await root.getDirectoryHandle("wasm-tool-streams-v1");
+    const directory = await streams.getDirectoryHandle(outputRef.id);
+    const handle = await directory.getFileHandle("stdout.bin");
+    writer = await handle.createWritable();
+    let output;
+    if (outputFormat === "csv" || outputFormat === "tsv") {
+      output = formatTableDelimited(transformed, { format: outputFormat });
+    } else if (outputFormat === "jsonl") {
+      output = transformed.rows.map((row) => JSON.stringify(Object.fromEntries(row.map((value, index) => [transformed.columns[index].id, value])))).join("\n") + "\n";
+    } else if (outputFormat === "table-json") {
+      output = canonicalTableJson(transformed);
     } else {
-      if (transformed.headers.length > 0) {
-        const headerBytes = encoder.encode(formatCsvRow(transformed.headers, { delimiter }));
-        await writer.write(headerBytes);
-        totalBytesWritten += headerBytes.byteLength;
-      }
-      for (const row of transformed.rows) {
-        const rowBytes = encoder.encode(formatCsvRow(row, { delimiter }));
-        await writer.write(rowBytes);
-        totalBytesWritten += rowBytes.byteLength;
-      }
+      fail("table_format_invalid", String(outputFormat));
     }
+    const bytes = encoder.encode(output);
+    if (bytes.byteLength > TABLE_LIMITS.maxOutputBytes) fail("table_output_bound", String(TABLE_LIMITS.maxOutputBytes));
+    await writeChunks(writer, bytes);
     await writer.close();
-
+    writer = null;
     await sealWasmStreamOutput({
       ref: outputRef,
       owner,
-      bytes: totalBytesWritten,
+      bytes: bytes.byteLength,
       receipt: {
         operation: "tabular-transform",
-        rowsIn: table.rows.length,
+        inputBytes: validated.bytes,
+        rowsIn: parsed.rows.length,
         rowsOut: transformed.rows.length,
+        columnsOut: transformed.columns.length,
+        outputFormat,
+        localeProfile,
+        bounds: TABLE_LIMITS,
       },
       storage,
     });
-
     return Object.freeze({
       ok: true,
       outputRef,
+      bytes: bytes.byteLength,
       rowsCount: transformed.rows.length,
-      columnsCount: transformed.headers.length,
-      headers: transformed.headers,
+      columnsCount: transformed.columns.length,
+      headers: transformed.columns.map((column) => column.header),
+      tableVersion: TABLE_VERSION,
     });
-  } catch (err) {
+  } catch (error) {
+    try { await writer?.abort?.(); } catch { /* cleanup continues */ }
     await discardWasmStream({ ref: outputRef, owner, storage }).catch(() => {});
-    throw err;
+    throw error;
   }
 }

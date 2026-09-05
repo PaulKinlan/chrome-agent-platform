@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.178] — 2026-09-05
+- Add a strict local table engine
+
 ## [0.3.176] — 2026-09-05
 - The artifact viewer displays tables in clean pages with warnings for formula exports
 
