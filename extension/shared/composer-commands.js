@@ -1,6 +1,8 @@
 // shared/composer-commands.js — the composer slash-command registry + data loaders.
 // DOM-free and dependency-injected so each Chrome-backed picker is unit-testable.
 
+import { skillMatchesUrl } from "./match-patterns.js";
+
 export const COMMAND_NAMESPACES = Object.freeze([
   { id: "skill", label: "skill", description: "invoke a skill", kind: "skill" },
   {
@@ -101,8 +103,17 @@ export async function loadComposerCommandItems(
       const res = runtimeSend
         ? await runtimeSend("skill.list").catch(() => ({}))
         : {};
+      // Origin-bound skills (CAP-FB-20260830-SITE-PLAYBOOKS-01): a skill
+      // declaring `origins` is OFFERED only when the active tab matches.
+      // This is the soft UX surface — the hard boundary is prompt composition.
+      let activeUrl = "";
+      try {
+        const tabs = await chromeApi?.tabs?.query?.({ active: true, currentWindow: true }) ?? [];
+        activeUrl = String(tabs?.[0]?.url ?? "");
+      } catch { activeUrl = ""; }
       return (res.skills || [])
         .filter((item) => hit(query, item.name, item.id))
+        .filter((item) => !Array.isArray(item.origins) || item.origins.length === 0 || skillMatchesUrl(item, activeUrl))
         .map((item) => ({
           // Collision-proof reference (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2):
           // the reference is built from the source-qualified refId so an

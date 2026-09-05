@@ -13,6 +13,8 @@
 // for the hub's recipe chips, the background-agent manager, and the future
 // /skill:name command + @-mention targets (ids are stable).
 
+import { skillMatchesUrl, validateSkillOrigins } from "../shared/match-patterns.js";
+
 const ON_DEMAND = "on-demand";
 const BACKGROUND = "background";
 
@@ -772,10 +774,45 @@ export const RECIPES = [
     prompt:
       "Gather the relevant content from the open tabs (list them with tab_list, read the ones relevant to the question). Synthesize a single, sourced answer that draws from all of them, citing which tab each point came from.",
   },
+  {
+    // CAP-FB-20260830-SITE-PLAYBOOKS-01: the canonical ORIGIN-BOUND skill,
+    // bound to the WebMCP fixture origin. It auto-composes into a run whose
+    // active tab matches (and is offered by the /skill: palette there), and
+    // never composes on any other origin — the journey suite pins both sides.
+    id: "fixture-triage",
+    name: "Fixture triage",
+    category: "context",
+    mode: ON_DEMAND,
+    icon: "target",
+    description: "Triage the WebMCP fixture page: list its declared tools and summarize what the page offers.",
+    origins: ["http://127.0.0.1/*"],
+    requiredCapabilities: ["tabs"],
+    prompt:
+      "You are triaging the WebMCP fixture site. On this site, always: list the tools the page declares (the WebMCP tool list), read the page content (read_page), and report a short triage summary naming each tool and what it does. Be concise.",
+  },
 ];
 
 export function getRecipe(id) {
   return RECIPES.find((r) => r.id === id);
+}
+
+/** The recipes offered for a URL (CAP-FB-20260830-SITE-PLAYBOOKS-01): global
+ * recipes everywhere, origin-bound recipes only when one of their match
+ * patterns matches. Pure. */
+export function recipesForOrigin(url, recipes = RECIPES) {
+  return (Array.isArray(recipes) ? recipes : []).filter((r) => skillMatchesUrl(r, url));
+}
+
+/** Registry validation helper for tests: every recipe's `origins` declaration
+ * must be valid (valid match patterns, bounded to MAX_SKILL_ORIGINS). Returns
+ * the list of offending { id, error } entries (empty = valid registry). */
+export function invalidRecipeOrigins(recipes = RECIPES) {
+  const out = [];
+  for (const r of Array.isArray(recipes) ? recipes : []) {
+    const v = validateSkillOrigins(r?.origins);
+    if (!v.ok) out.push({ id: r?.id, error: v.error });
+  }
+  return out;
 }
 
 /**

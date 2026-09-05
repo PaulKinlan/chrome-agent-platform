@@ -1297,6 +1297,45 @@ async function renderWebmcpStatus() {
     row.appendChild(err);
   }
   body.appendChild(row);
+
+  // Site playbook note (CAP-FB-20260830-SITE-PLAYBOOKS-01): the owner's
+  // per-origin instruction ("On this site, always …"), composed into the
+  // skills boundary layer for runs whose active tab is this origin. Bounded
+  // to 2,000 chars; stored under the origin key.
+  const origin = String(s.origin ?? "");
+  if (origin) {
+    const NOTE_MAX = 2000;
+    const field = document.createElement("div");
+    field.className = "webmcp-site-note";
+    const label = document.createElement("label");
+    const noteId = `site-note-${origin.replace(/[^a-z0-9]+/gi, "-")}`;
+    label.setAttribute("for", noteId);
+    label.textContent = "Site instructions (" + origin + ")";
+    const textarea = document.createElement("textarea");
+    textarea.id = noteId;
+    textarea.rows = 3;
+    textarea.maxLength = NOTE_MAX;
+    textarea.placeholder = "On this site, always …";
+    try {
+      const cur = await chrome.runtime.sendMessage({ type: "site-skills.get", origin });
+      textarea.value = String(cur?.notes ?? "");
+    } catch { /* SW not ready */ }
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.textContent = "Save site instructions";
+    saveBtn.addEventListener("click", async () => {
+      try {
+        await chrome.runtime.sendMessage({ type: "site-skills.set", origin, notes: textarea.value });
+        saveFlash("Site instructions saved.");
+      } catch {
+        saveFlash("Could not save site instructions.");
+      }
+    });
+    field.appendChild(label);
+    field.appendChild(textarea);
+    field.appendChild(saveBtn);
+    body.appendChild(field);
+  }
 }
 
 // ── Agents ──

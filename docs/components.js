@@ -22,6 +22,7 @@ import {
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
+import { skillMatchesUrl } from "./match-patterns.js";
 // The hub's activity allowlist — the SERVER (routes/activity.js) is the single
 // authority; the explorer imports the same frozen array so client + server can
 // never drift (CAP-FB-20260830-RECENT-ACTIVITY-USER-EVENTS-01).
@@ -641,6 +642,13 @@ async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind
   const ql = (q || "").toLowerCase();
   const items = [];
   const hit = (s) => !ql || String(s ?? "").toLowerCase().includes(ql);
+  // Origin-bound skills (CAP-FB-20260830-SITE-PLAYBOOKS-01) are offered only
+  // when the active tab matches — the same soft filter as the /skill: palette.
+  let activeUrl = "";
+  try {
+    const tabs = await chrome?.tabs?.query?.({ active: true, currentWindow: true }) ?? [];
+    activeUrl = String(tabs?.[0]?.url ?? "");
+  } catch { activeUrl = ""; }
   if (RUNTIME_SEND) {
     const [registry, skills, assets] = await Promise.all([
       RUNTIME_SEND("agent.registry").catch(() => ({ groups: [] })),
@@ -661,6 +669,7 @@ async function mentionCandidates(q = "", currentAgentId = null, currentAgentKind
     }
     for (const s of (skills.skills || [])) {
       if (!hit(s.name) && !hit(s.id)) continue;
+      if (Array.isArray(s.origins) && s.origins.length > 0 && !skillMatchesUrl(s, activeUrl)) continue;
       items.push({ id: `skill:${s.refId ?? s.id}`, label: s.name, description: s.description || "skill", kind: "skill", group: "Skills" });
     }
     for (const a of assets.assets || []) {

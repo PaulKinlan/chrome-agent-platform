@@ -1759,7 +1759,7 @@ export function createAgent({
     // prompt bodies recompose into the system prompt BEFORE the protected
     // block (a fresh agent for this run), so referenced-skill instructions
     // never sit after the runtime policy.
-    run: async (task, context, history, runGen, runSkills, runIdentity = null, runPromotion = null) => {
+    run: async (task, context, history, runGen, runSkills, runIdentity = null, runPromotion = null, runSiteNote = null) => {
       // Serialize the run behind any prior run of THIS worker (see runQueue above).
       // `execute` carries the full original body; the queue always advances even
       // if a run rejects, so a failed run can never poison later runs.
@@ -1811,17 +1811,21 @@ export function createAgent({
       // boundary so it can never sit after the protected policy.
       const hasRunSkills = Array.isArray(runSkills) && runSkills.length > 0;
       const promotionText = String(runPromotion ?? "").trim() || null;
+      const siteNote = runSiteNote && String(runSiteNote?.note ?? "").trim()
+        ? { origin: String(runSiteNote.origin ?? ""), note: String(runSiteNote.note) }
+        : null;
       const composeRunPrompt = () => appendSkillsLayer(
         system,
         [...(skills ?? []), ...(hasRunSkills ? runSkills : [])],
         undefined,
         untrustedToken,
         promotionText,
+        siteNote,
       );
-      const runAgent = (hasRunSkills || promotionText)
+      const runAgent = (hasRunSkills || promotionText || siteNote)
         ? makeAgent(composeRunPrompt())
         : agent;
-      activeSystemPrompt = (hasRunSkills || promotionText)
+      activeSystemPrompt = (hasRunSkills || promotionText || siteNote)
         ? composeRunPrompt()
         : systemPrompt;
       const onAbort = () => {
@@ -2162,7 +2166,7 @@ export function createOrchestrator({
   return {
     master,
     workers: workerAgents,
-    async run(task, context, history, runSkills, runIdentity = null, runPromotion = null) {
+    async run(task, context, history, runSkills, runIdentity = null, runPromotion = null, runSiteNote = null) {
       // Solo/multi-agent runs expose the same two-tool provider surface. The
       // logical/durable identity is held only for this serialized run and is
       // inherited by delegated workers.
@@ -2178,6 +2182,7 @@ export function createOrchestrator({
           runSkills,
           currentRunIdentity,
           runPromotion,
+          runSiteNote,
         );
       } finally {
         currentRunIdentity = null;

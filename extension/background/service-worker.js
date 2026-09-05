@@ -193,7 +193,7 @@ import {
   formatSiteAgentName,
   recoverDeclaringPageIdentity,
 } from "../lib/site-identity.js";
-import { allSkills, getSkills, setSkills } from "../lib/skills.js";
+import { allSkills, getSkills, setSkills, getSiteNote, setSiteNote } from "../lib/skills.js";
 import {
   createNamedAgent,
   deleteNamedAgent,
@@ -346,6 +346,7 @@ import {
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
 import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
+import { skillMatchesUrl } from "../shared/match-patterns.js";
 import { resolveSkillRef } from "../lib/skill-resolve.js";
 import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
@@ -3349,6 +3350,33 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // an attached skill's body already composes, so a skill past the 24th must
       // never be re-promoted (chrome-agent-platform-ve67 r2 P1).
       runSkillIds = attachedSkillRefs(runSkills).slice(0, JOURNALED_SKILLS_CAP);
+      // Site playbooks (CAP-FB-20260830-SITE-PLAYBOOKS-01): for a foreground
+      // run, the ACTIVE TAB's origin auto-includes any built-in origin-bound
+      // skills that match it (deduped after explicit refs, so an explicit
+      // /skill:<id> always wins) and composes the owner's per-origin note
+      // inside the skills boundary layer. Scheduled/background runs have no
+      // active-tab context: nothing auto-composes. A note for origin A is
+      // structurally incapable of composing into a run on origin B — the
+      // active-tab origin is resolved HERE, at the composition choke point.
+      let runSiteNote = null;
+      try {
+        let activeOrigin = "";
+        if (!scheduled) {
+          const activeTabs = await chrome.tabs?.query?.({ active: true, currentWindow: true }).catch(() => []);
+          const activeUrl = activeTabs?.[0]?.url;
+          if (activeUrl) {
+            try { activeOrigin = new URL(activeUrl).origin; } catch { activeOrigin = ""; }
+          }
+        }
+        if (activeOrigin) {
+          const bound = RECIPES.filter(
+            (r) => Array.isArray(r.origins) && r.origins.length > 0 && skillMatchesUrl(r, activeOrigin),
+          );
+          if (bound.length > 0) runSkills = mergeRunSkills(runSkills, bound);
+          const note = await getSiteNote(activeOrigin);
+          if (note) runSiteNote = { origin: activeOrigin, note };
+        }
+      } catch { /* a playbooks lookup failure never blocks the run */ }
       // Skill PROMOTION (chrome-agent-platform-ve67): when the run's agent has
       // NO relevant skills attached, a bounded section names the catalog
       // skills that match the current task — the model can adopt one
@@ -3394,6 +3422,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             documentId: "",
           }),
           runPromotion,
+          runSiteNote,
         );
         result = (runOutcome && typeof runOutcome === "object" && !Array.isArray(runOutcome) && typeof runOutcome.text === "string")
           ? runOutcome.text
@@ -8135,6 +8164,21 @@ const handlers = mergeRouteMaps(
     });
     if (out?.ok) broadcastRegistryChanged();
     return out;
+  },
+  async "site-skills.set"(m, context) {
+    // The owner writes a per-origin site note from the Settings surface ONLY
+    // (CAP-FB-20260830-SITE-PLAYBOOKS-01). Bounded by setSiteNote itself.
+    requireSettingsSender(context);
+    const origin = String(m?.origin ?? "").trim();
+    if (!origin) return { ok: false, error: "no origin provided" };
+    try { new URL(origin); } catch { return { ok: false, error: "origin must be a URL origin" }; }
+    const note = await setSiteNote(origin, m?.notes);
+    return { ok: true, notes: note };
+  },
+  async "site-skills.get"(m) {
+    const origin = String(m?.origin ?? "").trim();
+    if (!origin) return { ok: false, error: "no origin provided" };
+    return { ok: true, notes: await getSiteNote(origin) };
   },
   async "recipe.run"(m) {
     const recipe = getRecipe(m.id);

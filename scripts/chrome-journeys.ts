@@ -825,6 +825,13 @@ const EXPECTED = [
   "skill sync: the colliding imported skill is offered as imported:<id>, and NO background recipe row is offered",
   "skill sync: the colliding id serves the IMPORTED skill body, never the background recipe's prompt",
   "skill sync: deleting the colliding import removes it from the catalog",
+  "site playbook: the site note saved through the Settings-gated route",
+  "site playbook: the note reads back for its origin",
+  "site playbook: another origin has NO note (origin-keyed isolation)",
+  "site playbook: /skill: lists the fixture-bound skill on the fixture tab",
+  "site playbook: /skill: does NOT list the fixture-bound skill on a non-matching tab",
+  "site playbook: the run's system prompt carries the site note for the active tab's origin",
+  "site playbook: the run's system prompt auto-composes the origin-bound skill body",
   "no service-worker console errors",
   "no SW Runtime.enable errors (auto-attach)",
   "no NTP/Settings console errors",
@@ -7792,6 +7799,156 @@ async function main() {
       "skill sync: deleting the colliding import removes it from the catalog",
       !(collideGone?.skills ?? []).some((s: { id?: string }) => s?.id === "auto-group-by-domain" && s?.source === "imported"),
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY — site playbooks (CAP-FB-20260830-SITE-PLAYBOOKS-01). An
+    // origin-bound skill (fixture-triage, bound to the loopback fixture
+    // origin) is offered by /skill: only on a matching tab, and the owner's
+    // per-origin note composes into the REAL system prompt of a run whose
+    // active tab matches — asserted from the provider's captured request.
+    // ─────────────────────────────────────────────────────────────
+    try {
+      const PLAYBOOK_NOTE = "PLAYBOOK-NOTE-MARKER-7f3d: always triage fixtures first.";
+      const playbookTab = await openPage(port, RED_URL);
+      await sleep(1200);
+      // The fixture tab is ACTIVE while the hub composer is driven via CDP
+      // (Runtime.evaluate runs in the background tab without activating it).
+      await cdp.send("Target.activateTarget", { targetId: playbookTab.id });
+      await sleep(500);
+      const noteSet = await msgOpts({ type: "site-skills.set", origin: RED_ORIGIN, notes: PLAYBOOK_NOTE });
+      check("site playbook: the site note saved through the Settings-gated route", noteSet?.ok === true);
+      const noteReadBack = await msgValue({ type: "site-skills.get", origin: RED_ORIGIN });
+      check("site playbook: the note reads back for its origin", noteReadBack?.notes === PLAYBOOK_NOTE);
+      const noteForeign = await msgValue({ type: "site-skills.get", origin: "https://example.com" });
+      check("site playbook: another origin has NO note (origin-keyed isolation)", (noteForeign?.notes ?? "") === "");
+
+      // The palette half needs a FRESH hub page (the shared NTP may be on a
+      // thread view whose composer is a different element). Open it, then
+      // RE-ACTIVATE the fixture tab: the composer is driven in the background
+      // via CDP while the fixture tab stays the window's active tab.
+      const palettePage = await openPage(port, `chrome-extension://${extId}/ntp/ntp.html`);
+      await sleep(2500);
+      const paletteSess = await attachRuntime(cdp, palettePage.id);
+      cdp.pageSessions.add(paletteSess);
+      await cdp.send("Target.activateTarget", { targetId: playbookTab.id });
+      await sleep(800);
+      const readPalette = () => evalIn(cdp, paletteSess, `(() => {
+        // The composer renders in the LIGHT DOM (no shadow): find the input
+        // carrying the /skill token, then its composer's popup.
+        const input = [...document.querySelectorAll('#task-input')].find((i) => String(i.value ?? '').startsWith('/skill'));
+        if (!input) return "";
+        const c = input.closest('agent-composer') ?? document;
+        const pop = c.querySelector('.popup') ?? document.querySelector('.popup');
+        if (!pop || pop.hidden) return "<typed-but-no-popup>";
+        return [...pop.querySelectorAll('.item')].map((x) => x.textContent).join(' | ');
+      })()`);
+      // Poll: the palette loads skill.list asynchronously, and the active-tab
+      // switch needs a beat to be visible to chrome.tabs.query.
+      const pollPalette = async (want, timeoutMs = 15000) => {
+        const t0 = Date.now();
+        let text = "";
+        while (Date.now() - t0 < timeoutMs) {
+          text = await readPalette().catch(() => "");
+          if (typeof text === "string" && text.includes("Tab hygiene") && text.includes("Fixture triage") === want) return { ok: true, text };
+          await sleep(400);
+        }
+        return { ok: false, text };
+      };
+      await evalIn(cdp, paletteSess, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
+      // Synthetic input events (real mouse/keys can't focus a BACKGROUND tab —
+      // the fixture tab must stay active): set the value + dispatch input, the
+      // same event the composer's slash-command listener consumes.
+      const typePalette = (text) => evalIn(cdp, paletteSess, `(() => {
+        // Light DOM: the first visible composer input.
+        for (const i of document.querySelectorAll('#task-input')) {
+          const host = i.closest('agent-composer') ?? i;
+          if (!host.getBoundingClientRect().width) continue;
+          i.value = ${JSON.stringify(text ?? '')};
+          i.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ${JSON.stringify(text ?? '')} }));
+          return true;
+        }
+        return false;
+      })()`);
+      const typedFirst = await typePalette("/skill:");
+      if (typedFirst !== true) console.log("site playbook: composer input not found on the palette page");
+      const onFixture = await pollPalette(true);
+      console.log("site playbook palette (fixture tab):", JSON.stringify(String(onFixture.text).slice(0, 400)));
+      check(
+        "site playbook: /skill: lists the fixture-bound skill on the fixture tab",
+        onFixture.ok,
+      );
+      const paletteShot = await captureShot(cdp, paletteSess);
+      if (paletteShot) await writeEvidence("site-playbook-palette.png", paletteShot);
+      // Clear the composer, switch the ACTIVE tab to a non-matching origin
+      // (the hub itself — chrome-extension://), and re-open the palette.
+      await evalIn(cdp, paletteSess, `(() => { for (const i of document.querySelectorAll('#task-input')) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
+      await cdp.send("Target.activateTarget", { targetId: palettePage.id }).catch(() => {});
+      await sleep(800);
+      await typePalette("/skill:");
+      const offFixture = await pollPalette(false);
+      console.log("site playbook palette (non-matching tab):", JSON.stringify(String(offFixture.text).slice(0, 400)));
+      check(
+        "site playbook: /skill: does NOT list the fixture-bound skill on a non-matching tab",
+        offFixture.ok,
+      );
+      await cdp.send("Target.closeTarget", { targetId: palettePage.id }).catch(() => {});
+      await cdp.send("Target.activateTarget", { targetId: playbookTab.id }).catch(() => {});
+      await sleep(500);
+      await evalIn(cdp, ntpSession, `(() => { const c = document.querySelector('agent-composer'); const i = c?.shadowRoot?.querySelector('#task-input'); if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
+
+      // The composition half: a run whose ACTIVE tab is the fixture origin
+      // carries the note + the bound skill's body in the REAL system message.
+      const playbookProvider = await startScriptedProvider({
+        steps: [{ text: "Site playbook probe answered." }],
+      });
+      try {
+        await msgOpts({
+          type: "provider.set",
+          config: { provider: "openai-compatible", baseURL: playbookProvider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" },
+        });
+        await cdp.send("Target.activateTarget", { targetId: playbookTab.id }).catch(() => {});
+        await sleep(500);
+        // Drive the hub composer in the BACKGROUND (never activate the NTP —
+        // the fixture tab must stay the active tab when the run starts).
+        await clickSel(cdp, ntpSession, "#home").catch(() => false);
+        await sleep(600);
+        await typeInto(cdp, ntpSession, "#task-input", "site playbook probe");
+        await clickSel(cdp, ntpSession, "#run-task");
+        // Wait for the provider call to land.
+        let playbookCalls = 0;
+        for (let i = 0; i < 40; i++) {
+          playbookCalls = playbookProvider.requests.length;
+          if (playbookCalls > 0) break;
+          await sleep(500);
+        }
+        const sysMsg = String(
+          playbookProvider.requests[0]?.messages?.find((m) => m?.role === "system")?.content ?? "",
+        );
+        check(
+          "site playbook: the run's system prompt carries the site note for the active tab's origin",
+          sysMsg.includes("PLAYBOOK-NOTE-MARKER-7f3d") && sysMsg.includes(`## On ${RED_ORIGIN}`),
+        );
+        check(
+          "site playbook: the run's system prompt auto-composes the origin-bound skill body",
+          sysMsg.includes("## Skill: Fixture triage"),
+        );
+        console.log("site playbook system prompt markers:", JSON.stringify({
+          calls: playbookCalls,
+          note: sysMsg.includes("PLAYBOOK-NOTE-MARKER-7f3d"),
+          skill: sysMsg.includes("## Skill: Fixture triage"),
+        }));
+      } finally {
+        await playbookProvider.close?.().catch(() => {});
+        await msgOpts({ type: "provider.set", config: { provider: "demo", apiKey: "", baseURL: "", model: "" } });
+        await msgOpts({ type: "site-skills.set", origin: RED_ORIGIN, notes: "" }).catch(() => {});
+      }
+      await cdp.send("Target.closeTarget", { targetId: playbookTab.id }).catch(() => {});
+      await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
+      await sleep(500);
+    } catch (e) {
+      console.log("site playbook journey error:", String(e?.message ?? e));
+      check("site playbook journey completed without a harness error", false);
+    }
 
     // ─────────────────────────────────────────────────────────────
     // JOURNEY 10 — service-worker console audit (strictly worker-only).

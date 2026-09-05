@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.235] — 2026-09-05
+- : origin-bound skills + per-origin site notes
+
+## [0.3.234] — 2026-09-05
+- Site playbooks: a skill can now be bound to a website so it is only offered and only applied on that site, and each enrolled site gets its own "Site instructions" note in Settings that the agent follows when you are on that site
+
 ## [0.3.233] — 2026-09-05
 - Closed four long-open safety verifications with real tests: memory writes can't be rolled back by a stale run, the first connection message must name its enrollment, concurrent agent builds no longer share run bookkeeping, and a cancelled page action can never report late — each proven by breaking the protection and watching the test fail.
 
