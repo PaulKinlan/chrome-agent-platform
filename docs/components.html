@@ -185,6 +185,16 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;table-preview&gt;</code> — bounded accessible table preview (cap.table/1)</h3>
+        <div class="stage column" style="max-width:820px">
+          <table-preview id="table-preview-demo" name="Q3 Financials"></table-preview>
+        </div>
+        <p class="caption">
+          Bounded owner-local preview for canonical <code>cap.table/1</code> artifacts: maximum 50 rows × 20 cols (1,000 mounted cells), 512-byte display truncation, explicit omitted counts, keyboard-operable paging, <code>aria-live</code> page status, and formula export warnings.
+        </p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;artifact-inspector&gt;</code> — the exact, bounded, highlighted source</h3>
         <div class="stage column" style="max-width:820px">
           <artifact-inspector id="inspector-demo"></artifact-inspector>
@@ -748,6 +758,26 @@
         if (segmentedValue) segmentedValue.textContent = e.detail.value;
         log("#hub-log", `segmented-control: ${e.detail.value}`);
       });
+
+      // <table-preview> demo
+      const tablePreviewDemo = document.getElementById("table-preview-demo");
+      if (tablePreviewDemo) {
+        tablePreviewDemo.table = {
+          schema: "cap.table/1",
+          columns: [
+            { id: "c1", name: "Department", type: "string" },
+            { id: "c2", name: "Quarter", type: "string" },
+            { id: "c3", name: "Revenue", type: "number" },
+            { id: "c4", name: "Formula Sample", type: "string" },
+          ],
+          rows: [
+            ["Engineering", "Q1", 450000, "=SUM(A1:A10)"],
+            ["Marketing", "Q1", 120000, "+12345"],
+            ["Operations", "Q1", 85000, "Normal Text"],
+            ["Research", "Q1", 310000, "@lookup"],
+          ],
+        };
+      }
 
       // <artifact-inspector> example — the exact, highlighted HTML source.
       const inspectorDemo = document.getElementById("inspector-demo");

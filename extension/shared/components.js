@@ -2891,6 +2891,7 @@ class ArtifactInspector extends Component {
     const a = this._asset ?? {};
     const type = String(a.type ?? "data");
     const content = String(a.content ?? "");
+    const isTable = type === "table" || type === "cap.table/1" || a.meta?.schema === "cap.table/1" || String(a.name ?? "").endsWith(".csv");
     mountTemplate(this, `
       :host { display:block; min-inline-size:min(76vw,920px); max-inline-size:920px; }
       .bar { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-block-end:10px; }
@@ -2905,7 +2906,7 @@ class ArtifactInspector extends Component {
       .preview { margin-block-start:12px; border:1px solid var(--border,#e3e0d9); border-radius:8px; overflow:hidden; background:var(--panel,#fff); }
       .preview iframe { display:block; inline-size:100%; block-size:min(56vh,520px); border:0; }
       ${SOURCE_TOKEN_STYLE}
-    `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
+    `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" || isTable ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
     const isFileBacked = a.meta?.fileBacked === true || a.meta?.isStreamBacked === true;
     const isIncomplete = a.meta?.contentIncomplete === true || a.meta?.contentComplete === false;
     const rawBytes = new TextEncoder().encode(content).byteLength;
@@ -2954,8 +2955,19 @@ class ArtifactInspector extends Component {
   }
   startPreview() {
     const host = this._root.querySelector(".preview");
-    if (!host || this._asset?.type !== "html") return;
+    const a = this._asset ?? {};
+    const isTable = a.type === "table" || a.type === "cap.table/1" || a.meta?.schema === "cap.table/1" || String(a.name ?? "").endsWith(".csv");
+    if (!host || (a.type !== "html" && !isTable)) return;
     this.stopPreview();
+    if (isTable) {
+      const tbl = document.createElement("table-preview");
+      tbl.table = a.content;
+      tbl.setAttribute("name", a.name ?? "Table");
+      host.replaceChildren(tbl);
+      host.hidden = false;
+      this._root.querySelector(".status").textContent = "Interactive table preview opened.";
+      return;
+    }
     const frame = createHtmlFrame(this._asset.content ?? "", { title:`Interactive preview of ${this._asset.name ?? "HTML artifact"}` });
     host.replaceChildren(frame.wrapper);
     host.hidden = false;
@@ -3307,6 +3319,370 @@ class ArtifactDiff extends Component {
   }
 }
 customElements.define("artifact-diff", ArtifactDiff);
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * <table-preview page="1" page-size="50" max-cols="20">
+ * Bounded owner-local preview for canonical cap.table/1 and tabular artifacts
+ * (CAP-FB-20260822-SPREADSHEET-TOOLKIT-01 / chrome-agent-platform-def.5).
+ *
+ * Invariants:
+ *   - Maximum 50 rows × 20 cols = at most 1,000 mounted cells per view.
+ *   - Scalar-safe cell rendering truncated to <= 512 UTF-8 display bytes.
+ *   - Explicit omitted row and column counters in caption and headers.
+ *   - Native <table> with <caption>, <thead>, and <th scope="col">.
+ *   - Keyboard-operable paging with native buttons and aria-live status.
+ *   - Detects formula injection characters (=, +, -, @, |, \t, \r) and
+ *     surfaces formula/export safety warnings.
+ *   - Zero unsafe innerHTML for cell or header values.
+ * ────────────────────────────────────────────────────────────────────────── */
+export const TABLE_PREVIEW_LIMITS = Object.freeze({
+  maxRows: 50,
+  maxCols: 20,
+  maxCells: 1000,
+  maxCellBytes: 512,
+  defaultPageSize: 50,
+});
+
+/**
+ * Neutralize dangerous formula characters and truncate safely to maxBytes.
+ */
+function formatCellPreview(val, maxBytes = TABLE_PREVIEW_LIMITS.maxCellBytes) {
+  if (val === null || val === undefined) {
+    return { display: "", raw: val, isFormula: false, truncated: false };
+  }
+  let str;
+  if (typeof val === "object") {
+    try { str = JSON.stringify(val); } catch { str = String(val); }
+  } else {
+    str = String(val);
+  }
+
+  // Formula check: dangerous spreadsheet triggers
+  const isFormula = /^\s*[=+\-@|]/.test(str) || /^[\t\r\n]/.test(str);
+
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(str);
+  if (bytes.byteLength <= maxBytes) {
+    return { display: str, raw: val, isFormula, truncated: false };
+  }
+
+  // Surrogate-safe truncation: iterate characters
+  let truncatedStr = "";
+  let byteCount = 0;
+  for (const ch of str) {
+    const chBytes = encoder.encode(ch).byteLength;
+    if (byteCount + chBytes > maxBytes - 3) break;
+    truncatedStr += ch;
+    byteCount += chBytes;
+  }
+  return {
+    display: `${truncatedStr}…`,
+    raw: val,
+    isFormula,
+    truncated: true,
+  };
+}
+
+function parseSimpleCsv(text) {
+  const lines = String(text ?? "").split(/\r?\n/);
+  const rows = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const row = [];
+    let cell = "";
+    let inQuotes = false;
+    const delimiter = line.includes("\t") && !line.includes(",") ? "\t" : ",";
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (ch === delimiter && !inQuotes) {
+        row.push(cell.trim());
+        cell = "";
+      } else {
+        cell += ch;
+      }
+    }
+    row.push(cell.trim());
+    rows.push(row);
+  }
+  return rows;
+}
+
+function normalizeTableInput(input) {
+  if (!input) return { columns: [], rows: [] };
+
+  let parsed = input;
+  if (typeof input === "string") {
+    const trimmed = input.trim();
+    if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+      try { parsed = JSON.parse(trimmed); } catch { parsed = input; }
+    }
+  }
+
+  // 1. cap.table/1 object or { columns, rows }
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    if (Array.isArray(parsed.columns) && Array.isArray(parsed.rows)) {
+      const columns = parsed.columns.map((c, idx) => {
+        if (typeof c === "string") return { id: `c${idx + 1}`, name: c, type: "string" };
+        return {
+          id: c.id ?? `c${idx + 1}`,
+          name: String(c.name ?? c.id ?? `col_${idx + 1}`),
+          type: String(c.type ?? "string"),
+        };
+      });
+      return { columns, rows: parsed.rows };
+    }
+  }
+
+  // 2. Array of objects: [{ a: 1, b: 2 }, ...]
+  if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === "object" && !Array.isArray(parsed[0])) {
+    const keys = Object.keys(parsed[0]);
+    const columns = keys.map((k, idx) => ({ id: `c${idx + 1}`, name: k, type: typeof parsed[0][k] }));
+    const rows = parsed.map((obj) => keys.map((k) => obj[k] ?? null));
+    return { columns, rows };
+  }
+
+  // 3. 2D array: [[h1, h2], [v1, v2], ...]
+  if (Array.isArray(parsed) && parsed.length > 0 && Array.isArray(parsed[0])) {
+    const headers = parsed[0].map((h, idx) => ({ id: `c${idx + 1}`, name: String(h), type: "string" }));
+    return { columns: headers, rows: parsed.slice(1) };
+  }
+
+  // 4. CSV/TSV text
+  if (typeof input === "string") {
+    const csvRows = parseSimpleCsv(input);
+    if (csvRows.length > 0) {
+      const columns = csvRows[0].map((h, idx) => ({ id: `c${idx + 1}`, name: h || `col_${idx + 1}`, type: "string" }));
+      return { columns, rows: csvRows.slice(1) };
+    }
+  }
+
+  return { columns: [], rows: [] };
+}
+
+/**
+ * Pure render model for <table-preview>.
+ * Produces bounded rows, columns, counts, and accessibility text without a DOM.
+ */
+export function buildTablePreviewModel(input, {
+  page = 1,
+  pageSize = TABLE_PREVIEW_LIMITS.defaultPageSize,
+  maxCols = TABLE_PREVIEW_LIMITS.maxCols,
+  maxCellBytes = TABLE_PREVIEW_LIMITS.maxCellBytes,
+  tableName = "Table",
+} = {}) {
+  const norm = normalizeTableInput(input);
+  const totalRows = norm.rows.length;
+  const totalCols = norm.columns.length;
+
+  const effPageSize = Math.min(Math.max(1, Math.floor(Number(pageSize)) || TABLE_PREVIEW_LIMITS.defaultPageSize), TABLE_PREVIEW_LIMITS.maxRows);
+  const effMaxCols = Math.min(Math.max(1, Math.floor(Number(maxCols)) || TABLE_PREVIEW_LIMITS.maxCols), TABLE_PREVIEW_LIMITS.maxCols);
+
+  const totalPages = Math.max(1, Math.ceil(totalRows / effPageSize));
+  const currentPage = Math.max(1, Math.min(totalPages, Math.floor(Number(page)) || 1));
+
+  const startRowIdx = (currentPage - 1) * effPageSize;
+  const endRowIdx = Math.min(totalRows, startRowIdx + effPageSize);
+  const pageRawRows = norm.rows.slice(startRowIdx, endRowIdx);
+
+  const visibleCols = norm.columns.slice(0, effMaxCols);
+  const omittedCols = Math.max(0, totalCols - effMaxCols);
+  const omittedRows = Math.max(0, totalRows - pageRawRows.length);
+
+  let formulaCellCount = 0;
+  const renderedRows = pageRawRows.map((row) => {
+    return visibleCols.map((col, cIdx) => {
+      const rawVal = Array.isArray(row) ? row[cIdx] : row[col.id ?? col.name];
+      const cell = formatCellPreview(rawVal, maxCellBytes);
+      if (cell.isFormula) formulaCellCount++;
+      return cell;
+    });
+  });
+
+  const mountedCells = renderedRows.length * visibleCols.length;
+
+  const rowRange = totalRows === 0
+    ? "0 rows"
+    : `rows ${(startRowIdx + 1).toLocaleString()}–${endRowIdx.toLocaleString()} of ${totalRows.toLocaleString()}`;
+  const colInfo = omittedCols > 0
+    ? `${visibleCols.length} of ${totalCols.toLocaleString()} columns (${omittedCols.toLocaleString()} columns omitted)`
+    : `${totalCols.toLocaleString()} columns`;
+  const caption = `${tableName}: ${rowRange}, ${colInfo}`;
+  const pageStatus = `Page ${currentPage} of ${totalPages} (${totalRows.toLocaleString()} total rows)`;
+
+  return {
+    columns: visibleCols,
+    omittedCols,
+    omittedRows,
+    totalRows,
+    totalColumns: totalCols,
+    rows: renderedRows,
+    page: currentPage,
+    totalPages,
+    pageSize: effPageSize,
+    startRow: totalRows === 0 ? 0 : startRowIdx + 1,
+    endRow: endRowIdx,
+    mountedCells,
+    formulaCellCount,
+    caption,
+    pageStatus,
+    hasPrev: currentPage > 1,
+    hasNext: currentPage < totalPages,
+  };
+}
+
+class TablePreview extends Component {
+  static get observedAttributes() {
+    return ["page", "page-size", "max-cols", "name"];
+  }
+  constructor() {
+    super();
+    this._data = null;
+    this._page = 1;
+  }
+  set table(v) { this._data = v; this._rerender(); }
+  get table() { return this._data; }
+  set data(v) { this._data = v; this._rerender(); }
+  get data() { return this._data; }
+  set page(v) {
+    const num = Math.max(1, Math.floor(Number(v)) || 1);
+    if (this._page !== num) {
+      this._page = num;
+      this.setAttribute("page", String(num));
+      this._rerender();
+    }
+  }
+  get page() { return this._page; }
+
+  _rerender() {
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+
+  _render() {
+    const model = buildTablePreviewModel(this._data, {
+      page: this.getAttribute("page") ?? this._page,
+      pageSize: this.getAttribute("page-size") ?? TABLE_PREVIEW_LIMITS.defaultPageSize,
+      maxCols: this.getAttribute("max-cols") ?? TABLE_PREVIEW_LIMITS.maxCols,
+      tableName: this.getAttribute("name") || "Table",
+    });
+    this._model = model;
+    this._page = model.page;
+
+    const warnHtml = model.formulaCellCount > 0
+      ? `<div class="formula-warning" role="note"><span class="warn-icon" aria-hidden="true">⚠️</span> <span>Export notice: ${model.formulaCellCount} cell(s) contain spreadsheet formula characters (=, +, -, @, |). They will be protected with leading apostrophes on CSV export.</span></div>`
+      : "";
+
+    mountTemplate(this, `
+      :host { display:block; inline-size:100%; font-family:var(--font,system-ui,sans-serif); color:var(--text,#1d1b18); }
+      .wrapper { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,8px); background:var(--panel,#fff); overflow:hidden; display:flex; flex-direction:column; }
+      .formula-warning { display:flex; align-items:center; gap:8px; padding:8px 12px; background:color-mix(in oklab, var(--warning,#b26200) 10%, var(--panel,#fff)); border-block-end:1px solid var(--border,#e3e0d9); font-size:var(--text-xs,12px); }
+      .warn-icon { font-size:14px; }
+      .scroller { max-block-size:var(--table-preview-max-height,55vh); overflow:auto; -webkit-overflow-scrolling:touch; outline:none; }
+      .scroller:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
+      table { inline-size:100%; border-collapse:collapse; font-size:var(--text-xs,12px); font-variant-numeric:tabular-nums; text-align:start; }
+      caption { text-align:start; padding:8px 12px; font-weight:600; color:var(--muted,#635e56); background:var(--panel-2,#efede8); border-block-end:1px solid var(--border,#e3e0d9); }
+      thead { background:var(--panel-2,#efede8); position:sticky; top:0; z-index:1; }
+      th { padding:8px 12px; font-weight:600; text-align:start; border-block-end:1px solid var(--border,#e3e0d9); border-inline-end:1px solid color-mix(in oklab, var(--border,#e3e0d9) 50%, transparent); white-space:nowrap; }
+      th:last-child { border-inline-end:0; }
+      .col-type { font-weight:normal; color:var(--muted,#635e56); font-size:11px; margin-inline-start:4px; }
+      .omitted-col-th { color:var(--muted,#635e56); font-style:italic; }
+      tbody tr { border-block-end:1px solid color-mix(in oklab, var(--border,#e3e0d9) 40%, transparent); }
+      tbody tr:last-child { border-block-end:0; }
+      tbody tr:hover { background:color-mix(in oklab, var(--panel-2,#efede8) 50%, transparent); }
+      td { padding:6px 12px; border-inline-end:1px solid color-mix(in oklab, var(--border,#e3e0d9) 40%, transparent); font-family:var(--mono,ui-monospace,SFMono-Regular,Menlo,monospace); white-space:nowrap; max-inline-size:260px; overflow:hidden; text-overflow:ellipsis; }
+      td:last-child { border-inline-end:0; }
+      td.formula-cell { color:var(--accent,#0e6e63); font-weight:500; }
+      .omitted-td { color:var(--muted,#635e56); font-style:italic; }
+      .pagination { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; padding:8px 12px; border-block-start:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); font-size:var(--text-xs,12px); }
+      .page-status { color:var(--muted,#635e56); font-weight:500; }
+      .controls { display:inline-flex; align-items:center; gap:6px; }
+      .btn-p { min-block-size:28px; padding:3px 8px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,4px); background:var(--panel,#fff); color:var(--text,#1d1b18); cursor:pointer; font:inherit; font-size:12px; }
+      .btn-p:hover:not(:disabled) { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+      .btn-p:disabled { opacity:0.4; cursor:not-allowed; }
+      .btn-p:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+      .empty-notice { padding:24px; text-align:center; color:var(--muted,#635e56); font-style:italic; }
+    `, `<div class="wrapper">
+      ${warnHtml}
+      <div class="scroller" tabindex="0" role="region" aria-label="${escapeHtml(model.caption)}">
+        <table>
+          <caption>${escapeHtml(model.caption)}</caption>
+          <thead>
+            <tr>
+              ${model.columns.map((col) => `<th scope="col" title="${escapeHtml(col.name)}">${escapeHtml(col.name)}${col.type ? `<span class="col-type">(${escapeHtml(col.type)})</span>` : ""}</th>`).join("")}
+              ${model.omittedCols > 0 ? `<th scope="col" class="omitted-col-th">+${model.omittedCols} cols…</th>` : ""}
+            </tr>
+          </thead>
+          <tbody>
+            ${model.rows.length === 0
+              ? `<tr><td colspan="${Math.max(1, model.columns.length + (model.omittedCols > 0 ? 1 : 0))}" class="empty-notice">No rows to display</td></tr>`
+              : model.rows.map((row) => `<tr>
+                  ${row.map((cell) => `<td class="${cell.isFormula ? "formula-cell" : ""}" title="${escapeHtml(cell.display)}">${escapeHtml(cell.display)}</td>`).join("")}
+                  ${model.omittedCols > 0 ? `<td class="omitted-td">…</td>` : ""}
+                </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>
+      <nav class="pagination" aria-label="Table pagination">
+        <span class="page-status" role="status" aria-live="polite">${escapeHtml(model.pageStatus)}</span>
+        <div class="controls">
+          <button type="button" class="btn-p first" aria-label="First page" ${!model.hasPrev ? "disabled" : ""}>« First</button>
+          <button type="button" class="btn-p prev" aria-label="Previous page" ${!model.hasPrev ? "disabled" : ""}>‹ Prev</button>
+          <span class="page-indicator">${model.page} / ${model.totalPages}</span>
+          <button type="button" class="btn-p next" aria-label="Next page" ${!model.hasNext ? "disabled" : ""}>Next ›</button>
+          <button type="button" class="btn-p last" aria-label="Last page" ${!model.hasNext ? "disabled" : ""}>Last »</button>
+        </div>
+      </nav>
+    </div>`);
+  }
+
+  _wire() {
+    const scroller = this._root.querySelector(".scroller");
+    const m = this._model;
+    if (!m) return;
+
+    const gotoPage = (p) => {
+      const next = Math.max(1, Math.min(m.totalPages, p));
+      if (next !== this._page) {
+        this.page = next;
+        this._emit("page-change", {
+          page: next,
+          totalPages: m.totalPages,
+          startRow: this._model?.startRow,
+          endRow: this._model?.endRow,
+        });
+      }
+    };
+
+    this._root.querySelector(".btn-p.first")?.addEventListener("click", () => gotoPage(1));
+    this._root.querySelector(".btn-p.prev")?.addEventListener("click", () => gotoPage(this._page - 1));
+    this._root.querySelector(".btn-p.next")?.addEventListener("click", () => gotoPage(this._page + 1));
+    this._root.querySelector(".btn-p.last")?.addEventListener("click", () => gotoPage(m.totalPages));
+
+    // Keyboard navigation in table scroller
+    scroller?.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowRight" && (e.altKey || e.ctrlKey)) {
+        e.preventDefault(); gotoPage(this._page + 1);
+      } else if (e.key === "ArrowLeft" && (e.altKey || e.ctrlKey)) {
+        e.preventDefault(); gotoPage(this._page - 1);
+      } else if (e.key === "PageDown") {
+        e.preventDefault(); gotoPage(this._page + 1);
+      } else if (e.key === "PageUp") {
+        e.preventDefault(); gotoPage(this._page - 1);
+      } else if (e.key === "Home" && (e.altKey || e.ctrlKey)) {
+        e.preventDefault(); gotoPage(1);
+      } else if (e.key === "End" && (e.altKey || e.ctrlKey)) {
+        e.preventDefault(); gotoPage(m.totalPages);
+      }
+    });
+  }
+}
+customElements.define("table-preview", TablePreview);
 
 /* ──────────────────────────────────────────────────────────────────────────
  * <segmented-control items="Preview,Source,Diff" value="Preview" label="View">

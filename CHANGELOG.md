@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.176] — 2026-09-05
+- The artifact viewer displays tables in clean pages with warnings for formula exports
+
 ## [0.3.175] — 2026-09-05
 - The Settings page opens directly to sections and keeps agents and permissions accessible
 
