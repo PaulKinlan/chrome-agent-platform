@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { createIncrementalSha256 } from "../extension/lib/incremental-sha256.js";
+import { decodeCanonicalBase64, encodeCanonicalBase64 } from "../extension/lib/wasm-base64.js";
 import {
   appendWasmStreamInput,
   createWasmStreamInput,
@@ -108,6 +109,21 @@ Deno.test("incremental SHA-256 is byte-exact across arbitrary chunk boundaries",
   }
   equal(hash.hex(), expected);
   equal(hash.bytesHashed, bytes.byteLength);
+});
+
+Deno.test("canonical base64 validates a 4 MiB transport chunk without a regexp-size ceiling", () => {
+  const input = new Uint8Array(4 * 1024 * 1024);
+  for (let index = 0; index < input.length; index++) input[index] = index & 0xff;
+  const encoded = encodeCanonicalBase64(input);
+  const decoded = decodeCanonicalBase64(encoded);
+  equal(decoded.byteLength, input.byteLength);
+  equal(decoded[0], 0);
+  equal(decoded[decoded.length - 1], 255);
+  for (const hostile of [encoded.slice(0, -1), `${encoded.slice(0, -3)}x==`, `${encoded.slice(0, -4)}====`]) {
+    let rejected = false;
+    try { decodeCanonicalBase64(hostile); } catch { rejected = true; }
+    assert(rejected, "noncanonical large transport input must fail closed");
+  }
 });
 
 Deno.test("OPFS stream references are sealed, owner-bound, ranged, chainable, and removable", async () => {
