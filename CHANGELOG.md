@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.231] — 2026-09-05
+- Settings checks now verify each panel shows its real content, not just that the panel is visible — an empty panel can no longer pass.
+
 ## [0.3.230] — 2026-09-05
 - Browser checks now exercise real model runs instead of simulated messages, so what they prove matches what a model actually experiences.
 

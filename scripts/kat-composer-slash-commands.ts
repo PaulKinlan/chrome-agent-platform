@@ -122,6 +122,9 @@ try {
   }))()`,
     session,
   );
+  // rfca justification: visibility here is paired with the CONTENT check on
+  // the next line (the picker must list the real tab) — an empty-but-open
+  // popup fails that check.
   check("/tabs opens the picker", listed?.hidden === false, listed);
   check(
     "picker lists the real tab in the first window",

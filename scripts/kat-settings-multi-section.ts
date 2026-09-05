@@ -81,12 +81,22 @@ try {
     (providerContent?.tabs ?? 0) > 0 && (providerContent?.panels ?? 0) > 0 && (providerContent?.keyFields ?? 0) > 0, providerContent);
 
   // 2. Click "Browser control" nav link
+  // rfca: visibility alone proves the panel switched, not that its renderer
+  // ran (the hy91 blind spot). renderBrowser() binds the auto-close toggle
+  // from storage — seed a non-default value BEFORE navigating, then assert
+  // the toggle reflects it. If the renderer never runs the seed never
+  // reaches the DOM.
+  await evalIn(opts, `chrome.runtime.sendMessage({ type: "kv.set", values: { "cap:autoCloseRunTabs": true } }).then(v => v)`);
   const clickedBrowser = await clickSelector(opts, `document.querySelector('.nav-item[data-section="browser"]')`);
   check("clicked Browser control nav link", clickedBrowser);
   await sleep(600);
 
   const visiblePanels2 = await evalIn(opts, `[...document.querySelectorAll("section.panel")].filter(s => getComputedStyle(s).display !== "none").map(s => s.id)`);
   check("after nav click: only #browser panel is visible", JSON.stringify(visiblePanels2) === JSON.stringify(["browser"]), visiblePanels2);
+
+  const browserContent = await evalIn(opts, `(() => ({ autoCloseChecked: document.getElementById("auto-close-run-tabs")?.hasAttribute("checked") ?? null }))()`);
+  check("after nav click: #browser shows rendered content (the auto-close toggle reflects seeded storage state)",
+    browserContent?.autoCloseChecked === true, browserContent);
 
   // 3. Navigate directly to #skills deep link
   const skillsT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#skills` });
@@ -97,6 +107,14 @@ try {
   const visiblePanelsSkills = await evalIn(skillsSess, `[...document.querySelectorAll("section.panel")].filter(s => getComputedStyle(s).display !== "none").map(s => s.id)`);
   check("deep link #skills: only #skills panel is visible", JSON.stringify(visiblePanelsSkills) === JSON.stringify(["skills"]), visiblePanelsSkills);
 
+  // rfca: the skills section's static HTML (heading, import row) is present
+  // whether or not mountSkillsSection ran. The mount marks the section with
+  // dataset.skillsMounted and wires the Import button — that marker is the
+  // renderer-ran proof (CAP-FB-20260901-SKILLS-IMPORT-BUTTON-01).
+  const skillsContent = await evalIn(skillsSess, `(() => ({ mounted: document.getElementById("skills")?.dataset.skillsMounted === "1", importBtn: !!document.querySelector("#skills .import-btn") }))()`);
+  check("deep link #skills: the skills panel is MOUNTED (renderer ran, Import wired) — not just visible",
+    skillsContent?.mounted === true && skillsContent?.importBtn === true, skillsContent);
+
   // 4. Navigate directly to #about deep link
   const aboutT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#about` });
   const aboutSess = (await send("Target.attachToTarget", { targetId: aboutT.result.targetId, flatten: true })).result?.sessionId;
@@ -105,6 +123,14 @@ try {
 
   const visiblePanelsAbout = await evalIn(aboutSess, `[...document.querySelectorAll("section.panel")].filter(s => getComputedStyle(s).display !== "none").map(s => s.id)`);
   check("deep link #about: only #about panel is visible", JSON.stringify(visiblePanelsAbout) === JSON.stringify(["about"]), visiblePanelsAbout);
+
+  // rfca: the About panel's static HTML ships href="#" on the release-notes
+  // link; renderAbout() rewrites it to the bundled changelog URL. Assert the
+  // rewritten href — the renderer ran — not the version field (that one is
+  // filled by top-level boot code and says nothing about renderAbout).
+  const aboutContent = await evalIn(aboutSess, `(() => ({ href: document.getElementById("full-release-notes")?.getAttribute("href") ?? "" }))()`);
+  check("deep link #about: the release-notes link carries the bundled changelog URL (renderAbout ran), never the static # placeholder",
+    typeof aboutContent?.href === "string" && aboutContent.href.endsWith("CHANGELOG.md"), aboutContent);
 
 } finally {
   try { proc.kill("SIGKILL"); } catch { /* already dead */ }
