@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.248] — 2026-09-05
+- Release identity aligned at 0.3.247
+
 ## [0.3.245] — 2026-09-05
 - Maintenance and fixes.
 
