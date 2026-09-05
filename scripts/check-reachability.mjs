@@ -59,6 +59,8 @@ export const RETAINED = {
   // ── surfaces or modules another OPEN entry owns ──
   "lib/table-formula.js":
     "Standalone bounded formula engine; def.4 removes this RETAINED entry when its production route imports the module.",
+  "lib/table-join-pivot.js":
+    "Standalone bounded join/pivot engine; def.4 removes this RETAINED entry when its production route imports the module.",
   "lib/tabular-diff-artifacts.js":
     "CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01 is OPEN, not ABANDONED; the adapter and lib/tabular-diff-artifacts-core.js stay until it lands or closes (tests/tabular-diff-artifacts.test.ts).",
   "lib/code-diff-artifacts.js":

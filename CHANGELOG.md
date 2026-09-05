@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.215] — 2026-09-05
+- Add exact table joins and pivots
+
 ## [0.3.214] — 2026-09-05
 - Ensure web tool permissions and settings views initialize consistently.
 
