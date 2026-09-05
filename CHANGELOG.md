@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.250] — 2026-09-05
+- The release notes are repaired and now guarded: every note describes a real change, version numbers run in order with no gaps, and the versioning helper can no longer invent placeholder entries — commits with nothing user-visible simply do not consume a version.
+
 ## [0.3.249] — 2026-09-05
 - The toolbox gains imageops: inspect, resize, and convert images (PNG/JPEG/WebP) on-device
 
@@ -27,597 +30,286 @@
 ## [0.3.241] — 2026-09-05
 - Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
 
-- Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
-
 ## [0.3.240] — 2026-09-05
 - Internal hardening: the list of built-in tools allowed to read large files is now pinned by a test, so it cannot silently gain or lose a tool.
 
 ## [0.3.239] — 2026-09-05
 - The built-in tool catalogue research now covers many more areas (developer tools, documents, data, media, science, Python via Pyodide, and everyday productivity), ready for future tool additions
 
-## [0.3.236] — 2026-09-05
+## [0.3.238] — 2026-09-05
 - Websites can no longer tell the extension is installed: the artifact viewer files are no longer exposed to web pages, and the page-tool detector now uses a random, per-page hook name instead of a fixed one.
 
-## [0.3.234] — 2026-09-05
+## [0.3.237] — 2026-09-05
 - Site playbooks: a skill can now be bound to a website so it is only offered and only applied on that site, and each enrolled site gets its own "Site instructions" note in Settings that the agent follows when you are on that site
 
-## [0.3.233] — 2026-09-05
+## [0.3.236] — 2026-09-05
 - Closed four long-open safety verifications with real tests: memory writes can't be rolled back by a stale run, the first connection message must name its enrollment, concurrent agent builds no longer share run bookkeeping, and a cancelled page action can never report late — each proven by breaking the protection and watching the test fail.
 
-## [0.3.232] — 2026-09-05
+## [0.3.235] — 2026-09-05
 - Fixed a browser check that failed depending on how fast test tabs loaded: it now waits for the tabs to show their titles before reading the picker.
 
-## [0.3.231] — 2026-09-05
+## [0.3.234] — 2026-09-05
 - Settings checks now verify each panel shows its real content, not just that the panel is visible — an empty panel can no longer pass.
 
-## [0.3.230] — 2026-09-05
+## [0.3.233] — 2026-09-05
 - Browser checks now exercise real model runs instead of simulated messages, so what they prove matches what a model actually experiences.
 
-## [0.3.229] — 2026-09-05
-- chrome-agent-platform-qazo: docs/wasm-tool-catalogue.md — Wasm library catalogue (12 categories, ~25 admits, cited)
+## [0.3.232] — 2026-09-05
+- The built-in tool catalogue research now documents an initial set of WebAssembly libraries (image processing, compression, hashing, databases, documents and more) as candidates for future built-in tools, each with licensing, size and suitability notes.
 
-## [0.3.228] — 2026-09-05
+## [0.3.231] — 2026-09-05
 - Pipeline dispatcher now fails closed when two tools share a name
 
-## [0.3.227] — 2026-09-05
-- Changelog: sync the extension copy and give the four recovery-merge releases distinct user-language entries
+## [0.3.230] — 2026-09-05
+- The release notes shown inside the extension are now kept in exact sync with the project record, and the four recovery releases from the overnight merge work each have their own plain-language note.
 
-## [0.3.226] — 2026-09-05
+## [0.3.229] — 2026-09-05
 - Merge afiu task-composer and znx9 test-cascade branches
 
-## [0.3.225] — 2026-09-05
+## [0.3.228] — 2026-09-05
 - Merge np64 and changelog-reland branches
 
-## [0.3.224] — 2026-09-05
+## [0.3.227] — 2026-09-05
 - Merge lock-sync, def2 lineage and 8jh branch bookkeeping
 
-## [0.3.223] — 2026-09-05
+## [0.3.226] — 2026-09-05
 - Merge agent-fs, 2qy0, 4dg, 9h4u, brv, fw8, h0iy, p43i, qklv-jgho and changelog 60em branches
 
-## [0.3.222] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.221] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.220] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.219] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.218] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.217] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.216] — 2026-09-05
+## [0.3.225] — 2026-09-05
 - Add private local spreadsheet tools
 
-## [0.3.215] — 2026-09-05
+## [0.3.224] — 2026-09-05
 - Add exact table joins and pivots
 
-## [0.3.214] — 2026-09-05
+## [0.3.223] — 2026-09-05
 - Ensure web tool permissions and settings views initialize consistently.
 
-## [0.3.213] — 2026-09-05
+## [0.3.222] — 2026-09-05
 - The production build stably verifies package integrity during developer build cycles.
 
-## [0.3.212] — 2026-09-05
+## [0.3.221] — 2026-09-05
 - Add bounded table formulas
 
-## [0.3.211] — 2026-09-05
-- Maintenance and fixes.
+## [0.3.220] — 2026-09-05
+- The new Agent Directory shows the tools each website offers and lets you choose, per site, whether its tools run automatically, only after asking you, or never. Table previews also learned to display special characters and tags safely as plain text.
 
-## [0.3.210] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.209] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.208] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.207] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.206] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.205] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.204] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.203] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.202] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.201] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.200] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.199] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.198] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.197] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.196] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.195] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.194] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.193] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.192] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.191] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.190] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.189] — 2026-09-05
+## [0.3.219] — 2026-09-05
 - Table previews safely display special characters and tags as plain text, and format canonical column headers and types.
 
-## [0.3.188] — 2026-09-05
-- Maintenance and fixes.
+## [0.3.218] — 2026-09-05
+- Choosing a model in Settings now saves reliably every time, and if the saved model is no longer available, Settings says so plainly as a configuration problem instead of a generic failure.
 
-## [0.3.187] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.186] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.185] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.184] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.183] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.182] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.181] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.180] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.179] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.178] — 2026-09-05
+## [0.3.217] — 2026-09-05
 - Add a strict local table engine
 
-## [0.3.176] — 2026-09-05
+## [0.3.216] — 2026-09-05
 - The artifact viewer displays tables in clean pages with warnings for formula exports
 
-## [0.3.175] — 2026-09-05
+## [0.3.215] — 2026-09-05
 - The Settings page opens directly to sections and keeps agents and permissions accessible
 
-## [0.3.174] — 2026-09-05
-- The Settings page opens directly to sections and keeps agents and permissions accessible
-
-## [0.3.173] — 2026-09-05
+## [0.3.214] — 2026-09-05
 - Nine familiar Unix tools now process large files without truncating their input or output
 
-## [0.3.172] — 2026-09-05
+## [0.3.213] — 2026-09-05
 - Preserve binary output mode in streamed tools
 
-## [0.3.171] — 2026-09-05
+## [0.3.212] — 2026-09-05
 - Tie temporary tool files to the exact agent run
 
-## [0.3.170] — 2026-09-05
+## [0.3.211] — 2026-09-05
 - Keep binary stream results byte exact
 
-## [0.3.169] — 2026-09-05
+## [0.3.210] — 2026-09-05
 - Verify every Unix tool rebuild byte for byte
 
-## [0.3.168] — 2026-09-05
+## [0.3.209] — 2026-09-05
 - Tool execution complies with store security policies using built-in verified components
 
-## [0.3.167] — 2026-09-05
+## [0.3.208] — 2026-09-05
 - Large tool outputs remain completely available in storage while the artifact viewer clearly labels truncated previews
 
-## [0.3.166] — 2026-09-05
+## [0.3.207] — 2026-09-05
 - The tool library groups tools by what they are for — 'Running the browser' and 'Doing the work' — instead of by technical source
 
-## [0.3.165] — 2026-09-05
-- feat(9tg): Milestone 3 — tabular & structured data contracts, def alignment, and stream promotion hardening
+## [0.3.206] — 2026-09-05
+- Table and structured-data handling is unified across tools, and large streamed results move into permanent artifacts without extra copies.
 
-## [0.3.164] — 2026-09-05
+## [0.3.205] — 2026-09-05
 - Tabular data contracts add streaming CSV and JSONL transformations with formula injection defenses
 
-## [0.3.163] — 2026-09-05
+## [0.3.204] — 2026-09-05
 - reference-preserving artifact promotion and zero-copy asset stream transfer
 
-## [0.3.162] — 2026-09-05
-- feat(9tg): Milestone 2 — continuous abuse and resource quota gates
-
-## [0.3.161] — 2026-09-05
+## [0.3.203] — 2026-09-05
 - Added continuous abuse, quota, and lifecycle gates for the tool streaming platform
 
-## [0.3.160] — 2026-09-05
+## [0.3.202] — 2026-09-05
 - Platform streaming I/O connects attachments and files directly to tool execution and promotes results to permanent artifacts
 
-## [0.3.159] — 2026-09-05
+## [0.3.201] — 2026-09-05
 - Seeded warning permissions and verified seeded-profile budgets in performance gates
 
-## [0.3.158] — 2026-09-05
+## [0.3.200] — 2026-09-05
 - Performance gates verify seeded profile budgets and headless tests can pre-seed Chrome permissions
 
-## [0.3.157] — 2026-09-05
+## [0.3.199] — 2026-09-05
 - Merge bookkeeping: union changelog with the site-agent delegation entries, regenerate the bundled inventory after the merge
 
-## [0.3.156] — 2026-09-05
+## [0.3.198] — 2026-09-05
 - Site agent delegation supports attachments and live progress streams without dropping files
 
-## [0.3.155] — 2026-09-05
+## [0.3.197] — 2026-09-05
 - Delegating tasks to site agents supports attachments and streams live progress without dropping files
 
-## [0.3.154] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.153] — 2026-09-05
+## [0.3.196] — 2026-09-05
 - A leftover merge marker is gone from the changelog, keeping the public record clean
 
-## [0.3.152] — 2026-09-05
+## [0.3.195] — 2026-09-05
 - The test safety split now covers the new bundle size gate too, so it runs one at a time with the other build checks instead of racing them
 
-## [0.3.151] — 2026-09-05
+## [0.3.194] — 2026-09-05
 - The safety split that decides which tests must run one at a time is now shared by the full suite and the quick per-change runs, is pinned so it cannot drift unnoticed, and quick runs now parallelize their safe tests — a typical provider-change quick run dropped from 30 seconds to about 18
 
-## [0.3.150] — 2026-09-05
+## [0.3.193] — 2026-09-05
 - Deleting a named agent keeps its approval check when it runs inside a pipeline, now covered by real-path checks for the destructive case
 
-## [0.3.149] — 2026-09-05
+## [0.3.192] — 2026-09-05
 - Reopening long threads or agents loads quickly with windowed history and on-demand pagination for older runs
 
-## [0.3.148] — 2026-09-05
-- perf(4epo): reintroduce windowed loading with pagination for thread and agent open
-
-## [0.3.147] — 2026-09-05
+## [0.3.191] — 2026-09-05
 - The packaged extension is half the size: store bundles are minified, and the build fails if the background worker outgrows its budget
 
-## [0.3.146] — 2026-09-05
+## [0.3.190] — 2026-09-05
 - ensure approval card truthfully discloses truncated source previews and full-run digest
 
-## [0.3.145] — 2026-09-05
+## [0.3.189] — 2026-09-05
 - Cleaned up unused site tool code in the background worker
 
-## [0.3.144] — 2026-09-05
+## [0.3.188] — 2026-09-05
 - Permission matrix tests accurately reflect capability rows and settings navigation
 
-## [0.3.143] — 2026-09-05
+## [0.3.187] — 2026-09-05
 - Permission matrix testing accurately tests capability rows and settings navigation
 
-## [0.3.142] — 2026-09-04
+## [0.3.186] — 2026-09-04
 - Pipeline workflows now verify owner approval for destructive operations with live confirmation cards
 
-## [0.3.141] — 2026-09-04
+## [0.3.185] — 2026-09-04
 - Tool descriptions now tell the truth about size: there is no size limit, and adding to a saved artifact keeps your exact text
 
-## [0.3.140] — 2026-09-04
-- add safeCaptureScreenshot with quiesced frame fallback
-
-## [0.3.139] — 2026-09-04
+## [0.3.184] — 2026-09-04
 - Safe screenshot captures fall back cleanly and never hang on quiet pages
 
-## [0.3.138] — 2026-09-04
+## [0.3.183] — 2026-09-04
 - Confirmation dialogs and prompt editors follow one consistent, reliable design across the extension
 
-## [0.3.137] — 2026-09-04
+## [0.3.182] — 2026-09-04
 - Python tasks now prove they execute in the shipped extension
 
-## [0.3.136] — 2026-09-04
-- Changelog wording for the pipeline entries in plain user language
-
-## [0.3.135] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.134] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.133] — 2026-09-04
+## [0.3.181] — 2026-09-04
 - A pipeline step that asks for your approval now keeps working even when the task's context moved since the pipeline started — approving the step re-runs it instead of stopping the run with an error.
 
-## [0.3.132] — 2026-09-04
+## [0.3.180] — 2026-09-04
 - The agent can now chain a few tools into one run: it names the tool for each step and can pass an earlier step's result into a later step's input, so a few separate calls become one legible pipeline. Every step still runs through the usual gates — a step that needs approval pauses on your card mid-run, a denied or failing step stops the run and names the step, and each step shows in the plan strip as it runs.
 
-## [0.3.131] — 2026-09-04
-- remove stray extension/wasm-tools copy that broke build scanner
+## [0.3.179] — 2026-09-04
+- Fixed the developer build after a stray duplicated file confused the package scanner.
 
-## [0.3.130] — 2026-09-04
-- Restore the Pyodide WASM runtime files lost in the dptw phase-2 merge
+## [0.3.178] — 2026-09-04
+- Running Python works again after a merge accidentally dropped its runtime files.
 
-## [0.3.129] — 2026-09-04
-- restore the k3-work (60be + 3cb6 + dptw-tr content verified by k3)
-
-## [0.3.128] — 2026-09-04
+## [0.3.177] — 2026-09-04
 - Pyodide WASM runtime + offscreen host + tool wiring
 
-## [0.3.127] — 2026-09-04
-- python_execute now runs real Pyodide 0.26.4, bundled and served from the extension package ()
+## [0.3.176] — 2026-09-04
+- Python now runs on a real Pyodide 0.26.4 runtime bundled inside the extension package — nothing to download.
 
-## [0.3.126] — 2026-09-04
-- Maintenance and fixes.
+## [0.3.175] — 2026-09-04
+- The per-provider "server tools" switch in Settings no longer resets itself when the page is reloaded.
 
-## [0.3.125] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.124] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.123] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.122] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.121] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.120] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.119] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.118] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.117] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.116] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.115] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.114] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.113] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.112] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.111] — 2026-09-04
+## [0.3.174] — 2026-09-04
 - python_execute works in the shipped build again — restored the runtime-provider wiring and matched the tool counts to the catalog
 
-## [0.3.110] — 2026-09-04
-- Remove the python-tool RETAINED entry — the tool is now reachable via management-tools
-
-## [0.3.109] — 2026-09-04
+## [0.3.173] — 2026-09-04
 - Run Python programs in the browser: the python_execute tool is available again, executing code sandboxed in the built-in runtime with no DOM or network access.
 
-## [0.3.108] — 2026-09-04
-- Maintenance and fixes.
+## [0.3.172] — 2026-09-04
+- Agents now find tools by what they do, not just by name: a built-in meaning-based index ranks tools for a task, works fully offline, says honestly when nothing matches, and finding a tool never grants it a permission by itself.
 
-## [0.3.103] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.102] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.101] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.100] — 2026-09-04
+## [0.3.171] — 2026-09-04
 - The docs-fallback module is now imported by the service worker — drop the RETAINED entry
 
-## [0.3.99] — 2026-09-04
-- Wire the docs-fallback module into the service worker — import + integration reference in readSiteLazySources (922q)
+## [0.3.170] — 2026-09-04
+- Python in the browser: run Python programs in a sandboxed runtime inside the extension, with no access to the page or the network unless you grant it.
 
-## [0.3.98] — 2026-09-04
-- znx9 test: assert content stored complete (no-limits) instead of 240KiB cap + truncation marker
+## [0.3.169] — 2026-09-04
+- Fresh checkouts build reliably again — the build no longer fails on a missing lock file.
 
-## [0.3.97] — 2026-09-04
-- cap-beads-8zlu (test cascade cleanup + site docs fallback wiring + changelog semver fix)
+## [0.3.168] — 2026-09-04
+- Provider connections are now verified once, with a bounded check when the provider is set up, instead of re-requesting access around every run.
 
-## [0.3.96] — 2026-09-04
-- cap-beads-brv (Python in the browser via Pyodide)
-
-## [0.3.95] — 2026-09-04
-- remove MAX_MESSAGE_BYTES import from task-view-full-response-contract test
-
-## [0.3.94] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.93] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.92] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.91] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.90] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.89] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.88] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.87] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.86] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.85] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.84] — 2026-09-04
-- Fix the build lock file for fresh checkouts — the dist-complete validator needs it to pass
-
-## [0.3.83] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.82] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.81] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.80] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.79] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.78] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.77] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.76] — 2026-09-04
-- Register the site-docs-fallback module in RETAINED (922q docs-fallback utility; integration wiring follows in dptw phase-2)
-
-## [0.3.75] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.74] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.73] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.72] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.71] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.70] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.69] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.68] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.67] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.66] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.65] — 2026-09-04
+## [0.3.167] — 2026-09-04
 - Build and test evidence now survives restarts, and the recurring check flake is fixed
 
-## [0.3.64] — 2026-09-04
-- Build and test evidence now survives restarts — nothing is stored on volatile temp storage anymore, and the recurring check flake is fixed
+## [0.3.166] — 2026-09-04
+- Back up and restore everything: Settings can export your agents, memories, conversations, artifacts and settings as a single inspectable file, and import it back to restore them. Provider keys are never included in the file.
 
-## [0.3.63] — 2026-09-04
-- Build and test evidence now survives restarts — nothing is stored on volatile temp storage anymore, and the recurring custody check flake is fixed
-
-## [0.3.62] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.61] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.60] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.59] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.58] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.57] — 2026-09-04
-- Maintenance and fixes.
-
-## [0.3.56] — 2026-09-04
+## [0.3.165] — 2026-09-04
 - The browser grant persistence check is now a registered automated check that runs in real Chromium across reloads
 
-## [0.3.55] — 2026-09-03
+## [0.3.164] — 2026-09-03
 - Running a single test file through the npm shortcut works for every file, including the one that turns away the slow full sweep
 
-## [0.3.54] — 2026-09-03
-- The release notes read in plain language again — one entry no longer uses an internal term
-
-## [0.3.53] — 2026-09-03
+## [0.3.163] — 2026-09-03
 - Running the whole unit suite the slow way is no longer possible: the repo points you at the fast npm commands instead
 
-## [0.3.52] — 2026-09-03
-- The changelog reads like release notes again — every entry describes what the user gets, and the version hook strips bare branch names and merge subjects so this never recurs
+## [0.3.162] — 2026-09-03
+- The release notes read like release notes again — every entry describes what you get — and the versioning helper now strips bare branch names and merge subjects instead of publishing them.
 
-## [0.3.51] — 2026-09-03
+## [0.3.161] — 2026-09-03
 - The MCP SDK is properly declared as a dependency — installs can no longer accidentally lose it
 
-## [0.3.50] — 2026-09-03
+## [0.3.160] — 2026-09-03
 - The changelog's shipped copy materializes automatically in fresh checkouts, nine version notes are rewritten in plain user language, and the version hook stops writing bare ids as release notes
 
-## [0.3.49] — 2026-09-03
+## [0.3.159] — 2026-09-03
 - A regression suite no longer breaks when temp storage is cleaned between sessions
 
-## [0.3.48] — 2026-09-03
+## [0.3.158] — 2026-09-03
 - No self-imposed size caps in transport and rendering — large files attach with honest refusals, artifacts grow by appending, and the source view renders any size
 
-## [0.3.47] — 2026-09-03
+## [0.3.157] — 2026-09-03
 - The hub's own working copy and directory entries survive temporary-file cleanup
 
-## [0.3.46] — 2026-09-03
+## [0.3.156] — 2026-09-03
 - The task view shows long responses in full, exactly as they were generated — byte-true bounds, escapes handled, no broken characters
 
-## [0.3.45] — 2026-09-03
+## [0.3.155] — 2026-09-03
 - Embedded views share one content left edge at any viewport — the content-edge probes now use real visible elements and the embedded Artifacts title count is exact
 
-## [0.3.44] — 2026-09-03
+## [0.3.154] — 2026-09-03
 - Interactive artifacts are reliable — clicks reach the artifact, generated code no longer cuts off at size bounds, and the source view shows the complete stored body
 
-## [0.3.43] — 2026-09-03
+## [0.3.153] — 2026-09-03
 - Site-tool errors tell you the real cause — tool, phase, redacted message/stack, realm, and origin — with a docs-fallback that fetches the site's documentation when its tools fail
 
-## [0.3.42] — 2026-09-03
+## [0.3.152] — 2026-09-03
 - Pipeline workflows run with per-step owner approval — capability-paused steps show a real approval card and destructive steps fail closed
 
-## [0.3.41] — 2026-09-03
+## [0.3.151] — 2026-09-03
 - Worker runs can be steered and stopped safely — the stop-run path requires an exact run match and refuses wrong-run aborts
 
-## [0.3.40] — 2026-09-03
+## [0.3.150] — 2026-09-03
 - The unit test suite finishes in about a quarter of the time: test files run in parallel, and very long text no longer stalls secret redaction
 
-## [0.3.39] — 2026-09-03
+## [0.3.149] — 2026-09-03
 - The targeted npm run test:changed, test:fast and test:file shortcuts work again, and provider host-access checks no longer leave an 8-second timer running after a fast grant
 
-## [0.3.38] — 2026-09-03
+## [0.3.148] — 2026-09-03
 - The changelog reads like release notes instead of a git log — every entry describes what the user gets, not what branch was merged
 
-## [0.3.37] — 2026-09-03
-- The changelog reads like release notes instead of a git log — every entry describes what the user gets, not what branch was merged
-
-## [0.3.36] — 2026-09-03
+## [0.3.147] — 2026-09-03
 - Workflows: agents can create, save, recall, and run reusable workflows — recipes that run again whenever you need them, with owner approval for anything destructive
 - The task view shows long responses in full, exactly as they were generated — no truncation, no broken characters
 - Interactive artifacts are reliable — clicks reach the artifact, and generated code no longer cuts off at size bounds

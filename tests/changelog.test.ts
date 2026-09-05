@@ -168,3 +168,51 @@ Deno.test("changelog: recent entries (last ten versions) are plain user language
   assert(!recentSection.includes("six-import"), "must not contain 'six-import' jargon");
   assert(!recentSection.includes("whole-tuple"), "must not contain 'whole-tuple' jargon");
 });
+
+// ── xk2u hardening (2026-09-05) ────────────────────────────────────────────
+// The 2026-09-05 integrity failure: 93 entries said "Maintenance and fixes."
+// because bump-version.mjs invented placeholder text when a merge/branch
+// subject sanitized to empty, and parallel lanes racing version numbers left
+// gaps (0.3.104-107, 0.3.174, 0.3.177, 0.3.235/237/238 never existed).
+// These three tests make both failure modes unshippable.
+
+Deno.test("changelog: no placeholder or boilerplate entries anywhere in the file", async () => {
+  const changelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
+  const PLACEHOLDER_RE = /^-\s*(Maintenance and fixes\.?|Bug fixes and improvements\.?|Various (improvements|updates)\.?|General (updates|improvements)\.?|Stability improvements\.?)\s*$/gim;
+  const hits = [...changelog.matchAll(PLACEHOLDER_RE)];
+  assertEquals(hits.length, 0,
+    `placeholder/boilerplate entries are banned — every entry must name what the user gets:\n${hits.map((h) => h[0]).join("\n")}`);
+});
+
+Deno.test("changelog: every modern (0.3.x) bullet passes the user-facing language filter", async () => {
+  const changelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
+  const versions = parseChangelog(changelog);
+  const offenders: string[] = [];
+  for (const v of versions) {
+    const [major, minor] = v.version.split(".").map(Number);
+    if (major === 0 && minor < 3) continue; // ancient history is frozen, not rewritten
+    for (const b of v.bullets as string[]) {
+      if (!isUserFacingEntry(b)) offenders.push(`v${v.version}: ${b.slice(0, 80)}`);
+    }
+  }
+  assertEquals(offenders, [],
+    `every modern changelog bullet must read as user-facing copy:\n${offenders.join("\n")}`);
+});
+
+Deno.test("changelog: the modern (0.3.x) series is contiguous — no consumed-but-missing versions", async () => {
+  const changelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
+  const versions = parseChangelog(changelog)
+    .map((v) => v.version.split(".").map(Number))
+    .filter(([major, minor]) => major === 0 && minor === 3)
+    .map(([, , patch]) => patch);
+  assert(versions.length > 0, "must have 0.3.x entries");
+  const top = Math.max(...versions);
+  const bottom = Math.min(...versions);
+  const missing = [];
+  for (let p = bottom; p <= top; p++) {
+    if (!versions.includes(p)) missing.push(`0.3.${p}`);
+  }
+  assertEquals(missing, [],
+    `gaps in the 0.3 series mean a version number was consumed without an entry ` +
+    `(the parallel-lane race) — renumber or restore:\n${missing.join(", ")}`);
+});

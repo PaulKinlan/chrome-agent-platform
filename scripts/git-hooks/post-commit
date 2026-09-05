@@ -1,0 +1,31 @@
+#!/bin/sh
+# Reference post-commit hook (xk2u, 2026-09-05). Install with:
+#   cp scripts/git-hooks/post-commit .git/hooks/post-commit && chmod +x .git/hooks/post-commit
+#
+# Chaos-style: auto-bump the patch version after each commit (guard against the
+# amend loop). The changelog entry uses the commit's message.
+#
+# xk2u hardening: bump-version.mjs --skip-if-no-note means commits whose message
+# sanitizes to nothing user-sayable (merge subjects, bare branch names) do NOT
+# consume a version and NEVER write a placeholder entry — that placeholder path
+# is how 93 fake "Maintenance and fixes." entries shipped on 2026-09-05.
+# Versions are now only consumed by commits that write a real user-language
+# entry, so the changelog stays contiguous by construction. If your commit
+# lands user-visible work, say so in the subject, or bump explicitly:
+#   node scripts/bump-version.mjs patch --user-note "<what the user gets>"
+if [ -n "$CAP_SEMVER_AMEND" ]; then exit 0; fi
+export CAP_SEMVER_AMEND=1
+MSG="$(git log -1 --format=%s)"
+node scripts/bump-version.mjs patch --skip-if-no-note --message "$MSG"
+# keep the bundled gallery/changelog in lockstep with the just-bumped tree
+node scripts/sync-gallery.mjs >/dev/null 2>&1
+git add package.json package-lock.json extension/manifest.json CHANGELOG.md extension/CHANGELOG.md 2>/dev/null
+# amend only when the bump actually staged something (skip-if-no-note may have
+# changed nothing — bookkeeping commits must not be rewritten)
+git diff --cached --quiet || git commit -q --amend --no-edit
+
+# Beads: auto-push Dolt data to remote after each commit
+(
+  cd "$(dirname "$0")/../.." 2>/dev/null
+  bd dolt push 2>/dev/null
+) &

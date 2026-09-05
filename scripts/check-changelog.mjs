@@ -66,4 +66,26 @@ if (voiceFail.length) {
   process.exit(1);
 }
 
+// xk2u (2026-09-05): placeholder text is how 93 fake entries shipped — ban it
+// across the WHOLE file, not just the recent section. And the modern (0.3.x)
+// series must be contiguous: a gap means a version was consumed by a
+// bookkeeping bump with no entry (the parallel-lane race).
+const PLACEHOLDER_RE = /^-\s*(Maintenance and fixes\.?|Bug fixes and improvements\.?|Various (improvements|updates)\.?|General (updates|improvements)\.?|Stability improvements\.?)\s*$/gim;
+const placeholders = [...src.matchAll(PLACEHOLDER_RE)];
+if (placeholders.length) {
+  console.error(`CHANGELOG PLACEHOLDER FAIL (${placeholders.length} hits): every entry must name what the user gets`);
+  process.exit(1);
+}
+const modern = entries.filter(([maj, min]) => maj === 0 && min === 3).map(([, , p]) => p);
+if (modern.length) {
+  const gaps = [];
+  for (let p = Math.min(...modern); p <= Math.max(...modern); p++) {
+    if (!modern.includes(p)) gaps.push(`0.3.${p}`);
+  }
+  if (gaps.length) {
+    console.error(`CHANGELOG CONTIGUITY FAIL: versions consumed without entries: ${gaps.join(", ")}`);
+    process.exit(1);
+  }
+}
+
 console.log(`changelog identities: ${strs.length} entries, unique + descending ✓ (latest: ${strs[0]})`);
