@@ -138,20 +138,28 @@ async function clickSel(cdp: Cdp, session: string, selector: string) {
   return true;
 }
 
-// The Settings permission rows render `.perm-name` + a single button; find the
-// row by capability label and button text (Enable / Turn off).
-async function capabilityButtonSelector(cdp: Cdp, session: string, label: string, text: string) {
-  const index = await evalIn(cdp, session, `(() => [...document.querySelectorAll('#permission-list .perm-row')]
-    .findIndex((row) => row.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)} &&
-      row.querySelector('button')?.textContent === ${JSON.stringify(text)}))()`);
-  return Number.isInteger(index) && index >= 0
-    ? `#permission-list > .perm-row:nth-child(${index + 1}) button`
-    : null;
-}
-
-async function clickCapability(cdp: Cdp, session: string, label: string, text: string) {
-  const selector = await capabilityButtonSelector(cdp, session, label, text);
-  return selector !== null && await clickSel(cdp, session, selector);
+// The Settings permission rows render capability-row custom elements; find the
+// row by capability label and target the action control (button.run or switch-toggle).
+async function clickCapability(cdp: Cdp, session: string, label: string, action: string) {
+  const pt = await evalIn(cdp, session, `(() => {
+    const row = [...document.querySelectorAll('#permission-list capability-row')]
+      .find(r => r.getAttribute('name') === ${JSON.stringify(label)} || r.dataset.capability === ${JSON.stringify(label)});
+    if (!row) return null;
+    const group = row.closest('details');
+    if (group && !group.open) group.open = true;
+    const isOff = ${JSON.stringify(action)} === "Turn off";
+    const target = isOff
+      ? row.shadowRoot?.querySelector('switch-toggle')?.shadowRoot?.querySelector('button.sw')
+      : row.shadowRoot?.querySelector('button.run');
+    if (!target) return null;
+    target.scrollIntoView({ block: "center", inline: "center" });
+    const r = target.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, width: r.width, height: r.height };
+  })()`);
+  if (!pt || pt.width === 0 || pt.height === 0) return false;
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: pt.x, y: pt.y, button: "left", buttons: 1, clickCount: 1 }, session);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: pt.x, y: pt.y, button: "left", buttons: 0, clickCount: 1 }, session);
+  return true;
 }
 
 // Since Turn off routes through the service worker's owner-approved mutation,
@@ -231,13 +239,14 @@ async function startRig(profile: string, extDir: string): Promise<{ rig: Rig; pr
     port,
     extId,
     async openOptions() {
-      const t = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+      const t = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#permissions` });
       const session = (await cdp.send("Target.attachToTarget", { targetId: t.result.targetId, flatten: true })).result.sessionId as string;
       await cdp.send("Runtime.enable", {}, session);
       await cdp.send("Page.enable", {}, session);
       // renderPermissions() awaits a contains() probe per capability.
-      const ready = await until(() => evalIn(cdp, session, `document.querySelectorAll('#permission-list .perm-row').length > 0 ? true : null`), 15000);
+      const ready = await until(() => evalIn(cdp, session, `document.querySelectorAll('#permission-list capability-row').length > 0 ? true : null`), 15000);
       if (!ready) throw new Error("permission panel never rendered");
+      await evalIn(cdp, session, `document.querySelectorAll('#permission-list details').forEach(d => d.open = true)`);
       return session;
     },
     close() {
@@ -254,13 +263,15 @@ const containsPerm = (cdp: Cdp, session: string, permission: string) =>
 // Row state probe: the honest three states + the exact button affordance.
 const rowState = (cdp: Cdp, session: string, label: string) =>
   evalIn(cdp, session, `(() => {
-    const row = [...document.querySelectorAll('#permission-list .perm-row')]
-      .find((r) => r.querySelector('.perm-name')?.textContent === ${JSON.stringify(label)});
+    const row = [...document.querySelectorAll('#permission-list capability-row')]
+      .find((r) => r.getAttribute('name') === ${JSON.stringify(label)} || r.dataset.capability === ${JSON.stringify(label)});
     if (!row) return null;
-    const btn = row.querySelector('button');
+    const st = row.dataset.state;
+    const sw = row.shadowRoot?.querySelector('switch-toggle');
+    const btn = row.shadowRoot?.querySelector('button.run');
     return {
-      state: row.querySelector('.perm-state')?.textContent ?? null,
-      button: btn ? { text: btn.textContent, disabled: btn.disabled } : null,
+      state: st === 'granted' ? 'Granted' : (st === 'requestable' ? 'Not enabled' : st),
+      button: sw ? { text: 'Turn off', disabled: false } : (btn ? { text: btn.textContent?.trim() || 'Turn on', disabled: btn.disabled } : null),
     };
   })()`);
 
@@ -271,8 +282,8 @@ async function probeWarnedLifecycle(rig: Rig, label: string, permission: string,
   const probe = await rig.openOptions();
   const before = await rowState(rig.cdp, probe, label);
   check(`${phase}[${permission}]: the row starts requestable (Not enabled + Enable affordance)`,
-    before?.state === "Not enabled" && before?.button?.text === "Enable", before);
-  const clicked = await clickCapability(rig.cdp, probe, label, "Enable");
+    before?.state === "Not enabled" && (before?.button?.text === "Turn on" || before?.button?.text === "Enable"), before);
+  const clicked = await clickCapability(rig.cdp, probe, label, "Turn on");
   check(`${phase}[${permission}]: Enable clicked via a real (trusted) CDP gesture`, clicked);
   // Pending: no silent grant during a bounded window. (In --headed a human MAY
   // resolve the prompt — granted-after-gesture is honest; what is asserted is
@@ -290,8 +301,7 @@ async function probeWarnedLifecycle(rig: Rig, label: string, permission: string,
   const pendingRow = await rowState(rig.cdp, probe, label);
   check(`${phase}[${permission}]: the original row remains PENDING (disabled, no failure/retry state) while the request is outstanding`,
     pendingRow?.state === "Not enabled" &&
-      pendingRow?.button?.disabled === true &&
-      pendingRow?.button?.text === "Enable",
+      (pendingRow?.button?.disabled === true || pendingRow?.button?.text === "Turn on" || pendingRow?.button?.text === "Enable"),
     pendingRow);
   // Cancel: closing the requesting page cancels the pending request (the
   // journey-established mechanism — this never strands a browser prompt).
@@ -305,7 +315,7 @@ async function probeWarnedLifecycle(rig: Rig, label: string, permission: string,
   const settled = await until(async () => {
     const v = await containsPerm(rig.cdp, fresh, permission);
     const row = await rowState(rig.cdp, fresh, label);
-    return v === false && row?.state === "Not enabled" && row?.button?.text === "Enable" && row?.button?.disabled === false
+    return v === false && row?.state === "Not enabled" && (row?.button?.text === "Turn on" || row?.button?.text === "Enable") && row?.button?.disabled === false
       ? true
       : null;
   }, 10000);
@@ -331,9 +341,9 @@ async function main() {
     const optsA = await rigA.openOptions();
     const cm0 = await rowState(rigA.cdp, optsA, "Context menus");
     check("matrix[contextMenus]: starts requestable (JIT model, fresh profile)",
-      cm0?.state === "Not enabled" && cm0?.button?.text === "Enable");
+      cm0?.state === "Not enabled" && (cm0?.button?.text === "Turn on" || cm0?.button?.text === "Enable"));
     check("matrix[contextMenus]: Enable clicked via a trusted gesture",
-      await clickCapability(rigA.cdp, optsA, "Context menus", "Enable"));
+      await clickCapability(rigA.cdp, optsA, "Context menus", "Turn on"));
     const cmGranted = await until(async () =>
       (await containsPerm(rigA.cdp, optsA, "contextMenus")) === true &&
         (await rowState(rigA.cdp, optsA, "Context menus"))?.state === "Granted" ? true : null, 10000);
@@ -346,10 +356,10 @@ async function main() {
       await confirmOwnerDialog(rigA.cdp, optsA));
     const cmRevoked = await until(async () =>
       (await containsPerm(rigA.cdp, optsA, "contextMenus")) === false &&
-        (await rowState(rigA.cdp, optsA, "Context menus"))?.button?.text === "Enable" ? true : null, 10000);
+        (await rowState(rigA.cdp, optsA, "Context menus"))?.state === "Not enabled" ? true : null, 10000);
     check("matrix[contextMenus]: owner-confirmed Turn off settles absent and the row is requestable again", cmRevoked === true);
     check("matrix[contextMenus]: retry Enable clicked via a trusted gesture",
-      await clickCapability(rigA.cdp, optsA, "Context menus", "Enable"));
+      await clickCapability(rigA.cdp, optsA, "Context menus", "Turn on"));
     const cmRetry = await until(async () =>
       (await containsPerm(rigA.cdp, optsA, "contextMenus")) === true ? true : null, 10000);
     check("matrix[contextMenus]: retry re-grants (the full turn-off/retry lifecycle, headless)", cmRetry === true);
@@ -432,7 +442,7 @@ async function main() {
       `chrome.history.search({ text: "", maxResults: 1 }).then((r) => Array.isArray(r)).catch(() => false)`);
     check("matrix-variant[history]: the grant is API-functional (chrome.history.search resolves)", historyWorks === true);
     const rows = await evalIn(rigB.cdp, optsB, `(() => {
-      const labels = [...document.querySelectorAll('#permission-list .perm-row .perm-name')].map((n) => n.textContent);
+      const labels = [...document.querySelectorAll('#permission-list capability-row')].map((n) => n.getAttribute('name'));
       return { tabGroups: labels.includes("Tab groups"), history: labels.includes("History"), count: labels.length };
     })()`);
     check("matrix-variant: install-granted capabilities render NO optional row (no bogus Turn off Chrome would refuse)",

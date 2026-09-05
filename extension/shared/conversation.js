@@ -336,6 +336,14 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
     if (ev.type === "disconnect") { terminal.onPortError(); return; }
     if (ev.runId !== executionId) return;
     switch (ev.type) {
+      case "pipeline-step": {
+        // A run_pipeline step (chrome-agent-platform-qsm4): a plan-strip row
+        // per step, never a tool card — the pipeline wrapper is plumbing.
+        const stepLabel = planStepLabel(String(ev.tool ?? ""), null);
+        if (ev.status === "running") c.planEvent?.({ type: "step-start", label: stepLabel });
+        else c.planEvent?.({ type: "step-end", status: ev.status === "failed" ? "error" : "done", label: stepLabel });
+        break;
+      }
       case "tool-call": {
         onStatus?.({ state: "running", activity: friendlyActivityLabel(ev.toolName, ev.toolArgs) });
         // A tool call is a plan step — append it to the strip (a protocol call
@@ -1116,7 +1124,10 @@ export function effectiveToolCall(toolName, args, result) {
  * `search_tools` / `list_tools` are how the model finds a tool, not work the
  * owner asked for. They stay in the durable run log (the debugger surface) and
  * are never rendered as transcript cards. */
-export const PROTOCOL_TOOLS = new Set(["search_tools", "list_tools"]);
+// run_pipeline is composition plumbing too: the WRAPPER renders no card and
+// no plan row — its per-step pipeline-step events carry the visibility
+// (chrome-agent-platform-qsm4, slice 2).
+export const PROTOCOL_TOOLS = new Set(["search_tools", "list_tools", "run_pipeline"]);
 export function isProtocolTool(name) { return PROTOCOL_TOOLS.has(String(name ?? "")); }
 
 /** The selected tool's OWN result from a lazy `execute_tool` envelope
@@ -2178,6 +2189,14 @@ export async function runConversationTurn(container, { text, attachments = [], h
         });
         break;
       }
+      case "pipeline-step": {
+        // A run_pipeline step (chrome-agent-platform-qsm4): a plan-strip row
+        // per step, never a tool card — the pipeline wrapper is plumbing.
+        const stepLabel = planStepLabel(String(ev.tool ?? ""), null);
+        if (ev.status === "running") c.planEvent?.({ type: "step-start", label: stepLabel });
+        else c.planEvent?.({ type: "step-end", status: ev.status === "failed" ? "error" : "done", label: stepLabel });
+        break;
+      }
       case "tool-call": {
         lastActivity = friendlyActivityLabel(ev.toolName, ev.toolArgs);
         status({ state: attempt > 1 ? "retrying" : "running", activity: withBudget(lastActivity) });
@@ -2365,9 +2384,6 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // deterministically to the referenced agent (its own sandbox), whose
       // result is committed back into THIS task thread. This is NOT the
       // agent-chat surface (which still routes directly via agentId/agentKind).
-      if (mention.kind === "site" && attachments.length && typeof c.appendSystem === "function") {
-        c.appendSystem("Attachments aren't delivered to Site Agents yet — the text was sent.");
-      }
       res = await send("agent.run", {
         approvalBinding: approvalBinding ?? null,
         task: text,
@@ -2381,14 +2397,13 @@ export async function runConversationTurn(container, { text, attachments = [], h
     } else if (agentKind === "site") {
       // A Site Agent: direct delegation to the enrolled origin's worker agent
       // (agent.delegate — generation-fenced, journaled to the site's OWN OPFS
-      // store). Site delegation carries the task TEXT only (no attachments yet,
-      // no live per-run progress) — say so honestly when attachments exist.
-      if (attachments.length && typeof c.appendSystem === "function") {
-        c.appendSystem("Attachments aren't delivered to Site Agents yet — the text was sent.");
-      }
+      // store). Supports attachments and live progress streaming.
       res = await send("agent.delegate", {
         origin: agentId,
         task: text,
+        runId,
+        attachments,
+        threadId,
       });
     } else if (agentKind === "background") {
       res = await send("background-agent.run", {

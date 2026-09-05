@@ -24,6 +24,8 @@
 // stderr; it is strictly weaker (probe-then-bind still races) and should not
 // be reached for by default.
 
+import { crypto } from "jsr:@std/crypto@1";
+
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
   proc: Deno.ChildProcess;
@@ -40,6 +42,61 @@ export interface LaunchedChrome {
 const TAIL_LIMIT = 8192;
 
 /** The browser every harness drives. */
+export async function computeUnpackedExtensionId(path: string): Promise<string> {
+  const absPath = Deno.realPathSync(path);
+  const data = new TextEncoder().encode(absPath);
+  const hash = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+  let id = "";
+  for (let i = 0; i < 16; i++) {
+    const byte = hash[i];
+    const high = (byte >> 4) & 0x0f;
+    const low = byte & 0x0f;
+    id += String.fromCharCode(97 + high) + String.fromCharCode(97 + low);
+  }
+  return id;
+}
+
+export async function seedGrantedPermissions(
+  profileDir: string,
+  extIdOrPath: string,
+  apis: string[] = ["tabs", "notifications"],
+): Promise<string> {
+  const isId = /^[a-p]{32}$/.test(extIdOrPath);
+  const extId = isId ? extIdOrPath : await computeUnpackedExtensionId(extIdOrPath);
+  const extPath = isId ? "" : (() => { try { return Deno.realPathSync(extIdOrPath); } catch { return ""; } })();
+
+  const defaultDir = `${profileDir}/Default`;
+  await Deno.mkdir(defaultDir, { recursive: true });
+  const prefsPath = `${defaultDir}/Preferences`;
+  let prefs: any = {};
+  try {
+    prefs = JSON.parse(await Deno.readTextFile(prefsPath));
+  } catch {
+    prefs = {};
+  }
+  prefs.extensions ??= {};
+  prefs.extensions.settings ??= {};
+  prefs.extensions.settings[extId] = {
+    active_permissions: {
+      api: apis,
+      explicit_host: ["<all_urls>"],
+      manifest_permissions: [],
+      scriptable_host: [],
+    },
+    granted_permissions: {
+      api: apis,
+      explicit_host: ["<all_urls>"],
+      manifest_permissions: [],
+      scriptable_host: [],
+    },
+    location: 8,
+    ...(extPath ? { path: extPath } : {}),
+    withholding_permissions: false,
+  };
+  await Deno.writeTextFile(prefsPath, JSON.stringify(prefs, null, 2));
+  return extId;
+}
+
 export const CHROMIUM = "/usr/bin/chromium";
 
 // ── the serialized-Chrome lock ──────────────────────────────────────────────
@@ -181,7 +238,12 @@ export async function launchChrome(opts: {
   clearEnv?: boolean;
   /** Environment for the browser (with clearEnv: the whole environment — an allowlist). */
   env?: Record<string, string>;
+  /** Pre-seed Chrome's Preferences with granted permissions before launch. */
+  grantPermissions?: string[];
 }): Promise<LaunchedChrome> {
+  if (Array.isArray(opts.grantPermissions) && opts.grantPermissions.length && opts.profile && opts.extension) {
+    await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
+  }
   const extras = opts.args ?? [];
   const fixed = extras.find((a) => a.startsWith("--remote-debugging-port"));
   if (fixed) {
@@ -270,6 +332,8 @@ export interface CdpClient {
   open(url: string): Promise<{ targetId: string; sessionId: string }>;
   /** `Runtime.evaluate` with awaitPromise + returnByValue; throws on a page exception. */
   eval(sessionId: string, expression: string): Promise<any>;
+  /** Safely capture a screenshot of a target without wedging on quiesced headless frames (f5lb). */
+  screenshot(sessionId: string, opts?: ScreenshotOptions): Promise<Uint8Array | null>;
   /** Wait (bounded) for the extension's service-worker target; returns its info or null. */
   serviceWorker(opts?: { timeoutMs?: number }): Promise<any | null>;
   /** Subscribe to a CDP event (e.g. Runtime.executionContextCreated). Returns an unsubscribe. */
@@ -350,6 +414,7 @@ export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}):
       }
       return res?.result?.value;
     },
+    screenshot: (sessionId, opts = {}) => safeCaptureScreenshot(send, sessionId, opts),
     serviceWorker: (o = {}) => waitForServiceWorker(send, o),
     on(method, handler) {
       if (!listeners.has(method)) listeners.set(method, new Set());
@@ -387,7 +452,81 @@ export async function waitForServiceWorker(
   }
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+export interface ScreenshotOptions {
+  format?: "png" | "jpeg" | "webp";
+  quality?: number;
+  clip?: { x: number; y: number; width: number; height: number; scale?: number };
+  fromSurface?: boolean;
+  captureBeyondViewport?: boolean;
+  timeoutMs?: number;
+}
+
+/**
+ * Capture a screenshot safely without hanging on quiesced headless frames (chrome-agent-platform-f5lb).
+ *
+ * In headless Chromium with --disable-gpu, Page.captureScreenshot(fromSurface: true)
+ * issued when the page has no pending visual work waits forever for a compositor
+ * frame that is never scheduled (the renderer is idle, so Viz never gets an OnBeginFrame).
+ *
+ * This helper:
+ *   1. Races the capture against a bounded timeout (default 8000ms).
+ *   2. If fromSurface: true was requested or defaulted and times out or rejects,
+ *      wakes the frame pipeline with a micro requestAnimationFrame / style tick
+ *      and falls back to fromSurface: false (which reads from the backing store /
+ *      Blink paint tree directly rather than waiting for an unscheduled Viz frame).
+ *   3. Returns Uint8Array of bytes, or null on terminal failure (never wedges the process).
+ */
+export async function safeCaptureScreenshot(
+  send: CdpSend,
+  sessionId: string,
+  opts: ScreenshotOptions = {},
+): Promise<Uint8Array | null> {
+  const timeoutMs = opts.timeoutMs ?? 8000;
+  const captureCall = (fromSurface?: boolean) => {
+    const params: Record<string, unknown> = {
+      format: opts.format ?? "png",
+      ...(opts.quality !== undefined ? { quality: opts.quality } : {}),
+      ...(opts.clip ? { clip: opts.clip } : {}),
+      ...(opts.captureBeyondViewport !== undefined ? { captureBeyondViewport: opts.captureBeyondViewport } : {}),
+      ...(fromSurface !== undefined ? { fromSurface } : {}),
+    };
+    return send("Page.captureScreenshot", params, sessionId);
+  };
+
+  // Attempt 1: Caller's preferred fromSurface setting with bounded timeout
+  try {
+    const res = await withTimeout(captureCall(opts.fromSurface), timeoutMs);
+    const b64 = res?.result?.data ?? res?.data;
+    if (b64 && typeof b64 === "string") {
+      return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    }
+  } catch (_err) {
+    // If fromSurface was true (or defaulted), the frame scheduler may be quiesced.
+    // Fall through to wake the compositor and retry with fromSurface: false.
+  }
+
+  // Attempt 2: Wake up compositor and capture with fromSurface: false
+  try {
+    await withTimeout(
+      send("Runtime.evaluate", {
+        expression: "new Promise(r => requestAnimationFrame(() => r(true)))",
+        awaitPromise: true,
+      }, sessionId),
+      1500,
+    ).catch(() => {});
+    const fallback = await withTimeout(captureCall(false), Math.min(timeoutMs, 4000));
+    const b64 = fallback?.result?.data ?? fallback?.data;
+    if (b64 && typeof b64 === "string") {
+      return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   if (ms <= 0) return Promise.reject(new Error("deadline"));
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error("deadline")), ms);

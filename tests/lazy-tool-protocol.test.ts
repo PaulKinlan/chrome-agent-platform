@@ -727,7 +727,7 @@ Deno.test("lazy protocol: results are COMPLETE and secret-safe (dptw)", async ()
   assert(!wire.includes("abcdefghijklmnop"));
 });
 
-Deno.test("lazy provider capture: only three fixed protocol tools and selected schemas cross the wire", async () => {
+Deno.test("lazy provider capture: only four fixed protocol tools and selected schemas cross the wire", async () => {
   const inputs = [{
     sourceKind: "extension-builtin",
     packageId: "cap.core-tools",
@@ -784,6 +784,7 @@ Deno.test("lazy provider capture: only three fixed protocol tools and selected s
     "search_tools",
     "list_tools",
     "execute_tool",
+    "run_pipeline",
   ]);
   assertEquals(capture.selectedDescriptors.length, 1);
   assertEquals(capture.selectedDescriptors[0].name, "selected_tool");

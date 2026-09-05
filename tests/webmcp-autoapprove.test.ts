@@ -120,7 +120,8 @@ Deno.test("auto-approve SW wiring: availability + guard + execute path all consu
   assert(sw.includes('availabilityByTool[sourceTool.name] = enrollment.enrolled && approved'), "availability keyed on isApproved");
   assert(sw.includes('const approved = await isApproved(origin, sourceTool.name)'), "readSiteLazySources consults isApproved");
   assert(sw.includes('isApproved,') && sw.includes("createWebmcpAuthorizationGuard({"), "authorizationGuard consults isApproved via the extracted factory (lib/webmcp-authority.js)");
-  assert(sw.includes('if (!(await isApproved(origin, t.name)))'), "siteToolset execute path consults isApproved");
+  assert(sw.includes("executableWebMcpToolRecords(tools,"), "readSiteLazySources wires executable WebMCP records");
+  assert(!sw.includes("async function siteToolset"), "dead siteToolset is removed from service-worker.js");
   // tools.js derivation pins
   const tools = await Deno.readTextFile(new URL("../extension/lib/tools.js", import.meta.url));
   assert(tools.includes("if (enrolled) return true;"), "isApproved derives from enrollment");

@@ -1,0 +1,31 @@
+{
+ "bomFormat": "CycloneDX",
+ "specVersion": "1.5",
+ "version": 1,
+ "metadata": {
+  "component": {
+   "type": "application",
+   "name": "cap.bundled.sed",
+   "version": "1.0.0",
+   "licenses": [
+    {
+     "expression": "BSD-3-Clause"
+    }
+   ]
+  }
+ },
+ "components": [
+  {
+   "type": "application",
+   "name": "minised",
+   "version": "1.16",
+   "licenses": [
+    {
+     "license": {
+      "id": "BSD-3-Clause"
+     }
+    }
+   ]
+  }
+ ]
+}

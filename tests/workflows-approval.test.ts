@@ -280,6 +280,27 @@ import { createAgent } from "../extension/lib/agent.js";
 import { executableBrowserToolRecords } from "../extension/lib/lazy-tool-protocol.js";
 import { clearRunFence } from "../extension/lib/run-fence.js";
 import { workflowKey } from "../extension/lib/workflows.js";
+import { managementToolset } from "../extension/lib/management-tools.js";
+import {
+  createNamedAgent,
+  getNamedAgent,
+  deleteNamedAgent,
+} from "../extension/lib/named-agents.js";
+import { createNamedAgentDeleteGate } from "../extension/background/routes/agent-schedule.js";
+import {
+  createApprovalStore,
+  createPendingApproval,
+  resolvePendingApproval,
+  waitForApprovalDecision,
+  consumeApproved,
+  approvalCardDenial,
+  canonicalOperationTarget,
+  canonicalRecord,
+  canonicalField,
+  canonicalScalar,
+  payloadDigest,
+  opaqueTargetRef,
+} from "../extension/lib/owner-approval.js";
 
 function streamOf(parts, finishReason) {
   const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
@@ -441,4 +462,156 @@ Deno.test("slice-2 REAL path: a DENIED pipeline step fails the workflow closed �
   assert(joined.includes("denied"), "the denial reaches the model honestly: " + joined.slice(0, 400));
   assert(joined.includes("read the current site"), "the requirement is named");
   assert(joined.includes("site_report"), "the tool is named");
+});
+
+// ── 6. REAL-path destructive management in-route approval (kdjk) ─────────────
+// ── A real delete_named_agent step inside a pipeline workflow invokes the ────
+// ── real route gate, surfaces its owner approval card in-route, and awaits ───
+// ── decision: Allow deletes the agent and proceeds; Deny halts the pipeline. ─
+
+async function runRealDestructivePipeline(decision) {
+  const approvalStore = createApprovalStore();
+  const approvalEvents = [];
+  const executed = [];
+  const agentsMap = {
+    "doomed-agent": { id: "doomed-agent", name: "Doomed Agent", revision: 1 },
+  };
+
+  const payloadFields = (entries) =>
+    canonicalRecord(...entries.map(([name, value]) => canonicalField(name, canonicalScalar(value))));
+  const namedExistingPayload = (existing) => payloadFields([
+    ["id", existing?.id ?? ""],
+    ["instanceId", existing?.instanceId ?? `legacy:${existing?.id ?? ""}:0`],
+    ["revision", Number.isSafeInteger(existing?.revision) ? existing.revision : 0],
+  ]);
+  const namedBoundMutationPayload = (request, existing) =>
+    canonicalRecord(
+      canonicalField("request", request),
+      canonicalField("existing", namedExistingPayload(existing)),
+    );
+
+  const callRoute = async (type, args) => {
+    if (type === "named-agent.delete") {
+      const slug = args.id;
+      const existing = agentsMap[slug];
+      if (!existing) return { ok: false, error: `no agent ${slug}` };
+
+      const gateBeforeDelete = createNamedAgentDeleteGate(
+        { principal: "model", executionId: "exec-destructive-1" },
+        {
+          requireOwnerApproval: async (context, action, target, payload) => {
+            const executionId = context?.executionId ?? "exec-destructive-1";
+            const digest = await payloadDigest(payload);
+            const targetRef = `ref_${slug}`;
+            const pending = createPendingApproval(approvalStore, executionId, action, target, digest);
+            if (!pending.ok) return { ok: false, error: pending.error ?? "pending approval failed" };
+
+            const request = approvalCardDenial({ approvalId: pending.approvalId, action, targetRef });
+            approvalEvents.push({
+              type: "approval-request",
+              approvalId: pending.approvalId,
+              action,
+              targetRef,
+              target,
+              result: request,
+            });
+
+            // Asynchronously resolve or deny as the user would on the in-context approval card
+            queueMicrotask(() => {
+              resolvePendingApproval(approvalStore, pending.approvalId, decision === "approved");
+            });
+
+            const dec = await waitForApprovalDecision(approvalStore, pending.approvalId);
+            if (dec.decision === "approved") {
+              const exact = consumeApproved(approvalStore, executionId, action, target, digest);
+              if (exact.ok) {
+                approvalEvents.push({ type: "approval-settled", approvalId: pending.approvalId, state: "granted" });
+                return { ok: true };
+              }
+              return { ok: false, error: "approval mismatch" };
+            }
+            approvalEvents.push({ type: "approval-settled", approvalId: pending.approvalId, state: "denied" });
+            return { ok: false, approvalDenied: true, error: `The owner denied ${action}; the action was not performed.` };
+          },
+          canonicalOperationTarget,
+          namedBoundMutationPayload,
+          payloadFields,
+          cancelScheduledTaskBackground: () => ({ marked: Promise.resolve() }),
+        },
+      );
+
+      const gate = await gateBeforeDelete({ slug, existing });
+      if (!gate.ok) return gate;
+      delete agentsMap[slug];
+      return { ok: true, deleted: slug };
+    }
+    throw new Error(`unknown route ${type}`);
+  };
+
+  const mgmt = managementToolset({ callRoute });
+  const tools = {
+    delete_named_agent: mgmt.delete_named_agent,
+    site_report: {
+      description: "Report on the site",
+      execute: async () => {
+        return { ok: true, report: "step 2 executed" };
+      },
+    },
+  };
+
+  const dispatcher = createWorkflowPipelineDispatcher({
+    search: async (req) => ({ ok: true, results: [{ name: req.query, selectionRef: `sel_${req.query}` }] }),
+    execute: async (req) => {
+      const toolName = req.selectionRef.slice(4);
+      executed.push(toolName);
+      const t = tools[toolName];
+      if (!t) return { ok: false, error: `no tool ${toolName}` };
+      const res = await t.execute(req.arguments);
+      return { ok: true, selectedTool: toolName, result: res };
+    },
+    settle: async () => {},
+    context: async () => ({ signal: null, runId: "r1" }),
+  });
+
+  const pipe = JSON.stringify({
+    steps: [
+      { id: "s1", tool: "delete_named_agent", args: { id: "doomed-agent" } },
+      { id: "s2", tool: "site_report", args: {} },
+    ],
+  });
+
+  const outcome = await runPipelineWorkflow({
+    name: "destructive-test",
+    kind: "pipeline",
+    content: pipe,
+    dispatchStep: (tool, args, index) => dispatcher(tool, args, index),
+  });
+
+  return { outcome, approvalEvents, executed, agentsMap };
+}
+
+Deno.test("slice-2 REAL path: destructive delete_named_agent pipeline step surfaces owner card in-route and Allow completes deletion + step 2", async () => {
+  const { outcome, approvalEvents, executed, agentsMap } = await runRealDestructivePipeline("approved");
+  assert(outcome.ok, "pipeline completes after owner approves destructive step: " + JSON.stringify(outcome));
+  assertEquals(approvalEvents.length, 2, "surfaces approval-request then approval-settled");
+  assertEquals(approvalEvents[0].type, "approval-request");
+  assertEquals(approvalEvents[0].action, "named-agent.delete", "surfaces the exact destructive action");
+  assertEquals(approvalEvents[0].target, "named:12:doomed-agent", "canonical target names the exact agent slug");
+  assertEquals(approvalEvents[1].type, "approval-settled");
+  assertEquals(approvalEvents[1].state, "granted");
+  assertEquals(agentsMap["doomed-agent"], undefined, "agent is genuinely deleted after Allow");
+  assertEquals(executed, ["delete_named_agent", "site_report"], "subsequent pipeline step 2 executed after approval");
+});
+
+Deno.test("slice-2 REAL path: destructive delete_named_agent pipeline step denied by owner halts pipeline and leaves agent intact", async () => {
+  const { outcome, approvalEvents, executed, agentsMap } = await runRealDestructivePipeline("denied");
+  assert(!outcome.ok, "pipeline fails closed when owner denies destructive step: " + JSON.stringify(outcome));
+  assertStringIncludes(String(outcome.error), "The owner denied named-agent.delete; the action was not performed.");
+  assertEquals(approvalEvents.length, 2, "surfaces approval-request then approval-settled");
+  assertEquals(approvalEvents[0].type, "approval-request");
+  assertEquals(approvalEvents[0].action, "named-agent.delete");
+  assertEquals(approvalEvents[1].type, "approval-settled");
+  assertEquals(approvalEvents[1].state, "denied");
+  assert(agentsMap["doomed-agent"] !== undefined, "agent survives in storage when owner denies deletion");
+  assertEquals(executed, ["delete_named_agent"], "subsequent pipeline step 2 was NEVER executed because step 1 was denied");
 });

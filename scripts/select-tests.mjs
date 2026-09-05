@@ -15,16 +15,20 @@
 // suite instead of a silent core-only green. Nothing is skipped or weakened;
 // test:changed is a faster subset of the same assertions.
 //
-// Subset runs match the gate semantics EXACTLY (serial `deno test -A` on the
-// selected files): --parallel was measured and REJECTED because this suite has
-// cross-file hazards (tests that regenerate shared build artifacts, spawn the
-// Chrome-lock-bound security runner, or materialize /tmp trees race under
-// concurrency and produce false reds).
+// Subset runs match the gate semantics EXACTLY: the same two-phase partition
+// as the full suite (76hu) — serial build-artifact hazards first, the rest
+// with --parallel. A subset differs from the gate only in WHICH files run,
+// never in how they run: any serial hazard in the subset still runs serially.
+// (9hoc first ran subsets fully serial; vj4s's partition — shared via
+// scripts/test-partition.mjs and pinned by tests/test-partition-guard.test.ts
+// — made parallel subsets safe: an 18-file provider-gate subset dropped from
+// 182s to ~40s.)
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { partition } from "./test-partition.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -199,25 +203,40 @@ export function changedWithoutCoverage(changed, reverse) {
   return uncovered;
 }
 
+function runPhase(files, flags, label) {
+  const t0 = Date.now();
+  const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
+    stdio: "inherit",
+    cwd: ROOT,
+    // The marker tests/00-use-npm-test_test.ts checks for.
+    env: { ...process.env, CAP_TEST_RUNNER: "1" },
+  });
+  const secs = ((Date.now() - t0) / 1000).toFixed(0);
+  console.error(`select-tests: ${label} ${r.status === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
+  return r.status ?? 1;
+}
+
+// The shared two-phase partition (scripts/test-partition.mjs): serial hazards
+// first (never parallel), the rest with --parallel — same shape as the gate.
+// Exported so the 76hu before/after measurement can drive it directly.
+export function runPartitioned(files) {
+  const { serial, parallel } = partition(files);
+  console.error(
+    `select-tests: ${files.length} file(s) — partition: ${serial.length} serial hazard(s)${serial.length ? ` [${serial.join(", ")}]` : ""}, ${parallel.length} parallel`,
+  );
+  let rc = 0;
+  if (serial.length) rc = runPhase(serial, [], "serial phase");
+  if (rc === 0 && parallel.length) rc = runPhase(parallel, ["--parallel"], "parallel phase");
+  return rc;
+}
+
 function runDeno(files) {
   if (!files.length) {
     console.error("select-tests: no test files selected — nothing to run.");
     process.exit(1);
   }
   console.error(`select-tests: ${files.length} file(s):\n  ${files.map((f) => `  ${f}`).join("\n")}`);
-  // Subset runs match the gate semantics EXACTLY (serial `deno test -A` on the
-  // selected files, same as the full suite restricted to them): --parallel was
-  // measured and REJECTED because this suite has cross-file hazards (tests that
-  // regenerate shared build artifacts, spawn the Chrome-lock-bound security
-  // runner, or materialize /tmp trees race under concurrency and produce false
-  // reds). A subset must differ from the gate only in WHICH files run, never in
-  // how they run. The full suite stays `npm test`.
-  const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...files], {
-    stdio: "inherit",
-    cwd: ROOT,
-    env: { ...process.env, CAP_TEST_RUNNER: "1" },
-  });
-  process.exit(r.status ?? 1);
+  process.exit(runPartitioned(files));
 }
 
 function runFullSuite() {

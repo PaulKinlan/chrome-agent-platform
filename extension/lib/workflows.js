@@ -210,9 +210,20 @@ export function createWorkflowPipelineDispatcher({ search, execute, settle, cont
     try {
       const res = await search({ query: want, limit: 12 }, ctx);
       if (res?.ok === true && Array.isArray(res.results)) {
-        found = res.results.find((r) => r && typeof r.name === "string" && r.name === want) ?? null;
+        const exacts = res.results.filter((r) => r && typeof r.name === "string" && r.name === want);
+        if (exacts.length > 1) {
+          found = { ambiguous: true, count: exacts.length };
+        } else {
+          found = exacts[0] ?? null;
+        }
       }
     } catch { found = null; }
+    if (found && found.ambiguous === true) {
+      return {
+        ok: false,
+        error: `step ${stepIndex} names "${want}", which is ambiguous — ${found.count} tools share this name; ask the owner to disambiguate`,
+      };
+    }
     if (!found || typeof found.selectionRef !== "string") {
       return { ok: false, error: `step ${stepIndex} names "${want}", which is not a runnable tool in this context` };
     }

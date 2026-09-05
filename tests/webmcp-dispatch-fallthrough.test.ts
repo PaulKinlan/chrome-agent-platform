@@ -76,7 +76,7 @@ Deno.test("fall-through: no callable path at all is an honest internal error, di
 Deno.test("docs fallback: the live site-tool dispatch (readSiteLazySources) routes failures through withSiteDocsFallback", () => {
   const fnIdx = SW.indexOf("async function readSiteLazySources(");
   assert(fnIdx > 0, "readSiteLazySources is the live model-facing site-tool source");
-  const block = SW.slice(fnIdx, fnIdx + 4500);
+  const block = SW.slice(fnIdx, fnIdx + 6000);
   assert(block.includes("withSiteDocsFallback"), "the catalog dispatch routes failures through the docs fallback");
   assert(SW.includes('from "../lib/site-docs-fallback.js"'), "the fallback module is imported");
 });

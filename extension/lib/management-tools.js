@@ -13,6 +13,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 import { ASSET_BOUNDS, ASSET_TYPES } from "./artifacts.js";
+import { TABLE_LIMITS, TABLE_LOCALE_PROFILES } from "./table-core.js";
+import { TABLE_TOOL_NAMES } from "./table-tool-runtime.js";
 import { tagUntrusted } from "./untrusted-fence.js";
 
 /** The fixed management tool names (for the orchestrator introspection route). */
@@ -61,7 +63,66 @@ export const MANAGEMENT_TOOL_NAMES = [
   "board_list",
   "board_read",
   "board_read_messages",
+  ...TABLE_TOOL_NAMES,
 ];
+
+const TableArtifactIdSchema = z.string().min(1).max(200);
+const TableColumnIdSchema = z.string().regex(/^c(?:[1-9]\d*)$/u);
+const TableHeaderSchema = z.string().max(TABLE_LIMITS.maxHeaderBytes);
+const TableTypeSchema = z.union([
+  z.object({ kind: z.enum(["text", "boolean", "int64", "date", "datetime"]) }).strict(),
+  z.object({ kind: z.literal("decimal"), scale: z.number().int().min(0).max(18) }).strict(),
+]);
+const TableExplicitColumnSchema = z.object({
+  type: TableTypeSchema,
+  header: TableHeaderSchema.optional(),
+}).strict();
+const CanonicalTableSourceSchema = z.object({
+  artifactId: TableArtifactIdSchema,
+  format: z.literal("cap.table/1"),
+}).strict();
+const DelimitedTableSourceBase = {
+  artifactId: TableArtifactIdSchema,
+  format: z.enum(["csv", "tsv"]),
+  hasHeader: z.boolean(),
+  localeProfile: z.enum(Object.keys(TABLE_LOCALE_PROFILES)),
+};
+const DelimitedTableSourceSchema = z.union([
+  z.object({ ...DelimitedTableSourceBase, schemaMode: z.enum(["text", "infer"]) }).strict(),
+  z.object({
+    ...DelimitedTableSourceBase,
+    schemaMode: z.literal("explicit"),
+    columns: z.array(TableExplicitColumnSchema).max(TABLE_LIMITS.maxColumns),
+  }).strict(),
+]);
+const TableSourceSchema = z.union([CanonicalTableSourceSchema, DelimitedTableSourceSchema]);
+const TableOutputFields = {
+  outputName: z.string().min(1).max(ASSET_BOUNDS.maxNameLength).optional(),
+  timeoutMs: z.number().int().min(100).max(180_000).optional(),
+};
+const TableMetricSchema = z.object({
+  op: z.enum(["count_rows", "count_values", "sum", "avg", "min", "max"]),
+  column: TableColumnIdSchema.optional(),
+  header: TableHeaderSchema,
+  scale: z.number().int().min(0).max(18).optional(),
+}).strict().superRefine((metric, ctx) => {
+  if ((metric.op === "count_rows") === (metric.column !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["column"], message: "count_rows omits column; every other metric requires it" });
+  }
+  if ((metric.op === "avg") !== (metric.scale !== undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["scale"], message: "avg requires scale; every other metric omits it" });
+  }
+});
+const TableRangeSchema = z.object({
+  r1: z.number().int().min(1),
+  c1: z.number().int().min(1),
+  r2: z.number().int().min(1),
+  c2: z.number().int().min(1),
+}).strict();
+const TableTargetRowsSchema = z.object({
+  r1: z.number().int().min(1),
+  r2: z.number().int().min(1),
+}).strict();
 
 export function managementToolset({ callRoute }) {
   const call = (type, args) => Promise.resolve(callRoute(type, args ?? {}));
@@ -137,7 +198,7 @@ export function managementToolset({ callRoute }) {
         type: z.enum([...ASSET_TYPES]).default("text"),
         key: z.string().max(64).regex(/^[a-zA-Z0-9][a-zA-Z0-9 ._\-]{0,63}$/u).optional().describe("idempotency key (letters, digits, dot, dash, underscore, space; max 64 chars) — pass the same key to create-or-update the SAME artifact instead of duplicating"),
         name: z.string().max(ASSET_BOUNDS.maxNameLength).describe(`a short, clear name (max ${ASSET_BOUNDS.maxNameLength} characters)`),
-        content: z.string().describe(`the complete artifact content (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; use this field directly, never truncate)`),
+        content: z.string().describe("the complete artifact content (no size limit — pass the complete body in this field, never truncate; for very large bodies you may also build incrementally with append_asset)"),
       }),
       execute: ({ origin, type, key, name, content }) =>
         call("asset.create", { origin, assetType: type, key, name, content }),
@@ -151,7 +212,7 @@ export function managementToolset({ callRoute }) {
         id: z.string(),
         name: z.string().max(ASSET_BOUNDS.maxNameLength).optional(),
         type: z.enum([...ASSET_TYPES]).optional(),
-        content: z.string().optional().describe(`complete replacement content (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; never truncate)`),
+        content: z.string().optional().describe("complete replacement content (no size limit; never truncate)"),
       }),
       execute: (args) =>
         call("asset.update", {
@@ -181,11 +242,11 @@ export function managementToolset({ callRoute }) {
     }),
     append_asset: tool({
       description:
-        "Append text to the END of an artifact's content (the chunked build path for one artifact larger than a single call can carry). One call appends at most 64 KiB of UTF-8 text; call it repeatedly to grow an artifact — the body accumulates across calls up to the 4 MiB artifact storage ceiling, and every append is an immutable version. Prefer this over update_asset when you are building a large body incrementally: you never resend what is already stored. Pass expectVersion (the version you last read) to refuse the append if the artifact changed underneath you. The owner approves a model append like any other artifact edit.",
+        "Append text to the END of an artifact's content (the chunked build path for growing one artifact across several calls). There is no size limit: one call may carry any amount of text, and the body accumulates across calls with every append stored as an immutable version. Prefer this over update_asset when you are building a large body incrementally: you never resend what is already stored. Pass expectVersion (the version you last read) to refuse the append if the artifact changed underneath you. The owner approves a model append like any other artifact edit.",
       inputSchema: z.object({
         origin: z.string().default("master").describe("'master' or an https origin"),
         id: z.string().min(1).describe("the artifact id (from list_assets — the artifact you are growing)"),
-        content: z.string().min(1).describe(`the text to append to the end of the artifact (max ${ASSET_BOUNDS.maxAppendBytes} UTF-8 bytes per call; append in pieces for more)`),
+        content: z.string().min(1).describe("the text to append to the end of the artifact (no size limit; sent complete, never truncated)"),
         expectVersion: z.number().int().optional().describe("the version you last saw; the append is refused if the head has moved"),
       }),
       execute: ({ origin, id, content, expectVersion }) =>
@@ -205,7 +266,7 @@ export function managementToolset({ callRoute }) {
       execute: ({ origin }) => call("asset.list", { origin }),
     }),
     get_asset: tool({
-      description: "Read one artifact's content.",
+      description: "Read one artifact's content. Canonical cap.table/1 artifacts are local-only: this returns their id, digest, dimensions, and local-preview availability but never headers, rows, or cells.",
       inputSchema: z.object({
         origin: z.string().default("master"),
         id: z.string(),
@@ -398,7 +459,7 @@ export function managementToolset({ callRoute }) {
         "Generate an interactive HTML UI (a page, a widget, a data visualization, a small app) for the owner. It is saved as an html artifact AND rendered LIVE in a sandboxed double-iframe in the conversation. The UI may use inline scripts + styles (interactive) but runs in an ORIGIN-OPAQUE SANDBOX: no localStorage/sessionStorage/cookies, no network, no permission-gated APIs are available inside it (the frame is allow-scripts-only and its CSP blocks all egress). Write the UI to keep its state IN-MEMORY (JS variables — state resets on reload), or store state with the platform (a saved-state artifact/memory key) and load it back at start — never generate code that needs storage, cookies, or network at runtime. The owner's theme/locale is percolated in automatically.",
       inputSchema: z.object({
         name: z.string().max(ASSET_BOUNDS.maxNameLength).describe("a short, clear name for the generated UI"),
-        html: z.string().describe(`the complete HTML (max ${ASSET_BOUNDS.maxContentBytes} UTF-8 bytes; never truncate)`),
+        html: z.string().describe("the complete HTML (no size limit; never truncate)"),
         origin: z.string().default("master").describe("'master' for a hub-level artifact, or an https origin"),
       }),
       execute: ({ name, html, origin }) =>
@@ -468,6 +529,81 @@ export function managementToolset({ callRoute }) {
         stdin: z.string().optional().describe("optional standard input passed to the Python program"),
       }),
       execute: ({ code, stdin }) => call("python.execute", { code, stdin }),
+    }),
+
+    // ---- local table engine (full cells stay in artifacts; model sees metadata) ----
+    table_filter: tool({
+      description: "Filter a local table artifact with a strict typed predicate. The complete result is a new immutable cap.table/1 artifact; this tool returns only its id, digest, dimensions, and work/byte counts — never rows or cells.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        predicate: z.unknown().describe("strict all/any/not tree or typed leaf {column,op,value}; is_missing/is_present omit value"),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_filter", args }),
+    }),
+    table_select: tool({
+      description: "Project and reorder columns from a local table artifact. Repeated source columns and duplicate display headers are allowed; output ids are regenerated c1..cN. Returns metadata only.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        columns: z.array(z.object({ column: TableColumnIdSchema, header: TableHeaderSchema.optional() }).strict()).max(TABLE_LIMITS.maxColumns),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_select", args }),
+    }),
+    table_join: tool({
+      description: "Join two local table artifacts with exact typed keys and deterministic input order. Missing keys never match; duplicate keys produce the full Cartesian result or the whole job fails its bounds. Returns metadata only.",
+      inputSchema: z.object({
+        leftSource: TableSourceSchema,
+        rightSource: TableSourceSchema,
+        kind: z.enum(["inner", "left", "right", "full"]),
+        keys: z.array(z.object({ left: TableColumnIdSchema, right: TableColumnIdSchema }).strict()).min(1).max(8),
+        leftColumns: z.array(TableColumnIdSchema).max(TABLE_LIMITS.maxColumns),
+        rightColumns: z.array(TableColumnIdSchema).max(TABLE_LIMITS.maxColumns),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_join", args }),
+    }),
+    table_group_aggregate: tool({
+      description: "Group a local table by stable first-seen typed keys and compute exact count/sum/average/min/max metrics. Decimal math is BigInt-scaled with explicit half-even average scale. Returns metadata only.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        groupBy: z.array(TableColumnIdSchema).max(8),
+        metrics: z.array(TableMetricSchema).max(TABLE_LIMITS.maxMetrics),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_group_aggregate", args }),
+    }),
+    table_pivot: tool({
+      description: "Pivot a local table into explicit ordered categories and exact aggregate metrics. Unknown or missing undeclared categories fail the complete job; no rows or cells are returned to the provider.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        rowGroupBy: z.array(TableColumnIdSchema).max(8),
+        pivotColumn: TableColumnIdSchema,
+        categories: z.array(z.object({
+          value: z.union([z.string().max(TABLE_LIMITS.maxCellBytes), z.boolean()]),
+          header: TableHeaderSchema,
+        }).strict()).min(1).max(128),
+        metrics: z.array(TableMetricSchema).min(1).max(TABLE_LIMITS.maxMetrics),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_pivot", args }),
+    }),
+    table_formula: tool({
+      description: "Evaluate one closed, explicit-range formula over a local table. No JavaScript, SQL, network, volatile/indirect/external or whole-row references are available. Produces a materialized cap.table/1 artifact and returns metadata only.",
+      inputSchema: z.object({
+        source: TableSourceSchema,
+        mode: z.enum(["append_column", "scalar"]),
+        readRange: TableRangeSchema,
+        targetRows: TableTargetRowsSchema.optional(),
+        expression: z.string().min(1).max(4096),
+        result: z.object({ header: TableHeaderSchema, type: TableTypeSchema }).strict(),
+        numericPolicy: z.object({
+          divisionScale: z.number().int().min(0).max(18),
+          rounding: z.literal("half_even"),
+        }).strict(),
+        ...TableOutputFields,
+      }).strict(),
+      execute: (args) => call("table.run", { toolId: "table_formula", args }),
     }),
 
     // ---- schedules (per-agent alarm visibility + control) ----

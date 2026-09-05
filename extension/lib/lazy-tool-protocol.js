@@ -32,6 +32,8 @@ import {
   buildLazyProviderCapture,
   LAZY_PROTOCOL_TOOL_WIRE,
 } from "./lazy-tool-wire.js";
+import { runPipeline } from "./tool-pipeline.js";
+import { createWorkflowPipelineDispatcher } from "./workflows.js";
 import {
   fenceUntrustedText,
   fenceUntrustedValue,
@@ -40,6 +42,7 @@ import {
 } from "./untrusted-fence.js";
 import {
   executeBundledWasiJob,
+  isStreamBackedBundledTool,
   previewSpecFor,
   validatePreviewInput,
 } from "./tool-exec-preview.js";
@@ -1304,23 +1307,50 @@ export function executableBundledToolRecords(rows, context = {}) {
       try {
         let normalizedArgs = [];
         let normalizedStdin = "";
+        let normalizedInputRef = null;
         if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-          if (Array.isArray(rawArgs.args)) {
-            normalizedArgs = rawArgs.args.filter((a) => typeof a === "string");
+          const keys = Object.keys(rawArgs);
+          const allowed = new Set([
+            "toolId", "args", "stdin", "input", "text", "docA", "docB",
+            ...(isStreamBackedBundledTool(toolId) ? ["inputRef"] : []),
+          ]);
+          if ((Object.hasOwn(rawArgs, "toolId") && rawArgs.toolId !== toolId) ||
+              keys.some((key) => !allowed.has(key)) ||
+              (Object.hasOwn(rawArgs, "args") &&
+                (!Array.isArray(rawArgs.args) || rawArgs.args.some((arg) => typeof arg !== "string")))) {
+            return { ok: false, error: "invalid_arguments: shape" };
           }
-          if (typeof rawArgs.stdin === "string") {
-            normalizedStdin = rawArgs.stdin;
-          } else if (typeof rawArgs.input === "string") {
-            normalizedStdin = rawArgs.input;
-          } else if (typeof rawArgs.text === "string") {
-            normalizedStdin = rawArgs.text;
-          } else if (typeof rawArgs.docA === "string" && typeof rawArgs.docB === "string") {
-            normalizedArgs = [rawArgs.docA, rawArgs.docB];
+          if (Array.isArray(rawArgs.args)) normalizedArgs = [...rawArgs.args];
+          const textKeys = ["stdin", "input", "text"].filter((key) => Object.hasOwn(rawArgs, key));
+          const hasDocs = Object.hasOwn(rawArgs, "docA") || Object.hasOwn(rawArgs, "docB");
+          if (textKeys.length > 1 || (hasDocs && textKeys.length) ||
+              (hasDocs && Object.hasOwn(rawArgs, "args")) ||
+              (hasDocs && !(typeof rawArgs.docA === "string" && typeof rawArgs.docB === "string")) ||
+              (textKeys.length && typeof rawArgs[textKeys[0]] !== "string") ||
+              (Object.hasOwn(rawArgs, "inputRef") && (textKeys.length || hasDocs))) {
+            return { ok: false, error: "invalid_arguments: ambiguous input" };
+          }
+          if (textKeys.length) normalizedStdin = rawArgs[textKeys[0]];
+          else if (hasDocs) normalizedArgs = [rawArgs.docA, rawArgs.docB];
+          if (Object.hasOwn(rawArgs, "inputRef")) {
+            const ref = rawArgs.inputRef;
+            if (!ref || typeof ref !== "object" || Array.isArray(ref) ||
+                JSON.stringify(Object.keys(ref).sort()) !== JSON.stringify(["id", "kind", "version"]) ||
+                ref.version !== 1 || !/^[0-9a-f]{32}$/u.test(ref.id) ||
+                !new Set(["input", "stdout"]).has(ref.kind)) {
+              return { ok: false, error: "invalid_arguments: inputRef" };
+            }
+            normalizedInputRef = Object.freeze({ version: 1, id: ref.id, kind: ref.kind });
           }
         } else if (typeof rawArgs === "string") {
           normalizedStdin = rawArgs;
         } else if (Array.isArray(rawArgs)) {
-          normalizedArgs = rawArgs.filter((a) => typeof a === "string");
+          if (rawArgs.some((arg) => typeof arg !== "string")) {
+            return { ok: false, error: "invalid_arguments: args" };
+          }
+          normalizedArgs = [...rawArgs];
+        } else if (rawArgs != null) {
+          return { ok: false, error: "invalid_arguments: shape" };
         }
 
         const validated = validatePreviewInput({
@@ -1328,7 +1358,12 @@ export function executableBundledToolRecords(rows, context = {}) {
           args: normalizedArgs,
           stdin: normalizedStdin,
         });
-        return { ok: true, data: validated };
+        return {
+          ok: true,
+          data: normalizedInputRef
+            ? Object.freeze({ toolId: validated.toolId, args: validated.args, inputRef: normalizedInputRef })
+            : validated,
+        };
       } catch (err) {
         return { ok: false, error: `invalid_arguments: ${err?.message || err}` };
       }
@@ -1380,6 +1415,7 @@ export function executableBundledToolRecords(rows, context = {}) {
  *   selectionAuthority?: any,
  *   acceptsImageToolResults?: boolean | (() => boolean),
  *   vectorTableLoader?: null | (() => Promise<any>),
+ *   onPermissionRequest?: null | ((denial: any) => Promise<string> | string),
  * }} [options]
  */
 export function createLazyProviderToolset({
@@ -1394,6 +1430,13 @@ export function createLazyProviderToolset({
   // provider override can change the answer mid-session.
   acceptsImageToolResults = false,
   vectorTableLoader = null,
+  // The run's owner-approval seam (agent.js's onPermissionRequest). A
+  // run_pipeline STEP whose dispatch pauses on a capability surfaces the real
+  // owner card through it; Allow re-runs the step through the runtime-only
+  // resume path (chrome-agent-platform-3cb6). Absent here, a pause fails the
+  // step closed exactly as a direct call's pause would with no approval
+  // surface.
+  onPermissionRequest = null,
 } = {}) {
   const protocol = new LazyToolProtocol({ readSources, selectionAuthority, vectorTableLoader });
   if (typeof contextReader !== "function") {
@@ -1479,6 +1522,71 @@ export function createLazyProviderToolset({
             })),
           ],
         };
+      },
+    }),
+    // run_pipeline (chrome-agent-platform-qsm4, slice 2): the declarative
+    // pipeline core (lib/tool-pipeline.js) wired LIVE. Each step dispatches
+    // through THIS protocol's public search → execute seam — the exact-name
+    // catalog entry's selectionRef, the ordinary validation/authority/
+    // fencing/ledger path — via the same dispatcher adapter the workflow
+    // runner uses (lib/workflows.js createWorkflowPipelineDispatcher), so a
+    // step's owner-approval pause surfaces the run's real card (the 3cb6
+    // machinery: requestApproval → resumeApprovedCall) and a deny/failure
+    // halts the pipeline fail-closed. Per-step progress rides the run
+    // context's onProgress for the plan strip.
+    run_pipeline: tool({
+      description: LAZY_PROTOCOL_TOOL_WIRE[3].description,
+      inputSchema: z.object({
+        name: z.string().max(80).optional(),
+        steps: z.array(z.object({
+          id: z.string(),
+          tool: z.string(),
+          args: z.record(z.unknown()).optional(),
+        }).strict()).min(1),
+      }).strict(),
+      outputSchema: jsonSchema(LAZY_PROTOCOL_TOOL_WIRE[3].outputSchema),
+      execute: async (request) => {
+        const context = await readContext();
+        if (!context) return fixedError("lazy-run-context-unavailable");
+        const dispatchStep = createWorkflowPipelineDispatcher({
+          search: (req, ctx) => protocol.search(req, ctx),
+          execute: (req, ctx) => protocol.execute(req, ctx),
+          settle: (ref) => protocol.settlePausedCall(ref),
+          requestApproval: typeof onPermissionRequest === "function" ? onPermissionRequest : null,
+          // The paused record lives under THIS run's fence. Re-read the LIVE
+          // context per resume (parity with the agent-loop wrapper): an earlier
+          // step may have moved the run's documentId/origin, and the fence
+          // check must see the scope as it stands at resume time.
+          resume: async (ref) => protocol.resumeApprovedCall(ref, await readContext()),
+          // Each step re-reads the LIVE context (a long pipeline tracks the
+          // run's current scope exactly as a model-issued call would).
+          context: readContext,
+        });
+        const emit = ownData(context, "onProgress");
+        const pipelineName = typeof ownData(request, "name") === "string" ? ownData(request, "name") : "";
+        // runPipeline awaits each step before dispatching the next, so the
+        // counter IS the current step's index.
+        let stepIndex = 0;
+        return await runPipeline(
+          { name: pipelineName, steps: ownData(request, "steps") },
+          {
+            dispatchTool: (name, args) => dispatchStep(name, args, stepIndex++),
+            onStep: typeof emit === "function"
+              ? (evt) => {
+                try {
+                  emit({
+                    type: "pipeline-step",
+                    status: evt.status === "running" ? "running" : evt.status === "ok" ? "ok" : "failed",
+                    tool: evt.tool,
+                    id: evt.id,
+                    index: evt.index,
+                    pipeline: pipelineName,
+                  });
+                } catch { /* progress is telemetry — never break the run */ }
+              }
+              : undefined,
+          },
+        );
       },
     }),
   });

@@ -476,14 +476,20 @@ Three properties make it safe to compose tools this way:
   pipeline with a structured error rather than running a step against a missing
   input; step count and args size are bounded.
 
-Visually, a pipeline is meant to read as a checklist in the **plan strip** — one
-checkpoint per step (`step-start` → `step-end`), the same vocabulary a single
-run already uses — so the owner watches the pipe advance step by step, and the
-transcript pairs each step's call and result into one card. Contrast with
-`run_script`: that runs one opaque sandboxed-JS blob approved by a source digest;
-a pipeline is a legible chain of NAMED existing tools, each re-gated and each
-visible on its own row. Use `run_script` for arbitrary logic, a pipeline to chain
-tools safely and inspectably.
+A pipeline runs through `run_pipeline`, the fourth lazy-protocol meta-tool
+(slice 2, chrome-agent-platform-qsm4): its handler runs the core with the same
+dispatcher adapter the workflow runner uses, so every step resolves by exact
+tool name against the live catalog and executes through `LazyToolProtocol
+.execute` (the PUBLIC seam — validation, live authority, fencing and the ledger
+all apply). Visually, a pipeline reads as a checklist in the **plan strip** —
+one row per step (`step-start` → `step-end` via the run context's `onProgress`
+bridge), the same vocabulary a single run already uses — so the owner watches
+the pipe advance step by step. The wrapper itself is plumbing (no card); the
+steps are the rows. Contrast with `run_script`: that runs one opaque
+sandboxed-JS blob approved by a source digest; a pipeline is a legible chain
+of NAMED existing tools, each re-gated and each visible on its own row. Use
+`run_script` for arbitrary logic, a pipeline to chain tools safely and
+inspectably.
 
 ## Distribution archive boundary
 The production ZIP is a projection, not a copy of the developer's local

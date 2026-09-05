@@ -2,7 +2,6 @@
 // result envelopes. Pure only: no route, Worker, DOM, filesystem or authority.
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const CANONICAL_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const ENCODE_CHUNK_BYTES = 12 * 1024; // divisible by 3; bounds temporary strings
 
 /** Encode the complete byte sequence as canonical standard base64.
@@ -32,28 +31,38 @@ export function encodeCanonicalBase64(bytes) {
  * non-ASCII, URL-safe alphabet and misplaced padding; re-encoding rejects
  * non-zero trailing bits and any other noncanonical representation. */
 export function decodeCanonicalBase64(value) {
-  if (typeof value !== "string" || value.length % 4 !== 0 || !CANONICAL_RE.test(value)) {
+  if (typeof value !== "string" || value.length % 4 !== 0) {
     throw new TypeError("base64_canonical");
   }
+  if (value.length === 0) return new Uint8Array();
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  const decodedLength = value.length === 0 ? 0 : (value.length / 4) * 3 - padding;
-  const out = new Uint8Array(decodedLength);
+  const out = new Uint8Array((value.length / 4) * 3 - padding);
   let target = 0;
   for (let index = 0; index < value.length; index += 4) {
+    const last = index + 4 === value.length;
     const a = ALPHABET.indexOf(value[index]);
     const b = ALPHABET.indexOf(value[index + 1]);
-    const c = value[index + 2] === "=" ? 0 : ALPHABET.indexOf(value[index + 2]);
-    const d = value[index + 3] === "=" ? 0 : ALPHABET.indexOf(value[index + 3]);
+    const c = value[index + 2] === "=" ? -1 : ALPHABET.indexOf(value[index + 2]);
+    const d = value[index + 3] === "=" ? -1 : ALPHABET.indexOf(value[index + 3]);
+    if (a < 0 || b < 0) throw new TypeError("base64_canonical");
     out[target++] = (a << 2) | (b >>> 4);
-    if (value[index + 2] !== "=") {
-      out[target++] = ((b & 0x0f) << 4) | (c >>> 2);
+    if (c < 0) {
+      // One-byte tail: padding is final and the unused four bits are zero.
+      if (!last || value[index + 2] !== "=" || value[index + 3] !== "=" || (b & 0x0f) !== 0) {
+        throw new TypeError("base64_canonical");
+      }
+      continue;
     }
-    if (value[index + 3] !== "=") {
-      out[target++] = ((c & 0x03) << 6) | d;
+    out[target++] = ((b & 0x0f) << 4) | (c >>> 2);
+    if (d < 0) {
+      // Two-byte tail: one final '=' and the unused two bits are zero.
+      if (!last || value[index + 3] !== "=" || (c & 0x03) !== 0) {
+        throw new TypeError("base64_canonical");
+      }
+      continue;
     }
+    out[target++] = ((c & 0x03) << 6) | d;
   }
-  if (target !== decodedLength || encodeCanonicalBase64(out) !== value) {
-    throw new TypeError("base64_canonical");
-  }
+  if (target !== out.byteLength) throw new TypeError("base64_canonical");
   return out;
 }

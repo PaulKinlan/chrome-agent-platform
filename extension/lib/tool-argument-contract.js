@@ -16,6 +16,9 @@ const LARGE_FIELDS = Object.freeze({
   management: Object.freeze({
     create_asset: Object.freeze({ field: "content" }),
     update_asset: Object.freeze({ field: "content" }),
+    // The chunked build path carries the SAME body bytes create_asset would —
+    // a chunk is exact content, never NFKC-rewritten (gpw).
+    append_asset: Object.freeze({ field: "content" }),
     generate_ui: Object.freeze({ field: "html" }),
     create_script: Object.freeze({ field: "source" }),
     update_script: Object.freeze({ field: "source" }),
@@ -78,6 +81,19 @@ const TOOL_DESCRIPTOR_RESULT = {
     selectionRef: { type: ["string", "null"] },
   },
 };
+const TABLE_RESULT = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" }, artifactId: { type: "string" },
+    schema: { type: "string" }, sha256: { type: "string" },
+    rows: { type: "number" }, columns: { type: "number" },
+    inputBytes: { type: "number" }, outputBytes: { type: "number" },
+    workUnits: { type: "number" }, warnings: { type: "array", items: { type: "string" } },
+    previewAvailableLocally: { type: "boolean" }, deduped: { type: "boolean" },
+    code: { type: "string" }, error: ERROR,
+  },
+  "x-cap-output-shape": "provider-safe-table-metadata",
+};
 const PROVIDER_SEARCH_RESULT = {
   type: "object",
   properties: {
@@ -128,6 +144,28 @@ export const TOOL_OUTPUT_SCHEMA_REGISTRY = Object.freeze({
       retryable: { type: "boolean" }, selectionRef: { type: "string" },
     },
   },
+  // chrome-agent-platform-qsm4 (slice 2): run_pipeline's envelope is the
+  // pipeline runner's own outcome — the per-step rows ({id, tool, result}),
+  // the final step's result, or the fail-closed halt (failedStep + error).
+  run_pipeline: {
+    type: "object",
+    properties: {
+      ok: { type: "boolean" }, name: { type: "string" },
+      steps: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" }, tool: { type: "string" },
+            result: JSON_VALUE_OUTPUT,
+          },
+        },
+      },
+      final: JSON_VALUE_OUTPUT,
+      failedStep: { type: "string" }, stepIndex: { type: "number" },
+      completed: { type: "array" }, error: ERROR,
+    },
+  },
   create_asset: ARTIFACT_RESULT,
   update_asset: ARTIFACT_RESULT,
   generate_ui: ARTIFACT_RESULT,
@@ -139,6 +177,12 @@ export const TOOL_OUTPUT_SCHEMA_REGISTRY = Object.freeze({
     },
   },
   get_asset: ARTIFACT_RESULT,
+  table_filter: TABLE_RESULT,
+  table_select: TABLE_RESULT,
+  table_join: TABLE_RESULT,
+  table_group_aggregate: TABLE_RESULT,
+  table_pivot: TABLE_RESULT,
+  table_formula: TABLE_RESULT,
   "provider-server/gemini/google_search": PROVIDER_SEARCH_RESULT,
   "provider-server/anthropic/web_search": PROVIDER_SEARCH_RESULT,
 });

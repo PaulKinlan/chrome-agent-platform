@@ -211,7 +211,7 @@ Deno.test("reload fidelity: the reopened agent surface renders every tool card, 
 });
 
 // ── 4. what is not shown is stated ───────────────────────────────────────────
-Deno.test("reload fidelity (dptw): all 52 runs are in the agent view — no 50-run view bound", async () => {
+Deno.test("reload fidelity: runs beyond the last 50 are stated in-line by default, never silently dropped", async () => {
   const store = new FakeStore();
   const registry = makeRegistry(store);
   const agentId = "named:many";
@@ -221,14 +221,35 @@ Deno.test("reload fidelity (dptw): all 52 runs are in the agent view — no 50-r
   }
   const view = await agentView(registry, agentId);
   assertEquals(view.totalExecutions, N);
-  assertEquals(view.truncatedExecutions, 0, "dptw: no view bound — nothing omitted");
-  assertEquals(toolCards(view).length, N, "every run's card renders, past the old 50 cap");
-  assert(view.messages.some((m) => m.content === "a1"), "the oldest run is in the view");
-  assert(!view.messages.some((m) => m.role === "system" && m.viewBound), "no view-bound notice — there is no bound");
+  assertEquals(view.truncatedExecutions, 2, "the 2 oldest runs are beyond the default 50-run window");
+  assertEquals(toolCards(view).length, 50, "the last 50 runs' cards");
+  assert(!view.messages.some((m) => m.content === "a1" || m.content === "a2"), "the two oldest runs are outside the default view");
+  assertEquals(view.messages[0].role, "system");
+  assert(/last 50 of 52 runs/.test(view.messages[0].content), `the notice states the bound: ${view.messages[0].content}`);
+  assertEquals(view.messages[1].content, "t3", "the view starts at the 51st-newest run");
 });
 
-// ── dptw (R7): the view has no 50-execution / 250-row bounds ───────────────
-Deno.test("reload fidelity (dptw): the reopened thread renders runs past the old 50-execution view bound", async () => {
+Deno.test("reload fidelity: on-demand pagination loads agent runs past the 50-execution window", async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store);
+  const agentId = "named:many-paginated";
+  const N = 52;
+  for (let i = 1; i <= N; i++) {
+    await seedRun(registry, `exec_fid_many_p_${String(i).padStart(3, "0")}`, { agentId, task: `t${i}`, result: `a${i}`, toolCount: 1 });
+  }
+  const view = await buildAgentRunView({ agentId, all: true }, {
+    listRuns: async () => (await registry.list()).runs,
+    listLogs: (id, limit) => registry.listLogs(id, limit),
+    recordFailure: () => {},
+  });
+  assertEquals(view.totalExecutions, N);
+  assertEquals(view.truncatedExecutions, 0, "no view bound when all: true");
+  assertEquals(toolCards(view).length, N, "every run's card renders");
+  assert(view.messages.some((m) => m.content === "a1"), "the oldest run is in the view");
+  assert(!view.messages.some((m) => m.role === "system" && m.viewBound), "no view-bound notice");
+});
+
+Deno.test("reload fidelity: thread windowed replay bounds default open, older runs load on demand", async () => {
   const store = new FakeStore();
   // Retention keeps 60 runs per thread so only the VIEW bound can truncate.
   const registry = makeRegistry(store, { retention: { mode: "bounded", perThread: 60 } });
@@ -238,10 +259,21 @@ Deno.test("reload fidelity (dptw): the reopened thread renders runs past the old
     if (i > 1) await continueThread(t.id, `turn ${i}`);
     await seedRun(registry, `exec_dptw_view_${String(i).padStart(3, "0")}`, { threadId: t.id, task: `turn ${i}`, result: `answer ${i}` });
   }
-  const view = await threadView(registry, t.id);
-  assertEquals(view.totalExecutions, N);
-  assertEquals(view.truncatedExecutions, 0, "all 55 runs are in the view — past the old 50 cap");
-  assertEquals(toolCards(view).length, N * TOOLS_PER_RUN, "every tool card of all 55 runs reopens");
+  const defaultView = await threadView(registry, t.id);
+  assertEquals(defaultView.totalExecutions, N);
+  assertEquals(defaultView.truncatedExecutions, 5, "default view bounds at 50 executions");
+  assertEquals(toolCards(defaultView).length, 50 * TOOLS_PER_RUN, "50 runs' cards rendered by default");
+
+  // On demand: all runs load via pagination options
+  const allView = await buildThreadRunView(await getThread(t.id), {
+    listThreadExecutions: (id) => registry.listThreadExecutions(id),
+    listLogs: (id, limit) => registry.listLogs(id, limit),
+    commitTerminal: commitThreadTerminal,
+    recordFailure: () => {},
+  }, { all: true });
+  assertEquals(allView.totalExecutions, N);
+  assertEquals(allView.truncatedExecutions, 0, "all 55 runs loaded on demand");
+  assertEquals(toolCards(allView).length, N * TOOLS_PER_RUN, "every tool card of all 55 runs reopens");
 });
 
 Deno.test("reload fidelity (dptw): a run with more than 250 log rows reopens every row", async () => {

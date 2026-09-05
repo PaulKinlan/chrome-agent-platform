@@ -16,7 +16,7 @@
 // behaviours the consolidation is supposed to make identical by construction:
 // focus trap entry point, Escape, backdrop light-dismiss, and the destructive
 // default-focus rule. CAP-FB-20260827-DIALOG-CONSOLIDATION-01.
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
 const EXT = new URL("../extension", import.meta.url).pathname;
 const SHOTS = Deno.env.get("CAP_EVIDENCE_DIR") ?? "./evidence/dialogs";
@@ -30,11 +30,17 @@ const { proc, wsUrl } = await launchChrome({
     "--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*", `--user-data-dir=${profile}`,
-    "--noerrdialogs", "--no-first-run", "--ozone-platform=headless",
-    "--ozone-override-screen-size=1280,900", "--use-angle=swiftshader-webgl",
+    "--noerrdialogs", "--no-first-run", "--window-size=1280,900",
     "about:blank",
   ],
 });
+
+const HARD_TIMEOUT_MS = 30_000;
+const hardTimer = setTimeout(() => {
+  console.error(`kat-dialog-consolidation: timed out after ${HARD_TIMEOUT_MS} ms`);
+  try { proc.kill("SIGKILL"); } catch {}
+  Deno.exit(1);
+}, HARD_TIMEOUT_MS);
 
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = r; });
@@ -45,14 +51,18 @@ ws.onmessage = (e) => {
   if (d.id && pending.has(d.id)) { pending.get(d.id)!(d); pending.delete(d.id); }
 };
 const send = (m: string, p: any = {}, s?: string) =>
-  new Promise<any>((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method: m, params: p, sessionId: s })); });
+  new Promise<any>((res, rej) => {
+    const i = ++id;
+    const t = setTimeout(() => { pending.delete(i); rej(new Error(`CDP ${m} timed out`)); }, 10_000);
+    pending.set(i, (val) => { clearTimeout(t); res(val); });
+    ws.send(JSON.stringify({ id: i, method: m, params: p, sessionId: s }));
+  });
 
-let sw: any = null;
-for (let i = 0; i < 60 && !sw; i++) {
-  const t = await send("Target.getTargets");
-  sw = t.result.targetInfos.find((x: any) => x.type === "service_worker" && x.url.startsWith("chrome-extension://"));
-  if (!sw) await sleep(250);
-}
+let failed = 0;
+
+try {
+const sw = await waitForServiceWorker(send, { timeoutMs: 15_000 });
+if (!sw) throw new Error("extension service worker did not register");
 const extId = new URL(sw.url).host;
 
 async function openPage(path: string) {
@@ -135,8 +145,8 @@ const check = (name: string, ok: boolean, detail = "") =>
     d.close();
     out.escapeDenied = (await p1) === false;
 
-    // (b) without the flag, a click approves normally
-    const p2 = mod.confirmActionDialog({ title: "Plain", body: "ok?", confirmLabel: "Yes" });
+    // (b) without the flag (requireGenuineGesture: false), a scripted click approves normally
+    const p2 = mod.confirmActionDialog({ title: "Plain", body: "ok?", confirmLabel: "Yes", requireGenuineGesture: false });
     await new Promise(r => setTimeout(r, 200));
     d = document.querySelector('dialog.cap-confirm-dialog');
     out.plainFocused = (d?.querySelector(':focus')?.textContent ?? '').trim();
@@ -198,9 +208,13 @@ const check = (name: string, ok: boolean, detail = "") =>
 }
 
 console.log("\n" + results.join("\n"));
-const failed = results.filter((r) => r.startsWith("FAIL")).length;
+failed = results.filter((r) => r.startsWith("FAIL")).length;
 console.log(`\ndialog evidence: ${results.length - failed}/${results.length} passed`);
 
-try { proc.kill("SIGKILL"); } catch { /* gone */ }
-await Deno.remove(profile, { recursive: true }).catch(() => {});
+} finally {
+  clearTimeout(hardTimer);
+  try { ws.close(); } catch { /* closed */ }
+  try { proc.kill("SIGKILL"); } catch { /* gone */ }
+  await Deno.remove(profile, { recursive: true }).catch(() => {});
+}
 Deno.exit(failed ? 1 : 0);

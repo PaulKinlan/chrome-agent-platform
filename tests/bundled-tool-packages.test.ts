@@ -72,9 +72,9 @@ Deno.test("SPDX: everything else rejected fail-closed", () => {
   assert(!isValidLicenseExpression(null) && !isValidLicenseExpression(undefined) && !isValidLicenseExpression(42));
 });
 
-Deno.test("manifests: all 28 shipped manifests validate against the real authority (canonical bytes)", async () => {
+Deno.test("manifests: all 31 shipped manifests validate against the real authority (canonical bytes)", async () => {
   const probe = new WasmPackageAuthority();
-  assertEquals(BUNDLED_INVENTORY.manifests.length, 28);
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 31);
   for (const row of BUNDLED_INVENTORY.manifests) {
     const rel = `extension/wasm/manifests/${row.pkg}-${row.version}.manifest.json`;
     const raw = await Deno.readTextFile(root(rel));
@@ -88,7 +88,11 @@ Deno.test("manifests: all 28 shipped manifests validate against the real authori
 });
 
 Deno.test("manifests: composite licence terms present exactly where intended", async () => {
-  const read = async (tool) => JSON.parse(await Deno.readTextFile(root(`extension/wasm/manifests/cap.bundled.${tool}-1.0.0.manifest.json`)));
+  const read = async (tool) => {
+    const row = BUNDLED_TOOL_PACKAGES.find((candidate) => candidate.packageId === `cap.bundled.${tool}`);
+    assert(row, `package row for ${tool}`);
+    return JSON.parse(await Deno.readTextFile(root(`extension/wasm/manifests/${row.packageId}-${row.version}.manifest.json`)));
+  };
   assertEquals((await read("toml2json")).license.spdx, "MIT AND Apache-2.0");
   assertEquals((await read("toml2json")).license.notices, "extension/wasm/licenses/toml2json-NOTICES.txt");
   assertEquals((await read("gzip")).license.spdx, "Zlib AND Apache-2.0");
@@ -100,7 +104,7 @@ Deno.test("manifests: composite licence terms present exactly where intended", a
   assertEquals((await read("csvtool")).license.spdx, "Apache-2.0");
   assertEquals((await read("markdown")).license.spdx, "BSD-2-Clause");
   assertEquals((await read("base64")).license.spdx, "MIT");
-  assertEquals((await read("sort")).license.spdx, "Apache-2.0");
+  assertEquals(JSON.parse(await Deno.readTextFile(root("extension/wasm/manifests/cap.bundled.sort-2.0.0.manifest.json"))).license.spdx, "MIT");
   // an OR expression in place of the toml dual licence fails validation
   const mutated = await read("toml2json");
   mutated.license.spdx = "MIT OR Apache-2.0";
@@ -118,7 +122,7 @@ Deno.test("inventory: every declared file ships on disk with the exact pinned sh
   }
   // no unmanifested binaries: every CAS file maps to exactly one manifest executable
   const cas = BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/"));
-  assertEquals(cas.length, 28);
+  assertEquals(cas.length, 31);
   const execShas = new Set();
   for (const m of BUNDLED_INVENTORY.manifests) {
     const manifest = JSON.parse(await Deno.readTextFile(root(`extension/wasm/manifests/${m.pkg}-${m.version}.manifest.json`)));
@@ -128,19 +132,19 @@ Deno.test("inventory: every declared file ships on disk with the exact pinned sh
   for (const f of cas) assert(execShas.has(f.rel.slice("extension/wasm/cas/".length, -".wasm".length)), f.rel);
 });
 
-Deno.test("admission: all 28 packages admit through the real authority over the real bytes; re-admission dedupes", async () => {
+Deno.test("admission: all 31 packages admit through the real authority over the real bytes; re-admission dedupes", async () => {
   const store = new FakeStore();
   const inventory = diskInventory();
   const authority = new WasmPackageAuthority({ getStore: () => store, inventory, now: () => 1000 });
   const first = await admitBundledToolPackages(authority, { inventory });
   assert(first.ok, JSON.stringify(first.results.filter((r) => !r.ok)));
-  assertEquals(first.results.length, 28);
+  assertEquals(first.results.length, 31);
   assert(first.results.every((r) => !r.deduped));
   for (const row of BUNDLED_TOOL_PACKAGES) {
     const q = await authority.query({ packageId: row.packageId });
     assert(q.ok, row.packageId);
     assertEquals(q.record.current.state, "committed");
-    assertEquals(q.record.current.version, "1.0.0");
+    assertEquals(q.record.current.version, row.version);
     assertEquals(q.record.lane, "bundled");
   }
   const second = await admitBundledToolPackages(authority, { inventory });
@@ -162,14 +166,14 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors admit exactly the 28-tool Settings allowlist", () => {
-  assertEquals(BUNDLED_TOOL_PACKAGES.length, 28);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 28);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 28);
+Deno.test("posture: descriptors admit exactly the 31-tool Settings allowlist", () => {
+  assertEquals(BUNDLED_TOOL_PACKAGES.length, 31);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 31);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 31);
   const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(previewRows.map((r) => r.toolId).sort()), JSON.stringify(
-    ["awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
-  ), "exactly the 28-tool allowlist");
+    ["awk", "awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+  ), "exactly the 31-tool allowlist");
   for (const row of previewRows) {
     assertEquals(row.settingsPreview, true, row.toolId);
     assertEquals(row.disabled, false, row.toolId);
@@ -187,42 +191,46 @@ Deno.test("posture: descriptors admit exactly the 28-tool Settings allowlist", (
   const listed = listBundledToolPackages();
   listed[0].description = "mutated";
   assert(BUNDLED_TOOL_PACKAGES[0].description !== "mutated", "enumeration must return copies");
-  // ALL 23 admitted rows retain truthful per-tool caveats. Markdown has an
+  // Every admitted row retains truthful per-tool caveats. Markdown has an
   // empty workspace; stat/du have inputs/f.bin; tree has the nested inputs seed.
+  const fileStreamTools = new Set(["base64", "wc", "tr", "grep", "uniq", "sort", "sed", "awk", "jq"]);
   for (const row of previewRows) {
     const caveats = (row.caveats ?? []).join(" ");
-    if (row.toolId === "markdown") {
+    if (fileStreamTools.has(row.toolId)) {
+      assert(caveats.includes("owner-bound OPFS input/output references"), `${row.toolId}: file-backed authority caveat`);
+      assert(caveats.includes("complete size and SHA-256 receipt"), `${row.toolId}: complete receipt caveat`);
+    } else if (row.toolId === "markdown") {
       assert(caveats.includes("projects NO files into the fresh empty per-job workspace"), "markdown empty-workspace caveat");
     } else if (row.toolId === "stat" || row.toolId === "du") {
       assert(caveats.includes("immutable per-job inputs/f.bin seed"), `${row.toolId} seed confinement caveat`);
-      assert(caveats.includes("no provider, page or OPFS authority"), `${row.toolId} no-authority caveat`);
+      assert(caveats.includes("model execution requires live run ownership"), `${row.toolId} model authority caveat`);
       if (row.toolId === "du") {
         assert(caveats.includes("using /job by default"), "du safe default caveat");
         assert(caveats.includes("bounded recursive enumeration"), "du recursive read confinement caveat");
       }
     } else if (row.toolId === "tree") {
       assert(caveats.includes("immutable nested per-job inputs seed"), "tree nested seed confinement caveat");
-      assert(caveats.includes("no provider, page or OPFS authority"), "tree no-authority caveat");
+      assert(caveats.includes("model execution requires live run ownership"), "tree model authority caveat");
       assert(caveats.includes("bounded recursive enumeration"), "tree recursive read confinement caveat");
     } else if (row.toolId === "gzip") {
-      assert(caveats.includes("bounded text/canonical-base64 preview"), "gzip caveat names both bounded modes");
-      assert(caveats.includes("lossless binary output is canonical base64"), "gzip caveat names the binary arm");
-      assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "gzip caveat denies authority expansion");
+      assert(caveats.includes("lossless binary output as canonical base64"), "gzip Settings caveat names the binary arm");
+      assert(caveats.includes("owner-bound OPFS reference"), "gzip model caveat names the file-backed arm");
     } else if (row.toolId === "truncate") {
       assert(caveats.includes("scratch/touched"), "truncate fixture confinement caveat");
-      assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "truncate no-authority caveat");
+      assert(caveats.includes("model execution requires live run ownership"), "truncate model authority caveat");
       assert(caveats.includes("post-run stat readback"), "truncate readback proof caveat");
     } else if (row.toolId === "touch") {
       assert(caveats.includes("scratch/touched"), "touch fixture confinement caveat");
-      assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "touch no-authority caveat");
+      assert(caveats.includes("model execution requires live run ownership"), "touch model authority caveat");
       assert(caveats.includes("post-run stat readback"), "touch readback proof caveat");
     } else if (row.toolId === "sqlite3_query_bounded") {
       assert(caveats.includes("scratch/test.db"), "sqlite fixture confinement caveat");
       assert(caveats.includes("readOnly is forced"), "sqlite forced-readOnly caveat");
-      assert(caveats.includes("no provider, page, filesystem or OPFS authority"), "sqlite no-authority caveat");
+      assert(caveats.includes("model execution requires live run ownership"), "sqlite model authority caveat");
     } else {
       assert(!caveats.includes("projects NO files into the fresh empty per-job workspace"), `${row.toolId}: no file caveat without file.read`);
-      assert(caveats.includes("Settings-only bounded stdin preview"), `${row.toolId}: generic Settings-only caveat present`);
+      assert(caveats.includes("Settings preview requires an explicit owner click"), `${row.toolId}: Settings owner gate caveat`);
+      assert(caveats.includes("model execution remains subject to run ownership"), `${row.toolId}: model run gate caveat`);
     }
     assert(!/pending owner admission|not currently executable|future reviewed execution adapter|not admitted/i.test(caveats), `${row.toolId}: no stale pre-admission wording`);
   }
@@ -251,7 +259,7 @@ Deno.test("posture: descriptors admit exactly the 28-tool Settings allowlist", (
   const uuid = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "uuid");
   assert((uuid.caveats ?? []).join(" ").includes("output is intentionally nondeterministic"), "uuid nondeterminism caveat preserved");
   const b64 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "base64");
-  assert((b64.caveats ?? []).join(" ").includes("Invalid padding or characters rejected fail-closed"), "base64 padding caveat preserved");
+  assert((b64.caveats ?? []).join(" ").includes("file operands are rejected"), "base64 stdin-only caveat preserved");
   const sha256 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "sha256sum");
   assert((sha256.caveats ?? []).join(" ").includes("FIPS 180-4 SHA-256"), "sha256 FIPS caveat preserved");
   // the ADMITTED markdown row's caveat is TRUTHFUL (no pre-admission wording)
@@ -259,7 +267,8 @@ Deno.test("posture: descriptors admit exactly the 28-tool Settings allowlist", (
   assert(markdownRow, "markdown row present");
   assertEquals(markdownRow.admitted, true, "markdown admitted");
   const caveat = (markdownRow.caveats ?? []).join(" ");
-  assert(caveat.includes("Settings-only bounded stdin preview"), "the generated caveat names the stdin preview");
+  assert(caveat.includes("Settings preview requires an explicit owner click"), "the generated caveat names the Settings gate");
+  assert(caveat.includes("model execution remains subject to run ownership"), "the generated caveat names the model gate");
   assert(caveat.includes("projects NO files into the fresh empty per-job workspace"), "the route projects no files into the fresh empty workspace");
   assert(caveat.includes("cannot read owner data and fails closed"), "a file operand cannot read owner data");
   assert(caveat.includes("path normalization prevents escape/cross-job"), "path normalization prevents escape/cross-job");
@@ -290,9 +299,11 @@ Deno.test("idempotence: the generated inventory release equals the package versi
   // re-verifies the computed value)
 });
 
-Deno.test("posture: the ONLY route is tool.preview.run — no provider/selection authority", async () => {
+Deno.test("posture: Settings preview and run-bound model dispatch share immutable package authority", async () => {
   const sw = await Deno.readTextFile(root("extension/background/service-worker.js"));
-  assert(sw.includes("tool.preview.run"), "the Settings preview route exists");
+  assert(sw.includes("tool.preview.run"), "the legacy Settings preview route exists");
+  assert(sw.includes("tool-stream.run"), "the Settings file-backed route exists");
+  assert(sw.includes("dispatchBundledTool: dispatchBundledWasmStream"), "model execution receives the live file-backed dispatch closure");
   assert(sw.includes("bundled-inventory-data"), "the preview route revalidates against the immutable inventory");
   assert(sw.includes("previewSpecFor(input.toolId)"), "the toolId resolves through the immutable spec map");
   assert(!sw.includes("admitBundledToolPackages"), "service-worker.js must not reference the admission API");
@@ -312,9 +323,9 @@ import { assertStoreTargetBoundary } from "../scripts/store-target-policy.mjs";
 
 const repoRoot = new URL("..", import.meta.url).pathname;
 
-Deno.test("store map: exact archivePath→executable mapping for ALL 28 shipped CAS binaries", async () => {
+Deno.test("store map: exact archivePath→executable mapping for ALL 31 shipped CAS binaries", async () => {
   const map = await buildBundledWasmManifestMap(repoRoot);
-  assertEquals(map.size, 28);
+  assertEquals(map.size, 31);
   for (const [archivePath, executable] of map) {
     assert(archivePath.startsWith("wasm/cas/") && archivePath.endsWith(".wasm"), archivePath);
     assertEquals(archivePath, `wasm/cas/${executable.sha256}.wasm`);
@@ -452,11 +463,11 @@ Deno.test("sqlite sources stay outside extension/; shipped code imports no Node 
   assert(!shipped.some((n) => n.includes("host")), "no Node host under extension/wasm");
 });
 
-Deno.test("regeneration preserves all 25 predecessor manifest digests and CAS hashes", async () => {
+Deno.test("regeneration preserves predecessor manifest digests except intentional admissions", async () => {
   const identity26 = BUNDLED_INVENTORY.manifests.find((m) => m.pkg === "cap.bundled.sqlite3.query.bounded");
   assert(identity26, "sqlite identity present");
-  assertEquals(BUNDLED_INVENTORY.manifests.length, 28);
-  // the 25 predecessors' manifest files must match the previous release's digests
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 31);
+  // predecessor manifest files must match the previous release's digests
   const prevText = await Deno.readTextFile("/home/paulkinlan/worktrees/cap-bundled-tool-packages-163/extension/lib/bundled-inventory-data.js").catch(() => null);
   if (prevText) {
     const prevDigests = [...prevText.matchAll(/"pkg": "(cap\.bundled\.[^"]+)",\s*"version": "1\.0\.0",\s*"digest": "([0-9a-f]{64})"/g)];

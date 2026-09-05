@@ -185,6 +185,16 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;table-preview&gt;</code> — bounded accessible table preview (cap.table/1)</h3>
+        <div class="stage column" style="max-width:820px">
+          <table-preview id="table-preview-demo" name="Q3 Financials"></table-preview>
+        </div>
+        <p class="caption">
+          Bounded owner-local preview for canonical <code>cap.table/1</code> artifacts: maximum 50 rows × 20 cols (1,000 mounted cells), 512-byte display truncation, explicit omitted counts, keyboard-operable paging, <code>aria-live</code> page status, and formula export warnings.
+        </p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;artifact-inspector&gt;</code> — the exact, bounded, highlighted source</h3>
         <div class="stage column" style="max-width:820px">
           <artifact-inspector id="inspector-demo"></artifact-inspector>
@@ -749,6 +759,26 @@
         log("#hub-log", `segmented-control: ${e.detail.value}`);
       });
 
+      // <table-preview> demo
+      const tablePreviewDemo = document.getElementById("table-preview-demo");
+      if (tablePreviewDemo) {
+        tablePreviewDemo.table = {
+          schema: "cap.table/1",
+          columns: [
+            { id: "c1", name: "Department", type: "string" },
+            { id: "c2", name: "Quarter", type: "string" },
+            { id: "c3", name: "Revenue", type: "number" },
+            { id: "c4", name: "Formula Sample", type: "string" },
+          ],
+          rows: [
+            ["Engineering", "Q1", 450000, "=SUM(A1:A10)"],
+            ["Marketing", "Q1", 120000, "+12345"],
+            ["Operations", "Q1", 85000, "Normal Text"],
+            ["Research", "Q1", 310000, "@lookup"],
+          ],
+        };
+      }
+
       // <artifact-inspector> example — the exact, highlighted HTML source.
       const inspectorDemo = document.getElementById("inspector-demo");
       if (inspectorDemo) {
@@ -787,6 +817,40 @@
         selectionDiagnostics: { activeSelections: 3, activeRuns: 2, grantsCreated: 0, executableRoutesCreated: 0 },
         canExecute: false,
         canGrant: false,
+        // The purpose taxonomy rides IN the summary payload (the gallery is a
+        // static deploy; this fixture inlines the same two-family shape the
+        // shadow route stamps from lib/tool-purpose-groups.js).
+        purposeFamilies: [
+          { id: "running-the-browser", label: "Running the browser", line: "Sensing and driving Chrome itself: tabs, pages, downloads, and settings." },
+          { id: "doing-the-work", label: "Doing the work", line: "The agent's own workspace: files, text, tables, scripts, schedules, agents, and memory." },
+        ],
+        purposeGroups: {
+          "tabs-windows": { family: "running-the-browser", label: "Tabs & windows", line: "Open, close, move, pin, group, and switch between tabs and windows." },
+          "reading-capture": { family: "running-the-browser", label: "Reading, search & capture", line: "Read a page, search the web, take a screenshot, and see what a page loads." },
+          "driving-pages": { family: "running-the-browser", label: "Driving pages", line: "Click, type, scroll, and wait inside the page you are on." },
+          "agents": { family: "doing-the-work", label: "Agents & delegation", line: "Create, manage, and delegate work to agents." },
+          "assets": { family: "doing-the-work", label: "Assets", line: "Files the agent creates and keeps for you." },
+          "tables-queries": { family: "doing-the-work", label: "Tables & queries", line: "Work with CSV tables and query databases." },
+          "hashes-ids": { family: "doing-the-work", label: "Checksums & IDs", line: "Hash data and generate unique IDs." },
+        },
+        // Purpose-grouped rows (CAP-FB-20260828-TOOL-LIBRARY-GROUPING-01): the
+        // real rows carry the shadow-stamped `purpose`; the gallery exercises
+        // the grouped render across both families.
+        toolsBySource: {
+          "chrome-api": [
+            { toolId: "list_tabs", name: "list_tabs", sourceLabel: "Browser", purpose: "tabs-windows", version: null, available: true, description: "List open tabs across all windows." },
+            { toolId: "read_page", name: "read_page", sourceLabel: "Browser", purpose: "reading-capture", version: null, available: true, description: "Read the text of the page you are on." },
+            { toolId: "click_element", name: "click_element", sourceLabel: "Browser", purpose: "driving-pages", version: null, available: true, description: "Click an element on the page." },
+          ],
+          "management": [
+            { toolId: "create_agent", name: "create_agent", sourceLabel: "Management", purpose: "agents", version: null, available: true, description: "Create a named agent with a role." },
+            { toolId: "create_asset", name: "create_asset", sourceLabel: "Management", purpose: "assets", version: null, available: true, description: "Store a file the agent made." },
+          ],
+          "bundled-package": [
+            { toolId: "csvtool", name: "csvtool", sourceLabel: "Bundled packages", purpose: "tables-queries", version: "1.0.0", available: true, description: "RFC 4180 CSV stream filter." },
+            { toolId: "sha256sum", name: "sha256sum", sourceLabel: "Bundled packages", purpose: "hashes-ids", version: "1.0.0", available: true, description: "Compute cryptographic 256-bit SHA-256 hash digests." },
+          ],
+        },
       };
       const tlReady = document.getElementById("tl-ready");
       tlReady.summary = tlSummary;

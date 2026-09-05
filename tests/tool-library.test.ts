@@ -371,7 +371,7 @@ Deno.test("tool-library: gzip tool/mode handlers update controls and restore gen
 // ──────────────────────────────────────────────────────────────────────────
 // Tool-library <details> slice: the native details groups + the bounded rows
 // ──────────────────────────────────────────────────────────────────────────
-Deno.test("tool-library: each source category renders as a native <details> with the count on the <summary> and bounded tool rows (no action surfaces)", async () => {
+Deno.test("tool-library: tools render grouped by PURPOSE — the two families, task-shaped groups with one-line purposes, counts honest, no action surfaces", async () => {
   class El {
     constructor(tag) { this.tag = tag; this.children = []; this.textContent = ""; this.className = ""; this.hidden = false; this.attrs = {}; }
     setAttribute(k, v) { this.attrs[k] = v; }
@@ -392,6 +392,7 @@ Deno.test("tool-library: each source category renders as a native <details> with
   globalThis.document = { createElement: (t) => new El(t), querySelector: () => null, head: { appendChild() {} }, getElementById: () => null };
 
   const mod = await import("../extension/shared/components.js?details-slice");
+  const { TOOL_PURPOSE_FAMILIES, TOOL_PURPOSE_GROUPS } = await import("../extension/lib/tool-purpose-groups.js");
   const ToolLibraryClass = mod.ToolLibrary ?? registry.get("tool-library");
   const library = Object.create(ToolLibraryClass.prototype);
   library._root = shadow;
@@ -407,54 +408,93 @@ Deno.test("tool-library: each source category renders as a native <details> with
     catalogDiagnostics: {},
     selectionDiagnostics: {},
     settingsPreviewTools: ["csvtool", "gzip"],
+    purposeFamilies: TOOL_PURPOSE_FAMILIES,
+    purposeGroups: TOOL_PURPOSE_GROUPS,
     toolsBySource: {
       "bundled-package": [
-        { toolId: "csvtool", name: "csvtool", sourceLabel: "Bundled packages", version: "1.0.0", available: true, description: "RFC 4180 CSV stream filter" },
-        { toolId: "touch", name: "touch", sourceLabel: "Bundled packages", version: "1.0.0", available: false, description: "touch candidate" },
+        { toolId: "csvtool", name: "csvtool", sourceLabel: "Bundled packages", purpose: "tables-queries", version: "1.0.0", available: true, description: "RFC 4180 CSV stream filter" },
+        { toolId: "touch", name: "touch", sourceLabel: "Bundled packages", purpose: "files-data", version: "1.0.0", available: false, description: "touch candidate" },
       ],
       "extension-builtin": [
-        { toolId: "memory.read", name: "memory.read", sourceLabel: "Built-in", version: null, available: true, description: "Read the hub memory" },
+        { toolId: "memory_get", name: "memory_get", sourceLabel: "Built-in", purpose: "memory-usage", version: null, available: true, description: "Read the hub memory" },
+        // A row the taxonomy has not classified (no purpose) must render under
+        // an honest Ungrouped section — never silently dropped.
+        { toolId: "mystery_tool", name: "mystery_tool", sourceLabel: "Built-in", version: null, available: true, description: "Unclassified row" },
       ],
     },
   };
   library.state = "ready";
 
-  // each category is a native <details> with the count on the <summary>
+  // The catalog is grouped by purpose: two families, each with its groups.
   const allDetails = [];
   const walkDetails = (node) => {
     if (node.tag === "details") allDetails.push(node);
     for (const child of node.children ?? []) walkDetails(child);
   };
   walkDetails(catalogEl);
-  const details = allDetails.filter((d) => d.className === "source-group");
-  assertEquals(details.length, 6, "one native <details> per category (incl. the zero-count sources)");
-  const bundled = details.find((d) => d.attrs["data-source"] === "bundled-package");
-  assert(bundled, "the bundled-package category exists");
-  const bundledSummary = bundled.children.find((c) => c.tag === "summary");
-  assert(bundledSummary, "the category has a <summary>");
-  const summaryText = bundledSummary.children.map((c) => c.textContent).join(" ");
-  assert(summaryText.includes("Bundled packages"), "the summary keeps the label");
-  assert(summaryText.includes("2"), "the summary keeps the count");
-  // the expanded body lists the tool rows with the descriptions
-  const toolList = bundled.children.find((c) => c.tag === "ul");
-  assert(toolList, "the expanded body is a list");
-  assertEquals(toolList.children.length, 2, "the bounded tool rows are listed");
-  const first = toolList.children[0];
-  const firstHead = first.children.find((c) => c.className === "source-tool-head");
-  const firstDesc = first.children.find((c) => c.className === "source-tool-desc");
-  assert(firstHead && firstDesc, "each row has the head + the description");
-  const headText = firstHead.children.map((c) => c.textContent).join(" ");
-  assert(headText.includes("csvtool") && headText.includes("v1.0.0"), "the row shows the name + the version");
-  assertEquals(firstDesc.textContent, "RFC 4180 CSV stream filter", "the row shows the one-line description");
-  const touchHead = toolList.children[1].children.find((c) => c.className === "source-tool-head");
+  const groupsSection = (() => {
+    let found = null;
+    const walk = (node) => {
+      if (node.attrs?.["aria-label"] === "Tools by purpose") found = node;
+      for (const child of node.children ?? []) walk(child);
+    };
+    walk(catalogEl);
+    return found;
+  })();
+  assert(groupsSection, "the catalog section is labelled Tools by purpose");
+  const families = [];
+  const walkFamilies = (node) => {
+    if (node.className === "purpose-family") families.push(node);
+    for (const child of node.children ?? []) walkFamilies(child);
+  };
+  walkFamilies(groupsSection);
+  assertEquals(families.map((f) => f.attrs["data-family"]), ["running-the-browser", "doing-the-work"], "the two product families, in order");
+  const famLabels = families.map((f) => f.children.find((c) => c.className === "purpose-family-label")?.textContent);
+  assertEquals(famLabels, ["Running the browser", "Doing the work"], "family labels are the product language");
+  for (const fam of families) {
+    const line = fam.children.find((c) => c.className === "purpose-family-line");
+    assert(line && line.textContent.length > 0, "each family says what it is for");
+  }
+  // Every purpose group renders as a native <details> (incl. zero-count ones,
+  // like the source slice before), with the label + one-line purpose + count.
+  const groupDetails = allDetails.filter((d) => d.className === "source-group" && d.attrs["data-purpose"]);
+  assertEquals(groupDetails.length, 22 + 1, "the 22 taxonomy groups + the Ungrouped honesty section");
+  const byPurpose = new Map(groupDetails.map((d) => [d.attrs["data-purpose"], d]));
+  const tables = byPurpose.get("tables-queries");
+  assert(tables, "the tables-queries group exists");
+  const tablesSummary = tables.children.find((c) => c.tag === "summary");
+  const tablesSummaryText = tablesSummary.children.map((c) => c.textContent).join(" ");
+  assert(tablesSummaryText.includes("Tables & queries"), "the summary keeps the group label");
+  assert(tablesSummaryText.includes("CSV tables"), "the summary carries the one-line purpose");
+  assert(tablesSummaryText.includes("1"), "the summary keeps the group count");
+  const tablesList = tables.children.find((c) => c.tag === "ul");
+  assertEquals(tablesList.children.length, 1, "the bounded tool rows are listed under the group");
+  const csvRow = tablesList.children[0];
+  const csvHead = csvRow.children.find((c) => c.className === "source-tool-head");
+  const csvDesc = csvRow.children.find((c) => c.className === "source-tool-desc");
+  const csvHeadText = csvHead.children.map((c) => c.textContent).join(" ");
+  assert(csvHeadText.includes("csvtool") && csvHeadText.includes("v1.0.0"), "the row shows the name + the version");
+  assert(csvHeadText.includes("Bundled packages"), "the demoted source axis survives on the row");
+  assertEquals(csvDesc.textContent, "RFC 4180 CSV stream filter", "the row shows the one-line description");
+  const filesData = byPurpose.get("files-data");
+  const touchRow = filesData.children.find((c) => c.tag === "ul").children[0];
+  const touchHead = touchRow.children.find((c) => c.className === "source-tool-head");
   assert(touchHead.children.some((c) => c.className.includes("unavailable")), "the unavailable row is marked");
+  const memory = byPurpose.get("memory-usage");
+  assertEquals(memory.children.find((c) => c.tag === "ul").children.length, 1, "the built-in memory tool is grouped under Memory & usage");
+  // The honesty fallback: the unclassified row renders under Ungrouped.
+  const ungrouped = byPurpose.get("ungrouped");
+  assert(ungrouped, "the Ungrouped section renders when a row has no purpose");
+  const ungroupedList = ungrouped.children.find((c) => c.tag === "ul");
+  assertEquals(ungroupedList.children.length, 1);
+  assert(ungroupedList.children[0].children.find((c) => c.className === "source-tool-head").children.map((c) => c.textContent).join(" ").includes("mystery_tool"));
   // NO action surface: the details bodies contain no buttons/links/inputs
   const walk = (node, out = []) => {
     if (["button", "a", "input", "select", "textarea"].includes(node.tag)) out.push(node.tag);
     for (const child of node.children ?? []) walk(child, out);
     return out;
   };
-  assertEquals(walk(catalogEl), [], "the <details> slice renders no action surface — the Run preview button is the ONLY action");
+  assertEquals(walk(catalogEl), [], "the grouped slice renders no action surface — the Run preview button is the ONLY action");
 });
 
 // ──────────────────────────────────────────────────────────────────────────

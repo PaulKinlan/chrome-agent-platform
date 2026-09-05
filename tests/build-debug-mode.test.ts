@@ -19,7 +19,11 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const pathMod = "node:path";
 const path = (await import(pathMod)).default;
 const fsMod = "node:fs/promises";
-const { readFile, access } = await import(fsMod);
+const { readFile, writeFile, access } = await import(fsMod);
+import {
+  validateDistCompleteMarker,
+  INDEXED_SOURCE_EXCLUDED_PATHS,
+} from "../scripts/dist-complete.mjs";
 const cpMod = "node:child_process";
 const { spawnSync } = await import(cpMod);
 
@@ -90,4 +94,43 @@ Deno.test("build mode: the injected log-verbosity default differs by mode (debug
   const restore = build(["--target=store"]);
   assertEquals(restore.code, 0, restore.stderr.slice(0, 2000));
   assertEquals((await marker()).target, "store");
+});
+
+Deno.test("build mode: developer/store alternation preserves valid indexed source authority", async () => {
+  // 1. Build developer target
+  const rDev = build(["--target=developer"]);
+  assertEquals(rDev.code, 0, rDev.stderr.slice(0, 2000));
+  const mDev = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "developer" });
+  assertEquals(mDev.target, "developer");
+
+  // 2. Build store target immediately after
+  const rStore = build(["--target=store"]);
+  assertEquals(rStore.code, 0, rStore.stderr.slice(0, 2000));
+  const mStore = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "store" });
+  assertEquals(mStore.target, "store");
+
+  // 3. Verify that circular generated bundle docs/diff-core.bundle.js is explicitly excluded from source authority
+  assertEquals(INDEXED_SOURCE_EXCLUDED_PATHS.size, 1, "exclusion set must contain exactly one member");
+  assert(INDEXED_SOURCE_EXCLUDED_PATHS.has("docs/diff-core.bundle.js"), "docs/diff-core.bundle.js must be excluded from indexed source authority");
+
+  // 4. Source authority digest must remain stable across targets for identical underlying extension source
+  assertEquals(mStore.source.digest, mDev.source.digest, "underlying indexed source authority must match between dev and store targets");
+  assertEquals(mStore.source.files, mDev.source.files, "indexed source file count must match between dev and store targets");
+
+  // 5. Tamper-evident gate: modifying any real indexed source file invalidates source authority
+  const realFile = path.join(ROOT, "extension/lib/pure.js");
+  const originalBytes = await readFile(realFile);
+  try {
+    await writeFile(realFile, originalBytes + "\n// tamper\n");
+    let caught = null;
+    try {
+      await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "store" });
+    } catch (e) {
+      caught = e;
+    }
+    assert(caught !== null, "modifying a real source file must fail validation");
+    assertStringIncludes(caught.message, "marker indexed source authority is stale");
+  } finally {
+    await writeFile(realFile, originalBytes);
+  }
 });

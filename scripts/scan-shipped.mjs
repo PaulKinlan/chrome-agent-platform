@@ -206,15 +206,20 @@ const EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
 const EXECUTION_HOST_ALLOWED_ARG0 = "wasmBytes";
 const EXECUTION_HOST_ALLOWED_ARG1_OBJECT = "runtime";
 const EXECUTION_HOST_ALLOWED_ARG1_PROP = "imports";
+// File-backed successor: the sole dynamic Wasm call is likewise pinned to one
+// worker path, one source location, one call, and the same audited argument
+// shape. The offscreen host revalidates manifest + inventory + CAS first.
+const STREAM_EXECUTION_HOST_CANONICAL_PATH = "extension/lib/wasm-stream-worker.js";
+const STREAM_EXECUTION_HOST_CANONICAL_LOCATION = { line: 99, column: 23 };
+const STREAM_EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
 
 // THE WORKER-HOST exemption — a second FIXED canonical constant owned by the
 // scanner (NOT caller-supplied): the exact source-only, unreachable executor
 // (Gate 2 of CAP-FB-20260822-WASM-EXECUTION-HOST-01) constructs its fresh
-// dedicated Worker from a runtime-resolved URL. This is the ONLY non-literal
-// Worker construction in shipped source; everything else must be an
-// allowlisted literal. The exemption applies to exactly this ONE node (file +
-// exact line/column) and a bounded count of 1; any other Worker/SharedWorker
-// node — literal or not — in any file stays flagged.
+// dedicated Worker from a runtime-resolved URL. Every non-literal worker host
+// has its own exact path/location/constructor pin below; everything else must
+// be an allowlisted literal. This exemption applies to exactly this ONE node
+// (file + exact line/column) and a bounded count of 1.
 const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
 const WORKER_HOST_CANONICAL_LOCATION = { line: 226, column: 9 };
 const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
@@ -254,6 +259,17 @@ const AGENT_WORKER_CLIENT_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
 const PYTHON_WORKER_HOST_CANONICAL_PATH = "extension/lib/python-host.js";
 const PYTHON_WORKER_HOST_CANONICAL_LOCATION = { line: 72, column: 15 };
 const PYTHON_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
+// OPFS-backed bundled-tool host: exactly one fresh module Worker, created from
+// one runtime-resolved extension URL and killed by the 180s wall deadline.
+const STREAM_WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-stream-host.js";
+const STREAM_WORKER_HOST_CANONICAL_LOCATION = { line: 57, column: 26 };
+const STREAM_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+// The table host likewise creates exactly one fresh module Worker from the
+// extension-root URL. Its dependency-injected WorkerCtor is pinned to this
+// one file, one node, and one constructor occurrence.
+const TABLE_WORKER_HOST_CANONICAL_PATH = "extension/lib/table-worker-host.js";
+const TABLE_WORKER_HOST_CANONICAL_LOCATION = { line: 89, column: 13 };
+const TABLE_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
@@ -484,6 +500,20 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === PYTHON_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(PYTHON_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, STREAM_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "Worker" &&
+            node.loc?.start?.line === STREAM_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === STREAM_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(STREAM_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "WorkerCtor" &&
+            node.loc?.start?.line === TABLE_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === TABLE_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);
@@ -527,6 +557,7 @@ export async function scanShippedJs(files, {
           node.callee.object.name === "WebAssembly")
       ) {
         const isCanonicalHost = isCanonicalScannedPath(file, EXECUTION_HOST_CANONICAL_PATH);
+        const isStreamHost = isCanonicalScannedPath(file, STREAM_EXECUTION_HOST_CANONICAL_PATH);
         const isCall = node.type === "CallExpression";
         const memberName = node.callee?.property?.type === "Identifier"
           ? node.callee.property.name
@@ -541,13 +572,18 @@ export async function scanShippedJs(files, {
           arg1.property?.type === "Identifier" &&
           arg1.property.name === EXECUTION_HOST_ALLOWED_ARG1_PROP;
         const argCount = isCall ? (node.arguments?.length ?? 0) : 0;
-        const sameLocation = node.loc?.start?.line ===
+        const sameLegacyLocation = node.loc?.start?.line ===
             EXECUTION_HOST_CANONICAL_LOCATION.line &&
           node.loc?.start?.column === EXECUTION_HOST_CANONICAL_LOCATION.column;
-        const count = (text.match(EXECUTION_HOST_ALLOWED_CALL_RE) ?? []).length;
-        const allowed =
-          isCanonicalHost && isCall && memberName === "instantiate" &&
-          argCount === 2 && arg0Ok && arg1Ok && sameLocation && count === 1;
+        const sameStreamLocation = node.loc?.start?.line ===
+            STREAM_EXECUTION_HOST_CANONICAL_LOCATION.line &&
+          node.loc?.start?.column === STREAM_EXECUTION_HOST_CANONICAL_LOCATION.column;
+        const legacyCount = (text.match(EXECUTION_HOST_ALLOWED_CALL_RE) ?? []).length;
+        const streamCount = (text.match(STREAM_EXECUTION_HOST_ALLOWED_CALL_RE) ?? []).length;
+        const allowed = isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
+          (isCanonicalHost && sameLegacyLocation && legacyCount === 1) ||
+          (isStreamHost && sameStreamLocation && streamCount === 1)
+        );
         if (!allowed) {
           violations.push(`${file}: calls dynamic WebAssembly API (execution host is absent or the allowed call shape deviates)`);
         }

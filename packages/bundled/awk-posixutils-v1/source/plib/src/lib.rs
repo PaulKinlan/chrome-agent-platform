@@ -1,0 +1,52 @@
+// WASI builds of awk only need locale case conversion and POSIX ERE.
+#[cfg(target_os = "wasi")]
+#[path = "locale_wasi.rs"]
+pub mod locale;
+#[cfg(target_os = "wasi")]
+#[path = "regex_wasi.rs"]
+pub mod regex;
+
+#[cfg(not(target_os = "wasi"))]
+pub mod archive;
+#[cfg(not(target_os = "wasi"))]
+pub mod curuser;
+#[cfg(not(target_os = "wasi"))]
+pub mod diag;
+#[cfg(not(target_os = "wasi"))]
+pub mod exec;
+#[cfg(not(target_os = "wasi"))]
+pub mod group;
+#[cfg(not(target_os = "wasi"))]
+pub mod io;
+#[cfg(not(target_os = "wasi"))]
+pub mod linediff;
+#[cfg(not(target_os = "wasi"))]
+pub mod locale;
+#[cfg(not(target_os = "wasi"))]
+pub mod lzw;
+#[cfg(not(target_os = "wasi"))]
+pub mod modestr;
+#[cfg(not(target_os = "wasi"))]
+pub mod platform;
+#[cfg(not(target_os = "wasi"))]
+pub mod priority;
+#[cfg(not(target_os = "wasi"))]
+pub mod regex;
+#[cfg(not(target_os = "wasi"))]
+pub mod sccsfile;
+#[cfg(not(target_os = "wasi"))]
+pub mod syslog;
+#[cfg(not(target_os = "wasi"))]
+pub mod test_expr;
+#[cfg(not(target_os = "wasi"))]
+pub mod testing;
+#[cfg(not(target_os = "wasi"))]
+pub mod tmp;
+#[cfg(not(target_os = "wasi"))]
+pub mod tty;
+#[cfg(not(target_os = "wasi"))]
+pub mod user;
+#[cfg(not(target_os = "wasi"))]
+pub mod utmpx;
+
+pub const BUFSZ: usize = 8 * 1024;

@@ -76,6 +76,53 @@ export const LAZY_PROTOCOL_TOOL_WIRE = Object.freeze([
     }),
     outputSchema: toolOutputSchema("execute_tool"),
   }),
+  // chrome-agent-platform-qsm4 (slice 2): the DECLARATIVE pipeline runner —
+  // chain a few existing tools into one legible run where a step's output
+  // feeds a later step by an explicit { $ref } binding. Each step still runs
+  // through the ordinary search/execute seam, so its own owner-approval card
+  // and untrusted fence apply exactly as a direct call; a failing step halts
+  // the pipeline. No eval, no new authority.
+  Object.freeze({
+    name: "run_pipeline",
+    description:
+      "Run a few tools in sequence as one pipeline: each step names an existing tool, and a step's arguments may carry a binding { \"$ref\": \"<an earlier step's id>\", \"path\": \"a.b.0\" } that is replaced with that step's result (or a sub-path of it). Use it when one tool's output feeds the next (search → read → save) instead of making separate calls. Every step is validated and gated exactly like a direct execute_tool call — a step needing owner approval pauses on the owner's card, and a failing step stops the pipeline with the failed step named. The tool NAME in each step is fixed text, never a binding.",
+    inputSchema: Object.freeze({
+      type: "object",
+      additionalProperties: false,
+      required: Object.freeze(["steps"]),
+      properties: Object.freeze({
+        name: Object.freeze({
+          type: "string",
+          maxLength: 80,
+          description: "A short label for the pipeline (shown in the plan strip).",
+        }),
+        steps: Object.freeze({
+          type: "array",
+          minItems: 1,
+          items: Object.freeze({
+            type: "object",
+            additionalProperties: false,
+            required: Object.freeze(["id", "tool"]),
+            properties: Object.freeze({
+              id: Object.freeze({
+                type: "string",
+                description: "Unique step id (letters, digits, - or _), referenced by later steps' bindings.",
+              }),
+              tool: Object.freeze({
+                type: "string",
+                description: "The EXACT name of an existing tool (as list_tools/search_tools report it). Fixed text — never a binding.",
+              }),
+              args: Object.freeze({
+                type: "object",
+                description: "The tool's arguments, matching its schemaSummary. Any value shaped { \"$ref\": \"<earlier step id>\", \"path\": \"a.b.0\" } is replaced with that step's result (or the sub-path of it). A binding may only reference an EARLIER step.",
+              }),
+            }),
+          }),
+        }),
+      }),
+    }),
+    outputSchema: toolOutputSchema("run_pipeline"),
+  }),
 ]);
 
 function capabilitySummary(result) {

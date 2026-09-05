@@ -431,6 +431,7 @@ Deno.test("createWorkflowPipelineDispatcher: resolves ONLY an exact tool-name ma
   };
   const execute = async () => { throw new Error("must not execute a fuzzy match"); };
   const dispatcher = createWorkflowPipelineDispatcher({
+    context: async () => ({ origin: "chrome-extension://test" }),
     search,
     execute,
     settle: async () => {},
@@ -444,6 +445,7 @@ Deno.test("createWorkflowPipelineDispatcher: resolves ONLY an exact tool-name ma
 
 Deno.test("createWorkflowPipelineDispatcher: executes the exact match and normalizes the envelope", async () => {
   const dispatcher = createWorkflowPipelineDispatcher({
+    context: async () => ({ origin: "chrome-extension://test" }),
     search: async () => ({ ok: true, results: [{ name: "memory_get", selectionRef: "sel_ref_1" }] }),
     execute: async (request) => {
       assertEquals(request.selectionRef, "sel_ref_1");
@@ -461,6 +463,7 @@ Deno.test("createWorkflowPipelineDispatcher: executes the exact match and normal
 Deno.test("createWorkflowPipelineDispatcher: an owner-approval pause FAILS CLOSED naming tool + requirement", async () => {
   let settled = 0;
   const dispatcher = createWorkflowPipelineDispatcher({
+    context: async () => ({ origin: "chrome-extension://test" }),
     search: async () => ({ ok: true, results: [{ name: "capture_visible_tab", selectionRef: "sel_ref_9" }] }),
     execute: async () => ({
       ok: true,
@@ -519,4 +522,42 @@ Deno.test("system-prompt recall: the run-time memory digest lists saved workflow
   // A fresh store (no workflows saved yet) simply has nothing to list.
   const empty = await gatherRuntimeContext({ scope: "hub", agentLabel: "hub", memory: makeMemory(), now: new Date(0) });
   assert(!empty.text.includes("workflows:"), "no workflows saved → no workflows keys in the prompt");
+});
+
+Deno.test("pipeline step: same-named tools >1 candidate fails closed for disambiguation", async () => {
+  const twoTools = {
+    ok: true as const,
+    results: [
+      { name: "dup", selectionRef: "sel-a" },
+      { name: "dup", selectionRef: "sel-b" },
+    ],
+  };
+  const executed: string[] = [];
+  const dispatcher = createWorkflowPipelineDispatcher({
+    context: async () => ({ origin: "chrome-extension://test" }),
+    search: async () => twoTools,
+    execute: async (call: { selectionRef: string }) => { executed.push(call.selectionRef); return { ok: true as const, result: {} }; },
+  });
+  const out = await dispatcher("dup", {}, 0);
+  assertEquals(out.ok, false);
+  assertEquals(executed.length, 0);
+});
+
+Deno.test("pipeline step: unique exact-name candidate still executes", async () => {
+  const oneTool = {
+    ok: true as const,
+    results: [
+      { name: "noise", selectionRef: "sel-x" },
+      { name: "uniq", selectionRef: "sel-uniq" },
+    ],
+  };
+  const executed: string[] = [];
+  const dispatcher = createWorkflowPipelineDispatcher({
+    context: async () => ({ origin: "chrome-extension://test" }),
+    search: async () => oneTool,
+    execute: async (call: { selectionRef: string }) => { executed.push(call.selectionRef); return { ok: true as const, result: {} }; },
+  });
+  const out = await dispatcher("uniq", {}, 0);
+  assertEquals(out.ok, true);
+  assertEquals(executed, ["sel-uniq"]);
 });

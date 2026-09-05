@@ -137,6 +137,14 @@ const IDEMPOTENT_TOOLS = new Set([
   "skill_add",
   "subscribe_hook",
   "unsubscribe_hook",
+  // Deterministic local transforms publish under a full operation digest that
+  // includes the output bytes. Replaying an exact call resolves the same asset.
+  "table_filter",
+  "table_select",
+  "table_join",
+  "table_group_aggregate",
+  "table_pivot",
+  "table_formula",
 ]);
 
 export const READ_ONLY_TOOLS = new Set([
@@ -257,6 +265,7 @@ const BUILT_IN_TOOLS = new Set([
   "list_named_agents", "set_agent_provider", "list_hooks", "subscribe_hook",
   "unsubscribe_hook", "generate_ui", "create_script", "update_script",
   "delete_script", "list_scripts", "get_script", "run_script", "python_execute",
+  "table_filter", "table_select", "table_join", "table_group_aggregate", "table_pivot", "table_formula",
   // Per-agent schedule controls: mutating built-ins (route-gated by owner
   // approval; a replay re-runs the gated route, so the gate re-arms).
   "schedules_pause", "schedules_resume", "schedules_update",

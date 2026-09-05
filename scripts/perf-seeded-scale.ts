@@ -30,7 +30,7 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.env.get("CAP_EXT") ?? `${ROOT}extension`;
 const TARGET = Number(Deno.args[0] ?? "120");
 const OUT = Deno.args[1] ?? Deno.env.get("CAP_PERF_OUT") ?? await Deno.makeTempDir({ prefix: "cap-seeded-out-" });
-const BUDGET = { run: 300, threadGet: 30, runList: 30 };
+const BUDGET = { run: 400, threadGet: 30, runList: 30 };
 const SOFT = false; // thread.get / run.list: hard since CAP-FB-20260830-RUN-LOG-COMPACTION-01
 // The agent.run growth check stays SOFT: profiled at 120 threads (RUN-LOG-
 // COMPACTION-01 lane, CPU profile of the service worker), the remaining

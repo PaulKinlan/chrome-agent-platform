@@ -311,7 +311,7 @@ Deno.test("KAT 9: pure projection ordering + pause marker semantics (projectThre
 // The bound is 50 since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01 (the last 50
 // runs of a surface reopen with their full visible history); what lies beyond
 // it is stated in-line, never silently dropped.
-Deno.test("unbounded replay (dptw): a 55-run thread reads ALL 55 executions, totals honest", async () => {
+Deno.test("windowed replay: a 55-run thread reads the 50 recent executions by default, totals honest and stated", async () => {
   const store = new FakeStore();
   // Retention keeps 60/thread so only the VIEW bound could omit a run.
   const registry = makeRegistry(store, "boot-dptw-55", { retention: { mode: "bounded", perThread: 60 } });
@@ -332,14 +332,59 @@ Deno.test("unbounded replay (dptw): a 55-run thread reads ALL 55 executions, tot
   });
 
   assertEquals(view.totalExecutions, 55, "total executions reported honestly");
-  assertEquals(view.truncatedExecutions, 0, "dptw: no executions omitted from the view");
-  assertEquals(listLogsCalls, 55, "every execution's log is read — no 50-execution bound");
-  assert(!view.messages.some((m) => m.role === "system" && m.viewBound), "no view-bound notice — there is no bound");
+  assertEquals(view.truncatedExecutions, 5, "the 5 oldest executions are omitted by default window");
+  assertEquals(view.viewedExecutions, 50, "viewedExecutions is 50");
+  assertEquals(view.hasMore, true, "hasMore indicates older runs available");
+  assertEquals(listLogsCalls, 50, "listLogs is called only for the bounded recent executions, not all 55");
+  const bound = view.messages.find((m) => m.role === "system" && m.viewBound);
+  assert(bound && /last 50 of 55 runs/.test(bound.content), `the view states its bound: ${bound?.content}`);
+  assertEquals(view.messages.indexOf(bound), 0, "the notice leads the view");
   const hasRecent = toolCards(view).some((m) => m.executionId === "exec_bounded_0055");
   const hasOldest = toolCards(view).some((m) => m.executionId === "exec_bounded_0001");
   assert(hasRecent, "the most recent execution's card is rendered");
-  assert(hasOldest, "the OLDEST execution's card is rendered too (dptw)");
+  assert(!hasOldest, "the oldest execution (beyond the bound) is not re-read/rendered");
   assertEquals(view.status, "done", "terminal self-heal still holds");
+});
+
+Deno.test("paginated replay: sliced window loading with offset and limit", async () => {
+  const store = new FakeStore();
+  const registry = makeRegistry(store, "boot-slice-50", { retention: { mode: "bounded", perThread: 60 } });
+  const t = await createThread("slice-task");
+  for (let i = 1; i <= 50; i++) {
+    await seedRun(registry, `exec_slice_${String(i).padStart(4, "0")}`, t.id, 1, { result: `answer ${i}` });
+  }
+
+  const thread = await getThread(t.id);
+  // Request middle page: 20 runs, offset by 10 (executions 21 to 40)
+  const page1 = await buildThreadRunView(thread, {
+    listThreadExecutions: (id) => registry.listThreadExecutions(id),
+    listLogs: (id) => registry.listLogs(id),
+    commitTerminal: commitThreadTerminal,
+    recordFailure: () => {},
+  }, { limit: 20, offset: 10 });
+
+  assertEquals(page1.totalExecutions, 50);
+  assertEquals(page1.viewedExecutions, 20);
+  assertEquals(page1.truncatedExecutions, 30);
+  assertEquals(page1.hasMore, true);
+  assert(toolCards(page1).some((m) => m.executionId === "exec_slice_0021"));
+  assert(toolCards(page1).some((m) => m.executionId === "exec_slice_0040"));
+  assert(!toolCards(page1).some((m) => m.executionId === "exec_slice_0041"));
+  assert(!toolCards(page1).some((m) => m.executionId === "exec_slice_0020"));
+
+  // Request oldest page: offset 30, limit 20 (executions 1 to 20)
+  const pageOldest = await buildThreadRunView(thread, {
+    listThreadExecutions: (id) => registry.listThreadExecutions(id),
+    listLogs: (id) => registry.listLogs(id),
+    commitTerminal: commitThreadTerminal,
+    recordFailure: () => {},
+  }, { limit: 20, offset: 30 });
+
+  assertEquals(pageOldest.totalExecutions, 50);
+  assertEquals(pageOldest.viewedExecutions, 20);
+  assertEquals(pageOldest.hasMore, false, "at the beginning of history, hasMore is false");
+  assert(toolCards(pageOldest).some((m) => m.executionId === "exec_slice_0001"));
+  assert(toolCards(pageOldest).some((m) => m.executionId === "exec_slice_0020"));
 });
 
 Deno.test("unbounded replay (dptw): a single run with >250 log rows shows EVERY card (no row cap)", async () => {

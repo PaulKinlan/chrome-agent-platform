@@ -112,6 +112,16 @@ Deno.test("artifact body: a multibyte + JSON-escaping boundary body at the exact
   assert(got.ok === true && got.asset?.content === content, "the escaping boundary body round-trips byte-for-byte");
 });
 
+Deno.test("artifact body: one complete table at the 8 MiB table-output boundary stores without truncation", async () => {
+  resetStore();
+  const content = "t".repeat(8 * 1024 * 1024);
+  const result = await createAsset("master", { type: "data", name: "exact table output", content });
+  assert(result.ok === true, `8 MiB table body must store whole, got ${JSON.stringify(result).slice(0, 300)}`);
+  const got = await getAsset("master", result.asset?.id ?? result.id);
+  assertEquals(utf8(got.asset.content), 8 * 1024 * 1024);
+  assertEquals(got.asset.content, content);
+});
+
 Deno.test("artifact append: repeated appends grow ONE artifact past the 256 KiB single-call cap and stay byte-exact", async () => {
   resetStore();
   const base = "a".repeat(200 * 1024);

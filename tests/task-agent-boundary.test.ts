@@ -104,8 +104,8 @@ Deno.test("boundary WIRING (source pins): the composer keeps the hub task; the S
   // WITH the threadId; the delegation routes carry threadId into their durable
   // admission (so the outbox commits the terminal into the thread, crash-safe);
   // both resume replays restore threadId.
-  assert(sw.includes("m.mention") && sw.includes('handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null })'),
-    "agent.run dispatches a site mention with the threadId");
+  assert(sw.includes("m.mention") && sw.includes('handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null, attachments: bounded })'),
+    "agent.run dispatches a site mention with the threadId and attachments");
   assert(sw.includes('async "agent.delegate"({ origin, task, threadId = null'), "agent.delegate accepts threadId");
   assert(sw.includes('uiRunId: m.runId ?? null'), "the site-mention path forwards the UI runId (the approval-card bridge)");
   assert(sw.includes('async "named-agent.run"({ id, task, attachments, runId, threadId = null'), "named-agent.run accepts threadId");

@@ -8,8 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 138,
-  managementTools: 44,
-  totalTools: 182,
+  managementTools: 50,
+  totalTools: 188,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -210,6 +210,12 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "board_list",
   "board_read",
   "board_read_messages",
+  "table_filter",
+  "table_select",
+  "table_join",
+  "table_group_aggregate",
+  "table_pivot",
+  "table_formula",
 ]);
 
 export const FLAGGED_FOR_LATER_PROVIDER_CUTOVER = Object.freeze([
@@ -539,6 +545,15 @@ const rows = [
   record("board_list", "management", ["management.board.list"], [], "none", "read-only", false, "read", "management.board"),
   record("board_read", "management", ["management.board.read"], [], "none", "read-only", false, "read", "management.board"),
   record("board_read_messages", "management", ["management.board.messages"], [], "none", "read-only", false, "read", "management.board"),
+  // Deterministic local table transforms publish an immutable artifact under a
+  // full operation identity that includes the output digest. They need no
+  // Chrome permission or owner prompt; exact replays resolve to the same key.
+  record("table_filter", "management", ["management.table.filter"], [], "none", "idempotent", false, "idempotent", "management.table"),
+  record("table_select", "management", ["management.table.select"], [], "none", "idempotent", false, "idempotent", "management.table"),
+  record("table_join", "management", ["management.table.join"], [], "none", "idempotent", false, "idempotent", "management.table"),
+  record("table_group_aggregate", "management", ["management.table.group-aggregate"], [], "none", "idempotent", false, "idempotent", "management.table"),
+  record("table_pivot", "management", ["management.table.pivot"], [], "none", "idempotent", false, "idempotent", "management.table"),
+  record("table_formula", "management", ["management.table.formula"], [], "none", "idempotent", false, "idempotent", "management.table"),
   // Tranche-12 Chrome API coverage:
   // browser-wide global grant), user scripts + dynamic content scripts
   // (single-origin matches; destination-origin grant coverage; host

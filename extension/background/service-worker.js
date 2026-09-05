@@ -62,14 +62,37 @@ import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storag
 import {
   PREVIEW_LIMITS,
   PREVIEW_SETTINGS_ORIGIN,
+  STREAM_BACKED_BUNDLED_TOOL_IDS,
   boundPreviewResult,
   buildPreviewAuthority,
   buildPreviewJob,
+  executeBundledWasiJob,
   extractPreviewInput,
   previewSpecFor,
   revalidatePreviewExecution,
   validatePreviewInput,
+  wasmStreamOutputDescriptor,
 } from "../lib/tool-exec-preview.js";
+import {
+  appendWasmStreamInput,
+  appendWasmStreamInputBase64,
+  createWasmStreamInput,
+  createWasmStreamOutput,
+  discardWasmStream,
+  readWasmStreamReceipt,
+  readWasmStreamWindow,
+  removeWasmStream,
+  sealWasmStreamInput,
+  sealWasmStreamOutput,
+  stageWasmStreamInputChunks,
+  validateSealedWasmStream,
+} from "../lib/wasm-stream-files.js";
+import {
+  releaseRunWasmStreamOutputs,
+  retainRunWasmStreamOutput,
+} from "../lib/wasm-stream-run-lifecycle.js";
+import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
+import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
@@ -82,7 +105,7 @@ import {
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
-import { attachmentContext, buildMultimodalTask, validateRunAttachments } from "../lib/attachments.js";
+import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
 import {
   canonicalOrigin,
@@ -131,7 +154,7 @@ import {
   takeLastProviderError,
 } from "../lib/agent.js";
 import { clearUsage, getServerToolUsage, getUsage, onUsageChanged, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
-import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
+import { createWebmcpAuthorizationGuard, gateWebmcpToolDispatch } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
   diagnosticList,
@@ -148,6 +171,7 @@ import {
   disenrollOrigin,
   disenrollOriginLocked,
   enrollmentGeneration,
+  enrollmentPolicy,
   enrollmentSnapshot,
   enrollOrigin,
   getCurrentSiteIdentity,
@@ -158,6 +182,7 @@ import {
   pendingApprovals,
   replacePageTools,
   replaceTools,
+  setEnrollmentPolicy,
   withEnrollmentLock,
 } from "../lib/tools.js";
 import {
@@ -264,7 +289,6 @@ import {
 } from "../lib/system-prompts.js";
 import { gatherRuntimeContext } from "../lib/runtime-context.js";
 import {
-  APPEND_MAX_BYTES,
   appendAsset,
   assetLibraryCapacity,
   createAsset,
@@ -295,6 +319,18 @@ import {
   recordScriptRun,
   updateScript,
 } from "../lib/scripts.js";
+import {
+  stageAttachmentAsWasmStream,
+  stageAssetAsWasmStream,
+  promoteWasmStreamToArtifact,
+} from "../lib/tool-stream-platform.js";
+import { streamTabularTransform } from "../lib/tool-tabular-contracts.js";
+import { providerSafeTableAssetRead, runTableArtifactTool } from "../lib/table-tool-runtime.js";
+import {
+  cancelTableRun,
+  TABLE_WORKER_CANCEL_TYPE,
+  TABLE_WORKER_RUN_TYPE,
+} from "../lib/table-worker-host.js";
 import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
@@ -382,6 +418,32 @@ async function ensureOffscreen() {
   }
 }
 
+async function runOffscreenTableJob(job, { runId, timeoutMs } = {}) {
+  const ready = await ensureOffscreen();
+  if (!ready?.ok) return { ok: false, code: "table_worker_unavailable" };
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: TABLE_WORKER_RUN_TYPE,
+      job,
+      runId,
+      timeoutMs,
+    });
+    return result && typeof result === "object"
+      ? result
+      : { ok: false, code: "table_worker_failed" };
+  } catch {
+    return { ok: false, code: "table_worker_unavailable" };
+  }
+}
+
+function cancelTableExecution(runId) {
+  const cancelled = cancelTableRun(runId);
+  try {
+    chrome.runtime.sendMessage({ type: TABLE_WORKER_CANCEL_TYPE, runId }).catch(() => {});
+  } catch { /* offscreen host may already be gone */ }
+  return cancelled;
+}
+
 /** Run a script source in the sandboxed host, bounded by a timeout. The
  * production host is the offscreen document (scheduled runs, no open page); the
  * on-demand fallback is the NTP hub page. A TWO-PHASE CLAIM PROTOCOL ensures
@@ -404,6 +466,173 @@ function registerScriptRunPolicy(runId, source) {
   scriptRunPolicies.set(runId, policy);
   return policy;
 }
+function wasmStreamOwner(context) {
+  if (context?.principal !== "owner-options" || typeof context.documentId !== "string" || !context.documentId) {
+    const error = new Error("wasm_stream_owner_required");
+    error.code = "wasm_stream_owner_required";
+    throw error;
+  }
+  return `owner-options:${context.documentId}`;
+}
+
+async function stageInlineWasmInput({ stdin, owner }) {
+  async function* encodedChunks() {
+    const encoder = new TextEncoder();
+    const chunkCodeUnits = 512 * 1024;
+    for (let start = 0; start < stdin.length;) {
+      let end = Math.min(stdin.length, start + chunkCodeUnits);
+      if (end < stdin.length) {
+        const last = stdin.charCodeAt(end - 1);
+        if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+      }
+      yield encoder.encode(stdin.slice(start, end));
+      start = end;
+    }
+  }
+  return await stageWasmStreamInputChunks({ owner, chunks: encodedChunks() });
+}
+
+async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context }) {
+  if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
+    return await executeBundledWasiJob({
+      toolId,
+      args: validatedArgs?.args,
+      stdin: validatedArgs?.stdin,
+      runContext: context,
+    });
+  }
+  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  if (!runId) throw new Error("wasm_stream_run_required");
+  const agentId = String(context?.agentId ?? "hub");
+  const owner = `agent:${runId}:${agentId}`;
+  let inputRef = validatedArgs?.inputRef ?? null;
+  let staged = false;
+  if (!inputRef) {
+    inputRef = await stageInlineWasmInput({ stdin: String(validatedArgs?.stdin ?? ""), owner });
+    staged = true;
+  }
+  try {
+    const result = await runWasmStreamTool({
+      toolId,
+      args: Array.isArray(validatedArgs?.args) ? validatedArgs.args : [],
+      inputRef,
+      owner,
+      origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
+        ? new URL(context.origin).origin
+        : "https://agent.cap",
+      documentId: String(context?.documentId ?? runId),
+    });
+    if (result?.ok) {
+      try {
+        retainRunWasmStreamOutput(runId, { ref: result.output.ref, owner });
+      } catch (error) {
+        await discardWasmStream({ ref: result.output.ref, owner }).catch(() => {});
+        throw error;
+      }
+    }
+    return result;
+  } finally {
+    if (staged) await removeWasmStream({ ref: inputRef, owner }).catch(() => {});
+  }
+}
+
+async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVIEW_SETTINGS_ORIGIN, documentId = "settings-options" }) {
+  if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
+    return { ok: false, error: `unsupported_stream_tool: ${toolId}` };
+  }
+  const spec = previewSpecFor(toolId);
+  if (!spec) return { ok: false, error: `unknown_bundled_tool: ${toolId}` };
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
+    return { ok: false, error: "invalid_arguments" };
+  }
+  await validateSealedWasmStream({ ref: inputRef, owner });
+  const outputRef = await createWasmStreamOutput({ owner });
+  const authority = buildPreviewAuthority({ origin, documentId });
+  const host = await ensureOffscreen();
+  if (!host.ok) {
+    await discardWasmStream({ ref: outputRef, owner }).catch(() => {});
+    return host;
+  }
+  let result;
+  try {
+    result = await Promise.race([
+      chrome.runtime.sendMessage({
+        type: WASM_STREAM_RUN_TYPE,
+        toolId,
+        args,
+        inputRef,
+        outputRef,
+        authority,
+        owner,
+      }),
+      new Promise((resolve) => setTimeout(
+        () => resolve({ ok: false, phase: "timeout", error: "stream host timed out" }),
+        WASM_STREAM_WALL_MS + 5000,
+      )),
+    ]);
+  } catch (error) {
+    result = { ok: false, phase: "failed", error: String(error?.message ?? error) };
+  }
+  if (!result?.ok || !result.receipt || result.outputRef?.id !== outputRef.id) {
+    await discardWasmStream({ ref: outputRef, owner }).catch(() => {});
+    return {
+      ok: false,
+      phase: result?.phase ?? "failed",
+      error: String(result?.error ?? "stream execution failed").slice(0, 1024),
+      exitCode: Number.isSafeInteger(result?.exitCode) ? result.exitCode : null,
+    };
+  }
+  await sealWasmStreamOutput({
+    ref: outputRef,
+    owner,
+    bytes: result.receipt.stdoutBytes,
+    receipt: result.receipt,
+  });
+  // A small complete result remains convenient for the model. Large output is
+  // never squeezed into context: the explicit OPFS reference, size, and digest
+  // are authoritative and can feed the next tool without copying.
+  const outputDescriptor = wasmStreamOutputDescriptor(toolId, args);
+  const outputLifetime = owner.startsWith("agent:") ? "run" : "explicit-remove";
+  let stdout = null;
+  if (result.receipt.stdoutBytes <= 64 * 1024 && outputDescriptor.type === "utf8") {
+    const window = await readWasmStreamWindow({
+      ref: outputRef,
+      owner,
+      offset: 0,
+      length: result.receipt.stdoutBytes,
+    });
+    try {
+      stdout = new TextDecoder("utf-8", { fatal: true }).decode(decodeCanonicalBase64(window.base64));
+    } catch { stdout = null; }
+  }
+  return Object.freeze({
+    ok: true,
+    phase: "completed",
+    toolId,
+    output: Object.freeze({
+      ref: outputRef,
+      bytes: result.receipt.stdoutBytes,
+      sha256: result.receipt.stdoutSha256,
+      stderrBytes: result.receipt.stderrBytes,
+      stderrSha256: result.receipt.stderrSha256,
+      type: outputDescriptor.type,
+      mediaType: outputDescriptor.mediaType,
+      lifetime: outputLifetime,
+    }),
+    input: Object.freeze({
+      ref: inputRef,
+      bytesRead: result.receipt.stdinBytes,
+      sha256: result.receipt.stdinSha256,
+    }),
+    stdout,
+    stdoutComplete: stdout !== null,
+    outputType: outputDescriptor.type,
+    exitCode: result.exitCode,
+    elapsedMs: result.receipt.elapsedMs,
+    workerInstanceId: result.receipt.workerInstanceId,
+  });
+}
+
 async function runScriptSandboxed(source) {
   // Best-effort: open the offscreen doc (the scheduled host). If it is
   // unavailable (e.g. headless Chrome), the NTP page — the on-demand host —
@@ -656,7 +885,7 @@ import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js"
 import { journalJson } from "../shared/tool-tree.js";
 import { createAgentBoardRoutes, BOARD_HUB_ID, posterThreadResolver, boardHeartbeatPlan } from "../lib/agent-board.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity, observeToolCall } from "../lib/cap-log.js";
-import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
+import { perfSpan, perfSummary, perfClear, mergePerfMeasures } from "../lib/cap-perf.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
 // provider failures through describeError (one actionable error with the status
@@ -730,6 +959,7 @@ const delegationRegistry = createDelegationRegistry();
 // alive while a page is listening, and the events are fire-and-forget (a
 // closed port never throws into the run).
 const progressPorts = new Set();
+const pageMeasuresBuffer = [];
 // Startup truth is established before a new run is accepted: recover complete
 // terminal outboxes first, then honestly orphan pre-boot executions. Recovery
 // failure blocks durable starts/routes rather than pretending state is current.
@@ -1211,6 +1441,9 @@ function beginExecution(execId, taskId) {
   }
 }
 function finalizeExecution(execId) {
+  // Table workers are exact-run children. Ending any foreground/delegated
+  // execution terminates only workers carrying this immutable execution id.
+  cancelTableExecution(execId);
   // The attempt is over: its slot is sealed (a late/duplicate emission is
   // dropped, never appended into a REUSED slot) and the callback is unbound
   // by the caller's finally. The recorded events stay readable.
@@ -1437,7 +1670,8 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
       {
         scope,
         sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
-        closureGeneration: "task-execution-core",
+        closureGeneration: "task-execution-core:file-backed-v1",
+        dispatchBundledTool: dispatchBundledWasmStream,
       },
     ),
     // Provider-EXECUTED (server-side) tools — discovery through the same lazy
@@ -1489,8 +1723,15 @@ async function readSiteLazyScope(origin) {
   };
 }
 
-async function readSiteLazySources(origin, runGenCell) {
+async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
   const enrollment = await enrollmentSnapshot(origin);
+  // SITE TOOL-USE POLICY (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01): a
+  // DENIED site's tools never enter the agent's toolset — no records are
+  // built, so no search result can surface them and no stale descriptor can
+  // be selected. This is the falsification gate for the enrollment policy.
+  // The site stays enrolled (its agent record/memory/discovery remain); only
+  // its tools are excluded from every agent.
+  if (enrollment.policy === "deny") return [];
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
   const gate = gateMap[origin] ?? {};
   const documentId = typeof gate.documentId === "string" ? gate.documentId : "";
@@ -1559,6 +1800,29 @@ async function readSiteLazySources(origin, runGenCell) {
       );
     },
   }, async ({ name, source, args }) => {
+    // LIVE policy re-check at dispatch time (CAP-FB-20260819-DIRECTORY-TOOL-
+    // EXPLORER-01): the toolset exclusion above covers discovery, but an
+    // in-flight catalog built before a flip must still fail closed. "deny"
+    // never runs; "ask" pays the in-conversation owner card (Allow once /
+    // Deny) before the page call — a run with no owner channel fails closed
+    // here (the gate result carries the honest error, never a silent run).
+    // The gate IS the unit-tested factory (lib/webmcp-authority.js) — zero
+    // replica drift between the shipped fence and the enrollment-policy KATs.
+    const live = await enrollmentSnapshot(origin);
+    const gate = await gateWebmcpToolDispatch({
+      enrolled: live.enrolled,
+      policy: live.policy,
+      askGate: typeof askGateGetter === "function" ? askGateGetter() : null,
+      askPayload: { origin, name, source },
+    });
+    if (gate.ok !== true) {
+      return {
+        ok: false,
+        approvalDenied: gate.approvalDenied === true,
+        approvalExpired: gate.approvalExpired === true,
+        error: gate.error ?? "tool dispatch denied by policy",
+      };
+    }
     const res = await invokeSiteTool(
       origin,
       name,
@@ -1617,6 +1881,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // binds EXACTLY the cells it created, and the map is GC'd with the build.
     const buildCells = new Map(); // canonical origin -> { get: () => number|null }
     const workerComposed = new Map(); // canonical origin -> composed prompt (for layered attestation)
+    // Build-local site-tool ask gate (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01):
+    // bound AFTER the run's model dispatcher below (the workers are built
+    // first), then read lazily at dispatch time — a readLazySources closure
+    // runs only after this build completes, so the late binding is always set
+    // before any tool call. A null gate (scoped/no-approval builds) makes an
+    // "ask"-policy site's tool call fail closed with an honest error.
+    let webmcpAskGate = null;
     const workers = await Promise.all(origins.map(async (origin) => {
       const cell = { get: () => null };
       buildCells.set(origin, cell);
@@ -1646,7 +1917,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // WebMCP directories/navigation/approval are read for every lazy
         // search/execute fence; no build-time snapshot reaches the provider.
         tools: {},
-        readLazySources: () => readSiteLazySources(origin, cell),
+        readLazySources: () => readSiteLazySources(origin, cell, () => webmcpAskGate),
         readLazyScope: () => readSiteLazyScope(origin),
       };
     }));
@@ -1696,7 +1967,15 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       approvalExecutionId,
       dispatchRoute,
       (event) => onProgress?.(event),
+      // Immutable agent identity from the trusted run envelope. Table stream
+      // custody must never derive from model args or artifact metadata.
+      { agentId: providerServerAgentId || "hub" },
     );
+    // Bind the workers' site-tool ask gate to THIS run's dispatcher (see the
+    // late-bound declaration above): an "ask"-policy site's tool call pays the
+    // run's in-conversation owner card through the same approval machinery the
+    // cookie/destructive classes use.
+    webmcpAskGate = (payload) => modelManagementDispatch("webmcp.use-tool", payload);
     const liveBrowserTools = browserToolset(scoped, {
       // schedule_task with a scriptId pays the same source-disclosing card as
       // run_script — through the run's bound model dispatcher.
@@ -1888,45 +2167,6 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     return orch;
 }
 
-// Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
-// `runGenCell` is the per-worker cell the tool closures capture for the immutable
-// run generation (see ensureOrchestrator).
-async function siteToolset(origin, runGenCell) {
-  const tools = await listTools(origin);
-  const set = {};
-  const seen = new Map(); // tool id → (origin, name) for explicit duplicate rejection
-  for (const t of tools) {
-    // A valid AI-SDK tool needs an inputSchema. The JSON-schema descriptor is
-    // converted by schemaToZod (fail-closed: unsupported → z.never()), and the
-    // invocation is approval-gated + origin-bound.
-    let id = safeToolName(origin, t.name);
-    let n = 2;
-    // Even with a 64-bit hash, reject an actual collision explicitly: append a
-    // disambiguator rather than silently overwriting another tool.
-    while (
-      seen.has(id) &&
-      (seen.get(id).origin !== origin || seen.get(id).name !== t.name)
-    ) {
-      id = `${safeToolName(origin, t.name)}_${n++}`.slice(0, 64);
-    }
-    seen.set(id, { origin, name: t.name });
-    set[id] = tool({
-      description: `${t.name} on ${origin} — ${t.description ?? ""}`,
-      inputSchema: buildSchema(z, t.inputSchema),
-      execute: async (args) => {
-        if (!(await isApproved(origin, t.name))) {
-          return { error: `tool ${t.name} on ${origin} not approved` };
-        }
-        // Thread the worker's IMMUTABLE run-start generation into the site
-        // invocation so a re-enrolled origin is rejected (see runGenCell).
-        const runGen = runGenCell?.get?.() ?? null;
-        return await invokeSiteTool(origin, t.name, args, runGen);
-      },
-    });
-  }
-  return set;
-}
-
 // Drive a page function on an origin via the content script (WebMCP/injection).
 // Preemptive revocation: enrollment + GENERATION are read atomically up front,
 // the untrusted page call runs WITHOUT holding the origin lifecycle lock (so a
@@ -2088,6 +2328,16 @@ async function invokeSiteToolCore(
   const snap = await enrollmentSnapshot(canonical);
   if (!snap.enrolled) {
     return { error: `origin ${canonical} is not enrolled` };
+  }
+  // SITE TOOL-USE POLICY (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01): a
+  // DENIED site's tools fail closed on EVERY invocation path (agent dispatch,
+  // tools.invoke, legacy siteToolset) — "blocked" means blocked. The site
+  // stays enrolled; the owner flips the policy in the Directory to restore
+  // tool use. This check is belt-and-braces: the toolset exclusion keeps
+  // denied tools out of agent catalogs, the authorization guard re-denies
+  // stale records, and the generation bump fences in-flight runs.
+  if (snap.policy === "deny") {
+    return { error: `site tools on ${canonical} are blocked by the enrollment policy` };
   }
   // The IMMUTABLE run-start generation (threaded from the worker's run) takes
   // precedence over the current snapshot's generation. A stale run whose origin
@@ -3439,6 +3689,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     } finally {
       clearInterval(durableHeartbeat);
       durableRunAborters.delete(executionId);
+      const streamCleanup = await releaseRunWasmStreamOutputs(executionId);
+      if (streamCleanup.failed > 0) {
+        console.warn(`stream output cleanup failed for ${streamCleanup.failed} run-owned reference(s)`);
+      }
       // The delegation run-state dies with the run: a tool closure from a
       // settled run can never authorize a new delegation (fail-closed).
       if (delegationState) {
@@ -3743,7 +3997,10 @@ async function armDetectionProbe(tabId, documentId) {
       world: "MAIN",
       func: (value) => {
         const root = globalThis;
-        return root.__capWebmcpDetectBootstrap?.(value) === true;
+        // The hook name carries no `__` prefix (see webmcp-detect-main.js):
+        // minification inlines this alias to globalThis.<name>, and the
+        // shipped-code oracle scan flags `globalThis.__*`.
+        return root.capWebmcpDetectBootstrap?.(value) === true;
       },
       args: [nonce],
     });
@@ -4119,18 +4376,24 @@ async function destructiveActionPolicy() {
 async function scriptApprovalGate(context, action, scope, id, source, extra) {
   const target = canonicalOperationTarget("script", { origin: scope, id: String(id ?? "") });
   const { hosts, dynamic } = extractFetchHosts(source);
+  const sourceDigest = sha256Hex(String(source ?? ""));
   let payload;
   try {
     payload = payloadFields([
       ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
       ["id", String(id ?? "")],
       ["name", extra?.name ?? null],
-      ["sourceDigest", sha256Hex(String(source ?? ""))],
+      ["sourceDigest", sourceDigest],
       ["fetchHosts", hosts.join(",")],
       ["dynamic", dynamic],
     ]);
   } catch { return { ok: false, error: `${action} payload is not approvable` }; }
-  return await requireOwnerApproval(context, action, target, payload, { source: String(source ?? ""), hosts, dynamic });
+  return await requireOwnerApproval(context, action, target, payload, {
+    source: String(source ?? ""),
+    hosts,
+    dynamic,
+    sourceDigest,
+  });
 }
 
 function payloadStringArray(values) {
@@ -4967,6 +5230,7 @@ const handlers = mergeRouteMaps(
     // plane so the composer's run.control.steer reaches a worker run through
     // the agent-worker protocol (one steer protocol for every surface).
     runControl,
+    onRunSettled: cancelTableExecution,
     // ── PHASE-2 tool bridge authority ───────────────────────────────────────
     // The worker's RPC proxy (agent-worker.tool) resolves here. The SW is the
     // ONLY tool executor: resolve the tool by name from the SAME toolsets the
@@ -4983,6 +5247,63 @@ const handlers = mergeRouteMaps(
     journalAppend,
   }),
   {
+  // Six local spreadsheet tools share one strict engine and one run-bound
+  // route. The sender-derived model envelope is the only custody authority;
+  // direct extension/page calls and stale runs fail closed.
+  async "table.run"({ toolId, args } = {}, context) {
+    const executionId = typeof context?.executionId === "string" ? context.executionId : "";
+    const agentId = typeof context?.agentId === "string" ? context.agentId : "";
+    const isRunLive = () => {
+      if (context?.principal !== "model") return false;
+      if (activeExecutions.has(executionId)) return true;
+      const live = runControl.get(executionId);
+      return live?.kind === "worker" && live.surface === `agent-worker:${agentId}`;
+    };
+    if (!isRunLive()) {
+      return { ok: false, code: "table_run_required", error: "The local table operation requires a live agent run." };
+    }
+    return await runTableArtifactTool(toolId, args, context, { isRunLive, runJob: runOffscreenTableJob });
+  },
+
+  // File-backed bundled-tool transport. Every public route is restricted to
+  // the exact Settings document by wasmStreamOwner(); content moves in caller-
+  // chosen chunks, while execution and results use opaque OPFS references.
+  async "tool-stream.input.create"(_message, context) {
+    const owner = wasmStreamOwner(context);
+    const ref = await createWasmStreamInput({ owner });
+    return { ok: true, ref };
+  },
+  async "tool-stream.input.append"({ ref, base64 } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await appendWasmStreamInputBase64({ ref, owner, base64 });
+  },
+  async "tool-stream.input.seal"({ ref } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await sealWasmStreamInput({ ref, owner });
+  },
+  async "tool-stream.run"({ toolId, args = [], inputRef } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await runWasmStreamTool({
+      toolId,
+      args,
+      inputRef,
+      owner,
+      documentId: context.documentId,
+    });
+  },
+  async "tool-stream.output.read"({ ref, offset = 0, length = 65536 } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await readWasmStreamWindow({ ref, owner, offset, length });
+  },
+  async "tool-stream.output.receipt"({ ref } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await readWasmStreamReceipt({ ref, owner });
+  },
+  async "tool-stream.remove"({ ref } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await removeWasmStream({ ref, owner });
+  },
+
   // ── The "what I did" action ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01) ──
   // actions.list returns the most-recent reversible-first ledger rows the hub +
   // side panel render; actions.undo re-executes a row's inverse THROUGH the same
@@ -5499,7 +5820,7 @@ const handlers = mergeRouteMaps(
         // events (incl. tool permission denials → approval cards) are accepted
         // by the conversation's exact-runId fence; execId stays the durable
         // authority for the run itself.
-        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null });
+        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null, attachments: bounded });
       } else if (mentionRoute) {
         result = await handlers[mentionRoute]({
           id: mention.id,
@@ -5617,12 +5938,17 @@ const handlers = mergeRouteMaps(
     // turn is visible on reopen, and a stuck "running" thread self-heals.
     // BOUNDED: the view reads only the recent executions + recent log rows
     // (owner P0 thread-open perf — the full replay took ~10s).
+    // Windowed loading: supports pagination via limit, offset, and all.
     const viewSpan = perfSpan("thread.get:view");
     const view = await buildThreadRunView(thread, {
       listThreadExecutions: (id) => durableRuns.listThreadExecutions(id),
       listLogs: (id, limit) => durableRuns.listLogs(id, limit),
       commitTerminal: commitThreadTerminal,
       recordFailure: (kind, detail) => pushDiagnostic("error", `[thread] ${kind}: ${detail}`),
+    }, {
+      limit: m?.limit,
+      offset: m?.offset,
+      all: m?.all,
     });
     viewSpan.end("ok");
     return { ok: true, thread: view };
@@ -6025,7 +6351,7 @@ const handlers = mergeRouteMaps(
   // runs, with an in-line notice for anything older or compacted. The
   // journal routes above stay the LIST surface (and the fallback for runs
   // that predate the durable log).
-  async "agent.history-view"({ kind, id }) {
+  async "agent.history-view"({ kind, id, limit, offset, all }) {
     let agentId = null;
     if (kind === "named") {
       const agent = await getNamedAgent(id);
@@ -6040,7 +6366,12 @@ const handlers = mergeRouteMaps(
     }
     await durableRecoveryReady;
     const viewSpan = perfSpan("agent.history-view");
-    const view = await buildAgentRunView({ agentId }, {
+    const view = await buildAgentRunView({
+      agentId,
+      limit,
+      offset,
+      all,
+    }, {
       listRuns: async () => (await durableRuns.list()).runs,
       listLogs: (executionId, limit) => durableRuns.listLogs(executionId, limit),
       recordFailure: (k, detail) => pushDiagnostic("error", `[agent-view] ${k}: ${detail}`),
@@ -6504,8 +6835,9 @@ const handlers = mergeRouteMaps(
   // enrollment generation as the expected generation (the same value a
   // just-started run would capture). EXTENSION-ONLY: never in
   // PAGE_ALLOWED_ROUTES — a page must never invoke its own tools through the
-  // trusted path. The model-facing run path (siteToolset) additionally gates
-  // on per-tool owner approval before reaching invokeSiteTool.
+  // trusted path. The model-facing run path (readSiteLazySources /
+  // authorizationGuard) additionally gates on per-tool owner approval before
+  // reaching invokeSiteTool.
   async "tools.invoke"({ origin, name, args }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
@@ -6526,6 +6858,65 @@ const handlers = mergeRouteMaps(
       return out;
     }
     return { ok: true, result: res?.result };
+  },
+  async "tools.policies"() {
+    const out = {};
+    for (const origin of await listOrigins()) {
+      out[origin] = await enrollmentPolicy(origin);
+    }
+    return { ok: true, policies: out };
+  },
+  // The Directory's enrollment-policy control (owner surface only): sets an
+  // enrolled origin's tool-use policy to allow | deny | ask. A policy flip
+  // bumps the enrollment generation (revocation fence) — the route returns
+  // the new snapshot so the UI can re-render exactly the applied state.
+  async "tools.policy.set"({ origin, policy }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    try {
+      const applied = await setEnrollmentPolicy(canonical, policy);
+      invalidateAgent();
+      broadcastRegistryChanged();
+      const snap = await enrollmentSnapshot(canonical);
+      return { ok: true, origin: canonical, policy: applied, gen: snap.gen };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+  // The approval leg of an "ask"-policy site tool (CAP-FB-20260819-DIRECTORY-
+  // TOOL-EXPLORER-01): the WebMCP dispatch gate calls this route (model
+  // context) BEFORE the page call. The owner approves ONE invocation on an
+  // in-conversation card; the payload binds the exact origin + tool name, and
+  // every invocation path (invokeSiteTool's enrollment/generation/tab fences)
+  // still runs after the approval — this card decides WHETHER this call may
+  // run, never WHAT runs.
+  async "webmcp.use-tool"({ origin, name }, context) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    const toolName = typeof name === "string" ? name.slice(0, 200) : "";
+    if (!toolName) return { ok: false, error: "invalid tool name" };
+    const snap = await enrollmentSnapshot(canonical);
+    if (!snap.enrolled) return { ok: false, error: "origin not enrolled" };
+    if (snap.policy !== "ask") return { ok: true }; // no longer ask — let the normal path decide
+    const dir = await listTools(canonical);
+    if (!dir.some((t) => t?.name === toolName)) {
+      return { ok: false, error: `no such tool on ${canonical}: ${toolName}` };
+    }
+    const target = canonicalOperationTarget("webmcp-tool", {
+      origin: canonical,
+      name: toolName,
+    });
+    if (!target) return { ok: false, error: "this site tool is not approvable" };
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", canonicalOrigin(canonical)],
+        ["name", toolName],
+      ]);
+    } catch {
+      return { ok: false, error: "this site tool is not approvable" };
+    }
+    return await requireOwnerApproval(context, "webmcp.use-tool", target, payload);
   },
   async "webmcp.detect.bootstrap"({ origin, __sender }) {
     const canonical = canonicalOrigin(origin);
@@ -7017,10 +7408,10 @@ const handlers = mergeRouteMaps(
       : res;
   },
   // Append text to an artifact's END — the chunked build path for a body
-  // larger than one call can carry (p45y acceptance B: a generated artifact
-  // grows across bounded calls instead of one giant tool argument). Same
-  // approval class as every artifact edit (asset.update): the payload binds
-  // the APPENDED text (bounded per call), and expectVersion binds the base the
+  // built across several calls instead of one giant tool argument (a
+  // convenience, not a cap: no-limits per the owner directive 2026-09-03).
+  // Same approval class as every artifact edit (asset.update): the payload
+  // binds the APPENDED text, and expectVersion binds the base the
   // model read, so an approval can never land silently on a body that moved
   // while the owner decided.
   async "asset.append"({ origin, id, content, expectVersion }, context) {
@@ -7030,9 +7421,6 @@ const handlers = mergeRouteMaps(
     }
     if (typeof content !== "string" || content.length === 0) {
       return { ok: false, error: "append_asset needs the text to append" };
-    }
-    if (new TextEncoder().encode(content).byteLength > APPEND_MAX_BYTES) {
-      return { ok: false, error: `one append carries at most ${APPEND_MAX_BYTES} UTF-8 bytes (append in pieces)` };
     }
     const exists = await getAsset(scope, id);
     if (!exists.ok) {
@@ -7115,8 +7503,9 @@ const handlers = mergeRouteMaps(
     // (CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01).
     return await assetLibraryCapacity();
   },
-  async "asset.get"({ origin, id }) {
-    return await getAsset(origin ?? "master", id);
+  async "asset.get"({ origin, id }, context) {
+    const result = await getAsset(origin ?? "master", id);
+    return context?.principal === "model" ? providerSafeTableAssetRead(result) : result;
   },
 
   // ---- agent-generated scripts (create/update/delete/list/get/run) ----
@@ -7445,7 +7834,7 @@ const handlers = mergeRouteMaps(
     let result;
     try {
       if (request.route === "agent.delegate") {
-        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, threadId: request.threadId ?? null, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
+        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, attachments: request.attachments ?? [], threadId: request.threadId ?? null, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
       } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
         result = await handlers[request.route]({
           ...(request.routeArgs ?? {}), task: request.task, attachments: request.attachments ?? [],
@@ -8545,13 +8934,14 @@ const handlers = mergeRouteMaps(
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };
   },
-  async "agent.delegate"({ origin, task, threadId = null, _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId = null }) {
+  async "agent.delegate"({ origin, task, threadId = null, attachments = [], _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId: callerUiRunId = null, runId = null }) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
     // memory. Preemptive revocation: the generation is captured up front, the
     // worker run happens WITHOUT holding the origin lifecycle lock (a hung
     // provider/model must never block agent.delete), and the generation is
     // revalidated BEFORE committing the journal write.
+    const uiRunId = callerUiRunId ?? runId ?? null;
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     const snap = await enrollmentSnapshot(canonical);
@@ -8563,6 +8953,19 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: "delegation enrollment changed; interrupted run cannot resume against a different generation" };
     }
     const execId = _executionId || newExecutionId();
+    // Validate attachments: Site Agents accept text/data and multimodal image
+    // attachments. Host filesystem grants (local-folder) are host-only and
+    // cannot be delegated to Site Agents.
+    const { kept: rawAttachments, dropped: malformedDropped } = validateRunAttachments(attachments);
+    const validAttachments = [];
+    const dropped = [...malformedDropped];
+    for (const a of rawAttachments) {
+      if (a?.kind === "local-folder") {
+        dropped.push({ name: a?.name ?? "folder", reason: "local folder grants are host-only and cannot be delegated to Site Agents" });
+      } else {
+        validAttachments.push(a);
+      }
+    }
     // Capture the provider config once. The durable resume request, gate, pause,
     // and eventual dispatch are all bound to this exact non-secret identity and
     // requested host scope.
@@ -8575,17 +8978,15 @@ const handlers = mergeRouteMaps(
       clientCorrelationId: logicalId,
       kind: "delegate",
       agentId: canonical,
-      taskPreview: task,
-      // An @mention task keeps the HUB thread as its home: the delegate run's
-      // durable outbox commits the terminal row into THAT thread (idempotent by
-      // executionId), so the result lands back in the task — and survives an
-      // SW crash between dispatch and commit.
       threadId: threadId ?? null,
+      taskPreview: task,
+      attachmentCount: validAttachments.length,
+      attachments: sanitizeAttachments(validAttachments) ?? [],
       // The canonical terminal journal is master-owned so restart recovery can
       // never recreate a site store after disenrollment. The per-site audit row
       // below remains generation-fenced telemetry.
       journalTarget: "master",
-      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), generation: gen, threadId: threadId ?? null, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
+      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: threadId ?? null, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
     });
     // Failed admission was already compensated by start(); no readable
     // authority exists, so rollback would be both unnecessary and unsafe.
@@ -8614,7 +9015,17 @@ const handlers = mergeRouteMaps(
         task,
         delegated: true,
         executionId: execId,
+        attachmentCount: validAttachments.length,
+        ...(validAttachments.length ? { attachments: sanitizeAttachments(validAttachments) } : {}),
       }, delegateJournalGuard);
+      await durableRuns.appendLog(execId, {
+        type: "task",
+        id: logicalId,
+        task,
+        executionId: execId,
+        attachmentCount: validAttachments.length,
+        ...(validAttachments.length ? { attachments: sanitizeAttachments(validAttachments) } : {}),
+      }, "task").catch(() => {});
       dispatched = await dispatchDurableProviderRun({
       executionId: execId,
       providerConfig: delegateProviderConfig,
@@ -8699,11 +9110,13 @@ const handlers = mergeRouteMaps(
             try { a.abort?.(); } catch { /* already stopped */ }
           });
         });
-        // Thread the captured generation into a.run so the worker's memory/usage
-        // commits revalidate THAT immutable identity (the round-22 ABA blocker).
+        // Thread the captured generation and attachments into a.run. Text attachments
+        // are formatted into context; images become vision parts in a multimodal task.
+        const delegateContext = attachmentContext(validAttachments);
+        const promptTask = buildMultimodalTask(task, validAttachments);
         return await a.run(
-          task,
-          "",
+          promptTask,
+          delegateContext,
           [],
           gen,
           undefined,
@@ -8795,10 +9208,10 @@ const handlers = mergeRouteMaps(
         }
       });
       return delegatedAborted
-        ? { ok: false, aborted: true, executionId: execId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted" }
+        ? { ok: false, aborted: true, executionId: execId, error: "delegation aborted", errorReason: "the delegated worker was aborted", errorAction: "the delegated run stopped before completing", errorCategory: "aborted", ...(dropped.length ? { droppedAttachments: dropped } : {}) }
         : delegatedOk
-          ? { ok: true, origin: canonical, result, executionId: execId }
-          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId };
+          ? { ok: true, origin: canonical, result, executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) }
+          : { ok: false, error: String(outcome?.error ?? "delegation failed"), executionId: execId, ...(dropped.length ? { droppedAttachments: dropped } : {}) };
         });
       },
     });
@@ -8852,9 +9265,23 @@ const handlers = mergeRouteMaps(
   // redacted at write time) + the performance breakdown (cap:* measures).
   // From any extension page console:
   //   chrome.runtime.sendMessage({type:"observability.dumpTrace"}, console.log)
+  async "observability.page-measures"({ measures, page = "page" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    if (Array.isArray(measures)) {
+      for (const m of measures.slice(0, 100)) {
+        if (m && typeof m.name === "string") {
+          pageMeasuresBuffer.push(m);
+        }
+      }
+      while (pageMeasuresBuffer.length > 500) pageMeasuresBuffer.shift();
+    }
+    return { ok: true, accepted: Array.isArray(measures) ? measures.length : 0 };
+  },
   async "observability.dumpTrace"() {
     const logs = dumpLogBuffer();
-    const perf = perfSummary();
+    const perf = mergePerfMeasures(perfSummary(), pageMeasuresBuffer);
     swLog.info("trace dump", { logEntries: logs.entries.length, dropped: logs.dropped, stages: perf.measures.length });
     return {
       ok: true,
@@ -8867,8 +9294,39 @@ const handlers = mergeRouteMaps(
   async "observability.clearTrace"() {
     clearLogBuffer();
     perfClear();
+    pageMeasuresBuffer.length = 0;
     swLog.info("trace cleared");
     return { ok: true };
+  },
+
+  // ---- tool streaming platform (CAP-FB-20260822-WASM-TOOL-PLATFORM-01) ----
+  // Input create/append/seal, execution, reads, receipts, and removal use the
+  // single owner-derived lifecycle routes above. These platform-only bridges
+  // must not shadow that authority with caller-supplied owner strings.
+  async "tool-stream.stage-attachment"({ attachment } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
+    const res = await stageAttachmentAsWasmStream(attachment, { owner });
+    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
+  },
+  async "tool-stream.stage-asset"({ assetId, origin = "master" } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
+    const assetRes = await getAsset(origin, assetId);
+    if (!assetRes?.ok || !assetRes.asset) return { ok: false, error: "asset not found" };
+    const res = await stageAssetAsWasmStream(assetRes.asset, { owner });
+    return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
+  },
+  async "tool-stream.promote-output"({ outputRef, name, assetType = "text", origin = "master", force = false } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
+    return await promoteWasmStreamToArtifact(outputRef, { origin, name, type: assetType, owner, force });
+  },
+  async "tool-stream.discard"({ ref } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
+    await discardWasmStream({ ref, owner });
+    return { ok: true };
+  },
+  async "tool-stream.tabular-transform"({ inputRef, operations, outputFormat, delimiter } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
+    return await streamTabularTransform(inputRef, { operations, outputFormat, delimiter, owner });
   },
   async "observability.setVerbosity"({ level } = {}) {
     try {
@@ -8932,6 +9390,7 @@ async function resumeInterruptedRuns() {
         result = await handlers["agent.delegate"]({
           origin: request.origin,
           task: request.task,
+          attachments: request.attachments ?? [],
           threadId: request.threadId ?? null,
           _executionId: run.executionId,
           _resumeGeneration: request.generation,

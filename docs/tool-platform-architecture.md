@@ -210,7 +210,8 @@ every agent run while retaining the public Settings-only shadow capture:
   keys, and array items). The same contract drives lazy sanitization and the
   artifact/script store ceilings, so discovery and enforcement cannot drift;
 - every catalog row also carries a bounded `outputSchemaSummary`. Exact output
-  schemas currently cover `search_tools`, `list_tools`, `execute_tool`, the
+  schemas currently cover `search_tools`, `list_tools`, `execute_tool`,
+  `run_pipeline`, the
   create/update/delete/list/get/generate-UI artifact family, and Gemini `google_search` /
   Anthropic `web_search`; other tools use the generic JSON-value contract until
   the follow-up return-shape audit extends the tool-id registry. `execute_tool`
@@ -497,8 +498,11 @@ exact CSP, marker/output bindings, or package hashes.
 Digest pinning, signatures, owner clicks, local file selection, or a clean static
 scan do not by themselves resolve Chrome Web Store remotely hosted code policy.
 Arbitrary owner-package execution remains blocked on a written distribution-
-policy decision. Co-do's licence inconsistency and per-binary provenance are
-also unresolved.
+policy decision. Co-do's licence inconsistency and per-binary provenance were
+reconciled under Pillar 4 (2026-09-05, chrome-agent-platform-39is): no Co-do
+binaries are copied; all shipped executables are compiled from verified in-repo
+sources or pinned upstream releases with immutable SHA-256 digests and explicit
+SPDX licenses, governed by the STORE_WASM_LANE = "bundled-reviewed-only" authority.
 
 ## Planned authority split
 

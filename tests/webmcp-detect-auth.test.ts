@@ -59,7 +59,7 @@ Deno.test("passive detector rejects forged snapshots and relays the genuine prob
           return { ok: true, nonce: "detector-test-nonce-0123456789" };
         }
         if (message.type === "webmcp.detect.arm") {
-          return { ok: mainWindow.__capWebmcpDetectBootstrap("detector-test-nonce-0123456789") };
+          return { ok: mainWindow.capWebmcpDetectBootstrap("detector-test-nonce-0123456789") };
         }
         if (message.type === "webmcp.detected") {
           detections.push(message);

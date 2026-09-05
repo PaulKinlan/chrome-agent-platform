@@ -606,7 +606,7 @@ Deno.test("P1-b SW bridge: agent.run forwards the UI runId to agent.delegate, an
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assertStringIncludes(
     sw,
-    'handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null })',
+    'handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null, attachments: bounded })',
     "the mention path forwards the UI attempt runId as uiRunId",
   );
   assertStringIncludes(

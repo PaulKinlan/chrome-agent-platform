@@ -210,20 +210,26 @@ Deno.test("approval store deduplicates exact requests, never evicts approved gra
   assertEquals(store.approvals.get(one.approvalId)?.status, "approved");
 });
 
-Deno.test("model approval dispatcher captures an immutable build-local execution id and progress seam", () => {
+Deno.test("model approval dispatcher captures an immutable build-local run envelope and progress seam", () => {
   const seen = [];
   const events = [];
   const dispatch = (_type, _args, context) => {
-    seen.push(context.executionId);
+    seen.push({ executionId: context.executionId, runId: context.runId, agentId: context.agentId });
     context.onApprovalEvent?.({ type: "approval-request" });
     return context.executionId;
   };
-  const runA = bindModelApprovalDispatcher("exec:A", dispatch, (event) => events.push(event));
-  const runB = bindModelApprovalDispatcher("exec:B", dispatch);
+  const envelopeA = { agentId: "agent-instance-a" };
+  const runA = bindModelApprovalDispatcher("exec:A", dispatch, (event) => events.push(event), envelopeA);
+  envelopeA.agentId = "forged-after-bind";
+  const runB = bindModelApprovalDispatcher("exec:B", dispatch, null, { agentId: "hub" });
   assertEquals(runA("asset.delete", {}), "exec:A");
   assertEquals(runB("asset.delete", {}), "exec:B");
-  assertEquals(runA("asset.delete", {}), "exec:A", "a stale closure cannot borrow run B's id");
-  assertEquals(seen, ["exec:A", "exec:B", "exec:A"]);
+  assertEquals(runA("asset.delete", {}), "exec:A", "a stale closure cannot borrow run B's identity");
+  assertEquals(seen, [
+    { executionId: "exec:A", runId: "exec:A", agentId: "agent-instance-a" },
+    { executionId: "exec:B", runId: "exec:B", agentId: "hub" },
+    { executionId: "exec:A", runId: "exec:A", agentId: "agent-instance-a" },
+  ]);
   assertEquals(events, [{ type: "approval-request" }, { type: "approval-request" }], "run A's inline events stay on its captured progress channel");
 });
 

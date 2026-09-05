@@ -95,6 +95,15 @@ export function perfSpan(name, { ns = "perf" } = {}) {
   };
 }
 
+export const NTP_PERF_SPANS = Object.freeze([
+  "ntp:boot→composer-ready",
+  "ntp:thread-list-hydrated",
+  "ntp:agents-panel-hydrated",
+  "ntp:artifacts-panel-hydrated",
+  "ntp:send",
+  "ntp:open_thread",
+]);
+
 /** Aggregate all recorded cap:* measures into a readable breakdown. */
 export function perfSummary() {
   const out = { measures: [], truncated, generatedAt: new Date().toISOString() };
@@ -150,4 +159,51 @@ export function perfClear() {
       if (entry.name.startsWith(MARK_PREFIX)) performance.clearMarks(entry.name);
     }
   } catch { /* noop */ }
+}
+
+/**
+ * Merge base perf measures with page-level measures posted from extension pages.
+ * Aggregates count, totalMs, maxMs, and computes new avgMs. Sorts by totalMs descending.
+ */
+export function mergePerfMeasures(baseSummary, pageMeasures = []) {
+  const base = baseSummary && typeof baseSummary === "object" ? structuredClone(baseSummary) : { measures: [], truncated: 0 };
+  const measuresList = Array.isArray(pageMeasures) ? pageMeasures : [];
+  if (measuresList.length === 0) return base;
+
+  const byName = new Map();
+  for (const m of base.measures ?? []) {
+    if (m && typeof m.name === "string") {
+      byName.set(m.name, { ...m });
+    }
+  }
+
+  for (const p of measuresList) {
+    if (!p || typeof p.name !== "string") continue;
+    const name = p.name;
+    const count = Number.isFinite(p.count) ? p.count : 1;
+    const totalMs = Number.isFinite(p.totalMs) ? p.totalMs : (Number.isFinite(p.duration) ? p.duration : 0);
+    const maxMs = Number.isFinite(p.maxMs) ? p.maxMs : totalMs;
+    const lastMs = Number.isFinite(p.lastMs) ? p.lastMs : totalMs;
+
+    const existing = byName.get(name);
+    if (existing) {
+      existing.count += count;
+      existing.totalMs = Math.round((existing.totalMs + totalMs) * 10) / 10;
+      existing.maxMs = Math.round(Math.max(existing.maxMs, maxMs) * 10) / 10;
+      existing.lastMs = Math.round(lastMs * 10) / 10;
+      existing.avgMs = Math.round((existing.totalMs / existing.count) * 10) / 10;
+    } else {
+      byName.set(name, {
+        name,
+        count,
+        totalMs: Math.round(totalMs * 10) / 10,
+        avgMs: Math.round((totalMs / count) * 10) / 10,
+        maxMs: Math.round(maxMs * 10) / 10,
+        lastMs: Math.round(lastMs * 10) / 10,
+      });
+    }
+  }
+
+  base.measures = [...byName.values()].sort((a, b) => b.totalMs - a.totalMs);
+  return base;
 }
