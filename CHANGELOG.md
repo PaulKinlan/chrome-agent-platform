@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.256] — 2026-09-05
+- Site Agents now ask before each tool's first use, remember exact Allow or Deny decisions, expose activity and recovery controls in Settings, and cancel stale approvals immediately when access is reset.
+
 ## [0.3.255] — 2026-09-05
-- Merge commit '55fd033d' into HEAD
+- Settings navigation keeps the WebAssembly files panel reachable alongside every other Settings section.
 
 ## [0.3.254] — 2026-09-05
 - Save your own WebAssembly files in Settings: upload tools you trust, keep them locally with their name and description, and remove them any time

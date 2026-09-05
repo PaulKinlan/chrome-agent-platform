@@ -301,6 +301,29 @@ Deno.test("webmcp cancellation: disenroll while a promise tool runs discards the
   assert(!world.posted.some((m) => m?.type === "result" && m?.ok === true && m?.result === "late-result"), "the cancelled tool's result never surfaces");
 });
 
+Deno.test("webmcp consent revocation: in-flight result is discarded while later authorized invokes stay eligible", async () => {
+  let resolveSlow;
+  let calls = 0;
+  function slow() { calls++; return new Promise((resolve) => { resolveSlow = resolve; }); }
+  function later() { calls++; return "new-authority"; }
+  const world = makeWorld({ pageGlobals: { webmcpExpose: [slow, later] } });
+  world.arm();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  world.send({ type: "invoke", requestId: "r-revoked", name: "slow", args: {}, source: "inferred" });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  world.send({ type: "cancel-invocations" });
+  resolveSlow("stale-result");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const stale = world.posted.filter((message) => message?.type === "result" && message?.requestId === "r-revoked");
+  assertEquals(stale.length, 1);
+  assertEquals(stale[0].ok, false);
+  assert(!world.posted.some((message) => message?.result === "stale-result"));
+  const fresh = await invokeTool(world, { name: "later", source: "inferred", requestId: "r-new-authority" });
+  assertEquals(fresh[0]?.ok, true, "consent revocation advances the epoch without globally disenrolling the site");
+  assertEquals(fresh[0]?.result, "new-authority");
+  assertEquals(calls, 2);
+});
+
 Deno.test("webmcp cancellation: a result settling AFTER cancel+resume can never resurface (immutable epoch)", async () => {
   // The round-30 blocker: the old per-id tombstones expired/evicted and
   // re-enrollment cleared the cancel flag, so a promise settling after

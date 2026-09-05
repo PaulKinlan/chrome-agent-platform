@@ -132,6 +132,7 @@ const COMPONENTS = [
   "site-agent-card",
   "agent-template-card",
   "tool-directory-card",
+  "webmcp-consent-manager",
   "artifact-card",
   "artifact-inspector",
   "artifact-diff",
@@ -1466,6 +1467,95 @@ Deno.test("activity-explorer: approval rows stay ≤140 even with a long sentenc
   if (line.includes("More trailing text")) throw new Error("approval must not include past-the-first-sentence raw text");
 });
 
+Deno.test("site-tool cards expose one fail-closed View site activity control", async () => {
+  const { buildToolCardDom, normalizeSiteActivity } = await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  try {
+    const activity = { origin: "https://shop.example", tool: "add_to_cart" };
+    const card = buildToolCardDom({
+      name: "add_to_cart", status: "done", args: null, result: "added", detail: null,
+      duration: null, expandedState: new Map(), siteActivity: activity,
+    });
+    if (!card.querySelector(".site-activity")) throw new Error("a valid site-tool result needs the activity control");
+    if (card.children.filter((node) => node.querySelector?.(".site-activity")).length !== 1) throw new Error("the card must render exactly one activity control");
+    const ordinary = buildToolCardDom({ name: "memory_get", status: "done", args: null, result: "ok", detail: null, duration: null, expandedState: new Map() });
+    if (ordinary.querySelector(".site-activity")) throw new Error("ordinary tools must not gain a site activity control");
+    for (const malformed of [
+      { ...activity, runId: "must-not-ride" },
+      { origin: "chrome://settings", tool: "add_to_cart" },
+      { origin: activity.origin, tool: "add\u0000to_cart" },
+      { origin: activity.origin, tool: "cafe\u0301" },
+      Object.assign(Object.create({ inherited: true }), activity),
+      { origin: activity.origin, tool: "x".repeat(129) },
+    ]) {
+      if (normalizeSiteActivity(malformed) !== null) throw new Error("malformed owner metadata must fail closed");
+      const bad = buildToolCardDom({ name: "add_to_cart", status: "done", args: null, result: "ok", detail: null, duration: null, expandedState: new Map(), siteActivity: malformed });
+      if (bad.querySelector(".site-activity")) throw new Error("malformed metadata must not render the control");
+    }
+
+    // Cold/reopened threads derive cards from the durable run log rather than
+    // the live progress stream. The same owner-only pointer must survive that
+    // projection, while a valid pointer for a different tool fails closed.
+    const { projectThreadMessages, toolRowsFromRunLog } = await import("../extension/shared/conversation.js");
+    const durableLog = (siteActivity) => [
+      { type: "tool-call", id: "task-1", run: "run-1", callId: "call-1", tool: "execute_tool", args: '{"selectionRef":"opaque"}', at: 10 },
+      { type: "tool-result", id: "task-1", run: "run-1", callId: "call-1", tool: "execute_tool", selectedTool: "add_to_cart", result: "added", ok: true, siteActivity, at: 20 },
+    ];
+    const [durableRow] = toolRowsFromRunLog("exec-1", durableLog(activity)).filter((row) => row.role === "tool");
+    if (JSON.stringify(durableRow?.siteActivity) !== JSON.stringify(activity)) throw new Error("durable run-log projection dropped the owner activity pointer");
+    const reopened = projectThreadMessages({ messages: [
+      { role: "user", content: "Add it", executionId: "exec-1", ts: 1 },
+      durableRow,
+      { role: "assistant", content: "Added", executionId: "exec-1", ts: 30 },
+    ] }).find((row) => row.role === "tool");
+    if (JSON.stringify(reopened?.siteActivity) !== JSON.stringify(activity)) throw new Error("reopened thread dropped the owner activity pointer");
+    const [mismatched] = toolRowsFromRunLog("exec-2", durableLog({ ...activity, tool: "remove_from_cart" })).filter((row) => row.role === "tool");
+    if (mismatched?.siteActivity != null) throw new Error("mismatched durable activity metadata must fail closed");
+  } finally {
+    restoreDoc();
+  }
+});
+
+Deno.test("site activity control writes only origin + tool + timestamp, then opens query-free Settings", async () => {
+  await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  const priorChrome = Object.getOwnPropertyDescriptor(globalThis, "chrome");
+  let stored = null;
+  let opened = 0;
+  Object.defineProperty(globalThis, "chrome", {
+    configurable: true,
+    value: {
+      storage: { session: { set: async (value) => { stored = value; } } },
+      runtime: { openOptionsPage: async () => { opened++; } },
+    },
+  });
+  try {
+    const MB = registry.get("message-bubble");
+    const bubble = new MB();
+    bubble.setAttribute("site-activity", JSON.stringify({ origin: "https://shop.example", tool: "add_to_cart" }));
+    const root = new FakeNode("div");
+    const button = new FakeNode("button");
+    button.className = "site-activity";
+    root.append(button);
+    bubble._root = root;
+    bubble._wire();
+    const click = button.listeners.click?.[0];
+    if (!click) throw new Error("the shipped activity control must be wired");
+    await click({ currentTarget: button });
+    const hint = stored?.["cap:siteActivityFocus"];
+    if (!hint) throw new Error("the one-shot Settings hint was not written");
+    if (hint.origin !== "https://shop.example" || hint.tool !== "add_to_cart" || !Number.isSafeInteger(hint.at)) {
+      throw new Error(`unexpected activity hint: ${JSON.stringify(hint)}`);
+    }
+    if (Reflect.ownKeys(hint).length !== 3) throw new Error("no run/provider/model metadata may ride the Settings hint");
+    if (opened !== 1) throw new Error(`expected one openOptionsPage call, got ${opened}`);
+  } finally {
+    restoreDoc();
+    if (priorChrome) Object.defineProperty(globalThis, "chrome", priorChrome);
+    else delete globalThis.chrome;
+  }
+});
+
 Deno.test("message-bubble: a long agent response gets the Show-full-response treatment (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01)", async () => {
   await import("../extension/shared/components.js");
   const restoreDoc = installFakeDocument();
@@ -1590,6 +1680,22 @@ Deno.test("capability-row renders a switch-toggle when action-state is on and a 
 // resolves to 0 px wide inside a column flex parent (the gallery specimen
 // measured 0 px wide and 3,599 px tall). The host rule must declare an
 // inline-size beside the container-type so the card always takes its row.
+Deno.test("webmcp-consent-manager uses semantic controls, live states and text-only rendering", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const start = src.indexOf("class WebmcpConsentManager");
+  const end = src.indexOf('customElements.define("webmcp-consent-manager"');
+  if (!(start >= 0 && end > start)) throw new Error("webmcp-consent-manager class missing");
+  const block = src.slice(start, end);
+  for (const token of [
+    '<div class="root"', '<section class="site"', '<ul class="tools"', '<section class="audit"',
+    'role="status"', 'aria-live="polite"', 'aria-busy=', 'aria-label="Audit pages"',
+    'Disable automatic use', 'Reset decisions', 'Turn off site tools',
+  ]) if (!block.includes(token)) throw new Error(`manager missing ${token}`);
+  if (!src.includes('"Allow / try again"')) throw new Error("the exact-tool Allow / try again action is missing");
+  if (!block.includes("escapeHtml(")) throw new Error("page-derived labels are not escaped before template insertion");
+  if (block.includes("innerHTML =")) throw new Error("the manager assigns page-derived HTML imperatively");
+});
+
 Deno.test("tool-directory-card host declares inline-size 100% alongside container-type", async () => {
   const src = await Deno.readTextFile(ARTIFACT_DIFF_SRC);
   const start = src.indexOf("class ToolDirectoryCard extends Component");

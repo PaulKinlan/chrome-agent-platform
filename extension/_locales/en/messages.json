@@ -349,6 +349,12 @@
   "options_site_origin": {
     "message": "Site origin"
   },
+  "options_site_tool_permissions": {
+    "message": "Site tool permissions"
+  },
+  "options_site_tool_permissions_help": {
+    "message": "A Site Agent can report tools after enrollment, but the first model use of each exact tool asks you. Allowed tools run automatically until you disable them here; denied tools stay blocked until you allow or reset them."
+  },
   "options_skills": {
     "message": "\n        Skills"
   },

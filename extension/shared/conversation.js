@@ -367,6 +367,15 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
         toolCards.push(ev.toolName, card);
         break;
       }
+      case "site-activity": {
+        const activity = boundSiteToolActivity(ev.siteActivity);
+        const selected = typeof ev.selectedTool === "string" ? ev.selectedTool : "";
+        const card = toolCards.peek(ev.toolName || "execute_tool");
+        if (card && activity && visibleSiteToolLabel(selected, 128) === activity.tool) {
+          card.setAttribute?.("site-activity", JSON.stringify(activity));
+        }
+        break;
+      }
       case "tool-result": {
         const card = toolCards.take(ev.toolName);
         if (card?.protocol === true || (!card && isProtocolTool(ev.toolName))) break;
@@ -395,6 +404,9 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
           if (known) c.rememberArtifact(known.id, known.name);
         }
         if (card) {
+          card.removeAttribute?.("hidden");
+          card.removeAttribute?.("aria-hidden");
+          card.style?.removeProperty?.("display");
           // The result names the tool that actually ran; correct the header
           // from `execute_tool` to that name now it is known. The event's own
           // `selectedTool` (emitted by the runtime) is authoritative — the
@@ -403,6 +415,10 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
             (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
           if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
             card.setAttribute?.("tool-name", corrected);
+          }
+          const siteActivity = boundSiteToolActivity(ev.siteActivity);
+          if (siteActivity && visibleSiteToolLabel(corrected, 128) === siteActivity.tool) {
+            card.setAttribute?.("site-activity", JSON.stringify(siteActivity));
           }
           if (resEff.args != null) {
             try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep what is there */ }
@@ -413,7 +429,8 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
           if (note) card.setAttribute?.("tool-detail-note", note);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs });
+          const siteActivity = boundSiteToolActivity(ev.siteActivity);
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs, ...(siteActivity ? { siteActivity } : {}) });
         }
         break;
       }
@@ -589,6 +606,10 @@ export function createToolCardQueue() {
       if (!q || !q.length) return null;
       return q.shift();
     },
+    peek(name) {
+      const q = map.get(name);
+      return q?.[0] ?? null;
+    },
     pendingCount() {
       let n = 0;
       for (const q of map.values()) n += q.length;
@@ -633,6 +654,58 @@ export function boundScriptApprovalDetail(detail) {
   return { source: detail.source.slice(0, SCRIPT_DETAIL_MAX_SOURCE), hosts, dynamic: detail.dynamic === true };
 }
 
+function visibleSiteToolLabel(value, maxInputChars) {
+  if (typeof value !== "string" || !value || value.length > maxInputChars) return "";
+  try {
+    const label = value.normalize("NFC").replace(/[\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, (char) =>
+      `\\u{${char.codePointAt(0).toString(16).toUpperCase()}}`
+    );
+    if (label.length <= 128) return label;
+    let clipped = "";
+    for (const char of label) {
+      if (clipped.length + char.length > 127) break;
+      clipped += char;
+    }
+    return `${clipped}…`;
+  } catch {
+    return "";
+  }
+}
+
+export function boundSiteToolApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  const origin = typeof detail.origin === "string" && /^https?:\/\//.test(detail.origin) && detail.origin.length <= 240
+    ? detail.origin
+    : "";
+  const tool = visibleSiteToolLabel(detail.tool, 1024);
+  return detail.kind === "webmcp-tool" && origin && tool
+    ? { kind: "webmcp-tool", origin, tool }
+    : undefined;
+}
+
+/** Strict owner-only pointer from a site-tool result to its audit rows. */
+export function boundSiteToolActivity(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  let keys;
+  try {
+    const proto = Object.getPrototypeOf(detail);
+    if (proto !== Object.prototype && proto !== null) return undefined;
+    keys = Reflect.ownKeys(detail);
+  } catch { return undefined; }
+  if (keys.length !== 2 || !keys.includes("origin") || !keys.includes("tool")) return undefined;
+  const originDescriptor = Object.getOwnPropertyDescriptor(detail, "origin");
+  const toolDescriptor = Object.getOwnPropertyDescriptor(detail, "tool");
+  if (!originDescriptor?.enumerable || !("value" in originDescriptor) || !toolDescriptor?.enumerable || !("value" in toolDescriptor)) return undefined;
+  const origin = originDescriptor.value;
+  const tool = toolDescriptor.value;
+  if (typeof origin !== "string" || origin.length > 240 || typeof tool !== "string" || !tool || tool.length > 128 || visibleSiteToolLabel(tool, 128) !== tool) return undefined;
+  try {
+    const url = new URL(origin);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== origin) return undefined;
+  } catch { return undefined; }
+  return { origin, tool };
+}
+
 export function normalizePermissionRequirement(result) {
   if (result?.waitingForPermission !== true) return null;
   const req = result?.permissionRequirement;
@@ -666,9 +739,13 @@ export function normalizePermissionRequirement(result) {
         approvalId: a.approvalId,
         action: a.action,
         ...(a.targetRef === undefined ? {} : { targetRef: a.targetRef }),
-        // A script approval carries the bounded source + fetch hosts the
-        // owner must see (CAP-FB-20260830-RUN-SCRIPT-FETCH-APPROVAL-01).
-        ...(boundScriptApprovalDetail(a.detail) ? { detail: boundScriptApprovalDetail(a.detail) } : {}),
+        // Script cards carry bounded source; WebMCP cards carry separately
+        // bounded display-only site/tool labels. Neither is grant authority.
+        ...((a.action === "webmcp.use-tool"
+          ? boundSiteToolApprovalDetail(a.detail)
+          : boundScriptApprovalDetail(a.detail))
+          ? { detail: a.action === "webmcp.use-tool" ? boundSiteToolApprovalDetail(a.detail) : boundScriptApprovalDetail(a.detail) }
+          : {}),
       }))
     : [];
   if (Array.isArray(req.approvals) && req.approvals.length > 0 && approvals.length === 0) return null;
@@ -696,12 +773,15 @@ export function normalizePermissionRequirement(result) {
 
 /** The card title for an approvable action — plain words for the script
  * actions the owner must read carefully, the action id otherwise. */
-export function approvalCardTitle(action) {
+export function approvalCardTitle(action, detail = null) {
   switch (action) {
     case "script.create": return "Save this script the agent wrote?";
     case "script.run": return "Run this script now?";
     case "task.schedule-script": return "Run this script on a schedule?";
     case "fs.write": return "Write this file?";
+    case "webmcp.use-tool": return detail?.kind === "webmcp-tool"
+      ? `Use ${detail.origin}’s ${detail.tool}?`
+      : "Use this site tool?";
     default: return `Approve ${action}?`;
   }
 }
@@ -974,6 +1054,9 @@ export function pairToolJournal(entries) {
       // The structured denial persisted on the result row (§2b), when any.
       permissionRequirement: result?.permissionRequirement ?? null,
       permissionDecision: result?.permissionDecision ?? null,
+      // Owner-only audit pointer persisted on the result row. It contains no
+      // arguments, run/provider identifiers, or model metadata.
+      siteActivity: boundSiteToolActivity(result?.siteActivity),
       // Approved, then re-run by the runtime (the reopened card says so).
       reexecuted: result?.reexecuted === true,
       ts,
@@ -1325,6 +1408,7 @@ export function toolRowsFromRunLog(executionId, logs) {
       permissionRequirement: r.permissionRequirement && typeof r.permissionRequirement === "object" ? r.permissionRequirement : null,
       permissionDecision: typeof r.permissionDecision === "string" ? r.permissionDecision : null,
       reexecuted: r.reexecuted === true,
+      siteActivity: boundSiteToolActivity(r.siteActivity),
       ts: typeof r.at === "number" ? r.at : null,
     }));
   const seenApprovals = new Set();
@@ -1337,6 +1421,13 @@ export function toolRowsFromRunLog(executionId, logs) {
     const fullResult = p.resultFull ?? p.result;
     // Show the tool that RAN, not the lazy protocol's envelope.
     const eff = effectiveToolCall(p.tool, p.args, fullResult);
+    // Durable owner metadata remains useful after reopening, but only on the
+    // exact normalized tool it was minted for. A corrupted/mismatched log row
+    // cannot decorate a different card with a misleading Settings shortcut.
+    const activity = boundSiteToolActivity(p.siteActivity);
+    const siteActivity = activity && visibleSiteToolLabel(eff.name, 128) === activity.tool
+      ? activity
+      : null;
     const toolRow = {
       role: "tool",
       toolName: eff.name,
@@ -1351,6 +1442,7 @@ export function toolRowsFromRunLog(executionId, logs) {
       toolDuration: p.durationMs ?? null,
       toolCallId: p.callId ?? null,
       executionId,
+      siteActivity,
       ts: p.ts ?? null,
       derived: true, // a VIEW row — not persisted in the thread body
       // Protocol plumbing stays in the log; the renderer skips the card (§9).
@@ -1590,6 +1682,7 @@ export function projectThreadMessages(thread) {
       // `resultFull`; its note is carried verbatim (already worded).
       resultFull: typeof m.toolDetail === "string" && m.toolDetail ? m.toolDetail : null,
       ok: m.toolOk ?? null,
+      siteActivity: boundSiteToolActivity(m.siteActivity),
       ts: typeof m.ts === "number" ? m.ts : null,
       executionId: m.executionId ?? null,
     })),
@@ -1615,6 +1708,9 @@ export function projectThreadMessages(thread) {
       // The runtime-authoritative selected tool, so the artifact derivation
       // below keys on the tool that RAN even when a prose summary shadows it.
       selectedTool: t.selectedTool ?? null,
+      siteActivity: t.siteActivity && visibleSiteToolLabel(t.tool, 128) === t.siteActivity.tool
+        ? t.siteActivity
+        : null,
       ts: t.ts ?? null,
       executionId: t.executionId ?? orig?.executionId ?? null,
       callId: t.callId,
@@ -1908,6 +2004,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
       : navigator.userActivation.isActive === true;
     if (sourceEvent?.isTrusted !== true || !liveActivation) return;
     entry.status = approve ? "granting" : "denying";
+    card?.setAttribute("state", "busy");
+    card?.focusStatus?.();
     const outcome = approve
       ? await approvePermissionRequirement(requirement)
       : await resolveApprovalRequirement(requirement, false);
@@ -1935,6 +2033,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (outcome.ok) {
       entry.status = approve ? "granted" : "denied";
       card?.setAttribute("state", entry.status);
+      card?.focusStatus?.();
       // A blocking request remains inside the original tool invocation: the SW
       // wakes that exact promise. Legacy browser-grant denials still retry the
       // turn because those tools currently report only after returning.
@@ -1952,6 +2051,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       entry.status = "pending";
       card?.setAttribute("state", "error");
       card?.setAttribute("detail", outcome.errors.join("; ") || "the approval could not be completed");
+      card?.focusRetry?.();
     }
   };
   // Fetch the staged edit detail (current + proposed body) for an edit
@@ -1989,7 +2089,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
     diff.after = typeof detail.newContent === "string" ? detail.newContent : "";
     card.appendChild(diff);
   };
-  const maybeRenderApproval = (result, { blocking = false, requestId = null } = {}) => {
+  const maybeRenderApproval = (result, { blocking = false, requestId = null, toolCard = null } = {}) => {
     const requirement = normalizePermissionRequirement(result);
     if (!requirement) return;
     const existing = pendingApprovals.get(requirement.key);
@@ -2015,16 +2115,22 @@ export async function runConversationTurn(container, { text, attachments = [], h
       return;
     }
     let card = null;
+    const actionApproval = requirement.approvals.length > 0;
+    const approval = actionApproval ? requirement.approvals[0] : null;
+    const siteTool = approval?.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
     if (typeof document !== "undefined" && typeof c.append === "function") {
-      const actionApproval = requirement.approvals.length > 0;
       card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
       if (actionApproval) {
-        const approval = requirement.approvals[0];
-        card.setAttribute("title", approvalCardTitle(approval.action));
-        card.setAttribute("body", `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
+        card.setAttribute("title", approvalCardTitle(approval.action, approval.detail));
+        card.setAttribute("body", siteTool
+          ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
+          : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`);
+        if (siteTool) {
+          card.setAttribute("approve-label", "Allow automatically");
+          card.setAttribute("deny-label", "Deny");
         // The script source + hosts are a PROPERTY (rendered with textContent
         // inside the card), never an attribute.
-        if (approval.detail) card.detail = approval.detail;
+        } else if (approval.detail) card.detail = approval.detail;
       } else {
         card.setAttribute("reason", requirement.reason);
         if (requirement.permissions.length) card.setAttribute("permissions", JSON.stringify(requirement.permissions));
@@ -2034,6 +2140,22 @@ export async function runConversationTurn(container, { text, attachments = [], h
       }
       card.addEventListener("approve", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, true));
       card.addEventListener("deny", (ev) => handleApprovalDecision(requirement, card, ev?.detail?.sourceEvent, false));
+      card.addEventListener("retry", () => {
+        const entry = pendingApprovals.get(requirement.key);
+        if (!entry || entry.status !== "pending") return;
+        card.setAttribute("state", "pending");
+        card.removeAttribute("detail");
+        card.focusApprove?.();
+      });
+      // The approval card is the complete waiting state for a site tool. Hide
+      // the still-generic execute_tool row until its result gives it the exact
+      // site-tool name; this avoids stacking duplicate "Running a tool" rows
+      // around the owner's decision.
+      if (siteTool && toolCard) {
+        toolCard.setAttribute?.("hidden", "");
+        toolCard.setAttribute?.("aria-hidden", "true");
+        toolCard.style?.setProperty?.("display", "none");
+      }
       // Insert BEFORE the connected live-status row so the row stays the
       // conversation's last child (review P1-a); plain append() would land
       // the card after it.
@@ -2069,10 +2191,13 @@ export async function runConversationTurn(container, { text, attachments = [], h
     pendingApprovals.set(requirement.key, entry);
     for (const approval of requirement.approvals) approvalById.set(approval.approvalId, entry);
     if (requestId) approvalById.set(requestId, entry);
+    const statusReason = siteTool
+      ? `use ${approval.detail.tool} on ${approval.detail.origin}`
+      : requirement.reason;
     status({
       state: "waiting-for-permission",
-      message: `approval needed: ${requirement.reason}`,
-      errorReason: `the agent needs approval to ${requirement.reason}`,
+      message: `approval needed: ${statusReason}`,
+      errorReason: `the agent needs approval to ${statusReason}`,
       errorAction: "use the approval card in the conversation to allow it",
       errorCategory: "permission",
     });
@@ -2226,17 +2351,28 @@ export async function runConversationTurn(container, { text, attachments = [], h
         // The tool invocation is still pending in the worker. Render the card
         // on this exact runId-filtered conversation; its decision wakes that
         // same invocation rather than launching a second run.
-        maybeRenderApproval(ev.result, { blocking: true, requestId: ev.requestId ?? null });
+        maybeRenderApproval(ev.result, { blocking: true, requestId: ev.requestId ?? null, toolCard: toolCards.peek("execute_tool") });
         break;
       }
       case "approval-settled": {
         const entry = approvalById.get(String(ev.approvalId ?? ev.requestId ?? ""));
-        if (entry && ["granted", "denied", "expired"].includes(ev.state)) {
+        if (entry && ["granted", "denied", "expired", "cancelled"].includes(ev.state)) {
           entry.status = ev.state;
           entry.card?.setAttribute("state", ev.state);
           if (ev.state === "expired") {
             entry.card?.setAttribute("detail", "The request expired after 60 seconds. The action was not performed.");
+          } else if (ev.state === "cancelled") {
+            entry.card?.setAttribute("detail", "The run was cancelled. The action was not performed.");
           }
+        }
+        break;
+      }
+      case "site-activity": {
+        const activity = boundSiteToolActivity(ev.siteActivity);
+        const selected = typeof ev.selectedTool === "string" ? ev.selectedTool : "";
+        const card = toolCards.peek(ev.toolName || "execute_tool");
+        if (card && activity && visibleSiteToolLabel(selected, 128) === activity.tool) {
+          card.setAttribute?.("site-activity", JSON.stringify(activity));
         }
         break;
       }
@@ -2265,6 +2401,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
           c.planEvent?.({ type: "step-end", status: err ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
         }
         if (card) {
+          card.removeAttribute?.("hidden");
+          card.removeAttribute?.("aria-hidden");
+          card.style?.removeProperty?.("display");
           // The result names the tool that actually ran (the lazy envelope):
           // correct the header + unwrap the arguments now the real tool is
           // known (the event's selectedTool is authoritative; the result
@@ -2273,6 +2412,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
             (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
           if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
             card.setAttribute?.("tool-name", corrected);
+          }
+          const siteActivity = boundSiteToolActivity(ev.siteActivity);
+          if (siteActivity && visibleSiteToolLabel(corrected, 128) === siteActivity.tool) {
+            card.setAttribute?.("site-activity", JSON.stringify(siteActivity));
           }
           if (resEff.lazy && resEff.args != null) {
             try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep the existing args */ }
@@ -2283,7 +2426,8 @@ export async function runConversationTurn(container, { text, attachments = [], h
           if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
           if (note) card.setAttribute?.("tool-detail-note", note);
         } else if (typeof c.appendTool === "function") {
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs });
+          const siteActivity = boundSiteToolActivity(ev.siteActivity);
+          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs, ...(siteActivity ? { siteActivity } : {}) });
         } else {
           appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
         }
@@ -2312,7 +2456,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         }
         // A structured permission/grant denial surfaces an IN-CONTEXT approval
         // card (one per distinct requirement) instead of only an error card.
-        maybeRenderApproval(src);
+        maybeRenderApproval(src, { toolCard: card });
         break;
       }
       case "thinking-delta":

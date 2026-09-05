@@ -186,6 +186,51 @@ export function fire(el, type, detail = {}) {
   el.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
 }
 
+export const SITE_ACTIVITY_FOCUS_KEY = "cap:siteActivityFocus";
+
+/** Exact, data-only audit pointer. Malformed or expanded shapes fail closed. */
+export function normalizeSiteActivity(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  let keys;
+  try {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return null;
+    keys = Reflect.ownKeys(value);
+  } catch { return null; }
+  if (keys.length !== 2 || !keys.includes("origin") || !keys.includes("tool")) return null;
+  const originDescriptor = Object.getOwnPropertyDescriptor(value, "origin");
+  const toolDescriptor = Object.getOwnPropertyDescriptor(value, "tool");
+  if (!originDescriptor?.enumerable || !("value" in originDescriptor) || !toolDescriptor?.enumerable || !("value" in toolDescriptor)) return null;
+  const origin = originDescriptor.value;
+  const toolName = toolDescriptor.value;
+  if (typeof origin !== "string" || origin.length > 240 || typeof toolName !== "string" || !toolName || toolName.length > 128 || visibleSiteActivityLabel(toolName, 128) !== toolName) return null;
+  try {
+    const url = new URL(origin);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== origin) return null;
+  } catch { return null; }
+  return { origin, tool: toolName };
+}
+
+function siteActivityAttribute(value) {
+  if (typeof value !== "string" || !value) return null;
+  try { return normalizeSiteActivity(JSON.parse(value)); } catch { return null; }
+}
+
+function visibleSiteActivityLabel(value, max = 240) {
+  try {
+    const label = String(value ?? "").normalize("NFC").replace(/[\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, (char) =>
+      `\\u{${char.codePointAt(0).toString(16).toUpperCase()}}`
+    );
+    if (label.length <= max) return label;
+    let clipped = "";
+    for (const char of label) {
+      if (clipped.length + char.length > max - 1) break;
+      clipped += char;
+    }
+    return `${clipped}…`;
+  } catch { return "site tool"; }
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
  * Safe markdown renderer (no eval / new Function). Escapes everything FIRST,
  * then transforms a small, safe subset: fenced code blocks, inline code,
@@ -2404,6 +2449,7 @@ class ToolDirectoryCard extends Component {
   constructor() {
     super();
     this._tool = {};
+    this._titleId = `tool-title-${Math.random().toString(36).slice(2)}`;
   }
   set tool(value) {
     this._tool = value && typeof value === "object" ? value : {};
@@ -2418,26 +2464,28 @@ class ToolDirectoryCard extends Component {
     const source = String(tool.source || "inferred");
     const sourceLabel = source === "declared" ? "Declared" : source === "linked" ? "Linked" : "Inferred";
     const approved = tool.approved === true;
-    // The per-site enrollment policy (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-
-    // 01): when a site is NOT "allow", the card's state chip must say what is
-    // true for THIS tool — the policy badge stays contained in and labelled to
-    // the exact tool card (never a detached site-level note). A blocked tool is
-    // not "Approved" (its enrolment-derived approval is suspended); an ask tool
-    // pays a card before every call.
-    const policy = tool.policy === "deny" || tool.policy === "ask" ? tool.policy : "allow";
-    const policyStatus = policy === "deny"
-      ? { cls: "blocked", text: "Blocked by policy", label: "Blocked by enrollment policy" }
-      : policy === "ask"
-        ? { cls: "ask", text: "Ask before use", label: "Ask the owner before each use" }
-        : null;
-    const approvedStatus = policyStatus
-      ? null
-      : approved
-        ? { cls: "approved", text: "Approved", label: "Approved" }
-        : { cls: "pending", text: "Approval required", label: "Approval required" };
-    const statusChip = policyStatus ?? approvedStatus;
+    const policy = tool.policy === "deny" ? "deny" : "allow";
+    const consentState = policy === "deny"
+      ? "disabled"
+      : tool.consentState === "allowed" || tool.consentState === "denied" || tool.consentState === "ask"
+        ? tool.consentState
+        : approved ? "allowed" : "ask";
+    const statusChip = consentState === "disabled"
+      ? { cls: "blocked", text: "Site tools off", label: "Site tools are turned off" }
+      : consentState === "denied"
+        ? { cls: "blocked", text: "Blocked", label: "Blocked until you allow it in Settings" }
+        : consentState === "allowed"
+          ? { cls: "approved", text: "Allowed automatically", label: "Allowed automatically" }
+          : { cls: "ask", text: "Ask on first use", label: "Ask on first model use" };
+    const manage = tool.manage === true && consentState !== "disabled";
+    const busy = tool.busy === true;
+    const disabled = busy || tool.disabled === true;
+    const action = consentState === "allowed" ? "ask" : "allowed";
+    const actionLabel = consentState === "allowed"
+      ? "Disable automatic use"
+      : consentState === "denied" ? "Allow / try again" : "Allow automatically";
     const pageUrl = typeof tool.pageUrl === "string" && tool.pageUrl ? tool.pageUrl : "";
-    const titleId = `tool-title-${Math.random().toString(36).slice(2)}`;
+    const titleId = this._titleId;
     const descriptionId = `${titleId}-description`;
     mountTemplate(this, `
       /* inline-size:100% beside container-type — a block container host with
@@ -2472,7 +2520,9 @@ class ToolDirectoryCard extends Component {
         border:0; border-radius:var(--radius-sm,6px); background:var(--accent,#0e6e63);
         color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1.4 inherit;
         white-space:normal; overflow-wrap:anywhere; }
+      .approve:disabled { opacity:.6; cursor:progress; }
       .approve:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .tool-error { margin:0; color:var(--danger,#cf222e); font-size:var(--text-xs,12px); overflow-wrap:anywhere; }
       @container (min-inline-size:520px) {
         article { grid-template-columns:minmax(0,1fr) fit-content(260px); column-gap:20px; }
         .tool-name, .tool-description, .tool-metadata { grid-column:1; }
@@ -2490,19 +2540,260 @@ class ToolDirectoryCard extends Component {
         <div><dt>Schema:</dt><dd>${escapeHtml(summarizeInputSchema(tool.inputSchema))}</dd></div>
       </dl>
       <div class="tool-states" aria-label="States for ${escapeHtml(name)}">
-        <span class="tool-status source" role="status" aria-label="${escapeHtml(name)}: ${sourceLabel}">${sourceLabel}</span>
-        <span class="tool-status ${statusChip.cls}" role="status" aria-label="${escapeHtml(name)}: ${statusChip.label}">${statusChip.text}</span>
-        ${approved ? "" : `<button class="approve" type="button" aria-label="Approve ${escapeHtml(name)} for ${escapeHtml(origin)}">Approve</button>`}
+        <span class="tool-status source" aria-label="${escapeHtml(name)}: ${sourceLabel}">${sourceLabel}</span>
+        <span class="tool-status ${statusChip.cls}" aria-label="${escapeHtml(name)}: ${statusChip.label}">${statusChip.text}</span>
+        ${manage ? `<button class="approve" type="button" data-action="${action}"${disabled ? " disabled" : ""}${busy ? " aria-busy=\"true\"" : ""} aria-label="${escapeHtml(actionLabel)} for ${escapeHtml(name)} on ${escapeHtml(origin)}">${busy ? "Saving…" : escapeHtml(actionLabel)}</button>` : ""}
+        ${tool.error ? `<p class="tool-error" role="status">${escapeHtml(String(tool.error).slice(0, 240))}</p>` : ""}
       </div>
     </article>`);
   }
   _wire() {
-    this._root.querySelector(".approve")?.addEventListener("click", () => {
-      this._emit("approve", { origin: this._tool.origin, name: this._tool.name });
+    this._root.querySelector(".approve")?.addEventListener("click", (event) => {
+      const state = event.currentTarget?.dataset?.action === "ask" ? "ask" : "allowed";
+      const detail = { origin: this._tool.origin, name: this._tool.name, state };
+      this._emit("consent-action", detail);
+      if (state === "allowed") this._emit("approve", detail);
     });
   }
 }
 customElements.define("tool-directory-card", ToolDirectoryCard);
+
+/* <webmcp-consent-manager> — Settings' exact-owner management surface for
+ * first-use site-tool consent and the redacted durable audit. Data is assigned
+ * as a property; page-controlled origins/names never cross HTML attributes.
+ * Emits tool-consent, site-reset, site-policy, audit-page and refresh. */
+class WebmcpConsentManager extends Component {
+  constructor() {
+    super();
+    this._data = { loading: true, error: "", sites: [], audit: null, status: "Loading site tool permissions…", busyKey: "" };
+    this._activityFocus = null;
+  }
+  set data(value) {
+    this._data = value && typeof value === "object" ? value : this._data;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get data() { return this._data; }
+  focusSiteActivity(value) {
+    const activity = normalizeSiteActivity(value);
+    if (!activity) return false;
+    this._activityFocus = activity;
+    if (this._rendered) {
+      this._render();
+      this._wire();
+      queueMicrotask(() => {
+        const target = this._root.querySelector(".audit-target") ?? this._root.querySelector("#webmcp-audit-title");
+        target?.setAttribute?.("tabindex", "-1");
+        target?.scrollIntoView?.({ block: "center" });
+        target?.focus?.({ preventScroll: true });
+      });
+    }
+    return true;
+  }
+  _render() {
+    const data = this._data;
+    const sites = Array.isArray(data.sites) ? data.sites : [];
+    const audit = data.audit && typeof data.audit === "object" ? data.audit : null;
+    const allRecords = Array.isArray(audit?.records) ? audit.records : [];
+    const activityFocus = normalizeSiteActivity(this._activityFocus);
+    const displayedSites = sites
+      .map((site, siteIndex) => ({ site, siteIndex }))
+      .filter(({ site }) => !activityFocus || site?.origin === activityFocus.origin);
+    const records = activityFocus
+      ? allRecords.filter((row) => row?.origin === activityFocus.origin)
+      : allRecords;
+    const anyBusy = Boolean(data.busyKey) || data.loading === true || Boolean(data.error);
+    const eventLabel = (row) => {
+      switch (row?.event) {
+        case "consent-requested": return "Asked for first-use consent";
+        case "consent-decided": return row.outcome === "allowed"
+          ? "Allowed automatic use"
+          : row.outcome === "denied"
+            ? "Denied use"
+            : row.outcome === "expired"
+              ? "First-use request expired"
+              : "First-use approval unavailable";
+        case "consent-invalidated": return row.reason === "site-deleted"
+          ? "Removed the Site Agent’s tool authority"
+          : row.reason === "scripting-disabled"
+            ? "Removed tool authority when browser access was disabled"
+            : row.reason === "descriptor-changed"
+              ? "Required consent again after the tool changed"
+              : "Withheld work after authority changed";
+        case "invocation-started": return "Sent a call to the site";
+        case "invocation-finished": return row.outcome === "succeeded" ? "Received a successful result" : row.outcome === "revoked" ? "Withheld a result after revocation" : "Received a failed result";
+        case "invocation-blocked": return "Blocked a site-tool call";
+        case "consent-reset": return row.outcome === "disabled" ? "Turned site tools off" : "Reset the consent decision";
+        default: return "Site-tool event";
+      }
+    };
+    const outcomeLabel = (row) => {
+      const outcome = String(row?.outcome ?? "unknown");
+      if (outcome !== "pending") return outcome;
+      if (row?.event === "consent-requested") return "requested";
+      if (row?.event === "invocation-started") return "started";
+      return "recorded";
+    };
+    const siteMarkup = displayedSites.length
+      ? displayedSites.map(({ site, siteIndex }) => {
+          const tools = Array.isArray(site.tools) ? site.tools : [];
+          const siteBusy = String(data.busyKey ?? "").startsWith(`site:${siteIndex}:`);
+          return `<section class="site" aria-labelledby="consent-site-${siteIndex}">
+            <div class="site-head">
+              <h4 id="consent-site-${siteIndex}">${escapeHtml(String(site.origin ?? "Unknown site"))}</h4>
+              <span class="site-state ${site.policy === "deny" ? "off" : "on"}">${site.policy === "deny" ? "Tools off" : "Tools on"}</span>
+            </div>
+            <div class="site-actions" aria-label="Controls for ${escapeHtml(String(site.origin ?? "site"))}">
+              <button type="button" data-site-index="${siteIndex}" data-policy="${site.policy === "deny" ? "allow" : "deny"}"${anyBusy ? " disabled" : ""}${siteBusy ? " aria-busy=\"true\"" : ""}>${site.policy === "deny" ? "Turn on site tools" : "Turn off site tools"}</button>
+              <button type="button" data-site-index="${siteIndex}" data-reset="automatic"${anyBusy || site.policy === "deny" ? " disabled" : ""}>Disable automatic use</button>
+              <button type="button" data-site-index="${siteIndex}" data-reset="all"${anyBusy ? " disabled" : ""}>Reset decisions</button>
+            </div>
+            ${tools.length
+              ? `<ul class="tools" aria-label="Tools from ${escapeHtml(String(site.origin ?? "site"))}">${tools.map((_tool, toolIndex) => `<li><tool-directory-card data-site-index="${siteIndex}" data-tool-index="${toolIndex}"></tool-directory-card></li>`).join("")}</ul>`
+              : `<p class="empty">No tools have been reported by this site yet.</p>`}
+          </section>`;
+        }).join("")
+      : data.error
+        ? `<p class="empty">Site tool permissions are unavailable. Try again.</p>`
+        : activityFocus
+          ? `<p class="empty">This site is no longer enrolled. Its retained activity remains below.</p>`
+          : `<p class="empty">No Site Agents are enrolled. Add one above to review its tools here.</p>`;
+    const auditMarkup = records.length
+      ? `<ol class="audit-list">${records.map((row) => {
+          const at = Number.isSafeInteger(row?.at) ? new Date(row.at) : null;
+          const target = activityFocus && visibleSiteActivityLabel(row?.tool, 128) === activityFocus.tool ? " class=\"audit-target\"" : "";
+          return `<li${target}>
+            <div class="audit-main"><strong>${escapeHtml(eventLabel(row))}</strong><span class="audit-outcome">${escapeHtml(outcomeLabel(row))}</span></div>
+            <div class="audit-tool">${escapeHtml(String(row?.origin ?? "Unknown site"))} · <code>${escapeHtml(String(row?.tool ?? "Unknown tool"))}</code></div>
+            <div class="audit-meta">${at ? `<time datetime="${escapeHtml(at.toISOString())}">${escapeHtml(at.toLocaleString())}</time> · ` : ""}${escapeHtml(String(row?.actor ?? "system"))} · ${escapeHtml(String(row?.direction ?? ""))}</div>
+          </li>`;
+        }).join("")}</ol>`
+      : data.error
+        ? `<p class="empty">Audit history is unavailable. Try again.</p>`
+        : activityFocus
+          ? `<p class="empty">No activity for this site appears on this page. Use Older to continue through retained history.</p>`
+          : `<p class="empty">No site-tool consent or invocation events yet.</p>`;
+    mountTemplate(this, `
+      :host { display:block; min-inline-size:0; }
+      .root { display:grid; gap:18px; min-inline-size:0; }
+      .site, .audit { min-inline-size:0; border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; background:var(--bg,#f7f6f3); }
+      .site-head, .audit-head, .audit-main { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; }
+      h4 { margin:0; min-inline-size:0; font-size:14px; overflow-wrap:anywhere; }
+      .site-state, .audit-outcome { display:inline-flex; padding:2px 8px; border:1px solid currentColor; border-radius:999px; color:var(--muted,#635e56); font-size:12px; font-weight:600; }
+      .site-state.on { color:var(--success,#1a7f37); }
+      .site-state.off { color:var(--danger,#cf222e); }
+      .site-actions, .pager { display:flex; flex-wrap:wrap; gap:8px; margin-block-start:10px; }
+      button { min-block-size:36px; max-inline-size:100%; padding:6px 10px; border:1px solid var(--border,#e3e0d9); border-radius:7px; background:var(--panel,#fff); color:var(--text,#1d1b18); cursor:pointer; font:inherit; white-space:normal; overflow-wrap:anywhere; }
+      button:disabled { opacity:.55; cursor:not-allowed; }
+      button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .tools, .audit-list { display:grid; gap:10px; margin:12px 0 0; padding:0; list-style:none; min-inline-size:0; }
+      .audit { background:var(--panel,#fff); }
+      .audit h4 { font-size:15px; }
+      .audit-list li { min-inline-size:0; padding:10px 0; border-block-end:1px solid var(--border,#e3e0d9); }
+      .audit-list li:last-child { border-block-end:0; }
+      .audit-list li.audit-target { border-inline-start:3px solid var(--accent,#0e6e63); padding-inline-start:9px; }
+      .audit-filter { margin:8px 0 0; color:var(--muted,#635e56); font-size:12px; overflow-wrap:anywhere; }
+      .audit-main strong, .audit-tool, .audit-meta { overflow-wrap:anywhere; }
+      .audit-tool { margin-block-start:3px; font-size:13px; }
+      .audit-meta, .retention, .empty { color:var(--muted,#635e56); font-size:12px; }
+      .retention { margin:8px 0 0; }
+      .status { min-block-size:1.4em; margin:0; color:var(--muted,#635e56); font-size:13px; }
+      .error { color:var(--danger,#cf222e); }
+      @media (forced-colors:active) { .site, .audit, button, .site-state, .audit-outcome { border-color:CanvasText; } }
+    `, `<div class="root" aria-busy="${data.loading === true ? "true" : "false"}">
+      <p class="status${data.error ? " error" : ""}" role="status" aria-live="polite" aria-atomic="true">${escapeHtml(String(data.error || data.status || ""))}</p>
+      <button type="button" class="refresh"${Boolean(data.busyKey) || data.loading === true ? " disabled" : ""}>${data.error ? "Try again" : "Refresh"}</button>
+      ${data.loading === true && !sites.length ? `<p class="empty">Loading site tool permissions…</p>` : siteMarkup}
+      <section class="audit" aria-labelledby="webmcp-audit-title">
+        <div class="audit-head"><h4 id="webmcp-audit-title">Recent consent and use</h4>${activityFocus ? `<button type="button" class="audit-clear"${anyBusy ? " disabled" : ""}>Show all activity</button>` : ""}</div>
+        ${activityFocus ? `<p class="audit-filter">Showing ${escapeHtml(visibleSiteActivityLabel(activityFocus.origin))}; highlighting ${escapeHtml(visibleSiteActivityLabel(activityFocus.tool, 128))}.</p>` : ""}
+        ${auditMarkup}
+        ${audit?.historyTruncated ? `<p class="retention">Older events were removed by the visible retention policy. The oldest retained sequence is ${escapeHtml(String(audit.firstRetainedSequence ?? "unknown"))}.</p>` : ""}
+        <div class="pager" aria-label="Audit pages">
+          <button type="button" data-audit-cursor="${escapeHtml(String(audit?.olderCursor ?? ""))}"${audit?.olderCursor && !anyBusy ? "" : " disabled"}>Older</button>
+          <button type="button" data-audit-cursor="${escapeHtml(String(audit?.newerCursor ?? ""))}"${audit?.newerCursor && !anyBusy ? "" : " disabled"}>Newer</button>
+        </div>
+      </section>
+    </div>`);
+  }
+  _wire() {
+    const sites = Array.isArray(this._data.sites) ? this._data.sites : [];
+    for (const card of this._root.querySelectorAll("tool-directory-card")) {
+      const siteIndex = Number(card.dataset.siteIndex);
+      const toolIndex = Number(card.dataset.toolIndex);
+      const site = sites[siteIndex];
+      const tool = site?.tools?.[toolIndex];
+      if (!site || !tool) continue;
+      card.tool = {
+        ...tool,
+        origin: site.origin,
+        policy: site.policy,
+        consentState: tool.state,
+        manage: true,
+        busy: this._data.busyKey === `tool:${siteIndex}:${toolIndex}`,
+        disabled: Boolean(this._data.busyKey) || this._data.loading === true || Boolean(this._data.error),
+        error: this._data.toolErrors?.[`${siteIndex}:${toolIndex}`] ?? "",
+      };
+      card.addEventListener("consent-action", (event) => {
+        this._restoreFocus = `tool:${siteIndex}:${toolIndex}`;
+        this._emit("tool-consent", { siteIndex, toolIndex, state: event.detail?.state });
+      });
+    }
+    for (const button of this._root.querySelectorAll("[data-policy]")) {
+      button.addEventListener("click", () => {
+        this._restoreFocus = `policy:${button.dataset.siteIndex}`;
+        this._emit("site-policy", {
+          siteIndex: Number(button.dataset.siteIndex),
+          policy: button.dataset.policy,
+        });
+      });
+    }
+    for (const button of this._root.querySelectorAll("[data-reset]")) {
+      button.addEventListener("click", () => {
+        this._restoreFocus = `reset:${button.dataset.siteIndex}:${button.dataset.reset}`;
+        this._emit("site-reset", {
+          siteIndex: Number(button.dataset.siteIndex),
+          mode: button.dataset.reset,
+        });
+      });
+    }
+    for (const button of this._root.querySelectorAll("[data-audit-cursor]")) {
+      button.addEventListener("click", () => {
+        if (button.dataset.auditCursor) this._emit("audit-page", { cursor: button.dataset.auditCursor });
+      });
+    }
+    this._root.querySelector(".refresh")?.addEventListener("click", () => {
+      this._restoreFocus = "refresh";
+      this._emit("refresh");
+    });
+    this._root.querySelector(".audit-clear")?.addEventListener("click", () => {
+      this._activityFocus = null;
+      this._render();
+      this._wire();
+      queueMicrotask(() => {
+        const heading = this._root.querySelector("#webmcp-audit-title");
+        heading?.setAttribute?.("tabindex", "-1");
+        heading?.focus?.();
+      });
+    });
+    if (!this._data.busyKey && this._data.loading !== true && this._restoreFocus) {
+      let target = null;
+      const [kind, siteIndex, detail] = this._restoreFocus.split(":");
+      if (kind === "tool") {
+        target = this._root.querySelector(`tool-directory-card[data-site-index="${siteIndex}"][data-tool-index="${detail}"]`)?.shadowRoot?.querySelector(".approve");
+      } else if (kind === "policy") {
+        target = this._root.querySelector(`[data-policy][data-site-index="${siteIndex}"]`);
+      } else if (kind === "reset") {
+        target = this._root.querySelector(`[data-reset="${detail}"][data-site-index="${siteIndex}"]`);
+      } else if (kind === "refresh") {
+        target = this._root.querySelector(".refresh");
+      }
+      if ((!target || target.disabled) && this._data.error) target = this._root.querySelector(".refresh");
+      if (target && !target.disabled) queueMicrotask(() => target.focus());
+      this._restoreFocus = "";
+    }
+  }
+}
+customElements.define("webmcp-consent-manager", WebmcpConsentManager);
 
 /* <capability-row name description icon action="run|open|open-delete|use|state" action-state="on" detail detail-label last-run>
  * The reusable capability/recipe row. A strict grid — icon (fixed) | label
@@ -4989,7 +5280,7 @@ function buildToolTreeBlock(label, value, rowsIn, maxNodes, expandedState) {
  * The card is a per-card <details> COLLAPSED by default (the name summary +
  * status chip); clicking the head expands ONLY this card. `cardExpanded` +
  * `onCardToggle` persist the per-card open state across re-renders. */
-export function buildToolCardDom({ name, status: statusIn, args, result, detail, detailNote = null, duration, expandedState, cardExpanded = false, onCardToggle }) {
+export function buildToolCardDom({ name, status: statusIn, args, result, detail, detailNote = null, duration, expandedState, cardExpanded = false, onCardToggle, siteActivity = null }) {
   // THE ERROR RULE (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01 — owner: "it
   // errors on a tool call and I can't see the error in the UI"). A failed call
   // is a failed call whatever the row said: an error nested inside a lazy
@@ -5061,6 +5352,8 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
   try {
     const parsedArgs = shownArgs != null && shownArgs !== "" ? safeParseOnce(shownArgs) : null;
     what = describeToolCall(lazyName || name, parsedArgs && parsedArgs.kind === "json" ? parsedArgs.value : shownArgs);
+    if (status === "done" && what.startsWith("Running ")) what = `Completed ${what.slice("Running ".length)}`;
+    else if (status === "error" && what.startsWith("Running ")) what = `Failed ${what.slice("Running ".length)}`;
   } catch { what = ""; }
   if (what) {
     const whatEl = document.createElement("span");
@@ -5195,6 +5488,18 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
     if (result != null && result !== "") addBlock("result", result);
     if (detail != null && detail !== "" && detail !== result) addBlock("detail", detail);
   }
+  const activity = normalizeSiteActivity(siteActivity);
+  if (activity) {
+    const actions = document.createElement("div");
+    actions.className = "tool-actions";
+    const openActivity = document.createElement("button");
+    openActivity.type = "button";
+    openActivity.className = "site-activity";
+    openActivity.textContent = "View site activity";
+    openActivity.setAttribute("aria-label", `View site activity for ${visibleSiteActivityLabel(activity.tool, 128)} on ${visibleSiteActivityLabel(activity.origin)}`);
+    actions.appendChild(openActivity);
+    body.appendChild(actions);
+  }
   card.appendChild(body);
   return card;
 }
@@ -5240,7 +5545,7 @@ customElements.define("agent-identity", AgentIdentity);
 
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-detail-note", "tool-duration", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
+    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-detail-note", "tool-duration", "site-activity", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
   }
   // A long agent/system response is COLLAPSED to a preview with a
   // Show-full toggle (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the owner
@@ -5491,6 +5796,11 @@ class MessageBubble extends Component {
       .tool .tt-copy:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
       .tool .tt-copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
       .tool .tool-plain { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
+      .tool .tool-actions { display:flex; justify-content:flex-end; padding:7px 10px; border-top:1px solid var(--border,#e3e0d9); }
+      .tool .site-activity { min-block-size:32px; max-inline-size:100%; padding:4px 9px; border:1px solid var(--border,#e3e0d9); border-radius:6px; background:transparent; color:var(--accent,#0e6e63); cursor:pointer; font:inherit; font-size:12px; font-weight:600; white-space:normal; overflow-wrap:anywhere; }
+      .tool .site-activity:hover { border-color:var(--accent,#0e6e63); }
+      .tool .site-activity:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .tool .site-activity:disabled { cursor:wait; opacity:.6; }
       @media (prefers-reduced-motion: reduce) { .tool .tt-toggle .tt-caret { transition:none; } .tool .tt-copy { transition:none; } }
     `;
     let markup;
@@ -5604,6 +5914,7 @@ class MessageBubble extends Component {
           expandedState: this._ttExpanded,
           cardExpanded: this._toolCardExpanded === true,
           onCardToggle: (open) => { this._toolCardExpanded = open === true; },
+          siteActivity: siteActivityAttribute(this.getAttribute("site-activity")),
         });
       }
     } else if (role === "thinking") {
@@ -5688,6 +5999,22 @@ class MessageBubble extends Component {
     this._root.querySelector(".err-fix")?.addEventListener("click", () => {
       if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
         chrome.runtime.openOptionsPage();
+      }
+    });
+    this._root.querySelector(".site-activity")?.addEventListener("click", async (event) => {
+      const activity = siteActivityAttribute(this.getAttribute("site-activity"));
+      const button = event.currentTarget;
+      if (!activity || typeof chrome === "undefined" || !chrome.storage?.session?.set || !chrome.runtime?.openOptionsPage) return;
+      button.disabled = true;
+      try {
+        await chrome.storage.session.set({
+          [SITE_ACTIVITY_FOCUS_KEY]: { ...activity, at: Date.now() },
+        });
+        await chrome.runtime.openOptionsPage();
+      } catch {
+        button.textContent = "Could not open activity";
+      } finally {
+        button.disabled = false;
       }
     });
     // Percolate the current theme/locale into any rendered-HTML frame (the
@@ -6209,6 +6536,7 @@ class AgentConversation extends Component {
     const detail = m.detail ?? m["tool-detail"];
     const detailNote = m.detailNote ?? m["tool-detail-note"];
     const durationMs = m.durationMs ?? m["tool-duration"];
+    const siteActivity = normalizeSiteActivity(m.siteActivity ?? m["site-activity"]);
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
     return this._bubble("tool", null, {
       "tool-name": name,
@@ -6218,6 +6546,7 @@ class AgentConversation extends Component {
       "tool-detail": toolPayloadAttribute(detail),
       "tool-detail-note": typeof detailNote === "string" && detailNote ? detailNote : null,
       "tool-duration": durationMs != null ? String(durationMs) : null,
+      "site-activity": siteActivity ? JSON.stringify(siteActivity) : null,
     });
   }
   /** The IN-CONTEXT grant card for a PERSISTED permission denial
@@ -8055,7 +8384,7 @@ class PlanStrip extends Component {
       @keyframes plan-spin { to { transform:rotate(360deg); } }
       .sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
     `, `<div class="plan">
-      <details${settled ? "" : " open"}>
+      <details${!settled && steps.length > 1 ? " open" : ""}>
         <summary>
           <span class="lead${settled && !sum.errored ? " done" : ""}${settled && sum.errored ? " err" : ""}" aria-hidden="true">${settled ? (sum.errored ? ICON_STEP_ERROR : ICON_PLAN_DONE) : ICON_STEP_ACTIVE}</span>
           <span class="sumtx">${escapeHtml(summaryText)}</span>
@@ -8510,15 +8839,19 @@ class ApprovalCard extends Component {
     const body = this.getAttribute("body") || "";
     const approveLabel = this.getAttribute("approve-label") || "Approve";
     const denyLabel = this.getAttribute("deny-label") || "Deny";
-    const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
+    const state = ["busy", "granted", "denied", "expired", "cancelled", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") || "").slice(0, 240);
-    const stateText = state === "granted"
-      ? "Approved — continuing the paused action."
-      : state === "denied"
-        ? "Denied. The action was not performed."
-        : state === "expired"
-          ? (detail || "Expired. The action was not performed.")
-          : (detail || "The decision could not be recorded — try again.");
+    const stateText = state === "busy"
+      ? "Saving your decision…"
+      : state === "granted"
+        ? "Approved. The action resumed."
+        : state === "denied"
+          ? "Denied. The action was not performed."
+          : state === "expired"
+            ? (detail || "Expired. The action was not performed.")
+            : state === "cancelled"
+              ? (detail || "The run was cancelled. The action was not performed.")
+              : (detail || "The decision could not be recorded.");
     mountTemplate(this, `
       :host { display:block; margin-block-end:14px; }
       .card { border:1px solid var(--accent,#0e6e63); border-radius:12px; background:var(--panel,#ffffff); padding:14px 16px; max-width:min(680px, 100%); }
@@ -8533,12 +8866,12 @@ class ApprovalCard extends Component {
       slot[name="extra"]::slotted(*) { display:block; }
       .actions { display:flex; flex-wrap:wrap; gap:8px; }
       .approve { border:0; border-radius:8px; padding:7px 16px; min-height:34px; background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); cursor:pointer; font:inherit; font-weight:600; }
-      .deny { border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:7px 16px; min-height:34px; background:var(--panel,#ffffff); color:var(--ink,#1d1b18); cursor:pointer; font:inherit; }
-      .approve:focus-visible, .deny:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .deny, .retry { border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:7px 16px; min-height:34px; background:var(--panel,#ffffff); color:var(--ink,#1d1b18); cursor:pointer; font:inherit; }
+      .approve:focus-visible, .deny:focus-visible, .retry:focus-visible, .state:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .state { margin:0; font-size:12.5px; font-weight:600; color:var(--muted,#635e56); }
       .state.granted { color:var(--success,#1a7f37); }
-      .state.error, .state.expired { color:var(--danger,#b3261e); }
-      :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card, :host([state="error"]) .card { border-color:var(--border,#e3e0d9); }
+      .state.error, .state.expired, .state.cancelled { color:var(--danger,#b3261e); }
+      :host([state="busy"]) .card, :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card, :host([state="cancelled"]) .card, :host([state="error"]) .card { border-color:var(--border,#e3e0d9); }
     `, `<div class="card" role="group" aria-label="Approval request">
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
@@ -8550,7 +8883,9 @@ class ApprovalCard extends Component {
         <slot name="extra"></slot>
         ${state === "pending"
           ? `<div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>`
-          : `<p class="state ${state}" role="status">${escapeHtml(stateText)}</p>`}
+          : state === "error"
+            ? `<div class="actions"><p class="state error" role="status" tabindex="-1">${escapeHtml(stateText)}</p><button type="button" class="retry">Try again</button></div>`
+            : `<p class="state ${state}" role="status" tabindex="-1">${escapeHtml(stateText)}</p>`}
       </div>`);
   }
   _wire() {
@@ -8566,7 +8901,11 @@ class ApprovalCard extends Component {
     }
     this._root.querySelector(".approve")?.addEventListener("click", (event) => this._emit("approve", { sourceEvent: event }));
     this._root.querySelector(".deny")?.addEventListener("click", (event) => this._emit("deny", { sourceEvent: event }));
+    this._root.querySelector(".retry")?.addEventListener("click", () => this._emit("retry"));
   }
+  focusApprove() { queueMicrotask(() => this._root.querySelector(".approve")?.focus()); }
+  focusRetry() { queueMicrotask(() => this._root.querySelector(".retry")?.focus()); }
+  focusStatus() { queueMicrotask(() => this._root.querySelector(".state")?.focus()); }
 }
 customElements.define("approval-card", ApprovalCard);
 

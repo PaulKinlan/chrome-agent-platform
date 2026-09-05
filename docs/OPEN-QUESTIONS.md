@@ -102,10 +102,14 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     owner's tabs (one card: see tabs, group tabs, control the browser on the listed sites). Owner call
     needed before `CAP-FB-20260830-EXEC-DEMO-01`'s final recording, which asserts at most one card per step.
 
-23. **When does a site's WebMCP tool ask for consent?** — Enrolment (the picker's Add) is the only
-    consent today; a read or a mutation on the site runs with no card
-    (`CAP-FB-20260901-WEBMCP-CALL-CONSENT-01`). **Recommended default (coordinator, 2026-09-02; OPEN):**
-    enrolment covers the site's READ tools for the profile; the first call of a tool the site marks as
-    mutating (or any tool when the site marks none) shows one "Use <site>'s <tool>?" card per run;
-    Settings → Site tools shows and revokes the decision. The demo script's step 2 is updated to match
-    whichever way this lands.
+23. **When does a site's WebMCP tool ask for consent?** — **CLOSED (owner decision, 2026-09-05):**
+    enrollment creates the Site Agent and its discovery channel, but is not automatic-use consent.
+    Every exact origin/tool asks once on its first genuine model use. Allow persists for that browser
+    profile; later runs use that unchanged tool without another card. Deny is sticky and blocks without
+    nagging until the owner explicitly allows or resets it in Settings. Settings provides exact-tool and
+    site-wide disable/reset controls. Consent and invocation events are durably, redactedly audited; a
+    required audit write failure blocks dispatch/publication, and authority is rechecked before page
+    dispatch and before a result reaches the model. If the terminal `invocation-finished` audit cannot
+    be committed, an otherwise successful page result is discarded rather than published. Arguments
+    that cannot be canonically digested fail before dispatch and therefore create no invocation audit
+    row: no site work started.

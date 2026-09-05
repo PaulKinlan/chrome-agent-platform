@@ -332,3 +332,26 @@ Deno.test("r6 wake reconcile: only a GENUINELY absent run releases; terminal-ok 
   assertEquals((await queue.list("tAbsent")).map((i) => i.text), ["never admitted"], "the released message is back on the queue for the wake re-drain");
   assertEquals((await queue.list("tSettled")).map((i) => i.text), ["survivor"], "the executed item is gone; the survivor waits for the re-drain");
 });
+
+Deno.test("queue drain: a durable follow-up fires with its originating resolver document", async () => {
+  const kv = kvFake();
+  const queue = createThreadQueue({ kvGet: kv.kvGet, kvSet: kv.kvSet });
+  await queue.enqueue("tResolver", "continue", { resolverDocumentId: "conversation-document-9" });
+  const registry = registryFake();
+  registry.add("exec:owner", { clientCorrelationId: null, phase: "terminal", ok: true });
+  let fired = null;
+  const result = await drainQueuedFollowUp({
+    queue,
+    threadId: "tResolver",
+    settledExecutionId: "exec:owner",
+    runRow: registry.row,
+    fireRun: async (request) => {
+      fired = request;
+      return { ok: false, error: "test refusal" };
+    },
+    report: () => {},
+    newRunId,
+  });
+  assert(result.ok && result.drained);
+  assertEquals(fired.resolverDocumentId, "conversation-document-9");
+});

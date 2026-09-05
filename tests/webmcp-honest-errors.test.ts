@@ -60,7 +60,8 @@ Deno.test("honest errors: the isolated world forwards errorDetail and STAMPS rea
 Deno.test("honest errors: the tools.invoke route forwards errorDetail + reason + detail instead of re-wrapping to a bare string", () => {
   const routeIdx = SW.indexOf('async "tools.invoke"');
   assert(routeIdx > 0, "the tools.invoke route exists");
-  const route = SW.slice(routeIdx, routeIdx + 2200);
+  const routeEnd = SW.indexOf('async "tools.policies"', routeIdx);
+  const route = SW.slice(routeIdx, routeEnd > routeIdx ? routeEnd : routeIdx + 6000);
   assert(route.includes("out.errorDetail = res.errorDetail"), "the route forwards errorDetail");
   assert(route.includes("out.reason = res.reason"), "the route forwards the SW's own named reasons");
   assert(route.includes("out.detail = res.detail"), "the route forwards the SW's own detail");

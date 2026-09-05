@@ -217,6 +217,25 @@ Deno.test("webmcp bridge: disenrollment cancels pending invokes; stale sync cann
   assert(bridge.downSince(baseline).some((m) => m.type === "invoke" && m.gen === 9));
 });
 
+Deno.test("webmcp bridge: consent revocation cancels pending calls without disenrolling later calls", async () => {
+  const bridge = makeBridge(enrolledRoutes(5, 1));
+  await tick();
+  const baseline = bridge.posted.length;
+  const pending = bridge.emitRuntime({ type: "invoke-tool", name: "greet", args: {}, gen: 5, source: "inferred" });
+  assertEquals(pending.length, 0);
+  const revoked = bridge.emitRuntime({ type: "tool-consent-revoked" });
+  assertEquals(revoked[0]?.ok, true);
+  assertEquals(pending[0]?.ok, false, "the isolated-world waiter is rejected immediately");
+  assert(String(pending[0]?.error).includes("consent changed"));
+  assert(bridge.downSince(baseline).some((message) => message.type === "cancel-invocations"));
+
+  const later = bridge.emitRuntime({ type: "invoke-tool", name: "greet", args: {}, gen: 5, source: "inferred" });
+  assertEquals(later.length, 0, "revocation does not forge a site-wide disenrollment");
+  await tick(5);
+  const down = bridge.downSince(baseline);
+  assert(down.some((message) => message.type === "invoke"), "a later call may proceed only if service-worker authority authorizes it");
+});
+
 Deno.test("webmcp bridge: generationless lifecycle/invoke and source-less invoke fail closed", async () => {
   const bridge = makeBridge(enrolledRoutes(2, 0));
   await tick();

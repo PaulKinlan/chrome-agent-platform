@@ -138,6 +138,8 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_show_developer_features": "Show developer features",
   "options_site_agent_diagnostics": "Site Agent diagnostics",
   "options_site_origin": "Site origin",
+  "options_site_tool_permissions": "Site tool permissions",
+  "options_site_tool_permissions_help": "A Site Agent can report tools after enrollment, but the first model use of each exact tool asks you. Allowed tools run automatically until you disable them here; denied tools stay blocked until you allow or reset them.",
   "options_skills": "\n        Skills",
   "options_skills_1": "Skills",
   "options_system_hooks": "System hooks",
