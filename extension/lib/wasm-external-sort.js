@@ -87,24 +87,49 @@ class LineCursor {
     this.access = access;
     this.offset = 0;
     this.size = access.getSize();
+    this.buffer = new Uint8Array();
+    this.bufferStart = 0;
   }
 
   next() {
     if (this.offset >= this.size) return null;
     const start = this.offset;
     for (let position = start; position < this.size;) {
-      const bytes = readAt(this.access, position, Math.min(IO_BYTES, this.size - position));
-      if (bytes.byteLength === 0) fail("sort_run_read_failed");
-      const newline = bytes.indexOf(10);
+      if (position < this.bufferStart || position >= this.bufferStart + this.buffer.byteLength) {
+        this.bufferStart = position;
+        this.buffer = readAt(this.access, position, Math.min(IO_BYTES, this.size - position));
+        if (this.buffer.byteLength === 0) fail("sort_run_read_failed");
+      }
+      const relative = position - this.bufferStart;
+      const newline = this.buffer.subarray(relative).indexOf(10);
       if (newline >= 0) {
         const end = position + newline;
         this.offset = end + 1;
-        return Object.freeze({ access: this.access, start, end });
+        const length = end - start;
+        return Object.freeze({
+          access: this.access,
+          start,
+          end,
+          // Keep ordinary records in a fixed-size working set. Records larger
+          // than one I/O window remain zero-copy spans and are compared/copied
+          // incrementally, so this cache never becomes a content-size ceiling.
+          bytes: length <= IO_BYTES
+            ? (start >= this.bufferStart
+              ? this.buffer.slice(start - this.bufferStart, end - this.bufferStart)
+              : readAt(this.access, start, length))
+            : null,
+        });
       }
-      position += bytes.byteLength;
+      position = this.bufferStart + this.buffer.byteLength;
     }
     this.offset = this.size;
-    return Object.freeze({ access: this.access, start, end: this.size });
+    const length = this.size - start;
+    return Object.freeze({
+      access: this.access,
+      start,
+      end: this.size,
+      bytes: length <= IO_BYTES ? readAt(this.access, start, length) : null,
+    });
   }
 }
 
@@ -129,6 +154,14 @@ function compareSpan(a, aStart, aLength, b, bStart, bLength, padWithZero = false
 }
 
 function compareLexical(a, b) {
+  if (a.bytes && b.bytes) {
+    const length = Math.min(a.bytes.byteLength, b.bytes.byteLength);
+    for (let index = 0; index < length; index++) {
+      if (a.bytes[index] !== b.bytes[index]) return a.bytes[index] < b.bytes[index] ? -1 : 1;
+    }
+    if (a.bytes.byteLength !== b.bytes.byteLength) return a.bytes.byteLength < b.bytes.byteLength ? -1 : 1;
+    return 0;
+  }
   return compareSpan(a.access, a.start, a.end - a.start, b.access, b.start, b.end - b.start);
 }
 
@@ -263,9 +296,12 @@ async function mergePair({ left, right, scratchDirectory, name, options }) {
     const leftCursor = new LineCursor(leftAccess), rightCursor = new LineCursor(rightAccess);
     let a = leftCursor.next(), b = rightCursor.next();
     const emit = (line) => {
-      copyRange(line.access, line.start, line.end, (bytes) => {
-        outputOffset = writeAll(merged.access, bytes, outputOffset);
-      });
+      if (line.bytes) outputOffset = writeAll(merged.access, line.bytes, outputOffset);
+      else {
+        copyRange(line.access, line.start, line.end, (bytes) => {
+          outputOffset = writeAll(merged.access, bytes, outputOffset);
+        });
+      }
       outputOffset = writeAll(merged.access, new Uint8Array([10]), outputOffset);
     };
     while (a && b) {
