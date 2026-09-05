@@ -58,6 +58,7 @@ const PATHS = {
   c2: join(EVIDENCE, "c2"),
   csvtool: join(EVIDENCE, "csvtool"),
   imageops: join(EVIDENCE, "imageops"),
+  hasher: join(EVIDENCE, "hasher"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
   stream: join(REPO, "packages/bundled/unix-stream-v1"),
@@ -144,6 +145,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   truncate: "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
   imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: image bytes stdin to image bytes (info prints JSON) stdout. Subcommands: info; resize --width N --height M; convert --format.",
+  hasher: "hasher - compute a hash digest of the input. Use for checksums or dedup keys. In/out: bytes stdin to hex digest stdout. Flag: --algo sha256|sha512|sha3-256|sha3-512|blake2b|blake3. Example: 'hello' + sha256 gives the 2cf24dba...938b9824 digest.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
@@ -242,6 +244,13 @@ for (const toolId of LANES.c2.tools) {
   const buildB = readFileSync(join(PATHS.imageops, "build-b/imageops.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("imageops reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "imageops", lane: "imageops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.imageops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/imageops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "imageops", displayName: "imageops", category: "media", description: AGENT_DESCRIPTIONS.imageops, caveats: ["png/jpeg/webp only; stdin/stdout; no EXIF editing."], replayClass: "read-only", capabilities: ["compute"] });
+  { // hasher (CAP-authored clean-room over RustCrypto sha2/sha3, blake2, and the official blake3 crate — the algorithms behind the catalogue §3 candidates hash-wasm + blake3-wasm; 3wei)
+    const wasm = readFileSync(join(PATHS.hasher, "build-a/hasher.wasm"));
+    if (sha256(wasm) !== "c5f0f9b744f1c5c5620ccf48bfa894c932c2f5ebb0105d7d8cadfa1df5de7d3b" || wasm.byteLength !== 97135) throw new Error("hasher hash/size mismatch");
+    const buildB = readFileSync(join(PATHS.hasher, "build-b/hasher.wasm"));
+    if (sha256(buildB) !== sha256(wasm)) throw new Error("hasher reproducibility broken (build-a != build-b)");
+    packages.push({ toolId: "hasher", lane: "hasher", bytes: wasm, row: null, tier: "default", spdx: "MIT AND Apache-2.0", licenseFile: "extension/wasm/licenses/hasher-LICENSES.md", notices: null, sbom: { src: join(PATHS.hasher, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/hasher.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo stable; wasm32-wasip1", buildScriptLane: "hasher", displayName: "hasher", category: "crypto", description: AGENT_DESCRIPTIONS.hasher, caveats: ["Digests are integrity/identity aids, never signatures or content trust.", "stdin/stdout only."], replayClass: "read-only", capabilities: ["compute", "crypto"] });
+  }
 }
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));
@@ -396,7 +405,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "hasher", "imageops", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };

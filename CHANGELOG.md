@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.257] — 2026-09-05
+- wip: hasher admission artifacts staged
+
 ## [0.3.256] — 2026-09-05
 - Site Agents now ask before each tool's first use, remember exact Allow or Deny decisions, expose activity and recovery controls in Settings, and cancel stale approvals immediately when access is reset.
 

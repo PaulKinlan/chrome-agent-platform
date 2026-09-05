@@ -22,7 +22,7 @@ function assertEquals(actual, expected, message) {
   }
 }
 
-Deno.test("list_tools: enumerates all categories including the 32 admitted bundled Wasm tools", async () => {
+Deno.test("list_tools: enumerates all categories including the 33 admitted bundled Wasm tools", async () => {
   const bundledRecords = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
     scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
@@ -46,8 +46,8 @@ Deno.test("list_tools: enumerates all categories including the 32 admitted bundl
   // Call list_tools
   const result = await toolset.tools.list_tools.execute({});
   assertEquals(result.ok, true);
-  assertEquals(result.counts.bundledWasm, 32, "must report exactly 32 bundled Wasm tools");
-  assertEquals(result.tools["bundled-wasm"].length, 32, "must list all 31 bundled Wasm tools");
+  assertEquals(result.counts.bundledWasm, 33, "must report exactly 32 bundled Wasm tools");
+  assertEquals(result.tools["bundled-wasm"].length, 33, "must list all 31 bundled Wasm tools");
 
   const names = result.tools["bundled-wasm"].map((t) => t.name);
   const expectedSubset = ["awk_filter_bounded", "date_formatter_bounded", "diff", "patch", "truncate", "csvtool", "gzip", "md5sum", "sha256sum", "sqlite3_query_bounded"];
@@ -77,7 +77,7 @@ Deno.test("list_tools: category filter returns only the requested category", asy
 
   const filtered = await toolset.tools.list_tools.execute({ source: "bundled-wasm" });
   assertEquals(filtered.ok, true);
-  assertEquals(filtered.tools["bundled-wasm"].length, 32);
+  assertEquals(filtered.tools["bundled-wasm"].length, 33);
   assertEquals(filtered.tools.builtin.length, 0, "filtered category should not populate other categories");
 });
 
@@ -107,7 +107,7 @@ Deno.test("list_tools: returns every complete descriptor without the retired 32 
   const result = await toolset.tools.list_tools.execute({});
   assertEquals(result.ok, true);
   assertEquals(result.truncated, false);
-  assertEquals(result.tools["bundled-wasm"].length, 32);
+  assertEquals(result.tools["bundled-wasm"].length, 33);
   const serialized = JSON.stringify(result);
   const jsonBytes = new TextEncoder().encode(serialized).byteLength;
   assert(jsonBytes > 32 * 1024, `fixture must falsify the retired 32 KiB cap (${jsonBytes} bytes)`);

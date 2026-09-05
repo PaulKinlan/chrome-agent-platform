@@ -942,6 +942,44 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.hasher",
+  "version": "1.0.0",
+  "toolId": "hasher",
+  "lane": "hasher",
+  "displayName": "hasher",
+  "category": "crypto",
+  "description": "hasher - compute a hash digest of the input. Use for checksums or dedup keys. In/out: bytes stdin to hex digest stdout. Flag: --algo sha256|sha512|sha3-256|sha3-512|blake2b|blake3. Example: 'hello' + sha256 gives the 2cf24dba...938b9824 digest.",
+  "caveats": [
+   "Digests are integrity/identity aids, never signatures or content trust.",
+   "stdin/stdout only.",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+  ],
+  "capabilities": [
+   "compute",
+   "crypto"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "MIT AND Apache-2.0",
+   "file": "extension/wasm/licenses/hasher-LICENSES.md",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "c5f0f9b744f1c5c5620ccf48bfa894c932c2f5ebb0105d7d8cadfa1df5de7d3b",
+   "bytes": 97135,
+   "tier": "default",
+   "initialPages": 17,
+   "maxPages": 2048
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.hasher-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.gzip",
   "version": "1.0.0",
   "toolId": "gzip",
