@@ -432,6 +432,54 @@ Deno.test("def2 join: request shapes are exact and errors carry stable codes", (
   throwsCode(() => joinTables(broken, RIGHT, joinRequest), "table_bad_request");
 });
 
+Deno.test("def2 join: request objects and key pairs must be plain own enumerable data — no getters, symbols, or hidden props", () => {
+  // Sanity: the plain request still joins (strictness must not reject honest callers).
+  canonical(joinTables(LEFT, RIGHT, { kind: "inner", keys: [{ left: "c1", right: "c1" }] }));
+  // Top-level getter that fabricates the keys array on read.
+  const topGetter = { kind: "inner", keys: [{ left: "c1", right: "c1" }] };
+  Object.defineProperty(topGetter, "keys", { enumerable: true, get: () => [{ left: "c1", right: "c1" }] });
+  throwsCode(() => joinTables(LEFT, RIGHT, topGetter), "table_bad_request");
+  // Top-level symbol-keyed extra property.
+  throwsCode(
+    () => joinTables(LEFT, RIGHT, { kind: "inner", keys: [{ left: "c1", right: "c1" }], [Symbol("x")]: 1 }),
+    "table_bad_request",
+  );
+  // Top-level non-enumerable extra property (invisible to Object.keys).
+  const topHidden = { kind: "inner", keys: [{ left: "c1", right: "c1" }] };
+  Object.defineProperty(topHidden, "extra", { value: 1 });
+  throwsCode(() => joinTables(LEFT, RIGHT, topHidden), "table_bad_request");
+  // Nested: a key-pair member backed by an accessor.
+  const pairGetter = {};
+  Object.defineProperty(pairGetter, "left", { enumerable: true, get: () => "c1" });
+  Object.defineProperty(pairGetter, "right", { enumerable: true, value: "c1" });
+  throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: [pairGetter] }), "table_bad_request");
+  // Nested: symbol-keyed extra on a key pair.
+  throwsCode(
+    () => joinTables(LEFT, RIGHT, { kind: "inner", keys: [{ left: "c1", right: "c1", [Symbol("x")]: 1 }] }),
+    "table_bad_request",
+  );
+  // Nested: non-enumerable required property on a key pair.
+  const pairHidden = { left: "c1" };
+  Object.defineProperty(pairHidden, "right", { value: "c1" });
+  throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: [pairHidden] }), "table_bad_request");
+  // The keys array itself indexed by an accessor.
+  const accessorIndexed = [];
+  Object.defineProperty(accessorIndexed, 0, { enumerable: true, get: () => ({ left: "c1", right: "c1" }) });
+  throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: accessorIndexed }), "table_bad_request");
+  // The keys array carrying a symbol-keyed extra property.
+  const symbolArray = [{ left: "c1", right: "c1" }];
+  symbolArray[Symbol("x")] = 1;
+  throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: symbolArray }), "table_bad_request");
+  // The keys array carrying a non-index own property.
+  const extraKeyArray = [{ left: "c1", right: "c1" }];
+  extraKeyArray.tag = "meta";
+  throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: extraKeyArray }), "table_bad_request");
+  // Sparse keys arrays (holes) are descriptor-invalid and rejected.
+  const sparse = [];
+  sparse[1] = { left: "c1", right: "c1" };
+  throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: sparse }), "table_bad_request");
+});
+
 // ---------------------------------------------------------------------------
 // Join bounds — exact and +1 at the real strict-core ceilings
 // ---------------------------------------------------------------------------
@@ -750,6 +798,48 @@ Deno.test("def2 pivot: min/max order text by code points and skip null cells", (
   assertEquals(dateOut.columns[1].type, { kind: "date" });
 });
 
+Deno.test("def2 pivot: int64 and decimal min/max compare numerically, never lexically", () => {
+  // Multi-digit BigInt cells whose numeric order disagrees with string order:
+  // numeric extremes are min -9 / max 100, while a lexical implementation
+  // would pick min "-2" ("-2" < "-9") and max "9" ("9" > "80" > "100" > "2").
+  const ints = table([
+    { header: "g", type: { kind: "text" } },
+    { header: "c", type: { kind: "text" } },
+    { header: "n", type: { kind: "int64" } },
+  ], [
+    ["g1", "A", "100"],
+    ["g1", "A", "9"],
+    ["g1", "A", "-2"],
+    ["g1", "A", "80"],
+    ["g1", "A", "-9"],
+    ["g1", "A", "2"],
+  ]);
+  const intOut = canonical(pivotTable(ints, {
+    rowGroupBy: ["c1"], pivotColumn: "c2", categories: [{ value: "A" }],
+    metrics: [{ op: "min", column: "c3" }, { op: "max", column: "c3" }],
+  })).table;
+  assertEquals(intOut.rows, [["g1", "-9", "100"]]);
+  // Same divergence at decimal(2): numeric extremes are -9.75/100.00 while a
+  // lexical comparison would pick -2.25 ("-2" < "-9") and 9.50 ("9" > "8").
+  const decs = table([
+    { header: "g", type: { kind: "text" } },
+    { header: "c", type: { kind: "text" } },
+    { header: "d", type: { kind: "decimal", scale: 2 } },
+  ], [
+    ["g1", "A", "100.00"],
+    ["g1", "A", "9.50"],
+    ["g1", "A", "-2.25"],
+    ["g1", "A", "80.00"],
+    ["g1", "A", "-9.75"],
+    ["g1", "A", "2.00"],
+  ]);
+  const decOut = canonical(pivotTable(decs, {
+    rowGroupBy: ["c1"], pivotColumn: "c2", categories: [{ value: "A" }],
+    metrics: [{ op: "min", column: "c3" }, { op: "max", column: "c3" }],
+  })).table;
+  assertEquals(decOut.rows, [["g1", "-9.75", "100.00"]]);
+});
+
 Deno.test("def2 pivot: sum overflow on int64 fails the whole job exactly", () => {
   const data = table([
     { header: "c", type: { kind: "text" } },
@@ -855,6 +945,52 @@ Deno.test("def2 pivot: request shapes are exact and errors carry stable codes", 
   }), "table_type_mismatch");
 });
 
+Deno.test("def2 pivot: request objects and nested entries must be plain own enumerable data — no getters, symbols, or hidden props", () => {
+  // Sanity: the plain request still pivots.
+  canonical(pivotTable(PIVOT_DATA, pivotRequest));
+  // Top-level getter that fabricates the metrics array on read.
+  const topGetter = { rowGroupBy: ["c1"], pivotColumn: "c2", categories: [{ value: "A" }, { value: "B" }], metrics: [{ op: "count" }] };
+  Object.defineProperty(topGetter, "metrics", { enumerable: true, get: () => [{ op: "count" }] });
+  throwsCode(() => pivotTable(PIVOT_DATA, topGetter), "table_bad_request");
+  // Top-level symbol-keyed extra property.
+  throwsCode(() => pivotTable(PIVOT_DATA, { ...pivotRequest, [Symbol("x")]: 1 }), "table_bad_request");
+  // Top-level non-enumerable extra property (invisible to Object.keys).
+  const topHidden = { ...pivotRequest };
+  Object.defineProperty(topHidden, "extra", { value: 1 });
+  throwsCode(() => pivotTable(PIVOT_DATA, topHidden), "table_bad_request");
+  // Nested: a category entry whose value is backed by an accessor.
+  const categoryGetter = {};
+  Object.defineProperty(categoryGetter, "value", { enumerable: true, get: () => "A" });
+  throwsCode(
+    () => pivotTable(PIVOT_DATA, { ...pivotRequest, categories: [categoryGetter, { value: "B" }] }),
+    "table_bad_request",
+  );
+  // Nested: a metric entry whose op property is non-enumerable.
+  const metricHidden = {};
+  Object.defineProperty(metricHidden, "op", { value: "count" });
+  throwsCode(() => pivotTable(PIVOT_DATA, { ...pivotRequest, metrics: [metricHidden] }), "table_bad_request");
+  // Nested: symbol-keyed extra on a metric entry.
+  throwsCode(
+    () => pivotTable(PIVOT_DATA, { ...pivotRequest, metrics: [{ op: "count", [Symbol("x")]: 1 }] }),
+    "table_bad_request",
+  );
+  // Nested arrays: symbol-keyed extra on the categories array.
+  const symbolCategories = [{ value: "A" }, { value: "B" }];
+  symbolCategories[Symbol("x")] = 1;
+  throwsCode(() => pivotTable(PIVOT_DATA, { ...pivotRequest, categories: symbolCategories }), "table_bad_request");
+  // Nested arrays: rowGroupBy indexed by an accessor.
+  const accessorGroup = [];
+  Object.defineProperty(accessorGroup, 0, { enumerable: true, get: () => "c1" });
+  throwsCode(() => pivotTable(PIVOT_DATA, { ...pivotRequest, rowGroupBy: accessorGroup }), "table_bad_request");
+  // Sparse categories and metrics arrays are descriptor-invalid and rejected.
+  const sparseCategories = [];
+  sparseCategories[1] = { value: "A" };
+  throwsCode(() => pivotTable(PIVOT_DATA, { ...pivotRequest, categories: sparseCategories }), "table_bad_request");
+  const sparseMetrics = [];
+  sparseMetrics[1] = { op: "count" };
+  throwsCode(() => pivotTable(PIVOT_DATA, { ...pivotRequest, metrics: sparseMetrics }), "table_bad_request");
+});
+
 Deno.test("def2 pivot: category values must be valid canonical cells for the pivot column type", () => {
   // int64 pivot column: canonical integer strings only.
   const ints = table([
@@ -894,6 +1030,26 @@ Deno.test("def2 pivot: category values must be valid canonical cells for the piv
     metrics: [{ op: "count" }],
   })).table;
   assertEquals(flagOut.rows, [["g1", "1", "1"], ["g2", "1", "0"]]);
+});
+
+Deno.test("def2 pivot: decimal categories must be canonical strict-core cells — negative zero and >38-digit values are rejected even on empty tables", () => {
+  const empty = (scale) => table([
+    { header: "g", type: { kind: "text" } },
+    { header: "d", type: { kind: "decimal", scale } },
+  ], []);
+  const base = { rowGroupBy: ["c1"], pivotColumn: "c2", metrics: [{ op: "count" }] };
+  // Every negative-zero spelling the strict core's parser rejects.
+  throwsCode(() => pivotTable(empty(2), { ...base, categories: [{ value: "-0.00" }] }), "table_type_mismatch");
+  throwsCode(() => pivotTable(empty(1), { ...base, categories: [{ value: "-0.0" }] }), "table_type_mismatch");
+  throwsCode(() => pivotTable(empty(0), { ...base, categories: [{ value: "-0" }] }), "table_type_mismatch");
+  // 39 literal digits (37 whole + scale 2) exceed the core's 38-digit ceiling.
+  throwsCode(
+    () => pivotTable(empty(2), { ...base, categories: [{ value: `${["1", "0".repeat(36)].join("")}.00` }] }),
+    "table_type_mismatch",
+  );
+  // Exactly 38 digits is the ceiling and stays usable on an empty table.
+  const exact = canonical(pivotTable(empty(2), { ...base, categories: [{ value: `${["1", "0".repeat(35)].join("")}.00` }] })).table;
+  assertEquals(exact.rows, []);
 });
 
 // ---------------------------------------------------------------------------

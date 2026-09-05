@@ -82,6 +82,7 @@ const MAX_PIVOT_CATEGORIES = 128;
 const INT64_MIN = -(1n << 63n);
 const INT64_MAX = (1n << 63n) - 1n;
 const MAX_AVG_SCALE = 6; // int64-source averages: decimal scale 6 (half-even), matching the repo division default.
+const MAX_DECIMAL_PRECISION = 38; // strict-core parseDecimalToken ceiling on literal coefficient digits.
 const POW10 = [1n];
 for (let i = 1; i <= 80; i++) POW10.push(POW10[i - 1] * 10n);
 
@@ -89,20 +90,51 @@ function fail(code, detail = "") {
   throw new TableError(code, detail);
 }
 
-// Own-data object with exactly the allowed keys (mirrors the core's request
-// validation so table_* codes stay coherent across the strict core family).
+// Own-data object with exactly the allowed keys over plain data descriptors
+// (mirrors the strict core's ownObject + exactKeys so table_* codes stay
+// coherent across the strict core family): no accessors, no non-enumerable
+// properties, no symbol keys — later reads of the object never touch
+// caller-controlled getters.
 function exactData(value, allowed, required, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("table_bad_request", label);
-  if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) {
-    fail("table_bad_request", label);
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) fail("table_bad_request", label);
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (!("value" in descriptor) || descriptor.get || descriptor.set || !descriptor.enumerable) {
+      fail("table_bad_request", `${label}.${key}`);
+    }
   }
+  if (Reflect.ownKeys(value).some((key) => typeof key !== "string")) fail("table_bad_request", label);
   for (const key of Object.keys(value)) if (!allowed.includes(key)) fail("table_unknown_field", `${label}.${key}`);
   for (const key of required) if (!Object.hasOwn(value, key)) fail("table_bad_request", `${label}.${key}`);
 }
 
+// Indexed array whose elements are plain enumerable data properties, copied
+// onto a fresh array so later element reads never hit caller-controlled
+// accessors or holes (mirrors the strict core's safeArray over the
+// [min, max] length window).
 function idArray(value, label, min, max) {
-  if (!Array.isArray(value) || value.length < min || value.length > max) fail("table_bad_request", label);
-  return value;
+  if (!Array.isArray(value) || !Number.isSafeInteger(value.length) || value.length < min || value.length > max) {
+    fail("table_bad_request", label);
+  }
+  let descriptors;
+  try { descriptors = Object.getOwnPropertyDescriptors(value); }
+  catch { fail("table_bad_request", label); }
+  const copy = new Array(value.length);
+  for (let i = 0; i < value.length; i++) {
+    const descriptor = descriptors[String(i)];
+    if (!descriptor || !("value" in descriptor) || descriptor.get || descriptor.set || !descriptor.enumerable) {
+      fail("table_bad_request", `${label}[${i}]`);
+    }
+    copy[i] = descriptor.value;
+  }
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string" || (key !== "length" && !/^(?:0|[1-9]\d*)$/u.test(key))) {
+      fail("table_bad_request", `${label}.${String(key)}`);
+    }
+  }
+  return copy;
 }
 
 function columnIndex(table, id) {
@@ -161,10 +193,16 @@ function validTypedValue(value, type) {
       return n >= INT64_MIN && n <= INT64_MAX;
     }
     case "decimal": {
-      if (typeof value !== "string" || value === "-0") return false;
-      const match = /^-?(?:0|[1-9]\d*)(?:\.(\d+))?$/u.exec(value);
+      // Canonical decimal cells at the column scale, exactly as the strict
+      // core parses them (parseDecimalToken): canonical digit spelling, no
+      // negative-zero representation, at most 38 literal coefficient digits.
+      if (typeof value !== "string") return false;
+      const match = /^(-?)(0|[1-9]\d*)(?:\.(\d+))?$/u.exec(value);
       if (!match) return false;
-      return (match[1] ?? "").length === type.scale;
+      const fraction = match[3] ?? "";
+      if (fraction.length !== type.scale) return false;
+      if (match[1] && !/[1-9]/u.test(match[2] + fraction)) return false; // any negative-zero spelling
+      return match[2].length + fraction.length <= MAX_DECIMAL_PRECISION;
     }
     case "date": return typeof value === "string" && validDate(value);
     case "datetime": return typeof value === "string" && validDateTime(value);
