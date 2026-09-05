@@ -87,17 +87,42 @@ try {
   await send("Page.enable", {}, session);
   await sleep(1200);
 
+  // Deterministic fixtures (4u1e): the /tabs picker labels rows by tab title
+  // (falling back to the URL). Extension-NTP fixture tabs report BOTH empty
+  // while pending in headless, and the NTP's own static <title> never contains
+  // the marker — the original design raced load timing and rotted. Serve two
+  // real pages whose <title> IS the marker, and wait for the titles to settle
+  // before opening the picker.
+  const fixtureAc = new AbortController();
+  const fixtureServer = Deno.serve({ port: 0, hostname: "127.0.0.1", signal: fixtureAc.signal, onListen: () => {} }, (req) => {
+    const marker = new URL(req.url).pathname.replace(/\//g, "");
+    return new Response(
+      `<!doctype html><title>${marker}</title><body>${marker}</body>`,
+      { headers: { "content-type": "text/html; charset=utf-8" } },
+    );
+  });
+  const fixtureBase = `http://127.0.0.1:${(fixtureServer as any).addr.port}`;
   const fixtures = await evaluate(
     `(async () => {
-    const firstUrl = chrome.runtime.getURL("ntp/ntp.html?cap-tabs-kat-first");
-    const secondUrl = chrome.runtime.getURL("ntp/ntp.html?cap-tabs-kat-second");
+    const firstUrl = "${fixtureBase}/cap-tabs-kat-first";
+    const secondUrl = "${fixtureBase}/cap-tabs-kat-second";
     const first = await chrome.tabs.create({ url:firstUrl });
     const secondWindow = await chrome.windows.create({ url:secondUrl, type:"normal" });
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    return { first: { id:first.id, windowId:first.windowId }, second: { id:secondWindow.tabs?.[0]?.id, windowId:secondWindow.id } };
+    const second = secondWindow.tabs?.[0];
+    // Wait until BOTH fixture tabs report their marker titles (load settled).
+    const deadline = Date.now() + 15000;
+    for (;;) {
+      const a = await chrome.tabs.get(first.id);
+      const b = await chrome.tabs.get(second.id);
+      if ((a.title ?? "").includes("cap-tabs-kat-first") && (b.title ?? "").includes("cap-tabs-kat-second")) break;
+      if (Date.now() > deadline) return { error: "fixture titles never settled", a: a.title, b: b.title, aurl: a.url, burl: b.url };
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return { first: { id:first.id, windowId:first.windowId }, second: { id:second?.id, windowId:secondWindow.id } };
   })()`,
     session,
   );
+  check("fixture tabs loaded with their marker titles", !fixtures?.error, fixtures);
   check(
     "fixture tabs are in different windows",
     fixtures?.first?.windowId !== fixtures?.second?.windowId,
@@ -177,7 +202,7 @@ try {
   );
   check(
     "selecting a tab inserts a visible removable chip",
-    result?.chips?.some((text: string) => text.includes("Agent Hub")),
+    result?.chips?.some((text: string) => text.includes("cap-tabs-kat-second")),
     result,
   );
   check(
@@ -235,6 +260,7 @@ try {
     `KAT composer slash commands: ${passed} passed, ${failed} failed`,
   );
   socket.close();
+  fixtureAc.abort();
 } finally {
   try {
     proc.kill("SIGKILL");

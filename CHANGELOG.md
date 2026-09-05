@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.232] — 2026-09-05
+- Fixed a browser check that failed depending on how fast test tabs loaded: it now waits for the tabs to show their titles before reading the picker.
+
 ## [0.3.231] — 2026-09-05
 - Settings checks now verify each panel shows its real content, not just that the panel is visible — an empty panel can no longer pass.
 
