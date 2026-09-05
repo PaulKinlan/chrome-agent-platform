@@ -259,7 +259,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   assertEquals(validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true }) }).toolId, "sqlite3_query_bounded");
   // gzip + truncate + touch + sqlite are the appended tools after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["awk", "awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -360,7 +360,9 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
 Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 31 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
-    const manifestText = await Deno.readTextFile(root(`extension/wasm/manifests/${spec.packageId}-1.0.0.manifest.json`));
+    const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
+    assert(row, `${toolId}: generated package row exists`);
+    const manifestText = await Deno.readTextFile(root(row.manifestRef));
     const casBytes = new Uint8Array(await Deno.readFile(root(`extension/wasm/cas/${spec.casSha}.wasm`)));
     const revalidated = await revalidatePreviewExecution({
       toolId,
@@ -474,7 +476,7 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
 Deno.test("preview: the EXACT 31-tool static allowlist admits every shipped package", async () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "markdown", "md5sum", "patch", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["awk", "awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
