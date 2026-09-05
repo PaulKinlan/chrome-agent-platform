@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.253] — 2026-09-05
+- Settings can save and remove your own WebAssembly files with a name and description. Files are stored locally without upload-size or file-count caps; uploading does not run them or make them callable tools yet.
+
 ## [0.3.252] — 2026-09-05
 - Test runs are quicker to give results: checks that only pretend to launch a browser no longer wait in line behind real browser tests.
 
