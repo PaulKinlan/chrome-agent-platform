@@ -1,19 +1,29 @@
 // @ts-nocheck
-// tests/table-join-pivot.test.ts — chrome-agent-platform-def.2 r7 revision
+// tests/table-join-pivot.test.ts — chrome-agent-platform-def.2 r8 revision
 // KATs over the strict canonical table core (rows are ARRAYS, column types are
 // { kind, scale? } objects, outputs pass assertCanonicalTable).
 //
-// These tests pin the REVISED r7 contract (the a81cc52b / r6 contract is
+// These tests pin the REVISED r8 contract (the r7 [{column,header?}] form is
 // superseded and every one of these requests fails it):
-//   * join request { kind, keys, leftColumns, rightColumns } — output is
-//     EXACTLY the projected left columns then the projected right columns
-//     with regenerated ids; right keys are never auto-dropped and never
-//     coalesced into left slots; empty projections are allowed; duplicate key
-//     columns are invalid.
+//   * join request { kind, keys, leftColumns, rightColumns } — projections
+//     are DENSE ARRAYS OF CANONICAL COLUMN-ID STRINGS (["c1","c2"]) exactly
+//     as the toolkit contract (table_join §7.3) and the live management
+//     schema require; headers and types are PRESERVED from the source
+//     columns; object projection entries and non-string elements are
+//     rejected; an unknown/non-canonical ID fails table_unknown_column;
+//     either/both projections may be empty. Output is EXACTLY the projected
+//     left columns then the projected right columns with regenerated ids;
+//     right keys are never auto-dropped and never coalesced into left slots;
+//     duplicate key columns are invalid.
 //   * join keys: int64/decimal match by EXACT numeric value across kind and
 //     scale; other domains join as the identical typed kind; a null key
 //     component never matches. Right/full joins keep every unmatched right
 //     row's projected data (partial-null composite keys included).
+//   * workUnits follow the toolkit unit definition (a unit is one key-cell
+//     hash/comparison or one emitted cell): join charges the key-pair count
+//     per scanned key-pass row plus the output width per emitted row; pivot
+//     charges one per discovery input row plus the metric count per
+//     aggregation input row plus the output width per emitted group row.
 //   * pivot request { rowGroupBy ([] allowed), pivotColumn, categories,
 //     metrics } with ops count_rows | count_values | sum | avg | min | max;
 //     category and metric headers are REQUIRED; avg requires an explicit
@@ -28,12 +38,13 @@
 //     materialization) and the OutputBudget validates column width and header
 //     totals up front.
 //
-// Coverage: inner/left/right/full ordering, projections (headers, ids,
-// renames, empty lists), cross-kind numeric and composite/null keys, partial-
-// null right/full data retention, request-shape and descriptor guards, exact
-// row/cell/byte/header bounds at the real strict-core ceilings, pivots over
-// every op with exact BigInt/half-even semantics, category-major headers,
-// whole-table ([] rowGroupBy) pivots, and width/cell/group/header bounds.
+// Coverage: inner/left/right/full ordering, projections (ID arrays, preserved
+// source headers/types, empty lists, object-entry rejection), cross-kind
+// numeric and composite/null keys, partial-null right/full data retention,
+// request-shape and descriptor guards, exact row/cell/byte/header bounds at
+// the real strict-core ceilings, pivots over every op with exact BigInt/
+// half-even semantics, category-major headers, whole-table ([] rowGroupBy)
+// pivots, and width/cell/group/header bounds.
 
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import {
@@ -99,8 +110,8 @@ const RIGHT = table([
 const joinRequest = {
   kind: "inner",
   keys: [{ left: "c1", right: "c1" }],
-  leftColumns: [{ column: "c1" }, { column: "c2" }],
-  rightColumns: [{ column: "c1" }, { column: "c2" }],
+  leftColumns: ["c1", "c2"],
+  rightColumns: ["c1", "c2"],
 };
 const joinColumns = [
   { header: "k", type: { kind: "text" } },
@@ -109,7 +120,7 @@ const joinColumns = [
   { header: "w", type: { kind: "text" } },
 ];
 
-Deno.test("def2 r7 join: inner/left/right/full project exactly leftColumns then rightColumns with regenerated ids", () => {
+Deno.test("def2 r8 join: inner/left/right/full project exactly leftColumns then rightColumns with regenerated ids", () => {
   // inner: left-major; per left row, right matches in right input order.
   assertEquals(
     canonical(joinTables(LEFT, RIGHT, joinRequest)).table,
@@ -159,7 +170,7 @@ Deno.test("def2 r7 join: inner/left/right/full project exactly leftColumns then 
   );
 });
 
-Deno.test("def2 r7 join: output rows are arrays; right keys are never auto-dropped and never coalesced", () => {
+Deno.test("def2 r8 join: output rows are arrays; right keys are never auto-dropped and never coalesced", () => {
   const out = canonical(joinTables(LEFT, RIGHT, { ...joinRequest, kind: "full" })).table;
   assert(Array.isArray(out.rows[0]), "joined rows must be arrays, not objects");
   assertEquals(out.rows[0].c1, undefined); // object access must not work
@@ -183,7 +194,7 @@ Deno.test("def2 r7 join: output rows are arrays; right keys are never auto-dropp
   assertEquals(out.rows[out.rows.length - 1], [null, null, "w", "r"]);
 });
 
-Deno.test("def2 r7 join: composite and partial-null keys — projected right data survives right/full joins", () => {
+Deno.test("def2 r8 join: composite and partial-null keys — projected right data survives right/full joins", () => {
   const L = table([
     { header: "k", type: { kind: "text" } },
     { header: "n", type: { kind: "text" } },
@@ -207,8 +218,8 @@ Deno.test("def2 r7 join: composite and partial-null keys — projected right dat
   const request = (kind) => ({
     kind,
     keys: [{ left: "c1", right: "c1" }, { left: "c2", right: "c2" }],
-    leftColumns: [{ column: "c1" }, { column: "c2" }, { column: "c3" }],
-    rightColumns: [{ column: "c1" }, { column: "c2" }, { column: "c3" }],
+    leftColumns: ["c1", "c2", "c3"],
+    rightColumns: ["c1", "c2", "c3"],
   });
   const columns = [
     { header: "k", type: { kind: "text" } },
@@ -243,7 +254,7 @@ Deno.test("def2 r7 join: composite and partial-null keys — projected right dat
   assertEquals(rightOut.columns, columns.map((column, i) => ({ id: `c${i + 1}`, ...column })));
 });
 
-Deno.test("def2 r7 join: duplicate key columns on either side are invalid", () => {
+Deno.test("def2 r8 join: duplicate key columns on either side are invalid", () => {
   // Both sides have two TEXT columns so the duplicate check is reached
   // without a type-relation failure masking it.
   const L = table([
@@ -254,12 +265,12 @@ Deno.test("def2 r7 join: duplicate key columns on either side are invalid", () =
     { header: "k", type: { kind: "text" } },
     { header: "n", type: { kind: "text" } },
   ], [["a", "1"]]);
-  const base = { kind: "inner", leftColumns: [{ column: "c1" }], rightColumns: [{ column: "c1" }] };
+  const base = { kind: "inner", leftColumns: ["c1"], rightColumns: ["c1"] };
   throwsCode(() => joinTables(L, R, { ...base, keys: [{ left: "c1", right: "c1" }, { left: "c1", right: "c2" }] }), "table_bad_request");
   throwsCode(() => joinTables(L, R, { ...base, keys: [{ left: "c1", right: "c1" }, { left: "c2", right: "c1" }] }), "table_bad_request");
 });
 
-Deno.test("def2 r7 join: int64/decimal keys match by exact numeric value across kind and scale", () => {
+Deno.test("def2 r8 join: int64/decimal keys match by exact numeric value across kind and scale", () => {
   const intL = table([
     { header: "id", type: { kind: "int64" } },
     { header: "v", type: { kind: "text" } },
@@ -271,8 +282,8 @@ Deno.test("def2 r7 join: int64/decimal keys match by exact numeric value across 
   const projectAll = (kind, left, right) => canonical(joinTables(left, right, {
     kind,
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }, { column: "c2" }],
-    rightColumns: [{ column: "c1" }, { column: "c2" }],
+    leftColumns: ["c1", "c2"],
+    rightColumns: ["c1", "c2"],
   })).table.rows;
   // decimal(2): "5.00" and "-3.00" match exactly; "5.01"/"7.10" do not.
   const dec2 = table([
@@ -308,7 +319,7 @@ Deno.test("def2 r7 join: int64/decimal keys match by exact numeric value across 
   ]);
 });
 
-Deno.test("def2 r7 join: non-numeric key domains require the identical typed kind", () => {
+Deno.test("def2 r8 join: non-numeric key domains require the identical typed kind", () => {
   const textKey = table([{ header: "k", type: { kind: "text" } }, { header: "v", type: { kind: "text" } }], [["a", "v1"]]);
   const intKey = table([{ header: "k", type: { kind: "int64" } }, { header: "w", type: { kind: "text" } }], [["1", "w1"]]);
   const dateKey = table([{ header: "k", type: { kind: "date" } }, { header: "v", type: { kind: "text" } }], [["2026-01-01", "d1"]]);
@@ -316,8 +327,8 @@ Deno.test("def2 r7 join: non-numeric key domains require the identical typed kin
   const req = (left, right) => ({
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }, { column: "c2" }],
-    rightColumns: [{ column: "c1" }, { column: "c2" }],
+    leftColumns: ["c1", "c2"],
+    rightColumns: ["c1", "c2"],
   });
   // text vs int64, text vs date, date vs datetime: mismatched declaration.
   throwsCode(() => joinTables(textKey, intKey, req(textKey, intKey)), "table_type_mismatch");
@@ -346,7 +357,7 @@ Deno.test("def2 r7 join: non-numeric key domains require the identical typed kin
   ]);
 });
 
-Deno.test("def2 r7 join: null key components never match, single or composite", () => {
+Deno.test("def2 r8 join: null key components never match, single or composite", () => {
   const L = table([
     { header: "k", type: { kind: "text" } },
     { header: "n", type: { kind: "text" } },
@@ -367,8 +378,8 @@ Deno.test("def2 r7 join: null key components never match, single or composite", 
   const request = {
     kind: "full",
     keys: [{ left: "c1", right: "c1" }, { left: "c2", right: "c2" }],
-    leftColumns: [{ column: "c1" }, { column: "c2" }, { column: "c3" }],
-    rightColumns: [{ column: "c1" }, { column: "c2" }, { column: "c3" }],
+    leftColumns: ["c1", "c2", "c3"],
+    rightColumns: ["c1", "c2", "c3"],
   };
   // [null,"1"] and ["a","1"] are different tuples: an equal-looking null-key
   // right row still never matches, and both null-key rows stay as lones.
@@ -380,7 +391,7 @@ Deno.test("def2 r7 join: null key components never match, single or composite", 
   ]);
 });
 
-Deno.test("def2 r7 join: composite text keys cannot collide across separator spellings", () => {
+Deno.test("def2 r8 join: composite text keys cannot collide across separator spellings", () => {
   const tricky = table([
     { header: "k", type: { kind: "text" } },
     { header: "n", type: { kind: "text" } },
@@ -400,8 +411,8 @@ Deno.test("def2 r7 join: composite text keys cannot collide across separator spe
     canonical(joinTables(tricky, trickyR, {
       kind: "inner",
       keys: [{ left: "c1", right: "c1" }, { left: "c2", right: "c2" }],
-      leftColumns: [{ column: "c1" }, { column: "c2" }],
-      rightColumns: [{ column: "c3" }],
+      leftColumns: ["c1", "c2"],
+      rightColumns: ["c3"],
     })).table.rows,
     [
       ["a", "1\u0000x", "one"],
@@ -410,7 +421,7 @@ Deno.test("def2 r7 join: composite text keys cannot collide across separator spe
   );
 });
 
-Deno.test("def2 r7 join: mixed typed numeric + text composite keys normalize per component", () => {
+Deno.test("def2 r8 join: mixed typed numeric + text composite keys normalize per component", () => {
   const L = table([
     { header: "t", type: { kind: "text" } },
     { header: "n", type: { kind: "int64" } },
@@ -430,20 +441,20 @@ Deno.test("def2 r7 join: mixed typed numeric + text composite keys normalize per
     canonical(joinTables(L, R, {
       kind: "inner",
       keys: [{ left: "c1", right: "c1" }, { left: "c2", right: "c2" }],
-      leftColumns: [{ column: "c1" }, { column: "c2" }],
-      rightColumns: [{ column: "c3" }],
+      leftColumns: ["c1", "c2"],
+      rightColumns: ["c3"],
     })).table.rows,
     [["a", "5", "match"]],
   );
 });
 
-Deno.test("def2 r7 join: empty projections are allowed; both empty keeps one row per emission", () => {
+Deno.test("def2 r8 join: empty projections are allowed; both empty keeps one row per emission", () => {
   // No left columns: the output is exactly the right projection.
   const rightOnly = canonical(joinTables(LEFT, RIGHT, {
     kind: "left",
     keys: [{ left: "c1", right: "c1" }],
     leftColumns: [],
-    rightColumns: [{ column: "c1" }, { column: "c2" }],
+    rightColumns: ["c1", "c2"],
   })).table;
   assertEquals(rightOnly.columns.map((column) => column.header), ["k", "w"]);
   assertEquals(rightOnly.rows, [
@@ -458,7 +469,7 @@ Deno.test("def2 r7 join: empty projections are allowed; both empty keeps one row
   const leftOnly = canonical(joinTables(LEFT, RIGHT, {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }, { column: "c2" }],
+    leftColumns: ["c1", "c2"],
     rightColumns: [],
   })).table;
   assertEquals(leftOnly.columns.map((column) => column.header), ["k", "v"]);
@@ -475,14 +486,21 @@ Deno.test("def2 r7 join: empty projections are allowed; both empty keeps one row
   assert(none.rows.every((row) => Array.isArray(row) && row.length === 0));
 });
 
-Deno.test("def2 r7 join: projection headers default to source headers and rename on request", () => {
+Deno.test("def2 r8 join: projection headers and types are preserved from the source columns", () => {
+  // Projections are ID arrays only: the source header and type flow through
+  // unchanged, in declared order. There is no per-column rename field.
   const out = canonical(joinTables(LEFT, RIGHT, {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1", header: "LKey" }, { column: "c2", header: "LVal" }],
-    rightColumns: [{ column: "c2", header: "RVal" }],
+    leftColumns: ["c1", "c2"],
+    rightColumns: ["c2"],
   })).table;
-  assertEquals(out.columns.map((column) => column.header), ["LKey", "LVal", "RVal"]);
+  assertEquals(out.columns.map((column) => column.header), ["k", "v", "w"]);
+  assertEquals(out.columns.map((column) => column.type), [
+    { kind: "text" },
+    { kind: "int64" },
+    { kind: "text" },
+  ]);
   assertEquals(out.rows, [
     ["x", "1", "p"],
     ["x", "1", "q"],
@@ -491,12 +509,12 @@ Deno.test("def2 r7 join: projection headers default to source headers and rename
   ]);
 });
 
-Deno.test("def2 r7 join: keys can stay out of the projection entirely", () => {
+Deno.test("def2 r8 join: keys can stay out of the projection entirely", () => {
   const out = canonical(joinTables(LEFT, RIGHT, {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c2" }],
-    rightColumns: [{ column: "c2" }],
+    leftColumns: ["c2"],
+    rightColumns: ["c2"],
   })).table;
   assertEquals(out.columns.map((column) => column.header), ["v", "w"]);
   assertEquals(out.rows, [
@@ -507,7 +525,7 @@ Deno.test("def2 r7 join: keys can stay out of the projection entirely", () => {
   ]);
 });
 
-Deno.test("def2 r7 join: pure-key right sides and empty sides stay canonical under projections", () => {
+Deno.test("def2 r8 join: pure-key right sides and empty sides stay canonical under projections", () => {
   const empty = table([{ header: "k", type: { kind: "text" } }], []);
   const one = table([
     { header: "k", type: { kind: "text" } },
@@ -515,7 +533,7 @@ Deno.test("def2 r7 join: pure-key right sides and empty sides stay canonical und
   ], [
     ["a", "p"],
   ]);
-  const cols = (n) => Array.from({ length: n }, (_, i) => ({ column: `c${i + 1}` }));
+  const cols = (n) => Array.from({ length: n }, (_, i) => `c${i + 1}`);
   // Right join with an empty left side: the unmatched right row keeps its own
   // key data in the right slots; left slots stay null.
   assertEquals(
@@ -536,8 +554,8 @@ Deno.test("def2 r7 join: pure-key right sides and empty sides stay canonical und
   const pureOut = canonical(joinTables(one, pureKey, {
     kind: "full",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }, { column: "c2" }],
-    rightColumns: [{ column: "c1" }],
+    leftColumns: ["c1", "c2"],
+    rightColumns: ["c1"],
   })).table;
   assertEquals(pureOut.columns.map((column) => column.header), ["k", "w", "k"]);
   // Nothing matches (left key "a" vs right key "b"): the left row stays with
@@ -548,7 +566,7 @@ Deno.test("def2 r7 join: pure-key right sides and empty sides stay canonical und
   ]);
 });
 
-Deno.test("def2 r7 join: localeProfile and typed headers flow from the inputs into the output", () => {
+Deno.test("def2 r8 join: localeProfile and typed headers flow from the inputs into the output", () => {
   const de = assertCanonicalTable({
     version: TABLE_VERSION,
     localeProfile: "de-DE-v1",
@@ -570,8 +588,8 @@ Deno.test("def2 r7 join: localeProfile and typed headers flow from the inputs in
   const out = canonical(joinTables(de, en, {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }, { column: "c2" }],
-    rightColumns: [{ column: "c2" }],
+    leftColumns: ["c1", "c2"],
+    rightColumns: ["c2"],
   })).table;
   assertEquals(out.localeProfile, "de-DE-v1"); // left table's profile wins
   assertEquals(out.columns.map((column) => column.header), ["k", "Betrag", "label"]);
@@ -579,31 +597,33 @@ Deno.test("def2 r7 join: localeProfile and typed headers flow from the inputs in
   assertEquals(out.rows, [["x", "1.25", "hello"]]);
 });
 
-Deno.test("def2 r7 join: work units equal input row key passes plus emitted rows", () => {
-  // Charge model: one unit per left key pass row, one per right key pass row,
-  // one per emitted row (the multiplicity preflight is not separately charged).
+Deno.test("def2 r8 join: work units equal key-cell hashes plus emitted cells", () => {
+  // Toolkit unit definition: a work unit is one key-cell hash/comparison or
+  // one emitted cell. Charge model: the key-pair count (1 here) per scanned
+  // key-pass row on each side, plus the output width (4) per emitted row.
+  // Multiplicity preflight and index construction are not separately charged.
   const req = (kind) => ({ ...joinRequest, kind });
-  assertEquals(joinTables(LEFT, RIGHT, req("inner")).workUnits, 11); // 4+3+4
-  assertEquals(joinTables(LEFT, RIGHT, req("left")).workUnits, 13); // +2 left lones
-  assertEquals(joinTables(LEFT, RIGHT, req("right")).workUnits, 12); // +5 right emissions
-  assertEquals(joinTables(LEFT, RIGHT, req("full")).workUnits, 14); // +7 emissions
+  assertEquals(joinTables(LEFT, RIGHT, req("inner")).workUnits, 23); // 4+3 keys, 4 rows × 4 cells
+  assertEquals(joinTables(LEFT, RIGHT, req("left")).workUnits, 31); // +2 left lones × 4 cells
+  assertEquals(joinTables(LEFT, RIGHT, req("right")).workUnits, 27); // +5 right rows × 4 cells
+  assertEquals(joinTables(LEFT, RIGHT, req("full")).workUnits, 35); // +7 rows × 4 cells
   const noMatchL = table([{ header: "k", type: { kind: "text" } }], [["a"], ["b"]]);
   const noMatchR = table([{ header: "k", type: { kind: "text" } }], [["c"], ["d"], ["e"]]);
   const emptyReq = (kind) => ({
     kind,
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }],
-    rightColumns: [{ column: "c1" }],
+    leftColumns: ["c1"],
+    rightColumns: ["c1"],
   });
   const emptyJoin = joinTables(noMatchL, noMatchR, emptyReq("inner"));
-  assertEquals(emptyJoin.workUnits, 5); // 2 + 3 + 0 emissions
+  assertEquals(emptyJoin.workUnits, 5); // 2 + 3 key cells, 0 emitted cells
   assertEquals(emptyJoin.table.rows, []);
-  assertEquals(joinTables(noMatchL, noMatchR, emptyReq("left")).workUnits, 7); // +2 lones
-  assertEquals(joinTables(noMatchL, noMatchR, emptyReq("right")).workUnits, 8); // +3 lones
-  assertEquals(joinTables(noMatchL, noMatchR, emptyReq("full")).workUnits, 10); // +5 lones
+  assertEquals(joinTables(noMatchL, noMatchR, emptyReq("left")).workUnits, 9); // +2 lones × 2 cells
+  assertEquals(joinTables(noMatchL, noMatchR, emptyReq("right")).workUnits, 11); // +3 lones × 2 cells
+  assertEquals(joinTables(noMatchL, noMatchR, emptyReq("full")).workUnits, 15); // +5 lones × 2 cells
 });
 
-Deno.test("def2 r7 join: request shapes are exact and errors carry stable codes", () => {
+Deno.test("def2 r8 join: request shapes are exact and errors carry stable codes", () => {
   throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, kind: "outer" }), "table_bad_request");
   // keys: 1..8 pairs, exact {left,right}, no extra fields.
   throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, keys: [] }), "table_bad_request");
@@ -620,18 +640,26 @@ Deno.test("def2 r7 join: request shapes are exact and errors carry stable codes"
   // leftColumns/rightColumns are required; empty arrays are legal.
   throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: joinRequest.keys, rightColumns: [] }), "table_bad_request");
   throwsCode(() => joinTables(LEFT, RIGHT, { kind: "inner", keys: joinRequest.keys, leftColumns: [] }), "table_bad_request");
-  const missingColumn = { kind: "inner", keys: joinRequest.keys, leftColumns: [{ column: "c1" }], rightColumns: [{ header: "x" }] };
-  throwsCode(() => joinTables(LEFT, RIGHT, missingColumn), "table_bad_request");
-  const unknownColumn = { kind: "inner", keys: joinRequest.keys, leftColumns: [{ column: "c9" }], rightColumns: [{ column: "c1" }] };
+  // Projections accept ONLY dense arrays of canonical column-ID strings:
+  // object entries (any shape), numbers and other non-strings are rejected.
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: [{ column: "c1" }] }), "table_bad_request");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, rightColumns: [{ column: "c1", header: "x" }] }), "table_bad_request");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: [{ column: "c1", extra: 1 }], rightColumns: [] }), "table_bad_request");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, rightColumns: [{ header: "x" }] }), "table_bad_request");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: ["c1", 5] }), "table_bad_request");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: [null], rightColumns: [] }), "table_bad_request");
+  // Unknown or non-canonical column IDs fail table_unknown_column.
+  const unknownColumn = { kind: "inner", keys: joinRequest.keys, leftColumns: ["c9"], rightColumns: ["c1"] };
   throwsCode(() => joinTables(LEFT, RIGHT, unknownColumn), "table_unknown_column");
-  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: [{ column: "c1", extra: 1 }], rightColumns: [] }), "table_unknown_field");
-  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, rightColumns: [{ column: "c1", header: 5 }] }), "table_bad_request");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: ["c0"], rightColumns: [] }), "table_unknown_column");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: ["x"], rightColumns: [] }), "table_unknown_column");
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, rightColumns: ["c9"] }), "table_unknown_column");
   // Projecting the same source column twice is legal (two output columns).
   const duplicated = canonical(joinTables(LEFT, RIGHT, {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c2" }, { column: "c2" }],
-    rightColumns: [{ column: "c2" }],
+    leftColumns: ["c2", "c2"],
+    rightColumns: ["c2"],
   })).table;
   assertEquals(duplicated.columns.map((column) => column.header), ["v", "v", "w"]);
   throwsCode(() => joinTables(LEFT, null, joinRequest), "table_bad_request"); // assertCanonicalTable rejects null input
@@ -640,7 +668,7 @@ Deno.test("def2 r7 join: request shapes are exact and errors carry stable codes"
   throwsCode(() => joinTables(broken, RIGHT, joinRequest), "table_bad_request");
 });
 
-Deno.test("def2 r7 join: request objects and nested entries must be plain own enumerable data — zero getters invoked", () => {
+Deno.test("def2 r8 join: request objects and arrays must be plain own enumerable data — zero getters invoked", () => {
   // Sanity: the plain request still joins (strictness must not reject honest callers).
   canonical(joinTables(LEFT, RIGHT, joinRequest));
   let reads = 0;
@@ -665,22 +693,27 @@ Deno.test("def2 r7 join: request objects and nested entries must be plain own en
   Object.defineProperty(pairGetter, "right", { enumerable: true, get: makeGetter("right") });
   throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, keys: [pairGetter] }), "table_bad_request");
   assertEquals(reads, 0);
-  // Nested: symbol-keyed extra on a key pair and on a projection entry.
+  // Nested: symbol-keyed extras on key pairs. Projection entries are ID
+  // strings only, so an object element is rejected without any of its own
+  // properties (symbols, accessors, hidden fields) being read.
   throwsCode(
     () => joinTables(LEFT, RIGHT, { ...joinRequest, keys: [{ left: "c1", right: "c1", [Symbol("x")]: 1 }] }),
     "table_bad_request",
   );
+  const objectEntry = { column: "c1" };
+  Object.defineProperty(objectEntry, "header", { value: "k", enumerable: false });
   throwsCode(
-    () => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: [{ column: "c1", [Symbol("x")]: 1 }] }),
+    () => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: [objectEntry], rightColumns: [] }),
     "table_bad_request",
   );
-  // Nested: non-enumerable required property on a key pair / projection entry.
+  const getterEntry = {};
+  Object.defineProperty(getterEntry, "column", { enumerable: true, get: makeGetter("entry.column") });
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, rightColumns: [getterEntry] }), "table_bad_request");
+  assertEquals(reads, 0, "an object projection entry is rejected without reading into it");
+  // Nested: non-enumerable required property on a key pair.
   const pairHidden = { left: "c1" };
   Object.defineProperty(pairHidden, "right", { value: "c1" });
   throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, keys: [pairHidden] }), "table_bad_request");
-  const entryHidden = { column: "c1" };
-  Object.defineProperty(entryHidden, "header", { value: "k" });
-  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, rightColumns: [entryHidden] }), "table_bad_request");
   // Arrays indexed by accessors, or carrying symbols/non-index extras/holes.
   const accessorIndexed = [];
   Object.defineProperty(accessorIndexed, 0, { enumerable: true, get: makeGetter("keys[0]") });
@@ -696,15 +729,21 @@ Deno.test("def2 r7 join: request objects and nested entries must be plain own en
   sparse[1] = { left: "c1", right: "c1" };
   throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, keys: sparse }), "table_bad_request");
   const sparseProj = [];
-  sparseProj[1] = { column: "c1" };
+  sparseProj[1] = "c1";
   throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: sparseProj, rightColumns: [] }), "table_bad_request");
+  const symbolProj = ["c1"];
+  symbolProj[Symbol("x")] = 1;
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, leftColumns: symbolProj, rightColumns: [] }), "table_bad_request");
+  const taggedProj = ["c1"];
+  taggedProj.tag = "meta";
+  throwsCode(() => joinTables(LEFT, RIGHT, { ...joinRequest, rightColumns: taggedProj }), "table_bad_request");
 });
 
 // ---------------------------------------------------------------------------
 // Join bounds — exact and +1 at the real strict-core ceilings
 // ---------------------------------------------------------------------------
 
-Deno.test("def2 r7 join: output row bound is preflighted — accepts exactly maxRows, fails one past it", () => {
+Deno.test("def2 r8 join: output row bound is preflighted — accepts exactly maxRows, fails one past it", () => {
   const L = table([{ header: "k", type: { kind: "text" } }], new Array(100).fill(["a"]));
   const R1000 = table([
     { header: "k", type: { kind: "text" } },
@@ -713,8 +752,8 @@ Deno.test("def2 r7 join: output row bound is preflighted — accepts exactly max
   const req = (kind) => ({
     kind,
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }],
-    rightColumns: [{ column: "c2" }],
+    leftColumns: ["c1"],
+    rightColumns: ["c2"],
   });
   const exact = joinTables(L, R1000, req("inner"));
   assertEquals(exact.table.rows.length, TABLE_LIMITS.maxRows); // 100 × 1000
@@ -729,7 +768,7 @@ Deno.test("def2 r7 join: output row bound is preflighted — accepts exactly max
   );
 });
 
-Deno.test("def2 r7 join: output cell bound is preflighted — accepts exactly maxCells, fails one past it", () => {
+Deno.test("def2 r8 join: output cell bound is preflighted — accepts exactly maxCells, fails one past it", () => {
   // Output width 16: left 15 projected columns (key + 14 int64) + right 1.
   const makeL = (rows) => table(
     [{ header: "k", type: { kind: "text" } }, ...new Array(14).fill({ header: "z", type: { kind: "int64" } })],
@@ -742,8 +781,8 @@ Deno.test("def2 r7 join: output cell bound is preflighted — accepts exactly ma
   const req = {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: Array.from({ length: 15 }, (_, i) => ({ column: `c${i + 1}` })),
-    rightColumns: [{ column: "c2" }],
+    leftColumns: Array.from({ length: 15 }, (_, i) => `c${i + 1}`),
+    rightColumns: ["c2"],
   };
   // 62,500 rows × 16 columns = exactly 1,000,000 cells.
   assertEquals(TABLE_LIMITS.maxCells, 62_500 * 16);
@@ -756,7 +795,7 @@ Deno.test("def2 r7 join: output cell bound is preflighted — accepts exactly ma
   );
 });
 
-Deno.test("def2 r7 join: output bytes accept exactly maxOutputBytes and fail one row past it", () => {
+Deno.test("def2 r8 join: output bytes accept exactly maxOutputBytes and fail one row past it", () => {
   // Every emitted row is byte-identical, so the boundary is computable:
   // total(n) = prefix + n × (rowBytes + 1). The prefix is measured from one
   // real emitted row so the test tracks the module's exact accounting.
@@ -771,8 +810,8 @@ Deno.test("def2 r7 join: output bytes accept exactly maxOutputBytes and fail one
   const req = {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c1" }],
-    rightColumns: [{ column: "c2" }],
+    leftColumns: ["c1"],
+    rightColumns: ["c2"],
   };
   const oneOut = joinTables(one, R, req).table;
   const prefix = utf8(JSON.stringify(oneOut)) - (rowBytes + 1); // strip the single row
@@ -790,7 +829,7 @@ Deno.test("def2 r7 join: output bytes accept exactly maxOutputBytes and fail one
   );
 });
 
-Deno.test("def2 r7 join: OutputBudget validates the projected header total up front", () => {
+Deno.test("def2 r8 join: OutputBudget validates the projected header total up front", () => {
   // Each side alone fits the 64 KiB input header total (500 × 100 B); the
   // combined projection (1000 × 100 B = 100 KiB) must fail in the budget
   // constructor, before any row is materialized.
@@ -803,16 +842,12 @@ Deno.test("def2 r7 join: OutputBudget validates the projected header total up fr
   throwsCode(() => joinTables(L, R, {
     kind: "inner",
     keys: [{ left: "c1", right: "c1" }],
-    leftColumns: Array.from({ length: 500 }, (_, i) => ({ column: `c${i + 1}` })),
-    rightColumns: Array.from({ length: 500 }, (_, i) => ({ column: `c${i + 1}` })),
+    leftColumns: Array.from({ length: 500 }, (_, i) => `c${i + 1}`),
+    rightColumns: Array.from({ length: 500 }, (_, i) => `c${i + 1}`),
   }), "table_header_bound");
-  // A per-column header over maxHeaderBytes fails up front too.
-  throwsCode(() => joinTables(LEFT, RIGHT, {
-    kind: "inner",
-    keys: [{ left: "c1", right: "c1" }],
-    leftColumns: [{ column: "c2", header: "z".repeat(TABLE_LIMITS.maxHeaderBytes + 1) }],
-    rightColumns: [],
-  }), "table_header_bound");
+  // Projection headers come from the (already canonical) source columns, so
+  // the per-column cap cannot be crossed by a request; the combined-total cap
+  // above is the projection-reachable bound.
 });
 
 // ---------------------------------------------------------------------------
@@ -845,7 +880,7 @@ const pivotRequest = {
   ],
 };
 
-Deno.test("def2 r7 pivot: category-major value columns with composite headers over every metric op", () => {
+Deno.test("def2 r8 pivot: category-major value columns with composite headers over every metric op", () => {
   const out = canonical(pivotTable(PIVOT_DATA, pivotRequest)).table;
   assertEquals(out.columns.map((column) => column.header), [
     "region",
@@ -865,7 +900,7 @@ Deno.test("def2 r7 pivot: category-major value columns with composite headers ov
   assertEquals(out.rows[0].length, out.columns.length); // rectangular arrays
 });
 
-Deno.test("def2 r7 pivot: value columns follow the declared category order, metrics within each category", () => {
+Deno.test("def2 r8 pivot: value columns follow the declared category order, metrics within each category", () => {
   const out = canonical(pivotTable(PIVOT_DATA, {
     rowGroupBy: ["c1"],
     pivotColumn: "c2",
@@ -886,7 +921,7 @@ Deno.test("def2 r7 pivot: value columns follow the declared category order, metr
   ]);
 });
 
-Deno.test("def2 r7 pivot: row groups emit in first-seen data order and merge duplicates", () => {
+Deno.test("def2 r8 pivot: row groups emit in first-seen data order and merge duplicates", () => {
   const data = table([
     { header: "region", type: { kind: "text" } },
     { header: "product", type: { kind: "text" } },
@@ -909,7 +944,7 @@ Deno.test("def2 r7 pivot: row groups emit in first-seen data order and merge dup
   ]);
 });
 
-Deno.test("def2 r7 pivot: missing buckets stay present — counts 0, aggregates null", () => {
+Deno.test("def2 r8 pivot: missing buckets stay present — counts 0, aggregates null", () => {
   const data = table([
     { header: "region", type: { kind: "text" } },
     { header: "product", type: { kind: "text" } },
@@ -934,7 +969,7 @@ Deno.test("def2 r7 pivot: missing buckets stay present — counts 0, aggregates 
   ]);
 });
 
-Deno.test("def2 r7 pivot: count_rows counts bucket rows; count_values counts non-null cells only", () => {
+Deno.test("def2 r8 pivot: count_rows counts bucket rows; count_values counts non-null cells only", () => {
   const data = table([
     { header: "g", type: { kind: "text" } },
     { header: "c", type: { kind: "text" } },
@@ -966,7 +1001,7 @@ Deno.test("def2 r7 pivot: count_rows counts bucket rows; count_values counts non
   assertEquals(out.rows, [["g1", "3", "1", "1", "2", "0", "0", null, "0"]]);
 });
 
-Deno.test("def2 r7 pivot: avg requires an explicit scale and rounds half-even at exactly it", () => {
+Deno.test("def2 r8 pivot: avg requires an explicit scale and rounds half-even at exactly it", () => {
   const average = (rows, scale) => canonical(pivotTable(table([
     { header: "c", type: { kind: "text" } },
     { header: "n", type: { kind: "int64" } },
@@ -1013,7 +1048,7 @@ Deno.test("def2 r7 pivot: avg requires an explicit scale and rounds half-even at
   assertEquals(avgAt(3), "0.025");
 });
 
-Deno.test("def2 r7 pivot: decimal sums and averages stay exact at the requested scale", () => {
+Deno.test("def2 r8 pivot: decimal sums and averages stay exact at the requested scale", () => {
   const data = table([
     { header: "g", type: { kind: "text" } },
     { header: "c", type: { kind: "text" } },
@@ -1045,7 +1080,7 @@ Deno.test("def2 r7 pivot: decimal sums and averages stay exact at the requested 
   ]);
 });
 
-Deno.test("def2 r7 pivot: min/max compare numerically across int64/decimal, never lexically", () => {
+Deno.test("def2 r8 pivot: min/max compare numerically across int64/decimal, never lexically", () => {
   const ints = table([
     { header: "g", type: { kind: "text" } },
     { header: "c", type: { kind: "text" } },
@@ -1082,7 +1117,7 @@ Deno.test("def2 r7 pivot: min/max compare numerically across int64/decimal, neve
   assertEquals(decOut.rows, [["g1", "-9.75", "100.00"]]);
 });
 
-Deno.test("def2 r7 pivot: min/max order text by code points, dates canonically, and skip null cells", () => {
+Deno.test("def2 r8 pivot: min/max order text by code points, dates canonically, and skip null cells", () => {
   const data = table([
     { header: "g", type: { kind: "text" } },
     { header: "c", type: { kind: "text" } },
@@ -1118,7 +1153,7 @@ Deno.test("def2 r7 pivot: min/max order text by code points, dates canonically, 
   assertEquals(dateOut.columns[1].type, { kind: "date" });
 });
 
-Deno.test("def2 r7 pivot: rowGroupBy [] pivots the whole table and still emits one row for empty input", () => {
+Deno.test("def2 r8 pivot: rowGroupBy [] pivots the whole table and still emits one row for empty input", () => {
   const whole = table([
     { header: "region", type: { kind: "text" } },
     { header: "product", type: { kind: "text" } },
@@ -1158,7 +1193,7 @@ Deno.test("def2 r7 pivot: rowGroupBy [] pivots the whole table and still emits o
     ],
   })).table;
   assertEquals(emptyOut.rows, [["0", null]]);
-  // The single whole-table group row is charged one emission unit.
+  // The single whole-table group row emits one cell (width 1): 1 unit.
   assertEquals(pivotTable(empty, {
     rowGroupBy: [],
     pivotColumn: "c2",
@@ -1174,7 +1209,7 @@ Deno.test("def2 r7 pivot: rowGroupBy [] pivots the whole table and still emits o
   assertEquals(groupedEmpty.rows, []);
 });
 
-Deno.test("def2 r7 pivot: outputs stay canonical and null group cells group together", () => {
+Deno.test("def2 r8 pivot: outputs stay canonical and null group cells group together", () => {
   const nullGroup = table([
     { header: "g", type: { kind: "text" } },
     { header: "c", type: { kind: "text" } },
@@ -1192,7 +1227,7 @@ Deno.test("def2 r7 pivot: outputs stay canonical and null group cells group toge
   assertEquals(grouped.rows, [[null, "3"], ["g1", "5"]]); // null groups group together
 });
 
-Deno.test("def2 r7 pivot: unknown or null category values fail the whole job", () => {
+Deno.test("def2 r8 pivot: unknown or null category values fail the whole job", () => {
   throwsCode(() => pivotTable(PIVOT_DATA, {
     rowGroupBy: ["c1"], pivotColumn: "c2",
     categories: [{ value: "Z", header: "Zed" }],
@@ -1211,7 +1246,7 @@ Deno.test("def2 r7 pivot: unknown or null category values fail the whole job", (
   }), "table_category_unknown");
 });
 
-Deno.test("def2 r7 pivot: sum overflow on int64 fails the whole job exactly", () => {
+Deno.test("def2 r8 pivot: sum overflow on int64 fails the whole job exactly", () => {
   const data = table([
     { header: "c", type: { kind: "text" } },
     { header: "n", type: { kind: "int64" } },
@@ -1225,7 +1260,7 @@ Deno.test("def2 r7 pivot: sum overflow on int64 fails the whole job exactly", ()
   }), "table_numeric_overflow");
 });
 
-Deno.test("def2 r7 pivot: category and metric headers are required and compose the column headers", () => {
+Deno.test("def2 r8 pivot: category and metric headers are required and compose the column headers", () => {
   throwsCode(() => pivotTable(PIVOT_DATA, {
     rowGroupBy: ["c1"], pivotColumn: "c2",
     categories: [{ value: "A" }, { value: "B", header: "Beta" }],
@@ -1259,7 +1294,7 @@ Deno.test("def2 r7 pivot: category and metric headers are required and compose t
   assertEquals(out.columns.map((column) => column.header), ["region", "Alpha · Rows"]);
 });
 
-Deno.test("def2 r7 pivot: request shapes are exact — op/column/scale rules and stable codes", () => {
+Deno.test("def2 r8 pivot: request shapes are exact — op/column/scale rules and stable codes", () => {
   const base = () => ({ ...pivotRequest });
   throwsCode(() => pivotTable(PIVOT_DATA, { ...base(), extra: 1 }), "table_unknown_field");
   throwsCode(() => pivotTable(PIVOT_DATA, { ...base(), metrics: [{ op: "mean", column: "c3", header: "M" }] }), "table_bad_request");
@@ -1305,7 +1340,7 @@ Deno.test("def2 r7 pivot: request shapes are exact — op/column/scale rules and
   }), "table_type_mismatch");
 });
 
-Deno.test("def2 r7 pivot: request objects and nested entries must be plain own enumerable data — zero getters invoked", () => {
+Deno.test("def2 r8 pivot: request objects and nested entries must be plain own enumerable data — zero getters invoked", () => {
   canonical(pivotTable(PIVOT_DATA, pivotRequest));
   let reads = 0;
   const countingGetter = () => {
@@ -1345,7 +1380,7 @@ Deno.test("def2 r7 pivot: request objects and nested entries must be plain own e
   throwsCode(() => pivotTable(PIVOT_DATA, { ...pivotRequest, metrics: taggedMetrics }), "table_bad_request");
 });
 
-Deno.test("def2 r7 pivot: category values must be valid canonical cells for the pivot column type", () => {
+Deno.test("def2 r8 pivot: category values must be valid canonical cells for the pivot column type", () => {
   const ints = table([
     { header: "g", type: { kind: "text" } },
     { header: "n", type: { kind: "int64" } },
@@ -1386,7 +1421,7 @@ Deno.test("def2 r7 pivot: category values must be valid canonical cells for the 
   assertEquals(flagOut.rows, [["g1", "1", "1"], ["g2", "1", "0"]]);
 });
 
-Deno.test("def2 r7 pivot: decimal categories must be canonical strict-core cells — negative zero and >38-digit values are rejected even on empty tables", () => {
+Deno.test("def2 r8 pivot: decimal categories must be canonical strict-core cells — negative zero and >38-digit values are rejected even on empty tables", () => {
   const empty = (scale) => table([
     { header: "g", type: { kind: "text" } },
     { header: "d", type: { kind: "decimal", scale } },
@@ -1405,18 +1440,21 @@ Deno.test("def2 r7 pivot: decimal categories must be canonical strict-core cells
   assertEquals(exact.rows, []);
 });
 
-Deno.test("def2 r7 pivot: work units equal discovery rows plus metric passes plus emitted groups", () => {
-  // 6 rows (discovery) + 6 rows × 6 metrics (aggregation) + 2 groups = 44.
-  assertEquals(pivotTable(PIVOT_DATA, pivotRequest).workUnits, 44);
-  // Whole-table pivot of the same data: 6 + 36 + 1 group.
-  assertEquals(pivotTable(PIVOT_DATA, { ...pivotRequest, rowGroupBy: [] }).workUnits, 43);
+Deno.test("def2 r8 pivot: work units equal input visits plus emitted cells", () => {
+  // 6 discovery input rows (group visits) + 6 rows × 6 metrics (aggregation
+  // visits) + 2 group rows × 13 emitted cells (1 group column + 2 categories
+  // × 6 metrics) = 6 + 36 + 26 = 68.
+  assertEquals(pivotTable(PIVOT_DATA, pivotRequest).workUnits, 68);
+  // Whole-table pivot of the same data: 6 + 36 + 1 group × 12 cells (2
+  // categories × 6 metrics, no group column).
+  assertEquals(pivotTable(PIVOT_DATA, { ...pivotRequest, rowGroupBy: [] }).workUnits, 54);
 });
 
 // ---------------------------------------------------------------------------
 // Pivot bounds — exact and +1 at the real strict-core ceilings
 // ---------------------------------------------------------------------------
 
-Deno.test("def2 r7 pivot: row-group bound accepts exactly maxGroups and fails one past it", () => {
+Deno.test("def2 r8 pivot: row-group bound accepts exactly maxGroups and fails one past it", () => {
   const make = (groups) => {
     const rows = [];
     for (let i = 0; i < groups; i++) rows.push([`g${i}`, "A"]);
@@ -1436,7 +1474,7 @@ Deno.test("def2 r7 pivot: row-group bound accepts exactly maxGroups and fails on
   throwsCode(() => pivotTable(make(TABLE_LIMITS.maxGroups + 1), request), "table_group_bound");
 });
 
-Deno.test("def2 r7 pivot: output width accepts maxColumns and fails one past it, before any scan", () => {
+Deno.test("def2 r8 pivot: output width accepts maxColumns and fails one past it, before any scan", () => {
   const wide = () => {
     const rows = [["g", "g", "g", "g", "g", "g", "g", "g", "v0"]];
     return table(
@@ -1457,7 +1495,7 @@ Deno.test("def2 r7 pivot: output width accepts maxColumns and fails one past it,
   throwsCode(() => pivotTable(wide(), request(128)), "table_column_bound"); // 8 + 128×8 = 1032
 });
 
-Deno.test("def2 r7 pivot: output cells are preflighted before aggregation — exact maxCells and one past it", () => {
+Deno.test("def2 r8 pivot: output cells are preflighted before aggregation — exact maxCells and one past it", () => {
   const categories = [];
   for (let i = 0; i < 16; i++) categories.push({ value: `v${i}`, header: `h${i}` });
   const metrics = Array.from({ length: 16 }, (_, i) => ({ op: "count_rows", header: `m${i}` }));
@@ -1477,7 +1515,7 @@ Deno.test("def2 r7 pivot: output cells are preflighted before aggregation — ex
   throwsCode(() => pivotTable(make(3_892), request), "table_cell_count_bound");
 });
 
-Deno.test("def2 r7 pivot: header byte limits fail up front — per column and total", () => {
+Deno.test("def2 r8 pivot: header byte limits fail up front — per column and total", () => {
   // A single composite header over maxHeaderBytes fails in the budget.
   throwsCode(() => pivotTable(PIVOT_DATA, {
     rowGroupBy: ["c1"], pivotColumn: "c2",

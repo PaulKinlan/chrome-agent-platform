@@ -12,11 +12,17 @@
 // (tableNumericAdd / tableNumericAverage), so sums/averages are exact, and
 // every bound comes from the frozen TABLE_LIMITS.
 //
-// ── join semantics (revised r7 contract) ───────────────────────────────────
+// ── join semantics (revised r8 contract) ───────────────────────────────────
 // request: { kind: "inner"|"left"|"right"|"full",
 //            keys: [{ left, right }] (1..8),
-//            leftColumns: [{ column, header? }] (0..1024),
-//            rightColumns: [{ column, header? }] (0..1024) }
+//            leftColumns: [colId] (0..1024),
+//            rightColumns: [colId] (0..1024) }
+//   * Projections are DENSE ARRAYS OF CANONICAL COLUMN ID STRINGS (e.g.
+//     ["c1","c2"]) exactly as the toolkit contract (table_join §7.3) and the
+//     live management schema define them. Object projection entries
+//     ({column,header?}) are rejected. Headers and types are preserved from
+//     the source columns (no per-column rename); an unknown or non-canonical
+//     ID fails table_unknown_column and any non-string entry fails the job.
 //   * Output = EXACTLY the projected left columns followed by the projected
 //     right columns, ids regenerated c1..cN. There is NO automatic right-key
 //     dropping and NO key coalescing: an unmatched right row keeps its data
@@ -43,7 +49,7 @@
 //     materialized (table_row_bound / table_cell_count_bound). The exact
 //     serialized-byte budget is still enforced during emission, row by row.
 //
-// ── pivot semantics (revised r7 contract) ──────────────────────────────────
+// ── pivot semantics (revised r8 contract) ──────────────────────────────────
 // request: { rowGroupBy: [colId] (0..8, [] = whole table),
 //            pivotColumn: colId,
 //            categories: [{ value, header }] (1..128),
@@ -77,12 +83,16 @@
 //     distinct-group count is discovered in a first pass and the group×width
 //     cell count (maxCells) is checked before any aggregation runs.
 //
-// Work accounting: join charges one unit per left key pass row, one per right
-// key pass row, and one per emitted output row. Pivot charges one per input
-// row in the discovery pass, metricDefs per input row in the aggregation
-// pass, and one per emitted group row. The multiplicity/discovery passes are
-// row/cell-bounded by construction and are not separately charged.
-// maxWorkUnits stays a coarse backstop that the output bounds outrun.
+// Work accounting follows the toolkit work-unit definition (a unit is one
+// key-cell hash/comparison or one emitted cell): join charges the key-pair
+// count per scanned key-pass row (left and right: each key cell of each row
+// is hashed once) plus the output width per emitted row (every emitted cell,
+// null padding included). Pivot charges one per discovery input row (group
+// visit), the metric count per aggregation input row (category/metric
+// aggregate visits), and the output width per emitted group row (emitted
+// cells). The multiplicity/discovery passes are row/cell-bounded by
+// construction and are not separately charged. maxWorkUnits stays a coarse
+// backstop that the output bounds outrun.
 
 import {
   TABLE_LIMITS,
@@ -356,26 +366,17 @@ export function joinTables(leftInput, rightInput, request) {
   }
 
   // Projections are explicit: output = exactly leftColumns then rightColumns,
-  // in declared order, headers defaulting to the source header. Empty lists
-  // are allowed. Nothing is dropped or coalesced automatically.
-  const project = (entries, source, label) => entries.map((entry, index) => {
-    exactData(entry, ["column", "header"], ["column"], `${label}[${index}]`);
-    if (typeof entry.column !== "string") fail("table_bad_request", `${label}[${index}].column`);
-    const pos = columnIndex(source, entry.column);
-    const header = Object.hasOwn(entry, "header") ? entry.header : source.columns[pos].header;
-    if (typeof header !== "string") fail("table_bad_request", `${label}[${index}].header`);
-    return { pos, header, type: source.columns[pos].type };
+  // in declared order. Both are dense arrays of canonical column-ID strings
+  // that go through idArray (descriptor-safe copies); headers and types are
+  // preserved from the source columns and nothing is dropped, coalesced or
+  // renamed automatically. Empty lists are allowed.
+  const projectIds = (entries, source, label) => idArray(entries, label, 0, TABLE_LIMITS.maxColumns).map((id, index) => {
+    if (typeof id !== "string") fail("table_bad_request", `${label}[${index}]`);
+    const pos = columnIndex(source, id); // non-canonical spelling or unknown id: table_unknown_column
+    return { pos, header: source.columns[pos].header, type: source.columns[pos].type };
   });
-  const leftProjection = project(
-    idArray(request.leftColumns, "request.leftColumns", 0, TABLE_LIMITS.maxColumns),
-    left,
-    "request.leftColumns",
-  );
-  const rightProjection = project(
-    idArray(request.rightColumns, "request.rightColumns", 0, TABLE_LIMITS.maxColumns),
-    right,
-    "request.rightColumns",
-  );
+  const leftProjection = projectIds(request.leftColumns, left, "request.leftColumns");
+  const rightProjection = projectIds(request.rightColumns, right, "request.rightColumns");
 
   const budget = new OutputBudget(
     [...leftProjection.map((p) => ({ header: p.header, type: p.type })), ...rightProjection.map((p) => ({ header: p.header, type: p.type }))],
@@ -386,8 +387,8 @@ export function joinTables(leftInput, rightInput, request) {
   // additionally build the left index.
   const leftKeyTypes = leftKeyPos.map((i) => left.columns[i].type);
   const rightKeyTypes = rightKeyPos.map((i) => right.columns[i].type);
-  const leftKeys = left.rows.map((row) => { budget.work(); return compositeKey(leftKeyPos.map((i) => row[i]), leftKeyTypes); });
-  const rightKeys = right.rows.map((row) => { budget.work(); return compositeKey(rightKeyPos.map((i) => row[i]), rightKeyTypes); });
+  const leftKeys = left.rows.map((row) => { budget.work(leftKeyPos.length); return compositeKey(leftKeyPos.map((i) => row[i]), leftKeyTypes); });
+  const rightKeys = right.rows.map((row) => { budget.work(rightKeyPos.length); return compositeKey(rightKeyPos.map((i) => row[i]), rightKeyTypes); });
   const rightIndex = new Map();
   for (let i = 0; i < right.rows.length; i++) {
     if (rightKeys[i] === null) continue;
@@ -446,15 +447,15 @@ export function joinTables(leftInput, rightInput, request) {
   if (rowsOut * budget.width > TABLE_LIMITS.maxCells) fail("table_cell_count_bound", String(TABLE_LIMITS.maxCells));
 
   const emit = (lrow, rrow) => {
-    budget.work();
+    budget.work(budget.width); // one unit per emitted cell
     budget.push([...leftProjection.map((p) => lrow[p.pos]), ...rightProjection.map((p) => rrow[p.pos])]);
   };
   const emitLeftLone = (lrow) => {
-    budget.work();
+    budget.work(budget.width);
     budget.push([...leftProjection.map((p) => lrow[p.pos]), ...new Array(rightProjection.length).fill(null)]);
   };
   const emitRightLone = (rrow) => {
-    budget.work();
+    budget.work(budget.width);
     budget.push([...new Array(leftProjection.length).fill(null), ...rightProjection.map((p) => rrow[p.pos])]);
   };
 
@@ -633,7 +634,7 @@ export function pivotTable(tableInput, request) {
   }
 
   for (const group of groups) {
-    budget.work();
+    budget.work(budget.width); // one unit per emitted cell
     const row = [...group.cells];
     for (const category of categoryList) {
       for (let m = 0; m < metricDefs.length; m++) {

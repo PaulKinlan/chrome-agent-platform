@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.221] — 2026-09-05
+- chrome-agent-platform-def.2 r8: dense ID-string join projections + cell-level work units
+
 ## [0.3.219] — 2026-09-05
 - chrome-agent-platform-def.2 r7: exact join projections + cross-kind numeric keys + category-major pivot contract
 
