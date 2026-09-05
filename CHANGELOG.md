@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.261] — 2026-09-06
+- Internal cleanup: stop checking the retired task file's layout on every full test run
+
 ## [0.3.260] — 2026-09-05
 - Internal cleanup: remove an obsolete proof script left over from the skill-import work
 
