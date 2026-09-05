@@ -41,8 +41,10 @@ import {
   mintUntrustedToken,
 } from "./untrusted-fence.js";
 import {
+  PREVIEW_SETTINGS_ORIGIN,
   executeBundledWasiJob,
   isStreamBackedBundledTool,
+  previewOnlyToolEnvelope,
   previewSpecFor,
   validatePreviewInput,
 } from "./tool-exec-preview.js";
@@ -1483,6 +1485,9 @@ export function executableBundledToolRecords(rows, context = {}) {
           context: runContext,
           descriptorInput,
         });
+      }
+      if (!isStreamBackedBundledTool(toolId) && runContext?.origin !== PREVIEW_SETTINGS_ORIGIN) {
+        return previewOnlyToolEnvelope(toolId);
       }
       return await executeBundledWasiJob({
         toolId,

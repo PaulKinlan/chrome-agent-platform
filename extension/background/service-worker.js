@@ -68,6 +68,7 @@ import {
   buildPreviewJob,
   executeBundledWasiJob,
   extractPreviewInput,
+  previewOnlyToolEnvelope,
   previewSpecFor,
   revalidatePreviewExecution,
   validatePreviewInput,
@@ -515,12 +516,7 @@ async function stageInlineWasmInput({ stdin, owner }) {
 
 async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context }) {
   if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
-    return await executeBundledWasiJob({
-      toolId,
-      args: validatedArgs?.args,
-      stdin: validatedArgs?.stdin,
-      runContext: context,
-    });
+    return previewOnlyToolEnvelope(toolId);
   }
   const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
   if (!runId) throw new Error("wasm_stream_run_required");
@@ -563,7 +559,7 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
 
 async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVIEW_SETTINGS_ORIGIN, documentId = "settings-options" }) {
   if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
-    return { ok: false, error: `unsupported_stream_tool: ${toolId}` };
+    return previewOnlyToolEnvelope(toolId);
   }
   const spec = previewSpecFor(toolId);
   if (!spec) return { ok: false, error: `unknown_bundled_tool: ${toolId}` };

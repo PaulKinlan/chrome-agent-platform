@@ -138,6 +138,29 @@ export const STREAM_BACKED_BUNDLED_TOOL_IDS = Object.freeze([
 export function isStreamBackedBundledTool(toolId) {
   return STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId);
 }
+
+/** Error message when a preview-only tool is invoked in a live agent task. */
+export function previewOnlyToolError(toolId) {
+  return `preview_only_tool: ${toolId} is available in Settings preview, not in live agent tasks`;
+}
+
+/** Fail-closed envelope for live invocation of a preview-only bundled tool. */
+export function previewOnlyToolEnvelope(toolId) {
+  return Object.freeze({
+    ok: false,
+    phase: "failed",
+    error: previewOnlyToolError(toolId),
+    code: "preview_only_tool",
+    stdoutEncoding: "utf8",
+    stdout: "",
+    stdoutBase64: null,
+    stdoutBytes: 0,
+    stderr: "",
+    errno: null,
+    exitCode: null,
+  });
+}
+
 export function previewSpecFor(toolId) {
   return PREVIEW_SPECS[toolId] ?? null;
 }
