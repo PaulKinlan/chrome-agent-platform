@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = ["awk", "gettext-rs", "plib"]
+
+[workspace.package]
+repository = "https://github.com/rustcoreutils/posixutils-rs"
+license = "MIT"
+edition = "2021"
+rust-version = "1.84.0"
+
+[workspace.dependencies]
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context", "cargo"] }
+libc = "0.2"
+gettext-rs = { path = "./gettext-rs" }
+errno = "0.3"
+pest = { version = "2", default-features = false }
+pest_derive = "2"
+
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

@@ -70,6 +70,21 @@ import {
   revalidatePreviewExecution,
   validatePreviewInput,
 } from "../lib/tool-exec-preview.js";
+import {
+  appendWasmStreamInput,
+  appendWasmStreamInputBase64,
+  createWasmStreamInput,
+  createWasmStreamOutput,
+  discardWasmStream,
+  readWasmStreamReceipt,
+  readWasmStreamWindow,
+  removeWasmStream,
+  sealWasmStreamInput,
+  sealWasmStreamOutput,
+  validateSealedWasmStream,
+} from "../lib/wasm-stream-files.js";
+import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
+import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
@@ -416,6 +431,146 @@ function registerScriptRunPolicy(runId, source) {
   scriptRunPolicies.set(runId, policy);
   return policy;
 }
+function wasmStreamOwner(context) {
+  if (context?.principal !== "owner-options" || typeof context.documentId !== "string" || !context.documentId) {
+    const error = new Error("wasm_stream_owner_required");
+    error.code = "wasm_stream_owner_required";
+    throw error;
+  }
+  return `owner-options:${context.documentId}`;
+}
+
+async function stageInlineWasmInput({ stdin, owner }) {
+  const ref = await createWasmStreamInput({ owner });
+  const encoder = new TextEncoder();
+  const chunkCodeUnits = 512 * 1024;
+  for (let start = 0; start < stdin.length;) {
+    let end = Math.min(stdin.length, start + chunkCodeUnits);
+    if (end < stdin.length) {
+      const last = stdin.charCodeAt(end - 1);
+      if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+    }
+    await appendWasmStreamInput({ ref, owner, bytes: encoder.encode(stdin.slice(start, end)) });
+    start = end;
+  }
+  await sealWasmStreamInput({ ref, owner });
+  return ref;
+}
+
+async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context }) {
+  const runId = String(context?.runId ?? context?.executionId ?? "run");
+  const agentId = String(context?.agentId ?? "hub");
+  const owner = `agent:${runId}:${agentId}`;
+  let inputRef = validatedArgs?.inputRef ?? null;
+  let staged = false;
+  if (!inputRef) {
+    inputRef = await stageInlineWasmInput({ stdin: String(validatedArgs?.stdin ?? ""), owner });
+    staged = true;
+  }
+  try {
+    return await runWasmStreamTool({
+      toolId,
+      args: Array.isArray(validatedArgs?.args) ? validatedArgs.args : [],
+      inputRef,
+      owner,
+      origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
+        ? new URL(context.origin).origin
+        : "https://agent.cap",
+      documentId: String(context?.documentId ?? runId),
+    });
+  } finally {
+    if (staged) await removeWasmStream({ ref: inputRef, owner }).catch(() => {});
+  }
+}
+
+async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVIEW_SETTINGS_ORIGIN, documentId = "settings-options" }) {
+  const spec = previewSpecFor(toolId);
+  if (!spec) return { ok: false, error: `unknown_bundled_tool: ${toolId}` };
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
+    return { ok: false, error: "invalid_arguments" };
+  }
+  await validateSealedWasmStream({ ref: inputRef, owner });
+  const outputRef = await createWasmStreamOutput({ owner });
+  const authority = buildPreviewAuthority({ origin, documentId });
+  const host = await ensureOffscreen();
+  if (!host.ok) {
+    await discardWasmStream({ ref: outputRef, owner }).catch(() => {});
+    return host;
+  }
+  let result;
+  try {
+    result = await Promise.race([
+      chrome.runtime.sendMessage({
+        type: WASM_STREAM_RUN_TYPE,
+        toolId,
+        args,
+        inputRef,
+        outputRef,
+        authority,
+        owner,
+      }),
+      new Promise((resolve) => setTimeout(
+        () => resolve({ ok: false, phase: "timeout", error: "stream host timed out" }),
+        WASM_STREAM_WALL_MS + 5000,
+      )),
+    ]);
+  } catch (error) {
+    result = { ok: false, phase: "failed", error: String(error?.message ?? error) };
+  }
+  if (!result?.ok || !result.receipt || result.outputRef?.id !== outputRef.id) {
+    await discardWasmStream({ ref: outputRef, owner }).catch(() => {});
+    return {
+      ok: false,
+      phase: result?.phase ?? "failed",
+      error: String(result?.error ?? "stream execution failed").slice(0, 1024),
+      exitCode: Number.isSafeInteger(result?.exitCode) ? result.exitCode : null,
+    };
+  }
+  await sealWasmStreamOutput({
+    ref: outputRef,
+    owner,
+    bytes: result.receipt.stdoutBytes,
+    receipt: result.receipt,
+  });
+  // A small complete result remains convenient for the model. Large output is
+  // never squeezed into context: the explicit OPFS reference, size, and digest
+  // are authoritative and can feed the next tool without copying.
+  let stdout = null;
+  if (result.receipt.stdoutBytes <= 64 * 1024 && spec.stdoutEncoding === "utf8") {
+    const window = await readWasmStreamWindow({
+      ref: outputRef,
+      owner,
+      offset: 0,
+      length: result.receipt.stdoutBytes,
+    });
+    try {
+      stdout = new TextDecoder("utf-8", { fatal: true }).decode(decodeCanonicalBase64(window.base64));
+    } catch { stdout = null; }
+  }
+  return Object.freeze({
+    ok: true,
+    phase: "completed",
+    toolId,
+    output: Object.freeze({
+      ref: outputRef,
+      bytes: result.receipt.stdoutBytes,
+      sha256: result.receipt.stdoutSha256,
+      stderrBytes: result.receipt.stderrBytes,
+      stderrSha256: result.receipt.stderrSha256,
+    }),
+    input: Object.freeze({
+      ref: inputRef,
+      bytesRead: result.receipt.stdinBytes,
+      sha256: result.receipt.stdinSha256,
+    }),
+    stdout,
+    stdoutComplete: stdout !== null,
+    exitCode: result.exitCode,
+    elapsedMs: result.receipt.elapsedMs,
+    workerInstanceId: result.receipt.workerInstanceId,
+  });
+}
+
 async function runScriptSandboxed(source) {
   // Best-effort: open the offscreen doc (the scheduled host). If it is
   // unavailable (e.g. headless Chrome), the NTP page — the on-demand host —
@@ -1450,7 +1605,8 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
       {
         scope,
         sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
-        closureGeneration: "task-execution-core",
+        closureGeneration: "task-execution-core:file-backed-v1",
+        dispatchBundledTool: dispatchBundledWasmStream,
       },
     ),
     // Provider-EXECUTED (server-side) tools — discovery through the same lazy
@@ -4966,6 +5122,45 @@ const handlers = mergeRouteMaps(
     journalAppend,
   }),
   {
+  // File-backed bundled-tool transport. Every public route is restricted to
+  // the exact Settings document by wasmStreamOwner(); content moves in caller-
+  // chosen chunks, while execution and results use opaque OPFS references.
+  async "tool-stream.input.create"(_message, context) {
+    const owner = wasmStreamOwner(context);
+    const ref = await createWasmStreamInput({ owner });
+    return { ok: true, ref };
+  },
+  async "tool-stream.input.append"({ ref, base64 } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await appendWasmStreamInputBase64({ ref, owner, base64 });
+  },
+  async "tool-stream.input.seal"({ ref } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await sealWasmStreamInput({ ref, owner });
+  },
+  async "tool-stream.run"({ toolId, args = [], inputRef } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await runWasmStreamTool({
+      toolId,
+      args,
+      inputRef,
+      owner,
+      documentId: context.documentId,
+    });
+  },
+  async "tool-stream.output.read"({ ref, offset = 0, length = 65536 } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await readWasmStreamWindow({ ref, owner, offset, length });
+  },
+  async "tool-stream.output.receipt"({ ref } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await readWasmStreamReceipt({ ref, owner });
+  },
+  async "tool-stream.remove"({ ref } = {}, context) {
+    const owner = wasmStreamOwner(context);
+    return await removeWasmStream({ ref, owner });
+  },
+
   // ── The "what I did" action ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01) ──
   // actions.list returns the most-recent reversible-first ledger rows the hub +
   // side panel render; actions.undo re-executes a row's inverse THROUGH the same

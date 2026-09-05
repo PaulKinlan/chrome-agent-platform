@@ -1306,6 +1306,7 @@ export function executableBundledToolRecords(rows, context = {}) {
       try {
         let normalizedArgs = [];
         let normalizedStdin = "";
+        let normalizedInputRef = null;
         if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
           if (Array.isArray(rawArgs.args)) {
             normalizedArgs = rawArgs.args.filter((a) => typeof a === "string");
@@ -1319,6 +1320,16 @@ export function executableBundledToolRecords(rows, context = {}) {
           } else if (typeof rawArgs.docA === "string" && typeof rawArgs.docB === "string") {
             normalizedArgs = [rawArgs.docA, rawArgs.docB];
           }
+          if (rawArgs.inputRef !== undefined) {
+            const ref = rawArgs.inputRef;
+            if (!ref || typeof ref !== "object" || Array.isArray(ref) ||
+                JSON.stringify(Object.keys(ref).sort()) !== JSON.stringify(["id", "kind", "version"]) ||
+                ref.version !== 1 || !/^[0-9a-f]{32}$/u.test(ref.id) ||
+                !new Set(["input", "stdout"]).has(ref.kind)) {
+              return { ok: false, error: "invalid_arguments: inputRef" };
+            }
+            normalizedInputRef = Object.freeze({ version: 1, id: ref.id, kind: ref.kind });
+          }
         } else if (typeof rawArgs === "string") {
           normalizedStdin = rawArgs;
         } else if (Array.isArray(rawArgs)) {
@@ -1330,7 +1341,10 @@ export function executableBundledToolRecords(rows, context = {}) {
           args: normalizedArgs,
           stdin: normalizedStdin,
         });
-        return { ok: true, data: validated };
+        return {
+          ok: true,
+          data: Object.freeze({ ...validated, ...(normalizedInputRef ? { inputRef: normalizedInputRef } : {}) }),
+        };
       } catch (err) {
         return { ok: false, error: `invalid_arguments: ${err?.message || err}` };
       }

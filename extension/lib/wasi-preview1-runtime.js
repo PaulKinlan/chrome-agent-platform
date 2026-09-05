@@ -604,6 +604,7 @@ export function createWasiPreview1Runtime({
   job: rawJob,
   memory: rawMemory,
   workspace: rawWorkspace,
+  stdio: rawStdio = null,
   isCancelled = () => false,
   randomFill = (bytes) => crypto.getRandomValues(bytes),
   monotonicNowNs = () => BigInt(Math.floor(performance.now() * 1_000_000)),
@@ -611,6 +612,18 @@ export function createWasiPreview1Runtime({
   const job = createWasiJob(rawJob);
   const memory = validateMemory(rawMemory);
   const workspace = validateWorkspace(rawWorkspace);
+  let stdio = null;
+  if (rawStdio !== null) {
+    if (!plainData(rawStdio) ||
+        JSON.stringify(Object.keys(rawStdio).sort()) !==
+          JSON.stringify(["readStdin", "writeStderr", "writeStdout"].sort()) ||
+        typeof rawStdio.readStdin !== "function" ||
+        typeof rawStdio.writeStdout !== "function" ||
+        typeof rawStdio.writeStderr !== "function") {
+      throw new TypeError("runtime_stdio");
+    }
+    stdio = rawStdio;
+  }
   if (
     typeof isCancelled !== "function" || typeof randomFill !== "function" ||
     typeof monotonicNowNs !== "function"
@@ -1650,15 +1663,24 @@ export function createWasiPreview1Runtime({
         if (row.len === 0) continue;
         let bytes;
         if (record.kind === FD_KIND.STDIN) {
-          // Short-read on EOF: copy at most the REAL remaining stdin bytes
-          // (≤ the already-validated stdin quota) — never the advertised
-          // length, so an oversized advertised buffer cannot allocate.
-          const remaining = job.stdin.length - state.stdinOffset;
-          if (remaining <= 0) break;
-          const take = Math.min(row.len, remaining);
-          bytes = new Uint8Array(
-            job.stdin.slice(state.stdinOffset, state.stdinOffset + take),
-          );
+          if (stdio) {
+            bytes = syncResult(stdio.readStdin(state.stdinOffset, row.len));
+            if (!(bytes instanceof Uint8Array) || bytes.byteLength > row.len) {
+              fault(WASI_ERRNO.EIO);
+            }
+            bytes = new Uint8Array(bytes);
+            if (bytes.byteLength === 0) break;
+          } else {
+            // Short-read on EOF: copy at most the REAL remaining stdin bytes
+            // (≤ the already-validated stdin quota) — never the advertised
+            // length, so an oversized advertised buffer cannot allocate.
+            const remaining = job.stdin.length - state.stdinOffset;
+            if (remaining <= 0) break;
+            const take = Math.min(row.len, remaining);
+            bytes = new Uint8Array(
+              job.stdin.slice(state.stdinOffset, state.stdinOffset + take),
+            );
+          }
         } else {
           const remaining = job.quota.fileBytes - state.fileBytes;
           if (remaining <= 0) {
@@ -1735,10 +1757,24 @@ export function createWasiPreview1Runtime({
         const bytes = readBytes(row.ptr, allowed);
         let written = bytes.byteLength;
         if (record.kind === FD_KIND.STDOUT) {
-          state.stdout.push(bytes);
+          if (stdio) {
+            written = syncResult(stdio.writeStdout(state.stdoutBytes, bytes));
+            if (!Number.isSafeInteger(written) || written < 0 || written > bytes.byteLength) {
+              fault(WASI_ERRNO.EIO);
+            }
+          } else {
+            state.stdout.push(bytes);
+          }
           state.stdoutBytes += written;
         } else if (record.kind === FD_KIND.STDERR) {
-          state.stderr.push(bytes);
+          if (stdio) {
+            written = syncResult(stdio.writeStderr(state.stderrBytes, bytes));
+            if (!Number.isSafeInteger(written) || written < 0 || written > bytes.byteLength) {
+              fault(WASI_ERRNO.EIO);
+            }
+          } else {
+            state.stderr.push(bytes);
+          }
           state.stderrBytes += written;
         } else {
           written = syncResult(
@@ -1953,8 +1989,8 @@ export function createWasiPreview1Runtime({
           stderrBytes: state.stderrBytes,
           openDynamicFds: fds.size - STATIC_FD_COUNT,
         }),
-        stdout: concat(state.stdout, state.stdoutBytes),
-        stderr: concat(state.stderr, state.stderrBytes),
+        stdout: stdio ? new Uint8Array(0) : concat(state.stdout, state.stdoutBytes),
+        stderr: stdio ? new Uint8Array(0) : concat(state.stderr, state.stderrBytes),
       });
     },
   });

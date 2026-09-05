@@ -670,7 +670,25 @@ export function adaptBundledTools(rows, context = {}) {
       name: toolId,
       aliases: [],
       description: ownData(row, "description") ?? ownData(row, "displayName") ?? "",
-      inputSchema: context.inputSchemaByTool?.[toolId] ?? { type: "object", additionalProperties: false },
+      inputSchema: context.inputSchemaByTool?.[toolId] ?? {
+        type: "object",
+        properties: {
+          args: { type: "array", items: { type: "string" }, description: "command-line arguments, excluding argv[0]" },
+          stdin: { type: "string", description: "inline UTF-8 input; omitted when inputRef is used" },
+          inputRef: {
+            type: "object",
+            description: "opaque file-backed input or prior tool-output reference",
+            properties: {
+              version: { type: "integer", const: 1 },
+              id: { type: "string" },
+              kind: { type: "string", enum: ["input", "stdout"] },
+            },
+            required: ["version", "id", "kind"],
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
       outputSchema: context.outputSchemaByTool?.[toolId],
       capabilities: ownData(row, "capabilities") ?? [],
       scope: context.scope ?? { hub: true, agentId: "hub", origin: "", documentId: "" },

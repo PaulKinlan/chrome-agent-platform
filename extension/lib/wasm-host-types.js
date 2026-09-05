@@ -246,10 +246,13 @@ export function createWasiQuota(value = WASI_HOST_DEFAULT_QUOTA) {
       ? Object.getOwnPropertyDescriptor(value, key).value
       : WASI_HOST_DEFAULT_QUOTA[key];
     const hard = WASI_HOST_DEFAULT_QUOTA[key];
-    // Byte quotas admit Infinity (no limit, dptw); counts stay safe-integers.
-    const byteQuota = !Number.isSafeInteger(hard);
-    const okValue = byteQuota
-      ? (candidate === Number.POSITIVE_INFINITY || (Number.isSafeInteger(candidate) && candidate >= 0))
+    // Byte quotas admit Infinity (no content limit, dptw). A file-backed
+    // execution may also remove the host-call count ceiling: a fixed call
+    // count is an accidental content-size cap when stdin is streamed in
+    // finite chunks. Wall-clock cancellation remains the runaway guard.
+    const unbounded = !Number.isSafeInteger(hard) || key === "hostCalls";
+    const okValue = unbounded
+      ? (candidate === Number.POSITIVE_INFINITY || (Number.isSafeInteger(candidate) && candidate >= 0 && (key === "hostCalls" || candidate <= hard)))
       : (Number.isSafeInteger(candidate) && candidate >= 0 && candidate <= hard);
     if (!okValue) {
       fail(`quota_${key}`);

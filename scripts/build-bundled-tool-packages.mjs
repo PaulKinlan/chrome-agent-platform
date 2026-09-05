@@ -674,7 +674,9 @@ if (VERIFY) {
     for (const rel of walk(rootRel)) {
       // packages/bundled/evidence/** is generator INPUT (the pinned evidence
       // trees), not generated output — exclude it from the ungenerated sweep.
-      if (rel.startsWith("packages/bundled/evidence/")) continue;
+      if (rel.startsWith("packages/bundled/evidence/") ||
+          rel.startsWith("packages/bundled/unix-stream-v1/") ||
+          rel.startsWith("packages/bundled/awk-posixutils-v1/")) continue;
       if (!emitted.has(rel)) drift.push(`ungenerated file present: ${rel}`);
     }
   }

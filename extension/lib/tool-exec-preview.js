@@ -694,7 +694,7 @@ export async function executeBundledWasiJob({
       const rawResult = await host.handleJob({
         type: "wasm.job",
         job: { ...job, stdin: new Uint8Array(job.stdin) },
-        wasmBytes,
+        wasmBytes: casBytes,
       });
       return boundPreviewResult(rawResult, { stdoutEncoding: spec.stdoutEncoding });
     } catch (err) {
