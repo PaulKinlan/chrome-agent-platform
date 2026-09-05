@@ -1,26 +1,22 @@
-## [0.3.243] — 2026-09-05
+# Changelog
 
-## [0.3.244] — 2026-09-05
-- Maintenance and fixes.
+## [0.3.248] — 2026-09-05
+- Release identity coherent at 0.3.247 across package, lock, manifest, and changelog after the i18n merge
 
-## [0.3.244] — 2026-09-05
-- Settings static copy and the artifact-preview component resolve through the i18n catalogue: 125 Settings leaves carry data-i18n with byte-identical catalogue values (pinned against the no-JS fallback markup), the preview component's honest copy moves to t() keys with the catalogue holding the exact strings, and the source-honesty pin checks the new seam plus catalogue values
-- Settings and the shared components get an internationalisation foundation: a default locale and an en catalogue, one lookup seam every surface resolves copy through, a regenerable fallback so the docs gallery renders the same words, and a drift pin that fails the moment the two separate
+## [0.3.247] — 2026-09-05
+- Settings and the shared components get an internationalisation foundation: a default locale and an en catalogue, one lookup seam every surface resolves copy through, a regenerable fallback so the docs gallery renders the same words, and a drift pin that fails the moment the two separate copies drift. Settings static copy and the artifact preview now resolve through it.
 
-## [0.3.242] — 2026-09-05
-- Settings, hub and components carry their copy as hardcoded English today — this inventory counts the candidates surface by surface and proposes the catalogue key shape, so the migration knows what it is moving before it moves anything
-
-## [0.3.241] — 2026-09-05
-- Maintenance and fixes.
-
-## [0.3.243] — 2026-09-05
+## [0.3.246] — 2026-09-05
 - Fixed a bug where a scheduled task's script could run twice instead of once.
 
-## [0.3.242] — 2026-09-05
+## [0.3.245] — 2026-09-05
+- Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
+
+## [0.3.244] — 2026-09-05
 - Fixed the permissions health check: it was looking for parts of the Settings page that no longer exist, so it reported nothing. It now checks the real capability list and turns a capability off the same way you would — including the confirmation step.
 
-## [0.3.241] — 2026-09-05
-- Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
+## [0.3.243] — 2026-09-05
+- Settings, hub and components carry their copy as hardcoded English today — this inventory counts the candidates surface by surface and proposes the catalogue key shape, so the migration knows what it is moving before it moves anything
 
 ## [0.3.240] — 2026-09-05
 - Internal hardening: the list of built-in tools allowed to read large files is now pinned by a test, so it cannot silently gain or lose a tool.
