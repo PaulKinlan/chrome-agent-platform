@@ -253,3 +253,12 @@ Deno.test("store target: unmanifested or inventory-free Wasm authority fails the
     await Deno.remove(clean.root, { recursive: true });
   }
 });
+
+Deno.test("store target (Pillar 4): CWS compliance and provenance authority invariant", async () => {
+  const relPath = ["..", "extension", "manifest.json"].join("/");
+  const manifest = JSON.parse(await Deno.readTextFile(new URL(relPath, import.meta.url)));
+  assertEquals(manifest.manifest_version, 3);
+  assertEquals(manifest.content_security_policy.extension_pages, STORE_EXTENSION_CSP);
+  assertEquals(STORE_WASM_LANE, "bundled-reviewed-only");
+  assertEquals(STORE_TARGET, "store");
+});

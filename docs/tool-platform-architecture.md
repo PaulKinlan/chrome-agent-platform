@@ -498,8 +498,11 @@ exact CSP, marker/output bindings, or package hashes.
 Digest pinning, signatures, owner clicks, local file selection, or a clean static
 scan do not by themselves resolve Chrome Web Store remotely hosted code policy.
 Arbitrary owner-package execution remains blocked on a written distribution-
-policy decision. Co-do's licence inconsistency and per-binary provenance are
-also unresolved.
+policy decision. Co-do's licence inconsistency and per-binary provenance were
+reconciled under Pillar 4 (2026-09-05, chrome-agent-platform-39is): no Co-do
+binaries are copied; all shipped executables are compiled from verified in-repo
+sources or pinned upstream releases with immutable SHA-256 digests and explicit
+SPDX licenses, governed by the STORE_WASM_LANE = "bundled-reviewed-only" authority.
 
 ## Planned authority split
 

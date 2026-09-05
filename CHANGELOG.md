@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.168] — 2026-09-05
+- Tool execution complies with store security policies using built-in verified components
+
 ## [0.3.167] — 2026-09-05
 - Large tool outputs remain completely available in storage while the artifact viewer clearly labels truncated previews
 
