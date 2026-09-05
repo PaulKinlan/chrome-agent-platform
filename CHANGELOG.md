@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.260] — 2026-09-05
+- Internal cleanup: remove an obsolete proof script left over from the skill-import work
+
+## [0.3.259] — 2026-09-05
+- Internal cleanup: remove an obsolete proof script left over from the skill-import work
+
 ## [0.3.258] — 2026-09-05
 - The toolbox gains compressops — compress and decompress data with zstd and brotli on-device
 
