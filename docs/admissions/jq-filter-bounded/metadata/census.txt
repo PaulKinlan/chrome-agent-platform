@@ -4,5 +4,5 @@ imports: 19 (all wasi_snapshot_preview1)
   fd_prestat_dir_name, fd_read, fd_seek, fd_write, path_filestat_get, path_open,
   path_readlink, proc_exit, random_get
 memory: 1 defined internally; 64 initial pages / 512 maximum pages; no imported memory
-size: 501730 bytes (~490 KiB) -> tiny tier
+size: 501650 bytes (~490 KiB) -> tiny tier
 threads: NONE (single-threaded build: __thread -> -femulated-tls emutls; pthread TLS/mutex -> single-slot/no-op shim)

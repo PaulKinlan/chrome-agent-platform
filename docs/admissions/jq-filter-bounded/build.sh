@@ -28,7 +28,8 @@ for pass in a b; do
     ./configure --without-oniguruma --disable-maintainer-mode --disable-docs --host=wasm32-wasip1 \
       >> "$ROOT/metadata/build.log" 2>&1
     make -j1 src/builtin.inc src/config_opts.inc src/version.h >> "$ROOT/metadata/build.log" 2>&1
-    sed -i "s|$BUILD|/build|g" src/config_opts.inc
+    sed -i -e "s|$BUILD|/build|g" -e "s|$ROOT|/source-tree|g" \
+      -e "s|$SYSROOT|/wasi-sysroot|g" -e "s|$RT|/clang-resource|g" src/config_opts.inc
     make -j1 libjq.la src/main.o >> "$ROOT/metadata/build.log" 2>&1
     clang --target=wasm32-wasip1 --sysroot="$SYSROOT" -resource-dir="$RT" -O2 -femulated-tls \
       -I"$BUILD" -I"$ROOT/source" -c "$ROOT/source/pthread-shim.c" -o "$BUILD/pthread-shim.o"
