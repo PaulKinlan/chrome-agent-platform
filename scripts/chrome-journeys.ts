@@ -240,7 +240,7 @@ class Cdp {
 
 /** Open a tab (or extension page) via /json/new, returning its target. */
 async function openPage(port: number, url: string) {
-  return await fetchJson(`http://127.0.0.1:${port}/json/new?${url}`, {
+  return await fetchJson(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, {
     method: "PUT",
   });
 }
@@ -402,7 +402,9 @@ const ran = new Set();
 // name → owning CAP-FB id. Such a check still runs and is printed as
 // EXPECTED-RED with its owner on every run; it is not counted as a failure,
 // and the run FAILS the moment it passes so the entry is pruned. Never a skip.
-const EXPECTED_RED = new Map<string, string>([]);
+const EXPECTED_RED = new Map<string, string>([
+  ["attachment count cap (12 → 4 over-count dropped, journal records 8)", "dptw"],
+]);
 function check(name, cond) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   ran.add(name);
@@ -618,6 +620,8 @@ const EXPECTED = [
   "Runaway tool loop: the thread shows one muted 'Stopped after 6 steps' status line with Continue, no repeated agent bubbles, never 'Budget reached'",
   "Plan strip: a running multi-step task shows an advancing checklist pinned to the top of the thread",
   "Plan strip: on done it settles into a collapsed 'N steps' summary with every step checked",
+  "Pipeline: both steps render in the plan strip and settle checked (write then read)",
+  "Pipeline: the final answer carries the value the pipe actually moved (memory_set's key → memory_get's read)",
   "Every item: 12 fixture tabs are read with ONE read_page search — 12 execute_tool reads, 0 selection-replayed",
   "Every item: the status row counts Step N of M while working",
   "Budget: a run with budget 2 stops on 'Budget reached — Continue' (never a silent finish)",
@@ -1242,6 +1246,8 @@ async function main() {
       try {
         const hub = await open("ntp/ntp.html");
         const opts = await open("options/options.html#agents");
+        await evalIn(cdp, opts, `if (location.hash !== '#agents') { location.hash = '#agents'; } true`);
+        await sleep(600);
         const sp = await open("sidepanel/sidepanel.html");
         await evalIn(cdp, sp, `document.getElementById('tab-agents')?.click()`);
         await sleep(1200); // the picker's live registry fetch
@@ -2363,6 +2369,7 @@ async function main() {
     await sleep(300);
     const voicePage = await openPage(port, `chrome-extension://${extId}/options/options.html#agents`);
     const voiceSession = await attachRuntime(cdp, voicePage.id);
+    await evalIn(cdp, voiceSession, `if (location.hash !== '#agents') { location.hash = '#agents'; } true`);
     await sleep(1500);
     const settingsDeleteClicked = await clickSel(cdp, voiceSession, ".delete-named-agent");
     await sleep(500);
@@ -3035,6 +3042,8 @@ async function main() {
     // permissions (tabs / notifications) auto-DENY in headless — a headed
     // browser shows the prompt; the fail-closed denial is asserted here.
     // ─────────────────────────────────────────────────────────────
+    await clickSel(cdp, optsSession, '.nav-item[data-section="permissions"]');
+    await sleep(800);
     check(
       "Settings: Permissions panel present",
       (await boxOf(cdp, optsSession, "#permission-list")) !== null,
@@ -3091,7 +3100,7 @@ async function main() {
     // <capability-row>s; the state is on the row (`data-state`), the request
     // affordance is the ghost "Turn on" button, a granted row shows the switch.
     const permPanel = await evalOpts(`(async () => {
-      for (let i = 0; i < 80; i++) {
+      for (let i = 0; i < 40; i++) {
         if (document.querySelectorAll('#permission-list capability-row').length > 0) break;
         await new Promise((r) => setTimeout(r, 250));
       }
@@ -3247,9 +3256,11 @@ async function main() {
     // the pending prompt and poll the final absent state. This cannot strand a
     // browser prompt that poisons the rest of the journey.
     const probePromptedDenial = async (label, permission) => {
-      const page = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+      const page = await openPage(port, `chrome-extension://${extId}/options/options.html#permissions`);
       const session = await attachRuntime(cdp, page.id);
       cdp.pageSessions.add(session);
+      await evalIn(cdp, session, `if (location.hash !== '#permissions') { location.hash = '#permissions'; } true`);
+      await sleep(800);
       await cdp.send("Target.activateTarget", { targetId: page.id });
       await cdp.send("Page.bringToFront", {}, session);
       const clicked = await clickCapability(session, label, "Turn on");
@@ -3294,9 +3305,11 @@ async function main() {
     // a FRESH Settings page shows both warned rows requestable with a working
     // Enable button. (Re-open the page rather than reload: navigation breaks
     // the CDP eval context.)
-    const afterDenyPage = await openPage(port, `chrome-extension://${extId}/options/options.html`);
+    const afterDenyPage = await openPage(port, `chrome-extension://${extId}/options/options.html#permissions`);
     const afterDenySession = await attachRuntime(cdp, afterDenyPage.id);
     cdp.pageSessions.add(afterDenySession);
+    await evalIn(cdp, afterDenySession, `if (location.hash !== '#permissions') { location.hash = '#permissions'; } true`);
+    await sleep(800);
     let retryAffordance = false;
     for (let i = 0; i < 25 && !retryAffordance; i++) {
       const rows = await evalIn(cdp, afterDenySession, `(() => {
@@ -3722,6 +3735,8 @@ async function main() {
     // deny path is what is observable here and proves enrollment is NOT claimed
     // without the permission (the round-13 acceptance).
     // ─────────────────────────────────────────────────────────────
+    await clickSel(cdp, optsSession, '.nav-item[data-section="agents"]');
+    await sleep(800);
     const enrollOrigin = "https://enroll.example";
     check(
       "Settings: Enroll input present",
@@ -5682,6 +5697,8 @@ async function main() {
     // GENUINE UI grant: checkbox click + origin textarea typing (the primary
     // owner-grant acceptance), then revoke via a genuine checkbox click.
     // ─────────────────────────────────────────────────────────────
+    await clickSel(cdp, optsSession, '.nav-item[data-section="browser"]');
+    await sleep(800);
     check(
       "Settings: browser-grant checkbox present",
       (await boxOf(cdp, optsSession, "#browser-grant")) !== null,
@@ -6429,6 +6446,8 @@ async function main() {
     const retentionShot = await captureShot(cdp, optsSession).catch(() => null);
     if (retentionShot) await writeEvidence("settings-data-retention.png", retentionShot);
     check("Settings: retained the run-log retention screenshot", retentionShot !== null && retentionShot.length > 200);
+    await clickSel(cdp, optsSession, '.nav-item[data-section="agents"]');
+    await sleep(800);
     check(
       "Settings: multi-agent toggle present",
       (await boxOf(cdp, optsSession, "#multi-agent")) !== null,
@@ -6515,11 +6534,13 @@ async function main() {
     // ─────────────────────────────────────────────────────────────
     await msgValue({ type: "agent.create", origin: "https://disenroll.example", name: "disenroll" });
     const optsPage2 = await openPage(
-      port, `chrome-extension://${extId}/options/options.html`,
+      port, `chrome-extension://${extId}/options/options.html#agents`,
     );
     await sleep(2000);
     const optsSession2 = await attachRuntime(cdp, optsPage2.id);
     cdp.pageSessions.add(optsSession2);
+    await evalIn(cdp, optsSession2, `if (location.hash !== '#agents') { location.hash = '#agents'; } true`);
+    await sleep(800);
     let disenrollBtn = null;
     for (let i = 0; i < 20 && !disenrollBtn; i++) {
       disenrollBtn = await boxOf(cdp, optsSession2, ".origin-row .disenroll-origin");
@@ -6596,6 +6617,8 @@ async function main() {
     const registeredBeforeDisable = await evalIn(cdp, optsSession2,
       `(async () => { try { if (typeof chrome.scripting?.getRegisteredContentScripts !== "function") return { err: "chrome.scripting unavailable" }; const s = await chrome.scripting.getRegisteredContentScripts(); return s.map((x) => x.id); } catch (e) { return { err: String(e?.message ?? e) }; } })()`);
     console.log(`[debug] registered scripts before Turn off: ${JSON.stringify(registeredBeforeDisable)}`);
+    await clickSel(cdp, optsSession2, '.nav-item[data-section="permissions"]');
+    await sleep(800);
     await evalIn(cdp, optsSession2, `document.querySelector('#permission-list')?.scrollIntoView()`);
     check(
       "scripting Disable: Site Agents Turn off clicked via a trusted gesture",

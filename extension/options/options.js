@@ -3456,7 +3456,7 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
 // for Settings sections and deep links (CAP-FB-20260823-NAVIGATION-BACK-01).
 export const navigationController = createNavigationController({
   win: window,
-  normalizeHash: normalizeSettingsSectionId,
+  normalizeHash: (h) => normalizeSettingsSectionId(h) || "providers",
   isAllowedHash: (id) => SETTINGS_SECTIONS.includes(id),
   onNavigate: async ({ hash, sectionId, isTraverse }) => {
     return handleSettingsHashNavigation(hash || `#${sectionId}`, isTraverse);

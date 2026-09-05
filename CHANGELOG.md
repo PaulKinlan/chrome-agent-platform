@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.175] — 2026-09-05
+- The Settings page opens directly to sections and keeps agents and permissions accessible
+
+## [0.3.174] — 2026-09-05
+- The Settings page opens directly to sections and keeps agents and permissions accessible
+
 ## [0.3.173] — 2026-09-05
 - Nine familiar Unix tools now process large files without truncating their input or output
 
