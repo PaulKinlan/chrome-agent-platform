@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.3.265] — 2026-09-06
+- Internal cleanup: remove a folder of old screenshots that were stored in the wrong place
+
 ## [0.3.264] — 2026-09-06
 - Internal cleanup: remove a leftover one-off probe with outdated assumptions
 
 ## [0.3.263] — 2026-09-05
-- Internal cleanup: stop checking the retired task file's layout on every full test run
+- Internal bookkeeping: the version number was bumped twice while landing the previous cleanup change; no functional difference
 
 ## [0.3.262] — 2026-09-05
 - Internal cleanup: stop checking the retired task file's layout on every full test run
@@ -13,7 +16,7 @@
 - Tools that currently run only in Settings preview now fail with an honest refusal message when called from a live task
 
 ## [0.3.260] — 2026-09-05
-- Internal cleanup: remove an obsolete proof script left over from the skill-import work
+- Internal bookkeeping: the version number was bumped twice while landing the previous cleanup change; no functional difference
 
 ## [0.3.259] — 2026-09-05
 - Internal cleanup: remove an obsolete proof script left over from the skill-import work
