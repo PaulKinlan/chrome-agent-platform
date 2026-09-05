@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.244] — 2026-09-05
+- The tool operating platform strictly prevents unauthorized access and protects tables from formula injection.
+
 ## [0.3.243] — 2026-09-05
 - Fixed a bug where a scheduled task's script could run twice instead of once.
 
