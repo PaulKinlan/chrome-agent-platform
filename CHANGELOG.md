@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.219] — 2026-09-05
+- chrome-agent-platform-def.2 r7: exact join projections + cross-kind numeric keys + category-major pivot contract
+
+## [0.3.218] — 2026-09-05
+- Revise def2 joins and pivots to the exact r7 contract: explicit left/right projections (no auto key-drop/coalescing), exact int64/decimal key matching across kind/scale, descriptor-safe request guards, preflighted join multiplicity, category-major pivots over count_rows/count_values/sum/avg/min/max with explicit avg scale and composite category · metric headers
+
 ## [0.3.216] — 2026-09-05
 - Rewrite table joins and pivots over the strict canonical table core
 
