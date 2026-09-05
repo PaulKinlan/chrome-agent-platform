@@ -232,7 +232,18 @@ Deno.test("promoteWasmStreamToArtifact: promoted outputs write keyed artifact", 
   assertEquals(res.ok, true);
   assertEquals(res.promoted, true);
   assert(typeof res.artifactId === "string", "must return promoted artifactId");
+  assertEquals(res.asset.meta.streamRef, outRef, "must retain sealed streamRef without duplicating OPFS content");
+  assertEquals(res.asset.meta.isStreamBacked, true);
   assertEquals(res.stdout, sampleOutput);
+
+  // Direct zero-copy chaining from stream-backed asset
+  const stagedFromAsset = await stageAssetAsWasmStream(res.asset, {
+    owner: TEST_OWNER,
+    storage: fakeStorage,
+  });
+  assertEquals(stagedFromAsset.ok, true);
+  assertEquals(stagedFromAsset.chained, true);
+  assertEquals(stagedFromAsset.inputRef, outRef);
 });
 
 Deno.test("pipeline stream chaining: passes output.ref of step 1 directly as inputRef to step 2", async () => {

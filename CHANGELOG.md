@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.163] — 2026-09-05
+- reference-preserving artifact promotion and zero-copy asset stream transfer
+
 ## [0.3.162] — 2026-09-05
 - feat(9tg): Milestone 2 — continuous abuse and resource quota gates
 

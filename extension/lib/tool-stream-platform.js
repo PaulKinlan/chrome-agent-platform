@@ -103,21 +103,44 @@ export async function stageAttachmentAsWasmStream(attachment, { owner, storage }
  * can process stored files without copying entire strings into memory.
  */
 export async function stageAssetAsWasmStream(asset, { owner, storage } = {}) {
-  if (!asset || typeof asset !== "object" || typeof asset.content !== "string") {
-    fail("invalid_asset", "asset must have string content");
+  if (!asset || typeof asset !== "object") {
+    fail("invalid_asset", "asset must be an object");
   }
+
+  // Reference-preserving transfer: if the asset is already backed by a sealed OPFS
+  // stream reference, chain it directly without reading or duplicating bytes.
+  if (asset.meta?.streamRef) {
+    const validated = validateStreamChaining(asset.meta.streamRef);
+    return Object.freeze({
+      ok: true,
+      inputRef: validated.ref,
+      name: asset.name ?? "stream.bin",
+      bytes: asset.size ?? asset.meta.bytes ?? 0,
+      chained: true,
+    });
+  }
+
+  if (typeof asset.content !== "string") {
+    fail("invalid_asset", "asset has no readable content or stream reference");
+  }
+
   const name = String(asset.name ?? "asset.bin");
   const inputRef = await createWasmStreamInput({ owner, storage });
 
   try {
     const encoded = new TextEncoder().encode(asset.content);
-    await appendWasmStreamInput({ ref: inputRef, owner, bytes: encoded, storage });
+    const chunkSize = 256 * 1024;
+    for (let offset = 0; offset < encoded.length; offset += chunkSize) {
+      const chunk = encoded.subarray(offset, Math.min(encoded.length, offset + chunkSize));
+      await appendWasmStreamInput({ ref: inputRef, owner, bytes: chunk, storage });
+    }
     await sealWasmStreamInput({ ref: inputRef, owner, storage });
     return Object.freeze({
       ok: true,
       inputRef,
       name,
       bytes: encoded.byteLength,
+      chained: false,
     });
   } catch (err) {
     await discardWasmStream({ ref: inputRef, owner, storage }).catch(() => {});
@@ -175,10 +198,11 @@ export async function promoteWasmStreamToArtifact(outputRef, {
     });
   }
 
-  // Read full content for artifact store write
-  const file = await (await validated.directory.getFileHandle(validated.fileName)).getFile();
-  const content = await file.text();
-
+  // Reference-preserving artifact promotion: large or binary outputs must NEVER
+  // be whole-buffered into JS strings or re-encoded as UTF-8. The artifact records
+  // the bounded preview for UI display and retains the immutable, sealed OPFS stream
+  // reference under meta.streamRef (zero-copy, binary-safe).
+  const content = previewData.preview;
   const promotionKey = `stream-promo:${outputRef.id}`;
   const assetResult = await createAssetKeyed(origin, {
     key: promotionKey,
@@ -186,8 +210,10 @@ export async function promoteWasmStreamToArtifact(outputRef, {
     name,
     content,
     meta: {
+      streamRef: outputRef,
       streamId: outputRef.id,
       bytes: validated.bytes,
+      isStreamBacked: true,
     },
   });
 
