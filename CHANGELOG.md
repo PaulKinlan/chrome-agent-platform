@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.229] — 2026-09-05
+- chrome-agent-platform-qazo: docs/wasm-tool-catalogue.md — Wasm library catalogue (12 categories, ~25 admits, cited)
+
 ## [0.3.228] — 2026-09-05
 - Pipeline dispatcher now fails closed when two tools share a name
 
