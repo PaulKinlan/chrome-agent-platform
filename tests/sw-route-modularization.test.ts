@@ -170,6 +170,8 @@ const BASELINE_ROUTES = [
   "asset.versions",
   "asset.version-get",
   "asset.restore",
+  // Run-bound local spreadsheet transforms; full tables never cross to the model.
+  "table.run",
   "script.create",
   "script.update",
   "script.delete",

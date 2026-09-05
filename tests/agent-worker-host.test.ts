@@ -113,31 +113,41 @@ Deno.test("agent-worker-host: ensure/close/list contract (shimmed SharedWorker)"
   delete globalThis.SharedWorker;
 });
 
-Deno.test("P2 agent-worker.run + agent-worker.tool: validate principal + authority split", async () => {
+Deno.test("P2 detached run/dispatch handlers + agent-worker.tool: validate principal + authority split", async () => {
   reset();
   let executed = [];
+  const runControl = createRunControl();
   const routes = createAgentWorkerRoutes({
     ensureOffscreen,
     kvGet,
     kvSet,
+    runControl,
     executeTool: async (name, args, context) => { executed.push({ name, args, context }); return { ok: true, result: `ran ${name}` }; },
   });
   const c = { principal: "extension" };
 
-  // run kick: posts a run descriptor through the host (stubbed sendMessage).
-  const run = await routes["agent-worker.run"]({ agentId: "bg:hat", runId: "r1", task: "@demo-tools" }, c);
+  // dispatchRoute calls a selected handler as a plain function, so neither
+  // run path may rely on a route-map `this` binding when it ensures the host.
+  const runHandler = routes["agent-worker.run"];
+  const run = await runHandler({ agentId: "bg:hat", runId: "r1", task: "@demo-tools" }, c);
   assertEquals(run.ok, true);
   assertEquals(run.runId, "r1");
-  assert(sent.some((m) => m.type === "agent-worker-host:post" && m.msg?.type === "agent-worker:run"), "run descriptor must be posted to the host");
+  const dispatchHandler = routes["agent-worker.dispatch"];
+  const dispatched = await dispatchHandler({ agentId: "bg:hat", runId: "r2", task: "@demo-tools" }, c);
+  assertEquals(dispatched.ok, true);
+  assertEquals(dispatched.runId, "r2");
+  assert(sent.filter((m) => m.type === "agent-worker-host:post" && m.msg?.type === "agent-worker:run").length >= 2,
+    "both detached run handlers must post descriptors through the host");
 
   // tool bridge: the SW executes through the injected executor (authority).
-  const tool = await routes["agent-worker.tool"]({ toolName: "memory_set", args: { k: "v" } }, c);
+  const tool = await routes["agent-worker.tool"]({ runId: "r1", agentId: "bg:hat", toolName: "memory_set", args: { k: "v" } }, c);
   assertEquals(tool.ok, true);
   assertEquals(executed[0]?.name, "memory_set");
-  // The route must pass the CALLER CONTEXT through to the executor (the SW's
-  // executeWorkerTool uses it to bind management-tool dispatch to the right
-  // principal) — this is the P2 tool-wiring seam.
-  assertEquals(executed[0]?.context, c);
+  // The extension-only host context is replaced by the immutable live worker
+  // envelope before it reaches any model/management authority.
+  assertEquals(executed[0]?.context, {
+    principal: "model", executionId: "r1", runId: "r1", agentId: "bg:hat",
+  });
 
   // unauthorized principal: both routes refuse before any host/executor work.
   executed = [];
@@ -155,6 +165,7 @@ Deno.test("P2 agent-worker.tool: empty toolName refused before the executor; a t
   let called = 0;
   const routes = createAgentWorkerRoutes({
     ensureOffscreen, kvGet, kvSet,
+    runControl: { get: (id) => id === "r1" ? { kind: "worker", surface: "agent-worker:bg:hat" } : null },
     executeTool: async () => { called += 1; throw new Error("boom " + "x".repeat(300)); },
   });
   const c = { principal: "extension" };
@@ -163,7 +174,7 @@ Deno.test("P2 agent-worker.tool: empty toolName refused before the executor; a t
   assertEquals(empty.error, "invalid toolName");
   assertEquals(called, 0);
   // a throwing executor surfaces a bounded error (never a raw long throw)
-  const boom = await routes["agent-worker.tool"]({ toolName: "memory_set" }, c);
+  const boom = await routes["agent-worker.tool"]({ runId: "r1", agentId: "bg:hat", toolName: "memory_set" }, c);
   assertEquals(boom.ok, false);
   assert(boom.error.length <= 200, "executor error must be bounded");
 });

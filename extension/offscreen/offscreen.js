@@ -11,6 +11,7 @@ import { WasmExecutor } from "../lib/wasm-executor.js";
 import { registerWasmStreamHost } from "../lib/wasm-stream-host.js";
 import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
+import { registerTableWorkerHost } from "../lib/table-worker-host.js";
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
   handleScriptRunMessage(message, sendResponse, document, "offscreen")
@@ -33,3 +34,7 @@ registerPythonHost();
 // Large bundled tools keep stdin/stdout in OPFS and run in one fresh module
 // Worker. Only small authority/reference/receipt envelopes cross messaging.
 registerWasmStreamHost();
+
+// Bounded local table operations use a fresh module Worker here because MV3
+// service workers do not expose the Worker constructor.
+registerTableWorkerHost();

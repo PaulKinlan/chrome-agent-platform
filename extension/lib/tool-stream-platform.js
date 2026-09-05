@@ -102,9 +102,12 @@ export async function stageAttachmentAsWasmStream(attachment, { owner, storage }
  * Stage an existing OPFS artifact as a sealed stream input so Wasm tools
  * can process stored files without copying entire strings into memory.
  */
-export async function stageAssetAsWasmStream(asset, { owner, storage } = {}) {
+export async function stageAssetAsWasmStream(asset, { owner, storage, chunkSize = 256 * 1024 } = {}) {
   if (!asset || typeof asset !== "object") {
     fail("invalid_asset", "asset must be an object");
+  }
+  if (!Number.isSafeInteger(chunkSize) || chunkSize < 1 || chunkSize > 256 * 1024) {
+    fail("invalid_chunk_size", "asset staging chunkSize must be 1..262144 bytes");
   }
 
   // Reference-preserving transfer: if the asset is already backed by a sealed OPFS
@@ -130,7 +133,6 @@ export async function stageAssetAsWasmStream(asset, { owner, storage } = {}) {
 
   try {
     const encoded = new TextEncoder().encode(asset.content);
-    const chunkSize = 256 * 1024;
     for (let offset = 0; offset < encoded.length; offset += chunkSize) {
       const chunk = encoded.subarray(offset, Math.min(encoded.length, offset + chunkSize));
       await appendWasmStreamInput({ ref: inputRef, owner, bytes: chunk, storage });

@@ -197,6 +197,7 @@ const ROUTE_FAMILY_GROUP = Object.freeze({
   "management.ui": "automation",
   "management.memory": "memory-usage",
   "management.usage": "memory-usage",
+  "management.table": "tables-queries",
 });
 
 // Per-tool overrides where the route family mixes purposes. Keyed by toolId.

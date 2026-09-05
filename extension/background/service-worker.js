@@ -325,6 +325,12 @@ import {
   promoteWasmStreamToArtifact,
 } from "../lib/tool-stream-platform.js";
 import { streamTabularTransform } from "../lib/tool-tabular-contracts.js";
+import { providerSafeTableAssetRead, runTableArtifactTool } from "../lib/table-tool-runtime.js";
+import {
+  cancelTableRun,
+  TABLE_WORKER_CANCEL_TYPE,
+  TABLE_WORKER_RUN_TYPE,
+} from "../lib/table-worker-host.js";
 import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
@@ -410,6 +416,32 @@ async function ensureOffscreen() {
     offscreenCreating = null;
     return { ok: false, error: `offscreen document could not be created: ${e?.message ?? e}` };
   }
+}
+
+async function runOffscreenTableJob(job, { runId, timeoutMs } = {}) {
+  const ready = await ensureOffscreen();
+  if (!ready?.ok) return { ok: false, code: "table_worker_unavailable" };
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: TABLE_WORKER_RUN_TYPE,
+      job,
+      runId,
+      timeoutMs,
+    });
+    return result && typeof result === "object"
+      ? result
+      : { ok: false, code: "table_worker_failed" };
+  } catch {
+    return { ok: false, code: "table_worker_unavailable" };
+  }
+}
+
+function cancelTableExecution(runId) {
+  const cancelled = cancelTableRun(runId);
+  try {
+    chrome.runtime.sendMessage({ type: TABLE_WORKER_CANCEL_TYPE, runId }).catch(() => {});
+  } catch { /* offscreen host may already be gone */ }
+  return cancelled;
 }
 
 /** Run a script source in the sandboxed host, bounded by a timeout. The
@@ -1409,6 +1441,9 @@ function beginExecution(execId, taskId) {
   }
 }
 function finalizeExecution(execId) {
+  // Table workers are exact-run children. Ending any foreground/delegated
+  // execution terminates only workers carrying this immutable execution id.
+  cancelTableExecution(execId);
   // The attempt is over: its slot is sealed (a late/duplicate emission is
   // dropped, never appended into a REUSED slot) and the callback is unbound
   // by the caller's finally. The recorded events stay readable.
@@ -1932,6 +1967,9 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       approvalExecutionId,
       dispatchRoute,
       (event) => onProgress?.(event),
+      // Immutable agent identity from the trusted run envelope. Table stream
+      // custody must never derive from model args or artifact metadata.
+      { agentId: providerServerAgentId || "hub" },
     );
     // Bind the workers' site-tool ask gate to THIS run's dispatcher (see the
     // late-bound declaration above): an "ask"-policy site's tool call pays the
@@ -5192,6 +5230,7 @@ const handlers = mergeRouteMaps(
     // plane so the composer's run.control.steer reaches a worker run through
     // the agent-worker protocol (one steer protocol for every surface).
     runControl,
+    onRunSettled: cancelTableExecution,
     // ── PHASE-2 tool bridge authority ───────────────────────────────────────
     // The worker's RPC proxy (agent-worker.tool) resolves here. The SW is the
     // ONLY tool executor: resolve the tool by name from the SAME toolsets the
@@ -5208,6 +5247,24 @@ const handlers = mergeRouteMaps(
     journalAppend,
   }),
   {
+  // Six local spreadsheet tools share one strict engine and one run-bound
+  // route. The sender-derived model envelope is the only custody authority;
+  // direct extension/page calls and stale runs fail closed.
+  async "table.run"({ toolId, args } = {}, context) {
+    const executionId = typeof context?.executionId === "string" ? context.executionId : "";
+    const agentId = typeof context?.agentId === "string" ? context.agentId : "";
+    const isRunLive = () => {
+      if (context?.principal !== "model") return false;
+      if (activeExecutions.has(executionId)) return true;
+      const live = runControl.get(executionId);
+      return live?.kind === "worker" && live.surface === `agent-worker:${agentId}`;
+    };
+    if (!isRunLive()) {
+      return { ok: false, code: "table_run_required", error: "The local table operation requires a live agent run." };
+    }
+    return await runTableArtifactTool(toolId, args, context, { isRunLive, runJob: runOffscreenTableJob });
+  },
+
   // File-backed bundled-tool transport. Every public route is restricted to
   // the exact Settings document by wasmStreamOwner(); content moves in caller-
   // chosen chunks, while execution and results use opaque OPFS references.
@@ -7446,8 +7503,9 @@ const handlers = mergeRouteMaps(
     // (CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01).
     return await assetLibraryCapacity();
   },
-  async "asset.get"({ origin, id }) {
-    return await getAsset(origin ?? "master", id);
+  async "asset.get"({ origin, id }, context) {
+    const result = await getAsset(origin ?? "master", id);
+    return context?.principal === "model" ? providerSafeTableAssetRead(result) : result;
   },
 
   // ---- agent-generated scripts (create/update/delete/list/get/run) ----

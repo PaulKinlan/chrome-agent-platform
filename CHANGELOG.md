@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.216] — 2026-09-05
+- Add private local spreadsheet tools
+
 ## [0.3.215] — 2026-09-05
 - Add exact table joins and pivots
 

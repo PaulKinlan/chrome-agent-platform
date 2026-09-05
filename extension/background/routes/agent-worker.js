@@ -193,6 +193,7 @@ export function createAgentWorkerRoutes({
   journalAppend = null,
   resolveAgentIdentity = null,
   runControl = null,
+  onRunSettled = null,
 }) {
   // Review P1-2: worker identity must be the agent's IMMUTABLE instanceId —
   // a caller-supplied reusable slug would key the host worker + alive-set by
@@ -206,33 +207,35 @@ export function createAgentWorkerRoutes({
   const readAliveSet = readAliveSetWith(kvGet);
   const writeAliveSet = (ids) => writeAliveSetWith(kvSet)(ids);
 
+  /** Validate + ensure an agent's shared worker is alive. Keep this as a
+   * closure, not a `this`-dependent route method: dispatchRoute invokes the
+   * selected handler as a plain function. */
+  const ensureWorker = async (m, context) => {
+    if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
+    const agentId = String(m?.agentId ?? "");
+    if (!agentId || agentId.length > 200) return { ok: false, error: "invalid agentId" };
+
+    const identity = await workerIdentity(agentId);
+    const host = await ensureOffscreen();
+    if (!host?.ok) return { ok: false, error: host?.error || "offscreen unavailable" };
+
+    let ensured;
+    try {
+      ensured = await chrome.runtime.sendMessage({ type: "agent-worker-host:ensure", agentId: identity });
+    } catch (e) {
+      return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
+    }
+    if (!ensured?.ok) return { ok: false, error: ensured?.error || "worker not ensured" };
+
+    // Record liveness in the durable alive-set (identity-keyed).
+    const alive = await readAliveSet();
+    if (!alive.includes(identity)) await writeAliveSet([...alive, identity]);
+
+    return { ok: true, agentId: identity, workerUrl: workerUrl(), name: identity, created: ensured.created };
+  };
+
   return {
-    /** Validate + ensure an agent's shared worker is alive. Returns the
-     * connection params so a validated client can construct the SAME shared
-     * worker and hold its own live port. */
-    async "agent-worker.ensure"(m, context) {
-      if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
-      const agentId = String(m?.agentId ?? "");
-      if (!agentId || agentId.length > 200) return { ok: false, error: "invalid agentId" };
-
-      const identity = await workerIdentity(agentId);
-      const host = await ensureOffscreen();
-      if (!host?.ok) return { ok: false, error: host?.error || "offscreen unavailable" };
-
-      let ensured;
-      try {
-        ensured = await chrome.runtime.sendMessage({ type: "agent-worker-host:ensure", agentId: identity });
-      } catch (e) {
-        return { ok: false, error: `worker host unreachable: ${e?.message ?? e}` };
-      }
-      if (!ensured?.ok) return { ok: false, error: ensured?.error || "worker not ensured" };
-
-      // Record liveness in the durable alive-set (identity-keyed).
-      const alive = await readAliveSet();
-      if (!alive.includes(identity)) await writeAliveSet([...alive, identity]);
-
-      return { ok: true, agentId: identity, workerUrl: workerUrl(), name: identity, created: ensured.created };
-    },
+    "agent-worker.ensure": ensureWorker,
 
     /** PHASE-2 run kick (SW → host → worker run descriptor). Validated: only
      * extension surfaces may start a worker run. The worker holds NO authority
@@ -245,7 +248,7 @@ export function createAgentWorkerRoutes({
       if (!runId) return { ok: false, error: "invalid runId" };
 
       const identity = await workerIdentity(agentId);
-      const ensured = await this["agent-worker.ensure"]({ agentId: identity }, context);
+      const ensured = await ensureWorker({ agentId: identity }, context);
       if (!ensured?.ok) return ensured;
 
       const descriptor = {
@@ -277,7 +280,7 @@ export function createAgentWorkerRoutes({
 
       // Ensure the worker is alive (idempotent).
       const identity = await workerIdentity(agentId);
-      const ensured = await this["agent-worker.ensure"]({ agentId: identity }, context);
+      const ensured = await ensureWorker({ agentId: identity }, context);
       if (!ensured?.ok) return ensured;
 
       const descriptor = {
@@ -299,13 +302,35 @@ export function createAgentWorkerRoutes({
      * validates + executes the real tool (grant-lock / run-fence / redaction). */
     async "agent-worker.tool"(m, context) {
       if (!authorized(context)) return { ok: false, error: "unauthorized_principal" };
-      const toolName = String(m?.toolName ?? "").slice(0, 128);
-      if (!toolName) return { ok: false, error: "invalid toolName" };
+      const toolName = typeof m?.toolName === "string" ? m.toolName : "";
+      if (!toolName || toolName.length > 128) return { ok: false, error: "invalid toolName" };
       if (typeof executeTool !== "function") {
         return { ok: false, error: "tool execution not wired in this context" };
       }
+      if (!runControl || typeof runControl.get !== "function") {
+        return { ok: false, error: "run_not_live" };
+      }
+      const runId = typeof m?.runId === "string" ? m.runId : "";
+      const requestedAgent = typeof m?.agentId === "string" ? m.agentId : "";
+      if (!runId || runId.length > 200 || !requestedAgent || requestedAgent.length > 200) {
+        return { ok: false, error: "run_not_live" };
+      }
+      const identity = await workerIdentity(requestedAgent);
+      const live = runControl.get(runId);
+      if (!live || live.kind !== "worker" || live.surface !== `agent-worker:${identity}`) {
+        return { ok: false, error: "run_not_live" };
+      }
+      // The live run-control record, not body fields alone, authorizes and
+      // binds the model identity used by management/table routes.
+      const toolContext = Object.freeze({
+        ...context,
+        principal: "model",
+        executionId: runId,
+        runId,
+        agentId: identity,
+      });
       try {
-        return await executeTool(toolName, m?.args ?? {}, context);
+        return await executeTool(toolName, m?.args ?? {}, toolContext);
       } catch (e) {
         return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
       }
@@ -460,6 +485,7 @@ export function createAgentWorkerRoutes({
       // worker relays the SAME id it was given). A worker run that finishes
       // must never stay steerable / consume a 64-slot live-registry seat
       // because its id was not exec:-shaped.
+      try { onRunSettled?.(executionId); } catch { /* best-effort local worker cleanup */ }
       runControl?.unregister(executionId);
       if (!validExecutionId(executionId)) return { ok: false, error: "invalid executionId" };
 

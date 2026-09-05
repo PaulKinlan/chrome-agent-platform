@@ -224,6 +224,16 @@ Deno.test("group aggregates preserve first-seen order, missing semantics and exa
     ["A", "3", "2", "3.30", "1.65"],
     ["B", "1", "0", null, null],
   ]);
+  assertEquals(result.workUnits, 20, "each group-key cell and metric input visit is charged");
+
+  const multiKey = table([
+    { header: "Region", type: { kind: "text" } },
+    { header: "Dept", type: { kind: "text" } },
+  ], [["north", "A"], ["south", "B"]]);
+  assertEquals(groupAggregateTable(multiKey, {
+    groupBy: ["c1", "c2"],
+    metrics: [{ op: "count_rows", header: "Rows" }],
+  }).workUnits, 6, "two group-key hashes plus one aggregate visit are charged per row");
 
   const empty = table([{ header: "Amount", type: { kind: "decimal", scale: 2 } }], []);
   assertEquals(groupAggregateTable(empty, {
@@ -292,6 +302,17 @@ Deno.test("input, row-byte, row-count and total-header limits accept exact and r
   assertEquals(parseTableBytes(encode(`${headers}\n${rowExact}`), { schemaMode: "text" }).rows.length, 1);
   throwsCode(() => parseTableBytes(encode(`${headers}\n${rowExact.slice(0, -1)}x\n`), { schemaMode: "text" }), "table_row_byte_bound");
 
+  // CSV syntax bytes are not logical-row bytes. Quoting every exact-bound
+  // cell adds 32 transport bytes, but the decoded cells + 15 separators + one
+  // record terminator remain exactly 262,144 and must still be accepted.
+  const logicalCells = [...Array(15).fill("x".repeat(TABLE_LIMITS.maxCellBytes)), "x".repeat(TABLE_LIMITS.maxCellBytes - 16)];
+  const quotedExact = logicalCells.map((cell) => `"${cell}"`).join(",") + "\n";
+  assertEquals(encode(quotedExact).byteLength, TABLE_LIMITS.maxRowBytes + 2 * logicalCells.length);
+  assertEquals(parseTableBytes(encode(`${headers}\n${quotedExact}`), { schemaMode: "text" }).rows.length, 1);
+  assertEquals(parseTableBytes(encode(`${headers}\r\n${quotedExact.slice(0, -1)}\r\n`), { schemaMode: "text" }).rows.length, 1, "CRLF is one logical record terminator");
+  const quotedOver = [...logicalCells.slice(0, -1), `${logicalCells.at(-1)}x`].map((cell) => `"${cell}"`).join(",") + "\n";
+  throwsCode(() => parseTableBytes(encode(`${headers}\n${quotedOver}`), { schemaMode: "text" }), "table_row_byte_bound");
+
   const exactRows = encode(`h\n${"\n".repeat(TABLE_LIMITS.maxRows)}`);
   assertEquals(parseTableBytes(exactRows, { schemaMode: "text" }).rows.length, TABLE_LIMITS.maxRows);
   throwsCode(() => parseTableBytes(encode(`h\n${"\n".repeat(TABLE_LIMITS.maxRows + 1)}`), { schemaMode: "text" }), "table_row_bound");
@@ -325,6 +346,20 @@ Deno.test("cell-count and canonical-output limits accept exact and reject +1", (
   assertEquals(assertCanonicalTable(candidate).rows.length, 512);
   candidate.rows[511][0] += "x";
   throwsCode(() => assertCanonicalTable(candidate), "table_output_bound");
+});
+
+Deno.test("canonical rows enforce the independent 256 KiB logical-record ceiling at exact and plus one", () => {
+  const columns = Array.from({ length: 16 }, (_, index) => ({ header: `h${index}`, type: { kind: "text" } }));
+  const cells = [...Array(15).fill("x".repeat(TABLE_LIMITS.maxCellBytes)), "x".repeat(TABLE_LIMITS.maxCellBytes - 16)];
+  const cellBytes = cells.reduce((sum, cell) => sum + encode(cell).byteLength, 0);
+  const separatorBytes = cells.length - 1;
+  const terminatorBytes = 1;
+  assertEquals(cellBytes, TABLE_LIMITS.maxRowBytes - separatorBytes - terminatorBytes);
+  assertEquals(cellBytes + separatorBytes + terminatorBytes, TABLE_LIMITS.maxRowBytes);
+  assertEquals(assertCanonicalTable(table(columns, [cells])).rows.length, 1);
+  const over = cells.slice();
+  over[over.length - 1] += "x";
+  throwsCode(() => assertCanonicalTable(table(columns, [over])), "table_row_byte_bound");
 });
 
 Deno.test("group-count limit accepts exact and rejects +1", () => {

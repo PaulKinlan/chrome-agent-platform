@@ -368,3 +368,23 @@ Deno.test("scan: lookalike python-host paths NEVER inherit the canonical exempti
     assert(v.length >= 1, `python-host lookalike ${JSON.stringify(file)} must violate`);
   }
 });
+
+const TABLE_WORKER_CANONICAL_REL = "extension/lib/table-worker-host.js";
+
+Deno.test("scan: the table operation worker carries no dynamic code-loading sink", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/table-operation-worker.js", import.meta.url));
+  assertEquals(await scanShippedJs(["extension/lib/table-operation-worker.js"], { readText: async () => source }), []);
+});
+
+Deno.test("scan: the table host's one fresh WorkerCtor is exact-path and exact-location pinned", async () => {
+  const source = await Deno.readTextFile(new URL("../extension/lib/table-worker-host.js", import.meta.url));
+  assertEquals(await scanShippedJs([TABLE_WORKER_CANONICAL_REL], { readText: async () => source }), []);
+  for (const file of [
+    `/repo/${TABLE_WORKER_CANONICAL_REL}.evil`,
+    `/repo/xx${TABLE_WORKER_CANONICAL_REL}`,
+    "/repo/extension/lib/not-table-worker-host.js",
+  ]) {
+    const violations = await scanShippedJs([file], { readText: async () => source });
+    assert(violations.length >= 1, `table worker-host lookalike ${JSON.stringify(file)} must violate`);
+  }
+});

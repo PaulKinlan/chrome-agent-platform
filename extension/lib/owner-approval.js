@@ -446,13 +446,18 @@ export async function opaqueTargetRef(target) {
   return await opaqueTargetRefWithKey(target, await installKeyPromise);
 }
 
-/** Build-local model dispatcher: the execution id is captured once forever. */
-export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEvent = null) {
+/** Build-local model dispatcher: the authoritative run envelope is captured once forever. */
+export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEvent = null, runEnvelope = null) {
   if (typeof dispatch !== "function") throw new TypeError("dispatch function required");
   const captured = typeof executionId === "string" ? executionId : "";
+  const agentId = typeof runEnvelope?.agentId === "string" && runEnvelope.agentId.length <= 200
+    ? runEnvelope.agentId
+    : "";
   const context = Object.freeze({
     principal: "model",
     executionId: captured,
+    runId: captured,
+    agentId,
     onApprovalEvent: typeof onApprovalEvent === "function" ? onApprovalEvent : null,
   });
   return (type, args) => dispatch(type, args, context);

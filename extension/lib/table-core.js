@@ -285,7 +285,6 @@ class CsvByteParser {
     this.cellQuoted = false;
     this.row = [];
     this.rows = [];
-    this.rowBytes = 0;
     this.pendingCr = false;
     this.started = false;
     this.preamble = [];
@@ -306,15 +305,19 @@ class CsvByteParser {
     this.state = "start";
   }
   finishRow() {
+    // The row bound is over canonical logical content: decoded UTF-8 cell
+    // bytes, field separators, and exactly one record terminator. CSV quoting,
+    // doubled quotes, and CRLF transport spelling are not data and cannot turn
+    // an exact-bound logical row into a false rejection.
+    if (canonicalRowBytes(this.row.map((cell) => cell.text)) > this.limits.maxRowBytes) {
+      fail("table_row_byte_bound", String(this.limits.maxRowBytes));
+    }
     this.rows.push(this.row);
     if (this.rows.length > this.limits.maxRows + 1) fail("table_row_bound", String(this.limits.maxRows));
     this.row = [];
-    this.rowBytes = 0;
     this.started = false;
   }
   process(byte) {
-    this.rowBytes++;
-    if (this.rowBytes > this.limits.maxRowBytes) fail("table_row_byte_bound", String(this.limits.maxRowBytes));
     if (this.pendingCr) {
       if (byte !== 0x0a) fail("table_csv_syntax", "CR must be followed by LF");
       this.pendingCr = false;
@@ -479,6 +482,15 @@ export async function parseTableFile(file, options = {}) {
   return tableFromRawRows(parser.finish(), parsedOptions);
 }
 
+function canonicalRowBytes(row) {
+  let bytes = row.length > 0 ? row.length : 1; // separators plus one record terminator
+  for (const value of row) {
+    if (value === null) continue;
+    bytes += tableUtf8Bytes(typeof value === "boolean" ? String(value) : value);
+  }
+  return bytes;
+}
+
 function validateTypedValue(value, type, label) {
   if (value === null) return;
   switch (type.kind) {
@@ -522,6 +534,13 @@ export function assertCanonicalTable(input) {
     safeArray(row, `table.rows[${ri}]`, TABLE_LIMITS.maxColumns);
     if (row.length !== columns.length) fail("table_row_width", String(ri + 1));
     const copy = row.map((value, ci) => { validateTypedValue(value, columns[ci].type, `r${ri + 1}c${ci + 1}`); return value; });
+    // Delimited parsing enforces its raw-record width while reading. Canonical
+    // tables need the same independent logical-record ceiling (cell UTF-8
+    // bytes, separators, and a terminator); the 8 MiB whole-table ceiling alone
+    // would allow a single pathologically wide row.
+    if (canonicalRowBytes(copy) > TABLE_LIMITS.maxRowBytes) {
+      fail("table_row_byte_bound", String(ri + 1));
+    }
     return Object.freeze(copy);
   });
   const table = Object.freeze({ version: TABLE_VERSION, localeProfile: input.localeProfile, columns: Object.freeze(columns), rows: Object.freeze(rows) });
@@ -709,7 +728,7 @@ export function groupAggregateTable(tableInput, request, state = { units: 0 }) {
     return group;
   };
   for (const row of table.rows) {
-    work(state, 1 + metrics.length);
+    work(state, groupIndices.length + metrics.length);
     const group = ensureGroup(row);
     group.count++;
     metrics.forEach((metric, index) => {

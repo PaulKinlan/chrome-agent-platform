@@ -216,11 +216,10 @@ const STREAM_EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
 // THE WORKER-HOST exemption — a second FIXED canonical constant owned by the
 // scanner (NOT caller-supplied): the exact source-only, unreachable executor
 // (Gate 2 of CAP-FB-20260822-WASM-EXECUTION-HOST-01) constructs its fresh
-// dedicated Worker from a runtime-resolved URL. This is the ONLY non-literal
-// Worker construction in shipped source; everything else must be an
-// allowlisted literal. The exemption applies to exactly this ONE node (file +
-// exact line/column) and a bounded count of 1; any other Worker/SharedWorker
-// node — literal or not — in any file stays flagged.
+// dedicated Worker from a runtime-resolved URL. Every non-literal worker host
+// has its own exact path/location/constructor pin below; everything else must
+// be an allowlisted literal. This exemption applies to exactly this ONE node
+// (file + exact line/column) and a bounded count of 1.
 const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
 const WORKER_HOST_CANONICAL_LOCATION = { line: 226, column: 9 };
 const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
@@ -265,6 +264,12 @@ const PYTHON_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 const STREAM_WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-stream-host.js";
 const STREAM_WORKER_HOST_CANONICAL_LOCATION = { line: 57, column: 26 };
 const STREAM_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+// The table host likewise creates exactly one fresh module Worker from the
+// extension-root URL. Its dependency-injected WorkerCtor is pinned to this
+// one file, one node, and one constructor occurrence.
+const TABLE_WORKER_HOST_CANONICAL_PATH = "extension/lib/table-worker-host.js";
+const TABLE_WORKER_HOST_CANONICAL_LOCATION = { line: 89, column: 13 };
+const TABLE_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 
 // Scanner-owned canonical path matcher: BOTH exemptions bind to the exact
 // normalized repo tail (`extension/lib/…`). The Store pipeline passes ABSOLUTE
@@ -502,6 +507,13 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === STREAM_WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(STREAM_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, TABLE_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "WorkerCtor" &&
+            node.loc?.start?.line === TABLE_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === TABLE_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(TABLE_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           );
           if (value === null && !isCanonicalWorkerHost) {
             violations.push(`${file}: ${workerSink} URL is not a literal`);

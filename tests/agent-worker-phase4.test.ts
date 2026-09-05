@@ -22,20 +22,68 @@ function makeKv() {
 Deno.test("agent-worker.tool: destructive and read-only tools both reach the executor without a lease", async () => {
   const { store, kvGet, kvSet } = makeKv();
   const calls = [];
+  const runControl = { get: (id) => id === "exec:worker-live" ? { kind: "worker", surface: "agent-worker:instance-a" } : null };
   const routes = createAgentWorkerRoutes({
     ensureOffscreen: async () => ({ ok: true }),
     kvGet,
     kvSet,
+    runControl,
     executeTool: (name, args) => { calls.push(name); return { ok: true, name }; },
   });
   const ctx = { principal: "extension" };
+  const envelope = { runId: "exec:worker-live", agentId: "instance-a" };
 
-  const d = await routes["agent-worker.tool"]({ toolName: "open_tab", args: {} }, ctx);
+  const d = await routes["agent-worker.tool"]({ ...envelope, toolName: "open_tab", args: {} }, ctx);
   assertEquals(d.ok, true, "destructive tool executes (the grant + fence gate lives in the executor)");
-  const r = await routes["agent-worker.tool"]({ toolName: "list_tabs", args: {} }, ctx);
+  const r = await routes["agent-worker.tool"]({ ...envelope, toolName: "list_tabs", args: {} }, ctx);
   assertEquals(r.ok, true, "read-only tool executes");
   assertEquals(calls, ["open_tab", "list_tabs"]);
   assertEquals(store.has("cap:browser-command-lease"), false, "the bridge never writes a lease");
+});
+
+Deno.test("agent-worker.tool: missing run-control authority always fails closed", async () => {
+  const { kvGet, kvSet } = makeKv();
+  let called = false;
+  const routes = createAgentWorkerRoutes({
+    ensureOffscreen: async () => ({ ok: true }), kvGet, kvSet,
+    executeTool: () => { called = true; return { ok: true }; },
+  });
+  assertEquals(await routes["agent-worker.tool"]({ runId: "exec:live", agentId: "instance-a", toolName: "list_tabs" }, { principal: "extension" }), { ok: false, error: "run_not_live" });
+  assertEquals(called, false);
+});
+
+Deno.test("agent-worker.tool: production run-control binds immutable model run and agent identity", async () => {
+  const { kvGet, kvSet } = makeKv();
+  const calls = [];
+  const runControl = {
+    get: (id) => id === "exec:live" ? { kind: "worker", surface: "agent-worker:instance-a" } : null,
+  };
+  const routes = createAgentWorkerRoutes({
+    ensureOffscreen: async () => ({ ok: true }), kvGet, kvSet, runControl,
+    resolveAgentIdentity: async (id) => id === "friendly-a" ? "instance-a" : id,
+    executeTool: (_name, _args, context) => { calls.push(context); return { ok: true }; },
+  });
+  const ctx = { principal: "extension", documentId: "trusted-worker-host" };
+
+  const ok = await routes["agent-worker.tool"]({ runId: "exec:live", agentId: "friendly-a", toolName: "list_tabs", args: {} }, ctx);
+  assertEquals(ok.ok, true);
+  assertEquals(calls, [{
+    principal: "model",
+    documentId: "trusted-worker-host",
+    executionId: "exec:live",
+    runId: "exec:live",
+    agentId: "instance-a",
+  }]);
+
+  const forgedRun = await routes["agent-worker.tool"]({ runId: "exec:other", agentId: "friendly-a", toolName: "list_tabs" }, ctx);
+  const forgedAgent = await routes["agent-worker.tool"]({ runId: "exec:live", agentId: "instance-b", toolName: "list_tabs" }, ctx);
+  const overlongAlias = await routes["agent-worker.tool"]({ runId: `exec:live${"x".repeat(200)}`, agentId: "friendly-a", toolName: "list_tabs" }, ctx);
+  const coerciveRun = await routes["agent-worker.tool"]({ runId: { toString() { throw new Error("must not coerce"); } }, agentId: "friendly-a", toolName: "list_tabs" }, ctx);
+  assertEquals(forgedRun, { ok: false, error: "run_not_live" });
+  assertEquals(forgedAgent, { ok: false, error: "run_not_live" });
+  assertEquals(overlongAlias, { ok: false, error: "run_not_live" });
+  assertEquals(coerciveRun, { ok: false, error: "run_not_live" });
+  assertEquals(calls.length, 1, "forged envelopes never reach the executor");
 });
 
 Deno.test("agent-worker.tool: principal gate is first", async () => {
