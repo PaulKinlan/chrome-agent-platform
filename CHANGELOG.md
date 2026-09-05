@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.249] — 2026-09-05
+- chrome-agent-platform-6gmj: Internal cleanup: remove an obsolete proof script left over from the skill-import work
+
 ## [0.3.248] — 2026-09-05
 - The behind-the-scenes live test now cleans up fully: it used to leave pieces of the test browser running after it finished.
 
