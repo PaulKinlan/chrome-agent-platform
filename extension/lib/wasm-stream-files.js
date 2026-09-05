@@ -91,6 +91,7 @@ export async function createWasmStreamInput({ owner, storage } = {}) {
     owner: validateOwner(owner),
     sealed: false,
     bytes: 0,
+    createdAt: Date.now(),
   });
   return Object.freeze({ version: 1, id, kind: "input" });
 }
@@ -208,6 +209,7 @@ export async function createWasmStreamOutput({ owner, storage } = {}) {
     owner: validateOwner(owner),
     sealed: false,
     bytes: 0,
+    createdAt: Date.now(),
   });
   return Object.freeze({ version: 1, id, kind: "stdout" });
 }
@@ -267,6 +269,24 @@ export async function discardWasmStream({ ref, owner, storage } = {}) {
   const root = await streamsRoot(storage);
   await root.removeEntry(stream.id, { recursive: true });
   return Object.freeze({ ok: true });
+}
+
+export async function listWasmStreamEntries({ storage } = {}) {
+  const root = await streamsRoot(storage);
+  const out = [];
+  try {
+    for await (const [name, handle] of root.entries()) {
+      if (ID_RE.test(name) && handle.kind === "directory") {
+        try {
+          const meta = await readJson(handle, "authority.json");
+          out.push({ id: name, meta });
+        } catch {
+          out.push({ id: name, meta: null });
+        }
+      }
+    }
+  } catch { /* empty or non-iterable */ }
+  return out;
 }
 
 export const WASM_STREAM_FILE_NAMES = FILES;

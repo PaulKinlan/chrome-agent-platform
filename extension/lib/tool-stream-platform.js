@@ -16,6 +16,7 @@ import {
   readWasmStreamWindow,
   discardWasmStream,
   removeWasmStream,
+  listWasmStreamEntries,
 } from "./wasm-stream-files.js";
 import { decodeCanonicalBase64 } from "./wasm-base64.js";
 import { createAssetKeyed } from "./artifacts.js";
@@ -204,4 +205,95 @@ export async function promoteWasmStreamToArtifact(outputRef, {
     stdout: previewData.preview,
     stdoutComplete: previewData.complete,
   });
+}
+
+/**
+ * Tracks active unsealed streams per owner to bound concurrent stream allocations.
+ * Prevents memory exhaustion or file descriptor leakage from hostile flooding.
+ */
+export function createStreamQuotaTracker({ maxActive = STREAM_PLATFORM_LIMITS.maxActiveStreamsPerRun } = {}) {
+  const activeCounts = new Map();
+  return Object.freeze({
+    claim(owner) {
+      const current = activeCounts.get(owner) ?? 0;
+      if (current >= maxActive) {
+        fail("stream_quota_exceeded", `active stream quota exceeded (${maxActive} per owner)`);
+      }
+      activeCounts.set(owner, current + 1);
+      return current + 1;
+    },
+    release(owner) {
+      const current = activeCounts.get(owner) ?? 0;
+      if (current <= 1) {
+        activeCounts.delete(owner);
+      } else {
+        activeCounts.set(owner, current - 1);
+      }
+    },
+    count(owner) {
+      return activeCounts.get(owner) ?? 0;
+    },
+    clear() {
+      activeCounts.clear();
+    },
+  });
+}
+
+/**
+ * Clean up unsealed or corrupt streams older than maxAgeMs.
+ * Bounded garbage collection ensuring abandoned streams never leak OPFS space.
+ */
+export async function gcOrphanStreams({ maxAgeMs = 3600_000, storage } = {}) {
+  const entries = await listWasmStreamEntries({ storage });
+  const now = Date.now();
+  let collected = 0;
+  for (const entry of entries) {
+    const meta = entry.meta;
+    const createdAt = meta && Number.isSafeInteger(meta.createdAt) ? meta.createdAt : 0;
+    const isOld = (now - createdAt) > maxAgeMs;
+    if (!meta || (!meta.sealed && isOld)) {
+      try {
+        const root = await storage?.getDirectory?.();
+        if (root) {
+          const streamsDir = await root.getDirectoryHandle("wasm-tool-streams-v1");
+          await streamsDir.removeEntry(entry.id, { recursive: true });
+          collected++;
+        }
+      } catch { /* best effort */ }
+    }
+  }
+  return { collected };
+}
+
+/**
+ * Execute a stream job with guaranteed wall-clock deadline enforcement.
+ * If execution times out, onTimeout (terminating worker + cleaning up output stream)
+ * is called and a typed timeout response is returned.
+ */
+export async function runManagedStreamJob(jobFn, {
+  timeoutMs = STREAM_PLATFORM_LIMITS.defaultTimeoutMs,
+  onTimeout = () => {},
+} = {}) {
+  const boundedTimeout = Math.max(100, Math.min(timeoutMs, STREAM_PLATFORM_LIMITS.maxTimeoutMs));
+  let timer;
+  let timedOut = false;
+  const timeoutPromise = new Promise((resolve) => {
+    timer = setTimeout(async () => {
+      timedOut = true;
+      try { await onTimeout(); } catch { /* best effort */ }
+      resolve(Object.freeze({
+        ok: false,
+        phase: "timeout",
+        error: "wall deadline exceeded; worker terminated",
+      }));
+    }, boundedTimeout);
+  });
+
+  try {
+    const jobPromise = Promise.resolve().then(() => jobFn());
+    const result = await Promise.race([jobPromise, timeoutPromise]);
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
 }
