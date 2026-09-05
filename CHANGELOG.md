@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.151] — 2026-09-05
+- A leftover merge marker is gone from the changelog, keeping the public record clean
+
 ## [0.3.150] — 2026-09-05
 - The test safety split now covers the new bundle size gate too, so it runs one at a time with the other build checks instead of racing them
 
@@ -23,7 +26,6 @@
 
 ## [0.3.143] — 2026-09-05
 - Permission matrix testing accurately tests capability rows and settings navigation
->>>>>>> origin/main
 
 ## [0.3.142] — 2026-09-04
 - Pipeline workflows now verify owner approval for destructive operations with live confirmation cards
