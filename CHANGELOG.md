@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.216] — 2026-09-05
+- Rewrite table joins and pivots over the strict canonical table core
+
 ## [0.3.213] — 2026-09-05
 - The production build stably verifies package integrity during developer build cycles.
 

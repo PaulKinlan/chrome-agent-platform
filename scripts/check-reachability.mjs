@@ -57,6 +57,8 @@ export const RETAINED = {
   "lib/bundled-inventory.js":
     "Owner directive 2026-08-30: part of the WASI bundled-package inventory (imported by lib/bundled-tool-packages.js); tests/bundled-tool-packages.test.ts pins it.",
   // ── surfaces or modules another OPEN entry owns ──
+  "lib/table-join-pivot.js":
+    "chrome-agent-platform-def.2 (OPEN): strict-core joins and pivots over lib/table-core.js; the service-worker tool route is a follow-up that removes this RETAINED entry (tests/table-join-pivot.test.ts pins it).",
   "lib/table-formula.js":
     "Standalone bounded formula engine; def.4 removes this RETAINED entry when its production route imports the module.",
   "lib/tabular-diff-artifacts.js":
