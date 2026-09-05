@@ -7,6 +7,6 @@
 - **Toolchain:** clang 22.1.8, wasi-sysroot 22.0, WASI Preview 1.
 - **Binary:** 501,650 bytes, SHA-256 `e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234`; 64 initial and 512 maximum memory pages. Build/configuration paths are deterministically remapped; the binary contains no absolute build-host path.
 - **Imports:** 19, all `wasi_snapshot_preview1` (see `metadata/census.txt`); no JS or thread imports.
-- **Reproducibility:** `build.sh` extracts the hash-pinned archive into two independent build roots, builds both, and requires byte identity. `metadata/rebuild-jq.wasm` is byte-identical to the admitted binary.
+- **Reproducibility:** `build.sh` requires the recorded clang identity, extracts the hash-pinned archive into two independent build roots, builds both, requires byte identity and the admitted SHA-256, and emits a path-independent checksum record. `metadata/rebuild-jq.wasm` is byte-identical to the admitted binary.
 
 Direct WASI probes include `jq -c '. | select(.value == "MATCH")'` over the deterministic 100 MiB JSON-lines fixture. Final admission additionally requires execution of these exact CAS bytes through the loaded extension's OPFS worker path.

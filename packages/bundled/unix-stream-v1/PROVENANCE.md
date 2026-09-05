@@ -6,7 +6,7 @@
 - **Target:** `wasm32-wasip1`, WASI Preview 1.
 - **Toolchain:** wasi-sdk clang 18.1.2.
 - **Memory declaration:** 64 initial pages, 512 maximum pages (4–32 MiB).
-- **Rebuild:** `WASI_SDK=/path/to/wasi-sdk ./build.sh`; each source is built twice and `cmp` must prove byte identity.
+- **Rebuild:** `WASI_SDK=/path/to/wasi-sdk ./build.sh`; the script requires the recorded clang identity, builds each source twice, requires byte identity, and rejects any digest that differs from the admitted table below.
 - **Execution profile:** stdin/stdout are synchronous OPFS access-handle adapters. All kernels except `sort` consume bounded chunks and retain at most a line or fixed transform state. `sort.wasm` is a run kernel; the host creates line-complete OPFS runs (4 MiB or 32,768 records), treats an oversized single line as a file-backed singleton, and pairwise-merges runs with ranged comparison. These are working-set parameters, not input/output ceilings.
 
 ## Binary identities

@@ -84,8 +84,9 @@ export const PREVIEW_SPECS = Object.freeze(
           // request-borne — the SW copies it into the trusted job envelope.
           acceptedExitCodes: row.toolId === "diff" || row.toolId === "grep"
             ? Object.freeze([0, 1]) : Object.freeze([0]),
-          // Output policy is immutable spec authority. gzip alone uses the
-          // lossless binary arm; every predecessor remains byte-identical UTF-8.
+          // Default output policy is immutable spec authority. gzip always uses
+          // the lossless binary arm; base64 decode selects that same arm from
+          // its validated trusted argv through previewStdoutEncoding().
           stdoutEncoding: row.toolId === "gzip" ? "base64" : "utf8",
           ...(row.toolId === "gzip" ? {
             allowedArgs: Object.freeze([
@@ -134,6 +135,23 @@ export function isStreamBackedBundledTool(toolId) {
 }
 export function previewSpecFor(toolId) {
   return PREVIEW_SPECS[toolId] ?? null;
+}
+
+/** Resolve mode-sensitive output typing from trusted, validated argv. */
+export function previewStdoutEncoding(toolId, inputArgs = []) {
+  const spec = previewSpecFor(toolId);
+  if (!spec || !Array.isArray(inputArgs)) fail("preview_args");
+  return toolId === "base64" && inputArgs.length === 1 &&
+      (inputArgs[0] === "-d" || inputArgs[0] === "--decode")
+    ? "base64"
+    : spec.stdoutEncoding;
+}
+
+export function wasmStreamOutputDescriptor(toolId, inputArgs = []) {
+  const encoding = previewStdoutEncoding(toolId, inputArgs);
+  return Object.freeze(encoding === "base64"
+    ? { type: "binary", mediaType: "application/octet-stream" }
+    : { type: "utf8", mediaType: "text/plain;charset=utf-8" });
 }
 
 /** Resolve the exact argv vector used by both inline preview and file-backed
@@ -393,7 +411,7 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     args,
     stdin: stdinBytes,
     acceptedExitCodes: spec.acceptedExitCodes,
-    stdoutEncoding: spec.stdoutEncoding,
+    stdoutEncoding: previewStdoutEncoding(input.toolId, input.args),
     workspaceSeed: spec.workspaceSeed,
     quota: quota ?? {
       // dptw: byte quotas are unbounded; the count guards stay (runaway guard).
@@ -602,18 +620,20 @@ export async function executeBundledWasiJob({
   }
 
   let input;
+  let stdoutEncoding = spec.stdoutEncoding;
   try {
     input = validatePreviewInput({
       toolId,
       args: Array.isArray(args) ? args : [],
       stdin: typeof stdin === "string" ? stdin : "",
     });
+    stdoutEncoding = previewStdoutEncoding(input.toolId, input.args);
   } catch (err) {
     return Object.freeze({
       ok: false,
       phase: "failed",
       error: `invalid_input: ${err.message || err}`,
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -645,7 +665,7 @@ export async function executeBundledWasiJob({
       ok: false,
       phase: "failed",
       error: `asset_fetch_failed: ${err.message || err}`,
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -668,7 +688,7 @@ export async function executeBundledWasiJob({
       ok: false,
       phase: "failed",
       error: `revalidation_failed: ${err.code || err.message || err}`,
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -718,13 +738,13 @@ export async function executeBundledWasiJob({
         job: { ...job, stdin: new Uint8Array(job.stdin) },
         wasmBytes: casBytes,
       });
-      return boundPreviewResult(rawResult, { stdoutEncoding: spec.stdoutEncoding });
+      return boundPreviewResult(rawResult, { stdoutEncoding });
     } catch (err) {
       return Object.freeze({
         ok: false,
         phase: "failed",
         error: `execution_worker_failed: ${err.message || err}`,
-        stdoutEncoding: spec.stdoutEncoding,
+        stdoutEncoding,
         stdout: "",
         stdoutBase64: null,
         stdoutBytes: 0,
@@ -757,13 +777,13 @@ export async function executeBundledWasiJob({
     });
 
     if (envelope?.ok && envelope.result) {
-      return boundPreviewResult(envelope.result, { stdoutEncoding: spec.stdoutEncoding });
+      return boundPreviewResult(envelope.result, { stdoutEncoding });
     }
     return Object.freeze({
       ok: false,
       phase: "failed",
       error: envelope?.error || "execution_failed",
-      stdoutEncoding: spec.stdoutEncoding,
+      stdoutEncoding,
       stdout: "",
       stdoutBase64: null,
       stdoutBytes: 0,
@@ -778,7 +798,7 @@ export async function executeBundledWasiJob({
     ok: false,
     phase: "failed",
     error: "wasi_task_host_unavailable",
-    stdoutEncoding: spec.stdoutEncoding,
+    stdoutEncoding,
     stdout: "",
     stdoutBase64: null,
     stdoutBytes: 0,

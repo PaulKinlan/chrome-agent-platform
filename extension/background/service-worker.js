@@ -71,6 +71,7 @@ import {
   previewSpecFor,
   revalidatePreviewExecution,
   validatePreviewInput,
+  wasmStreamOutputDescriptor,
 } from "../lib/tool-exec-preview.js";
 import {
   appendWasmStreamInput,
@@ -83,8 +84,13 @@ import {
   removeWasmStream,
   sealWasmStreamInput,
   sealWasmStreamOutput,
+  stageWasmStreamInputChunks,
   validateSealedWasmStream,
 } from "../lib/wasm-stream-files.js";
+import {
+  releaseRunWasmStreamOutputs,
+  retainRunWasmStreamOutput,
+} from "../lib/wasm-stream-run-lifecycle.js";
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
 import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
@@ -436,20 +442,20 @@ function wasmStreamOwner(context) {
 }
 
 async function stageInlineWasmInput({ stdin, owner }) {
-  const ref = await createWasmStreamInput({ owner });
-  const encoder = new TextEncoder();
-  const chunkCodeUnits = 512 * 1024;
-  for (let start = 0; start < stdin.length;) {
-    let end = Math.min(stdin.length, start + chunkCodeUnits);
-    if (end < stdin.length) {
-      const last = stdin.charCodeAt(end - 1);
-      if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  async function* encodedChunks() {
+    const encoder = new TextEncoder();
+    const chunkCodeUnits = 512 * 1024;
+    for (let start = 0; start < stdin.length;) {
+      let end = Math.min(stdin.length, start + chunkCodeUnits);
+      if (end < stdin.length) {
+        const last = stdin.charCodeAt(end - 1);
+        if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+      }
+      yield encoder.encode(stdin.slice(start, end));
+      start = end;
     }
-    await appendWasmStreamInput({ ref, owner, bytes: encoder.encode(stdin.slice(start, end)) });
-    start = end;
   }
-  await sealWasmStreamInput({ ref, owner });
-  return ref;
+  return await stageWasmStreamInputChunks({ owner, chunks: encodedChunks() });
 }
 
 async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context }) {
@@ -471,7 +477,7 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
     staged = true;
   }
   try {
-    return await runWasmStreamTool({
+    const result = await runWasmStreamTool({
       toolId,
       args: Array.isArray(validatedArgs?.args) ? validatedArgs.args : [],
       inputRef,
@@ -481,6 +487,15 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
         : "https://agent.cap",
       documentId: String(context?.documentId ?? runId),
     });
+    if (result?.ok) {
+      try {
+        retainRunWasmStreamOutput(runId, { ref: result.output.ref, owner });
+      } catch (error) {
+        await discardWasmStream({ ref: result.output.ref, owner }).catch(() => {});
+        throw error;
+      }
+    }
+    return result;
   } finally {
     if (staged) await removeWasmStream({ ref: inputRef, owner }).catch(() => {});
   }
@@ -541,8 +556,9 @@ async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVI
   // A small complete result remains convenient for the model. Large output is
   // never squeezed into context: the explicit OPFS reference, size, and digest
   // are authoritative and can feed the next tool without copying.
+  const outputDescriptor = wasmStreamOutputDescriptor(toolId, args);
   let stdout = null;
-  if (result.receipt.stdoutBytes <= 64 * 1024 && spec.stdoutEncoding === "utf8") {
+  if (result.receipt.stdoutBytes <= 64 * 1024 && outputDescriptor.type === "utf8") {
     const window = await readWasmStreamWindow({
       ref: outputRef,
       owner,
@@ -563,6 +579,9 @@ async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVI
       sha256: result.receipt.stdoutSha256,
       stderrBytes: result.receipt.stderrBytes,
       stderrSha256: result.receipt.stderrSha256,
+      type: outputDescriptor.type,
+      mediaType: outputDescriptor.mediaType,
+      lifetime: "run",
     }),
     input: Object.freeze({
       ref: inputRef,
@@ -571,6 +590,7 @@ async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVI
     }),
     stdout,
     stdoutComplete: stdout !== null,
+    outputType: outputDescriptor.type,
     exitCode: result.exitCode,
     elapsedMs: result.receipt.elapsedMs,
     workerInstanceId: result.receipt.workerInstanceId,
@@ -3575,6 +3595,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     } finally {
       clearInterval(durableHeartbeat);
       durableRunAborters.delete(executionId);
+      const streamCleanup = await releaseRunWasmStreamOutputs(executionId);
+      if (streamCleanup.failed > 0) {
+        console.warn(`stream output cleanup failed for ${streamCleanup.failed} run-owned reference(s)`);
+      }
       // The delegation run-state dies with the run: a tool closure from a
       // settled run can never authorize a new delegation (fail-closed).
       if (delegationState) {

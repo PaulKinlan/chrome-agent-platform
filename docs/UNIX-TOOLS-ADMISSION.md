@@ -8,7 +8,8 @@ Status: implemented admission profile for the `grep`, `sed`, `awk`, `sort`,
 These are command-compatible WebAssembly tools available through the ordinary
 `search_tools` → `execute_tool` path. CAP does not reject an input because it
 crosses a product-defined byte or line threshold. Input, output, and sort spill
-are streamed or file-backed; complete output is retained. A run may still fail
+are streamed or file-backed; complete output remains available for chaining
+throughout its run and explicit artifact promotion gives it durable lifetime. A run may still fail
 for invalid syntax, cancellation, browser storage exhaustion, or genuine
 wasm32 memory exhaustion. Declared Wasm memory maxima, finite open handles, and
 a hang watchdog remain isolation boundaries, not content-size admission rules.
@@ -47,9 +48,14 @@ publishes the files and returns references plus incremental SHA-256, counts,
 and timings. Small results may also be inlined for convenience, but crossing an
 inline representation threshold never rejects or truncates the retained
 result. Cancellation or failure terminates the Worker and removes its unsealed
-output and scratch; reusable sealed caller input is retained, while input staged
-only for one inline model call is removed by that caller. Storage failures are
-reported as execution failures. Content-scaled host-call and byte quotas are
+output and scratch; append/seal/publication failures remove partial directories
+as one transaction. Reusable sealed caller input is retained, while input staged
+only for one inline model call is removed by that caller. Successful model
+outputs are run-scoped: they remain chainable until that exact run settles, then
+all non-promoted references are removed. Binary `base64 -d` results remain exact
+OPFS bytes and carry `type: binary` plus `application/octet-stream`; they are
+never mis-decoded as preview text. Storage failures are reported as execution
+failures. Content-scaled host-call and byte quotas are
 replaced by cancellation, strict syscall shapes, finite concurrent descriptors,
 a finite path-operation guard, and a conservative hang watchdog.
 

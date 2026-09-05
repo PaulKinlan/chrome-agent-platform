@@ -55,6 +55,12 @@ async function streamDirectory(id, { create = false, storage } = {}) {
   return await (await streamsRoot(storage)).getDirectoryHandle(id, { create });
 }
 
+async function removeStreamDirectory(id, storage) {
+  try {
+    await (await streamsRoot(storage)).removeEntry(id, { recursive: true });
+  } catch { /* publication cleanup is best-effort after the original failure */ }
+}
+
 async function writeJson(directory, name, value) {
   const handle = await directory.getFileHandle(name, { create: true });
   const writer = await handle.createWritable();
@@ -82,18 +88,23 @@ function metadataShape(value) {
 
 export async function createWasmStreamInput({ owner, storage } = {}) {
   const id = newWasmStreamId();
-  const directory = await streamDirectory(id, { create: true, storage });
-  await directory.getFileHandle(FILES.input, { create: true });
-  await writeJson(directory, "authority.json", {
-    version: 1,
-    id,
-    type: "input",
-    owner: validateOwner(owner),
-    sealed: false,
-    bytes: 0,
-    createdAt: Date.now(),
-  });
-  return Object.freeze({ version: 1, id, kind: "input" });
+  try {
+    const directory = await streamDirectory(id, { create: true, storage });
+    await directory.getFileHandle(FILES.input, { create: true });
+    await writeJson(directory, "authority.json", {
+      version: 1,
+      id,
+      type: "input",
+      owner: validateOwner(owner),
+      sealed: false,
+      bytes: 0,
+      createdAt: Date.now(),
+    });
+    return Object.freeze({ version: 1, id, kind: "input" });
+  } catch (error) {
+    await removeStreamDirectory(id, storage);
+    throw error;
+  }
 }
 
 async function withAppendLock(id, operation) {
@@ -149,15 +160,38 @@ export async function appendWasmStreamInputBase64({ ref, owner, base64, storage 
 export async function sealWasmStreamInput({ ref, owner, storage } = {}) {
   const input = validateWasmStreamRef(ref, { kinds: ["input"] });
   return await withAppendLock(input.id, async () => {
-    const directory = await streamDirectory(input.id, { storage });
-    const meta = metadataShape(await readJson(directory, "authority.json"));
-    if (meta.type !== "input" || meta.owner !== validateOwner(owner)) fail("wasm_stream_authority");
-    const file = await (await directory.getFileHandle(FILES.input)).getFile();
-    if (file.size !== meta.bytes) fail("wasm_stream_size_drift");
-    const sealed = { ...meta, sealed: true, bytes: file.size };
-    await writeJson(directory, "authority.json", sealed);
-    return Object.freeze({ ok: true, ref: input, bytes: file.size });
+    let authorityValidated = false;
+    try {
+      const directory = await streamDirectory(input.id, { storage });
+      const meta = metadataShape(await readJson(directory, "authority.json"));
+      if (meta.type !== "input" || meta.owner !== validateOwner(owner)) fail("wasm_stream_authority");
+      authorityValidated = true;
+      const file = await (await directory.getFileHandle(FILES.input)).getFile();
+      if (file.size !== meta.bytes) fail("wasm_stream_size_drift");
+      const sealed = { ...meta, sealed: true, bytes: file.size };
+      await writeJson(directory, "authority.json", sealed);
+      return Object.freeze({ ok: true, ref: input, bytes: file.size });
+    } catch (error) {
+      if (authorityValidated) await removeStreamDirectory(input.id, storage);
+      throw error;
+    }
   });
+}
+
+/** Create, append, and seal one input as a single cleanup-safe transaction. */
+export async function stageWasmStreamInputChunks({ owner, chunks, storage } = {}) {
+  let ref = null;
+  try {
+    ref = await createWasmStreamInput({ owner, storage });
+    for await (const bytes of chunks) {
+      await appendWasmStreamInput({ ref, owner, bytes, storage });
+    }
+    await sealWasmStreamInput({ ref, owner, storage });
+    return ref;
+  } catch (error) {
+    if (ref) await discardWasmStream({ ref, owner, storage }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function validateSealedWasmStream({ ref, owner, storage } = {}) {
@@ -198,35 +232,47 @@ export async function openWasmStreamHandles({ ref, owner, allowUnsealedOutput = 
 
 export async function createWasmStreamOutput({ owner, storage } = {}) {
   const id = newWasmStreamId();
-  const directory = await streamDirectory(id, { create: true, storage });
-  await directory.getFileHandle(FILES.stdout, { create: true });
-  await directory.getFileHandle(FILES.stderr, { create: true });
-  await directory.getDirectoryHandle("scratch", { create: true });
-  await writeJson(directory, "authority.json", {
-    version: 1,
-    id,
-    type: "output",
-    owner: validateOwner(owner),
-    sealed: false,
-    bytes: 0,
-    createdAt: Date.now(),
-  });
-  return Object.freeze({ version: 1, id, kind: "stdout" });
+  try {
+    const directory = await streamDirectory(id, { create: true, storage });
+    await directory.getFileHandle(FILES.stdout, { create: true });
+    await directory.getFileHandle(FILES.stderr, { create: true });
+    await directory.getDirectoryHandle("scratch", { create: true });
+    await writeJson(directory, "authority.json", {
+      version: 1,
+      id,
+      type: "output",
+      owner: validateOwner(owner),
+      sealed: false,
+      bytes: 0,
+      createdAt: Date.now(),
+    });
+    return Object.freeze({ version: 1, id, kind: "stdout" });
+  } catch (error) {
+    await removeStreamDirectory(id, storage);
+    throw error;
+  }
 }
 
 export async function sealWasmStreamOutput({ ref, owner, bytes, receipt, storage } = {}) {
   const output = validateWasmStreamRef(ref, { kinds: ["stdout"] });
   if (!Number.isSafeInteger(bytes) || bytes < 0 || !plain(receipt)) fail("wasm_stream_receipt");
-  const directory = await streamDirectory(output.id, { storage });
-  const meta = metadataShape(await readJson(directory, "authority.json"));
-  if (meta.type !== "output" || meta.owner !== validateOwner(owner) || meta.sealed) {
-    fail("wasm_stream_authority");
+  let authorityValidated = false;
+  try {
+    const directory = await streamDirectory(output.id, { storage });
+    const meta = metadataShape(await readJson(directory, "authority.json"));
+    if (meta.type !== "output" || meta.owner !== validateOwner(owner) || meta.sealed) {
+      fail("wasm_stream_authority");
+    }
+    authorityValidated = true;
+    const file = await (await directory.getFileHandle(FILES.stdout)).getFile();
+    if (file.size !== bytes) fail("wasm_stream_size_drift");
+    await writeJson(directory, "receipt.json", receipt);
+    await writeJson(directory, "authority.json", { ...meta, sealed: true, bytes });
+    return Object.freeze({ ok: true, ref: output, bytes });
+  } catch (error) {
+    if (authorityValidated) await removeStreamDirectory(output.id, storage);
+    throw error;
   }
-  const file = await (await directory.getFileHandle(FILES.stdout)).getFile();
-  if (file.size !== bytes) fail("wasm_stream_size_drift");
-  await writeJson(directory, "receipt.json", receipt);
-  await writeJson(directory, "authority.json", { ...meta, sealed: true, bytes });
-  return Object.freeze({ ok: true, ref: output, bytes });
 }
 
 export async function readWasmStreamWindow({ ref, owner, offset = 0, length, storage } = {}) {

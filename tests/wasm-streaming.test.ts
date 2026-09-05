@@ -10,11 +10,21 @@ import {
   removeWasmStream,
   sealWasmStreamInput,
   sealWasmStreamOutput,
+  stageWasmStreamInputChunks,
   validateSealedWasmStream,
   WASM_STREAM_ROOT_NAME,
 } from "../extension/lib/wasm-stream-files.js";
+import {
+  releaseRunWasmStreamOutputs,
+  retainRunWasmStreamOutput,
+} from "../extension/lib/wasm-stream-run-lifecycle.js";
 import { createWasiPreview1Runtime } from "../extension/lib/wasi-preview1-runtime.js";
-import { buildPreviewAuthority, buildPreviewJob, validatePreviewInput } from "../extension/lib/tool-exec-preview.js";
+import {
+  buildPreviewAuthority,
+  buildPreviewJob,
+  validatePreviewInput,
+  wasmStreamOutputDescriptor,
+} from "../extension/lib/tool-exec-preview.js";
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
 import { WasiProcExit } from "../extension/lib/wasm-host-types.js";
 import { executeWasmStreamJob } from "../extension/lib/wasm-stream-worker.js";
@@ -29,7 +39,12 @@ const fileNode = () => ({ kind: "file", bytes: new Uint8Array(), syncOpen: false
 const directoryNode = () => ({ kind: "directory", children: new Map() });
 
 class MemoryWritable {
-  constructor(node, keep) { this.node = node; this.bytes = keep ? node.bytes.slice() : new Uint8Array(); this.position = 0; }
+  constructor(node, keep, beforeClose = null) {
+    this.node = node;
+    this.bytes = keep ? node.bytes.slice() : new Uint8Array();
+    this.position = 0;
+    this.beforeClose = beforeClose;
+  }
   async seek(position) { this.position = position; }
   async write(value) {
     const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value);
@@ -38,7 +53,10 @@ class MemoryWritable {
     next.set(this.bytes); next.set(bytes, this.position);
     this.bytes = next; this.position += bytes.byteLength;
   }
-  async close() { this.node.bytes = this.bytes; }
+  async close() {
+    await this.beforeClose?.();
+    this.node.bytes = this.bytes;
+  }
   async abort() {}
 }
 class MemorySyncAccess {
@@ -67,13 +85,15 @@ class MemorySyncAccess {
   close() { if (!this.closed) { this.closed = true; this.node.syncOpen = false; } }
 }
 class MemoryFile {
-  constructor(node) { this.node = node; this.kind = "file"; }
+  constructor(node, name, failWrite) { this.node = node; this.name = name; this.failWrite = failWrite; this.kind = "file"; }
   async getFile() { return new Blob([this.node.bytes]); }
-  async createWritable({ keepExistingData = false } = {}) { return new MemoryWritable(this.node, keepExistingData); }
+  async createWritable({ keepExistingData = false } = {}) {
+    return new MemoryWritable(this.node, keepExistingData, () => this.failWrite?.(this.name));
+  }
   async createSyncAccessHandle() { return new MemorySyncAccess(this.node); }
 }
 class MemoryDirectory {
-  constructor(node) { this.node = node; this.kind = "directory"; }
+  constructor(node, failWrite = null) { this.node = node; this.failWrite = failWrite; this.kind = "directory"; }
   async getDirectoryHandle(name, { create = false } = {}) {
     if (!this.node.children.has(name)) {
       if (!create) throw new Error("not found");
@@ -81,7 +101,7 @@ class MemoryDirectory {
     }
     const child = this.node.children.get(name);
     if (child.kind !== "directory") throw new Error("type mismatch");
-    return new MemoryDirectory(child);
+    return new MemoryDirectory(child, this.failWrite);
   }
   async getFileHandle(name, { create = false } = {}) {
     if (!this.node.children.has(name)) {
@@ -90,13 +110,16 @@ class MemoryDirectory {
     }
     const child = this.node.children.get(name);
     if (child.kind !== "file") throw new Error("type mismatch");
-    return new MemoryFile(child);
+    return new MemoryFile(child, name, this.failWrite);
   }
   async removeEntry(name) { if (!this.node.children.delete(name)) throw new Error("not found"); }
 }
-function memoryStorage() {
-  const root = new MemoryDirectory(directoryNode());
+function memoryStorage({ failWrite = null } = {}) {
+  const root = new MemoryDirectory(directoryNode(), failWrite);
   return { root, storage: { async getDirectory() { return root; } } };
+}
+function streamDirectoryCount(root) {
+  return root.node.children.get(WASM_STREAM_ROOT_NAME)?.children.size ?? 0;
 }
 
 Deno.test("incremental SHA-256 is byte-exact across arbitrary chunk boundaries", async () => {
@@ -157,6 +180,88 @@ Deno.test("OPFS stream references are sealed, owner-bound, ranged, chainable, an
   let removed = false;
   try { await validateSealedWasmStream({ ref: output, owner, storage }); } catch { removed = true; }
   assert(removed, "removed output must disappear");
+});
+
+Deno.test("stream staging and publication failures remove partial directories", async () => {
+  const owner = "owner-options:fault-test";
+  for (const failOnAuthorityWrite of [2, 3]) {
+    let authorityWrites = 0;
+    const { root, storage } = memoryStorage({
+      failWrite(name) {
+        if (name === "authority.json" && ++authorityWrites === failOnAuthorityWrite) {
+          throw new Error("injected authority write failure");
+        }
+      },
+    });
+    let failed = false;
+    try {
+      await stageWasmStreamInputChunks({
+        owner,
+        chunks: [new Uint8Array([1])],
+        storage,
+      });
+    } catch { failed = true; }
+    assert(failed, `authority write ${failOnAuthorityWrite} must fail`);
+    equal(streamDirectoryCount(root), 0, "failed input publication must leave no stream directory");
+  }
+
+  {
+    const { root, storage } = memoryStorage({
+      failWrite(name) { if (name === "stdin.bin") throw new Error("injected append failure"); },
+    });
+    let failed = false;
+    try {
+      await stageWasmStreamInputChunks({ owner, chunks: [new Uint8Array([1, 2, 3])], storage });
+    } catch { failed = true; }
+    assert(failed, "append failure must propagate");
+    equal(streamDirectoryCount(root), 0, "failed append must leave no stream directory");
+  }
+
+  for (const failedName of ["receipt.json", "authority.json"]) {
+    let armed = false;
+    const { root, storage } = memoryStorage({
+      failWrite(name) {
+        if (armed && name === failedName) throw new Error(`injected ${name} failure`);
+      },
+    });
+    const output = await createWasmStreamOutput({ owner, storage });
+    const streams = await root.getDirectoryHandle(WASM_STREAM_ROOT_NAME);
+    const directory = await streams.getDirectoryHandle(output.id);
+    const writer = await (await directory.getFileHandle("stdout.bin")).createWritable();
+    await writer.write(new Uint8Array([7]));
+    await writer.close();
+    armed = true;
+    let failed = false;
+    try {
+      await sealWasmStreamOutput({ ref: output, owner, bytes: 1, receipt: { stdoutBytes: 1 }, storage });
+    } catch { failed = true; }
+    assert(failed, `${failedName} publication failure must propagate`);
+    equal(streamDirectoryCount(root), 0, `${failedName} failure must remove stdout and scratch`);
+  }
+});
+
+Deno.test("model stream outputs remain chainable until their exact run settles", async () => {
+  const { root, storage } = memoryStorage();
+  const runId = "execution-1";
+  const owner = `agent:${runId}:hub`;
+  for (let index = 0; index < 2; index++) {
+    const output = await createWasmStreamOutput({ owner, storage });
+    await sealWasmStreamOutput({
+      ref: output,
+      owner,
+      bytes: 0,
+      receipt: { stdoutBytes: 0, stdoutSha256: "0".repeat(64) },
+      storage,
+    });
+    retainRunWasmStreamOutput(runId, { ref: output, owner });
+    await validateSealedWasmStream({ ref: output, owner, storage });
+  }
+  equal(streamDirectoryCount(root), 2, "run outputs must exist while chaining is live");
+  const cleanup = await releaseRunWasmStreamOutputs(runId, { storage });
+  equal(cleanup.released, 2);
+  equal(cleanup.failed, 0);
+  equal(streamDirectoryCount(root), 0, "settled run must release every non-promoted output");
+  equal((await releaseRunWasmStreamOutputs(runId, { storage })).released, 0, "cleanup is idempotent");
 });
 
 Deno.test("WASI stdio adapters stream complete input/output without runtime accumulation", async () => {
@@ -225,6 +330,9 @@ Deno.test("service worker exposes one owner-derived stream lifecycle instead of 
   equal(platformRoutes.split("wasmStreamOwner(routeContext)").length - 1, 5,
     "every attachment, artifact, promotion, discard, and tabular bridge derives the owner from its sender");
   assert(!platformRoutes.includes('owner = "hub"'), "platform bridges must not accept caller-selected owners");
+  assert(source.includes("releaseRunWasmStreamOutputs(executionId)"),
+    "run settlement must release model-owned stream results");
+  assert(source.includes('lifetime: "run"'), "stream results must disclose their temporary lifetime");
 });
 
 Deno.test("stream worker core executes exact shipped CAS bytes through sync OPFS handles", async () => {
@@ -264,4 +372,42 @@ Deno.test("stream worker core executes exact shipped CAS bytes through sync OPFS
     await executeWasmStreamJob({ wasmBytes, job, owner: "agent:other:hub", inputRef, outputRef, toolId: "wc" }, { storage });
   } catch (error) { rejected = error?.code === "wasm_stream_authority"; }
   assert(rejected, "worker core rejects a foreign owner before execution");
+});
+
+Deno.test("base64 decode preserves invalid UTF-8 bytes and declares binary output", async () => {
+  const { storage } = memoryStorage();
+  const owner = "agent:binary-run:hub";
+  const inputRef = await createWasmStreamInput({ owner, storage });
+  await appendWasmStreamInput({ ref: inputRef, owner, bytes: new TextEncoder().encode("AP+A\n"), storage });
+  await sealWasmStreamInput({ ref: inputRef, owner, storage });
+  const outputRef = await createWasmStreamOutput({ owner, storage });
+  const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === "base64");
+  const wasmBytes = await Deno.readFile(`extension/wasm/cas/${row.binary.sha256}.wasm`);
+  const authority = buildPreviewAuthority({ origin: "https://agent.cap", documentId: "binary-run", now: () => 1 });
+  const input = validatePreviewInput({ toolId: "base64", args: ["-d"], stdin: "" });
+  const job = buildPreviewJob({ input, authority, quota: {
+    hostCalls: Number.POSITIVE_INFINITY, pathCalls: 4096,
+    stdinBytes: Number.POSITIVE_INFINITY, stdoutBytes: Number.POSITIVE_INFINITY,
+    stderrBytes: Number.POSITIVE_INFINITY, fileBytes: Number.POSITIVE_INFINITY,
+    fileSize: Number.POSITIVE_INFINITY, dynamicFds: 256,
+  } });
+  equal(job.stdoutEncoding, "base64", "decode mode must select the binary WASI result arm");
+  const descriptor = wasmStreamOutputDescriptor("base64", ["-d"]);
+  equal(descriptor.type, "binary");
+  equal(descriptor.mediaType, "application/octet-stream");
+  const result = await executeWasmStreamJob({
+    wasmBytes, job, owner, inputRef, outputRef, toolId: "base64",
+  }, { storage });
+  assert(result.ok, result.error);
+  equal(result.receipt.stdoutBytes, 3);
+  await sealWasmStreamOutput({
+    ref: outputRef,
+    owner,
+    bytes: result.receipt.stdoutBytes,
+    receipt: result.receipt,
+    storage,
+  });
+  const window = await readWasmStreamWindow({ ref: outputRef, owner, offset: 0, length: 3, storage });
+  const bytes = decodeCanonicalBase64(window.base64);
+  equal([...bytes].join(","), "0,255,128", "binary stdout must remain byte-exact in OPFS");
 });
