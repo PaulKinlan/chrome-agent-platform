@@ -18,6 +18,17 @@ function concat(chunks) {
 }
 
 const REQUIRED = Object.freeze(["grep", "sed", "awk", "sort", "uniq", "wc", "tr", "base64", "jq"]);
+const REBUILD_PATHS = Object.freeze({
+  base64: "packages/bundled/unix-stream-v1/rebuild/base64.wasm",
+  grep: "packages/bundled/unix-stream-v1/rebuild/grep.wasm",
+  sort: "packages/bundled/unix-stream-v1/rebuild/sort.wasm",
+  tr: "packages/bundled/unix-stream-v1/rebuild/tr.wasm",
+  uniq: "packages/bundled/unix-stream-v1/rebuild/uniq.wasm",
+  wc: "packages/bundled/unix-stream-v1/rebuild/wc.wasm",
+  sed: "docs/admissions/t3-trio/sed/metadata/rebuild-sed.wasm",
+  awk: "packages/bundled/awk-posixutils-v1/receipts/rebuild-awk.wasm",
+  jq: "docs/admissions/jq-filter-bounded/metadata/rebuild-jq.wasm",
+});
 
 async function run(toolId, args, stdin) {
   const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
@@ -84,6 +95,11 @@ Deno.test("Unix tools: all nine exact executable IDs resolve to immutable shippe
     const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
       .map((byte) => byte.toString(16).padStart(2, "0")).join("");
     equal(digest, row.binary.sha256, `${toolId} CAS digest`);
+    const rebuild = await Deno.readFile(REBUILD_PATHS[toolId]);
+    equal(rebuild.byteLength, bytes.byteLength, `${toolId} independent rebuild size`);
+    const rebuildDigest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", rebuild))]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    equal(rebuildDigest, digest, `${toolId} independent rebuild must be byte-identical`);
     equal(row.binary.initialPages, 64, `${toolId} initial pages`);
     equal(row.binary.maxPages, 512, `${toolId} maximum pages`);
   }

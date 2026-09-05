@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.169] — 2026-09-05
+- Verify every Unix tool rebuild byte for byte
+
 ## [0.3.168] — 2026-09-05
 - Tool execution complies with store security policies using built-in verified components
 
