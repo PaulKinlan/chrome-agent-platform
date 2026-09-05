@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.233] — 2026-09-05
+- Closed four long-open safety verifications with real tests: memory writes can't be rolled back by a stale run, the first connection message must name its enrollment, concurrent agent builds no longer share run bookkeeping, and a cancelled page action can never report late — each proven by breaking the protection and watching the test fail.
+
 ## [0.3.232] — 2026-09-05
 - Fixed a browser check that failed depending on how fast test tabs loaded: it now waits for the tabs to show their titles before reading the picker.
 

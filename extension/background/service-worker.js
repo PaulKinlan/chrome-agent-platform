@@ -886,6 +886,7 @@ import { journalJson } from "../shared/tool-tree.js";
 import { createAgentBoardRoutes, BOARD_HUB_ID, posterThreadResolver, boardHeartbeatPlan } from "../lib/agent-board.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity, observeToolCall } from "../lib/cap-log.js";
 import { perfSpan, perfSummary, perfClear, mergePerfMeasures } from "../lib/cap-perf.js";
+import { createRunGenCellBook } from "../lib/run-gen-cells.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
 // provider failures through describeError (one actionable error with the status
@@ -1877,9 +1878,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // a module-global `runGenCells` Map, so two concurrent same-generation builds
     // overwrote each other's entries — build A's tools captured cell A, but A's
     // commit bound cell B, leaving A's cell permanently null (a run returned from
-    // A then failed site tools spuriously). A build-local map means each build
-    // binds EXACTLY the cells it created, and the map is GC'd with the build.
-    const buildCells = new Map(); // canonical origin -> { get: () => number|null }
+    // A then failed site tools spuriously). A build-local book means each build
+    // binds EXACTLY the cells it created, and the book is GC'd with the build.
+    // (Extracted to lib/run-gen-cells.js for direct testability — k8u.)
+    const buildCells = createRunGenCellBook(); // canonical origin -> { get: () => number|null }
     const workerComposed = new Map(); // canonical origin -> composed prompt (for layered attestation)
     // Build-local site-tool ask gate (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01):
     // bound AFTER the run's model dispatcher below (the workers are built
@@ -1889,8 +1891,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // "ask"-policy site's tool call fail closed with an honest error.
     let webmcpAskGate = null;
     const workers = await Promise.all(origins.map(async (origin) => {
-      const cell = { get: () => null };
-      buildCells.set(origin, cell);
+      const cell = buildCells.cellFor(origin);
       const skills = await getSkills(origin);
       const workerRuntimeContext = await gatherRuntimeContext({
         scope: "worker",
@@ -2132,8 +2133,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // THIS build, so a later rebuild (which creates NEW cells + NEW workers) can
     // never repoint this build's tool closures at a different agent.
     for (const [origin, agent] of orch.workers) {
-      const cell = buildCells.get(origin);
-      if (cell) cell.get = () => agent.getRunGen();
+      buildCells.bind(origin, () => agent.getRunGen());
     }
     // The effective-prompt attestation (keyed receipts, no content) — journaled
     // at run start so a run can prove WHICH composition it was built with, and
