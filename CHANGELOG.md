@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.159] — 2026-09-05
+- Settings and the shared components get an internationalisation foundation: a default locale and an en catalogue, one lookup seam every surface resolves copy through, a regenerable fallback so the docs gallery renders the same words, and a drift pin that fails the moment the two separate
+
 ## [0.3.158] — 2026-09-05
 - Settings, hub and components carry their copy as hardcoded English today — this inventory counts the candidates surface by surface and proposes the catalogue key shape, so the migration knows what it is moving before it moves anything
 
