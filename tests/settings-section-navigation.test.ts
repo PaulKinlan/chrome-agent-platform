@@ -93,3 +93,14 @@ Deno.test("settings multi-section: provider server tools init is bound to the pr
   const htmlSection = HTML.slice(HTML.indexOf('id="providers"'), HTML.indexOf('id="mcp-servers"'));
   assert(htmlSection.includes('id="server-tools-enabled"'), "the server-tools toggle lives in the providers section HTML");
 });
+
+// A section renderer that throws must not keep its one-shot claim, or that
+// section stays blank for the life of the page with no way to retry — the same
+// blank panel hy91 was reported as, reached by a different route.
+Deno.test("settings sections: a failed section render releases its claim so the next navigation retries", () => {
+  const block = JS.slice(JS.indexOf("async function ensureSectionRendered("), JS.indexOf("async function renderSection("));
+  assert(block.includes("renderedSections.delete(sectionId)"),
+    "ensureSectionRendered must release renderedSections when the renderer throws");
+  assert(/catch\s*\(/.test(block) && block.includes("throw"),
+    "ensureSectionRendered must rethrow after releasing the claim (never swallow the failure)");
+});

@@ -80,6 +80,16 @@ try {
   check("initial load: providers panel shows real content (tabs, rendered provider panels, an API-key field) — never a blank shell",
     (providerContent?.tabs ?? 0) > 0 && (providerContent?.panels ?? 0) > 0 && (providerContent?.keyFields ?? 0) > 0, providerContent);
 
+  // A stale or unknown deep link must land on the default section too, never on
+  // a page where nothing rendered. main's normalizeHash fallback provides this;
+  // nothing pinned it (hy91 follow-up).
+  const staleT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#no-such-section` });
+  const staleSess = (await send("Target.attachToTarget", { targetId: staleT.result.targetId, flatten: true })).result?.sessionId;
+  await send("Runtime.enable", {}, staleSess);
+  await sleep(1600);
+  const staleCards = await evalIn(staleSess, `document.querySelectorAll("#providers input.api-key").length`);
+  check("stale deep link: falls back to a RENDERED Providers section", staleCards > 0, staleCards);
+
   // 2. Click "Browser control" nav link
   // rfca: visibility alone proves the panel switched, not that its renderer
   // ran (the hy91 blind spot). renderBrowser() binds the auto-close toggle

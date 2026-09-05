@@ -3405,9 +3405,22 @@ function hideDeveloperLockedNotice() {
 }
 
 const renderedSections = new Set();
+// The claim is taken BEFORE the renderer runs so two overlapping navigations
+// never build a section twice — but a renderer that THROWS must not keep the
+// claim, or that section stays blank for the life of the page with no way back
+// (hy91: a blank Providers panel is indistinguishable from a broken install).
+// The claim is released on failure so the next navigation retries.
 async function ensureSectionRendered(sectionId) {
   if (renderedSections.has(sectionId)) return;
   renderedSections.add(sectionId);
+  try {
+    await renderSection(sectionId);
+  } catch (e) {
+    renderedSections.delete(sectionId);
+    throw e;
+  }
+}
+async function renderSection(sectionId) {
   if (sectionId === "providers") {
     await renderProviders();
     // The server-tools toggle + per-agent rows live in the providers section

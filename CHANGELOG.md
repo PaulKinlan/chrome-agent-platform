@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.241] — 2026-09-05
+- a Settings section that fails to load can be opened again
+
 ## [0.3.240] — 2026-09-05
 - Internal hardening: the list of built-in tools allowed to read large files is now pinned by a test, so it cannot silently gain or lose a tool.
 
