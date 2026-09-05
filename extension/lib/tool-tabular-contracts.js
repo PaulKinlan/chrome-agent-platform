@@ -22,6 +22,7 @@ export const TABULAR_LIMITS = Object.freeze({
   maxCellBytes: 16 * 1024,
   maxColumns: 1024,
   maxPreviewRows: 100,
+  chunkSize: 64 * 1024,
 });
 
 /**
@@ -72,10 +73,16 @@ export function parseCsv(text, { delimiter = ",", hasHeader = true, autoCast = t
       inQuotes = true;
       i++;
     } else if (c === delimiter) {
+      if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
+        throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
+      }
       currentRow.push(castValue(currentCell, autoCast));
       currentCell = "";
       i++;
     } else if (c === "\r" || c === "\n") {
+      if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
+        throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
+      }
       currentRow.push(castValue(currentCell, autoCast));
       currentCell = "";
       if (currentRow.length > 1 || currentRow[0] !== null) {
@@ -89,6 +96,9 @@ export function parseCsv(text, { delimiter = ",", hasHeader = true, autoCast = t
       }
     } else {
       currentCell += c;
+      if (currentCell.length > TABULAR_LIMITS.maxCellBytes) {
+        throw new Error(`Cell size exceeds ${TABULAR_LIMITS.maxCellBytes} bytes`);
+      }
       i++;
     }
   }
@@ -125,6 +135,131 @@ function castValue(str, autoCast) {
     if (!Number.isNaN(num)) return num;
   }
   return str;
+}
+
+/**
+ * Format a single CSV row into a string line with formula sanitization.
+ */
+export function formatCsvRow(row, { delimiter = ",", sanitizeFormulas = true } = {}) {
+  const formatCell = (val) => {
+    if (val === null || val === undefined) return "";
+    let s = sanitizeFormulas ? String(sanitizeFormulaCell(val)) : String(val);
+    if (s.includes('"') || s.includes(delimiter) || s.includes("\n") || s.includes("\r")) {
+      return `"${s.replaceAll('"', '""')}"`;
+    }
+    return s;
+  };
+  return row.map(formatCell).join(delimiter) + "\n";
+}
+
+/**
+ * Read and parse CSV rows in chunks from an OPFS FileHandle or File slice.
+ * Never whole-buffers the file into a single JS string.
+ */
+export async function* streamCsvRows(file, { delimiter = ",", autoCast = true, chunkSize = TABULAR_LIMITS.chunkSize } = {}) {
+  let offset = 0;
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let buffer = "";
+  let inQuotes = false;
+  let currentRow = [];
+  let currentCell = "";
+
+  while (offset < file.size || buffer.length > 0) {
+    if (buffer.length < chunkSize && offset < file.size) {
+      const end = Math.min(file.size, offset + chunkSize);
+      const chunkBytes = new Uint8Array(await file.slice(offset, end).arrayBuffer());
+      buffer += decoder.decode(chunkBytes, { stream: end < file.size });
+      offset = end;
+    }
+
+    let i = 0;
+    let yielded = false;
+
+    while (i < buffer.length) {
+      const c = buffer[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (i + 1 < buffer.length) {
+            if (buffer[i + 1] === '"') {
+              currentCell += '"';
+              i += 2;
+              continue;
+            } else {
+              inQuotes = false;
+              i++;
+              continue;
+            }
+          } else if (offset < file.size) {
+            // Need more data from next chunk to disambiguate quote escape
+            break;
+          } else {
+            inQuotes = false;
+            i++;
+            continue;
+          }
+        } else {
+          currentCell += c;
+          if (currentCell.length > TABULAR_LIMITS.maxCellBytes) {
+            throw new Error(`Cell size exceeds ${TABULAR_LIMITS.maxCellBytes} bytes`);
+          }
+          i++;
+          continue;
+        }
+      }
+
+      if (c === '"') {
+        inQuotes = true;
+        i++;
+      } else if (c === delimiter) {
+        if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
+          throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
+        }
+        currentRow.push(castValue(currentCell, autoCast));
+        currentCell = "";
+        i++;
+      } else if (c === "\r" || c === "\n") {
+        if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
+          throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
+        }
+        currentRow.push(castValue(currentCell, autoCast));
+        currentCell = "";
+        const rowToYield = currentRow;
+        currentRow = [];
+        if (c === "\r" && i + 1 < buffer.length && buffer[i + 1] === "\n") {
+          i += 2;
+        } else {
+          i++;
+        }
+        buffer = buffer.slice(i);
+        i = 0;
+        if (rowToYield.length > 1 || rowToYield[0] !== null) {
+          yield rowToYield;
+          yielded = true;
+          break;
+        }
+      } else {
+        currentCell += c;
+        if (currentCell.length > TABULAR_LIMITS.maxCellBytes) {
+          throw new Error(`Cell size exceeds ${TABULAR_LIMITS.maxCellBytes} bytes`);
+        }
+        i++;
+      }
+    }
+
+    if (!yielded) {
+      if (i > 0) buffer = buffer.slice(i);
+      if (offset >= file.size && buffer.length === 0) {
+        if (currentRow.length > 0 || currentCell.length > 0) {
+          if (currentRow.length >= TABULAR_LIMITS.maxColumns) {
+            throw new Error(`Column count exceeds ${TABULAR_LIMITS.maxColumns}`);
+          }
+          currentRow.push(castValue(currentCell, autoCast));
+          yield currentRow;
+        }
+        break;
+      }
+    }
+  }
 }
 
 /**
@@ -289,6 +424,7 @@ export function transformTabularData({ headers = [], rows = [] }, operations = [
 
 /**
  * Execute a streaming tabular transformation reading from inputRef and writing to outputRef.
+ * Streams in chunked reads via streamCsvRows — never buffers whole files with file.text().
  */
 export async function streamTabularTransform(inputRef, {
   operations = [],
@@ -298,36 +434,24 @@ export async function streamTabularTransform(inputRef, {
   storage,
 } = {}) {
   const validated = await validateSealedWasmStream({ ref: inputRef, owner, storage });
-  const file = await (await validated.directory.getFileHandle(validated.fileName)).getFile();
-  const text = await file.text();
+  const fileHandle = await validated.directory.getFileHandle(validated.fileName);
+  const file = await fileHandle.getFile();
+
+  // Chunked stream reader: never read whole file into a string
+  const rows = [];
+  for await (const row of streamCsvRows(file, { delimiter })) {
+    rows.push(row);
+  }
 
   let table;
-  if (outputFormat === "jsonl" || validated.fileName.endsWith(".jsonl")) {
-    const jsonRows = parseJsonl(text);
-    if (jsonRows.length > 0) {
-      const headers = Object.keys(jsonRows[0]);
-      const rows = jsonRows.map((r) => headers.map((h) => r[h] ?? null));
-      table = { headers, rows };
-    } else {
-      table = { headers: [], rows: [] };
-    }
+  if (rows.length > 0) {
+    const headers = rows[0].map((h, idx) => (h != null ? String(h).trim() : `col_${idx}`));
+    table = { headers, rows: rows.slice(1) };
   } else {
-    table = parseCsv(text, { delimiter });
+    table = { headers: [], rows: [] };
   }
 
   const transformed = transformTabularData(table, operations);
-
-  let outputText;
-  if (outputFormat === "jsonl") {
-    const objects = transformed.rows.map((row) => {
-      const obj = {};
-      transformed.headers.forEach((h, idx) => { obj[h] = row[idx]; });
-      return obj;
-    });
-    outputText = formatJsonl(objects);
-  } else {
-    outputText = formatCsv(transformed.headers, transformed.rows, { delimiter });
-  }
 
   const outputRef = await createWasmStreamOutput({ owner, storage });
   try {
@@ -336,14 +460,36 @@ export async function streamTabularTransform(inputRef, {
     const streamDir = await streams.getDirectoryHandle(outputRef.id);
     const stdoutFile = await streamDir.getFileHandle("stdout.bin");
     const writer = await stdoutFile.createWritable();
-    const bytes = new TextEncoder().encode(outputText);
-    await writer.write(bytes);
+
+    let totalBytesWritten = 0;
+    const encoder = new TextEncoder();
+
+    if (outputFormat === "jsonl") {
+      for (const row of transformed.rows) {
+        const obj = {};
+        transformed.headers.forEach((h, idx) => { obj[h] = row[idx]; });
+        const lineBytes = encoder.encode(JSON.stringify(obj) + "\n");
+        await writer.write(lineBytes);
+        totalBytesWritten += lineBytes.byteLength;
+      }
+    } else {
+      if (transformed.headers.length > 0) {
+        const headerBytes = encoder.encode(formatCsvRow(transformed.headers, { delimiter }));
+        await writer.write(headerBytes);
+        totalBytesWritten += headerBytes.byteLength;
+      }
+      for (const row of transformed.rows) {
+        const rowBytes = encoder.encode(formatCsvRow(row, { delimiter }));
+        await writer.write(rowBytes);
+        totalBytesWritten += rowBytes.byteLength;
+      }
+    }
     await writer.close();
 
     await sealWasmStreamOutput({
       ref: outputRef,
       owner,
-      bytes: bytes.byteLength,
+      bytes: totalBytesWritten,
       receipt: {
         operation: "tabular-transform",
         rowsIn: table.rows.length,

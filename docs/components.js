@@ -2906,7 +2906,12 @@ class ArtifactInspector extends Component {
       .preview iframe { display:block; inline-size:100%; block-size:min(56vh,520px); border:0; }
       ${SOURCE_TOKEN_STYLE}
     `, `<div class="bar"><span class="meta"></span><button type="button" class="copy">Copy exact content</button>${type === "html" ? '<button type="button" class="primary play">Preview / Play</button>' : ""}</div><pre tabindex="0"><code></code></pre><p class="note" hidden></p><p class="status" role="status" aria-live="polite"></p><div class="preview" hidden></div>`);
-    this._root.querySelector(".meta").textContent = `${type} · ${a.size ?? new TextEncoder().encode(content).byteLength} B · ${a.origin ?? "master"}`;
+    const isFileBacked = a.meta?.fileBacked === true || a.meta?.isStreamBacked === true;
+    const isIncomplete = a.meta?.contentIncomplete === true || a.meta?.contentComplete === false;
+    const rawBytes = new TextEncoder().encode(content).byteLength;
+    const totalBytes = a.meta?.streamBytes ?? a.size ?? rawBytes;
+    const metaSuffix = (isFileBacked && isIncomplete) ? ` · ${totalBytes} B (file-backed stream)` : ` · ${totalBytes} B`;
+    this._root.querySelector(".meta").textContent = `${type}${metaSuffix} · ${a.origin ?? "master"}`;
     const code = this._root.querySelector("code");
     const lang = this.language;
     // The COMPLETE stored body renders — never a slice and never size-refused
@@ -2920,16 +2925,29 @@ class ArtifactInspector extends Component {
     // runs synchronously: a body above the single-call artifact limit renders
     // as exact plain text instead (tokenizing a multi-MB body would freeze).
     const MAX_ARTIFACT_HIGHLIGHT_BYTES = 256 * 1024; // the single-call content cap (tool-argument-contract)
-    const rawBytes = new TextEncoder().encode(content).byteLength;
     if (lang && lang !== "text" && rawBytes <= MAX_ARTIFACT_HIGHLIGHT_BYTES) code.replaceChildren(highlightSource(content, lang, document));
     else code.textContent = content;
+    const copyBtn = this._root.querySelector(".copy");
     const note = this._root.querySelector(".note");
-    note.hidden = true;
+    if (isFileBacked && isIncomplete) {
+      if (copyBtn) copyBtn.textContent = "Copy preview content";
+      note.hidden = false;
+      note.textContent = `Preview showing initial 64 KiB. Complete file is retained in OPFS stream (${totalBytes} bytes).`;
+    } else {
+      if (copyBtn) copyBtn.textContent = "Copy exact content";
+      note.hidden = true;
+    }
   }
   _wire() {
     this._root.querySelector(".copy")?.addEventListener("click", async () => {
       const status = this._root.querySelector(".status");
-      try { await navigator.clipboard.writeText(String(this._asset?.content ?? "")); status.textContent = "Copied exact artifact content."; }
+      const a = this._asset ?? {};
+      const isFileBacked = a.meta?.fileBacked === true || a.meta?.isStreamBacked === true;
+      const isIncomplete = a.meta?.contentIncomplete === true || a.meta?.contentComplete === false;
+      const successMsg = (isFileBacked && isIncomplete)
+        ? "Copied preview content (file-backed stream in OPFS)."
+        : "Copied exact artifact content.";
+      try { await navigator.clipboard.writeText(String(this._asset?.content ?? "")); status.textContent = successMsg; }
       catch { status.textContent = "Copy failed. Select the source and copy it manually."; }
     });
     this._root.querySelector(".play")?.addEventListener("click", () => this.startPreview());

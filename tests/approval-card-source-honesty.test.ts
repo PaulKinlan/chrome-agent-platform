@@ -81,3 +81,19 @@ Deno.test("ApprovalCard component: renders honest preview notice and source trun
   // 4. Wire method appends truncation comment in the <pre class="source">
   assertStringIncludes(components, "characters truncated from preview — full script");
 });
+
+Deno.test("ArtifactInspector component: renders honest preview notice and copy button for file-backed stream artifacts", async () => {
+  const componentsPath = new URL("../extension/shared/components.js", import.meta.url).pathname;
+  const components = await Deno.readTextFile(componentsPath);
+
+  // Verifies fileBacked and contentIncomplete checks
+  assertStringIncludes(components, "const isFileBacked = a.meta?.fileBacked === true || a.meta?.isStreamBacked === true;");
+  assertStringIncludes(components, "const isIncomplete = a.meta?.contentIncomplete === true || a.meta?.contentComplete === false;");
+
+  // Verifies honest button text and note message
+  assertStringIncludes(components, 'if (copyBtn) copyBtn.textContent = "Copy preview content";');
+  assertStringIncludes(components, 'Preview showing initial 64 KiB. Complete file is retained in OPFS stream');
+
+  // Verifies honest copy status message
+  assertStringIncludes(components, "Copied preview content (file-backed stream in OPFS).");
+});

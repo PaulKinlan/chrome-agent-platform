@@ -234,3 +234,25 @@ Deno.test("streamTabularTransform: transforms OPFS CSV stream end-to-end", async
   assert(text.includes("engineering,25,300000"));
   assert(!text.includes("finance"));
 });
+
+Deno.test("tabular limits: cell size overflow fails closed", () => {
+  const giantCell = "a".repeat(17 * 1024); // 17 KiB > 16 KiB limit
+  const csv = `id,name\n1,${giantCell}\n`;
+  try {
+    parseCsv(csv);
+    assert(false, "should have thrown cell size overflow");
+  } catch (err) {
+    assert(err.message.includes("Cell size exceeds"));
+  }
+});
+
+Deno.test("tabular limits: column count overflow fails closed", () => {
+  const cols = Array.from({ length: 1025 }, (_, i) => `c${i}`).join(",");
+  const csv = `${cols}\n`;
+  try {
+    parseCsv(csv);
+    assert(false, "should have thrown column count overflow");
+  } catch (err) {
+    assert(err.message.includes("Column count exceeds"));
+  }
+});

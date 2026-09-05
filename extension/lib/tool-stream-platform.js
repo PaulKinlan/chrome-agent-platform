@@ -108,16 +108,15 @@ export async function stageAssetAsWasmStream(asset, { owner, storage } = {}) {
   }
 
   // Reference-preserving transfer: if the asset is already backed by a sealed OPFS
-  // stream reference, revalidate the sealed stream and chain it directly without reading
-  // or duplicating bytes.
+  // stream reference, revalidate the sealed stream using the caller's verified
+  // owner authority (never caller-forgeable asset.meta).
   if (asset.meta?.streamRef) {
-    const streamOwner = asset.meta.streamOwner ?? owner;
-    const validated = await validateSealedWasmStream({ ref: asset.meta.streamRef, owner: streamOwner, storage });
+    const validated = await validateSealedWasmStream({ ref: asset.meta.streamRef, owner, storage });
     return Object.freeze({
       ok: true,
       inputRef: validated.ref,
       name: asset.name ?? "stream.bin",
-      bytes: validated.bytes ?? asset.meta.streamBytes ?? asset.meta.bytes ?? asset.size ?? 0,
+      bytes: validated.bytes,
       chained: true,
     });
   }
@@ -200,15 +199,14 @@ export async function promoteWasmStreamToArtifact(outputRef, {
     });
   }
 
-  // Mark stream metadata as promoted so orphan GC never sweeps it
-  try {
-    const metaHandle = await validated.directory.getFileHandle("authority.json");
-    const metaObj = JSON.parse(await (await metaHandle.getFile()).text());
-    metaObj.promoted = true;
-    const metaWriter = await metaHandle.createWritable();
-    await metaWriter.write(JSON.stringify(metaObj));
-    await metaWriter.close();
-  } catch { /* best effort */ }
+  // Mark stream metadata as promoted in authority.json so orphan GC never sweeps it.
+  // Must FAIL CLOSED if the pin cannot be written — never a silent best-effort catch.
+  const metaHandle = await validated.directory.getFileHandle("authority.json");
+  const metaObj = JSON.parse(await (await metaHandle.getFile()).text());
+  metaObj.promoted = true;
+  const metaWriter = await metaHandle.createWritable();
+  await metaWriter.write(JSON.stringify(metaObj));
+  await metaWriter.close();
 
   // Reference-preserving artifact promotion: large or binary outputs must NEVER
   // be whole-buffered into JS strings or re-encoded as UTF-8. The artifact records

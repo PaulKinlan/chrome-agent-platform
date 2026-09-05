@@ -254,7 +254,11 @@ export async function readWasmStreamReceipt({ ref, owner, storage } = {}) {
 
 export async function removeWasmStream({ ref, owner, storage } = {}) {
   const stream = validateWasmStreamRef(ref);
-  await validateSealedWasmStream({ ref: stream, owner, storage });
+  const validated = await validateSealedWasmStream({ ref: stream, owner, storage });
+  const meta = metadataShape(await readJson(validated.directory, "authority.json"));
+  if (meta.promoted === true) {
+    fail("wasm_stream_promoted", "cannot remove promoted artifact stream");
+  }
   const root = await streamsRoot(storage);
   await root.removeEntry(stream.id, { recursive: true });
   return Object.freeze({ ok: true });
@@ -266,6 +270,9 @@ export async function discardWasmStream({ ref, owner, storage } = {}) {
   const directory = await streamDirectory(stream.id, { storage });
   const meta = metadataShape(await readJson(directory, "authority.json"));
   if (meta.owner !== validateOwner(owner)) fail("wasm_stream_authority");
+  if (meta.promoted === true) {
+    fail("wasm_stream_promoted", "cannot discard promoted artifact stream");
+  }
   const root = await streamsRoot(storage);
   await root.removeEntry(stream.id, { recursive: true });
   return Object.freeze({ ok: true });

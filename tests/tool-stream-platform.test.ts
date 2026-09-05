@@ -292,3 +292,197 @@ Deno.test("pipeline stream chaining: passes output.ref of step 1 directly as inp
   assertEquals(dispatchedCalls[1].args.inputRef, stdoutRef);
   assertEquals(result.final.exitCode, 0);
 });
+
+Deno.test("1bbu gate: file-backed binary-safe stream artifact promotion and zero-copy re-staging", async () => {
+  const outRef = await createWasmStreamOutput({ owner: TEST_OWNER, storage: fakeStorage });
+  const dir = await fakeStorage.getDirectory();
+  const streams = await dir.getDirectoryHandle("wasm-tool-streams-v1");
+  const streamDir = await streams.getDirectoryHandle(outRef.id);
+  const stdoutFile = await streamDir.getFileHandle("stdout.bin");
+  const writer = await stdoutFile.createWritable();
+
+  // Write a large stream (128 KiB > 64 KiB threshold)
+  const largeChunk = "0123456789abcdef".repeat(8 * 1024); // 128 KiB
+  await writer.write(largeChunk);
+  await writer.close();
+
+  await sealWasmStreamOutput({
+    ref: outRef,
+    owner: TEST_OWNER,
+    bytes: largeChunk.length,
+    receipt: { toolId: "base64", exitCode: 0 },
+    storage: fakeStorage,
+  });
+
+  // Promote output (automatic promotion because bytes > 64 KiB)
+  const res = await promoteWasmStreamToArtifact(outRef, {
+    owner: TEST_OWNER,
+    storage: fakeStorage,
+    name: "large-output.bin",
+    force: false,
+  });
+
+  assertEquals(res.ok, true);
+  assertEquals(res.promoted, true);
+  assertEquals(res.asset.meta.fileBacked, true);
+  assertEquals(res.asset.meta.isStreamBacked, true);
+  assertEquals(res.asset.meta.contentIncomplete, true);
+  assertEquals(res.asset.meta.streamBytes, largeChunk.length);
+  assertEquals(res.asset.meta.bytes, largeChunk.length);
+  // Preview must be bounded to 64 KiB
+  assertEquals(res.stdout.length <= 64 * 1024, true);
+
+  // Authority marker verification
+  const metaHandle = await streamDir.getFileHandle("authority.json");
+  const metaObj = JSON.parse(await (await metaHandle.getFile()).text());
+  assertEquals(metaObj.promoted, true);
+
+  // GC orphan sweep must NEVER collect promoted streams
+  const { gcOrphanStreams } = await import("../extension/lib/tool-stream-platform.js");
+  const gcRes = await gcOrphanStreams({ maxAgeMs: 0, storage: fakeStorage });
+  assertEquals(gcRes.collected, 0);
+
+  // Zero-copy re-staging from asset
+  const staged = await stageAssetAsWasmStream(res.asset, {
+    owner: TEST_OWNER,
+    storage: fakeStorage,
+  });
+  assertEquals(staged.ok, true);
+  assertEquals(staged.chained, true);
+  assertEquals(staged.inputRef, outRef);
+  assertEquals(staged.bytes, largeChunk.length); // Full 128 KiB, NOT truncated preview!
+});
+
+Deno.test("adversarial gate: wrong-owner and forged streamOwner fail closed", async () => {
+  // 1. Create a stream owned by owner-a
+  const outRef = await createWasmStreamOutput({ owner: "owner-a", storage: fakeStorage });
+  const dir = await fakeStorage.getDirectory();
+  const streams = await dir.getDirectoryHandle("wasm-tool-streams-v1");
+  const streamDir = await streams.getDirectoryHandle(outRef.id);
+  const stdoutFile = await streamDir.getFileHandle("stdout.bin");
+  const writer = await stdoutFile.createWritable();
+  await writer.write("Secret data belonging to owner-a");
+  await writer.close();
+
+  await sealWasmStreamOutput({
+    ref: outRef,
+    owner: "owner-a",
+    bytes: 32,
+    receipt: { toolId: "grep", exitCode: 0 },
+    storage: fakeStorage,
+  });
+
+  // 2. Caller owner-b attempts to stage owner-a's stream directly -> must FAIL CLOSED
+  const rawAsset = {
+    id: "a_victim",
+    name: "data.bin",
+    meta: { streamRef: outRef },
+  };
+  await assertRejects(
+    async () => stageAssetAsWasmStream(rawAsset, { owner: "owner-b", storage: fakeStorage }),
+    Error,
+    "wasm_stream_authority",
+  );
+
+  // 3. Adversary owner-b presents forged asset claiming meta.streamOwner = "owner-a" -> must FAIL CLOSED
+  const forgedAsset = {
+    id: "a_forged",
+    name: "forged.bin",
+    meta: {
+      streamRef: outRef,
+      streamOwner: "owner-a", // Forged claim
+    },
+  };
+  await assertRejects(
+    async () => stageAssetAsWasmStream(forgedAsset, { owner: "owner-b", storage: fakeStorage }),
+    Error,
+    "wasm_stream_authority",
+  );
+});
+
+Deno.test("adversarial gate: remove/discard on promoted streams fail closed", async () => {
+  const { removeWasmStream, discardWasmStream } = await import("../extension/lib/wasm-stream-files.js");
+  const outRef = await createWasmStreamOutput({ owner: TEST_OWNER, storage: fakeStorage });
+  const dir = await fakeStorage.getDirectory();
+  const streams = await dir.getDirectoryHandle("wasm-tool-streams-v1");
+  const streamDir = await streams.getDirectoryHandle(outRef.id);
+  const stdoutFile = await streamDir.getFileHandle("stdout.bin");
+  const writer = await stdoutFile.createWritable();
+  await writer.write("Permanent promoted artifact stream");
+  await writer.close();
+
+  await sealWasmStreamOutput({
+    ref: outRef,
+    owner: TEST_OWNER,
+    bytes: 34,
+    receipt: { toolId: "sort", exitCode: 0 },
+    storage: fakeStorage,
+  });
+
+  // Promote stream
+  await promoteWasmStreamToArtifact(outRef, {
+    owner: TEST_OWNER,
+    storage: fakeStorage,
+    force: true,
+  });
+
+  // Calling removeWasmStream on promoted stream must FAIL CLOSED
+  await assertRejects(
+    async () => removeWasmStream({ ref: outRef, owner: TEST_OWNER, storage: fakeStorage }),
+    Error,
+    "wasm_stream_promoted",
+  );
+
+  // Calling discardWasmStream on promoted stream must FAIL CLOSED
+  await assertRejects(
+    async () => discardWasmStream({ ref: outRef, owner: TEST_OWNER, storage: fakeStorage }),
+    Error,
+    "wasm_stream_promoted",
+  );
+});
+
+Deno.test("adversarial gate: arbitrary binary payload stream promotion and zero-copy transfer without UTF-8 corruption", async () => {
+  const { readWasmStreamWindow } = await import("../extension/lib/wasm-stream-files.js");
+  const outRef = await createWasmStreamOutput({ owner: TEST_OWNER, storage: fakeStorage });
+  const dir = await fakeStorage.getDirectory();
+  const streams = await dir.getDirectoryHandle("wasm-tool-streams-v1");
+  const streamDir = await streams.getDirectoryHandle(outRef.id);
+  const stdoutFile = await streamDir.getFileHandle("stdout.bin");
+  const writer = await stdoutFile.createWritable();
+
+  // Arbitrary raw binary: NULL bytes, high bytes, invalid UTF-8 sequences
+  const rawBinary = new Uint8Array([0x00, 0xFF, 0xFE, 0x00, 0x80, 0x81, 0x7F, 0x00, 0xC0, 0xAF]);
+  await writer.write(rawBinary);
+  await writer.close();
+
+  await sealWasmStreamOutput({
+    ref: outRef,
+    owner: TEST_OWNER,
+    bytes: rawBinary.byteLength,
+    receipt: { toolId: "gzip", exitCode: 0 },
+    storage: fakeStorage,
+  });
+
+  const res = await promoteWasmStreamToArtifact(outRef, {
+    owner: TEST_OWNER,
+    storage: fakeStorage,
+    force: true,
+  });
+
+  assertEquals(res.ok, true);
+  assertEquals(res.promoted, true);
+  assertEquals(res.bytes, rawBinary.byteLength);
+
+  // Staging as stream input preserves exact byte count and ref
+  const staged = await stageAssetAsWasmStream(res.asset, {
+    owner: TEST_OWNER,
+    storage: fakeStorage,
+  });
+  assertEquals(staged.ok, true);
+  assertEquals(staged.bytes, rawBinary.byteLength);
+
+  // Read window from stream to verify byte preservation
+  const win = await readWasmStreamWindow({ ref: staged.inputRef, owner: TEST_OWNER, offset: 0, length: 10, storage: fakeStorage });
+  assertEquals(win.ok, true);
+  assertEquals(win.size, rawBinary.byteLength);
+});

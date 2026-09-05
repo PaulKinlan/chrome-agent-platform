@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.167] — 2026-09-05
+- Large tool outputs remain completely available in storage while the artifact viewer clearly labels truncated previews
+
 ## [0.3.166] — 2026-09-05
 - The tool library groups tools by what they are for — 'Running the browser' and 'Doing the work' — instead of by technical source
 
