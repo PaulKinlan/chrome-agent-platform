@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.144] — 2026-09-05
+- update permission-matrix-acceptance selectors for capability-row and add #permissions hash
+
 ## [0.3.143] — 2026-09-05
-- test(kdjk): add real-path tests for destructive delete_named_agent in-route approval in pipelines
+- Permission matrix testing accurately tests capability rows and settings navigation
 
 ## [0.3.142] — 2026-09-04
 - Pipeline workflows now verify owner approval for destructive operations with live confirmation cards
