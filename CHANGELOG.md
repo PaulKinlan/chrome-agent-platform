@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.244] — 2026-09-05
+- New contributor reference documents land in the repo: a full architecture guide, an architecture risk register, a docs-accuracy audit, a cleanup inventory with per-item verification beads, and a position plan for native agent support in the web platform.
+
 ## [0.3.243] — 2026-09-05
 - Fixed a bug where a scheduled task's script could run twice instead of once.
 
@@ -7,6 +10,8 @@
 - Fixed the permissions health check: it was looking for parts of the Settings page that no longer exist, so it reported nothing. It now checks the real capability list and turns a capability off the same way you would — including the confirmation step.
 
 ## [0.3.241] — 2026-09-05
+- Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
+
 - Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
 
 ## [0.3.240] — 2026-09-05
