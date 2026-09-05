@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.172",
+ "release": "0.3.173",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -11,7 +11,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.awk",
    "version": "1.0.0",
-   "digest": "bd445052b21ee5e00fe49d2fb5b4683088b9240ce2841c69181acad6c4f58221"
+   "digest": "fb71aadfe45784c874f871d7ea007efcb43e3a62d7da8d154cc1f9608813ab6c"
   },
   {
    "pkg": "cap.bundled.awk.filter.bounded",
@@ -21,7 +21,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.base64",
    "version": "2.0.0",
-   "digest": "35dfc3768f6271748167eb853f37ca0c8389d77ddc48ce349f67e329e103031a"
+   "digest": "383721407a8268454306cab7bec26cf659279cc0f1934ac712e754bff2e5e7df"
   },
   {
    "pkg": "cap.bundled.csvtool",
@@ -51,7 +51,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.grep",
    "version": "2.0.0",
-   "digest": "a80b8d1e7171ef5b32f2bcdc644434e3d30601243bf7ac9a58e8bccaf781079d"
+   "digest": "a0edafd35aed31e3b06fc9ad95fb06a568517bc2ed3d3397492113de2056c805"
   },
   {
    "pkg": "cap.bundled.gzip",
@@ -66,7 +66,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.jq",
    "version": "1.0.0",
-   "digest": "42a41cae31a3e130a3b3035100a85fab41823a97d5cf488d52aeaaeb41f72f0b"
+   "digest": "c2f44fcb33ccac70dbed85a30be25ace6e93f01168e8fdc4562104f1f57f8dfb"
   },
   {
    "pkg": "cap.bundled.markdown",
@@ -86,7 +86,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.sed",
    "version": "1.0.0",
-   "digest": "f9232e247cd433836b099507035df19259b9a60a6fe13ff966f0776b63300499"
+   "digest": "0e1c211c8dee47c37831bbf4968b35dc03e3580dec7b5b3acb9c564e7fc5a2c7"
   },
   {
    "pkg": "cap.bundled.sha256sum",
@@ -101,7 +101,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.sort",
    "version": "2.0.0",
-   "digest": "40c5cb6cdfed1b7691dd879feebaf7cdad97f7b87d6d2d32f8c329e50f1e3df4"
+   "digest": "38620efb994082119ddcce4bc109c375c54e0ad2cc8aadb5d7199917601fb9b5"
   },
   {
    "pkg": "cap.bundled.sqlite3.query.bounded",
@@ -131,7 +131,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.tr",
    "version": "2.0.0",
-   "digest": "c482d64c05750df74865ff0dd8dd367d0a147dd6bd64052b44943e890e56396f"
+   "digest": "18fea841fe0bc506242c8fdcdd87b49f073b9c688642740a27d0d72f5dafacf9"
   },
   {
    "pkg": "cap.bundled.tree",
@@ -146,7 +146,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.uniq",
    "version": "2.0.0",
-   "digest": "ffe6c7397a5e9b4100565956c8f973d8cc4b594867af78957ba426121cdaf93c"
+   "digest": "5420d92b7e3bd4574a2e18d84d51ae172c783011d051fb57fa2cbd0c5dff06da"
   },
   {
    "pkg": "cap.bundled.uuid",
@@ -156,7 +156,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.wc",
    "version": "2.0.0",
-   "digest": "a5077e63cf2fd33cbfc57dcecf6f4ef8764aa0f77fb8b939e67aec3df17dd48c"
+   "digest": "c07a4b5ee6f1a15ba5da98095bafd13e1f05359c14b632ed53f42ee2f79c6765"
   },
   {
    "pkg": "cap.bundled.xxd",
@@ -387,7 +387,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.awk-1.0.0.manifest.json",
-   "sha256": "bd445052b21ee5e00fe49d2fb5b4683088b9240ce2841c69181acad6c4f58221",
+   "sha256": "fb71aadfe45784c874f871d7ea007efcb43e3a62d7da8d154cc1f9608813ab6c",
    "size": 1842
   },
   {
@@ -397,7 +397,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.base64-2.0.0.manifest.json",
-   "sha256": "35dfc3768f6271748167eb853f37ca0c8389d77ddc48ce349f67e329e103031a",
+   "sha256": "383721407a8268454306cab7bec26cf659279cc0f1934ac712e754bff2e5e7df",
    "size": 1779
   },
   {
@@ -427,7 +427,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.grep-2.0.0.manifest.json",
-   "sha256": "a80b8d1e7171ef5b32f2bcdc644434e3d30601243bf7ac9a58e8bccaf781079d",
+   "sha256": "a0edafd35aed31e3b06fc9ad95fb06a568517bc2ed3d3397492113de2056c805",
    "size": 1772
   },
   {
@@ -442,7 +442,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.jq-1.0.0.manifest.json",
-   "sha256": "42a41cae31a3e130a3b3035100a85fab41823a97d5cf488d52aeaaeb41f72f0b",
+   "sha256": "c2f44fcb33ccac70dbed85a30be25ace6e93f01168e8fdc4562104f1f57f8dfb",
    "size": 1793
   },
   {
@@ -462,7 +462,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sed-1.0.0.manifest.json",
-   "sha256": "f9232e247cd433836b099507035df19259b9a60a6fe13ff966f0776b63300499",
+   "sha256": "0e1c211c8dee47c37831bbf4968b35dc03e3580dec7b5b3acb9c564e7fc5a2c7",
    "size": 1786
   },
   {
@@ -477,7 +477,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sort-2.0.0.manifest.json",
-   "sha256": "40c5cb6cdfed1b7691dd879feebaf7cdad97f7b87d6d2d32f8c329e50f1e3df4",
+   "sha256": "38620efb994082119ddcce4bc109c375c54e0ad2cc8aadb5d7199917601fb9b5",
    "size": 1772
   },
   {
@@ -507,7 +507,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.tr-2.0.0.manifest.json",
-   "sha256": "c482d64c05750df74865ff0dd8dd367d0a147dd6bd64052b44943e890e56396f",
+   "sha256": "18fea841fe0bc506242c8fdcdd87b49f073b9c688642740a27d0d72f5dafacf9",
    "size": 1786
   },
   {
@@ -522,7 +522,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.uniq-2.0.0.manifest.json",
-   "sha256": "ffe6c7397a5e9b4100565956c8f973d8cc4b594867af78957ba426121cdaf93c",
+   "sha256": "5420d92b7e3bd4574a2e18d84d51ae172c783011d051fb57fa2cbd0c5dff06da",
    "size": 1773
   },
   {
@@ -532,7 +532,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.wc-2.0.0.manifest.json",
-   "sha256": "a5077e63cf2fd33cbfc57dcecf6f4ef8764aa0f77fb8b939e67aec3df17dd48c",
+   "sha256": "c07a4b5ee6f1a15ba5da98095bafd13e1f05359c14b632ed53f42ee2f79c6765",
    "size": 1769
   },
   {

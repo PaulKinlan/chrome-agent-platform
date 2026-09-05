@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.173] — 2026-09-05
+- Nine familiar Unix tools now process large files without truncating their input or output
+
 ## [0.3.172] — 2026-09-05
 - Preserve binary output mode in streamed tools
 

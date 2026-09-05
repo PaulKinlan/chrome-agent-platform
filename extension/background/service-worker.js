@@ -9144,9 +9144,9 @@ const handlers = mergeRouteMaps(
     const res = await stageAssetAsWasmStream(assetRes.asset, { owner });
     return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
   },
-  async "tool-stream.promote-output"({ outputRef, name, type = "text", origin = "master", force = false } = {}, routeContext) {
+  async "tool-stream.promote-output"({ outputRef, name, assetType = "text", origin = "master", force = false } = {}, routeContext) {
     const owner = wasmStreamOwner(routeContext);
-    return await promoteWasmStreamToArtifact(outputRef, { origin, name, type, owner, force });
+    return await promoteWasmStreamToArtifact(outputRef, { origin, name, type: assetType, owner, force });
   },
   async "tool-stream.discard"({ ref } = {}, routeContext) {
     const owner = wasmStreamOwner(routeContext);

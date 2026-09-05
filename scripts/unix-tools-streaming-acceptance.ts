@@ -4,9 +4,10 @@
 // routes, runs every shipped executable through offscreen -> fresh Worker ->
 // WASI -> OPFS, and verifies complete byte/SHA-256 receipts. Large stdout is
 // sampled by range and removed after verification; tr stdout is also chained
-// by reference into wc. A hostile grep program must fail without leaving an
-// unsealed output directory. Evidence and the Chrome profile live on durable
-// disk.
+// by reference into wc. The exact 100 MiB tr output and 139,810,137-byte
+// base64 output are promoted, re-staged without copying, and chained into wc.
+// A hostile grep program must fail without leaving an unsealed output
+// directory. Evidence and the Chrome profile live on durable disk.
 
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -29,6 +30,13 @@ const EXPECTED_CAS = Object.freeze({
   sed: "3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438",
   awk: "e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23",
   jq: "e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234",
+});
+
+const BASE64_COUNT = Object.freeze({
+  args: ["-c"],
+  bytes: 10,
+  sha256: "31834464723f249d0e8f702123ec84f12b2bf5dcb23d679b98770f200eaeda73",
+  stdout: "139810137\n",
 });
 
 const EXPECTED = Object.freeze({
@@ -84,6 +92,44 @@ function runExpression(toolId: string, args: string[], inputRef: unknown, remove
   })()`;
 }
 
+function promotionExpression(outputRef: unknown, name: string, wcArgs: string[]) {
+  return `(async () => {
+    const request = ${JSON.stringify({
+      type: "tool-stream.promote-output",
+      outputRef,
+      name,
+      assetType: "text",
+      origin: "master",
+      force: true,
+    })};
+    const promoted = await chrome.runtime.sendMessage(request);
+    if (!promoted?.ok) return { promoted };
+    const promotedRetry = await chrome.runtime.sendMessage(request);
+    if (!promotedRetry?.ok) return { promoted, promotedRetry };
+    const staged = await chrome.runtime.sendMessage({
+      type: "tool-stream.stage-asset",
+      assetId: promoted.artifactId,
+      origin: "master",
+    });
+    if (!staged?.ok) return { promoted, promotedRetry, staged };
+    const result = await chrome.runtime.sendMessage({
+      type: "tool-stream.run",
+      toolId: "wc",
+      args: ${JSON.stringify(wcArgs)},
+      inputRef: staged.inputRef,
+    });
+    if (!result?.ok) return { promoted, promotedRetry, staged, chain: { result } };
+    const receipt = await chrome.runtime.sendMessage({ type: "tool-stream.output.receipt", ref: result.output.ref });
+    const sampleLength = Math.min(256, result.output.bytes);
+    const first = await chrome.runtime.sendMessage({ type: "tool-stream.output.read", ref: result.output.ref, offset: 0, length: sampleLength });
+    const last = await chrome.runtime.sendMessage({ type: "tool-stream.output.read", ref: result.output.ref, offset: Math.max(0, result.output.bytes - sampleLength), length: sampleLength });
+    const removed = await chrome.runtime.sendMessage({ type: "tool-stream.remove", ref: result.output.ref });
+    const postRemove = await chrome.runtime.sendMessage({ type: "tool-stream.output.receipt", ref: result.output.ref });
+    const pinnedRemove = await chrome.runtime.sendMessage({ type: "tool-stream.remove", ref: ${JSON.stringify(outputRef)} });
+    return { promoted, promotedRetry, staged, chain: { result, receipt, first, last, removed, postRemove }, pinnedRemove };
+  })()`;
+}
+
 function verifyRun(toolId: string, probe: any, expected: { bytes: number; sha256: string; stdout: string | null }, input = { bytes: INPUT_BYTES, sha256: INPUT_SHA256 }) {
   assert(probe?.result?.ok === true, `${toolId}: execution failed: ${JSON.stringify(probe?.result)}`);
   const result = probe.result;
@@ -103,11 +149,39 @@ function verifyRun(toolId: string, probe: any, expected: { bytes: number; sha256
   assert(probe.last?.ok === true && probe.last.end === expected.bytes && probe.last.eof === true, `${toolId}: last range read failed`);
 }
 
+function verifyPromotion(label: string, probe: any, sourceRef: any, input: { bytes: number; sha256: string }, expected: { bytes: number; sha256: string; stdout: string | null }) {
+  assert(probe?.promoted?.ok === true && probe.promoted.promoted === true, `${label}: promotion failed`);
+  assert(probe?.promotedRetry?.ok === true && probe.promotedRetry.artifactId === probe.promoted.artifactId,
+    `${label}: keyed promotion retry did not deduplicate`);
+  const asset = probe.promoted.asset;
+  assert(typeof probe.promoted.artifactId === "string" && probe.promoted.artifactId.length > 0,
+    `${label}: no promoted artifact identity`);
+  assert(asset?.meta?.fileBacked === true && asset.meta?.isStreamBacked === true &&
+    asset.meta?.contentComplete === false && asset.meta?.contentIncomplete === true,
+  `${label}: artifact does not disclose its bounded preview`);
+  assert(asset.meta?.bytes === input.bytes && asset.meta?.streamBytes === input.bytes,
+    `${label}: promoted byte count drifted`);
+  assert(JSON.stringify(asset.meta?.streamRef) === JSON.stringify(sourceRef),
+    `${label}: artifact did not retain the exact sealed reference`);
+  assert(asset.content === undefined ||
+    (typeof asset.content === "string" && new TextEncoder().encode(asset.content).byteLength <= 64 * 1024),
+  `${label}: artifact response materialized more than the bounded preview`);
+  assert(probe?.staged?.ok === true && probe.staged.bytes === input.bytes &&
+    JSON.stringify(probe.staged.inputRef) === JSON.stringify(sourceRef),
+  `${label}: re-staging copied or changed the sealed reference`);
+  verifyRun("wc", probe.chain, expected, input);
+  assert(probe.chain.removed?.ok === true && probe.chain.postRemove?.ok === false,
+    `${label}: chained count output cleanup failed`);
+  assert(probe.pinnedRemove?.ok === false && String(probe.pinnedRemove?.error ?? "").includes("promoted"),
+    `${label}: public removal created a dangling artifact reference`);
+}
+
 let browser: Deno.ChildProcess | null = null;
 let cdp: Awaited<ReturnType<typeof openCdp>> | null = null;
 let pageSession: string | null = null;
 let inputRef: any = null;
 let trOutputRef: any = null;
+let base64OutputRef: any = null;
 const state: any = {
   schemaVersion: 1,
   pass: false,
@@ -117,6 +191,7 @@ const state: any = {
   loadedPackages: null,
   runs: {},
   chain: null,
+  promotions: { tr100MiB: null, base64Output: null },
   binaryDecode: null,
   failureCleanup: null,
   workerInstanceIds: [],
@@ -185,10 +260,11 @@ try {
 
   for (const toolId of Object.keys(EXPECTED)) {
     const expected = EXPECTED[toolId as keyof typeof EXPECTED];
-    const holdOutput = toolId === "tr";
+    const holdOutput = toolId === "tr" || toolId === "base64";
     const probe = await cdp.eval(page.sessionId, runExpression(toolId, [...expected.args], inputRef, !holdOutput));
     verifyRun(toolId, probe, expected);
-    if (holdOutput) trOutputRef = probe.result.output.ref;
+    if (toolId === "tr") trOutputRef = probe.result.output.ref;
+    else if (toolId === "base64") base64OutputRef = probe.result.output.ref;
     else {
       assert(probe.removed?.ok === true, `${toolId}: output cleanup failed`);
       assert(probe.postRemove?.ok === false, `${toolId}: removed output remained readable`);
@@ -205,6 +281,24 @@ try {
   assert(chainProbe.removed?.ok === true && chainProbe.postRemove?.ok === false, "chain output cleanup failed");
   state.chain = { from: "tr", to: "wc", probe: chainProbe };
   state.workerInstanceIds.push(chainProbe.result.workerInstanceId);
+
+  state.promotions.tr100MiB = await cdp.eval(page.sessionId,
+    promotionExpression(trOutputRef, "tr-100m.txt", []));
+  verifyPromotion("tr 100 MiB", state.promotions.tr100MiB, trOutputRef,
+    { bytes: INPUT_BYTES, sha256: EXPECTED.tr.sha256 }, EXPECTED.wc);
+  state.workerInstanceIds.push(state.promotions.tr100MiB.chain.result.workerInstanceId);
+
+  state.promotions.base64Output = await cdp.eval(page.sessionId,
+    promotionExpression(base64OutputRef, "base64-139810137.txt", [...BASE64_COUNT.args]));
+  verifyPromotion("base64 139,810,137-byte output", state.promotions.base64Output, base64OutputRef,
+    { bytes: EXPECTED.base64.bytes, sha256: EXPECTED.base64.sha256 }, BASE64_COUNT);
+  state.workerInstanceIds.push(state.promotions.base64Output.chain.result.workerInstanceId);
+
+  // Promoted references remain pinned for their artifact lifetime; the profile
+  // is removed after this acceptance, while public removal is verified above
+  // to fail closed rather than create a dangling asset reference.
+  trOutputRef = null;
+  base64OutputRef = null;
 
   state.binaryDecode = await cdp.eval(page.sessionId, `(async () => {
     let inputRef = null;
@@ -256,6 +350,7 @@ try {
   assert(state.binaryDecode.outputRemoved?.ok === true && state.binaryDecode.inputRemoved?.ok === true,
     "base64 binary probe cleanup failed");
   state.workerInstanceIds.push(state.binaryDecode.result.workerInstanceId);
+  assert(state.workerInstanceIds.length === 13, `expected 13 completed jobs, got ${state.workerInstanceIds.length}`);
   assert(new Set(state.workerInstanceIds).size === state.workerInstanceIds.length, "a worker instance was reused across jobs");
 
   state.failureCleanup = await cdp.eval(page.sessionId, `(async () => {
@@ -284,10 +379,7 @@ try {
   assert(JSON.stringify(state.failureCleanup.before) === JSON.stringify(state.failureCleanup.after),
     "failed execution left an unsealed OPFS directory");
 
-  state.cleanup.trOutput = await cdp.eval(page.sessionId,
-    `chrome.runtime.sendMessage(${JSON.stringify({ type: "tool-stream.remove", ref: trOutputRef })})`);
-  assert(state.cleanup.trOutput?.ok === true, "retained tr output cleanup failed");
-  trOutputRef = null;
+  state.cleanup.trOutput = "promoted-and-pinned-until-profile-removal";
   state.cleanup.input = await cdp.eval(page.sessionId,
     `chrome.runtime.sendMessage(${JSON.stringify({ type: "tool-stream.remove", ref: inputRef })})`);
   assert(state.cleanup.input?.ok === true, "input cleanup failed");
@@ -302,7 +394,7 @@ try {
     card.id = "unix-stream-acceptance-result";
     card.textContent = ${JSON.stringify("PASS — loaded extension, exact 100 MiB OPFS input\n")}
       + ${JSON.stringify(Object.entries(EXPECTED).map(([id, row]) => `${id.padEnd(7)} ${String(row.bytes).padStart(9)} B  ${row.sha256.slice(0, 16)}…`).join("\n"))}
-      + ${JSON.stringify("\ntr → wc chained by sealed OPFS reference\nbinary base64 decode: exact 00 ff 80\nfresh workers: 11/11 · rejected-exit cleanup: complete")};
+      + ${JSON.stringify("\ntr → wc chained by sealed OPFS reference\n100 MiB + 139,810,137 B promoted and re-chained zero-copy\nbinary base64 decode: exact 00 ff 80\nfresh workers: 13/13 · rejected-exit cleanup: complete")};
     Object.assign(card.style, {
       position: "fixed", inset: "48px", zIndex: "2147483647", margin: "0",
       padding: "28px", overflow: "auto", border: "3px solid #087f5b",
@@ -326,6 +418,10 @@ try {
   if (cdp && pageSession && trOutputRef) {
     state.cleanup.trOutput = await cdp.eval(pageSession,
       `chrome.runtime.sendMessage(${JSON.stringify({ type: "tool-stream.remove", ref: trOutputRef })})`).catch(() => null);
+  }
+  if (cdp && pageSession && base64OutputRef) {
+    state.cleanup.base64Output = await cdp.eval(pageSession,
+      `chrome.runtime.sendMessage(${JSON.stringify({ type: "tool-stream.remove", ref: base64OutputRef })})`).catch(() => null);
   }
   if (cdp && pageSession && inputRef) {
     state.cleanup.input = await cdp.eval(pageSession,

@@ -57,7 +57,10 @@ OPFS bytes and carry `type: binary` plus `application/octet-stream`; they are
 never mis-decoded as preview text. Storage failures are reported as execution
 failures. Content-scaled host-call and byte quotas are
 replaced by cancellation, strict syscall shapes, finite concurrent descriptors,
-a finite path-operation guard, and a conservative hang watchdog.
+a finite path-operation guard, and a conservative hang watchdog. The separate
+`tool-stream.tabular-transform` contract deliberately retains its 16 KiB cell
+and 1,024-column guards; those schema limits are not imported into or applied
+to any of the nine Unix WASI jobs.
 
 ## Tool profiles
 

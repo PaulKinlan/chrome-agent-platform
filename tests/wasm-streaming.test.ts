@@ -29,6 +29,7 @@ import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
 import { WasiProcExit } from "../extension/lib/wasm-host-types.js";
 import { executeWasmStreamJob } from "../extension/lib/wasm-stream-worker.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../extension/lib/bundled-tool-packages.data.js";
+import { TABULAR_LIMITS } from "../extension/lib/tool-tabular-contracts.js";
 
 function assert(condition, message = "assertion failed") { if (!condition) throw new Error(message); }
 function equal(actual, expected, message = "values differ") {
@@ -330,6 +331,10 @@ Deno.test("service worker exposes one owner-derived stream lifecycle instead of 
   equal(platformRoutes.split("wasmStreamOwner(routeContext)").length - 1, 5,
     "every attachment, artifact, promotion, discard, and tabular bridge derives the owner from its sender");
   assert(!platformRoutes.includes('owner = "hub"'), "platform bridges must not accept caller-selected owners");
+  assert(platformRoutes.includes('"tool-stream.promote-output"({ outputRef, name, assetType = "text"'),
+    "promotion must use assetType because message.type is reserved for route selection");
+  assert(!platformRoutes.includes('"tool-stream.promote-output"({ outputRef, name, type = "text"'),
+    "promotion must not mistake the route name for the artifact type");
   assert(source.includes("releaseRunWasmStreamOutputs(executionId)"),
     "run settlement must release model-owned stream results");
   assert(source.includes('const runId = typeof context?.runId === "string" && context.runId ? context.runId : null'),
@@ -379,6 +384,51 @@ Deno.test("stream worker core executes exact shipped CAS bytes through sync OPFS
     await executeWasmStreamJob({ wasmBytes, job, owner: "agent:other:hub", inputRef, outputRef, toolId: "wc" }, { storage });
   } catch (error) { rejected = error?.code === "wasm_stream_authority"; }
   assert(rejected, "worker core rejects a foreign owner before execution");
+});
+
+Deno.test("tabular cell limits never become Unix stream input ceilings", async () => {
+  equal(TABULAR_LIMITS.maxCellBytes, 16 * 1024, "tabular transforms retain their explicit cell guard");
+  equal(TABULAR_LIMITS.maxColumns, 1024, "tabular transforms retain their explicit column guard");
+  const hostSource = await Deno.readTextFile("extension/lib/wasm-stream-host.js");
+  assert(!hostSource.includes("TABULAR_LIMITS"), "Unix execution must not inherit tabular working limits");
+  assert(hostSource.includes("stdinBytes: Number.POSITIVE_INFINITY"),
+    "Unix stream jobs must admit complete content rather than a tabular byte ceiling");
+
+  const { storage } = memoryStorage();
+  const owner = "agent:over-tabular-cell:hub";
+  const inputBytes = new Uint8Array(TABULAR_LIMITS.maxCellBytes + 1).fill(0x78);
+  inputBytes[inputBytes.length - 1] = 0x0a;
+  const inputRef = await createWasmStreamInput({ owner, storage });
+  await appendWasmStreamInput({ ref: inputRef, owner, bytes: inputBytes, storage });
+  await sealWasmStreamInput({ ref: inputRef, owner, storage });
+  const outputRef = await createWasmStreamOutput({ owner, storage });
+  const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === "wc");
+  const wasmBytes = await Deno.readFile(`extension/wasm/cas/${row.binary.sha256}.wasm`);
+  const authority = buildPreviewAuthority({ origin: "https://agent.cap", documentId: "over-tabular-cell", now: () => 1 });
+  const input = validatePreviewInput({ toolId: "wc", args: ["-c"], stdin: "" });
+  const job = buildPreviewJob({ input, authority, quota: {
+    hostCalls: Number.POSITIVE_INFINITY, pathCalls: 4096,
+    stdinBytes: Number.POSITIVE_INFINITY, stdoutBytes: Number.POSITIVE_INFINITY,
+    stderrBytes: Number.POSITIVE_INFINITY, fileBytes: Number.POSITIVE_INFINITY,
+    fileSize: Number.POSITIVE_INFINITY, dynamicFds: 256,
+  } });
+  const result = await executeWasmStreamJob({
+    wasmBytes, job, owner, inputRef, outputRef, toolId: "wc",
+  }, { storage });
+  assert(result.ok, result.error);
+  equal(result.receipt.stdinBytes, inputBytes.byteLength,
+    "wc must consume a record beyond the tabular cell guard completely");
+  await sealWasmStreamOutput({
+    ref: outputRef,
+    owner,
+    bytes: result.receipt.stdoutBytes,
+    receipt: result.receipt,
+    storage,
+  });
+  const window = await readWasmStreamWindow({
+    ref: outputRef, owner, offset: 0, length: result.receipt.stdoutBytes, storage,
+  });
+  equal(atob(window.base64), `${inputBytes.byteLength}\n`);
 });
 
 Deno.test("base64 decode preserves invalid UTF-8 bytes and declares binary output", async () => {
