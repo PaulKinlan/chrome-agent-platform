@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.212] — 2026-09-05
+- Implement bounded deterministic table joins and pivots over the canonical strict table core
+
 ## [0.3.211] — 2026-09-05
 - Maintenance and fixes.
 
