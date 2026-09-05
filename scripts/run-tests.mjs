@@ -21,16 +21,7 @@
 // This script is the merge gate via `npm test`; explicit files still run directly.
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-
-const SERIAL = new Set([
-  "tests/build-bootstrap.test.ts", // runs node build.mjs in-place (dist/dist-versions rewrite)
-  "tests/build-debug-mode.test.ts", // runs node build.mjs in-place (debug+store bundles)
-  "tests/build-tool-bundling.test.ts", // runs build.mjs / build-bundled in-place
-  "tests/bundled-tool-packages.test.ts", // asserts the shipped CAS bytes (races with rebuilds)
-  "tests/reachability.test.ts", // asserts the repo tree's generated-artifact state
-  "tests/tool-exec-preview.test.ts", // revalidates the REAL shipped bytes (races with rebuilds)
-  "tests/package-extension-freshness.test.ts", // packages dist + writes the dist-complete marker
-]);
+import { SERIAL, partition } from "./test-partition.mjs";
 
 // Recursive: `deno test tests/` walks subdirectories, so this walk must too
 // (a non-recursive readdir would silently drop future tests/**/ nested files).
@@ -43,7 +34,7 @@ if (missing.length > 0) {
   console.error(`run-tests: SERIAL names files that do not exist: ${missing.join(", ")}`);
   process.exit(2);
 }
-const parallel = all.filter((f) => !SERIAL.has(f));
+const { parallel } = partition(all);
 
 function run(files, flags, label) {
   const t0 = Date.now();

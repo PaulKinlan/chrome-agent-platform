@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.144] — 2026-09-05
+- The safety split that decides which tests must run one at a time is now shared by the full suite and the quick per-change runs, is pinned so it cannot drift unnoticed, and quick runs now parallelize their safe tests — a typical provider-change quick run dropped from 30 seconds to about 18
+
 ## [0.3.143] — 2026-09-05
-- test(kdjk): add real-path tests for destructive delete_named_agent in-route approval in pipelines
+- Deleting a named agent keeps its approval check when it runs inside a pipeline, now covered by real-path checks for the destructive case
 
 ## [0.3.142] — 2026-09-04
 - Pipeline workflows now verify owner approval for destructive operations with live confirmation cards
