@@ -7959,7 +7959,14 @@ class ApprovalCard extends Component {
   get detail() { return this._detail ?? null; }
   set detail(value) {
     this._detail = value && typeof value === "object" && typeof value.source === "string"
-      ? { source: value.source, hosts: Array.isArray(value.hosts) ? value.hosts.filter((h) => typeof h === "string") : [], dynamic: value.dynamic === true }
+      ? {
+          source: value.source,
+          hosts: Array.isArray(value.hosts) ? value.hosts.filter((h) => typeof h === "string") : [],
+          dynamic: value.dynamic === true,
+          truncated: value.truncated === true,
+          totalSourceChars: typeof value.totalSourceChars === "number" ? value.totalSourceChars : value.source.length,
+          sourceDigest: typeof value.sourceDigest === "string" ? value.sourceDigest : null,
+        }
       : null;
     if (this._rendered) { this._render(); this._wire(); }
   }
@@ -7982,6 +7989,8 @@ class ApprovalCard extends Component {
       .card { border:1px solid var(--accent,#0e6e63); border-radius:12px; background:var(--panel,#ffffff); padding:14px 16px; max-width:min(680px, 100%); }
       .title { font-size:14px; font-weight:600; color:var(--ink,#1d1b18); margin:0 0 4px; overflow-wrap:anywhere; }
       .body { font-size:13px; color:var(--muted,#635e56); margin:0 0 12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+      .source-notice { margin:0 0 8px; font-size:12px; color:var(--muted,#635e56); background:var(--panel-2,#f5f3ef); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 10px; line-height:1.4; }
+      .source-notice strong { color:var(--ink,#1d1b18); }
       /* An optional slotted region (e.g. an <artifact-diff> on an edit
          approval) between the body and the decision buttons. The slot has no
          box unless something is assigned to it. */
@@ -7998,7 +8007,11 @@ class ApprovalCard extends Component {
     `, `<div class="card" role="group" aria-label="Approval request">
         <p class="title">${escapeHtml(title)}</p>
         ${body ? `<p class="body">${escapeHtml(body)}</p>` : ""}
-        ${this._detail ? `<span class="source-label" id="source-label">Script source</span><pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}` : ""}
+        ${this._detail ? `<span class="source-label" id="source-label">Script source</span>` +
+          (this._detail.truncated
+            ? `<p class="source-notice" role="note"><strong>Preview:</strong> Showing the first 64 KB (${this._detail.source.length.toLocaleString()} characters) of ${this._detail.totalSourceChars.toLocaleString()} total characters. ${this._detail.sourceDigest ? `Full source SHA-256: <code>${escapeHtml(this._detail.sourceDigest.slice(0, 16))}…</code>. ` : ""}The complete script will run if approved.</p>`
+            : "") +
+          `<pre class="source" tabindex="0" role="region" aria-labelledby="source-label"></pre><span class="source-label">Sites it fetches</span><ul class="hosts" aria-label="Sites this script fetches">${this._detail.hosts.length ? this._detail.hosts.map((h) => `<li>${escapeHtml(h)}</li>`).join("") : `<li class="none">none — the script makes no fetch to a listed site</li>`}</ul>${this._detail.dynamic ? `<p class="dynamic" role="note">Builds a URL at run time (unknown hosts) — only the sites listed above will be reachable; localhost and private addresses are always refused.</p>` : ""}` : ""}
         <slot name="extra"></slot>
         ${state === "pending"
           ? `<div class="actions"><button type="button" class="approve">${escapeHtml(approveLabel)}</button><button type="button" class="deny">${escapeHtml(denyLabel)}</button></div>`
@@ -8008,7 +8021,14 @@ class ApprovalCard extends Component {
   _wire() {
     // The source is untrusted text: textContent, never markup.
     const pre = this._root.querySelector(".source");
-    if (pre && this._detail) pre.textContent = this._detail.source;
+    if (pre && this._detail) {
+      if (this._detail.truncated) {
+        const remaining = this._detail.totalSourceChars - this._detail.source.length;
+        pre.textContent = this._detail.source + `\n\n/* … [${remaining.toLocaleString()} characters truncated from preview — full script (${this._detail.totalSourceChars.toLocaleString()} chars) runs on approval] … */`;
+      } else {
+        pre.textContent = this._detail.source;
+      }
+    }
     this._root.querySelector(".approve")?.addEventListener("click", (event) => this._emit("approve", { sourceEvent: event }));
     this._root.querySelector(".deny")?.addEventListener("click", (event) => this._emit("deny", { sourceEvent: event }));
   }

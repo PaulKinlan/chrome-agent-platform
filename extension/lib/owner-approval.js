@@ -637,15 +637,30 @@ export function approvalPendingCount(store) {
 export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run"]);
 export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253 });
 
-/** Bound a script-approval detail ({ source, hosts, dynamic }) for the card;
- * a malformed detail is dropped (the card still renders without it). */
+/** Bound a script-approval detail ({ source, hosts, dynamic, sourceDigest }) for the card;
+ * a malformed detail is dropped (the card still renders without it).
+ * Truthfulness (chrome-agent-platform-vvbq): when the source exceeds maxSourceChars (64 KiB),
+ * the detail honestly notes `truncated: true`, records `totalSourceChars`, and includes the
+ * full source SHA-256 digest so the card discloses that the preview is partial while the
+ * full source runs on approval. */
 export function boundApprovalDetail(detail) {
   if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
-  const source = typeof detail.source === "string" ? detail.source.slice(0, APPROVAL_DETAIL_BOUNDS.maxSourceChars) : "";
+  const rawSource = typeof detail.source === "string" ? detail.source : "";
+  const isTruncated = rawSource.length > APPROVAL_DETAIL_BOUNDS.maxSourceChars;
+  const source = isTruncated ? rawSource.slice(0, APPROVAL_DETAIL_BOUNDS.maxSourceChars) : rawSource;
   const hosts = Array.isArray(detail.hosts)
     ? detail.hosts.filter((h) => typeof h === "string" && h.length > 0 && h.length <= APPROVAL_DETAIL_BOUNDS.maxHostChars).slice(0, APPROVAL_DETAIL_BOUNDS.maxHosts)
     : [];
-  return { source, hosts, dynamic: detail.dynamic === true };
+  const sourceDigest = typeof detail.sourceDigest === "string"
+    ? detail.sourceDigest
+    : (typeof detail.digest === "string" ? detail.digest : undefined);
+  return {
+    source,
+    hosts,
+    dynamic: detail.dynamic === true,
+    ...(isTruncated ? { truncated: true, totalSourceChars: rawSource.length } : {}),
+    ...(sourceDigest ? { sourceDigest } : {}),
+  };
 }
 
 export function approvalCardDenial({ approvalId, action, targetRef, detail }) {

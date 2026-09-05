@@ -4079,18 +4079,24 @@ async function destructiveActionPolicy() {
 async function scriptApprovalGate(context, action, scope, id, source, extra) {
   const target = canonicalOperationTarget("script", { origin: scope, id: String(id ?? "") });
   const { hosts, dynamic } = extractFetchHosts(source);
+  const sourceDigest = sha256Hex(String(source ?? ""));
   let payload;
   try {
     payload = payloadFields([
       ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
       ["id", String(id ?? "")],
       ["name", extra?.name ?? null],
-      ["sourceDigest", sha256Hex(String(source ?? ""))],
+      ["sourceDigest", sourceDigest],
       ["fetchHosts", hosts.join(",")],
       ["dynamic", dynamic],
     ]);
   } catch { return { ok: false, error: `${action} payload is not approvable` }; }
-  return await requireOwnerApproval(context, action, target, payload, { source: String(source ?? ""), hosts, dynamic });
+  return await requireOwnerApproval(context, action, target, payload, {
+    source: String(source ?? ""),
+    hosts,
+    dynamic,
+    sourceDigest,
+  });
 }
 
 function payloadStringArray(values) {

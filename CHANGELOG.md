@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.146] — 2026-09-05
+- ensure approval card truthfully discloses truncated source previews and full-run digest
+
 ## [0.3.145] — 2026-09-05
-- refactor(1ia6): remove dead siteToolset function and repoint references to readSiteLazySources
+- Cleaned up unused site tool code in the background worker
 
 ## [0.3.144] — 2026-09-05
 - Permission matrix tests accurately reflect capability rows and settings navigation
