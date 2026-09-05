@@ -1,16 +1,19 @@
 # Changelog
 
+## [0.3.227] — 2026-09-05
+- Changelog: sync the extension copy and give the four recovery-merge releases distinct user-language entries
+
 ## [0.3.226] — 2026-09-05
-- Maintenance and fixes.
+- Merge afiu task-composer and znx9 test-cascade branches
 
 ## [0.3.225] — 2026-09-05
-- Maintenance and fixes.
+- Merge np64 and changelog-reland branches
 
 ## [0.3.224] — 2026-09-05
-- Maintenance and fixes.
+- Merge lock-sync, def2 lineage and 8jh branch bookkeeping
 
 ## [0.3.223] — 2026-09-05
-- Maintenance and fixes.
+- Merge agent-fs, 2qy0, 4dg, 9h4u, brv, fw8, h0iy, p43i, qklv-jgho and changelog 60em branches
 
 ## [0.3.222] — 2026-09-05
 - Maintenance and fixes.
