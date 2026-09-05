@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.174] — 2026-09-05
+- chrome-agent-platform-def.2: bounded deterministic table joins and pivots over cap.table/1
+
 ## [0.3.173] — 2026-09-05
 - Nine familiar Unix tools now process large files without truncating their input or output
 

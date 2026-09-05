@@ -76,6 +76,8 @@ export const RETAINED = {
     "No page mounts the preference bridge (docs/PREFERENCE-PERCOLATION.md describes the design); only tests/security.test.ts imports it to pin the message validation.",
   "shared/agent-candidates.js":
     "shared/agent-registry.js replaced it in the product; scripts/sync-gallery.mjs still copies it into docs/ and tests/agent-command.test.ts, tests/site-agent-copy.test.ts, tests/webmcp-page-identity.test.ts import it.",
+  "lib/table-join-pivot.js":
+    "Bead chrome-agent-platform-def.2 (CAP-FB-20260822-SPREADSHEET-TOOLKIT-01, def alignment) is OPEN: bounded deterministic table joins + pivots over the cap.table/1 model. No route/tool wires it yet; only tests/table-join-pivot.test.ts imports it (kept with the module until the def tranche lands a caller).",
 };
 
 // Parse the esbuild entries out of build.mjs: `const X = path.join(STAGE, "<dist rel>")`
