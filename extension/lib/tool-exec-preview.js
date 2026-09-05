@@ -126,6 +126,12 @@ export const PREVIEW_SPECS = Object.freeze(
   ),
 );
 export const PREVIEW_TOOL_IDS = Object.freeze(Object.keys(PREVIEW_SPECS).sort());
+export const STREAM_BACKED_BUNDLED_TOOL_IDS = Object.freeze([
+  "awk", "base64", "grep", "jq", "sed", "sort", "tr", "uniq", "wc",
+]);
+export function isStreamBackedBundledTool(toolId) {
+  return STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId);
+}
 export function previewSpecFor(toolId) {
   return PREVIEW_SPECS[toolId] ?? null;
 }

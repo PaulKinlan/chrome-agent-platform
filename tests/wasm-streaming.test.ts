@@ -215,6 +215,14 @@ Deno.test("service worker exposes one owner-derived stream lifecycle instead of 
   assert(lifecycle.includes("wasmStreamOwner(context)"), "lifecycle routes must derive owner authority from the sender context");
   assert(lifecycle.includes("appendWasmStreamInputBase64"), "Chrome transport must use canonical base64 bytes");
   assert(!lifecycle.includes('owner = "hub"'), "lifecycle authority must not be caller-selected");
+
+  const platformRoutes = source.slice(
+    source.indexOf("// ---- tool streaming platform"),
+    source.indexOf('async "observability.setVerbosity"'),
+  );
+  equal(platformRoutes.split("wasmStreamOwner(routeContext)").length - 1, 5,
+    "every attachment, artifact, promotion, discard, and tabular bridge derives the owner from its sender");
+  assert(!platformRoutes.includes('owner = "hub"'), "platform bridges must not accept caller-selected owners");
 });
 
 Deno.test("stream worker core executes exact shipped CAS bytes through sync OPFS handles", async () => {

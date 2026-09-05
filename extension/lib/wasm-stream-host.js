@@ -2,7 +2,12 @@
 // revalidates the shipped manifest/CAS, then gives one fresh Worker only opaque
 // OPFS references plus the audited executable bytes.
 
-import { previewSpecFor, previewWasiArgs, revalidatePreviewExecution } from "./tool-exec-preview.js";
+import {
+  isStreamBackedBundledTool,
+  previewSpecFor,
+  previewWasiArgs,
+  revalidatePreviewExecution,
+} from "./tool-exec-preview.js";
 import { createWasiJob } from "./wasm-host-types.js";
 import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 import { validateAuthorityRecord } from "./wasm-executor.js";
@@ -32,7 +37,7 @@ function validateRequest(raw) {
     fail("wasm_stream_request");
   }
   const spec = previewSpecFor(raw.toolId);
-  if (!spec) fail("wasm_stream_tool");
+  if (!spec || !isStreamBackedBundledTool(raw.toolId)) fail("wasm_stream_tool");
   const authority = validateAuthorityRecord(raw.authority);
   return Object.freeze({
     toolId: raw.toolId,

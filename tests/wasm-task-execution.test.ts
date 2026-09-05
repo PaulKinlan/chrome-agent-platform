@@ -17,6 +17,7 @@ import {
   executeBundledWasiJob,
   previewSpecFor,
   PREVIEW_LIMITS,
+  STREAM_BACKED_BUNDLED_TOOL_IDS,
 } from "../extension/lib/tool-exec-preview.js";
 
 function assert(condition, message) {
@@ -97,6 +98,16 @@ Deno.test("executableBundledToolRecords: validateArguments validates valid and r
   const validDiff = await diffRec.validateArguments({ docA: "a\nb\n", docB: "a\nc\n" });
   assertEquals(validDiff.ok, true);
   assertEquals(validDiff.data.args.length, 2);
+  assertEquals((await diffRec.validateArguments({ inputRef: ref })).ok, false,
+    "non-stream packages do not acquire an unsupported file-backed execution profile");
+
+  const expectedStreamIds = [...STREAM_BACKED_BUNDLED_TOOL_IDS].sort();
+  const schemaStreamIds = records
+    .filter((record) => Object.hasOwn(record.descriptorInput.inputSchema.properties, "inputRef"))
+    .map((record) => record.descriptorInput.toolId)
+    .sort();
+  assertEquals(JSON.stringify(schemaStreamIds), JSON.stringify(expectedStreamIds),
+    "only the nine streamed Unix packages advertise opaque input references");
 });
 
 Deno.test("executeBundledWasiJob: real manifest and CAS bytes revalidation with typed error envelope on absent host", async () => {

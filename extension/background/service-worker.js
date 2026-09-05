@@ -62,9 +62,11 @@ import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storag
 import {
   PREVIEW_LIMITS,
   PREVIEW_SETTINGS_ORIGIN,
+  STREAM_BACKED_BUNDLED_TOOL_IDS,
   boundPreviewResult,
   buildPreviewAuthority,
   buildPreviewJob,
+  executeBundledWasiJob,
   extractPreviewInput,
   previewSpecFor,
   revalidatePreviewExecution,
@@ -451,6 +453,14 @@ async function stageInlineWasmInput({ stdin, owner }) {
 }
 
 async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context }) {
+  if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
+    return await executeBundledWasiJob({
+      toolId,
+      args: validatedArgs?.args,
+      stdin: validatedArgs?.stdin,
+      runContext: context,
+    });
+  }
   const runId = String(context?.runId ?? context?.executionId ?? "run");
   const agentId = String(context?.agentId ?? "hub");
   const owner = `agent:${runId}:${agentId}`;
@@ -477,6 +487,9 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
 }
 
 async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVIEW_SETTINGS_ORIGIN, documentId = "settings-options" }) {
+  if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
+    return { ok: false, error: `unsupported_stream_tool: ${toolId}` };
+  }
   const spec = previewSpecFor(toolId);
   if (!spec) return { ok: false, error: `unknown_bundled_tool: ${toolId}` };
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
@@ -9093,42 +9106,30 @@ const handlers = mergeRouteMaps(
   // Input create/append/seal, execution, reads, receipts, and removal use the
   // single owner-derived lifecycle routes above. These platform-only bridges
   // must not shadow that authority with caller-supplied owner strings.
-  async "tool-stream.stage-attachment"({ attachment, owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
+  async "tool-stream.stage-attachment"({ attachment } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
     const res = await stageAttachmentAsWasmStream(attachment, { owner });
     return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
   },
-  async "tool-stream.stage-asset"({ assetId, origin = "master", owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
+  async "tool-stream.stage-asset"({ assetId, origin = "master" } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
     const assetRes = await getAsset(origin, assetId);
     if (!assetRes?.ok || !assetRes.asset) return { ok: false, error: "asset not found" };
     const res = await stageAssetAsWasmStream(assetRes.asset, { owner });
     return { ok: true, inputRef: res.inputRef, bytes: res.bytes, name: res.name };
   },
-  async "tool-stream.promote-output"({ outputRef, name, type = "text", origin = "master", owner = "hub", force = false }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
-    const res = await promoteWasmStreamToArtifact(outputRef, { origin, name, type, owner, force });
-    return res;
+  async "tool-stream.promote-output"({ outputRef, name, type = "text", origin = "master", force = false } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
+    return await promoteWasmStreamToArtifact(outputRef, { origin, name, type, owner, force });
   },
-  async "tool-stream.discard"({ ref, owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
+  async "tool-stream.discard"({ ref } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
     await discardWasmStream({ ref, owner });
     return { ok: true };
   },
-  async "tool-stream.tabular-transform"({ inputRef, operations, outputFormat, delimiter, owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
-    const res = await streamTabularTransform(inputRef, { operations, outputFormat, delimiter, owner });
-    return res;
+  async "tool-stream.tabular-transform"({ inputRef, operations, outputFormat, delimiter } = {}, routeContext) {
+    const owner = wasmStreamOwner(routeContext);
+    return await streamTabularTransform(inputRef, { operations, outputFormat, delimiter, owner });
   },
   async "observability.setVerbosity"({ level } = {}) {
     try {

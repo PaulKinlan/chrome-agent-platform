@@ -18,6 +18,7 @@ import {
   utf8ByteLength,
 } from "./pure.js";
 import { REPLAY_UNKNOWN, replaySafetyForTool } from "./tool-replay-safety.js";
+import { isStreamBackedBundledTool } from "./tool-exec-preview.js";
 
 export const TOOL_CATALOG_SCHEMA_VERSION = 1;
 
@@ -662,6 +663,7 @@ export function adaptBundledTools(rows, context = {}) {
     const isAdmitted = row?.admitted === true && row?.disabled !== true;
     const availability = context?.availabilityByTool?.[toolId] ?? (isAdmitted ? "ready" : "disabled");
     const dispatcherKind = context?.dispatcherKind ?? (isAdmitted ? "bundled-wasm-task" : "bundled-wasm-disabled");
+    const supportsStreamRef = isStreamBackedBundledTool(toolId);
     inputs.push({
       sourceKind: "bundled-package",
       packageId: ownData(row, "packageId"),
@@ -674,20 +676,25 @@ export function adaptBundledTools(rows, context = {}) {
         type: "object",
         properties: {
           args: { type: "array", items: { type: "string" }, description: "command-line arguments, excluding argv[0]" },
-          stdin: { type: "string", description: "inline UTF-8 input; omitted when inputRef is used" },
-          inputRef: {
-            type: "object",
-            description: "opaque file-backed input or prior tool-output reference",
-            properties: {
-              version: { type: "integer", const: 1 },
-              id: { type: "string", pattern: "^[0-9a-f]{32}$" },
-              kind: { type: "string", enum: ["input", "stdout"] },
-            },
-            required: ["version", "id", "kind"],
-            additionalProperties: false,
+          stdin: {
+            type: "string",
+            description: supportsStreamRef ? "inline UTF-8 input; omitted when inputRef is used" : "inline UTF-8 input",
           },
+          ...(supportsStreamRef ? {
+            inputRef: {
+              type: "object",
+              description: "opaque file-backed input or prior tool-output reference",
+              properties: {
+                version: { type: "integer", const: 1 },
+                id: { type: "string", pattern: "^[0-9a-f]{32}$" },
+                kind: { type: "string", enum: ["input", "stdout"] },
+              },
+              required: ["version", "id", "kind"],
+              additionalProperties: false,
+            },
+          } : {}),
         },
-        not: { required: ["stdin", "inputRef"] },
+        ...(supportsStreamRef ? { not: { required: ["stdin", "inputRef"] } } : {}),
         additionalProperties: false,
       },
       outputSchema: context.outputSchemaByTool?.[toolId],

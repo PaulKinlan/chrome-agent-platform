@@ -97,6 +97,16 @@ Deno.test("stream host revalidates shipped assets and posts canonical jq argv to
   }
 });
 
+Deno.test("stream host rejects admitted packages outside the nine file-backed Unix tools", async () => {
+  let code = null;
+  try {
+    await executeWasmStreamRequest(request("diff"), { wallMs: 1 });
+  } catch (error) {
+    code = error?.code ?? null;
+  }
+  equal(code, "wasm_stream_tool");
+});
+
 Deno.test("stream host rejects a malformed success receipt instead of sealing it", async () => {
   globalThis.chrome = { runtime };
   globalThis.fetch = fileFetch;

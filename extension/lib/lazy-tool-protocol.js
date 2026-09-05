@@ -42,6 +42,7 @@ import {
 } from "./untrusted-fence.js";
 import {
   executeBundledWasiJob,
+  isStreamBackedBundledTool,
   previewSpecFor,
   validatePreviewInput,
 } from "./tool-exec-preview.js";
@@ -1309,7 +1310,10 @@ export function executableBundledToolRecords(rows, context = {}) {
         let normalizedInputRef = null;
         if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
           const keys = Object.keys(rawArgs);
-          const allowed = new Set(["toolId", "args", "stdin", "inputRef", "input", "text", "docA", "docB"]);
+          const allowed = new Set([
+            "toolId", "args", "stdin", "input", "text", "docA", "docB",
+            ...(isStreamBackedBundledTool(toolId) ? ["inputRef"] : []),
+          ]);
           if ((Object.hasOwn(rawArgs, "toolId") && rawArgs.toolId !== toolId) ||
               keys.some((key) => !allowed.has(key)) ||
               (Object.hasOwn(rawArgs, "args") &&
