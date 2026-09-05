@@ -169,7 +169,7 @@ function cdxBytes(name, version, license, components) {
 
 const NEW_SOURCE = {
   repo: "https://github.com/PaulKinlan/chrome-agent-platform",
-  commit: "cc3a69cb6c8f4f2ee5b3ced269cd1a1fe15d3c7c",
+  commit: "b58721e5aa7b1d93510e542bad897ffb57462229",
 };
 const STREAM_EXPECT = Object.freeze({
   base64: ["20d6324f4925ee8263322bb74eb818861f13fbd0d4ce080b13c2140b213232cf", 15346],

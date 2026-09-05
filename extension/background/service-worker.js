@@ -310,13 +310,6 @@ import {
   updateScript,
 } from "../lib/scripts.js";
 import {
-  createWasmStreamInput,
-  appendWasmStreamInput,
-  sealWasmStreamInput,
-  removeWasmStream,
-  discardWasmStream,
-} from "../lib/wasm-stream-files.js";
-import {
   stageAttachmentAsWasmStream,
   stageAssetAsWasmStream,
   promoteWasmStreamToArtifact,
@@ -9097,28 +9090,9 @@ const handlers = mergeRouteMaps(
   },
 
   // ---- tool streaming platform (CAP-FB-20260822-WASM-TOOL-PLATFORM-01) ----
-  async "tool-stream.input.create"({ owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
-    const inputRef = await createWasmStreamInput({ owner });
-    return { ok: true, inputRef };
-  },
-  async "tool-stream.input.append"({ ref, bytes, owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
-    const chunk = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const res = await appendWasmStreamInput({ ref, owner, bytes: chunk });
-    return { ok: true, bytes: res.bytes };
-  },
-  async "tool-stream.input.seal"({ ref, owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
-    const res = await sealWasmStreamInput({ ref, owner });
-    return { ok: true, ref: res.ref, bytes: res.bytes };
-  },
+  // Input create/append/seal, execution, reads, receipts, and removal use the
+  // single owner-derived lifecycle routes above. These platform-only bridges
+  // must not shadow that authority with caller-supplied owner strings.
   async "tool-stream.stage-attachment"({ attachment, owner = "hub" }, routeContext) {
     if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
       return { ok: false, error: "extension-only route" };
@@ -9141,13 +9115,6 @@ const handlers = mergeRouteMaps(
     }
     const res = await promoteWasmStreamToArtifact(outputRef, { origin, name, type, owner, force });
     return res;
-  },
-  async "tool-stream.remove"({ ref, owner = "hub" }, routeContext) {
-    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
-      return { ok: false, error: "extension-only route" };
-    }
-    await removeWasmStream({ ref, owner });
-    return { ok: true };
   },
   async "tool-stream.discard"({ ref, owner = "hub" }, routeContext) {
     if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {

@@ -4,7 +4,9 @@
 // routes, runs every shipped executable through offscreen -> fresh Worker ->
 // WASI -> OPFS, and verifies complete byte/SHA-256 receipts. Large stdout is
 // sampled by range and removed after verification; tr stdout is also chained
-// by reference into wc. Evidence and the Chrome profile live on durable disk.
+// by reference into wc. A hostile grep program must fail without leaving an
+// unsealed output directory. Evidence and the Chrome profile live on durable
+// disk.
 
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -115,6 +117,7 @@ const state: any = {
   loadedPackages: null,
   runs: {},
   chain: null,
+  failureCleanup: null,
   workerInstanceIds: [],
   cleanup: { input: null, trOutput: null },
   error: null,
@@ -203,6 +206,32 @@ try {
   state.workerInstanceIds.push(chainProbe.result.workerInstanceId);
   assert(new Set(state.workerInstanceIds).size === state.workerInstanceIds.length, "a worker instance was reused across jobs");
 
+  state.failureCleanup = await cdp.eval(page.sessionId, `(async () => {
+    async function entries() {
+      const root = await navigator.storage.getDirectory();
+      let streams;
+      try { streams = await root.getDirectoryHandle("wasm-tool-streams-v1"); }
+      catch (error) { if (error?.name === "NotFoundError") return []; throw error; }
+      const names = [];
+      for await (const name of streams.keys()) names.push(name);
+      return names.sort();
+    }
+    const before = await entries();
+    const result = await chrome.runtime.sendMessage(${JSON.stringify({
+      type: "tool-stream.run",
+      toolId: "grep",
+      args: ["["],
+      inputRef,
+    })});
+    const after = await entries();
+    return { before, result, after };
+  })()`);
+  assert(state.failureCleanup?.result?.ok === false, "hostile grep unexpectedly succeeded");
+  assert(state.failureCleanup.result.phase === "failed" && state.failureCleanup.result.exitCode === 2,
+    `hostile grep did not preserve its rejected exit: ${JSON.stringify(state.failureCleanup.result)}`);
+  assert(JSON.stringify(state.failureCleanup.before) === JSON.stringify(state.failureCleanup.after),
+    "failed execution left an unsealed OPFS directory");
+
   state.cleanup.trOutput = await cdp.eval(page.sessionId,
     `chrome.runtime.sendMessage(${JSON.stringify({ type: "tool-stream.remove", ref: trOutputRef })})`);
   assert(state.cleanup.trOutput?.ok === true, "retained tr output cleanup failed");
@@ -221,7 +250,7 @@ try {
     card.id = "unix-stream-acceptance-result";
     card.textContent = ${JSON.stringify("PASS — loaded extension, exact 100 MiB OPFS input\n")}
       + ${JSON.stringify(Object.entries(EXPECTED).map(([id, row]) => `${id.padEnd(7)} ${String(row.bytes).padStart(9)} B  ${row.sha256.slice(0, 16)}…`).join("\n"))}
-      + ${JSON.stringify("\ntr → wc chained by sealed OPFS reference\nfresh workers: 10/10 · cleanup: complete")};
+      + ${JSON.stringify("\ntr → wc chained by sealed OPFS reference\nfresh workers: 10/10 · rejected-exit cleanup: complete")};
     Object.assign(card.style, {
       position: "fixed", inset: "48px", zIndex: "2147483647", margin: "0",
       padding: "28px", overflow: "auto", border: "3px solid #087f5b",

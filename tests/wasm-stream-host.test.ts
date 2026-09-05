@@ -143,7 +143,7 @@ Deno.test("stream host has a finite cancellation deadline", async () => {
 Deno.test("offscreen stream listener trusts only the extension service worker sender", async () => {
   const manifest = JSON.parse(await Deno.readTextFile("extension/manifest.json"));
   equal(manifest.background.service_worker, WASM_STREAM_SERVICE_WORKER_PATH, "sender pin matches the shipped manifest");
-  assert(isTrustedWasmStreamSender({ id: runtime.id }, runtime));
+  assert(!isTrustedWasmStreamSender({ id: runtime.id }, runtime), "an absent sender URL has no service-worker authority");
   assert(isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("dist/background/service-worker.js") }, runtime));
   const offscreenRuntime = { ...runtime, getManifest() { return { manifest_version: 3 }; } };
   assert(isTrustedWasmStreamSender({ id: runtime.id, url: runtime.getURL("dist/background/service-worker.js") }, offscreenRuntime),

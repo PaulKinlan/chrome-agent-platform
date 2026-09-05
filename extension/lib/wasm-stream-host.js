@@ -223,7 +223,6 @@ function validateWorkerResult(result, request) {
 export function isTrustedWasmStreamSender(sender, runtime = chrome.runtime) {
   if (sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
   const url = typeof sender?.url === "string" ? sender.url : "";
-  if (url === "") return true;
   // Chrome strips the background section from getManifest() in an offscreen
   // document, so this path is pinned and separately tested against the shipped
   // manifest rather than inferred from attacker-controlled sender fields.

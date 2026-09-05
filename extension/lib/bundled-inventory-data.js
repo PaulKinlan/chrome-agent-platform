@@ -11,7 +11,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.awk",
    "version": "1.0.0",
-   "digest": "0741612c40aa5828063705f427e910e83c3bd9ad9036de9d0edd5cf71ffb2472"
+   "digest": "d63961da2945344177002bb512caaba1e5ec0d69fab1a43b6526ed37c0e8a202"
   },
   {
    "pkg": "cap.bundled.awk.filter.bounded",
@@ -21,7 +21,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.base64",
    "version": "2.0.0",
-   "digest": "ef11a7800ceb911d46491361f3fb1c4e391edbd62c22267e79a7369aec5c7ffb"
+   "digest": "55f235265b80e13acdb35ec6dee547bfd2c4667e2875bfd4064436809078dfc3"
   },
   {
    "pkg": "cap.bundled.csvtool",
@@ -51,7 +51,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.grep",
    "version": "2.0.0",
-   "digest": "ebd87af1e36286f56602c6056da9fa4bb75c1b1aad69be1b16cbf7877cdfe089"
+   "digest": "23b7195879f8dce1e2a7d19c05cf03410ebb19900ae197f644a6231856aecdd2"
   },
   {
    "pkg": "cap.bundled.gzip",
@@ -66,7 +66,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.jq",
    "version": "1.0.0",
-   "digest": "8af0bfdf4df0135edd27ea516f09e5d64a10014dc107fa61490f0b8acff633ca"
+   "digest": "5f5f34bc3f8d8db32628a8755c2e0c6bc914275681c0e71f0e08ab5655f24ba9"
   },
   {
    "pkg": "cap.bundled.markdown",
@@ -86,7 +86,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.sed",
    "version": "1.0.0",
-   "digest": "798fd93e0dc505c0c0b6638bb1d67f42551a8853d75277d060057d92a82cd91c"
+   "digest": "e1a72f1b8687a44d5c194cfedb4a4ebbf7cc67eac597593638ab9099cb948b22"
   },
   {
    "pkg": "cap.bundled.sha256sum",
@@ -101,7 +101,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.sort",
    "version": "2.0.0",
-   "digest": "b7ab6a48bcce4dbc7008458cdaa25c6d5c6645c1e1796f4cb8805676b9284f98"
+   "digest": "ad58a242158be47f986fae2fe65626e8ce9639c27551fc2f85ad334b824cfe5c"
   },
   {
    "pkg": "cap.bundled.sqlite3.query.bounded",
@@ -131,7 +131,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.tr",
    "version": "2.0.0",
-   "digest": "92f3b73dc24af30f7b36ad08e6c8d961972dee0ece867a4db35608d5d5675e37"
+   "digest": "0c66ba609b609e33b70e7e8d1c112f6b84eb0ae6025845cc42346aa0bbe367f7"
   },
   {
    "pkg": "cap.bundled.tree",
@@ -146,7 +146,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.uniq",
    "version": "2.0.0",
-   "digest": "504766f1de2ec01feafcff27db785bf6c0d234abd4f169901ad690378e98237d"
+   "digest": "d33226fdc7c3f97d2fd167adc958c8a6885cd6bb6e7842e56891c1fd54012769"
   },
   {
    "pkg": "cap.bundled.uuid",
@@ -156,7 +156,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.wc",
    "version": "2.0.0",
-   "digest": "a8cc93cd11305bc91a402e8a29fd8e3cb7ba463bf7639bc89615bbaaac7b376d"
+   "digest": "ca88faef69cd63facd2abdade06dc8f00616c28a47574daea80c3115f36fca8d"
   },
   {
    "pkg": "cap.bundled.xxd",
@@ -387,7 +387,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.awk-1.0.0.manifest.json",
-   "sha256": "0741612c40aa5828063705f427e910e83c3bd9ad9036de9d0edd5cf71ffb2472",
+   "sha256": "d63961da2945344177002bb512caaba1e5ec0d69fab1a43b6526ed37c0e8a202",
    "size": 1842
   },
   {
@@ -397,7 +397,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.base64-2.0.0.manifest.json",
-   "sha256": "ef11a7800ceb911d46491361f3fb1c4e391edbd62c22267e79a7369aec5c7ffb",
+   "sha256": "55f235265b80e13acdb35ec6dee547bfd2c4667e2875bfd4064436809078dfc3",
    "size": 1779
   },
   {
@@ -427,7 +427,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.grep-2.0.0.manifest.json",
-   "sha256": "ebd87af1e36286f56602c6056da9fa4bb75c1b1aad69be1b16cbf7877cdfe089",
+   "sha256": "23b7195879f8dce1e2a7d19c05cf03410ebb19900ae197f644a6231856aecdd2",
    "size": 1772
   },
   {
@@ -442,7 +442,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.jq-1.0.0.manifest.json",
-   "sha256": "8af0bfdf4df0135edd27ea516f09e5d64a10014dc107fa61490f0b8acff633ca",
+   "sha256": "5f5f34bc3f8d8db32628a8755c2e0c6bc914275681c0e71f0e08ab5655f24ba9",
    "size": 1793
   },
   {
@@ -462,7 +462,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sed-1.0.0.manifest.json",
-   "sha256": "798fd93e0dc505c0c0b6638bb1d67f42551a8853d75277d060057d92a82cd91c",
+   "sha256": "e1a72f1b8687a44d5c194cfedb4a4ebbf7cc67eac597593638ab9099cb948b22",
    "size": 1786
   },
   {
@@ -477,7 +477,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.sort-2.0.0.manifest.json",
-   "sha256": "b7ab6a48bcce4dbc7008458cdaa25c6d5c6645c1e1796f4cb8805676b9284f98",
+   "sha256": "ad58a242158be47f986fae2fe65626e8ce9639c27551fc2f85ad334b824cfe5c",
    "size": 1772
   },
   {
@@ -507,7 +507,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.tr-2.0.0.manifest.json",
-   "sha256": "92f3b73dc24af30f7b36ad08e6c8d961972dee0ece867a4db35608d5d5675e37",
+   "sha256": "0c66ba609b609e33b70e7e8d1c112f6b84eb0ae6025845cc42346aa0bbe367f7",
    "size": 1786
   },
   {
@@ -522,7 +522,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.uniq-2.0.0.manifest.json",
-   "sha256": "504766f1de2ec01feafcff27db785bf6c0d234abd4f169901ad690378e98237d",
+   "sha256": "d33226fdc7c3f97d2fd167adc958c8a6885cd6bb6e7842e56891c1fd54012769",
    "size": 1773
   },
   {
@@ -532,7 +532,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.wc-2.0.0.manifest.json",
-   "sha256": "a8cc93cd11305bc91a402e8a29fd8e3cb7ba463bf7639bc89615bbaaac7b376d",
+   "sha256": "ca88faef69cd63facd2abdade06dc8f00616c28a47574daea80c3115f36fca8d",
    "size": 1769
   },
   {

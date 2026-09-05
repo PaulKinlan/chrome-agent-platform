@@ -195,6 +195,28 @@ Deno.test("WASI stdio adapters stream complete input/output without runtime accu
   equal(runtime.snapshot().counters.stdinBytesRead, source.byteLength);
 });
 
+Deno.test("service worker exposes one owner-derived stream lifecycle instead of shadowing routes", async () => {
+  const source = await Deno.readTextFile("extension/background/service-worker.js");
+  for (const route of [
+    "tool-stream.input.create",
+    "tool-stream.input.append",
+    "tool-stream.input.seal",
+    "tool-stream.run",
+    "tool-stream.output.read",
+    "tool-stream.output.receipt",
+    "tool-stream.remove",
+  ]) {
+    equal(source.split(`async \"${route}\"`).length - 1, 1, `${route} must have exactly one route definition`);
+  }
+  const lifecycle = source.slice(
+    source.indexOf('async "tool-stream.input.create"'),
+    source.indexOf('// ── The "what I did" action ledger'),
+  );
+  assert(lifecycle.includes("wasmStreamOwner(context)"), "lifecycle routes must derive owner authority from the sender context");
+  assert(lifecycle.includes("appendWasmStreamInputBase64"), "Chrome transport must use canonical base64 bytes");
+  assert(!lifecycle.includes('owner = "hub"'), "lifecycle authority must not be caller-selected");
+});
+
 Deno.test("stream worker core executes exact shipped CAS bytes through sync OPFS handles", async () => {
   const { storage } = memoryStorage();
   const owner = "agent:run-1:hub";

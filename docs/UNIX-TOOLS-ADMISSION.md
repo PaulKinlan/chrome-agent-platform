@@ -1,7 +1,7 @@
 # Unix tools: large-input execution and admission profile
 
-Status: design authority for the `grep`, `sed`, `awk`, `sort`, `uniq`, `wc`,
-`tr`, `base64`, and `jq` admissions.
+Status: implemented admission profile for the `grep`, `sed`, `awk`, `sort`,
+`uniq`, `wc`, `tr`, `base64`, and `jq` packages.
 
 ## Contract
 
@@ -28,33 +28,38 @@ input   = inline UTF-8/bytes | inputRef
 stdout  = per-call OPFS file
 stderr  = per-call OPFS file
 scratch = isolated per-call OPFS files
-result  = outputRef + media type + byte count + digest + exit status + counters
+result  = outputRef + byte counts + SHA-256 digests + exit status + timing
 ```
 
-The service worker keeps manifest/CAS/capability/run-fence revalidation. It
-ensures the existing offscreen document, which stages inline, attachment, or
-artifact input under `tool-jobs/<execution>/<call>/`. A fresh dedicated Worker
-opens file handles with `FileSystemSyncAccessHandle` before `_start`, so WASI
-`fd_read`, `fd_write`, seek, and scratch calls remain synchronous without
-serializing the payload as JavaScript number arrays. Wasm bytes travel as a
-`Uint8Array`/transferable buffer.
+The service worker keeps manifest/CAS/capability/run-fence revalidation. Inline
+model input is staged in finite chunks, while Settings can create, append, and
+seal an input explicitly. Both paths use opaque records under
+`wasm-tool-streams-v1/<id>/`; already-sealed stdout may be supplied as the next
+call's input without copying. Attachment and permanent-artifact promotion are a
+separate platform layer rather than authority silently claimed here. A fresh
+dedicated Worker opens file handles with `FileSystemSyncAccessHandle` before
+`_start`, so WASI `fd_read`, `fd_write`, seek, and scratch calls remain
+synchronous without serializing the payload as JavaScript number arrays. Wasm
+bytes travel as a `Uint8Array`/transferable buffer.
 
 The Worker never concatenates large stdout or stderr. Completion atomically
 publishes the files and returns references plus incremental SHA-256, counts,
 and timings. Small results may also be inlined for convenience, but crossing an
 inline representation threshold never rejects or truncates the retained
-result. Cancellation or failure terminates the Worker and removes unpublished
-input/output/scratch. Storage exhaustion is reported as `storage_exhausted`.
-Content-scaled host-call and path-call quotas are replaced by cancellation,
-strict syscall shapes, finite concurrent descriptors, and a conservative hang
-watchdog.
+result. Cancellation or failure terminates the Worker and removes its unsealed
+output and scratch; reusable sealed caller input is retained, while input staged
+only for one inline model call is removed by that caller. Storage failures are
+reported as execution failures. Content-scaled host-call and byte quotas are
+replaced by cancellation, strict syscall shapes, finite concurrent descriptors,
+a finite path-operation guard, and a conservative hang watchdog.
 
 ## Tool profiles
 
 - `wc`, `tr`, and `base64` use fixed-size buffers and true stream I/O;
   `base64 -d` has an explicit binary output type.
-- `uniq` retains only adjacent-record state and spills an exceptionally long
-  record rather than imposing a line limit.
+- `uniq` retains only the current and previous adjacent records. Record storage
+  may grow until genuine wasm32 memory exhaustion; there is no CAP byte/line
+  admission ceiling.
 - `grep` uses a real regular-expression parser/engine, assembles records across
   chunks, and preserves normal exits 0 (match), 1 (no match), and 2 (error).
 - `sed` uses pinned minised 1.16 (BSD-3-Clause), its real program parser, and
@@ -62,12 +67,14 @@ watchdog.
 - `awk` is a canonical grammar-based implementation, not the historical
   `awk_filter_bounded` literal-pattern subset. Subprocess and network operations
   remain unavailable at the sandbox boundary.
-- `jq` uses pinned jq 1.8.2 with permissively licensed regex support, normal jq
-  argv, JSON sequences, and `--stream`; arbitrary filters are not claimed to
-  use constant memory.
-- `sort` performs C-locale external merge sort: bounded-memory sorted runs are
-  written sequentially, then fixed-fan-in merge passes alternate between two
-  scratch files. Data volume is limited only by available browser storage.
+- `jq` uses pinned jq 1.8.2 with normal jq argv, JSON sequences, and `--stream`.
+  Its single-threaded WASI adaptation omits Oniguruma, so Oniguruma-dependent
+  regex built-ins are explicitly unavailable; arbitrary filters are not claimed
+  to use constant memory.
+- `sort` performs C-locale external merge sort: bounded-memory, line-complete
+  runs are written to isolated scratch files and pairwise-merged until one run
+  remains. Oversized records are copied as file-backed singleton runs. Data
+  volume is limited only by available browser storage.
 
 Historical bounded package identities remain immutable; canonical replacements
 receive new manifests, CAS digests, and descriptors.
@@ -82,14 +89,16 @@ import/memory census, canonical manifest/CAS identity, a small semantic and
 negative KAT, a 100 MiB loaded-extension KAT, and a deliberate corruption or
 truncation red proof.
 
-The deterministic 100 MiB corpus contains fixed-width records and sentinels on
-both sides of former 2 KiB, 64 KiB, 8 MiB, 10 MiB, 32 MiB, and 64 MiB boundaries,
-plus a final-record sentinel. Acceptance records input/output byte counts and
-digests, bytes actually read, cold and warm wall time, MiB/s, peak Wasm pages,
-and peak scratch bytes. Correctness is exact: counts/formulas for `wc`/`awk`,
-digests for full-output transforms, boundary matches for `grep`, encode/decode
-round-trip for `base64`, JSON tail queries for `jq`, and ordered record count,
-first/last records, digest, and observed spill/merge for `sort`.
+The deterministic 100 MiB corpus is 819,200 fixed-width JSONL records (409,600
+matching records), with an exact input digest. Loaded-extension acceptance
+records input/output byte counts and digests, bytes actually read, elapsed time,
+fresh Worker identities, first/last output windows, reference chaining, and
+post-read cleanup. Correctness is exact: counts for `wc`/`grep`/`awk`, complete
+output digests for every transform, decoded first/last windows for large
+results, and ordered first/last records plus the full digest for spilled
+`sort` output. Focused adversarial tests separately cover malformed programs,
+receipt forgery, timeout termination, oversized sort records, and scratch/error
+cleanup.
 
 KATs drive the loaded production extension and admitted Worker; host-native
 commands and imported test doubles are not execution evidence. Gates are the
