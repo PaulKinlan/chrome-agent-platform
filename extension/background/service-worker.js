@@ -4017,21 +4017,31 @@ function issueDetectionNonce(documentId) {
   return nonce;
 }
 
-async function armDetectionProbe(tabId, documentId) {
+async function armDetectionProbe(tabId, documentId, hookName) {
   const nonce = detectionNonceMemory.get(documentId);
   if (!nonce) return false;
+  // The hook name is per-document and comes from the page's OWN relay (f62c).
+  // Validate the exact shape before calling it: a same-prefix page function
+  // can only receive this document's own detection nonce (self-impact — the
+  // page already controls its own detection feed by declaring tools).
+  if (typeof hookName !== "string" || !/^capWebmcpDetectBootstrap_[0-9a-f]{32}$/.test(hookName)) {
+    return false;
+  }
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId, documentIds: [documentId] },
       world: "MAIN",
-      func: (value) => {
+      func: (name, value) => {
         const root = globalThis;
         // The hook name carries no `__` prefix (see webmcp-detect-main.js):
         // minification inlines this alias to globalThis.<name>, and the
-        // shipped-code oracle scan flags `globalThis.__*`.
-        return root.capWebmcpDetectBootstrap?.(value) === true;
+        // shipped-code oracle scan flags `globalThis.__*`. The name arrives
+        // as an ARGUMENT (per-document, unguessable) — there is no static
+        // global contract a page can probe (the fingerprint-surface fix).
+        const hook = root[name];
+        return typeof hook === "function" && hook(value) === true;
       },
-      args: [nonce],
+      args: [hookName, nonce],
     });
     return results?.[0]?.result === true;
   } catch {
@@ -6961,7 +6971,7 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, nonce: issueDetectionNonce(__sender.documentId) };
   },
-  async "webmcp.detect.arm"({ origin, __sender }) {
+  async "webmcp.detect.arm"({ origin, hook, __sender }) {
     const canonical = canonicalOrigin(origin);
     if (
       !canonical ||
@@ -6973,7 +6983,7 @@ const handlers = mergeRouteMaps(
     if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
       return { ok: false, error: "sender tab origin mismatch" };
     }
-    const armed = await armDetectionProbe(__sender.tabId, __sender.documentId);
+    const armed = await armDetectionProbe(__sender.tabId, __sender.documentId, hook);
     return armed ? { ok: true } : { ok: false, error: "detection probe not armed" };
   },
   async "webmcp.detected"({ origin, url, toolCount, __sender }) {

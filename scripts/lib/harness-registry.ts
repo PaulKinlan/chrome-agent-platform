@@ -101,6 +101,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-mcp-transport.ts": { class: "kat" },
   "kat-mic-state.ts": { class: "kat", ...RED("59/1", "axe: the device picker controls carry an aria attribute not allowed on their role") },
   "kat-narrow-toggle.ts": { class: "kat" },
+  "kat-fingerprint-surface.ts": { class: "kat" },
   "kat-notify-icon.ts": { class: "kat" },
   "kat-noun-discipline.ts": { class: "kat" },
   "kat-patch-asset.ts": { class: "kat" },

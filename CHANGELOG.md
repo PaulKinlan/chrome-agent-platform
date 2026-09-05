@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.236] — 2026-09-05
+- Websites can no longer tell the extension is installed: the artifact viewer files are no longer exposed to web pages, and the page-tool detector now uses a random, per-page hook name instead of a fixed one.
+
 ## [0.3.235] — 2026-09-05
 - : origin-bound skills + per-origin site notes
 
