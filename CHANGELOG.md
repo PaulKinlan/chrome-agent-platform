@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.249] — 2026-09-05
+- The toolbox gains imageops: inspect, resize, and convert images (PNG/JPEG/WebP) on-device
+
 ## [0.3.248] — 2026-09-05
 - The behind-the-scenes live test now cleans up fully: it used to leave pieces of the test browser running after it finished.
 

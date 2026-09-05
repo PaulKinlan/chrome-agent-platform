@@ -458,7 +458,7 @@ Deno.test("tool-library: tools render grouped by PURPOSE — the two families, t
   // Every purpose group renders as a native <details> (incl. zero-count ones,
   // like the source slice before), with the label + one-line purpose + count.
   const groupDetails = allDetails.filter((d) => d.className === "source-group" && d.attrs["data-purpose"]);
-  assertEquals(groupDetails.length, 22 + 1, "the 22 taxonomy groups + the Ungrouped honesty section");
+  assertEquals(groupDetails.length, 23 + 1, "the 23 taxonomy groups + the Ungrouped honesty section");
   const byPurpose = new Map(groupDetails.map((d) => [d.attrs["data-purpose"], d]));
   const tables = byPurpose.get("tables-queries");
   assert(tables, "the tables-queries group exists");

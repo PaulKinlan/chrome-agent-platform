@@ -1,0 +1,16 @@
+[package]
+name = "imageops"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "CAP-authored WASI image tool: info/resize/convert over stdin/stdout (chrome-agent-platform-e5o8)"
+
+[dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

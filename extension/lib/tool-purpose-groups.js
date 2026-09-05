@@ -108,6 +108,11 @@ export const TOOL_PURPOSE_GROUPS = Object.freeze({
     label: "Checksums & IDs",
     line: "Hash data and generate unique IDs.",
   }),
+  "media-images": Object.freeze({
+    family: "doing-the-work",
+    label: "Images & media",
+    line: "Inspect, resize, and convert images and other media.",
+  }),
   "scripts-compute": Object.freeze({
     family: "doing-the-work",
     label: "Scripts & compute",
@@ -253,6 +258,8 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "sha256sum": "hashes-ids",
   "sha512sum": "hashes-ids",
   "uuid": "hashes-ids",
+  // Bundled packages — images & media.
+  "imageops": "media-images",
   // Built-in core tools.
   "memory_get": "memory-usage",
   "memory_set": "memory-usage",

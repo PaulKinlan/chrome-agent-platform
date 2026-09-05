@@ -26,7 +26,11 @@ not captured during research it is marked *pin sha at admission time*.
 
 ## 1. Image processing
 
-### wasm-vips — ADMIT-NOW (Paul's "liboxide/libs something" — verified)
+### wasm-vips — SUPERSEDED (2026-09-05, e5o8 owner decision: option B)
+- Measured at admission: vips.wasm 5,084,535 bytes (5.08 MB), imports env×89 (Emscripten) + wasi_snapshot_preview1×10 + GOT.func (dynamic linking); side modules vips-heif/jxl/resvg are GOT-linked side modules; glue uses SharedArrayBuffer/pthreads. The bundled WASI-preview1-only authority cannot host it; it moves to the Emscripten-module host epic (chrome-agent-platform-ltkj / CAP-FB-20260905-EMSCRIPTEN-RUNTIME-01).
+- Shipped instead: **imageops** (cap.bundled.imageops 1.0.0) — CAP-authored clean-room WASI tool over the pure-Rust `image` crate 0.25.10 (MIT OR Apache-2.0): info/resize/convert (png/jpeg/webp), stdin→stdout, 721,475 bytes, 8 WASI imports, sha256 cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a, byte-reproducible (build-a == build-b). Evidence: packages/bundled/evidence/imageops/.
+
+### wasm-vips — ADMIT-NOW (catalogue verdict history — see the SUPERSEDED note above) (Paul's "liboxide/libs something" — verified)
 - Repo: https://github.com/kleisauke/wasm-vips · npm: https://www.npmjs.com/package/wasm-vips
 - License: MIT (third-party notices: aom BSD-2, brotli MIT, cgif MIT, etc.)
 - Size: ~4.6 MB wasm binary

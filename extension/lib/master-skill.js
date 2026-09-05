@@ -63,9 +63,9 @@ interaction, History & sessions, Downloads, Bookmarks & reading list,
 Cookies & site data, Network (declarativeNetRequest), Content & user scripts,
 System & power, Extensions.
 - Local files the owner granted: list_folders, read_file, write_file.
-- 31 on-device bundled Wasm tools (list_tools("bundled-wasm")): grep, sed, awk,
+- 32 on-device bundled Wasm tools (list_tools("bundled-wasm")): grep, sed, awk,
 sort, uniq, wc, tr, base64, jq, diff, csvtool, toml2json,
-sqlite3_query_bounded, xxd, uuid, gzip… They are NOT in your default
+sqlite3_query_bounded, xxd, uuid, gzip, imageops… They are NOT in your default
 tool list.
 - Agents: create_agent enrolls a SITE (its WebMCP tools); a teammate in the
 owner's Agents list is a NAMED agent (create_named_agent, list_named_agents).

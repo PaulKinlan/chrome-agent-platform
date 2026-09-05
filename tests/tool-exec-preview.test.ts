@@ -260,7 +260,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   assertEquals(validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true }) }).toolId, "sqlite3_query_bounded");
   // gzip + truncate + touch + sqlite are the appended tools after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["awk", "awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -358,7 +358,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 31 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 32 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
@@ -375,7 +375,11 @@ Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for 
     assertEquals(revalidated.casSha256, spec.casSha, toolId);
     assertEquals(revalidated.casSize, spec.size, toolId);
     assertEquals(revalidated.executable.id, toolId, toolId);
-    assertEquals(revalidated.memory.tier, "tiny", toolId);
+    // The tier the manifest DECLARES is the tier the revalidation must honor
+    // (tiny for the Unix tools; imageops declares the default tier — image
+    // buffers legitimately exceed 512 pages).
+    const declaredTier = JSON.parse(manifestText)?.executables?.[0]?.memory?.tier ?? "tiny";
+    assertEquals(revalidated.memory.tier, declaredTier, toolId);
     assertEquals(JSON.stringify(revalidated.capabilities), JSON.stringify(spec.caps), toolId);
   }
   // per-tool caps honored: uuid is the crypto set, the others text.transform
@@ -474,10 +478,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 31-tool static allowlist admits every shipped package", async () => {
+Deno.test("preview: the EXACT 32-tool static allowlist admits every shipped package", async () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["awk", "awk_filter_bounded", "base64", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -485,7 +489,7 @@ Deno.test("preview: the EXACT 31-tool static allowlist admits every shipped pack
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 0, "all 31 are enabled");
+  assertEquals(notAdmitted.length, 0, "all 32 are enabled");
   assertEquals(notAdmitted.map((row) => row.toolId).sort(), []);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);

@@ -1,0 +1,426 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:cbcf9ec3-f51d-4b82-83c0-3e306696cf1c",
+  "version": 1,
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "rustc",
+          "version": "1.97.1 (8bab26f4f 2026-07-14)"
+        },
+        {
+          "type": "application",
+          "name": "cargo",
+          "version": "1.97.1"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "imageops@1.0.0",
+      "name": "imageops",
+      "version": "1.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "licenceStatus",
+          "value": "cleared"
+        },
+        {
+          "name": "provenance",
+          "value": "CAP-authored clean-room wrapper over the pure-Rust image crate; chrome-agent-platform-e5o8"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "crate:adler2@2.0.1",
+      "name": "adler2",
+      "version": "2.0.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/adler2/2.0.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:autocfg@1.5.1",
+      "name": "autocfg",
+      "version": "1.5.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/autocfg/1.5.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:bitflags@2.13.1",
+      "name": "bitflags",
+      "version": "2.13.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/bitflags/2.13.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:bytemuck@1.25.2",
+      "name": "bytemuck",
+      "version": "1.25.2",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/bytemuck/1.25.2"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:byteorder-lite@0.1.0",
+      "name": "byteorder-lite",
+      "version": "0.1.0",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/byteorder-lite/0.1.0"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:cfg-if@1.0.4",
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/cfg-if/1.0.4"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:crc32fast@1.5.1",
+      "name": "crc32fast",
+      "version": "1.5.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/crc32fast/1.5.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:fdeflate@0.3.7",
+      "name": "fdeflate",
+      "version": "0.3.7",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/fdeflate/0.3.7"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:flate2@1.1.10",
+      "name": "flate2",
+      "version": "1.1.10",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/flate2/1.1.10"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:image@0.25.10",
+      "name": "image",
+      "version": "0.25.10",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/image/0.25.10"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:image-webp@0.2.4",
+      "name": "image-webp",
+      "version": "0.2.4",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/image-webp/0.2.4"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:miniz_oxide@0.8.9",
+      "name": "miniz_oxide",
+      "version": "0.8.9",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/miniz_oxide/0.8.9"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:miniz_oxide@0.9.1",
+      "name": "miniz_oxide",
+      "version": "0.9.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/miniz_oxide/0.9.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:moxcms@0.8.1",
+      "name": "moxcms",
+      "version": "0.8.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/moxcms/0.8.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:num-traits@0.2.19",
+      "name": "num-traits",
+      "version": "0.2.19",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/num-traits/0.2.19"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:png@0.18.1",
+      "name": "png",
+      "version": "0.18.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/png/0.18.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:pxfm@0.1.30",
+      "name": "pxfm",
+      "version": "0.1.30",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/pxfm/0.1.30"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:quick-error@2.0.1",
+      "name": "quick-error",
+      "version": "2.0.1",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/quick-error/2.0.1"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:simd-adler32@0.3.10",
+      "name": "simd-adler32",
+      "version": "0.3.10",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/simd-adler32/0.3.10"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:zlib-rs@0.6.7",
+      "name": "zlib-rs",
+      "version": "0.6.7",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/zlib-rs/0.6.7"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:zune-core@0.5.3",
+      "name": "zune-core",
+      "version": "0.5.3",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/zune-core/0.5.3"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "crate:zune-jpeg@0.5.15",
+      "name": "zune-jpeg",
+      "version": "0.5.15",
+      "licenses": [
+        {
+          "expression": "NOASSERTION"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://crates.io/crates/zune-jpeg/0.5.15"
+        }
+      ]
+    }
+  ]
+}

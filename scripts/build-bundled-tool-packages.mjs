@@ -57,6 +57,7 @@ const PATHS = {
   b2: join(EVIDENCE, "b2"),
   c2: join(EVIDENCE, "c2"),
   csvtool: join(EVIDENCE, "csvtool"),
+  imageops: join(EVIDENCE, "imageops"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
   stream: join(REPO, "packages/bundled/unix-stream-v1"),
@@ -142,6 +143,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   touch: "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
   truncate: "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
+  imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: image bytes stdin to image bytes (info prints JSON) stdout. Subcommands: info; resize --width N --height M; convert --format.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
@@ -233,6 +235,13 @@ for (const toolId of LANES.c2.tools) {
   const buildB = readFileSync(join(PATHS.csvtool, "build-b/csvtool.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("csvtool reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "csvtool", lane: "csvtool", bytes: wasm, row: null, spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.csvtool, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/csvtool.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "clang 22.1.8; LLD 22.1.8", buildScriptLane: "csvtool", displayName: "csvtool", category: "text", description: AGENT_DESCRIPTIONS.csvtool, caveats: ["Stdin/stdout only; no file operands."], replayClass: "read-only", capabilities: ["compute", "text.transform"] });
+}
+{ // imageops (CAP-authored clean-room over the pure-Rust image crate; owner decision: Apache-2.0; e5o8 option B)
+  const wasm = readFileSync(join(PATHS.imageops, "build-a/imageops.wasm"));
+  if (sha256(wasm) !== "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a" || wasm.byteLength !== 721475) throw new Error("imageops hash/size mismatch");
+  const buildB = readFileSync(join(PATHS.imageops, "build-b/imageops.wasm"));
+  if (sha256(buildB) !== sha256(wasm)) throw new Error("imageops reproducibility broken (build-a != build-b)");
+  packages.push({ toolId: "imageops", lane: "imageops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.imageops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/imageops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "imageops", displayName: "imageops", category: "media", description: AGENT_DESCRIPTIONS.imageops, caveats: ["png/jpeg/webp only; stdin/stdout; no EXIF editing."], replayClass: "read-only", capabilities: ["compute"] });
 }
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));
@@ -387,7 +396,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
@@ -510,18 +519,19 @@ for (const pkg of packages) {
   // Ground-truth the binary: audit the real bytes, then declare EXACTLY the
   // measured memory (initial/max pages) so the manifest is truthful by
   // construction. The declared import module list must cover the actual set.
-  const tier = "tiny";
-  const probeExec = { memory: { tier, maxPages: WASM_PACKAGE_LIMITS.TIERS.tiny.maxPages }, imports: { allowed: ["wasi_snapshot_preview1"], disallowed: [] } };
+  const tier = pkg.tier ?? "tiny";
+  const tierCeiling = WASM_PACKAGE_LIMITS.TIERS[tier]?.maxPages;
+  if (!Number.isInteger(tierCeiling)) throw new Error(`${pkg.toolId}: unknown tier ${tier}`);
+  const probeExec = { memory: { tier, maxPages: tierCeiling }, imports: { allowed: ["wasi_snapshot_preview1"], disallowed: [] } };
   const audit = auditWasmBinary(pkg.bytes, probeExec, {});
   const actualModules = [...new Set(audit.imports.map((i) => i.module))].sort();
   const allowed = ["wasi_snapshot_preview1"];
   if (!actualModules.every((m) => allowed.includes(m))) throw new Error(`${pkg.toolId}: unaudited import module ${actualModules}`);
   const initialPages = pkg.memoryOverride?.initialPages ?? audit.measured.memoryInitial;
-  const maxPages = pkg.memoryOverride?.maxPages ?? audit.measured.memoryMax ?? WASM_PACKAGE_LIMITS.TIERS.tiny.maxPages;
+  const maxPages = pkg.memoryOverride?.maxPages ?? audit.measured.memoryMax ?? tierCeiling;
   if (audit.measured.memoryMax != null && audit.measured.memoryMax > maxPages) throw new Error(`${pkg.toolId}: binary max ${audit.measured.memoryMax} exceeds declared ${maxPages}`);
   if (audit.measured.memoryInitial > initialPages) throw new Error(`${pkg.toolId}: binary initial ${audit.measured.memoryInitial} exceeds declared ${initialPages}`);
-  if (maxPages > WASM_PACKAGE_LIMITS.TIERS.tier?.maxPages) throw new Error("unreachable");
-  if (maxPages > WASM_PACKAGE_LIMITS.TIERS.tiny.maxPages) throw new Error(`${pkg.toolId}: exceeds tiny tier`);
+  if (maxPages > tierCeiling) throw new Error(`${pkg.toolId}: exceeds ${tier} tier`);
 
   const meta = pkg.row ?? pkg;
   const capabilities = [...meta.capabilities].sort();

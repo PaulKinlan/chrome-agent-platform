@@ -906,6 +906,42 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.imageops",
+  "version": "1.0.0",
+  "toolId": "imageops",
+  "lane": "imageops",
+  "displayName": "imageops",
+  "category": "media",
+  "description": "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: image bytes stdin to image bytes (info prints JSON) stdout. Subcommands: info; resize --width N --height M; convert --format.",
+  "caveats": [
+   "png/jpeg/webp only; stdin/stdout; no EXIF editing.",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+  ],
+  "capabilities": [
+   "compute"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "Apache-2.0",
+   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "cbcf9ec3f51d6b82c3c03e306696cf1ccb8896ba230ad9d0f0c9211eb7de2a6a",
+   "bytes": 721475,
+   "tier": "default",
+   "initialPages": 18,
+   "maxPages": 2048
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.imageops-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.gzip",
   "version": "1.0.0",
   "toolId": "gzip",
