@@ -93,3 +93,27 @@ Deno.test("settings multi-section: provider server tools init is bound to the pr
   const htmlSection = HTML.slice(HTML.indexOf('id="providers"'), HTML.indexOf('id="mcp-servers"'));
   assert(htmlSection.includes('id="server-tools-enabled"'), "the server-tools toggle lives in the providers section HTML");
 });
+
+// ── Boot with no fragment (chrome-agent-platform-hy91) ─────────────────────
+// The hub's Settings button opens `options/options.html` with NO fragment, and
+// so does Chrome's own extension Options entry. The navigation controller fails
+// closed on an unresolvable hash — correct for a mid-session navigation, fatal
+// on boot: no section renderer ran, and the statically-active Providers panel
+// showed its heading with an empty provider list. The controller must be given
+// a default section for the boot sync.
+Deno.test("settings boot: the navigation controller declares a default section for a fragment-less load", () => {
+  assert(
+    /defaultHash:\s*"#providers"/.test(JS),
+    "options.js must pass defaultHash: \"#providers\" to createNavigationController, or a fragment-less Settings load renders no section at all",
+  );
+});
+
+// A renderer that throws must not keep its one-shot claim, or the section stays
+// blank for the life of the page with no way to retry.
+Deno.test("settings boot: a failed section render releases its claim so the next navigation retries", () => {
+  const block = JS.slice(JS.indexOf("async function ensureSectionRendered("), JS.indexOf("async function renderSection("));
+  assert(block.includes("renderedSections.delete(sectionId)"),
+    "ensureSectionRendered must release renderedSections when the renderer throws");
+  assert(/catch\s*\(/.test(block) && block.includes("throw"),
+    "ensureSectionRendered must rethrow after releasing the claim (never swallow the failure)");
+});

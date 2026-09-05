@@ -76,9 +76,22 @@ try {
     tabs: document.querySelectorAll("#provider-tabs > *").length,
     panels: document.getElementById("provider-panels")?.children.length ?? 0,
     keyFields: document.querySelectorAll("#providers input.api-key").length,
+    cards: document.querySelectorAll("#providers .provider-card").length,
   }))()`);
   check("initial load: providers panel shows real content (tabs, rendered provider panels, an API-key field) — never a blank shell",
     (providerContent?.tabs ?? 0) > 0 && (providerContent?.panels ?? 0) > 0 && (providerContent?.keyFields ?? 0) > 0, providerContent);
+  check("initial load: the provider list itself rendered (cards)",
+    (providerContent?.cards ?? 0) > 0, providerContent);
+
+  // 1b. A stale/unknown deep link must land on the default section too, never
+  // on a page where nothing rendered (the controller's boot defaultHash).
+  const staleT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#no-such-section` });
+  const staleSess = (await send("Target.attachToTarget", { targetId: staleT.result.targetId, flatten: true })).result?.sessionId;
+  await send("Runtime.enable", {}, staleSess);
+  await sleep(1600);
+  const staleCards = await evalIn(staleSess, `document.querySelectorAll("#providers .provider-card").length`);
+  check("stale deep link: falls back to a rendered Providers section", (staleCards ?? 0) > 0, staleCards);
+  await send("Target.closeTarget", { targetId: staleT.result.targetId });
 
   // 2. Click "Browser control" nav link
   // rfca: visibility alone proves the panel switched, not that its renderer

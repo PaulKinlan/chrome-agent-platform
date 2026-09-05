@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.241] — 2026-09-05
+- Settings is harder to break: if a section fails to load, navigating to it again now retries instead of staying blank, and opening Settings with an outdated or missing link always lands on a working page.
+
 ## [0.3.240] — 2026-09-05
 - Internal hardening: the list of built-in tools allowed to read large files is now pinned by a test, so it cannot silently gain or lose a tool.
 
