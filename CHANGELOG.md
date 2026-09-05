@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.145] — 2026-09-05
+- refactor(1ia6): remove dead siteToolset function and repoint references to readSiteLazySources
+
 ## [0.3.144] — 2026-09-05
-- update permission-matrix-acceptance selectors for capability-row and add #permissions hash
+- Permission matrix tests accurately reflect capability rows and settings navigation
 
 ## [0.3.143] — 2026-09-05
 - Permission matrix testing accurately tests capability rows and settings navigation

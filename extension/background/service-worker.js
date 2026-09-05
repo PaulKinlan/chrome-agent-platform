@@ -1887,45 +1887,6 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     return orch;
 }
 
-// Per-site toolset: the site's declared/inferred tools become valid AI-SDK tools.
-// `runGenCell` is the per-worker cell the tool closures capture for the immutable
-// run generation (see ensureOrchestrator).
-async function siteToolset(origin, runGenCell) {
-  const tools = await listTools(origin);
-  const set = {};
-  const seen = new Map(); // tool id → (origin, name) for explicit duplicate rejection
-  for (const t of tools) {
-    // A valid AI-SDK tool needs an inputSchema. The JSON-schema descriptor is
-    // converted by schemaToZod (fail-closed: unsupported → z.never()), and the
-    // invocation is approval-gated + origin-bound.
-    let id = safeToolName(origin, t.name);
-    let n = 2;
-    // Even with a 64-bit hash, reject an actual collision explicitly: append a
-    // disambiguator rather than silently overwriting another tool.
-    while (
-      seen.has(id) &&
-      (seen.get(id).origin !== origin || seen.get(id).name !== t.name)
-    ) {
-      id = `${safeToolName(origin, t.name)}_${n++}`.slice(0, 64);
-    }
-    seen.set(id, { origin, name: t.name });
-    set[id] = tool({
-      description: `${t.name} on ${origin} — ${t.description ?? ""}`,
-      inputSchema: buildSchema(z, t.inputSchema),
-      execute: async (args) => {
-        if (!(await isApproved(origin, t.name))) {
-          return { error: `tool ${t.name} on ${origin} not approved` };
-        }
-        // Thread the worker's IMMUTABLE run-start generation into the site
-        // invocation so a re-enrolled origin is rejected (see runGenCell).
-        const runGen = runGenCell?.get?.() ?? null;
-        return await invokeSiteTool(origin, t.name, args, runGen);
-      },
-    });
-  }
-  return set;
-}
-
 // Drive a page function on an origin via the content script (WebMCP/injection).
 // Preemptive revocation: enrollment + GENERATION are read atomically up front,
 // the untrusted page call runs WITHOUT holding the origin lifecycle lock (so a
@@ -6503,8 +6464,9 @@ const handlers = mergeRouteMaps(
   // enrollment generation as the expected generation (the same value a
   // just-started run would capture). EXTENSION-ONLY: never in
   // PAGE_ALLOWED_ROUTES — a page must never invoke its own tools through the
-  // trusted path. The model-facing run path (siteToolset) additionally gates
-  // on per-tool owner approval before reaching invokeSiteTool.
+  // trusted path. The model-facing run path (readSiteLazySources /
+  // authorizationGuard) additionally gates on per-tool owner approval before
+  // reaching invokeSiteTool.
   async "tools.invoke"({ origin, name, args }) {
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
