@@ -528,7 +528,14 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   font-family: ui-monospace, monospace;
   font-size: 13px;
 }
-/* ── WebMCP discovery status (Paul 2026-08-18) ── */
+/* ── Site tool consent + WebMCP discovery status ── */
+.site-tool-consent,
+.webmcp-status {
+  margin-top: 20px;
+}
+.site-tool-consent > p {
+  max-width: 72ch;
+}
 .webmcp-row {
   display: flex;
   flex-direction: column;

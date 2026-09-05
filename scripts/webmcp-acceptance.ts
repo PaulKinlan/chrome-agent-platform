@@ -16,13 +16,13 @@
 //   6. discovery WITHOUT a reload (immediate injection), then AFTER a reload
 //      (dynamic registration + the bridge startup enrollment sync) and after a
 //      cross-document navigation;
-//   7. PRODUCTION invocation: the extension-only `tools.invoke` route →
-//      invokeSiteTool (directory + dispatch-source resolution, immutable
-//      generation fencing, the exact approved-tab/document binding, pre/post
-//      enrollment revalidation) → isolated → MAIN, with a VISIBLE page side
-//      effect (DOM mutation + counter), the declared-vs-global collision
-//      assertion, production negatives (unknown tool) and bridge-layer
-//      fencing negatives (missing gen / source rejected at the relay);
+//   7. GENUINE model invocation: the composer creates a real foreground run,
+//      the exact first-use approval card appears in that conversation, a real
+//      owner click persists Allow, and only then does the lazy protocol reach
+//      invokeSiteTool → isolated → MAIN and visibly mutate the page. Follow-up
+//      model runs prove silent reuse and sticky Deny; Settings clicks prove
+//      rearm/reset, bounded audit pagination, and in-flight result suppression.
+//      Owner-only `tools.invoke` remains only for lower-level bridge negatives.
 //   8. re-enrollment singleton: repeated enrollment yields exactly ONE live
 //      bridge (one side effect per invoke);
 //   9. screenshots + a machine-verifiable manifest (test-artifacts/ by
@@ -429,9 +429,10 @@ async function main() {
   // lazy protocol: the page's cart changes and the transcript's tool card
   // names the site's tool. Timed end to end. Then the service worker is
   // restarted and the site's tool still runs without re-enrollment.
-  // Enrollment IS the owner's consent for the site's tools (CAP-FB-20260824-
-  // WEBMCP-AUTOAPPROVE-01): the negative asserted here is that BEFORE the click
-  // nothing on the site can be invoked, and no permission is held.
+  // Enrollment grants discovery and worker custody, never automatic model use.
+  // The negative asserted here is that BEFORE enrollment nothing can run; after
+  // enrollment the first exact model-selected tool still pauses for its own
+  // owner-bound consent card.
   if (!HEADED) {
     const showcaseProfile = durableDir(`cap-webmcp-showcase-${Date.now()}`);
     await Deno.mkdir(showcaseProfile, { recursive: true });
@@ -650,6 +651,35 @@ async function main() {
       check("showcase: the task is in the composer", typeof typed === "string" && typed.endsWith(taskTail), typed);
       const ran = await c.clickExpr(ns, `document.querySelector("#run-task")`);
       check("showcase: clicked Run task via a real click", ran);
+      const firstUseCard = await c.until(() => c.evalIn(ns, `(() => {
+        const cards = [...document.querySelectorAll("approval-card")];
+        const card = cards.find((candidate) => candidate.getAttribute("title")?.includes("add_to_cart") && candidate.getAttribute("state") !== "granted");
+        if (!card) return null;
+        const root = card.shadowRoot;
+        return {
+          title: card.getAttribute("title"),
+          body: card.getAttribute("body"),
+          approve: root?.querySelector(".approve")?.textContent?.trim(),
+          deny: root?.querySelector(".deny")?.textContent?.trim(),
+          focused: root?.activeElement?.classList?.contains("approve") === true,
+        };
+      })()`), 15000, 100);
+      check("first use: the genuine model run pauses on the exact site/tool card",
+        firstUseCard?.title === `Use ${PAGE_ORIGIN}’s add_to_cart?` &&
+          String(firstUseCard?.body).includes(`Site: ${PAGE_ORIGIN}`) &&
+          String(firstUseCard?.body).includes("Tool: add_to_cart"), firstUseCard);
+      check("first use: the card offers exact Allow automatically and Deny controls",
+        firstUseCard?.approve === "Allow automatically" && firstUseCard?.deny === "Deny", firstUseCard);
+      const firstUseFocus = await c.until(() => c.evalIn(ns, `[...document.querySelectorAll("approval-card")].some((card) => card.getAttribute("title")?.includes("add_to_cart") && card.shadowRoot?.activeElement?.classList?.contains("approve")) ? true : null`), 3000, 50);
+      check("first use: keyboard focus moves to Allow automatically", firstUseFocus === true);
+      const pendingCart = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
+      check("first use: no page side effect crosses before the owner decides", pendingCart === "0", pendingCart);
+      await front(hubT.targetId, ns);
+      await shotOf(ns, "showcase-first-use-card.png");
+      const allowedFirstUse = await c.clickExpr(ns, `[...document.querySelectorAll("approval-card")].find((card) => card.getAttribute("title")?.includes("add_to_cart") && card.getAttribute("state") !== "granted")?.shadowRoot?.querySelector(".approve")`);
+      check("first use: clicked Allow automatically in the originating conversation", allowedFirstUse);
+      const settledFirstUse = await c.until(() => c.evalIn(ns, `[...document.querySelectorAll("approval-card")].some((card) => card.getAttribute("title")?.includes("add_to_cart") && card.getAttribute("state") === "granted") ? true : null`), 10000, 100);
+      check("first use: the exact card settles granted", settledFirstUse === true);
       const cartChanged = await c.until(() => c.evalIn(shop, `(() => {
         const count = document.getElementById("cart-count")?.textContent;
         const total = document.getElementById("cart-total")?.textContent;
@@ -667,6 +697,44 @@ async function main() {
         return status === "success" ? { name: hit.getAttribute("tool-name"), status, text: (hit.shadowRoot?.textContent ?? "").replace(/\\s+/g, " ").slice(0, 300) } : null;
       })()`), 20000);
       check("showcase: the transcript's tool card shows the site's tool name (add_to_cart) with a successful result", toolCard?.name === "add_to_cart" && toolCard?.status === "success", toolCard);
+      const firstActivityControl = await c.evalIn(ns, `(() => {
+        const card = [...document.querySelectorAll('message-bubble[role="tool"]')].find((bubble) => bubble.getAttribute("tool-name") === "add_to_cart");
+        let activity = null;
+        try { activity = JSON.parse(card?.getAttribute("site-activity") || "null"); } catch {}
+        const button = card?.shadowRoot?.querySelector(".site-activity");
+        return card && button ? { activity, label: button.textContent?.trim(), aria: button.getAttribute("aria-label") } : null;
+      })()`);
+      check("first use: the completed site-tool bubble exposes its exact owner-only activity control",
+        firstActivityControl?.activity?.origin === PAGE_ORIGIN && firstActivityControl?.activity?.tool === "add_to_cart" &&
+          Object.keys(firstActivityControl.activity).length === 2 && firstActivityControl?.label === "View site activity",
+        firstActivityControl);
+      const firstActivityExpanded = await c.clickExpr(ns, `[...document.querySelectorAll('message-bubble[role="tool"]')].find((bubble) => bubble.getAttribute("tool-name") === "add_to_cart")?.shadowRoot?.querySelector("details.tool > summary")`);
+      check("first use activity: expanded the completed tool bubble with a real click", firstActivityExpanded);
+      const firstActivityOpened = await c.clickExpr(ns, `[...document.querySelectorAll('message-bubble[role="tool"]')].find((bubble) => bubble.getAttribute("tool-name") === "add_to_cart")?.shadowRoot?.querySelector(".site-activity")`);
+      check("first use activity: clicked View site activity from the tool bubble", firstActivityOpened);
+      const consentSettingsT = await c.until(async () => {
+        const targets = await c.send("Target.getTargets");
+        return targets?.targetInfos?.find((target: any) => target.type === "page" && String(target.url).includes(`chrome-extension://${extId}/options/options.html`)) ?? null;
+      }, 10000, 100);
+      check("first use activity: the bubble opens the production Settings document", !!consentSettingsT?.targetId, consentSettingsT);
+      if (!consentSettingsT?.targetId) throw new Error("site activity Settings target missing");
+      const consentSettings = await c.attach(consentSettingsT.targetId);
+      await c.send("Page.enable", {}, consentSettings);
+      const firstActivityFocused = await c.until(() => c.evalIn(consentSettings, `(() => {
+        const manager = document.getElementById("webmcp-consent-manager");
+        const focus = manager?._activityFocus;
+        const target = manager?.shadowRoot?.querySelector(".audit-target");
+        return focus?.origin === ${JSON.stringify(PAGE_ORIGIN)} && focus?.tool === "add_to_cart" && target ? {
+          focus, text: (target.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 240), hash: location.hash,
+        } : null;
+      })()`), 15000, 100);
+      check("first use activity: Settings filters to the exact site and highlights the called tool",
+        firstActivityFocused?.focus?.origin === PAGE_ORIGIN && firstActivityFocused?.focus?.tool === "add_to_cart" && firstActivityFocused?.hash === "#agents",
+        firstActivityFocused);
+      const clearedFirstActivity = await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector(".audit-clear")`);
+      check("first use activity: Show all activity clears the one-shot filter", clearedFirstActivity);
+      await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?._activityFocus === null ? true : null`), 5000, 50);
+      await front(hubT.targetId, ns);
       const finalText = await c.until(() => c.evalIn(ns, `(() => {
         const bubbles = [...document.querySelectorAll('message-bubble')].filter((b) => b.getAttribute("role") !== "tool" && b.getAttribute("role") !== "user");
         // The visible message text only (the shadow root's <style> is not prose).
@@ -681,6 +749,254 @@ async function main() {
       await front(hubT.targetId, ns);
       await shotOf(ns, "showcase-tool-card.png");
       console.log(`showcase timing (ms after hub load): tab opened +${tOpen - t0}; check chip +${tOpen - t0 + checkMs} (${checkMs} after the tab); grant +${tGrant - t0}; offer chip +${tGrant - t0 + chipMs} (${chipMs} after the grant); page changed +${tChanged - t0}`);
+
+      const approvalCardCount = () => c.evalIn(ns, `document.querySelectorAll("approval-card").length`);
+      const activeComposerExpr = `(!document.querySelector("#thread-view")?.hidden ? document.querySelector("agent-composer#thread-composer") : document.querySelector("agent-composer#composer"))`;
+      const waitForComposer = () => c.until(() => c.evalIn(ns, `(() => {
+        const host = ${activeComposerExpr};
+        const input = host?.querySelector("#task-input");
+        const running = !document.querySelector("#thread-view")?.hidden && !document.querySelector("#run-control-bar")?.hidden;
+        return input && !input.disabled && !running ? true : null;
+      })()`), 30000, 100);
+      const ensureSiteSelection = async () => {
+        const current = await c.evalIn(ns, `(() => { const a = ${activeComposerExpr}?.selectedAgent; return a?.kind === "site" && a?.id === ${JSON.stringify(PAGE_ORIGIN)}; })()`);
+        if (current === true) return true;
+        await c.clickExpr(ns, `${activeComposerExpr}?.querySelector("#task-input")`);
+        await c.send("Input.insertText", { text: "@127" }, ns);
+        const offered = await c.until(() => c.evalIn(ns, `[...(${activeComposerExpr}?.querySelectorAll('.popup .item[role="option"]') ?? [])].some((row) => (row.textContent || "").includes("127.0.0.1:8934")) ? true : null`), 5000, 100);
+        if (!offered) return false;
+        return await c.clickExpr(ns, `[...(${activeComposerExpr}?.querySelectorAll('.popup .item[role="option"]') ?? [])].find((row) => (row.textContent || "").includes("127.0.0.1:8934"))`);
+      };
+      const runSiteTask = async (text: string) => {
+        if (!(await waitForComposer())) return false;
+        if (!(await ensureSiteSelection())) return false;
+        await c.clickExpr(ns, `${activeComposerExpr}?.querySelector("#task-input")`);
+        await c.send("Input.insertText", { text }, ns);
+        const enabled = await c.until(() => c.evalIn(ns, `(() => { const button = ${activeComposerExpr}?.querySelector("#run-task"); return button && !button.disabled ? true : null; })()`), 3000, 50);
+        return enabled === true && await c.clickExpr(ns, `${activeComposerExpr}?.querySelector("#run-task")`);
+      };
+
+      // Persistent Allow: a second GENUINE model run of the same exact tool
+      // must execute silently. A card would remain in the transcript, so the
+      // before/after count is a durable no-card assertion rather than a poll
+      // that could miss a short-lived element.
+      const cardsBeforeReuse = await approvalCardCount();
+      const reuseRan = await runSiteTask(`add another product @demo-site-tool add_to_cart {"sku":"gizmo"}`);
+      check("silent reuse: submitted a second genuine model run", reuseRan);
+      const reusedCart = await c.until(() => c.evalIn(shop, `(() => {
+        const count = document.getElementById("cart-count")?.textContent;
+        const total = document.getElementById("cart-total")?.textContent;
+        return count === "2" && total === "$11.75" ? { count, total } : null;
+      })()`), 30000, 100);
+      await waitForComposer();
+      const cardsAfterReuse = await approvalCardCount();
+      check("silent reuse: persisted Allow executes without another card",
+        !!reusedCart && cardsAfterReuse === cardsBeforeReuse, { reusedCart, cardsBeforeReuse, cardsAfterReuse });
+      const silentActivity = await c.evalIn(ns, `(() => {
+        const cards = [...document.querySelectorAll('message-bubble[role="tool"]')].filter((bubble) => bubble.getAttribute("tool-name") === "add_to_cart");
+        const card = cards.at(-1);
+        let activity = null;
+        try { activity = JSON.parse(card?.getAttribute("site-activity") || "null"); } catch {}
+        return card?.shadowRoot?.querySelector(".site-activity") ? { count: cards.length, activity } : null;
+      })()`);
+      check("silent reuse: the cached-Allow tool bubble also carries the exact owner-only activity control",
+        silentActivity?.activity?.origin === PAGE_ORIGIN && silentActivity?.activity?.tool === "add_to_cart" && Object.keys(silentActivity.activity).length === 2,
+        silentActivity);
+      const silentExpanded = await c.clickExpr(ns, `(() => { const cards = [...document.querySelectorAll('message-bubble[role="tool"]')].filter((bubble) => bubble.getAttribute("tool-name") === "add_to_cart"); return cards.at(-1)?.shadowRoot?.querySelector("details.tool > summary"); })()`);
+      check("silent reuse activity: expanded the cached-Allow tool bubble", silentExpanded);
+      const silentOpened = await c.clickExpr(ns, `(() => { const cards = [...document.querySelectorAll('message-bubble[role="tool"]')].filter((bubble) => bubble.getAttribute("tool-name") === "add_to_cart"); return cards.at(-1)?.shadowRoot?.querySelector(".site-activity"); })()`);
+      check("silent reuse activity: clicked View site activity", silentOpened);
+      const silentFocused = await c.until(() => c.evalIn(consentSettings, `(() => {
+        const focus = document.getElementById("webmcp-consent-manager")?._activityFocus;
+        return focus?.origin === ${JSON.stringify(PAGE_ORIGIN)} && focus?.tool === "add_to_cart" ? focus : null;
+      })()`), 10000, 100);
+      check("silent reuse activity: the existing Settings document consumes the fresh one-shot hint", silentFocused?.origin === PAGE_ORIGIN && silentFocused?.tool === "add_to_cart", silentFocused);
+      await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector(".audit-clear")`);
+      await front(hubT.targetId, ns);
+
+      // A different exact tool asks independently. Deny is durable and sticky:
+      // the retry fails without nagging and cannot mutate the page.
+      const cardsBeforeDeny = await approvalCardCount();
+      const denyRan = await runSiteTask(`try removing the widget @demo-site-tool remove_from_cart {"sku":"widget-basic"}`);
+      check("sticky Deny: submitted the first genuine remove_from_cart run", denyRan);
+      const denyCard = await c.until(() => c.evalIn(ns, `(() => {
+        const card = [...document.querySelectorAll("approval-card")].find((candidate) => candidate.getAttribute("title")?.includes("remove_from_cart") && candidate.getAttribute("state") !== "denied");
+        return card ? { title: card.getAttribute("title"), deny: card.shadowRoot?.querySelector(".deny")?.textContent?.trim() } : null;
+      })()`), 15000, 100);
+      check("sticky Deny: remove_from_cart gets its own exact first-use card", denyCard?.title === `Use ${PAGE_ORIGIN}’s remove_from_cart?`, denyCard);
+      const denyClicked = await c.clickExpr(ns, `[...document.querySelectorAll("approval-card")].find((card) => card.getAttribute("title")?.includes("remove_from_cart") && card.getAttribute("state") !== "denied")?.shadowRoot?.querySelector(".deny")`);
+      check("sticky Deny: clicked Deny in the originating conversation", denyClicked);
+      await waitForComposer();
+      const deniedCart = await c.evalIn(shop, `({ count: document.getElementById("cart-count")?.textContent, total: document.getElementById("cart-total")?.textContent })`);
+      check("sticky Deny: the denied call did not mutate the cart", deniedCart?.count === "2" && deniedCart?.total === "$11.75", deniedCart);
+      const cardsAfterDeny = await approvalCardCount();
+      const retryDeniedRan = await runSiteTask(`retry removing the widget @demo-site-tool remove_from_cart {"sku":"widget-basic"}`);
+      check("sticky Deny: submitted the denied tool again", retryDeniedRan);
+      await waitForComposer();
+      const cardsAfterDeniedRetry = await approvalCardCount();
+      const deniedRetryCart = await c.evalIn(shop, `document.getElementById("cart-count")?.textContent`);
+      check("sticky Deny: retry stays blocked without another card",
+        cardsAfterDeniedRetry === cardsAfterDeny && deniedRetryCart === "2",
+        { cardsBeforeDeny, cardsAfterDeny, cardsAfterDeniedRetry, deniedRetryCart });
+
+      // Settings is the only place that can rearm sticky Deny. Drive the real
+      // nested native button and then prove the next model call runs silently.
+      await front(consentSettingsT.targetId, consentSettings);
+      const managerReady = await c.until(() => c.evalIn(consentSettings, `(() => {
+        const manager = document.getElementById("webmcp-consent-manager");
+        return manager?.data?.loading === false && manager?.data?.sites?.some((site) => site.origin === ${JSON.stringify(PAGE_ORIGIN)}) ? true : null;
+      })()`), 15000, 100);
+      check("Settings: the owner-local consent manager loaded the enrolled site", managerReady === true);
+      // The direct-activity journey opened Settings before this later Deny.
+      // Refresh its owner snapshot rather than mistaking the intentionally
+      // non-live historical view for the current sticky decision.
+      await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector(".refresh")`);
+      await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.sites?.flatMap((site) => site.tools || []).find((tool) => tool.name === "remove_from_cart")?.state === "denied" ? true : null`), 10000, 100);
+
+      // Visual/accessibility matrix on the REAL Settings document. Capture
+      // explicit light, dark, forced-colors and narrow states and assert there
+      // is no horizontal overflow at phone width.
+      await front(consentSettingsT.targetId, consentSettings);
+      await c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.scrollIntoView({ block: "start" }); true`);
+      await c.send("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false }, consentSettings);
+      await c.send("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: "prefers-color-scheme", value: "light" }] }, consentSettings);
+      await shotOf(consentSettings, "showcase-consent-settings-light.png");
+      await c.send("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: "prefers-color-scheme", value: "dark" }] }, consentSettings);
+      await shotOf(consentSettings, "showcase-consent-settings-dark.png");
+      await c.send("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: "forced-colors", value: "active" }, { name: "prefers-color-scheme", value: "light" }] }, consentSettings);
+      await shotOf(consentSettings, "showcase-consent-settings-forced-colors.png");
+      await c.send("Emulation.setEmulatedMedia", { media: "screen", features: [{ name: "prefers-color-scheme", value: "dark" }] }, consentSettings);
+      await c.send("Emulation.setDeviceMetricsOverride", { width: 480, height: 900, deviceScaleFactor: 1, mobile: false }, consentSettings);
+      await c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.scrollIntoView({ block: "start" }); true`);
+      const narrowLayout = await c.evalIn(consentSettings, `({ innerWidth, scrollWidth: document.documentElement.scrollWidth, managerWidth: Math.round(document.getElementById("webmcp-consent-manager")?.getBoundingClientRect().width ?? 0) })`);
+      check("Settings accessibility: narrow layout fits without horizontal overflow",
+        narrowLayout?.innerWidth === 480 && narrowLayout?.scrollWidth <= narrowLayout?.innerWidth && narrowLayout?.managerWidth > 0, narrowLayout);
+      await shotOf(consentSettings, "showcase-consent-settings-narrow.png");
+      await c.send("Emulation.clearDeviceMetricsOverride", {}, consentSettings);
+      await c.send("Emulation.setEmulatedMedia", { media: "", features: [] }, consentSettings);
+      const toolButtonExpr = (name: string, label: string) => `(() => {
+        const manager = document.getElementById("webmcp-consent-manager");
+        const card = [...(manager?.shadowRoot?.querySelectorAll("tool-directory-card") ?? [])].find((candidate) => candidate.tool?.name === ${JSON.stringify(name)});
+        const button = card?.shadowRoot?.querySelector(".approve");
+        return button && button.textContent.trim() === ${JSON.stringify(label)} ? button : null;
+      })()`;
+      await front(consentSettingsT.targetId, consentSettings);
+      const allowDenied = await c.clickExpr(consentSettings, toolButtonExpr("remove_from_cart", "Allow / try again"));
+      check("Settings: clicked Allow / try again for the exact denied tool", allowDenied);
+      const removeAllowed = await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.sites?.flatMap((site) => site.tools || []).find((tool) => tool.name === "remove_from_cart")?.state === "allowed" ? true : null`), 10000, 100);
+      check("Settings: sticky Deny became exact-tool Allow", removeAllowed === true);
+      await front(hubT.targetId, ns);
+      const cardsBeforeSettingsReuse = await approvalCardCount();
+      const removeRan = await runSiteTask(`remove the widget now @demo-site-tool remove_from_cart {"sku":"widget-basic"}`);
+      check("Settings rearm: submitted remove_from_cart after Allow / try again", removeRan);
+      const removedWidget = await c.until(() => c.evalIn(shop, `document.getElementById("cart-count")?.textContent === "1" ? true : null`), 30000, 100);
+      await waitForComposer();
+      check("Settings rearm: the model call runs silently and removes the widget",
+        removeRan === true && removedWidget === true && await approvalCardCount() === cardsBeforeSettingsReuse);
+
+      // Per-tool Disable returns only that tool to ASK. Its next model use gets
+      // a fresh card and can be Allowed again without touching add_to_cart.
+      await front(consentSettingsT.targetId, consentSettings);
+      const disableRemove = await c.clickExpr(consentSettings, toolButtonExpr("remove_from_cart", "Disable automatic use"));
+      check("Settings: clicked per-tool Disable automatic use", disableRemove);
+      const removeAsk = await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.sites?.flatMap((site) => site.tools || []).find((tool) => tool.name === "remove_from_cart")?.state === "ask" ? true : null`), 10000, 100);
+      check("Settings: per-tool reset rearms ASK", removeAsk === true);
+      await front(hubT.targetId, ns);
+      const reaskRan = await runSiteTask(`remove the gizmo @demo-site-tool remove_from_cart {"sku":"gizmo"}`);
+      check("per-tool reset: submitted the rearmed tool", reaskRan);
+      const reaskCard = await c.until(() => c.evalIn(ns, `[...document.querySelectorAll("approval-card")].some((card) => card.getAttribute("title")?.includes("remove_from_cart") && !["granted", "denied", "expired", "cancelled"].includes(card.getAttribute("state"))) ? true : null`), 15000, 100);
+      check("per-tool reset: next model use asks again", reaskCard === true);
+      const reaskFocus = await c.until(() => c.evalIn(ns, `[...document.querySelectorAll("approval-card")].some((card) => card.getAttribute("title")?.includes("remove_from_cart") && card.shadowRoot?.activeElement?.classList?.contains("approve")) ? true : null`), 3000, 50);
+      check("per-tool reset: keyboard focus moved to the rearmed Allow automatically control", reaskFocus === true);
+      if (reaskFocus) {
+        await c.send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: " ", code: "Space", text: " ", windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, ns);
+        await c.send("Input.dispatchKeyEvent", { type: "keyUp", key: " ", code: "Space", windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, ns);
+      }
+      const reallowRemove = await c.until(() => c.evalIn(ns, `[...document.querySelectorAll("approval-card")].some((card) => card.getAttribute("title")?.includes("remove_from_cart") && card.getAttribute("state") === "granted") ? true : null`), 10000, 100);
+      check("per-tool reset: activated Allow automatically with the keyboard", reallowRemove === true);
+      const emptied = await c.until(() => c.evalIn(shop, `document.getElementById("cart-count")?.textContent === "0" ? true : null`), 30000, 100);
+      await waitForComposer();
+      check("per-tool reset: the resumed call removes the gizmo", emptied === true);
+
+      // Produce enough redacted invocation rows to force immutable-sequence
+      // pagination, then drive the real Older button and site-wide reset.
+      const auditSeedResults = [];
+      for (const sku of ["widget-basic", "widget-basic", "widget-basic", "widget-basic", "widget-basic", "widget-basic"]) {
+        auditSeedResults.push(await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: "add_to_cart", args: { sku: ${JSON.stringify(sku)} } })`));
+      }
+      check("Settings audit: six real invocations seeded more than one page of records",
+        auditSeedResults.length === 6 && auditSeedResults.every((result) => result?.ok === true), auditSeedResults);
+      await front(consentSettingsT.targetId, consentSettings);
+      const refreshedAudit = await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector(".refresh")`);
+      check("Settings audit: clicked Refresh", refreshedAudit);
+      const olderCursor = await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.audit?.olderCursor ?? null`), 10000, 100);
+      check("Settings audit: the 20-row page exposes an immutable Older cursor", typeof olderCursor === "string", olderCursor);
+      const newestAuditSeq = await c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.audit?.records?.[0]?.seq ?? null`);
+      const olderClicked = await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector('[data-audit-cursor^="older:"]')`);
+      check("Settings audit: clicked Older through the native pager", olderClicked);
+      const olderAuditSeq = await c.until(() => c.evalIn(consentSettings, `(() => { const seq = document.getElementById("webmcp-consent-manager")?.data?.audit?.records?.[0]?.seq; return Number.isSafeInteger(seq) && seq < ${Number(newestAuditSeq)} ? seq : null; })()`), 10000, 100);
+      check("Settings audit: Older shows a distinct earlier immutable sequence", Number.isSafeInteger(olderAuditSeq), { newestAuditSeq, olderAuditSeq });
+      await shotOf(consentSettings, "showcase-consent-settings-audit.png");
+      const resetAll = await c.clickExpr(consentSettings, `document.getElementById("webmcp-consent-manager")?.shadowRoot?.querySelector('[data-reset="all"]')`);
+      check("Settings: clicked site-wide Reset decisions", resetAll);
+      const allAsk = await c.until(() => c.evalIn(consentSettings, `(() => {
+        const site = document.getElementById("webmcp-consent-manager")?.data?.sites?.find((entry) => entry.origin === ${JSON.stringify(PAGE_ORIGIN)});
+        return site?.tools?.length && site.tools.every((tool) => tool.state === "ask") ? true : null;
+      })()`), 10000, 100);
+      check("Settings: site-wide reset rearms every exact tool to ASK", allAsk === true);
+
+      // In-flight revocation/result suppression. Re-allow add_to_cart from
+      // Settings, replace only its page implementation with a same-descriptor
+      // delayed result, start the production route, then revoke while pending.
+      const allowAdd = await c.clickExpr(consentSettings, toolButtonExpr("add_to_cart", "Allow automatically"));
+      check("in-flight revocation: re-allowed add_to_cart in Settings", allowAdd);
+      const addAllowed = await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.sites?.flatMap((site) => site.tools || []).find((tool) => tool.name === "add_to_cart")?.state === "allowed" ? true : null`), 10000, 100);
+      check("in-flight revocation: exact Allow persisted", addAllowed === true);
+      await c.evalIn(shop, `document.modelContext.registerTool({
+        name: "add_to_cart",
+        description: "Add a product to the shopper's cart by sku (optional quantity); returns the updated cart and total",
+        inputSchema: { type: "object", properties: { sku: { type: "string" }, quantity: { type: "integer", minimum: 1 } }, required: ["sku"] },
+        execute: async () => {
+          window.__revocationPageStarted = (window.__revocationPageStarted || 0) + 1;
+          await new Promise((resolve) => setTimeout(resolve, 2200));
+          window.__revocationPageSettled = (window.__revocationPageSettled || 0) + 1;
+          return { ok: true, privateResult: "must-not-reach-extension-caller" };
+        },
+      }).then(() => true)`);
+      await front(hubT.targetId, ns);
+      const revocationStarted = await c.evalIn(ns, `(() => {
+        const started = performance.now();
+        globalThis.__revocationResult = null;
+        chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: "add_to_cart", args: { sku: "widget-basic" } })
+          .then((result) => { globalThis.__revocationResult = { result, elapsed: performance.now() - started }; });
+        return true;
+      })()`);
+      check("in-flight revocation: production invocation started", revocationStarted === true);
+      const pageCallStarted = await c.until(() => c.evalIn(shop, `(window.__revocationPageStarted ?? 0) === 1 ? true : null`), 5000, 25);
+      check("in-flight revocation: the page handler is genuinely pending before revocation", pageCallStarted === true);
+      await front(consentSettingsT.targetId, consentSettings);
+      const revokePending = await c.clickExpr(consentSettings, toolButtonExpr("add_to_cart", "Disable automatic use"));
+      check("in-flight revocation: clicked Disable automatic use while the page promise was pending", revokePending);
+      const revokedResult = await c.until(() => c.evalIn(ns, `globalThis.__revocationResult`), 5000, 50);
+      check("in-flight revocation: pending waiter rejects immediately and no page result reaches the caller",
+        revokedResult?.elapsed < 1800 && revokedResult?.result?.ok === false &&
+          !JSON.stringify(revokedResult?.result ?? {}).includes("must-not-reach-extension-caller"), revokedResult);
+      await sleep(2600);
+      const latePageSettle = await c.evalIn(shop, `window.__revocationPageSettled ?? 0`);
+      const stillSuppressed = await c.evalIn(ns, `globalThis.__revocationResult`);
+      check("in-flight revocation: cancelled page work or any later settlement remains suppressed",
+        (latePageSettle === 0 || latePageSettle === 1) &&
+          !JSON.stringify(stillSuppressed?.result ?? {}).includes("must-not-reach-extension-caller"),
+        { latePageSettle, stillSuppressed });
+      const allowTotal = await c.clickExpr(consentSettings, toolButtonExpr("cart_total", "Allow automatically"));
+      check("restart setup: allowed cart_total from Settings", allowTotal);
+      const totalAllowed = await c.until(() => c.evalIn(consentSettings, `document.getElementById("webmcp-consent-manager")?.data?.sites?.flatMap((site) => site.tools || []).find((tool) => tool.name === "cart_total")?.state === "allowed" ? true : null`), 10000, 100);
+      check("restart setup: cart_total Allow persisted", totalAllowed === true);
+      const expectedTotalAfterRestart = await c.evalIn(shop, `Number((document.getElementById("cart-total")?.textContent ?? "").replace("$", ""))`);
+      check("restart setup: captured the page's exact pre-restart total", Number.isFinite(expectedTotalAfterRestart), expectedTotalAfterRestart);
+      await shotOf(consentSettings, "showcase-consent-settings-final.png");
+      await c.send("Target.closeTarget", { targetId: consentSettingsT.targetId }).catch(() => {});
+      await front(hubT.targetId, ns);
 
       // The same path after a SERVICE-WORKER RESTART: the enrollment and the
       // detection registry are durable, so the origin is not offered again
@@ -702,10 +1018,8 @@ async function main() {
         const r = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: "cart_total", args: {} })`);
         return r?.ok === true ? r : null;
       }, 15000);
-      check("showcase: after the restart the site's tool still runs without re-enrollment (cart_total = 4.5)", totalAfter?.result?.total === 4.5, totalAfter);
-      const addAgain = await c.evalIn(ns, `chrome.runtime.sendMessage({ type: "tools.invoke", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: "add_to_cart", args: { sku: "gizmo" } })`);
-      const cartAfter = await c.evalIn(shop, `({ count: document.getElementById("cart-count")?.textContent, total: document.getElementById("cart-total")?.textContent })`);
-      check("showcase: after the restart a second add_to_cart changes the page again (2 items, $11.75)", addAgain?.ok === true && cartAfter?.count === "2" && cartAfter?.total === "$11.75", { addAgain, cartAfter });
+      check("showcase: after the restart the exact cart_total Allow still runs without re-enrollment",
+        totalAfter?.result?.total === expectedTotalAfterRestart, { expectedTotalAfterRestart, totalAfter });
       c.close();
     } finally {
       try { launched.proc.kill("SIGKILL"); } catch { /* already dead */ }
@@ -795,11 +1109,11 @@ async function main() {
 
     // 2. Enable the diagnostics toggle via a REAL Settings click (gates the
     //    [WebMCP] console lifecycle events we assert below).
-    const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+    const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#agents` });
     const opts = (await send("Target.attachToTarget", { targetId: optT.targetId, flatten: true })).sessionId;
     await send("Runtime.enable", {}, opts);
     await sleep(1600);
-    const diagClicked = await clickSelector(opts, `document.getElementById("webmcp-diagnostics")`);
+    const diagClicked = await clickSelector(opts, `document.getElementById("webmcp-diagnostics")?.shadowRoot?.querySelector("button")`);
     check("Settings: clicked the Diagnostics toggle via a real click", diagClicked);
     await sleep(500);
     const diagOn = await evalIn(opts, `chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" }).then(r => r?.enabled === true)`);
@@ -927,11 +1241,25 @@ async function main() {
     await until(() => evalIn(decoySession, `document.readyState === "complete" ? true : null`), 8000);
     await evalIn(decoySession, `document.title = "Decoy same-origin tab"`);
 
-    // 11. PRODUCTION invocation: the extension-only tools.invoke route (the
-    //     same invokeSiteTool path the model's siteToolset reaches after owner
-    //     approval — directory/source resolution, the immutable generation
-    //     requirement, run fencing, the EXACT approved-tab/document binding,
-    //     pre/post enrollment revalidation) with a VISIBLE side effect.
+    // 11. PRODUCTION invocation: this lower-level bridge section deliberately
+    //     seeds exact consent from an attached Settings document. The showcase
+    //     above proves the genuine model/card/click path; these calls isolate
+    //     directory/source, generation and exact-tab/document fencing.
+    const seedExactConsent = async (names: string[]) => {
+      const target = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#agents` });
+      const settings = (await send("Target.attachToTarget", { targetId: target.targetId, flatten: true })).sessionId;
+      await send("Runtime.enable", {}, settings);
+      await until(() => evalIn(settings, `document.getElementById("webmcp-consent-manager")?.data?.loading === false ? true : null`), 10000);
+      const results = [];
+      for (const name of names) {
+        results.push(await evalIn(settings, `chrome.runtime.sendMessage({ type: "webmcp.consent.tool.set", origin: ${JSON.stringify(PAGE_ORIGIN)}, name: ${JSON.stringify(name)}, state: "allowed" })`));
+      }
+      await send("Target.closeTarget", { targetId: target.targetId }).catch(() => {});
+      return results;
+    };
+    const seeded = await seedExactConsent(["greet", "shop.total"]);
+    check("bridge setup: attached Settings document seeded exact greet + shop.total consent",
+      seeded.length === 2 && seeded.every((result) => result?.ok === true), seeded);
     const gen = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.directory" }).then(d => d?.agents?.find(a => a.origin === ${JSON.stringify(PAGE_ORIGIN)})?.gen ?? null)`);
     check("the enrollment generation is readable (agent.directory.gen)", typeof gen === "number" && gen > 0, gen);
     const invoke = (name: string, args: any) =>
@@ -982,6 +1310,8 @@ async function main() {
     await sleep(500);
     const gen2 = await evalIn(ns, `chrome.runtime.sendMessage({ type: "agent.directory" }).then(d => d?.agents?.find(a => a.origin === ${JSON.stringify(PAGE_ORIGIN)})?.gen ?? null)`);
     check("re-enrollment advanced the generation", typeof gen2 === "number" && gen2 > gen, { gen, gen2 });
+    const reseeded = await seedExactConsent(["greet"]);
+    check("re-enrollment: the new generation starts ASK and Settings explicitly re-allows greet", reseeded?.[0]?.ok === true, reseeded);
     // Enrollment completion precedes the page's asynchronous replacement
     // snapshot. Poll the PRODUCTION invocation until that exact document is
     // ready; failed pre-ready attempts are rejected before any page side effect.

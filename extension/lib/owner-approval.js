@@ -453,11 +453,15 @@ export function bindModelApprovalDispatcher(executionId, dispatch, onApprovalEve
   const agentId = typeof runEnvelope?.agentId === "string" && runEnvelope.agentId.length <= 200
     ? runEnvelope.agentId
     : "";
+  const resolverDocumentId = typeof runEnvelope?.resolverDocumentId === "string" && runEnvelope.resolverDocumentId.length <= 200
+    ? runEnvelope.resolverDocumentId
+    : "";
   const context = Object.freeze({
     principal: "model",
     executionId: captured,
     runId: captured,
     agentId,
+    resolverDocumentId,
     onApprovalEvent: typeof onApprovalEvent === "function" ? onApprovalEvent : null,
   });
   return (type, args) => dispatch(type, args, context);
@@ -534,6 +538,18 @@ export function createPendingApproval(store, runId, action, target, digest, ttlM
   });
   store.byTuple.set(key, approvalId);
   return { ok: true, approvalId, deduped: false, status: "pending" };
+}
+
+export function cancelPendingApprovalsForRun(store, runId, error = "run cancelled before approval") {
+  if (!store?.approvals || typeof runId !== "string" || !runId) return 0;
+  let cancelled = 0;
+  for (const [approvalId, entry] of [...store.approvals]) {
+    if (entry.runId !== runId) continue;
+    removeApproval(store, approvalId, entry);
+    settleWaiters(store, approvalId, { ok: false, decision: "cancelled", error });
+    cancelled++;
+  }
+  return cancelled;
 }
 
 export function resolvePendingApproval(store, approvalId, approve) {
@@ -657,7 +673,8 @@ export function approvalPendingCount(store) {
 // fetches. The owner cannot approve code they have not seen, so for these
 // (and only these) the card carries the bounded source and host list.
 export const SOURCE_DISCLOSING_ACTIONS = new Set(["script.create", "script.run", "task.schedule-script", "workflow.run"]);
-export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253 });
+export const SITE_TOOL_APPROVAL_ACTIONS = new Set(["webmcp.use-tool"]);
+export const APPROVAL_DETAIL_BOUNDS = Object.freeze({ maxSourceChars: 64 * 1024, maxHosts: 64, maxHostChars: 253, maxOriginChars: 240, maxToolChars: 128 });
 
 /** Bound a script-approval detail ({ source, hosts, dynamic, sourceDigest }) for the card;
  * a malformed detail is dropped (the card still renders without it).
@@ -685,11 +702,35 @@ export function boundApprovalDetail(detail) {
   };
 }
 
+function visibleSiteToolLabel(value, maxInputChars) {
+  if (typeof value !== "string" || !value || value.length > maxInputChars) return "";
+  try {
+    return value.normalize("NFC").replace(/[\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, (char) =>
+      `\\u{${char.codePointAt(0).toString(16).toUpperCase()}}`
+    );
+  } catch {
+    return "";
+  }
+}
+
+export function boundSiteToolApprovalDetail(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return undefined;
+  const origin = typeof detail.origin === "string" && /^https?:\/\//.test(detail.origin) && detail.origin.length <= APPROVAL_DETAIL_BOUNDS.maxOriginChars
+    ? detail.origin
+    : "";
+  const tool = visibleSiteToolLabel(detail.tool, APPROVAL_DETAIL_BOUNDS.maxToolChars);
+  return origin && tool ? Object.freeze({ kind: "webmcp-tool", origin, tool }) : undefined;
+}
+
 export function approvalCardDenial({ approvalId, action, targetRef, detail }) {
   if (typeof approvalId !== "string" || !approvalId || approvalId.length > 160) return null;
   if (typeof action !== "string" || !DESTRUCTIVE_ACTIONS.has(action)) return null;
   const ref = String(targetRef ?? "").slice(0, 200);
-  const bounded = SOURCE_DISCLOSING_ACTIONS.has(action) ? boundApprovalDetail(detail) : undefined;
+  const bounded = SOURCE_DISCLOSING_ACTIONS.has(action)
+    ? boundApprovalDetail(detail)
+    : SITE_TOOL_APPROVAL_ACTIONS.has(action)
+      ? boundSiteToolApprovalDetail(detail)
+      : undefined;
   return {
     ok: false,
     waitingForPermission: true,
@@ -764,15 +805,19 @@ export function mayReadApprovalDetail(principal) {
   return principal === "extension" || principal === "owner-options";
 }
 
-/** Which surface may resolve WHICH approval (per-agent alarms P1-3): Settings
- * (owner-options) resolves anything; an extension surface (the conversation's
- * approval card) may resolve ONLY run-bound approvals — a model-initiated
- * action awaiting its owner — never a `ui:`-bound one, which stays an exact
- * Settings-document decision. Every other principal resolves nothing. */
-export function mayResolveApproval(row, principal) {
-  if (principal === "owner-options") return Boolean(row);
+/** Which surface may resolve WHICH approval. A row carrying a browser-
+ * supplied resolverDocumentId is bound to that exact originating conversation;
+ * another extension document (including Settings) cannot resolve it merely by
+ * learning the random approval id. Legacy/unbound rows retain the existing
+ * Settings-anything and extension-run-only partition. */
+export function mayResolveApproval(row, principal, documentId = "") {
+  if (!row) return false;
+  if (typeof row.resolverDocumentId === "string" && row.resolverDocumentId) {
+    return principal === "extension" && documentId === row.resolverDocumentId;
+  }
+  if (principal === "owner-options") return true;
   if (principal === "extension") {
-    return Boolean(row) && typeof row.runId === "string" && !row.runId.startsWith("ui:");
+    return typeof row.runId === "string" && !row.runId.startsWith("ui:");
   }
   return false;
 }

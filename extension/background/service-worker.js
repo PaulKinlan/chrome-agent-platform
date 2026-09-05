@@ -154,7 +154,12 @@ import {
   takeLastProviderError,
 } from "../lib/agent.js";
 import { clearUsage, getServerToolUsage, getUsage, onUsageChanged, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
-import { createWebmcpAuthorizationGuard, gateWebmcpToolDispatch } from "../lib/webmcp-authority.js";
+import {
+  createWebmcpAuthorizationGuard,
+  gateWebmcpToolDispatch,
+  siteToolConsentPermissionDigest,
+  siteToolSourceGeneration,
+} from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
   diagnosticList,
@@ -168,6 +173,7 @@ import {
 } from "../lib/diagnostics.js";
 import {
   approveTool,
+  currentSiteToolConsentProfileEpoch,
   disenrollOrigin,
   disenrollOriginLocked,
   enrollmentGeneration,
@@ -175,6 +181,7 @@ import {
   enrollmentSnapshot,
   enrollOrigin,
   getCurrentSiteIdentity,
+  invalidateSiteToolConsentWriters,
   isApproved,
   isEnrolled,
   listSiteIdentityHistory,
@@ -182,9 +189,21 @@ import {
   pendingApprovals,
   replacePageTools,
   replaceTools,
+  resetToolConsents,
   setEnrollmentPolicy,
+  setToolConsentDecision,
+  toolConsentSnapshot,
+  toolConsentStates,
+  toolConsentStatesLocked,
   withEnrollmentLock,
+  withSiteToolConsentBarrier,
 } from "../lib/tools.js";
+import {
+  appendSiteToolAudit,
+  digestSiteToolArguments,
+  listSiteToolAudit,
+  withSiteToolAuditBarrier,
+} from "../lib/site-tool-audit.js";
 import {
   attestReportedPageUrl,
   boundedPageTitle,
@@ -379,6 +398,7 @@ import {
   executableManagementToolRecords,
   executableMcpToolRecords,
   executableWebMcpToolRecords,
+  withOwnerSiteToolActivity,
 } from "../lib/lazy-tool-protocol.js";
 
 const notificationRegistry = new NotificationRegistry();
@@ -866,6 +886,7 @@ import {
   canonicalRecord,
   canonicalScalar,
   bindModelApprovalDispatcher,
+  cancelPendingApprovalsForRun,
   consumeApproved,
   approvalCardDenial,
   mayResolveApproval,
@@ -1421,6 +1442,133 @@ const recentRunAttestations = new Map(); // execId → { taskId, at, finalized, 
 const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
 const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
+
+// Exact WebMCP consent authority tokens never cross runtime messaging. A
+// WeakSet makes an object copied from a request body useless even if every
+// visible field happens to match.
+const trustedSiteToolAuthorizations = new WeakSet();
+const pendingSiteToolConsent = new Map();
+const cancellingApprovalExecutions = new Set();
+let siteToolProfileEpoch = 0;
+let siteToolResetting = 0;
+
+function siteToolRunIdentity(context = {}) {
+  const executionId = typeof context.executionId === "string"
+    ? context.executionId
+    : (typeof context.runId === "string" ? context.runId : null);
+  const slot = executionId ? recentRunAttestations.get(executionId) : null;
+  return {
+    executionId,
+    runId: typeof context.taskId === "string" && context.taskId
+      ? context.taskId
+      : (typeof slot?.taskId === "string" ? slot.taskId : executionId),
+    agentId: typeof context.agentId === "string" && context.agentId ? context.agentId : null,
+  };
+}
+
+function auditRecordFor(consent, {
+  event,
+  direction,
+  actor,
+  outcome,
+  reason,
+  context = {},
+  argDigest = null,
+}) {
+  const run = siteToolRunIdentity(context);
+  return {
+    event,
+    direction,
+    actor,
+    origin: consent.origin,
+    tool: consent.name,
+    source: consent.source,
+    identityDigest: consent.identityDigest,
+    enrollmentGen: consent.enrollmentGen,
+    consentRevision: consent.revision,
+    executionId: run.executionId,
+    runId: run.runId,
+    agentId: run.agentId,
+    argDigest,
+    outcome,
+    reason,
+  };
+}
+
+async function appendRequiredSiteToolAudit(record, { enrollmentLocked = false } = {}) {
+  const profileEpoch = siteToolProfileEpoch;
+  try {
+    if (siteToolResetting > 0) throw new Error("site_tool_audit_profile_reset");
+    // Never let a stale invocation recreate the private audit after Factory
+    // reset removed enrollment and OPFS. Queue the append only while the exact
+    // enrollment generation in the row is still live; the synchronous epoch
+    // check immediately before append closes the reset/queue gap. Scripting
+    // Disable already owns the enrollment lock, so it must use the deliberately
+    // unlocked generation read instead of recursively acquiring the mutex.
+    const enrollment = enrollmentLocked
+      ? { enrolled: true, gen: await enrollmentGeneration(record?.origin) }
+      : await enrollmentSnapshot(record?.origin);
+    if (
+      siteToolResetting > 0 || profileEpoch !== siteToolProfileEpoch || !enrollment.enrolled ||
+      enrollment.gen !== record?.enrollmentGen
+    ) {
+      throw new Error("site_tool_audit_authority_changed");
+    }
+    return await appendSiteToolAudit(record);
+  } catch (error) {
+    pushDiagnostic(
+      "error",
+      `Site tool audit unavailable: ${String(error?.code ?? error?.message ?? error).slice(0, 160)}`,
+      "webmcp",
+      "audit",
+    );
+    const failure = new Error("site_tool_audit_unavailable");
+    failure.code = "site_tool_audit_unavailable";
+    throw failure;
+  }
+}
+
+function mintSiteToolAuthorization(consent, kind, context = {}) {
+  const run = siteToolRunIdentity(context);
+  const token = Object.freeze({
+    kind,
+    origin: consent.origin,
+    name: consent.name,
+    source: consent.source,
+    identityDigest: consent.identityDigest,
+    enrollmentGen: consent.enrollmentGen,
+    consentRevision: consent.revision,
+    executionId: run.executionId,
+  });
+  trustedSiteToolAuthorizations.add(token);
+  return token;
+}
+
+async function verifySiteToolAuthorization(token, descriptor = null) {
+  if (!token || !trustedSiteToolAuthorizations.has(token)) {
+    return { ok: false, reason: "authority-changed" };
+  }
+  const enrollment = await enrollmentSnapshot(token.origin);
+  if (!enrollment.enrolled || enrollment.gen !== token.enrollmentGen || enrollment.policy === "deny") {
+    return { ok: false, reason: "authority-changed" };
+  }
+  const tools = descriptor ? [descriptor] : await listTools(token.origin);
+  const current = tools.find((tool) => tool?.name === token.name && tool?.source === token.source);
+  if (!current) return { ok: false, reason: "descriptor-changed" };
+  let consent;
+  try { consent = await toolConsentSnapshot(token.origin, token.name); }
+  catch { return { ok: false, reason: "authority-changed" }; }
+  if (
+    consent.identityDigest !== token.identityDigest || consent.revision !== token.consentRevision ||
+    consent.enrollmentGen !== token.enrollmentGen ||
+    (token.kind === "model" && consent.state !== "allowed")
+  ) return { ok: false, reason: "authority-changed" };
+  if (token.kind === "model" && (!token.executionId || !activeExecutions.has(token.executionId))) {
+    return { ok: false, reason: "run-not-live" };
+  }
+  return { ok: true, consent, descriptor: current };
+}
+
 function newExecutionId() {
   // A GENUINE v4 UUID, never newId(): validExecutionId (lib/durable-runs.js)
   // and memory.js's EXECUTION_ID_SOURCE check the version/variant nibbles, so
@@ -1450,6 +1598,7 @@ function finalizeExecution(execId) {
   // dropped, never appended into a REUSED slot) and the callback is unbound
   // by the caller's finally. The recorded events stay readable.
   activeExecutions.delete(execId);
+  cancellingApprovalExecutions.delete(execId);
   const slot = recentRunAttestations.get(execId);
   if (slot) slot.finalized = true;
 }
@@ -1524,7 +1673,19 @@ function abortWorker(origin) {
   }
 }
 
-async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null) {
+async function invalidateSiteToolWork(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return;
+  abortWorker(canonical);
+  // MAIN-world calls already inside page code cannot be undone, but the
+  // immutable cancel epoch prevents their result from crossing back. Calls
+  // not yet started are cancelled before handler entry.
+  await notifyOriginBridge(canonical, { type: "tool-consent-revoked" });
+  invalidateAgent();
+  broadcastRegistryChanged();
+}
+
+async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverride = null, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null, approvalResolverDocumentId = "") {
   // A BACKGROUND/SCHEDULED agent has its OWN memory (Paul: all agents get their
   // own OPFS). Build a FRESH orchestrator bound to that store — never the cached
   // shared master, whose memory tools would otherwise write to the master's
@@ -1547,6 +1708,7 @@ async function ensureOrchestrator(onProgress = null, scoped = false, memoryOverr
       iterationGuard,
       providerServerAgentId,
       agentTools,
+      approvalResolverDocumentId,
     );
   }
   while (true) {
@@ -1737,22 +1899,32 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
   const gate = gateMap[origin] ?? {};
   const documentId = typeof gate.documentId === "string" ? gate.documentId : "";
-  const sourceGeneration = [
-    `enrollment:${enrollment.gen ?? 0}`,
-    `document:${documentId}`,
-    `epoch:${gate.epoch ?? 0}`,
-    `seq:${gate.seq ?? 0}`,
-  ].join(":");
+  // Snapshot `seq` authenticates and orders bridge reports, but an identical
+  // idempotent re-poll is not a new execution source. Binding selections to
+  // `seq` made a genuine first-use card race the bridge's 4-second re-poll:
+  // the page action ran, then its result was discarded as source-stale. The
+  // document + navigation epoch bind the execution realm; descriptor and
+  // consent digests independently fence tool-definition drift.
+  const sourceGeneration = siteToolSourceGeneration(enrollment.gen, {
+    documentId,
+    epoch: gate.epoch,
+  });
   const tools = await listTools(origin);
   const permissionDigestByTool = {};
   const availabilityByTool = {};
+  const initialConsentByTool = new Map();
   for (const sourceTool of tools) {
     if (!sourceTool || typeof sourceTool.name !== "string") continue;
-    const approved = await isApproved(origin, sourceTool.name).catch(() => false);
-    permissionDigestByTool[sourceTool.name] = sha256Hex(`approved:${approved}`);
-    availabilityByTool[sourceTool.name] = enrollment.enrolled && approved
-      ? "ready"
-      : enrollment.enrolled ? "owner-action-required" : "disabled";
+    let consent = null;
+    try { consent = await toolConsentSnapshot(origin, sourceTool.name); } catch { consent = null; }
+    if (consent) initialConsentByTool.set(sourceTool.name, consent);
+    // The descriptor binds exact identity + the monotonic consent revision.
+    // Reset/disable invalidates selections already issued before the mutation;
+    // a first-use Allow opens a narrow run-local transition window below.
+    permissionDigestByTool[sourceTool.name] = siteToolConsentPermissionDigest(consent);
+    availabilityByTool[sourceTool.name] = !enrollment.enrolled || consent?.state === "denied"
+      ? "disabled"
+      : "ready";
   }
   const grantDigest = sha256Hex(sourceGeneration);
   const packageDigest = sha256Hex(`webmcp:${origin}:${sourceGeneration}`);
@@ -1767,15 +1939,41 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
     origin,
     enrollmentSnapshot,
     listTools,
-    isApproved,
+    consentSnapshot: toolConsentSnapshot,
     runGenCell,
-    onDeny: (decision, target) => {
+    onDeny: async (decision, target) => {
       pushDiagnostic(
         "warn",
         `WebMCP tool authorization denied: ${decision.reason} (${target.name} on ${target.origin})`,
         "webmcp",
         "authorization",
       );
+      const consent = target.consent ?? initialConsentByTool.get(target.name);
+      if (!consent) return;
+      let argDigest = null;
+      try { argDigest = digestSiteToolArguments(target.args ?? {}); } catch { /* invalid args never dispatch */ }
+      const reason = decision.reason === "site-policy-denied"
+        ? "site-policy-deny"
+        : decision.reason === "not-enrolled"
+          ? "not-enrolled"
+          : decision.reason === "tool-not-in-directory" || decision.reason === "permission-digest-drift"
+            ? "descriptor-changed"
+            : decision.reason === "run-generation-missing" || decision.reason === "run-generation-stale"
+              ? "run-not-live"
+              : "authority-changed";
+      await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+        event: "invocation-blocked",
+        direction: "agent-to-site",
+        actor: "agent",
+        outcome: "blocked",
+        reason,
+        context: {
+          executionId: target.context?.runId,
+          taskId: target.context?.taskId,
+          agentId: target.context?.agentId,
+        },
+        argDigest,
+      }));
     },
   });
   return executableWebMcpToolRecords(tools, {
@@ -1801,38 +1999,120 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
         "arguments",
       );
     },
-  }, async ({ name, source, args }) => {
-    // LIVE policy re-check at dispatch time (CAP-FB-20260819-DIRECTORY-TOOL-
-    // EXPLORER-01): the toolset exclusion above covers discovery, but an
-    // in-flight catalog built before a flip must still fail closed. "deny"
-    // never runs; "ask" pays the in-conversation owner card (Allow once /
-    // Deny) before the page call — a run with no owner channel fails closed
-    // here (the gate result carries the honest error, never a silent run).
-    // The gate IS the unit-tested factory (lib/webmcp-authority.js) — zero
-    // replica drift between the shipped fence and the enrollment-policy KATs.
+  }, async ({ name, source, args, runId, taskId, agentId, authorizationTransition }) => {
+    const modelContext = { executionId: runId, runId, taskId, agentId };
+    let argDigest;
+    try { argDigest = digestSiteToolArguments(args); }
+    catch { return { ok: false, error: "site tool arguments could not be audited" }; }
     const live = await enrollmentSnapshot(origin);
+    let consent;
+    try { consent = await toolConsentSnapshot(origin, name); }
+    catch { return { ok: false, error: "site tool consent is unavailable" }; }
+    const startedInAsk = consent.state === "ask";
     const gate = await gateWebmcpToolDispatch({
       enrolled: live.enrolled,
       policy: live.policy,
+      consentState: consent.state,
       askGate: typeof askGateGetter === "function" ? askGateGetter() : null,
-      askPayload: { origin, name, source },
+      askPayload: { origin, name, source, argDigest },
     });
     if (gate.ok !== true) {
+      try {
+        await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+          event: "invocation-blocked",
+          direction: "agent-to-site",
+          actor: "agent",
+          outcome: "blocked",
+          reason: gate.reason === "site-policy-denied"
+            ? "site-policy-deny"
+            : gate.reason === "tool-consent-denied"
+              ? "sticky-deny"
+              : gate.reason === "not-enrolled"
+                ? "not-enrolled"
+                : gate.reason === "owner-approval-expired"
+                  ? "owner-expired"
+                  : gate.reason === "owner-approval-channel-missing"
+                    ? "no-owner-channel"
+                    : "authority-changed",
+          context: modelContext,
+          argDigest,
+        }));
+      } catch {
+        return { ok: false, error: "site_tool_audit_unavailable" };
+      }
       return {
         ok: false,
         approvalDenied: gate.approvalDenied === true,
         approvalExpired: gate.approvalExpired === true,
-        error: gate.error ?? "tool dispatch denied by policy",
+        error: gate.error ?? "site tool dispatch was denied",
       };
     }
-    const res = await invokeSiteTool(
-      origin,
-      name,
-      args,
-      runGenCell?.get?.() ?? null,
-      source,
-    );
-    return await withSiteDocsFallback({ origin, name, args, res });
+    // The card may have persisted Allow, or Settings may have changed state
+    // while it was visible. Re-read and mint an internal-only revision token.
+    try { consent = await toolConsentSnapshot(origin, name); }
+    catch { return { ok: false, error: "site tool consent is unavailable" }; }
+    if (consent.state !== "allowed") {
+      return { ok: false, error: "site tool consent changed before dispatch" };
+    }
+    if (startedInAsk) authorizationTransition?.();
+    const authorization = mintSiteToolAuthorization(consent, "model", modelContext);
+    try {
+      await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+        event: "invocation-started",
+        direction: "agent-to-site",
+        actor: "agent",
+        outcome: "pending",
+        reason: startedInAsk ? "owner-allowed" : "cached-allow",
+        context: modelContext,
+        argDigest,
+      }));
+    } catch {
+      return { ok: false, error: "site_tool_audit_unavailable" };
+    }
+    let res;
+    try {
+      res = await invokeSiteTool(
+        origin,
+        name,
+        args,
+        runGenCell?.get?.() ?? null,
+        source,
+        null,
+        authorization,
+      );
+    } catch {
+      // An unexpected transport/runtime throw is still a terminal audited
+      // invocation. Never leave a durable `pending` start row with no outcome.
+      res = { ok: false, error: "site tool invocation failed" };
+    }
+    const finalRes = res?.authorityRevoked === true
+      ? res
+      : await withSiteDocsFallback({ origin, name, args, res });
+    try {
+      await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+        event: "invocation-finished",
+        direction: "site-to-agent",
+        actor: "system",
+        outcome: finalRes?.authorityRevoked === true ? "revoked" : (finalRes?.error || finalRes?.ok === false) ? "failed" : "succeeded",
+        reason: finalRes?.authorityRevoked === true
+          ? "authority-changed"
+          : finalRes?.docsFallback
+            ? "docs-fallback"
+            : (finalRes?.error || finalRes?.ok === false) ? "page-error" : "page-result",
+        context: modelContext,
+        argDigest,
+      }));
+    } catch {
+      return withOwnerSiteToolActivity(
+        { ok: false, error: "site_tool_audit_unavailable" },
+        { origin, tool: name },
+      );
+    }
+    // Long-running page tools and docs fallback may exceed the initial
+    // 30-second transition window. Re-open it only for this genuine first-use
+    // Allow immediately before the lazy protocol's final live revalidation.
+    if (startedInAsk) authorizationTransition?.();
+    return withOwnerSiteToolActivity(finalRes, { origin, tool: name });
   });
 }
 
@@ -1840,7 +2120,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
 // ensureOrchestrator's cache path AND the fresh per-background-agent path.
 // `promptScope`/`agentRole` select the system-prompt composition (the hub by
 // default; a named agent's own scope + role when it runs).
-async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null) {
+async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, promptScope = null, agentRole = "", approvalExecutionId = null, runMaxIterations = undefined, iterationGuard = null, providerServerAgentId = "hub", agentTools = null, approvalResolverDocumentId = "") {
     // A per-agent model override (the named-agent provider config) REPLACES the
     // global model for THIS build — the resolved { model, modelId, providerName }
     // is self-contained, so a per-agent model never mixes one provider's
@@ -1971,7 +2251,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       (event) => onProgress?.(event),
       // Immutable agent identity from the trusted run envelope. Table stream
       // custody must never derive from model args or artifact metadata.
-      { agentId: providerServerAgentId || "hub" },
+      {
+        agentId: providerServerAgentId || "hub",
+        resolverDocumentId: approvalResolverDocumentId,
+      },
     );
     // Bind the workers' site-tool ask gate to THIS run's dispatcher (see the
     // late-bound declaration above): an "ask"-policy site's tool call pays the
@@ -2300,6 +2583,7 @@ async function invokeSiteTool(
   expectedGen = null,
   expectedSource = null,
   expectedSourceGeneration = null,
+  authorization = null,
 ) {
   return observeToolCall(name, args, () => invokeSiteToolCore(
     origin,
@@ -2308,6 +2592,7 @@ async function invokeSiteTool(
     expectedGen,
     expectedSource,
     expectedSourceGeneration,
+    authorization,
   ), {
     source: expectedSource ? `webmcp-${expectedSource}` : "webmcp-bridge",
     runId: currentRunContext()?.runId ?? null,
@@ -2321,6 +2606,7 @@ async function invokeSiteToolCore(
   expectedGen = null,
   expectedSource = null,
   expectedSourceGeneration = null,
+  authorization = null,
 ) {
   const canonical = canonicalOrigin(origin);
   if (!canonical) return { error: `invalid origin ${origin}` };
@@ -2395,6 +2681,15 @@ async function invokeSiteToolCore(
   if (expectedSource && descriptor.source !== expectedSource) {
     return { error: `tool ${name} source changed before invocation` };
   }
+  const initialAuthority = await verifySiteToolAuthorization(authorization, descriptor);
+  if (!initialAuthority.ok) {
+    return {
+      ok: false,
+      authorityRevoked: true,
+      error: `site tool authority changed before ${name} could run`,
+      reason: initialAuthority.reason,
+    };
+  }
   // The EXACT approved tab + document identity (the round-30 tab-binding
   // blocker): the picker's approved tab is bound in the snapshot gate at
   // enrollment, and the gate tracks the CURRENT document on that tab (its
@@ -2423,12 +2718,7 @@ async function invokeSiteToolCore(
   );
 
   if (isBoundAlive) {
-    const boundSourceGeneration = [
-      `enrollment:${snap.gen ?? 0}`,
-      `document:${binding.documentId}`,
-      `epoch:${binding.epoch ?? 0}`,
-      `seq:${binding.seq ?? 0}`,
-    ].join(":");
+    const boundSourceGeneration = siteToolSourceGeneration(snap.gen, binding);
     if (
       expectedSourceGeneration && boundSourceGeneration !== expectedSourceGeneration
     ) {
@@ -2577,11 +2867,32 @@ async function invokeSiteToolCore(
   // as possible without holding the origin lifecycle lock across the page call.
   {
     const recheck = await enrollmentSnapshot(canonical);
-    if (!recheck.enrolled || recheck.gen !== gen) {
+    if (!recheck.enrolled || recheck.gen !== gen || recheck.policy === "deny") {
       return {
         ok: false,
-        error: `origin ${canonical} was disenrolled before the call`,
+        authorityRevoked: true,
+        error: `origin ${canonical} was disabled before the call`,
         reason: "not-enrolled",
+      };
+    }
+    const currentDir = await listTools(canonical);
+    const currentDescriptor = currentDir.find((tool) => tool?.name === name && tool?.source === descriptor.source);
+    const currentGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+    const currentBinding = currentGateMap[canonical] ?? null;
+    const currentTab = await chrome.tabs.get(tab.id).catch(() => null);
+    let currentTabOrigin = null;
+    try { currentTabOrigin = currentTab?.url ? canonicalOrigin(currentTab.url) : null; } catch { currentTabOrigin = null; }
+    const liveAuthority = await verifySiteToolAuthorization(authorization, currentDescriptor);
+    if (
+      !currentDescriptor || !currentBinding || currentBinding.tabId !== tab.id ||
+      currentBinding.documentId !== resolvedBinding.documentId || currentTabOrigin !== canonical ||
+      !liveAuthority.ok
+    ) {
+      return {
+        ok: false,
+        authorityRevoked: true,
+        error: `site tool authority changed before ${name} could run`,
+        reason: liveAuthority.reason ?? "authority-changed",
       };
     }
   }
@@ -2675,6 +2986,29 @@ async function invokeSiteToolCore(
         detail: `tool ${name} disappeared after page re-bind`,
       };
     }
+    // Recovery has its own effect boundary after several awaits. Recheck every
+    // live authority immediately before the second send; the first failed send
+    // never grants a stale recovery attempt.
+    const recoveryEnrollment = await enrollmentSnapshot(canonical);
+    const recoveryGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+    const recoveryBinding = recoveryGateMap[canonical] ?? null;
+    const recoveryTab = await chrome.tabs.get(recoverTabId).catch(() => null);
+    let recoveryOrigin = null;
+    try { recoveryOrigin = recoveryTab?.url ? canonicalOrigin(recoveryTab.url) : null; } catch { recoveryOrigin = null; }
+    const recoveryAuthority = await verifySiteToolAuthorization(authorization, stillThere);
+    if (
+      runAborted() || !recoveryEnrollment.enrolled || recoveryEnrollment.gen !== gen ||
+      recoveryEnrollment.policy === "deny" || !recoveryBinding ||
+      recoveryBinding.tabId !== recoverTabId || recoveryBinding.documentId !== freshBinding.documentId ||
+      recoveryOrigin !== canonical || !recoveryAuthority.ok
+    ) {
+      return {
+        ok: false,
+        authorityRevoked: true,
+        error: `site tool authority changed before ${name} recovery could run`,
+        reason: recoveryAuthority.reason ?? "authority-changed",
+      };
+    }
     try {
       res = await chrome.tabs.sendMessage(recoverTabId, {
         type: "invoke-tool",
@@ -2696,29 +3030,38 @@ async function invokeSiteToolCore(
   // Revalidate live enrollment + the SAME generation ATOMICALLY after the page
   // call (a single locked snapshot, not two unlocked reads).
   const after = await enrollmentSnapshot(canonical);
-  if (!after.enrolled || after.gen !== gen) {
+  if (!after.enrolled || after.gen !== gen || after.policy === "deny") {
     return {
       ok: false,
-      error: `origin ${canonical} was disenrolled during the call — result discarded`,
+      authorityRevoked: true,
+      error: `origin ${canonical} was disabled during the call — result discarded`,
       reason: "not-enrolled",
     };
   }
   if (expectedSourceGeneration) {
     const afterGateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
     const afterBinding = afterGateMap[canonical] ?? {};
-    const afterSourceGeneration = [
-      `enrollment:${after.gen ?? 0}`,
-      `document:${typeof afterBinding.documentId === "string" ? afterBinding.documentId : ""}`,
-      `epoch:${afterBinding.epoch ?? 0}`,
-      `seq:${afterBinding.seq ?? 0}`,
-    ].join(":");
+    const afterSourceGeneration = siteToolSourceGeneration(after.gen, afterBinding);
     if (afterSourceGeneration !== expectedSourceGeneration) {
       return {
         ok: false,
+        authorityRevoked: true,
         error: `the approved document changed during ${name} — result discarded`,
         reason: "document-navigated",
       };
     }
+  }
+  const afterDescriptor = (await listTools(canonical)).find((tool) =>
+    tool?.name === name && tool?.source === descriptor.source
+  );
+  const afterAuthority = await verifySiteToolAuthorization(authorization, afterDescriptor);
+  if (!afterDescriptor || !afterAuthority.ok) {
+    return {
+      ok: false,
+      authorityRevoked: true,
+      error: `site tool authority changed during ${name} — result discarded`,
+      reason: afterAuthority.reason ?? "authority-changed",
+    };
   }
   return res ?? { ok: true };
 }
@@ -2755,7 +3098,30 @@ function providerResumeIdentity(config) {
   };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null, agentTools = null }) {
+function boundedOwnerSiteActivity(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  let keys;
+  try {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return null;
+    keys = Reflect.ownKeys(value);
+  } catch { return null; }
+  if (keys.length !== 2 || !keys.includes("origin") || !keys.includes("tool")) return null;
+  const originDescriptor = Object.getOwnPropertyDescriptor(value, "origin");
+  const toolDescriptor = Object.getOwnPropertyDescriptor(value, "tool");
+  if (!originDescriptor?.enumerable || !("value" in originDescriptor) || !toolDescriptor?.enumerable || !("value" in toolDescriptor)) return null;
+  const origin = originDescriptor.value;
+  const tool = toolDescriptor.value;
+  if (typeof origin !== "string" || origin.length > 240 || typeof tool !== "string" || !tool || tool.length > 128) return null;
+  try {
+    const url = new URL(origin);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== origin) return null;
+    if (tool !== tool.normalize("NFC") || /[\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(tool)) return null;
+  } catch { return null; }
+  return { origin, tool };
+}
+
+async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null, agentTools = null, approvalResolverDocumentId = "", uiRunId = null }) {
   // skipRunLock is ONLY for the delegation child path (agent.delegate): the
   // child builds a FRESH orchestrator (its own memory + abort controller via
   // the memoryOverride/promptScope/executionId path below), so the shared-
@@ -2829,6 +3195,15 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       scheduleName: scheduleName ?? null,
       runKind: runKind ?? null,
       memoryOrigin: mem.origin ?? "master",
+      // Browser-supplied identity of the conversation allowed to resolve a
+      // WebMCP first-use card. A stale/missing document fails closed.
+      approvalResolverDocumentId: typeof approvalResolverDocumentId === "string" && approvalResolverDocumentId.length <= 200
+        ? approvalResolverDocumentId
+        : "",
+      // UI correlation is inert authority-wise, but retaining it lets a
+      // recovered interactive run surface a new first-use card to the same
+      // conversation instead of running with a silent progress sink.
+      uiRunId: typeof uiRunId === "string" && uiRunId.length <= 200 ? uiRunId : null,
     };
     const admissionFailure = await admitDurableRun(durableRuns, {
       executionId,
@@ -2923,6 +3298,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     const callSeq = new Map(); // per-run: toolName -> counter (tool-call side)
     const callQueue = new Map(); // per-run: toolName -> pending callId FIFO (tool-result side)
     const orphanSeq = new Map(); // per-run: toolName -> orphan-result counter (unique ids)
+    const siteActivityQueues = new Map(); // envelope toolName -> owner-only {origin,tool} FIFO
     // The run's step budget as the loop reports it (CAP-FB-20260901-RUN-BUDGET-
     // EVERY-ITEM-01): {used,total,exhausted}. `exhausted` turns the terminal
     // into a "Budget reached — Continue" stop instead of a silent finish.
@@ -2934,6 +3310,22 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // run did not open — the plan is a pure filter over the tracker's ids).
     const lifecycle = createLifecycleTracker();
     const journalingProgress = async (event) => {
+      if (event?.type === "site-activity") {
+        const activity = boundedOwnerSiteActivity(event.siteActivity);
+        if (activity) {
+          const key = typeof event.toolName === "string" && event.toolName ? event.toolName : "site-tool";
+          const queue = siteActivityQueues.get(key) ?? [];
+          queue.push(activity);
+          siteActivityQueues.set(key, queue.slice(-8));
+        }
+      } else if (event?.type === "tool-result" && !event.siteActivity) {
+        const key = typeof event.toolName === "string" && event.toolName ? event.toolName : "site-tool";
+        const queue = siteActivityQueues.get(key) ?? [];
+        const siteActivity = queue.shift() ?? null;
+        if (queue.length) siteActivityQueues.set(key, queue);
+        else siteActivityQueues.delete(key);
+        if (siteActivity) event = { ...event, siteActivity };
+      }
       if (event?.type === "budget" && Number.isFinite(event.step) && Number.isFinite(event.total)) {
         runBudget = { used: event.step, total: event.total, exhausted: event.exhausted === true || runBudget?.exhausted === true };
       }
@@ -2994,7 +3386,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       if (delegationState && event?.type === "thinking" && Number.isFinite(event.step)) {
         delegationState.step = Math.max(delegationState.step, event.step + 1);
       }
-      try { onProgress?.(event); } catch { /* broadcast must not break telemetry */ }
+      try {
+        if (typeof onProgress === "function") onProgress(event);
+        else if (typeof uiRunId === "string" && uiRunId) {
+          broadcastProgress({ ...event, runId: uiRunId, threadId: threadId ?? null });
+        }
+      } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;
       // Every substantive per-step answer is persisted IN ORDER as an interim
       // assistant row of this execution (executionId + step); the terminal
@@ -3069,6 +3466,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // A structured permission denial keeps its requirement on the row
         // (bounded: the same shape normalizePermissionRequirement accepts) so
         // a reopened thread can render the grant card, not prose (§2b).
+        const ownerSiteActivity = boundedOwnerSiteActivity(event.siteActivity);
         const permissionReq = event.permissionRequirement && typeof event.permissionRequirement === "object" && !Array.isArray(event.permissionRequirement)
           ? {
             permissionRequirement: {
@@ -3087,7 +3485,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             ...(event.reexecuted === true ? { reexecuted: true } : {}),
           }
           : {};
-        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}), ...permissionReq };
+        const log = { type: "tool-result", id: taskId, executionId, run: runInstance, callId, tool: event.toolName ?? "tool", result, ok: event.ok ?? null, ...(typeof event.selectedTool === "string" && event.selectedTool ? { selectedTool: event.selectedTool } : {}), ...(ownerSiteActivity ? { siteActivity: ownerSiteActivity } : {}), ...permissionReq };
         // The per-agent journal is the LIST surface (bounded at 200 KiB for
         // the whole agent) — it keeps the small row. The durable run log is
         // the authority the cards read: it carries the retained FULL result
@@ -3202,6 +3600,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         delegationState ? (step) => canStartDelegationIteration(delegationState, step) : null,
         providerServerAgentId,
         agentTools,
+        approvalResolverDocumentId,
       );
       durableRunAborters.set(executionId, () => {
         try { orch?.abort?.(); } catch { /* already stopped */ }
@@ -3741,7 +4140,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       if (threadId && endedRun?.ok) {
         for (const steer of endedRun.undelivered) {
           if (steer.text && steer.mode !== "stop-run") {
-            threadQueues.enqueue(threadId, steer.text).catch(() => {});
+            threadQueues.enqueue(threadId, steer.text, { resolverDocumentId: approvalResolverDocumentId }).catch(() => {});
           }
         }
         void drainThreadQueueForThread(threadId, executionId).catch((err) =>
@@ -3964,11 +4363,7 @@ async function readShadowCatalogInputs() {
     if (inputs.length >= TOOL_CATALOG_BOUNDS.maxDescriptors * 2) break;
     const enrollment = await enrollmentSnapshot(origin);
     const gate = gateMap[origin] ?? {};
-    const sourceGeneration = [
-      `enrollment:${enrollment.gen ?? 0}`,
-      `epoch:${gate.epoch ?? 0}`,
-      `seq:${gate.seq ?? 0}`,
-    ].join(":");
+    const sourceGeneration = siteToolSourceGeneration(enrollment.gen, gate);
     const documentId = typeof gate.documentId === "string"
       ? gate.documentId
       : "";
@@ -4230,6 +4625,28 @@ async function waitForInlinePermissionDecision(executionId, result, onProgress) 
   });
 }
 
+function approvalResolverDocument(context) {
+  if (context?.principal === "model") {
+    return typeof context.resolverDocumentId === "string" && context.resolverDocumentId.length <= 200
+      ? context.resolverDocumentId
+      : "";
+  }
+  if (context?.principal === "extension") {
+    // Durable resume supplies the original resolver explicitly. Preserve an
+    // explicit empty value (background/interruption recovery) rather than
+    // borrowing the document that happened to click Resume.
+    if (Object.prototype.hasOwnProperty.call(context, "resolverDocumentId")) {
+      return typeof context.resolverDocumentId === "string" && context.resolverDocumentId.length <= 200
+        ? context.resolverDocumentId
+        : "";
+    }
+    return typeof context.documentId === "string" && context.documentId.length <= 200
+      ? context.documentId
+      : "";
+  }
+  return "";
+}
+
 function approvalExecutionId(context) {
   if (context?.principal === "model") {
     const id = context.executionId;
@@ -4282,10 +4699,21 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
     securityApprovalEvent("consumed", action, targetRef);
     return { ok: true };
   }
+  if (
+    action === "webmcp.use-tool" && context?.principal === "model" &&
+    (typeof context.resolverDocumentId !== "string" || !context.resolverDocumentId)
+  ) {
+    return { ok: false, error: "Owner approval was required but no originating conversation was bound." };
+  }
   const pending = createPendingApproval(ownerApprovalStore, executionId, action, target, digest);
   if (!pending.ok) return { ok: false, error: pending.error ?? "This operation requires owner approval." };
   const row = ownerApprovalStore.approvals.get(pending.approvalId);
-  if (row) row.targetRef = targetRef;
+  if (row) {
+    row.targetRef = targetRef;
+    if (action === "webmcp.use-tool" && context?.principal === "model") {
+      row.resolverDocumentId = context.resolverDocumentId;
+    }
+  }
   if (!pending.deduped) securityApprovalEvent("requested", action, targetRef);
   // Stage the private diff detail for the owner's card (model path only — the
   // owner-direct / Settings paths never publish an in-context card). Best
@@ -4327,20 +4755,246 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
       return { ok: false, error: "The approval no longer matched this tool call." };
     }
     const expired = decision.decision === "expired";
-    context.onApprovalEvent({ type: "approval-settled", approvalId: pending.approvalId, state: expired ? "expired" : "denied" });
+    const cancelled = decision.decision === "cancelled";
+    context.onApprovalEvent({
+      type: "approval-settled",
+      approvalId: pending.approvalId,
+      state: cancelled ? "cancelled" : expired ? "expired" : "denied",
+    });
     return {
       ok: false,
-      approvalDenied: !expired,
+      approvalDenied: !expired && !cancelled,
       approvalExpired: expired,
-      error: expired
-        ? `Approval for ${action} expired after 60 seconds; the action was not performed.`
-        : `The owner denied ${action}; the action was not performed.`,
+      approvalCancelled: cancelled,
+      reason: cancelled ? "approval-cancelled" : expired ? "approval-expired" : "approval-denied",
+      error: cancelled
+        ? `Approval for ${action} was cancelled with its run; the action was not performed.`
+        : expired
+          ? `Approval for ${action} expired after 60 seconds; the action was not performed.`
+          : `The owner denied ${action}; the action was not performed.`,
     };
   }
 
   // Settings-level requests retain their existing pending-list + exact retry
   // flow; they did not originate in a run and therefore have no conversation.
   return { ok: false, error: "This operation requires owner approval in Settings." };
+}
+
+async function requestSiteToolFirstUse(context, canonical, tool, consent, argDigest) {
+  const requestProfileEpoch = siteToolProfileEpoch;
+  const consentWriterEpoch = currentSiteToolConsentProfileEpoch();
+  const profileIsCurrent = () => siteToolResetting === 0 && requestProfileEpoch === siteToolProfileEpoch;
+  const runIsCurrent = () => context?.principal !== "model" || (
+    typeof context.executionId === "string" && activeExecutions.has(context.executionId) &&
+    !cancellingApprovalExecutions.has(context.executionId)
+  );
+  if (
+    context?.principal !== "model" || typeof context.executionId !== "string" ||
+    !runIsCurrent()
+  ) {
+    await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+      event: "consent-decided",
+      direction: "agent-to-owner",
+      actor: "agent",
+      outcome: "unavailable",
+      reason: "run-not-live",
+      context,
+      argDigest,
+    }));
+    return { ok: false, reason: "run-not-live", error: "site tool consent requires a live model run" };
+  }
+  const target = canonicalOperationTarget("webmcp-tool", {
+    origin: canonical,
+    name: tool.name,
+  });
+  if (!target) return { ok: false, error: "this site tool is not approvable" };
+  const pendingKey = `${target}\u0000${consent.identityDigest}\u0000${consent.enrollmentGen}\u0000${consent.revision}`;
+  let pending = pendingSiteToolConsent.get(pendingKey);
+  if (!pending) {
+    pending = (async () => {
+      if (!profileIsCurrent()) return { ok: false, reason: "authority-changed", error: "the browser profile was reset" };
+      if (consent.recordRevision > 0) {
+        await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+          event: "consent-invalidated",
+          direction: "agent-to-owner",
+          actor: "system",
+          outcome: "revoked",
+          reason: "descriptor-changed",
+          context,
+          argDigest,
+        }));
+      }
+      await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+        event: "consent-requested",
+        direction: "agent-to-owner",
+        actor: "agent",
+        outcome: "pending",
+        reason: "first-use",
+        context,
+        argDigest,
+      }));
+      let payload;
+      try {
+        payload = payloadFields([
+          ["origin", canonical],
+          ["name", tool.name],
+          ["source", tool.source],
+          ["identityDigest", consent.identityDigest],
+          ["enrollmentGen", consent.enrollmentGen],
+          ["consentRevision", consent.revision],
+        ]);
+      } catch {
+        return { ok: false, error: "this site tool is not approvable" };
+      }
+      const decision = await requireOwnerApproval(
+        context,
+        "webmcp.use-tool",
+        target,
+        payload,
+        { origin: canonical, tool: tool.name },
+      );
+      if (!profileIsCurrent()) {
+        return { ok: false, reason: "authority-changed", error: "the browser profile was reset while consent was pending" };
+      }
+      if (!runIsCurrent()) {
+        return { ok: false, reason: "run-not-live", error: "the run was cancelled while consent was pending" };
+      }
+      if (decision.ok === true) {
+        // The durable decision row lands BEFORE authority. If audit storage is
+        // unavailable, no automatic-use grant is persisted and nothing runs.
+        try {
+          await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+            event: "consent-decided",
+            direction: "owner-to-agent",
+            actor: "owner",
+            outcome: "allowed",
+            reason: "owner-allowed",
+            context,
+            argDigest,
+          }));
+        } catch {
+          // A transient first append may leave the request row pending. Attempt
+          // a terminal redacted row, but keep the operation fail-closed even if
+          // the audit store remains unavailable.
+          try {
+            await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+              event: "consent-invalidated",
+              direction: "owner-to-agent",
+              actor: "system",
+              outcome: "unavailable",
+              reason: "audit-unavailable",
+              context,
+              argDigest,
+            }));
+          } catch { /* the store is still unavailable */ }
+          return {
+            ok: false,
+            reason: "audit-unavailable",
+            error: "site tool consent audit is unavailable",
+          };
+        }
+        try {
+          if (!profileIsCurrent()) throw new Error("site_tool_profile_reset");
+          if (!runIsCurrent()) throw new Error("site_tool_consent_run_cancelled");
+          const applied = await setToolConsentDecision(canonical, tool.name, "allowed", {
+            expected: consent,
+            expectedProfileEpoch: consentWriterEpoch,
+            commitGuard: runIsCurrent,
+          });
+          // Do not abort the run whose exact call is waiting to continue. Its
+          // lazy protocol opens a narrow catalog-transition window, while all
+          // subsequent reads see the new persisted revision immediately.
+          invalidateAgent();
+          broadcastRegistryChanged();
+          return { ok: true, consent: applied };
+        } catch (error) {
+          if (error?.code === "site_tool_consent_changed" || !runIsCurrent()) {
+            await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+              event: "consent-invalidated",
+              direction: "settings-to-agent",
+              actor: "system",
+              outcome: "revoked",
+              reason: runIsCurrent() ? "authority-changed" : "run-not-live",
+              context,
+              argDigest,
+            }));
+          }
+          return {
+            ok: false,
+            reason: runIsCurrent() ? "authority-changed" : "run-not-live",
+            error: runIsCurrent()
+              ? "site tool consent changed before the decision could be applied"
+              : "the run was cancelled before site tool consent could be applied",
+          };
+        }
+      }
+      const denied = decision.approvalDenied === true;
+      const expired = decision.approvalExpired === true;
+      await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+        event: "consent-decided",
+        direction: denied ? "owner-to-agent" : "agent-to-owner",
+        actor: denied ? "owner" : "agent",
+        outcome: denied ? "denied" : expired ? "expired" : "unavailable",
+        reason: denied ? "owner-denied" : expired ? "owner-expired" : "no-owner-channel",
+        context,
+        argDigest,
+      }));
+      if (denied) {
+        try {
+          if (!profileIsCurrent()) throw new Error("site_tool_profile_reset");
+          if (!runIsCurrent()) throw new Error("site_tool_consent_run_cancelled");
+          const applied = await setToolConsentDecision(canonical, tool.name, "denied", {
+            expected: consent,
+            expectedProfileEpoch: consentWriterEpoch,
+            commitGuard: runIsCurrent,
+          });
+          // This exact call returns the denial; there is no page work to abort.
+          // Settings revocations use invalidateSiteToolWork for live calls.
+          invalidateAgent();
+          broadcastRegistryChanged();
+          return {
+            ok: false,
+            approvalDenied: true,
+            sticky: true,
+            consent: applied,
+            reason: "tool-consent-denied",
+            error: "the owner blocked this site tool; enable it in Settings to try again",
+          };
+        } catch {
+          if (!runIsCurrent()) {
+            await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+              event: "consent-invalidated",
+              direction: "owner-to-agent",
+              actor: "system",
+              outcome: "revoked",
+              reason: "run-not-live",
+              context,
+              argDigest,
+            }));
+          }
+          return {
+            ok: false,
+            reason: runIsCurrent() ? "authority-changed" : "run-not-live",
+            error: runIsCurrent()
+              ? "site tool consent changed before the denial could be applied"
+              : "the run was cancelled before the denial could be applied",
+          };
+        }
+      }
+      return {
+        ok: false,
+        approvalExpired: expired,
+        reason: expired ? "owner-approval-expired" : "owner-approval-channel-missing",
+        error: decision.error ?? "the site tool was not allowed",
+      };
+    })().finally(() => pendingSiteToolConsent.delete(pendingKey));
+    pendingSiteToolConsent.set(pendingKey, pending);
+  }
+  const result = await pending;
+  if (result?.ok && !activeExecutions.has(context.executionId)) {
+    return { ok: false, reason: "run-not-live", error: "the model run ended before site tool consent settled" };
+  }
+  return result;
 }
 
 function payloadFields(entries) {
@@ -4769,7 +5423,7 @@ async function writeActionLedgerRow(name, args, result, context) {
 // child through the SAME path (own OPFS sandbox, own provider override, own
 // prompt scope) — delegation adds only the delegation context, the budget cap,
 // skipRunLock, and never forwards approvalBinding.
-async function runNamedAgentTask({ id, task, attachments, runId, threadId = null, _executionId = null, _preallocatedExecutionId = null, _admissionFence = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, history = null, journaledSkillIds = null }) {
+async function runNamedAgentTask({ id, task, attachments, runId, threadId = null, _executionId = null, _preallocatedExecutionId = null, _admissionFence = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, history = null, journaledSkillIds = null, approvalResolverDocumentId = "" }) {
   // The agent runs the task with its OWN OPFS sandbox (namedAgentMemory — its
   // memory + history), so its runs read/write its own tier, never the
   // master's or a site's.
@@ -4845,6 +5499,7 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
       skipRunLock,
       parentRunId,
       onExecutionStarted,
+      approvalResolverDocumentId,
       onProgress: (event) => {
         broadcastProgress({ ...event, runId: runTag, agentId: agent.id ?? null, ...(parentRunId ? { parentRunId } : {}) });
       },
@@ -4866,7 +5521,7 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
 // id is tracked for the cancellation cascade (P1-b); the settled child's
 // total subtree consumption is charged back to the caller's budget (P1-a);
 // a cancelled child surfaces a STRUCTURED cancellation, not a generic error.
-async function runDelegatedChild(callerExecutionId, state, targetRef, task, briefContext) {
+async function runDelegatedChild(callerExecutionId, state, targetRef, task, briefContext, approvalResolverDocumentId = "") {
   const taskText = typeof task === "string" ? task.trim() : "";
   const callerAgent = await getNamedAgent(state.agentId);
   const agents = await listNamedAgents();
@@ -4969,6 +5624,7 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
       maxIterations: verdict.child.maxIterations,
       skipRunLock: true,
       parentRunId: callerExecutionId,
+      approvalResolverDocumentId,
     });
   } catch (error) {
     thrown = error;
@@ -5016,18 +5672,24 @@ async function runDelegatedChild(callerExecutionId, state, targetRef, task, brie
 // execution is cancelled recursively first — a parent never settles cancelled
 // while a child keeps spending.
 async function cancelExecutionTree(executionId, { reason, requestId = null }) {
+  // Owner cancellation intent is a synchronous authority fence. The durable
+  // cancellation callback below settles cards only after the tombstone lands,
+  // while consent commit guards can already refuse a racing late Allow.
+  cancellingApprovalExecutions.add(executionId);
   const admission = delegationAdmissions.get(executionId);
   if (admission?.cancel?.(reason)) {
     const snapshot = admission.snapshot?.() ?? { phase: "pending" };
     // Browser KAT authority: prove the cancellation hit the pre-admission
     // fence, rather than merely observing an eventually-cancelled child.
     broadcastProgress({ type: "delegation-admission-cancelled", executionId, pendingAdmission: true, admissionPhase: snapshot.phase });
+    cancellingApprovalExecutions.delete(executionId);
     return { ok: true, cancelled: true, pendingAdmission: true, admissionPhase: snapshot.phase, executionId };
   }
   const result = await durableRuns.cancel(executionId, {
     reason,
     requestId,
     onAuthorityPersisted: async () => {
+      cancelPendingApprovalsForRun(ownerApprovalStore, executionId, "run cancelled before approval");
       const kids = [...(delegationChildren.get(executionId) ?? [])];
       for (const kid of kids) {
         const child = await cancelExecutionTree(kid, { reason: `parent run cancelled: ${reason}` });
@@ -5041,6 +5703,7 @@ async function cancelExecutionTree(executionId, { reason, requestId = null }) {
     },
   });
   const failure = delegationCancellationFailure(result);
+  if (!activeExecutions.has(executionId)) cancellingApprovalExecutions.delete(executionId);
   if (failure) return { ...result, ok: false, error: `live cancellation failed: ${failure}` };
   return result;
 }
@@ -5072,7 +5735,10 @@ async function drainThreadQueueForThread(threadId, settledExecutionId) {
       const snapshot = await durableRuns.list();
       return snapshot.runs.find((row) => row.executionId === executionId) ?? null;
     },
-    fireRun: ({ runId, text }) => handlers["agent.run"]({ threadId: id, task: text, runId }),
+    fireRun: ({ runId, text, resolverDocumentId }) => handlers["agent.run"](
+      { threadId: id, task: text, runId },
+      { principal: "extension", resolverDocumentId },
+    ),
     report: (level, message) => pushDiagnostic(level, message),
     newRunId: retryRunId,
   }).catch((e) => {
@@ -5564,6 +6230,25 @@ const handlers = mergeRouteMaps(
       // the global lock.
       return await withEnrollmentLock(async () => {
         const origins = await listOrigins(); // read under the global enrollment lock
+        // Audit every exact authority loss before the first tombstone. This is
+        // an all-or-nothing preflight: an unavailable audit leaves scripting,
+        // enrollment and every bridge unchanged rather than partly disabling
+        // the profile with missing revocation history.
+        for (const origin of origins) {
+          // The transition already owns withEnrollmentLock. Re-entering it via
+          // toolConsentStates/enrollmentSnapshot would wait on itself forever,
+          // leaving the permission enabled and every site authoritative.
+          for (const consent of await toolConsentStatesLocked(origin)) {
+            await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+              event: "consent-invalidated",
+              direction: "owner-to-agent",
+              actor: "owner",
+              outcome: "revoked",
+              reason: "scripting-disabled",
+              context,
+            }), { enrollmentLocked: true });
+          }
+        }
         const results = [];
         for (const o of origins) {
           try {
@@ -5780,7 +6465,7 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: `tool preview result rejected: ${error?.code ?? error}` };
     }
   },
-  async "agent.run"(m) {
+  async "agent.run"(m, routeContext) {
     // Validate the attachment dataURL SHAPE only (dptw: the 8 MiB/16 MiB/8-count
     // caps are gone — the message transport and OPFS quota surface their own
     // honest errors). Malformed dataURLs and declared-type/parsed-MIME
@@ -5859,7 +6544,10 @@ const handlers = mergeRouteMaps(
         // events (incl. tool permission denials → approval cards) are accepted
         // by the conversation's exact-runId fence; execId stays the durable
         // authority for the run itself.
-        result = await handlers["agent.delegate"]({ origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null, attachments: bounded });
+        result = await handlers["agent.delegate"](
+          { origin: mention.id, task: m.task, threadId, uiRunId: m.runId ?? null, attachments: bounded },
+          routeContext,
+        );
       } else if (mentionRoute) {
         result = await handlers[mentionRoute]({
           id: mention.id,
@@ -5877,13 +6565,14 @@ const handlers = mergeRouteMaps(
           // whose schedule mutation was approved by the owner starts its retry
           // with the SAME binding (no re-approval prompt).
           approvalBinding: m.approvalBinding ?? null,
-        });
+        }, routeContext);
       } else {
       result = await runTask({
         id: m.id,
         task: m.task,
         attachments: bounded,
         clientCorrelationId: m.runId ?? null,
+        uiRunId: m.runId ?? threadId ?? m.id ?? null,
         approvalBinding: m.approvalBinding ?? null,
         threadId,
         agentRole: "hub",
@@ -5907,6 +6596,7 @@ const handlers = mergeRouteMaps(
         // thread's earlier terminal rows journaled — re-applied on resume so a
         // continuation that does not re-mention /skill:x still runs with it.
         journaledSkillIds: threadJournaledSkills,
+        approvalResolverDocumentId: approvalResolverDocument(routeContext),
       });
       }
       // A run that failed BEFORE durable admission (unknown agent,
@@ -6315,8 +7005,13 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, refined };
   },
-  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, history = null, journaledSkillIds = null }) {
-    return await runNamedAgentTask({ id, task, attachments, runId, threadId, _executionId, _permissionResume, _resumeToken, _allowProviderChange, approvalBinding, history, journaledSkillIds });  },
+  async "named-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, history = null, journaledSkillIds = null }, routeContext) {
+    return await runNamedAgentTask({
+      id, task, attachments, runId, threadId, _executionId, _permissionResume,
+      _resumeToken, _allowProviderChange, approvalBinding, history, journaledSkillIds,
+      approvalResolverDocumentId: approvalResolverDocument(routeContext),
+    });
+  },
 
   // Agent→agent delegation (G5, owner directive 2026-08-28: "agents invocable
   // as skills"). The CALLER identity comes from the route CONTEXT — the
@@ -6353,7 +7048,14 @@ const handlers = mergeRouteMaps(
       // have settled/cancelled while this attempt waited for the lock.
       const liveState = activeDelegationRuns.get(callerExecutionId);
       if (!liveState) return { ok: false, code: "delegation-context", error: "the parent run settled before this queued delegation started" };
-      return runDelegatedChild(callerExecutionId, liveState, targetRef, task, briefContext);
+      return runDelegatedChild(
+        callerExecutionId,
+        liveState,
+        targetRef,
+        task,
+        briefContext,
+        approvalResolverDocument(routeContext),
+      );
     });
     const tail = attempt.catch(() => {});
     delegationLocks.set(callerExecutionId, tail);
@@ -6600,8 +7302,21 @@ const handlers = mergeRouteMaps(
       );
       return { ok: false, error: "factory reset is restricted to the Settings surface" };
     }
+    siteToolResetting++;
     try {
-      const result = await executeFactoryReset();
+      // Fence pending WebMCP cards and audit/state writers before OPFS is
+      // removed. A late card decision sees the changed profile epoch and can
+      // neither recreate consent nor append into the freshly reset profile.
+      siteToolProfileEpoch++;
+      invalidateSiteToolConsentWriters();
+      for (const [approvalId, row] of ownerApprovalStore.approvals) {
+        if (row?.action === "webmcp.use-tool") resolvePendingApproval(ownerApprovalStore, approvalId, false);
+      }
+      const origins = await listOrigins();
+      await Promise.all(origins.map((origin) => invalidateSiteToolWork(origin)));
+      const result = await withEnrollmentLock(() =>
+        withSiteToolAuditBarrier(() =>
+          withSiteToolConsentBarrier(() => executeFactoryReset())));
       // The reset wipes OPFS without restarting this worker, so the durable-run
       // registry's in-memory record cache would still describe runs that no
       // longer exist. Go cold (CAP-FB-20260830-RUN-LOG-COMPACTION-01).
@@ -6616,6 +7331,8 @@ const handlers = mergeRouteMaps(
       return { ok: true, ...result };
     } catch (err) {
       return { ok: false, error: `factory_reset_failed: ${err?.message || err}` };
+    } finally {
+      siteToolResetting--;
     }
   },
 
@@ -6877,18 +7594,66 @@ const handlers = mergeRouteMaps(
   // trusted path. The model-facing run path (readSiteLazySources /
   // authorizationGuard) additionally gates on per-tool owner approval before
   // reaching invokeSiteTool.
-  async "tools.invoke"({ origin, name, args }) {
-    const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    const snap = await enrollmentSnapshot(canonical);
-    if (!snap.enrolled) {
-      return { ok: false, error: `origin ${canonical} is not enrolled` };
+  async "tools.invoke"({ origin, name, args }, context) {
+    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+      return { ok: false, error: "site tools can be invoked directly only by an owner extension surface" };
     }
-    const res = await invokeSiteTool(canonical, String(name ?? ""), args ?? {}, snap.gen);
-    // Forward the FULL honest failure (chrome-agent-platform-ajcc):
-    // errorDetail (page-side name/message/stack excerpt + phase + realm +
-    // origin), plus the SW's own reason/detail on its early exits — re-wrapping
-    // to a bare { error } string here used to strip them all.
+    const canonical = canonicalOrigin(origin);
+    const toolName = typeof name === "string" ? name : "";
+    if (!canonical || !toolName) return { ok: false, error: "invalid site tool" };
+    const snap = await enrollmentSnapshot(canonical);
+    if (!snap.enrolled) return { ok: false, error: `origin ${canonical} is not enrolled` };
+    const descriptor = (await listTools(canonical)).find((tool) => tool?.name === toolName);
+    if (!descriptor) return { ok: false, error: `no such tool on ${canonical}: ${toolName}` };
+    let consent;
+    let argDigest;
+    try {
+      consent = await toolConsentSnapshot(canonical, toolName);
+      argDigest = digestSiteToolArguments(args ?? {});
+    } catch {
+      return { ok: false, error: "site tool authority is unavailable" };
+    }
+    if (snap.policy === "deny") {
+      try {
+        await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+          event: "invocation-blocked", direction: "agent-to-site", actor: "owner",
+          outcome: "blocked", reason: "site-policy-deny", context, argDigest,
+        }));
+      } catch { return { ok: false, error: "site_tool_audit_unavailable" }; }
+      return { ok: false, error: `site tools on ${canonical} are turned off` };
+    }
+    const authorization = mintSiteToolAuthorization(consent, "owner-direct", context);
+    try {
+      await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+        event: "invocation-started", direction: "agent-to-site", actor: "owner",
+        outcome: "pending", reason: "owner-direct", context, argDigest,
+      }));
+    } catch { return { ok: false, error: "site_tool_audit_unavailable" }; }
+    let res;
+    try {
+      res = await invokeSiteTool(
+        canonical,
+        toolName,
+        args ?? {},
+        snap.gen,
+        descriptor.source,
+        null,
+        authorization,
+      );
+    } catch {
+      // Preserve a terminal audit row even for an unexpected route/runtime
+      // throw; provider/page details never cross this owner-safe boundary.
+      res = { ok: false, error: "site tool invocation failed" };
+    }
+    try {
+      await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+        event: "invocation-finished", direction: "site-to-agent", actor: "system",
+        outcome: res?.authorityRevoked === true ? "revoked" : (res?.error || res?.ok === false) ? "failed" : "succeeded",
+        reason: res?.authorityRevoked === true ? "authority-changed" : (res?.error || res?.ok === false) ? "page-error" : "page-result",
+        context, argDigest,
+      }));
+    } catch { return { ok: false, error: "site_tool_audit_unavailable" }; }
+    // Forward the FULL honest failure (chrome-agent-platform-ajcc).
     if (res?.error || res?.ok === false) {
       const out = { ok: false, error: res.error ?? "invoke failed" };
       if (res?.errorDetail) out.errorDetail = res.errorDetail;
@@ -6905,57 +7670,180 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, policies: out };
   },
-  // The Directory's enrollment-policy control (owner surface only): sets an
-  // enrolled origin's tool-use policy to allow | deny | ask. A policy flip
-  // bumps the enrollment generation (revocation fence) — the route returns
-  // the new snapshot so the UI can re-render exactly the applied state.
-  async "tools.policy.set"({ origin, policy }) {
+  // Coarse site on/off is a Settings-only authority mutation. Directory stays
+  // a read-only catalog; a generic extension document cannot flip policy.
+  async "tools.policy.set"({ origin, policy }, context) {
+    requireSettingsSender(context);
+    const mutationEpoch = siteToolProfileEpoch;
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    const requested = policy === "deny" ? "deny" : policy === "allow" ? "allow" : null;
+    if (!canonical || !requested) return { ok: false, error: "invalid site tool policy" };
+    if (siteToolResetting > 0) return { ok: false, error: "site tool profile reset in progress" };
     try {
-      const applied = await setEnrollmentPolicy(canonical, policy);
-      invalidateAgent();
-      broadcastRegistryChanged();
+      const before = await toolConsentStates(canonical);
+      for (const consent of before) {
+        await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+          event: "consent-reset",
+          direction: "settings-to-agent",
+          actor: "settings",
+          outcome: requested === "deny" ? "disabled" : "reset",
+          reason: "settings-site",
+          context,
+        }));
+      }
+      if (siteToolResetting > 0 || mutationEpoch !== siteToolProfileEpoch) {
+        throw new Error("site_tool_profile_reset");
+      }
+      const applied = await setEnrollmentPolicy(canonical, requested);
+      await invalidateSiteToolWork(canonical);
       const snap = await enrollmentSnapshot(canonical);
+      if (applied === "allow") {
+        await notifyOriginBridge(canonical, { type: "enrollment-sync", gen: snap.gen });
+      }
       return { ok: true, origin: canonical, policy: applied, gen: snap.gen };
-    } catch (e) {
-      return { ok: false, error: String(e?.message ?? e) };
+    } catch (error) {
+      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
     }
   },
-  // The approval leg of an "ask"-policy site tool (CAP-FB-20260819-DIRECTORY-
-  // TOOL-EXPLORER-01): the WebMCP dispatch gate calls this route (model
-  // context) BEFORE the page call. The owner approves ONE invocation on an
-  // in-conversation card; the payload binds the exact origin + tool name, and
-  // every invocation path (invokeSiteTool's enrollment/generation/tab fences)
-  // still runs after the approval — this card decides WHETHER this call may
-  // run, never WHAT runs.
-  async "webmcp.use-tool"({ origin, name }, context) {
+
+  async "webmcp.consent.snapshot"(_body, context) {
+    requireSettingsSender(context);
+    const sites = [];
+    for (const origin of await listOrigins()) {
+      const enrollment = await enrollmentSnapshot(origin);
+      const tools = await listTools(origin);
+      const states = await toolConsentStates(origin);
+      const byName = new Map(states.map((state) => [state.name, state]));
+      sites.push({
+        origin,
+        policy: enrollment.policy === "deny" ? "deny" : "allow",
+        enrollmentGen: enrollment.gen,
+        tools: tools.map((tool) => {
+          const consent = byName.get(tool.name);
+          return {
+            name: tool.name,
+            description: tool.description ?? "",
+            source: tool.source,
+            inputSchema: tool.inputSchema ?? {},
+            pageUrl: tool.pageUrl ?? "",
+            state: consent?.state ?? "ask",
+            identityDigest: consent?.identityDigest ?? "",
+            revision: consent?.revision ?? 0,
+          };
+        }),
+      });
+    }
+    return { ok: true, sites };
+  },
+
+  async "webmcp.consent.tool.set"({ origin, name, state }, context) {
+    requireSettingsSender(context);
+    const mutationEpoch = siteToolProfileEpoch;
+    const consentWriterEpoch = currentSiteToolConsentProfileEpoch();
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
-    const toolName = typeof name === "string" ? name.slice(0, 200) : "";
-    if (!toolName) return { ok: false, error: "invalid tool name" };
+    const toolName = typeof name === "string" && name.length <= 128 ? name : "";
+    const nextState = state === "allowed" || state === "denied" || state === "ask" ? state : null;
+    if (!canonical || !toolName || !nextState) return { ok: false, error: "invalid site tool consent" };
+    if (siteToolResetting > 0) return { ok: false, error: "site tool profile reset in progress" };
+    try {
+      const before = await toolConsentSnapshot(canonical, toolName);
+      await appendRequiredSiteToolAudit(auditRecordFor(before, {
+        event: nextState === "ask" ? "consent-reset" : "consent-decided",
+        direction: "settings-to-agent",
+        actor: "settings",
+        outcome: nextState === "ask" ? "reset" : nextState,
+        reason: "settings-tool",
+        context,
+      }));
+      if (siteToolResetting > 0 || mutationEpoch !== siteToolProfileEpoch) {
+        throw new Error("site_tool_profile_reset");
+      }
+      const applied = await setToolConsentDecision(canonical, toolName, nextState, {
+        expected: before,
+        expectedProfileEpoch: consentWriterEpoch,
+      });
+      await invalidateSiteToolWork(canonical);
+      return { ok: true, consent: applied };
+    } catch (error) {
+      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
+    }
+  },
+
+  async "webmcp.consent.site.reset"({ origin, mode }, context) {
+    requireSettingsSender(context);
+    const mutationEpoch = siteToolProfileEpoch;
+    const consentWriterEpoch = currentSiteToolConsentProfileEpoch();
+    const canonical = canonicalOrigin(origin);
+    const resetMode = mode === "automatic" ? "automatic" : mode === "all" ? "all" : null;
+    if (!canonical || !resetMode) return { ok: false, error: "invalid site consent reset" };
+    if (siteToolResetting > 0) return { ok: false, error: "site tool profile reset in progress" };
+    try {
+      const states = await toolConsentStates(canonical);
+      const affected = states.filter((state) => resetMode === "all" ? state.state !== "ask" : state.state === "allowed");
+      for (const consent of affected) {
+        await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+          event: "consent-reset",
+          direction: "settings-to-agent",
+          actor: "settings",
+          outcome: "reset",
+          reason: "settings-site",
+          context,
+        }));
+      }
+      if (siteToolResetting > 0 || mutationEpoch !== siteToolProfileEpoch) {
+        throw new Error("site_tool_profile_reset");
+      }
+      const applied = await resetToolConsents(canonical, resetMode, {
+        expectedProfileEpoch: consentWriterEpoch,
+      });
+      if (affected.length) await invalidateSiteToolWork(canonical);
+      return { ok: true, reset: applied };
+    } catch (error) {
+      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
+    }
+  },
+
+  async "webmcp.audit.list"({ cursor = null, limit = 25 } = {}, context) {
+    requireSettingsSender(context);
+    try {
+      return await listSiteToolAudit({ cursor, limit });
+    } catch (error) {
+      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
+    }
+  },
+  // The first-use consent leg for the exact model-selected site tool. It
+  // re-reads descriptor and durable state; neither the page nor model supplies
+  // actor/run authority. Allow persists per profile, Deny is sticky, and a
+  // reset racing the card invalidates the late decision by revision.
+  async "webmcp.use-tool"({ origin, name, source, argDigest }, context) {
+    const canonical = canonicalOrigin(origin);
+    const toolName = typeof name === "string" && name.length <= 128 ? name : "";
+    if (!canonical || !toolName || (source !== "declared" && source !== "inferred")) {
+      return { ok: false, error: "invalid site tool" };
+    }
     const snap = await enrollmentSnapshot(canonical);
     if (!snap.enrolled) return { ok: false, error: "origin not enrolled" };
-    if (snap.policy !== "ask") return { ok: true }; // no longer ask — let the normal path decide
-    const dir = await listTools(canonical);
-    if (!dir.some((t) => t?.name === toolName)) {
-      return { ok: false, error: `no such tool on ${canonical}: ${toolName}` };
+    if (snap.policy === "deny") return { ok: false, reason: "site-policy-denied", error: "site tools are turned off" };
+    const tool = (await listTools(canonical)).find((candidate) =>
+      candidate?.name === toolName && candidate?.source === source
+    );
+    if (!tool) return { ok: false, error: `no such tool on ${canonical}: ${toolName}` };
+    let consent;
+    try { consent = await toolConsentSnapshot(canonical, toolName); }
+    catch { return { ok: false, error: "site tool consent is unavailable" }; }
+    if (consent.state === "allowed") return { ok: true };
+    if (consent.state === "denied") {
+      return {
+        ok: false,
+        reason: "tool-consent-denied",
+        approvalDenied: true,
+        sticky: true,
+        error: "the owner blocked this site tool; enable it in Settings to try again",
+      };
     }
-    const target = canonicalOperationTarget("webmcp-tool", {
-      origin: canonical,
-      name: toolName,
-    });
-    if (!target) return { ok: false, error: "this site tool is not approvable" };
-    let payload;
-    try {
-      payload = payloadFields([
-        ["origin", canonicalOrigin(canonical)],
-        ["name", toolName],
-      ]);
-    } catch {
-      return { ok: false, error: "this site tool is not approvable" };
-    }
-    return await requireOwnerApproval(context, "webmcp.use-tool", target, payload);
+    const digest = typeof argDigest === "string" && /^[0-9a-f]{64}$/.test(argDigest) ? argDigest : null;
+    if (!digest) return { ok: false, error: "site tool audit digest is invalid" };
+    return await requestSiteToolFirstUse(context, canonical, tool, consent, digest);
   },
   async "webmcp.detect.bootstrap"({ origin, __sender }) {
     const canonical = canonicalOrigin(origin);
@@ -7148,12 +8036,18 @@ const handlers = mergeRouteMaps(
     }
     return { ok: true, enrolled: snap.enrolled, gen: snap.gen, epoch, nonce };
   },
-  async "tools.approve"({ origin, name, decision }) {
-    return await approveTool(origin, name, decision);
+  async "tools.approve"({ origin, name, decision }, context) {
+    requireSettingsSender(context);
+    const state = decision === true ? "allowed" : "ask";
+    return await handlers["webmcp.consent.tool.set"]({ origin, name, state }, context);
   },
   async "tools.pending"({ origin }) {
     if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
     return await pendingApprovals(origin);
+  },
+  async "tools.consent.states"({ origin }) {
+    if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
+    return { ok: true, states: await toolConsentStates(origin) };
   },
   async "tools.allOrigins"() {
     return await listOrigins();
@@ -7290,7 +8184,7 @@ const handlers = mergeRouteMaps(
     // bound approvals (a model-initiated action awaiting its owner) — never
     // a ui:-bound one, which stays an exact-Settings-document decision.
     const before = ownerApprovalStore.approvals.get(String(approvalId ?? ""));
-    if (!mayResolveApproval(before, context?.principal)) {
+    if (!mayResolveApproval(before, context?.principal, context?.documentId)) {
       return { ok: false, error: "approvals are available only in Settings" };
     }
     const result = resolvePendingApproval(ownerApprovalStore, String(approvalId ?? ""), approve === true);
@@ -7872,8 +8766,14 @@ const handlers = mergeRouteMaps(
     }
     let result;
     try {
+      const resumeContext = {
+        ...context,
+        resolverDocumentId: typeof request.approvalResolverDocumentId === "string"
+          ? request.approvalResolverDocumentId
+          : "",
+      };
       if (request.route === "agent.delegate") {
-        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, attachments: request.attachments ?? [], threadId: request.threadId ?? null, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, context);
+        result = await handlers["agent.delegate"]({ origin: request.origin, task: request.task, attachments: request.attachments ?? [], threadId: request.threadId ?? null, uiRunId: request.uiRunId ?? null, _executionId: executionId, _resumeGeneration: request.generation, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change" }, resumeContext);
       } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
         result = await handlers[request.route]({
           ...(request.routeArgs ?? {}), task: request.task, attachments: request.attachments ?? [],
@@ -7882,7 +8782,7 @@ const handlers = mergeRouteMaps(
           history: Array.isArray(request.history) ? request.history : [],
           journaledSkillIds: Array.isArray(request.journaledSkillIds) && request.journaledSkillIds.length > 0 ? request.journaledSkillIds : null,
           _executionId: executionId, _permissionResume: true, _resumeToken: resumed.token, _allowProviderChange: run.phase === "paused-provider-change",
-        }, context);
+        }, resumeContext);
       } else {
         result = await runTask({ ...request, memory: await resolveMemory(request.memoryOrigin ?? "master"), executionId, permissionResume: true, resumeToken: resumed.token, allowProviderChange: run.phase === "paused-provider-change" });
       }
@@ -7917,7 +8817,7 @@ const handlers = mergeRouteMaps(
       task: BUDGET_CONTINUE_TASK,
       runId: m?.runId ?? null,
       continuesExecutionId: executionId,
-    });
+    }, context);
   },
   // ── run.control.* — the composer's STEER + QUEUE protocol
   // (chrome-agent-platform-afiu) ────────────────────────────────────────────
@@ -7951,7 +8851,9 @@ const handlers = mergeRouteMaps(
         requestId: m?.requestId ?? crypto.randomUUID?.() ?? String(Date.now()),
       });
       if (live.threadId && String(text).trim()) {
-        await threadQueues.enqueue(live.threadId, text).catch(() => {});
+        await threadQueues.enqueue(live.threadId, text, {
+          resolverDocumentId: approvalResolverDocument(context),
+        }).catch(() => {});
       }
       return { ...(cancelled ?? { ok: true }), stopped: true, executionId };
     }
@@ -7976,7 +8878,9 @@ const handlers = mergeRouteMaps(
     }
     const threadId = String(m?.threadId ?? "");
     if (!threadId) return { ok: false, error: "threadId is required" };
-    return await threadQueues.enqueue(threadId, String(m?.text ?? ""));
+    return await threadQueues.enqueue(threadId, String(m?.text ?? ""), {
+      resolverDocumentId: approvalResolverDocument(context),
+    });
   },
 
   async "run.control.queue.remove"(m, context) {
@@ -8487,7 +9391,7 @@ const handlers = mergeRouteMaps(
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
   },
-  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, history = null, journaledSkillIds = null }) {
+  async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, history = null, journaledSkillIds = null }, routeContext) {
     const recipe = await resolveRecipe(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
@@ -8517,6 +9421,7 @@ const handlers = mergeRouteMaps(
         // carries that thread's prior turns + journaled skills.
         history: Array.isArray(history) ? history : [],
         journaledSkillIds: Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0 ? journaledSkillIds : null,
+        approvalResolverDocumentId: approvalResolverDocument(routeContext),
         onProgress: (event) => {
           broadcastProgress({ ...event, runId: runTag, agentId: `background:${recipe.id}` });
         },
@@ -8860,6 +9765,19 @@ const handlers = mergeRouteMaps(
     );
     if (!gate.ok) return gate;
     return await withOriginLock(canonical, async () => {
+      // Deletion is an authority mutation: its durable, redacted invalidation
+      // rows must land before the enrollment tombstone. If audit persistence
+      // is unavailable, fail without partly deleting the Site Agent.
+      for (const consent of await toolConsentStates(canonical)) {
+        await appendRequiredSiteToolAudit(auditRecordFor(consent, {
+          event: "consent-invalidated",
+          direction: "owner-to-agent",
+          actor: "owner",
+          outcome: "revoked",
+          reason: "site-deleted",
+          context,
+        }));
+      }
       // Authoritative, PREEMPTIVE revocation: abort any in-flight worker run,
       // then tombstone the enrollment FIRST (a running content-script bridge is
       // rejected by isEnrolled from this instant), THEN remove the dynamic
@@ -8988,7 +9906,7 @@ const handlers = mergeRouteMaps(
   async "agent.pending-cleanup"() {
     return { origins: await listPendingCleanup() };
   },
-  async "agent.delegate"({ origin, task, threadId = null, attachments = [], _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId: callerUiRunId = null, runId = null }) {
+  async "agent.delegate"({ origin, task, threadId = null, attachments = [], _executionId = null, _resumeGeneration = null, _resumeToken = null, _allowProviderChange = false, uiRunId: callerUiRunId = null, runId = null }, routeContext) {
     // Direct, observable fan-out: run a WORKER agent (not the hub) for an
     // enrolled origin and journal its result to the worker's OWN per-origin
     // memory. Preemptive revocation: the generation is captured up front, the
@@ -8996,6 +9914,7 @@ const handlers = mergeRouteMaps(
     // provider/model must never block agent.delete), and the generation is
     // revalidated BEFORE committing the journal write.
     const uiRunId = callerUiRunId ?? runId ?? null;
+    const approvalResolverDocumentId = approvalResolverDocument(routeContext);
     const canonical = canonicalOrigin(origin);
     if (!canonical) return { ok: false, error: "invalid origin" };
     const snap = await enrollmentSnapshot(canonical);
@@ -9040,7 +9959,7 @@ const handlers = mergeRouteMaps(
       // never recreate a site store after disenrollment. The per-site audit row
       // below remains generation-fenced telemetry.
       journalTarget: "master",
-      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: threadId ?? null, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
+      resumeRequest: { route: "agent.delegate", origin: canonical, task: String(task ?? ""), attachments: sanitizeAttachments(validAttachments) ?? [], generation: gen, threadId: threadId ?? null, uiRunId, approvalResolverDocumentId, providerBinding: delegateProviderBinding, idempotencyKey: execId, replaySafety: { classification: "unknown-until-tool-progress", automaticReplayBeforeProgress: true } },
     });
     // Failed admission was already compensated by start(); no readable
     // authority exists, so rollback would be both unnecessary and unsafe.
@@ -9092,7 +10011,13 @@ const handlers = mergeRouteMaps(
         // come from it — no callback may read the racing global (an
         // invalidate between capture and attestation would otherwise drop or
         // swap the receipts under this worker).
-        const build = await ensureOrchestrator();
+        const directProgress = (event) => {
+          try { broadcastProgress({ ...event, runId: uiRunId ?? execId, agentId: canonical }); } catch { /* best effort */ }
+        };
+        const build = await ensureOrchestrator(
+          directProgress, false, null, null, null, "", execId, undefined, null,
+          "hub", null, approvalResolverDocumentId,
+        );
         const a = build?.workers?.get(canonical);
         // The worker run is a SIDE-EFFECTING boundary: it must be fenced (an aborted
         // run must not start a delegated worker) AND serialized with the master via
@@ -9155,11 +10080,11 @@ const handlers = mergeRouteMaps(
           };
           recordRunAttestation(bound);
         });
-        a.setProgress?.((ev) => {
+        a.setProgress?.((event) => {
           // UI broadcasts ride the UI correlation id when one was supplied
           // (the conversation fences on the UI attempt's runId); execId stays
           // the durable authority everywhere else.
-          try { broadcastProgress({ ...ev, runId: uiRunId ?? execId, agentId: canonical }); } catch { /* best-effort */ }
+          directProgress(event);
           durableRuns.heartbeat(execId, { progressed: true }).catch(() => {
             try { a.abort?.(); } catch { /* already stopped */ }
           });
@@ -9440,16 +10365,24 @@ async function resumeInterruptedRuns() {
     }
     let result;
     try {
+      const recoveryContext = {
+        principal: "extension",
+        documentId: "internal-interruption-recovery",
+        resolverDocumentId: typeof request.approvalResolverDocumentId === "string"
+          ? request.approvalResolverDocumentId
+          : "",
+      };
       if (request.route === "agent.delegate") {
         result = await handlers["agent.delegate"]({
           origin: request.origin,
           task: request.task,
           attachments: request.attachments ?? [],
           threadId: request.threadId ?? null,
+          uiRunId: request.uiRunId ?? null,
           _executionId: run.executionId,
           _resumeGeneration: request.generation,
           _resumeToken: claimed.token,
-        }, { principal: "extension", documentId: "internal-interruption-recovery" });
+        }, recoveryContext);
       } else if (["named-agent.run", "background-agent.run"].includes(request.route)) {
         result = await handlers[request.route]({
           ...(request.routeArgs ?? {}),
@@ -9462,7 +10395,7 @@ async function resumeInterruptedRuns() {
           _executionId: run.executionId,
           _permissionResume: true,
           _resumeToken: claimed.token,
-        }, { principal: "extension", documentId: "internal-interruption-recovery" });
+        }, recoveryContext);
       } else {
         result = await runTask({
           ...request,

@@ -36,7 +36,7 @@
  *   (null for a wake kick — no settle gate)
  * @param {(executionId: string) => Promise<object|null>} deps.runRow  durable
  *   registry row for a settled EXECUTION id, or null when absent/unreadable
- * @param {({ runId: string, text: string }) => Promise<object>} deps.fireRun
+ * @param {({ runId: string, text: string, resolverDocumentId: string }) => Promise<object>} deps.fireRun
  *   starts the continuation turn (the SW's agent.run); resolves with its
  *   result ({ok:true} once the turn settles, {ok:false} when refused)
  * @param {(level: string, message: string) => void} [deps.report]
@@ -99,8 +99,11 @@ export async function drainQueuedFollowUp({
     };
   }
   const text = String(claim.item.text ?? "");
+  const resolverDocumentId = typeof claim.item.resolverDocumentId === "string" && claim.item.resolverDocumentId.length <= 200
+    ? claim.item.resolverDocumentId
+    : "";
   try {
-    const runPromise = fireRun({ runId: claimRunId, text });
+    const runPromise = fireRun({ runId: claimRunId, text, resolverDocumentId });
     void Promise.resolve(runPromise).then((result) => {
       if (result?.ok !== true) {
         // Admission refused / failed before a durable run: the message never

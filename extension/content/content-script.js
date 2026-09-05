@@ -139,6 +139,20 @@ function applyEnrollmentSync(gen, via) {
   return null;
 }
 
+function cancelToolInvocations(via) {
+  // A consent reset/disable is a coarse per-origin cancellation fence. Reject
+  // every isolated-world waiter now and advance MAIN's immutable cancel epoch;
+  // new calls remain possible under whatever consent state the SW authorizes.
+  log("tool-consent-revoked", JSON.stringify({ origin: location.origin, via }));
+  for (const [requestId, send] of pending) {
+    pending.delete(requestId);
+    try {
+      send({ ok: false, error: "site tool consent changed — invocation cancelled" });
+    } catch { /* sendResponse already consumed */ }
+  }
+  sendDown({ type: "cancel-invocations" });
+}
+
 function applyDisenrollment(gen, via) {
   // MONOTONIC in BOTH directions (the round-25 blocker 8): reject a STALE
   // disenrollment (older gen than a sync we already applied). Only the LATEST
@@ -279,6 +293,11 @@ function onRuntimeMessage(message, _sender, sendResponse) {
     // (preemptive revocation) and signal MAIN to discard in-flight results.
     const err = applyDisenrollment(normalizeGen(message?.gen), "push");
     sendResponse(err ? { ok: false, error: err } : { ok: true });
+    return true;
+  }
+  if (message?.type === "tool-consent-revoked") {
+    cancelToolInvocations("push");
+    sendResponse({ ok: true });
     return true;
   }
   if (message?.type === "invoke-tool") {

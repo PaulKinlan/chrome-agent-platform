@@ -19,6 +19,7 @@ import {
   LAZY_PROTOCOL_TOOL_WIRE,
   LazyToolProtocol,
   sanitizeLazyToolArguments,
+  withOwnerSiteToolActivity,
 } from "../extension/lib/lazy-tool-protocol.js";
 import { ShadowToolCatalogController } from "../extension/lib/tool-catalog-shadow.js";
 import { canonicalToolDescriptor } from "../extension/lib/tool-catalog.js";
@@ -672,6 +673,54 @@ Deno.test("lazy protocol: built-in, browser, management and WebMCP adapters pres
     "management:agent.directory",
     "webmcp:page_lookup",
   ]);
+});
+
+Deno.test("lazy protocol: owner site activity reaches the UI side channel but never provider/model JSON", async () => {
+  const origin = "https://example.test";
+  const records = executableWebMcpToolRecords([{
+    name: "page_lookup",
+    source: "declared",
+    description: "lookup",
+    inputSchema: {
+      type: "object",
+      properties: { q: { type: "string" } },
+      required: ["q"],
+    },
+  }], {
+    origin,
+    agentId: "hub",
+    documentId: "hub-doc",
+    sourceGeneration: "enrollment:1:document:hub-doc:epoch:1",
+  }, () => withOwnerSiteToolActivity({ ok: true, value: "done" }, { origin, tool: "page_lookup" }));
+  const ownerEvents: Record<string, unknown>[] = [];
+  const lazy = createLazyProviderToolset({
+    readSources: () => records,
+    contextReader: () => runContext({ origin, onProgress: (event: Record<string, unknown>) => ownerEvents.push(event) }),
+    selectionAuthority: new ToolSelectionAuthority({ newRef: refFactory() }),
+  }) as any;
+  const searched = await lazy.tools.search_tools.execute({ query: "page_lookup", limit: 1 });
+  const ref = searched.results[0].selectionRef;
+  const output = await lazy.tools.execute_tool.execute({ selectionRef: ref, arguments: { q: "x" } });
+  assertEquals(output.selectedTool, "page_lookup");
+  assertEquals(ownerEvents, [{
+    type: "site-activity",
+    toolName: "execute_tool",
+    selectedTool: "page_lookup",
+    siteActivity: { origin, tool: "page_lookup" },
+  }]);
+  assertEquals(Reflect.ownKeys(ownerEvents[0].siteActivity as object).length, 2);
+  assert(!JSON.stringify(output).includes("siteActivity"));
+  assert(!JSON.stringify(output).includes(origin), "owner origin must not enter the journal-safe result");
+
+  const modelOutput = await lazy.tools.execute_tool.toModelOutput({
+    toolCallId: "call-site",
+    input: { selectionRef: ref, arguments: { q: "x" } },
+    output,
+  });
+  assertEquals(modelOutput.type, "json");
+  assertEquals(modelOutput.value.selectedTool, "page_lookup");
+  assert(!JSON.stringify(modelOutput).includes(origin));
+  assert(!JSON.stringify(modelOutput).includes("siteActivity"));
 });
 
 Deno.test("lazy protocol: hostile structured dispatcher errors never invoke getters", async () => {

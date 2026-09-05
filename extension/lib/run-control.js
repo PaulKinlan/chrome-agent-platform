@@ -208,14 +208,21 @@ export function createThreadQueue({ kvGet = async () => ({}), kvSet = async () =
   };
   const writeAll = (map) => kvSet({ [QUEUE_KEY]: map });
 
-  const item = (text) => ({ id: newId("q"), text: boundControlText(text), ts: now() });
+  const item = (text, resolverDocumentId = "") => ({
+    id: newId("q"),
+    text: boundControlText(text),
+    ts: now(),
+    ...(typeof resolverDocumentId === "string" && resolverDocumentId.length > 0 && resolverDocumentId.length <= 200
+      ? { resolverDocumentId }
+      : {}),
+  });
 
   /** Actionable (pending) items only: a CLAIMED item is in flight — its run
    * is executing it — so it is not a chip the owner can reorder/remove. */
   const pendingOf = (list) => normalize(list).filter((entry) => !entry.claim);
 
   return Object.freeze({
-    async enqueue(threadId, text) {
+    async enqueue(threadId, text, { resolverDocumentId = "" } = {}) {
       const id = String(threadId ?? "");
       if (!id) return { ok: false, error: "threadId is required" };
       const bounded = boundControlText(text);
@@ -237,7 +244,7 @@ export function createThreadQueue({ kvGet = async () => ({}), kvSet = async () =
             limit: MAX_THREADS_QUEUED,
           };
         }
-        const entry = item(bounded);
+        const entry = item(bounded, resolverDocumentId);
         list.push(entry);
         map[id] = list;
         await writeAll(map);

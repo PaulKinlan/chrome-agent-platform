@@ -23,6 +23,8 @@ Deno.test("tool-lifecycle: the queue matches parallel same-name calls FIFO", () 
   q.push("memory_get", b);
   q.push("memory_set", c);
   assertEquals(q.pendingCount(), 3);
+  assert(q.peek("memory_get") === a, "owner metadata can decorate the oldest card without consuming it");
+  assertEquals(q.pendingCount(), 3, "peek is non-consuming");
   assert(q.take("memory_get") === a, "oldest first");
   assert(q.take("memory_get") === b, "second in order");
   assert(q.take("memory_set") === c, "different name resolves independently");

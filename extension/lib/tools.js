@@ -10,6 +10,21 @@ import {
   historicalSiteIdentity,
   SITE_HISTORY_MAX,
 } from "./site-identity.js";
+import {
+  currentSiteToolConsentProfileEpoch,
+  invalidateSiteToolConsentWriters,
+  listSiteToolConsentStates,
+  resetSiteToolConsents,
+  setSiteToolConsent,
+  siteToolConsentSnapshot,
+  withSiteToolConsentBarrier,
+} from "./site-tool-consent.js";
+
+export {
+  currentSiteToolConsentProfileEpoch,
+  invalidateSiteToolConsentWriters,
+  withSiteToolConsentBarrier,
+};
 
 const DIR_KEY = "toolDirectory";
 export const SITE_IDENTITIES_KEY = "site_identities";
@@ -34,20 +49,11 @@ export function withEnrollmentLock(fn) {
   return run;
 }
 
-/** The per-site enrollment policy — the Directory's tool-use control
- * (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01). Enrollment itself remains the
- * coarse ALLOW (the owner's enroll gesture consents to the origin's tools as a
- * class — WEBMCP-AUTOAPPROVE-01); this column layers the tool-use decision on
- * top WITHOUT un-enrolling the site:
- *  - "allow" (default): the site's tools flow to agent toolsets unchanged.
- *  - "deny": the site stays enrolled (agent record + memory + discovery) but
- *    its tools are EXCLUDED from every agent toolset and every invocation fails
- *    closed with the named reason "site-policy-denied".
- *  - "ask": the site's tools stay discoverable but every invocation pays an
- *    in-conversation owner card (webmcp.use-tool) before the page call runs;
- *    a run with no owner conversation fails closed (never auto-runs).
- * Unknown/legacy entries read as "allow" (fail-closed would silently break
- * every already-enrolled site). */
+/** The coarse per-site tool switch. Enrollment creates discovery and worker
+ * custody, never automatic tool consent. "allow" means exact tools may enter
+ * the first-use consent state machine; "deny" is the site's hard off switch.
+ * The legacy "ask" value is still accepted when reading old profiles and has
+ * the same first-use semantics as "allow" — it no longer means per-call nags. */
 export const SITE_TOOL_POLICIES = Object.freeze(["allow", "deny", "ask"]);
 export function isSiteToolPolicy(value) {
   return typeof value === "string" && SITE_TOOL_POLICIES.includes(value);
@@ -421,9 +427,8 @@ export async function enrollOrigin(origin) {
       enrolled: true,
       at: Date.now(),
       gen: await nextGeneration(),
-      // The site's tool-use policy defaults to allow (enrollment = consent;
-      // the owner can switch it in the Directory). A legacy entry without the
-      // column reads as "allow" via isSiteToolPolicy's default.
+      // This is the coarse site switch only. Every exact tool still starts at
+      // first-use consent; enrollment never creates an automatic-use grant.
       policy: DEFAULT_SITE_TOOL_POLICY,
     };
     await kvSet({ [ENROLL_KEY]: map });
@@ -471,47 +476,73 @@ export async function disenrollOriginLocked(origin) {
   return Object.keys(map).filter((o) => map[o]?.enrolled === true);
 }
 
-/**
- * First-run approval — CAP-FB-20260824-WEBMCP-AUTOAPPROVE-01: ENROLLMENT IS
- * THE CONSENT. The owner's Settings gesture that enrolls a site agent
- * approves that origin's WebMCP tools as a class — declared AND inferred,
- * including tools declared or updated AFTER the enrollment (there is no
- * per-tool approval UI, so a per-tool gate was an unsatisfiable dead-end:
- * every enrolled tool failed closed as "owner-action-required" forever).
- *
- * Approval only decides WHETHER an enrolled site's tools may run at all;
- * WHAT may run is still fenced by the invocation path (enrollment
- * generation revocation, documentId-addressed sendMessage, run-gen echo,
- * descriptor re-verification, the round-30 binding fence, fail-closed on
- * disenroll) — none of that is weakened here.
- *
- * The per-tool approval record remains only as an explicit grant on a
- * NON-enrolled origin (legacy/route compat). Revocation rides the disenroll
- * tombstone + generation bump: isApproved derives from the LIVE enrollment
- * snapshot, so a tombstoned origin fails closed at the very next check.
- */
-export async function isApproved(origin, toolName) {
-  const { enrolled } = await enrollmentSnapshot(origin);
-  if (enrolled) return true;
-  const approved = (await siteMemory(origin).get("approvals")) ?? {};
-  return Boolean(approved[toolName]);
+/** Exact-tool consent layered over enrollment. Absence is ASK, Allow is
+ * profile-durable for the current execution-relevant descriptor identity, and
+ * Deny remains sticky by exact origin/name until Settings changes it. */
+export async function toolConsentSnapshot(origin, toolName) {
+  const canonical = canonicalOrigin(origin);
+  const enrollment = await enrollmentSnapshot(canonical);
+  if (!canonical || !enrollment.enrolled) {
+    return { state: "ask", enrolled: false, enrollmentGen: enrollment.gen ?? 0, revision: 0 };
+  }
+  const tools = await listTools(canonical);
+  const tool = tools.find((candidate) => candidate?.name === toolName);
+  if (!tool) throw new Error(`no such tool on ${canonical}: ${String(toolName)}`);
+  return { ...(await siteToolConsentSnapshot(canonical, tool, enrollment.gen)), enrolled: true };
 }
 
+/** Read every exact-tool consent while the caller ALREADY holds the global
+ * enrollment lock. This deliberately does not re-enter withEnrollmentLock —
+ * scripting Disable holds that lock across its audit + tombstone transition. */
+export async function toolConsentStatesLocked(origin) {
+  const canonical = canonicalOrigin(origin);
+  if (!canonical) return [];
+  const map = await enrolledMap();
+  const enrollment = map[canonical];
+  if (!enrollment || enrollment.enrolled !== true) return [];
+  const tools = await listTools(canonical);
+  return await listSiteToolConsentStates(canonical, tools, enrollment.gen ?? 0);
+}
+
+export async function toolConsentStates(origin) {
+  return await withEnrollmentLock(() => toolConsentStatesLocked(origin));
+}
+
+export async function isApproved(origin, toolName) {
+  try {
+    return (await toolConsentSnapshot(origin, toolName)).state === "allowed";
+  } catch {
+    return false;
+  }
+}
+
+export async function setToolConsentDecision(origin, toolName, state, options = {}) {
+  const canonical = canonicalOrigin(origin);
+  const enrollment = await enrollmentSnapshot(canonical);
+  if (!canonical || !enrollment.enrolled) throw new Error("origin not enrolled");
+  const tools = await listTools(canonical);
+  const tool = tools.find((candidate) => candidate?.name === toolName);
+  if (!tool) throw new Error(`no such tool on ${canonical}: ${String(toolName)}`);
+  return await setSiteToolConsent(canonical, tool, enrollment.gen, state, options);
+}
+
+/** Legacy exact-owner route compatibility: true allows; false rearms ASK. */
 export async function approveTool(origin, toolName, decision = true) {
-  const store = siteMemory(origin);
-  const approved = (await store.get("approvals")) ?? {};
-  if (decision) approved[toolName] = Date.now();
-  else delete approved[toolName];
-  await store.setTrusted("approvals", approved);
-  return approved;
+  return await setToolConsentDecision(origin, toolName, decision === true ? "allowed" : "ask");
+}
+
+export async function resetToolConsents(origin, mode = "all", options = {}) {
+  const canonical = canonicalOrigin(origin);
+  const enrollment = await enrollmentSnapshot(canonical);
+  if (!canonical || !enrollment.enrolled) throw new Error("origin not enrolled");
+  return await resetSiteToolConsents(canonical, enrollment.gen, mode, options);
 }
 
 export async function pendingApprovals(origin) {
-  // Enrollment approves the site's tools as a class — nothing pends for an
-  // enrolled origin (the auto-approve finding: a pending list that cannot be
-  // satisfied through any UI is a dead-end, not a gate).
-  if (await isEnrolled(origin)) return [];
-  const tools = await listTools(origin);
-  const approved = (await siteMemory(origin).get("approvals")) ?? {};
-  return tools.filter((t) => !approved[t.name]);
+  const canonical = canonicalOrigin(origin);
+  const enrollment = await enrollmentSnapshot(canonical);
+  if (!canonical || !enrollment.enrolled) return [];
+  const tools = await listTools(canonical);
+  const states = await listSiteToolConsentStates(canonical, tools, enrollment.gen);
+  return tools.filter((tool) => states.find((state) => state.name === tool.name)?.state === "ask");
 }

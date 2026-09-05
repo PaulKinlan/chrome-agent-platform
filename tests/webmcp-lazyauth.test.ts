@@ -20,9 +20,9 @@ class FakeDirHandle { constructor(n) { this.node = n; } get kind() { return "dir
 const root = dirNode();
 Object.defineProperty(globalThis, "navigator", { value: { storage: { async getDirectory() { return new FakeDirHandle(root); } } }, configurable: true, writable: true });
 
-import { disenrollOrigin, enrollOrigin, enrollmentSnapshot, isApproved, listTools, replaceTools } from "../extension/lib/tools.js";
-import { createWebmcpAuthorizationGuard, evaluateWebmcpAuthority, WEBMCP_AUTHORITY_REASONS } from "../extension/lib/webmcp-authority.js";
-import { executableWebMcpToolRecords, LazyToolProtocol } from "../extension/lib/lazy-tool-protocol.js";
+import { disenrollOrigin, enrollOrigin, enrollmentSnapshot, listTools, replaceTools, setToolConsentDecision, toolConsentSnapshot } from "../extension/lib/tools.js";
+import { createWebmcpAuthorizationGuard, evaluateWebmcpAuthority, siteToolConsentPermissionDigest, siteToolSourceGeneration, WEBMCP_AUTHORITY_REASONS } from "../extension/lib/webmcp-authority.js";
+import { executableWebMcpToolRecords, LazyToolProtocol, withOwnerSiteToolActivity } from "../extension/lib/lazy-tool-protocol.js";
 import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
 import { sha256Hex } from "../extension/lib/pure.js";
 
@@ -30,19 +30,19 @@ const TOOL = { name: "book_table", source: "declared", description: "Book a tabl
 
 // Build the lazy records EXACTLY as the SW's readSiteLazySources does — the
 // guard is the shipped factory (zero replica drift).
-async function siteRecords(origin, runGenCell, denials, dispatched) {
+async function siteRecords(origin, runGenCell, denials, dispatched, autoAllow = false) {
   const enrollment = await enrollmentSnapshot(origin);
-  const sourceGeneration = `enrollment:${enrollment.gen ?? 0}:document::epoch:0:seq:0`;
+  const sourceGeneration = siteToolSourceGeneration(enrollment.gen, { documentId: "", epoch: 0, seq: 0 });
   const tools = await listTools(origin);
   const permissionDigestByTool = {};
   const availabilityByTool = {};
   for (const t of tools) {
-    const approved = await isApproved(origin, t.name).catch(() => false);
-    permissionDigestByTool[t.name] = sha256Hex(`approved:${approved}`);
-    availabilityByTool[t.name] = enrollment.enrolled && approved ? "ready" : enrollment.enrolled ? "owner-action-required" : "disabled";
+    const consent = await toolConsentSnapshot(origin, t.name).catch(() => null);
+    permissionDigestByTool[t.name] = siteToolConsentPermissionDigest(consent);
+    availabilityByTool[t.name] = !enrollment.enrolled || consent?.state === "denied" ? "disabled" : "ready";
   }
   const authorizationGuard = createWebmcpAuthorizationGuard({
-    origin, enrollmentSnapshot, listTools, isApproved, runGenCell,
+    origin, enrollmentSnapshot, listTools, consentSnapshot: toolConsentSnapshot, runGenCell,
     onDeny: (decision, target) => denials.push({ reason: decision.reason, name: target.name }),
   });
   return executableWebMcpToolRecords(tools, {
@@ -50,34 +50,65 @@ async function siteRecords(origin, runGenCell, denials, dispatched) {
     sourceGeneration, closureGeneration: sourceGeneration,
     packageDigest: sha256Hex(`webmcp:${origin}:${sourceGeneration}`),
     permissionDigestByTool, grantDigest: sha256Hex(sourceGeneration), availabilityByTool, authorizationGuard,
-  }, ({ name, args }) => { dispatched.push({ name, args }); return { ok: true, result: "done" }; });
+  }, async ({ name, args, authorizationTransition }) => {
+    if (autoAllow && (await toolConsentSnapshot(origin, name)).state === "ask") {
+      await setToolConsentDecision(origin, name, "allowed");
+      authorizationTransition?.();
+    }
+    dispatched.push({ name, args });
+    return withOwnerSiteToolActivity({ ok: true, result: "done" }, { origin, tool: name });
+  });
 }
 
-async function drive(origin, runGenCell) {
+async function drive(origin, runGenCell, { autoAllow = false } = {}) {
   const denials = [];
   const dispatched = [];
+  const ownerEvents = [];
   const protocol = new LazyToolProtocol({
-    readSources: () => siteRecords(origin, runGenCell, denials, dispatched),
+    readSources: () => siteRecords(origin, runGenCell, denials, dispatched, autoAllow),
     selectionAuthority: new ToolSelectionAuthority(),
   });
   const gen = (await enrollmentSnapshot(origin)).gen;
-  const context = { signal: new AbortController().signal, runId: "run-1", taskId: "task-1", agentId: origin, origin, documentId: "", runGeneration: String(gen), catalogGeneration: "1" };
+  const context = { signal: new AbortController().signal, runId: "run-1", taskId: "task-1", agentId: origin, origin, documentId: "", runGeneration: String(gen), catalogGeneration: "1", onProgress: (event) => ownerEvents.push(event) };
   const search = await protocol.search({ query: "book table" }, context);
-  if (!search.ok || !search.results?.length) return { search, exec: null, denials, dispatched };
+  if (!search.ok || !search.results?.length) return { search, exec: null, denials, dispatched, ownerEvents };
   const exec = await protocol.execute({ selectionRef: search.results[0].selectionRef, arguments: { partySize: 2 } }, context);
-  return { search, exec, denials, dispatched };
+  return { search, exec, denials, dispatched, ownerEvents };
 }
 
-Deno.test("lazyauth: an ENROLLED site's declared tool dispatches via the REAL guard — no authorization dead-end", async () => {
+Deno.test("lazyauth: identical authenticated re-polls do not change the execution realm", () => {
+  const first = siteToolSourceGeneration(7, { documentId: "doc-a", epoch: 3, seq: 1 });
+  const rePoll = siteToolSourceGeneration(7, { documentId: "doc-a", epoch: 3, seq: 999 });
+  assertEquals(first, rePoll, "report seq orders authenticated snapshots but is not execution identity");
+  assertEquals(first, "enrollment:7:document:doc-a:epoch:3");
+  assert(siteToolSourceGeneration(7, { documentId: "doc-b", epoch: 3, seq: 999 }) !== first);
+  assert(siteToolSourceGeneration(7, { documentId: "doc-a", epoch: 4, seq: 1 }) !== first);
+});
+
+Deno.test("lazyauth: first-use Allow crosses only the marked revision transition, then stays ready", async () => {
   const origin = "https://lazyauth-a.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
   const gen = (await enrollmentSnapshot(origin)).gen;
-  const { search, exec, denials, dispatched } = await drive(origin, { get: () => gen });
-  assertEquals(search.results[0].availability, "ready");
-  assertEquals(exec?.ok, true, "the delegated lazy path dispatches for an enrolled site");
-  assertEquals(dispatched.length, 1);
-  assertEquals(denials, [], "no denial recorded");
+  assertEquals((await toolConsentSnapshot(origin, TOOL.name)).state, "ask");
+  const first = await drive(origin, { get: () => gen }, { autoAllow: true });
+  assertEquals(first.search.results[0].availability, "ready", "ASK is executable solely so dispatch can show the card");
+  assert(typeof first.search.results[0].selectionRef === "string");
+  assertEquals(first.exec?.ok, true);
+  assertEquals(first.dispatched.length, 1);
+  const firstActivity = first.ownerEvents.find((event) => event.type === "site-activity")?.siteActivity;
+  assertEquals(firstActivity, { origin, tool: TOOL.name });
+  assertEquals(Reflect.ownKeys(firstActivity ?? {}).length, 2, "owner metadata carries only origin + exact tool");
+  assert(!JSON.stringify(first.exec).includes("siteActivity"), "owner metadata never enters the model/result journal JSON");
+  assertEquals((await toolConsentSnapshot(origin, TOOL.name)).state, "allowed");
+  const later = await drive(origin, { get: () => gen });
+  assertEquals(later.exec?.ok, true, "the persisted exact Allow dispatches without another transition");
+  assertEquals(later.dispatched.length, 1);
+  assertEquals(later.denials, []);
+  const cachedActivity = later.ownerEvents.find((event) => event.type === "site-activity")?.siteActivity;
+  assertEquals(cachedActivity, { origin, tool: TOOL.name }, "silent cached Allow keeps the owner audit pointer");
+  assertEquals(Reflect.ownKeys(cachedActivity ?? {}).length, 2);
+  assert(!JSON.stringify(later.exec).includes("siteActivity"));
 });
 
 Deno.test("lazyauth: a DISENROLLED origin fails closed (reason: not-enrolled)", async () => {
@@ -92,7 +123,7 @@ Deno.test("lazyauth: a DISENROLLED origin fails closed (reason: not-enrolled)", 
   assertEquals(search.results[0].selectionRef, null);
   assertEquals(dispatched.length, 0);
   // The guard itself names the conjunct when consulted directly:
-  const guard = createWebmcpAuthorizationGuard({ origin, enrollmentSnapshot, listTools, isApproved, runGenCell: { get: () => gen } });
+  const guard = createWebmcpAuthorizationGuard({ origin, enrollmentSnapshot, listTools, consentSnapshot: toolConsentSnapshot, runGenCell: { get: () => gen } });
   const denied = await guard({ name: "book_table", source: "declared", descriptorInput: { permissionDigest: sha256Hex("approved:false"), grantDigest: "g" } });
   assertEquals(denied.ok, false);
   assertEquals(denied.reason, "not-enrolled");
@@ -105,6 +136,7 @@ Deno.test("lazyauth: a mid-run re-enrollment (gen bump) fails the STALE run clos
   const runGen = (await enrollmentSnapshot(origin)).gen;
   // Re-enroll MID-RUN: the enrollment generation bumps; the run's captured gen is stale.
   await enrollOrigin(origin);
+  await setToolConsentDecision(origin, TOOL.name, "allowed");
   const { exec, denials, dispatched } = await drive(origin, { get: () => runGen });
   assertEquals(exec?.ok, false, "the stale run must not operate under the new enrollment");
   assertEquals(dispatched.length, 0);
@@ -115,6 +147,7 @@ Deno.test("lazyauth: a missing run generation fails closed AND named (run-genera
   const origin = "https://lazyauth-d.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
+  await setToolConsentDecision(origin, TOOL.name, "allowed");
   const { exec, denials, dispatched } = await drive(origin, { get: () => null });
   assertEquals(exec?.ok, false);
   assertEquals(dispatched.length, 0);
@@ -126,23 +159,35 @@ Deno.test("lazyauth: a tool removed from the live directory fails closed (tool-n
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
   const gen = (await enrollmentSnapshot(origin)).gen;
-  const guard = createWebmcpAuthorizationGuard({ origin, enrollmentSnapshot, listTools, isApproved, runGenCell: { get: () => gen } });
+  const guard = createWebmcpAuthorizationGuard({ origin, enrollmentSnapshot, listTools, consentSnapshot: toolConsentSnapshot, runGenCell: { get: () => gen } });
   await replaceTools(origin, []); // the page removed its tools
   const denied = await guard({ name: "book_table", source: "declared", descriptorInput: { permissionDigest: sha256Hex("approved:true"), grantDigest: "g" } });
   assertEquals(denied.ok, false);
   assertEquals(denied.reason, "tool-not-in-directory");
 });
 
-Deno.test("lazyauth: evaluateWebmcpAuthority names every conjunct (unit)", () => {
-  const base = { enrolled: true, enrollmentGen: 7, toolPresent: true, approved: true, runGen: 7, descriptorInput: { permissionDigest: sha256Hex("approved:true"), grantDigest: "g" } };
+Deno.test("lazyauth: evaluateWebmcpAuthority names every exact conjunct (unit)", () => {
+  const identityDigest = "1".repeat(64);
+  const consent = { state: "allowed", enrollmentGen: 7, revision: 4, identityDigest };
+  const base = {
+    enrolled: true, policy: "allow", enrollmentGen: 7, toolPresent: true,
+    consentState: consent.state, consentEnrollmentGen: consent.enrollmentGen,
+    consentRevision: consent.revision, identityDigest,
+    runGen: 7, descriptorInput: { permissionDigest: siteToolConsentPermissionDigest(consent), grantDigest: "g" },
+  };
   assertEquals(evaluateWebmcpAuthority(base).ok, true);
   assertEquals(evaluateWebmcpAuthority({ ...base, enrolled: false }).reason, "not-enrolled");
+  assertEquals(evaluateWebmcpAuthority({ ...base, policy: "deny" }).reason, "site-policy-denied");
   assertEquals(evaluateWebmcpAuthority({ ...base, toolPresent: false }).reason, "tool-not-in-directory");
-  assertEquals(evaluateWebmcpAuthority({ ...base, approved: false }).reason, "not-approved");
+  const asking = { ...base, consentState: "ask", descriptorInput: { ...base.descriptorInput, permissionDigest: siteToolConsentPermissionDigest({ ...consent, state: "ask" }) } };
+  assertEquals(evaluateWebmcpAuthority(asking).ok, true, "ASK may reach the card-owning dispatch closure");
+  assertEquals(evaluateWebmcpAuthority({ ...asking, phase: "after-dispatch" }).reason, "tool-consent-required");
+  assertEquals(evaluateWebmcpAuthority({ ...base, consentState: "denied" }).reason, "tool-consent-denied");
+  assertEquals(evaluateWebmcpAuthority({ ...base, consentEnrollmentGen: 6 }).reason, "tool-consent-generation-stale");
   assertEquals(evaluateWebmcpAuthority({ ...base, runGen: null }).reason, "run-generation-missing");
   assertEquals(evaluateWebmcpAuthority({ ...base, runGen: 6 }).reason, "run-generation-stale");
   assertEquals(evaluateWebmcpAuthority({ ...base, descriptorInput: { permissionDigest: "other", grantDigest: "g" } }).reason, "permission-digest-drift");
-  for (const r of ["not-enrolled", "tool-not-in-directory", "not-approved", "run-generation-missing", "run-generation-stale", "permission-digest-drift"]) {
+  for (const r of ["not-enrolled", "site-policy-denied", "tool-not-in-directory", "tool-consent-required", "tool-consent-denied", "tool-consent-generation-stale", "run-generation-missing", "run-generation-stale", "permission-digest-drift"]) {
     assert(WEBMCP_AUTHORITY_REASONS.includes(r));
   }
 });

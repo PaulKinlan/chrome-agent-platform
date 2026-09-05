@@ -702,6 +702,12 @@
       cancelledAll = true;
       cancelEpoch++;
       log("cancel", JSON.stringify({ origin: location.origin }));
+    } else if (msg.type === "cancel-invocations") {
+      // Consent changed without disenrollment. Advance the immutable epoch to
+      // cancel every captured call/result, but leave new invokes eligible for
+      // the service worker's newly persisted consent decision.
+      cancelEpoch++;
+      log("cancel-invocations", JSON.stringify({ origin: location.origin }));
     } else if (msg.type === "invoke") {
       log("invoke", JSON.stringify({ name: msg.name, requestId: msg.requestId }));
       const requestId = msg.requestId;

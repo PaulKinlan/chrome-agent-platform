@@ -1,8 +1,7 @@
 // options.js — the dedicated settings/configuration page.
 
-if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
-  document.documentElement.dataset.embedded = "1";
-}
+const IS_EMBEDDED_SETTINGS = new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top;
+if (IS_EMBEDDED_SETTINGS) document.documentElement.dataset.embedded = "1";
 
 import {
   RECIPES,
@@ -27,6 +26,7 @@ import {
   capabilityStatus,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
+import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";
 import {
   USAGE_RANGES,
   dayBuckets,
@@ -1082,6 +1082,7 @@ async function renderEnroll() {
       : siteAgentSetupMessage(state, origin));
     renderData();
     renderEnrolledSites();
+    renderSiteToolConsents({ cursor: null });
     renderWebmcpStatus();
   });
 }
@@ -1167,6 +1168,7 @@ async function renderDiscoveredOpenTabs() {
       saveFlash(siteAgentSetupMessage(state, t.origin));
       renderData();
       renderEnrolledSites();
+      renderSiteToolConsents({ cursor: null });
       renderWebmcpStatus();
       renderDiscoveredOpenTabs();
     });
@@ -1210,12 +1212,154 @@ async function renderEnrolledSites() {
       }
       renderEnrolledSites();
       renderData();
+      renderSiteToolConsents({ cursor: null });
       renderWebmcpStatus();
     });
     row.appendChild(disenroll);
 
     el.appendChild(row);
   }
+}
+
+// ── Exact Site Agent tool consent + redacted durable audit ──────────────
+let siteToolConsentWired = false;
+let siteToolConsentRequestSeq = 0;
+let siteToolConsentView = {
+  loading: true,
+  error: "",
+  status: "Loading site tool permissions…",
+  sites: [],
+  audit: null,
+  cursor: null,
+  busyKey: "",
+  toolErrors: {},
+};
+
+function publishSiteToolConsentView() {
+  const manager = $("#webmcp-consent-manager");
+  if (manager) manager.data = { ...siteToolConsentView };
+}
+
+async function renderSiteToolConsents({ cursor = siteToolConsentView.cursor, status = "" } = {}) {
+  const manager = $("#webmcp-consent-manager");
+  if (!manager) return;
+  if (!siteToolConsentWired) {
+    siteToolConsentWired = true;
+    manager.addEventListener("tool-consent", async (event) => {
+      const siteIndex = Number(event.detail?.siteIndex);
+      const toolIndex = Number(event.detail?.toolIndex);
+      const site = siteToolConsentView.sites?.[siteIndex];
+      const tool = site?.tools?.[toolIndex];
+      const state = event.detail?.state === "ask" ? "ask" : "allowed";
+      if (!site || !tool || siteToolConsentView.busyKey) return;
+      siteToolConsentView = {
+        ...siteToolConsentView,
+        busyKey: `tool:${siteIndex}:${toolIndex}`,
+        error: "",
+        status: state === "ask" ? `Disabling automatic use of ${tool.name}…` : `Allowing ${tool.name}…`,
+      };
+      publishSiteToolConsentView();
+      const result = await boundedSend("webmcp.consent.tool.set", {
+        origin: site.origin,
+        name: tool.name,
+        state,
+      }).catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
+      if (result?.ok !== true) {
+        siteToolConsentView = {
+          ...siteToolConsentView,
+          busyKey: "",
+          error: result?.error ?? "The tool permission could not be saved.",
+          status: "",
+          toolErrors: { ...siteToolConsentView.toolErrors, [`${siteIndex}:${toolIndex}`]: "Could not save. Try again." },
+        };
+        publishSiteToolConsentView();
+        return;
+      }
+      await renderSiteToolConsents({
+        cursor: null,
+        status: state === "ask"
+          ? `${tool.name} will ask on its next model use.`
+          : `${tool.name} is allowed automatically.`,
+      });
+    });
+    manager.addEventListener("site-reset", async (event) => {
+      const siteIndex = Number(event.detail?.siteIndex);
+      const site = siteToolConsentView.sites?.[siteIndex];
+      const mode = event.detail?.mode === "automatic" ? "automatic" : "all";
+      if (!site || siteToolConsentView.busyKey) return;
+      siteToolConsentView = {
+        ...siteToolConsentView,
+        busyKey: `site:${siteIndex}:${mode}`,
+        error: "",
+        status: mode === "automatic" ? `Disabling automatic use for ${site.origin}…` : `Resetting decisions for ${site.origin}…`,
+      };
+      publishSiteToolConsentView();
+      const result = await boundedSend("webmcp.consent.site.reset", { origin: site.origin, mode })
+        .catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
+      if (result?.ok !== true) {
+        siteToolConsentView = { ...siteToolConsentView, busyKey: "", error: result?.error ?? "The site permissions could not be reset.", status: "" };
+        publishSiteToolConsentView();
+        return;
+      }
+      await renderSiteToolConsents({ cursor: null, status: mode === "automatic" ? `Automatic use is disabled for ${site.origin}.` : `All decisions were reset for ${site.origin}.` });
+    });
+    manager.addEventListener("site-policy", async (event) => {
+      const siteIndex = Number(event.detail?.siteIndex);
+      const site = siteToolConsentView.sites?.[siteIndex];
+      const policy = event.detail?.policy === "deny" ? "deny" : "allow";
+      if (!site || siteToolConsentView.busyKey) return;
+      siteToolConsentView = { ...siteToolConsentView, busyKey: `site:${siteIndex}:policy`, error: "", status: `${policy === "deny" ? "Turning off" : "Turning on"} tools for ${site.origin}…` };
+      publishSiteToolConsentView();
+      const result = await boundedSend("tools.policy.set", { origin: site.origin, policy })
+        .catch((error) => ({ ok: false, error: String(error?.message ?? error) }));
+      if (result?.ok !== true) {
+        siteToolConsentView = { ...siteToolConsentView, busyKey: "", error: result?.error ?? "The site tool switch could not be saved.", status: "" };
+        publishSiteToolConsentView();
+        return;
+      }
+      await renderSiteToolConsents({ cursor: null, status: `Site tools are ${policy === "deny" ? "off" : "on"} for ${site.origin}.` });
+    });
+    manager.addEventListener("audit-page", (event) => {
+      renderSiteToolConsents({ cursor: event.detail?.cursor ?? null, status: "Audit page loaded." });
+    });
+    manager.addEventListener("refresh", () => renderSiteToolConsents({ cursor: null }));
+  }
+  const requestSeq = ++siteToolConsentRequestSeq;
+  siteToolConsentView = { ...siteToolConsentView, loading: true, error: "", status: status || "Loading site tool permissions…", cursor };
+  publishSiteToolConsentView();
+  const [snapshot, audit] = await Promise.all([
+    boundedSend("webmcp.consent.snapshot").catch((error) => ({ ok: false, error: String(error?.message ?? error) })),
+    boundedSend("webmcp.audit.list", { cursor, limit: 20 }).catch((error) => ({ ok: false, error: String(error?.message ?? error) })),
+  ]);
+  if (requestSeq !== siteToolConsentRequestSeq) return;
+  if (snapshot?.ok !== true || audit?.ok !== true) {
+    const auditError = String(audit?.error ?? "");
+    const error = auditError === "site_tool_audit_corrupt"
+      ? "Consent history is damaged and site tools are blocked. Try again. If this persists, Factory reset under Data & memory clears all extension data and restores a clean profile."
+      : snapshot?.error ?? audit?.error ?? "Site tool permissions could not be loaded.";
+    siteToolConsentView = {
+      ...siteToolConsentView,
+      loading: false,
+      busyKey: "",
+      error,
+      status: "",
+      sites: snapshot?.ok === true && Array.isArray(snapshot.sites) ? snapshot.sites : siteToolConsentView.sites,
+      audit: audit?.ok === true ? audit : siteToolConsentView.audit,
+    };
+    publishSiteToolConsentView();
+    return;
+  }
+  siteToolConsentView = {
+    loading: false,
+    error: "",
+    status: status || "Site tool permissions loaded.",
+    sites: Array.isArray(snapshot.sites) ? snapshot.sites : [],
+    audit,
+    cursor,
+    busyKey: "",
+    toolErrors: {},
+  };
+  publishSiteToolConsentView();
 }
 
 // ── WebMCP discovery status + diagnostics toggle (Paul 2026-08-18) ──
@@ -3521,6 +3665,41 @@ export const navigationController = createNavigationController({
   },
 });
 
+async function showSiteActivityFocus(activity, { replace = false } = {}) {
+  if (!activity) return false;
+  const focus = () => document.getElementById("webmcp-consent-manager")?.focusSiteActivity?.(activity) === true;
+  // Apply the one-shot filter synchronously when this is an already-open
+  // Settings document. Navigation and the fresh snapshot are async and may be
+  // coalesced by Chrome; neither is allowed to lose the owner's click.
+  let focused = focus();
+  try { await navigationController.navigate("#agents", { replace }); } catch { /* retain the immediate owner focus */ }
+  // openOptionsPage may focus a Settings document that was already open. Read
+  // a fresh owner snapshot so the linked audit and consent state cannot be
+  // stale from an earlier visit, then restore focus after its re-render.
+  try { await renderSiteToolConsents({ cursor: null }); } catch { /* the manager exposes its normal error/retry state */ }
+  focused = focus() || focused;
+  return focused;
+}
+
+// openOptionsPage may focus an already-open Settings document, so consume the
+// one-shot session hint both at boot and on live session-storage changes.
+if (!IS_EMBEDDED_SETTINGS) {
+  try {
+    chrome.storage?.onChanged?.addListener((changes, areaName) => {
+      if (areaName !== "session") return;
+      // Normalize the event's immutable value before any options document can
+      // remove the one-shot key. If Chrome temporarily has two Settings
+      // documents, both can focus safely while the shared hint is still
+      // consumed exactly once from session storage.
+      const activity = normalizeSiteActivityFocus(changes?.[SITE_ACTIVITY_FOCUS_KEY]?.newValue);
+      if (!activity) return;
+      showSiteActivityFocus(activity)
+        .finally(() => chrome.storage?.session?.remove?.(SITE_ACTIVITY_FOCUS_KEY))
+        .catch(() => {});
+    });
+  } catch { /* Settings still works without the convenience deep link */ }
+}
+
 // ── Section anchor links (CAP-FB-20260823-SECTION-ANCHOR-LINKS-01) ─────────
 // Every panel h2 gets a hover-revealed anchor; clicking the anchor or the
 // heading copies the deep link (#section) to the clipboard with a visible
@@ -3673,6 +3852,7 @@ document.getElementById("mcp-add-btn")?.addEventListener("click", () => mcpOpenE
 await renderData();
 await renderMemoryExplorer();
 await renderEnrolledSites();
+await renderSiteToolConsents({ cursor: null });
 await renderWebmcpStatus();
 
 // ── Developer-features toggle (About) ───────────────────────────────────────
@@ -3867,7 +4047,14 @@ async function renderAbout() {
 }
 await wireObservabilitySettings();
 await wireRunRetentionSettings();
-await navigationController.syncCurrent();
+const initialSiteActivityFocus = IS_EMBEDDED_SETTINGS
+  ? null
+  : await consumeSiteActivityFocus(chrome.storage?.session);
+if (initialSiteActivityFocus) {
+  await showSiteActivityFocus(initialSiteActivityFocus, { replace: true });
+} else {
+  await navigationController.syncCurrent();
+}
 
 
 // ── Board deny rules (the owner controls which edges are blocked) ──────────

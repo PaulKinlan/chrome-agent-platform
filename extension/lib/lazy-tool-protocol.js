@@ -73,6 +73,75 @@ function ownData(value, key) {
   }
 }
 
+// Owner-only site activity enters from the trusted dispatch wrapper through a
+// symbol, then emits on the run's local progress channel. It never enters the
+// lazy result, output schema, provider/model content, or argument/result log.
+// The dispatch wrapper is accepted only for a WebMCP record.
+const OWNER_SITE_TOOL_DISPATCH = Symbol("cap.owner-site-tool-dispatch");
+
+function normalizeOwnerSiteActivity(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  let keys;
+  try {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return null;
+    keys = Reflect.ownKeys(value);
+  } catch { return null; }
+  if (keys.length !== 2 || !keys.includes("origin") || !keys.includes("tool")) return null;
+  const originDescriptor = Object.getOwnPropertyDescriptor(value, "origin");
+  const toolDescriptor = Object.getOwnPropertyDescriptor(value, "tool");
+  if (!originDescriptor?.enumerable || !("value" in originDescriptor) || !toolDescriptor?.enumerable || !("value" in toolDescriptor)) return null;
+  const origin = originDescriptor.value;
+  const toolName = toolDescriptor.value;
+  if (typeof origin !== "string" || origin.length > 240 || typeof toolName !== "string" || !toolName || toolName.length > 128) return null;
+  try {
+    const url = new URL(origin);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== origin) return null;
+  } catch { return null; }
+  return Object.freeze({ origin, tool: toolName });
+}
+
+function ownerSafeToolLabel(value) {
+  try {
+    const label = value.normalize("NFC").replace(/[\u0000-\u001f\u007f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, (char) =>
+      `\\u{${char.codePointAt(0).toString(16).toUpperCase()}}`
+    );
+    if (label.length <= 128) return label;
+    let clipped = "";
+    for (const char of label) {
+      if (clipped.length + char.length > 127) break;
+      clipped += char;
+    }
+    return `${clipped}…`;
+  } catch { return "site tool"; }
+}
+
+/** Wrap a trusted WebMCP dispatch result with owner-only provenance. */
+export function withOwnerSiteToolActivity(result, activity) {
+  const normalized = normalizeOwnerSiteActivity(activity);
+  if (!normalized) return result;
+  const wrapped = { result };
+  Object.defineProperty(wrapped, OWNER_SITE_TOOL_DISPATCH, { value: normalized });
+  return Object.freeze(wrapped);
+}
+
+function splitOwnerSiteToolDispatch(value, descriptor) {
+  if (!String(ownData(descriptor, "sourceKind") ?? "").startsWith("webmcp")) {
+    return { result: value, activity: null };
+  }
+  const wrappedActivity = ownData(value, OWNER_SITE_TOOL_DISPATCH);
+  if (wrappedActivity === undefined) return { result: value, activity: null };
+  const activity = normalizeOwnerSiteActivity(wrappedActivity);
+  const descriptorName = ownData(descriptor, "name");
+  if (!activity || typeof descriptorName !== "string" || activity.tool !== descriptorName) {
+    return { result: ownData(value, "result"), activity: null };
+  }
+  return {
+    result: ownData(value, "result"),
+    activity: Object.freeze({ origin: activity.origin, tool: ownerSafeToolLabel(activity.tool) }),
+  };
+}
+
 function isAborted(signal) {
   try {
     return signal?.aborted === true;
@@ -1018,6 +1087,15 @@ export class LazyToolProtocol {
               context,
               dispatchResolved.descriptor,
             ),
+            // A genuine first-use owner Allow changes the exact consent
+            // revision while this call is paused inside dispatch. The trusted
+            // WebMCP closure may mark that transition so this one run can
+            // revalidate by tool identity; live post-dispatch authorization
+            // still checks the new revision/state before publishing output.
+            authorizationTransition: () => {
+              const window = this.#approvalWindow(ownData(context, "runId"));
+              if (window) window.until = Date.now() + APPROVAL_GRACE_MS;
+            },
           }),
         ),
         {
@@ -1036,6 +1114,21 @@ export class LazyToolProtocol {
         throw error;
       }
       dispatchError = error;
+    }
+    const ownerDispatch = splitOwnerSiteToolDispatch(rawResult, dispatchResolved.descriptor);
+    rawResult = ownerDispatch.result;
+    if (ownerDispatch.activity) {
+      const emit = ownData(context, "onProgress");
+      if (typeof emit === "function") {
+        try {
+          await emit(Object.freeze({
+            type: "site-activity",
+            toolName: "execute_tool",
+            selectedTool: dispatchResolved.descriptor.name,
+            siteActivity: ownerDispatch.activity,
+          }));
+        } catch { /* owner navigation metadata never changes tool semantics */ }
+      }
     }
     if (isAborted(signal)) return released(fixedError("lazy-run-aborted"));
 
@@ -1510,11 +1603,17 @@ export function createLazyProviderToolset({
         const parts = imageToolResultsAllowed()
           ? protocol.attachmentsFor(ownData(output, "selectionRef"))
           : EMPTY_ATTACHMENTS;
-        if (!parts.length) return { type: "json", value: output ?? null };
+        // Copy enumerable string data only. Owner-only site provenance was
+        // emitted separately on the local progress channel and never entered
+        // this provider/model value.
+        const modelOutput = output && typeof output === "object" && !Array.isArray(output)
+          ? Object.fromEntries(Object.keys(output).map((key) => [key, ownData(output, key)]))
+          : (output ?? null);
+        if (!parts.length) return { type: "json", value: modelOutput };
         return {
           type: "content",
           value: [
-            { type: "text", text: JSON.stringify(output) },
+            { type: "text", text: JSON.stringify(modelOutput) },
             ...parts.map((part) => ({
               type: "file",
               mediaType: part.mediaType,
@@ -1686,7 +1785,11 @@ export function executableWebMcpToolRecords(tools, context, dispatch) {
             source: expectedSource,
             args,
             signal: ownData(dispatchContext, "signal"),
+            runId: ownData(dispatchContext, "runId"),
+            taskId: ownData(dispatchContext, "taskId"),
+            agentId: ownData(dispatchContext, "agentId"),
             replayMetadata: ownData(dispatchContext, "replayMetadata"),
+            authorizationTransition: ownData(dispatchContext, "authorizationTransition"),
           }))
         : null,
     });

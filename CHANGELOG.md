@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.244] — 2026-09-05
+- Require owner consent before site tools run
+
 ## [0.3.243] — 2026-09-05
 - Fixed a bug where a scheduled task's script could run twice instead of once.
 

@@ -196,7 +196,7 @@ Deno.test("delegated WebMCP: lazy tool sources report ready when enrolled & appr
   assertEquals(dispatched[0].args.partySize, 2);
 });
 
-Deno.test("delegated WebMCP: unapproved tool reports owner-action-required without selectionRef", async () => {
+Deno.test("delegated WebMCP: an ASK tool receives a selection so its dispatch can show first-use consent", async () => {
   const { executableWebMcpToolRecords, LazyToolProtocol } = await import("../extension/lib/lazy-tool-protocol.js");
   const { ToolSelectionAuthority } = await import("../extension/lib/tool-selection.js");
 
@@ -219,7 +219,7 @@ Deno.test("delegated WebMCP: unapproved tool reports owner-action-required witho
     permissionDigestByTool: { mutate_something: "sha256-unapproved" },
     grantDigest: "sha256-grant",
     availabilityByTool: {
-      mutate_something: "owner-action-required",
+      mutate_something: "ready",
     },
   }, () => ({ ok: false }));
 
@@ -242,14 +242,16 @@ Deno.test("delegated WebMCP: unapproved tool reports owner-action-required witho
   const search = await protocol.search({ query: "mutate" }, context);
   assertEquals(search.ok, true);
   assertEquals(search.results.length, 1);
-  assertEquals(search.results[0].availability, "owner-action-required");
-  assertEquals(search.results[0].selectionRef, null, "unapproved tool must not receive selectionRef");
+  assertEquals(search.results[0].availability, "ready");
+  assert(typeof search.results[0].selectionRef === "string", "ASK needs a selectionRef to reach the card-owning dispatch closure");
 });
 
 Deno.test("delegated WebMCP: invokeSiteTool source contract requires tab opening & focus on dead/missing binding", async () => {
   const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
-  // Invariant 1: availability is ready when enrolled and approved (not gating on open tab presence)
-  assert(sw.includes('availabilityByTool[sourceTool.name] = enrollment.enrolled && approved'), "readSiteLazySources availability calculation");
+  // Invariant 1: ASK and Allow are executable (the dispatch owns the first-use
+  // card); Deny/disenrollment are excluded before a page call.
+  assert(sw.includes('availabilityByTool[sourceTool.name] = !enrollment.enrolled || consent?.state === "denied"'), "readSiteLazySources consent availability calculation");
+  assert(sw.includes("siteToolConsentPermissionDigest(consent)"), "selection identity binds the consent revision");
   // Invariant 2: invokeSiteTool checks alive bound tab before deciding to plan vs execute directly
   assert(sw.includes('const isBoundAlive = Boolean('), "isBoundAlive check in invokeSiteTool");
   // Invariant 3: opening new tab activates and focuses it

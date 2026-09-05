@@ -228,6 +228,16 @@ Deno.test("r5: a claimed follow-up SURVIVES an SW stop (store re-creation) and r
   assert(reclaim.ok, "the recovered message must be drainable again");
 });
 
+Deno.test("queue: owner resolver identity survives persistence and claim", async () => {
+  const kv = kvFake();
+  const first = createThreadQueue({ kvGet: kv.kvGet, kvSet: kv.kvSet });
+  await first.enqueue("tResolver", "follow up", { resolverDocumentId: "conversation-document-7" });
+  const restarted = createThreadQueue({ kvGet: kv.kvGet, kvSet: kv.kvSet });
+  assertEquals((await restarted.list("tResolver"))[0].resolverDocumentId, "conversation-document-7");
+  const claim = await restarted.claimHead("tResolver", "run:resolver");
+  assertEquals(claim.item.resolverDocumentId, "conversation-document-7");
+});
+
 Deno.test("r5: dropClaim removes only the settled run's item; a claimed head BLOCKS a second concurrent drain", async () => {
   const kv = kvFake();
   const q = createThreadQueue({ kvGet: kv.kvGet, kvSet: kv.kvSet });

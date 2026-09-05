@@ -9,6 +9,7 @@ import {
   approvalCardDenial,
   approvalPendingCount,
   bindModelApprovalDispatcher,
+  cancelPendingApprovalsForRun,
   canonicalArray,
   canonicalBinary,
   canonicalField,
@@ -24,9 +25,11 @@ import {
   payloadDigest,
   resolvePendingApproval,
   waitForApprovalDecision,
+  boundSiteToolApprovalDetail,
   boundStagedApprovalDetail,
   getStagedApprovalDetail,
   mayReadApprovalDetail,
+  mayResolveApproval,
   stageApprovalDetail,
 } from "../extension/lib/owner-approval.js";
 // The BUILT diff bundle (jsdiff): the consumers never resolve the bare "diff"
@@ -35,6 +38,10 @@ import {
 import { structuredPatch } from "../extension/dist/shared/diff-core.bundle.js";
 import { isExactOptionsSender, SETTINGS_SECTIONS } from "../extension/lib/pure.js";
 import { scrubEventDetail } from "../extension/lib/diagnostics.js";
+import {
+  approvalCardTitle,
+  normalizePermissionRequirement,
+} from "../extension/shared/conversation.js";
 
 const action = "asset.delete";
 const target = canonicalOperationTarget("asset", { origin: "https://EXAMPLE.com:443/path", id: "a_1" });
@@ -261,6 +268,21 @@ Deno.test("inline decision wait: the tool stays pending, approve resumes exactly
   assertEquals(resolvePendingApproval(expiredStore, expired.approvalId, true).ok, false, "a late click cannot revive expired work");
 });
 
+Deno.test("run cancellation settles its outstanding card without turning cancellation into owner Deny", async () => {
+  const store = createApprovalStore();
+  const digest = await payloadDigest(payload);
+  const pending = createPendingApproval(store, "exec-cancel-card", "webmcp.use-tool", target, digest);
+  const decision = waitForApprovalDecision(store, pending.approvalId);
+  assertEquals(cancelPendingApprovalsForRun(store, "exec-cancel-card"), 1);
+  assertEquals(await decision, {
+    ok: false,
+    decision: "cancelled",
+    error: "run cancelled before approval",
+  });
+  assertEquals(resolvePendingApproval(store, pending.approvalId, true).ok, false, "late Allow has no approval row to resolve");
+  assertEquals(approvalPendingCount(store), 0);
+});
+
 Deno.test("approval grants bind run/action/target/digest, expire, and consume exactly once", async () => {
   const store = createApprovalStore();
   const digest = await payloadDigest(payload);
@@ -321,6 +343,35 @@ Deno.test("approval resolution accepts only the exact options extension sender",
   assert(isExactOptionsSender({ ...exact, frameId: 2, tab: { id: 1, url: ntp } }, id, url), "the exact private Settings document is trusted in the shipped NTP iframe");
   assert(!isExactOptionsSender({ ...exact, documentLifecycle: "prerender" }, id, url));
   assert(!isExactOptionsSender({ ...exact, documentId: "" }, id, url));
+});
+
+Deno.test("WebMCP card detail is display-only, bounded, spoof-resistant, and exact-document resolved", () => {
+  const bounded = boundSiteToolApprovalDetail({
+    origin: "https://shop.example",
+    tool: "checkout\u202Eevil",
+  });
+  assertEquals(bounded, {
+    kind: "webmcp-tool",
+    origin: "https://shop.example",
+    tool: "checkout\\u{202E}evil",
+  });
+  const denial = approvalCardDenial({
+    approvalId: "approval-1",
+    action: "webmcp.use-tool",
+    targetRef: "opaque-ref",
+    detail: { origin: "https://shop.example", tool: "checkout\u202Eevil" },
+  });
+  const requirement = normalizePermissionRequirement(denial);
+  assertEquals(requirement.approvals[0].detail, bounded);
+  assertEquals(approvalCardTitle("webmcp.use-tool", bounded), "Use https://shop.example’s checkout\\u{202E}evil?");
+  assertEquals(boundSiteToolApprovalDetail({ origin: "javascript:alert(1)", tool: "x" }), undefined);
+  assertEquals(boundSiteToolApprovalDetail({ origin: "https://shop.example", tool: "" }), undefined);
+
+  const row = { runId: "run-1", resolverDocumentId: "conversation-doc" };
+  assertEquals(mayResolveApproval(row, "extension", "conversation-doc"), true);
+  assertEquals(mayResolveApproval(row, "extension", "another-doc"), false);
+  assertEquals(mayResolveApproval(row, "owner-options", "conversation-doc"), false);
+  assertEquals(mayResolveApproval({ runId: "run-legacy" }, "owner-options", "settings-doc"), true);
 });
 
 Deno.test("every shipped Settings navigation hash remains inside exact owner authority", () => {
@@ -488,6 +539,21 @@ Deno.test("boundStagedApprovalDetail drops a malformed or model-forbidden record
 // CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01: a model write to a granted local
 // folder is an approvable, stageable action whose target is the grant + the
 // cleaned relative path.
+Deno.test("durable continuations preserve the original approval resolver and direct progress seam", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  assert(sw.includes("approvalResolverDocumentId: approvalResolverDocument(routeContext)"), "delegated durable requests persist resolver identity");
+  assert(sw.includes("resolverDocumentId: approvalResolverDocument(context)"), "queued owner follow-ups persist resolver identity");
+  assert(sw.includes("uiRunId: typeof uiRunId === \"string\""), "generic durable requests persist UI correlation");
+  assert(sw.includes("cancelPendingApprovalsForRun(ownerApprovalStore, executionId"), "durable cancellation settles the run’s outstanding cards");
+  assert(sw.includes("commitGuard: runIsCurrent"), "first-use authority commits recheck cancellation inside the consent lock");
+  assert(sw.includes("broadcastProgress({ ...event, runId: uiRunId"), "recovered interactive runs restore their progress channel");
+  assert(sw.includes('{ principal: "extension", resolverDocumentId }'), "queue drain re-enters agent.run with the persisted resolver");
+  const continueBlock = sw.slice(sw.indexOf('async "run.continue"'), sw.indexOf('async "run.control.steer"'));
+  assert(continueBlock.includes("}, context);"), "budget continuation forwards the owner route context");
+  const directBlock = sw.slice(sw.indexOf("const directProgress ="), sw.indexOf("const a = build?.workers"));
+  assert(directBlock.includes("const build = await ensureOrchestrator(\n          directProgress"), "direct delegation binds progress before the run starts");
+});
+
 Deno.test("fs.write is approvable and stageable; canonicalOperationTarget('fs') binds grant + path and rejects an empty identity", () => {
   assert(DESTRUCTIVE_ACTIONS.has("fs.write"), "fs.write must be approvable (createPendingApproval refuses anything else)");
   assert(!OWNER_DIRECT_ACTIONS.has("fs.write"), "a file write is never owner-direct: only the model path reaches it and it always pays the card");
