@@ -1,16 +1,25 @@
 # Changelog
 
-## [0.3.151] — 2026-09-05
+## [0.3.154] — 2026-09-05
+- Maintenance and fixes.
+
+## [0.3.153] — 2026-09-05
 - A leftover merge marker is gone from the changelog, keeping the public record clean
 
-## [0.3.150] — 2026-09-05
+## [0.3.152] — 2026-09-05
 - The test safety split now covers the new bundle size gate too, so it runs one at a time with the other build checks instead of racing them
 
-## [0.3.149] — 2026-09-05
+## [0.3.151] — 2026-09-05
 - The safety split that decides which tests must run one at a time is now shared by the full suite and the quick per-change runs, is pinned so it cannot drift unnoticed, and quick runs now parallelize their safe tests — a typical provider-change quick run dropped from 30 seconds to about 18
 
-## [0.3.148] — 2026-09-05
+## [0.3.150] — 2026-09-05
 - Deleting a named agent keeps its approval check when it runs inside a pipeline, now covered by real-path checks for the destructive case
+
+## [0.3.149] — 2026-09-05
+- Reopening long threads or agents loads quickly with windowed history and on-demand pagination for older runs
+
+## [0.3.148] — 2026-09-05
+- perf(4epo): reintroduce windowed loading with pagination for thread and agent open
 
 ## [0.3.147] — 2026-09-05
 - The packaged extension is half the size: store bundles are minified, and the build fails if the background worker outgrows its budget
