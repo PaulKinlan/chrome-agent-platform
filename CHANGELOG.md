@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.199] — 2026-09-05
+- Maintenance and fixes.
+
 ## [0.3.198] — 2026-09-05
 - Maintenance and fixes.
 
