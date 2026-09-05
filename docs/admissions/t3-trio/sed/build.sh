@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 SYSROOT="${WASI_SYSROOT:?set WASI_SYSROOT to a wasi-sysroot-22.0 tree}"
 RTDIR="${WASI_RT:?set WASI_RT to a dir with lib/wasm32-unknown-wasip1/libclang_rt.builtins.a + include/}"
 export SOURCE_DATE_EPOCH=0 TZ=UTC LC_ALL=C
-FLAGS="-O2 -DNDEBUG -g0 -ffile-prefix-map=$ROOT=/src -Wl,--strip-all"
+FLAGS="-O2 -DNDEBUG -g0 -ffile-prefix-map=$ROOT=/src -Wl,--strip-all -Wl,--initial-memory=4194304 -Wl,--max-memory=33554432"
 mkdir -p "$ROOT/binaries" "$ROOT/metadata" "$ROOT/logs"
 {
   echo "toolchain=$(clang --version | head -1)"

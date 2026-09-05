@@ -17,21 +17,24 @@ for pass in a b; do
   BUILD="$ROOT/source/build-$pass"
   rm -rf "$BUILD"; mkdir -p "$BUILD"
   tar xzf "$ARCHIVE" -C "$BUILD"
+  cp "$ROOT/source/pthread-shim.h" "$BUILD/pthread.h"
   SRC="$BUILD/jq-1.8.2"
   (
     cd "$SRC"
     CC="clang --target=wasm32-wasip1 --sysroot=$SYSROOT -resource-dir=$RT" \
     CFLAGS="-O2 -g0 -ffile-prefix-map=$SRC=/src -DNDEBUG -femulated-tls" \
-    CPPFLAGS="-I$ROOT/source -D_WASI_EMULATED_SIGNAL" \
-    LDFLAGS="-Wl,--strip-all -lwasi-emulated-signal" \
+    CPPFLAGS="-I$BUILD -I$ROOT/source -D_WASI_EMULATED_SIGNAL" \
+    LDFLAGS="-Wl,--strip-all -Wl,--initial-memory=4194304 -Wl,--max-memory=33554432 -lwasi-emulated-signal" \
     ./configure --without-oniguruma --disable-maintainer-mode --disable-docs --host=wasm32-wasip1 \
       >> "$ROOT/metadata/build.log" 2>&1
-    make -j"${JOBS:-4}" >> "$ROOT/metadata/build.log" 2>&1
+    make -j1 src/builtin.inc src/config_opts.inc src/version.h >> "$ROOT/metadata/build.log" 2>&1
+    sed -i "s|$BUILD|/build|g" src/config_opts.inc
+    make -j1 libjq.la src/main.o >> "$ROOT/metadata/build.log" 2>&1
     clang --target=wasm32-wasip1 --sysroot="$SYSROOT" -resource-dir="$RT" -O2 -femulated-tls \
-      -I"$ROOT/source" -c "$ROOT/source/pthread-shim.c" -o "$BUILD/pthread-shim.o"
+      -I"$BUILD" -I"$ROOT/source" -c "$ROOT/source/pthread-shim.c" -o "$BUILD/pthread-shim.o"
     clang --target=wasm32-wasip1 --sysroot="$SYSROOT" -resource-dir="$RT" -O2 -femulated-tls \
       src/main.o ./.libs/libjq.a "$BUILD/pthread-shim.o" -lwasi-emulated-signal \
-      -Wl,--strip-all -o "$ROOT/binaries/jq-$pass.wasm"
+      -Wl,--strip-all -Wl,--initial-memory=4194304 -Wl,--max-memory=33554432 -o "$ROOT/binaries/jq-$pass.wasm"
   )
 done
 cmp "$ROOT/binaries/jq-a.wasm" "$ROOT/binaries/jq-b.wasm"

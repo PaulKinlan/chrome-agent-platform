@@ -5,7 +5,7 @@
 - **License:** MIT (`COPYING-jq.txt`, vendored verbatim).
 - **WASI adaptation:** `-femulated-tls`; a single-threaded pthread TLS/mutex/once shim; wasi-libc emulated signals for decNumber; Oniguruma omitted because it is not WASI-compatible in this profile. Regex built-ins that depend on Oniguruma are therefore unavailable; jq's real parser, JSON streaming, filters, expressions, object/array operations, reductions, and formatter remain upstream jq 1.8.2.
 - **Toolchain:** clang 22.1.8, wasi-sysroot 22.0, WASI Preview 1.
-- **Binary:** 501,520 bytes, SHA-256 `b428286b49c45ea6d494defd16e46083cd04fc7a5541a3a35d756853ee7e613d`.
+- **Binary:** 501,730 bytes, SHA-256 `be861cb3835493e050c4b10805331cb90ff3d56d9ed5ece4ea8f4dc9df73e222`; 64 initial and 512 maximum memory pages.
 - **Imports:** 19, all `wasi_snapshot_preview1` (see `metadata/census.txt`); no JS or thread imports.
 - **Reproducibility:** `build.sh` extracts the hash-pinned archive into two independent build roots, builds both, and requires byte identity. `metadata/rebuild-jq.wasm` is byte-identical to the admitted binary.
 
