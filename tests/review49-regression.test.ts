@@ -3,6 +3,13 @@
 // as REGRESSION assertions: each asserts the DEFECT IS ABSENT on the fixed
 // code (the external harness reproduced the defects; this suite proves they
 // are closed). @ts-nocheck — untyped harness by design.
+//
+// The probed modules (extension/lib/{memory,artifacts}.js) are pinned at the
+// exact artifact-tx commit these regressions were verified against (4eaf0d34),
+// re-homed as a durable worktree under ~/worktrees (tmpfs snapshots get
+// cleaned; the current modules have evolved past these shapes).
+// Re-materialize if ever missing: git worktree add \
+//   /home/paulkinlan/worktrees/cap-artifact-tx-snapshot 4eaf0d34
 import { assert, assertEquals } from "jsr:@std/assert@1";
 function dirNode(){return {kind:"directory",children:new Map()};}
 function fileNode(c){return {kind:"file",content:c};}

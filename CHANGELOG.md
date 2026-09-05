@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.179] — 2026-09-05
+- Maintenance and fixes.
+
 ## [0.3.178] — 2026-09-05
 - Add a strict local table engine
 
