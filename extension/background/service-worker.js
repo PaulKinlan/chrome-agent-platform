@@ -655,7 +655,7 @@ import { bridgeAndAuditApprovalBindings } from "../lib/approval-bridge-audit.js"
 import { journalJson } from "../shared/tool-tree.js";
 import { createAgentBoardRoutes, BOARD_HUB_ID, posterThreadResolver, boardHeartbeatPlan } from "../lib/agent-board.js";
 import { capLog, dumpLogBuffer, clearLogBuffer, getLogVerbosity, setLogVerbosity, observeToolCall } from "../lib/cap-log.js";
-import { perfSpan, perfSummary, perfClear } from "../lib/cap-perf.js";
+import { perfSpan, perfSummary, perfClear, mergePerfMeasures } from "../lib/cap-perf.js";
 
 // Suppress the AI SDK's own warning/retry console spam. The extension surfaces
 // provider failures through describeError (one actionable error with the status
@@ -729,6 +729,7 @@ const delegationRegistry = createDelegationRegistry();
 // alive while a page is listening, and the events are fire-and-forget (a
 // closed port never throws into the run).
 const progressPorts = new Set();
+const pageMeasuresBuffer = [];
 // Startup truth is established before a new run is accepted: recover complete
 // terminal outboxes first, then honestly orphan pre-boot executions. Recovery
 // failure blocks durable starts/routes rather than pretending state is current.
@@ -8853,9 +8854,23 @@ const handlers = mergeRouteMaps(
   // redacted at write time) + the performance breakdown (cap:* measures).
   // From any extension page console:
   //   chrome.runtime.sendMessage({type:"observability.dumpTrace"}, console.log)
+  async "observability.page-measures"({ measures, page = "page" }, routeContext) {
+    if (routeContext?.principal !== "extension" && routeContext?.principal !== "owner-options") {
+      return { ok: false, error: "extension-only route" };
+    }
+    if (Array.isArray(measures)) {
+      for (const m of measures.slice(0, 100)) {
+        if (m && typeof m.name === "string") {
+          pageMeasuresBuffer.push(m);
+        }
+      }
+      while (pageMeasuresBuffer.length > 500) pageMeasuresBuffer.shift();
+    }
+    return { ok: true, accepted: Array.isArray(measures) ? measures.length : 0 };
+  },
   async "observability.dumpTrace"() {
     const logs = dumpLogBuffer();
-    const perf = perfSummary();
+    const perf = mergePerfMeasures(perfSummary(), pageMeasuresBuffer);
     swLog.info("trace dump", { logEntries: logs.entries.length, dropped: logs.dropped, stages: perf.measures.length });
     return {
       ok: true,
@@ -8868,6 +8883,7 @@ const handlers = mergeRouteMaps(
   async "observability.clearTrace"() {
     clearLogBuffer();
     perfClear();
+    pageMeasuresBuffer.length = 0;
     swLog.info("trace cleared");
     return { ok: true };
   },

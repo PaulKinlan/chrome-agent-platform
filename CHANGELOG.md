@@ -1,10 +1,16 @@
 # Changelog
 
+## [0.3.159] — 2026-09-05
+- feat(14l1): seed warning permissions and seeded-profile budgets into check and perf gates
+
+## [0.3.158] — 2026-09-05
+- Performance gates verify seeded profile budgets and headless tests can pre-seed Chrome permissions
+
 ## [0.3.157] — 2026-09-05
 - Merge bookkeeping: union changelog with the site-agent delegation entries, regenerate the bundled inventory after the merge
 
 ## [0.3.156] — 2026-09-05
-- feat(0ks): add attachment and live progress support to site-agent delegation
+- Site agent delegation supports attachments and live progress streams without dropping files
 
 ## [0.3.155] — 2026-09-05
 - Delegating tasks to site agents supports attachments and streams live progress without dropping files

@@ -257,6 +257,7 @@ const BASELINE_ROUTES = [
   "diagnostics.clear",
   "observability.dumpTrace",
   "observability.clearTrace",
+  "observability.page-measures",
   "observability.setVerbosity",
   "diagnostics.report",
   "security.state",

@@ -78,8 +78,9 @@ import {
   startDiagnosticSubscription,
 } from "../shared/diagnostics-client.js";
 import { capLog } from "../lib/cap-log.js";
-import { perfSpan } from "../lib/cap-perf.js";
+import { perfSpan, perfSummary } from "../lib/cap-perf.js";
 
+const bootComposerSpan = perfSpan("ntp:boot→composer-ready");
 const ntpLog = capLog("ntp");
 ntpLog.info("new tab page evaluated");
 
@@ -1004,6 +1005,7 @@ siteOffer?.addEventListener("select", async (e) => {
 
 // ── named agents (the persistent named agents) ──────────────────────────────
 async function renderNamedAgents() {
+  const span = perfSpan("ntp:agents-panel-hydrated");
   const el = document.getElementById("named-agents");
   // Unified agents list (CAP-FB-20260826-BACKGROUND-AGENTS-UNIFY-01): the hub's
   // Agents box shows named AND background agents together — a background agent
@@ -1115,6 +1117,7 @@ async function renderNamedAgents() {
   }
   renderSidebarAgents(active);
   refreshAgentCount(active);
+  span.end();
 }
 
 // ── the named agents in the SIDEBAR (a created agent must appear here, not
@@ -2022,8 +2025,12 @@ async function refreshFailedRuns() {
 }
 
 function renderTaskRows(threads, activeId = null) {
+  const span = perfSpan("ntp:thread-list-hydrated");
   const el = document.getElementById("thread-sidebar");
-  if (!el) return;
+  if (!el) {
+    span.end();
+    return;
+  }
   el.replaceChildren();
   // UX-008: failed dispatches render as a bounded, retryable section ABOVE the
   // thread rows — a submitted prompt must never vanish into a silent failure.
@@ -2037,6 +2044,7 @@ function renderTaskRows(threads, activeId = null) {
     empty.className = "thread-empty";
     empty.textContent = "No tasks yet — start one above.";
     el.append(empty);
+    span.end();
     return;
   }
   for (const t of threads.slice(0, 40)) {
@@ -2095,6 +2103,7 @@ function renderTaskRows(threads, activeId = null) {
     });
     el.append(item);
   }
+  span.end();
 }
 
 // ── the full-screen thread surface ────────────────────────────────────────
@@ -3787,6 +3796,8 @@ async function runThreadTurn(text, attachments = [], mention = null) {
 
 const composer = document.getElementById("composer");
 composer.addEventListener("send", async (ev) => {
+  const sendSpan = perfSpan("ntp:send");
+  try {
   const { text: task, attachments, agent } = ev.detail;
   // TASK-LIFECYCLE-CONTRACT §2: a send must land in the conversation the user
   // is looking at. If a task view is open, this send CONTINUES that thread —
@@ -3830,6 +3841,10 @@ composer.addEventListener("send", async (ev) => {
   syncConversationRunControls();
   threadTitle.textContent = "New task";
   await runThreadTurn(task, attachments);
+  } finally {
+    sendSpan.end();
+    send("observability.page-measures", { page: "ntp", measures: perfSummary().measures }).catch(() => {});
+  }
 });
 composer.addEventListener("status", (ev) => {
   if (ev.detail?.text) setStatus(ev.detail.text, false);
@@ -4515,6 +4530,7 @@ document.getElementById("open-directory")?.addEventListener(
 // Artifacts. Every call site that opens artifacts/index.html passes the same
 // title; there is no second name for the same destination.
 const artifactQuickDrawer = document.getElementById("artifact-quick-drawer");
+perfSpan("ntp:artifacts-panel-hydrated").end();
 document.getElementById("open-artifacts")?.addEventListener(
   "click",
   () => {
@@ -4652,6 +4668,8 @@ window.addEventListener("message", (ev) => {
 });
 
 setStatus("ready");
+bootComposerSpan.end();
+send("observability.page-measures", { page: "ntp", measures: perfSummary().measures }).catch(() => {});
 
 // Transparency surface: capture the page's own errors/CSP violations into the
 // shared console + keep the shield/console badges live. Push-driven: the SW
