@@ -19,15 +19,30 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// mirrors lib/capabilities.js CAPABILITIES + the warned flags
+// The REAL capability list (never mirror it — storage/alarms/sidePanel went
+// mandatory and the old mirror's rows stopped rendering, ymut). The lifecycle
+// below drives the capabilities whose headless behavior is DETERMINISTIC:
+// silent-grantable (activeTab, scripting) and warned/auto-denied-in-headless
+// (tabs, notifications). The rendered-row content check covers the full
+// optional set.
+import { CAPABILITIES as REAL_CAPABILITIES } from "../extension/lib/capabilities.js";
+const MANIFEST = JSON.parse(Deno.readTextFileSync(`${ROOT}extension/manifest.json`));
+const MANDATORY: Set<string> = new Set(MANIFEST.permissions ?? []);
+// What Settings renders: capabilities with at least one OPTIONAL permission
+// (options.js skips capabilities backed entirely by mandatory permissions).
+const OPTIONAL_CAPABILITIES = REAL_CAPABILITIES.filter(
+  (cap: any) => !(cap.permissions ?? []).every((p: string) => MANDATORY.has(p)),
+);
+// The "Always on" group renders one capability-row per mandatory boot-critical
+// permission (storage/alarms/sidePanel/offscreen, when in the manifest).
+const ALWAYS_ON = ["storage", "alarms", "sidePanel", "offscreen"]
+  .filter((p) => MANDATORY.has(p));
+const EXPECTED_ROWS = OPTIONAL_CAPABILITIES.length + ALWAYS_ON.length;
 const CAPABILITIES: { id: string; permissions: string[]; warned: boolean }[] = [
-  { id: "storage", permissions: ["storage"], warned: false },
-  { id: "alarms", permissions: ["alarms"], warned: false },
-  { id: "tabs", permissions: ["tabs"], warned: true },
   { id: "activeTab", permissions: ["activeTab"], warned: false },
   { id: "scripting", permissions: ["scripting"], warned: false },
+  { id: "tabs", permissions: ["tabs"], warned: true },
   { id: "notifications", permissions: ["notifications"], warned: true },
-  { id: "sidePanel", permissions: ["sidePanel"], warned: false },
 ];
 
 let pass = 0;
@@ -113,21 +128,41 @@ async function main() {
   const { proc, cdp } = await launch();
   try {
     const { extId } = await findSw(cdp);
-    const t = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+    const t = await cdp.send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#permissions` });
     const s = await cdp.send("Target.attachToTarget", { targetId: t.targetId, flatten: true });
     const sessionId = s.result?.sessionId ?? s.sessionId;
     await cdp.send("Runtime.enable", {}, sessionId);
     await cdp.send("Page.enable", {}, sessionId);
 
-    // wait for the permission list to render (each capability = one .perm-row
-    // with a .grant-perm (ungranted) or .revoke-perm (granted) button)
+    // wait for the permission list to render (each capability = one
+    // <capability-row data-capability="..."> — the retired `.perm-row`
+    // selector reads 0 after the capability-row migration, ymut). The
+    // permissions section is LAZY-rendered (the #permissions hash above),
+    // and the expected count is the REAL optional set, not a hardcoded 7.
+    const expectedRows = EXPECTED_ROWS;
     for (let i = 0; i < 40; i++) {
-      const n = await cdp.evl(sessionId, `document.querySelectorAll('#permission-list .perm-row').length`);
-      if (Number(n) >= 7) break;
+      const n = await cdp.evl(sessionId, `document.querySelectorAll('#permission-list capability-row').length`);
+      if (Number(n) >= expectedRows) break;
       await sleep(200);
     }
-    const rendered = await cdp.evl(sessionId, `document.querySelectorAll('#permission-list .perm-row').length`);
-    check("settings rendered all 7 capability rows", Number(rendered) === 7, { rendered });
+    const rendered = await cdp.evl(sessionId, `document.querySelectorAll('#permission-list capability-row').length`);
+    check(`settings rendered all ${expectedRows} optional capability rows`, Number(rendered) === expectedRows, { rendered, expectedRows });
+    // rfca-pattern content assertion: an empty-but-present row list must fail.
+    // Every expected capability id is present AND each row carries its name
+    // (the renderer ran) — a bare count proves neither.
+    const rowsContent = await cdp.evl(sessionId, `(() => {
+      const rows = [...document.querySelectorAll('#permission-list capability-row')];
+      return {
+        ids: rows.map((r) => r.dataset.capability ?? null),
+        named: rows.filter((r) => (r.getAttribute('name') ?? '').length > 0).length,
+        states: rows.filter((r) => (r.dataset.state ?? '').length > 0).length,
+      };
+    })()`);
+    const expectedIds = [...OPTIONAL_CAPABILITIES.map((c: any) => c.id), ...ALWAYS_ON];
+    check("capability rows carry real content (id + name + state per row)",
+      expectedIds.every((id) => rowsContent?.ids?.includes(id)) &&
+      rowsContent?.named === expectedRows && rowsContent?.states === expectedRows,
+      { missing: expectedIds.filter((id) => !rowsContent?.ids?.includes(id)), named: rowsContent?.named, states: rowsContent?.states, expectedRows });
 
     const contains = (perms: string[]) => cdp.evl(sessionId,
       `chrome.permissions.contains({ permissions: ${JSON.stringify(perms)} }).then(r => !!r).catch(() => false)`);
@@ -141,10 +176,20 @@ async function main() {
 
     for (const cap of CAPABILITIES) {
       // ── GRANT (real gesture) ──
-      // the button is only present when NOT granted; after a failed grant it
-      // re-renders. Use the .grant-perm button.
+      // The grant affordance is the row's shadow-root ghost "Turn on" button
+      // (the retired `.grant-perm` class selector reads 0 — ymut). Find the
+      // row by data-capability, open its (possibly collapsed) group, and
+      // target the shadow button.
       const clicked = await realClick(cdp, sessionId,
-        `document.querySelector('#permission-list .grant-perm[data-capability="${cap.id}"]')`);
+        `(() => {
+          const row = [...document.querySelectorAll('#permission-list capability-row')]
+            .find((r) => r.dataset.capability === ${JSON.stringify(cap.id)});
+          if (!row) return null;
+          const group = row.closest('details');
+          if (group && !group.open) group.open = true;
+          const btn = row.shadowRoot?.querySelector('button.run');
+          return btn && btn.textContent.trim() === 'Turn on' ? btn : null;
+        })()`);
       if (clicked) await sleep(1200);
       const granted = await contains(cap.permissions);
 
@@ -163,16 +208,42 @@ async function main() {
         check(`capability ${cap.id}: the SW reports it granted`, status === true, { status });
       }
 
-      // ── REVOKE (the SW's capability.revoke route — no gesture needed) ──
-      const rev = await cdp.evl(sessionId,
-        `chrome.runtime.sendMessage({ type: "capability.revoke", id: "${cap.id}" }).then(r => r).catch(e => ({ ok:false, error:String(e) }))`);
-      await sleep(400);
-      const revoked = !(await contains(cap.permissions));
+      // ── REVOKE (the row's "Turn off" switch, real gesture) ──
+      // The bare capability.revoke route now requires owner approval (the
+      // owner's UI click IS the approval via the owner-direct path) — a bare
+      // runtime message is refused, so drive the switch like the owner does.
       if (!cap.warned) {
-        check(`capability ${cap.id}: revoked (permission removed)`, revoked === true, { rev });
+        const offClicked = await realClick(cdp, sessionId,
+          `(() => {
+            const row = [...document.querySelectorAll('#permission-list capability-row')]
+              .find((r) => r.dataset.capability === ${JSON.stringify(cap.id)});
+            if (!row) return null;
+            const group = row.closest('details');
+            if (group && !group.open) group.open = true;
+            return row.shadowRoot?.querySelector('switch-toggle')?.shadowRoot?.querySelector('.sw') ?? null;
+          })()`);
+        check(`capability ${cap.id}: the revoke switch is present after grant`, offClicked === true);
+        // The destructive confirm dialog ("Turn off X?") — a genuine owner
+        // gesture on the accept button, never a bare route call.
+        await sleep(400);
+        const confirmed = await realClick(cdp, sessionId,
+          `document.querySelector('dialog.cap-confirm-dialog button.cap-confirm-accept')`);
+        check(`capability ${cap.id}: the Turn off confirmation dialog is confirmed with a real gesture`, confirmed === true);
+        await sleep(400);
+        // A revoke is settled only when contains() reports the permission gone.
+        let revoked = false;
+        for (let i = 0; i < 40; i++) {
+          revoked = !(await contains(cap.permissions));
+          if (revoked) break;
+          await sleep(250);
+        }
+        check(`capability ${cap.id}: revoked (permission removed)`, revoked === true);
       } else {
-        // a warned capability was never granted; the revoke route still must not
-        // claim success while the permission is absent.
+        // a warned capability was never granted; the bare revoke route still
+        // must not claim success while the permission is absent.
+        const rev = await cdp.evl(sessionId,
+          `chrome.runtime.sendMessage({ type: "capability.revoke", id: "${cap.id}" }).then(r => r).catch(e => ({ ok:false, error:String(e) }))`);
+        const revoked = !(await contains(cap.permissions));
         check(`capability ${cap.id} (warned): revoke is a no-op on an absent grant`, revoked === true || rev?.ok === false, { rev });
       }
     }
