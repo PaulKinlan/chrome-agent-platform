@@ -188,13 +188,12 @@ export async function fetchSiteDocs({ origin, queryTerms = [], fetchImpl }) {
   };
 }
 
-// The readSiteLazySources seam (the live model-facing site-tool dispatch —
-// note: the older siteToolset() in service-worker.js is dead code, kept for
-// reference): wrap a site-tool result. A success passes through
-// untouched; a failure tries the docs and — when they exist — returns the
-// docs content as the tool result, with the failure and the fetch window
-// stated plainly. When no docs are discoverable the ORIGINAL result (the
-// honest error) is returned unchanged.
+// The readSiteLazySources seam (the live model-facing site-tool dispatch):
+// wrap a site-tool result. A success passes through untouched; a failure tries
+// the docs and — when they exist — returns the docs content as the tool
+// result, with the failure and the fetch window stated plainly. When no docs
+// are discoverable the ORIGINAL result (the honest error) is returned
+// unchanged.
 export async function withSiteDocsFallback({ origin, name, args, res, fetchImpl }) {
   const failed = res && (typeof res.error === "string" || res.ok === false);
   if (!failed) return res;

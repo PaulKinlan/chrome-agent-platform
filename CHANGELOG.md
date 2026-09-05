@@ -1,10 +1,26 @@
 # Changelog
 
-## [0.3.144] — 2026-09-05
+## [0.3.149] — 2026-09-05
 - The safety split that decides which tests must run one at a time is now shared by the full suite and the quick per-change runs, is pinned so it cannot drift unnoticed, and quick runs now parallelize their safe tests — a typical provider-change quick run dropped from 30 seconds to about 18
 
-## [0.3.143] — 2026-09-05
+## [0.3.148] — 2026-09-05
 - Deleting a named agent keeps its approval check when it runs inside a pipeline, now covered by real-path checks for the destructive case
+
+## [0.3.147] — 2026-09-05
+- The packaged extension is half the size: store bundles are minified, and the build fails if the background worker outgrows its budget
+
+## [0.3.146] — 2026-09-05
+- ensure approval card truthfully discloses truncated source previews and full-run digest
+
+## [0.3.145] — 2026-09-05
+- Cleaned up unused site tool code in the background worker
+
+## [0.3.144] — 2026-09-05
+- Permission matrix tests accurately reflect capability rows and settings navigation
+
+## [0.3.143] — 2026-09-05
+- Permission matrix testing accurately tests capability rows and settings navigation
+>>>>>>> origin/main
 
 ## [0.3.142] — 2026-09-04
 - Pipeline workflows now verify owner approval for destructive operations with live confirmation cards

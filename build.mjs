@@ -13,7 +13,7 @@
 //     readers wait — documented + enforced by build:wait-for-dist);
 //   - per-FILE modes preserved from the previous tree; failures roll back and
 //     ROLLBACK FAILURE IS FATAL; every failure path cleans its staging.
-import { build } from "esbuild";
+import { build, transform } from "esbuild";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
@@ -358,11 +358,15 @@ try {
     // developer target and is absent from every store build.
     const swInject = [path.join(ROOT, "browser-shim-process.js")];
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
-    await build({
+    const swResult = await build({
       ...shared,
       entryPoints: [path.join(EXT_DIR, "background/service-worker.js")],
       outfile: SW,
       inject: swInject,
+      // metafile feeds the bundle-budget report + gate
+      // (CAP-FB-20260830-BUNDLE-BUDGET-01): the contributors are visible in
+      // every build log, and the store gate failure names them.
+      metafile: true,
       alias: {
         "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
         "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
@@ -370,6 +374,15 @@ try {
         "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
       },
     });
+    {
+      // The budget report NEVER lands in dist/: the shipped package must not
+      // carry build-host paths (the shipped-bytes scrub rule). Stdout always;
+      // .build/ (gitignored) for inspection.
+      const { formatContributors } = await import("./scripts/bundle-budget.mjs");
+      console.log(`bundle report (service-worker, pre-minify inputs):\n${formatContributors(swResult.metafile)}`);
+      await mkdir(path.join(ROOT, ".build"), { recursive: true });
+      await writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile));
+    }
     await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
@@ -417,6 +430,48 @@ try {
       await writeFile(scrubPath, bundle);
       const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
       if (remaining > 0) throw new Error(`bundle still contains ${remaining} eval sites after cleaning`);
+    }
+
+    // Store-target minification (CAP-FB-20260830-BUNDLE-BUDGET-01). The
+    // documented contract was always "developer = unminified + source maps,
+    // store = minified" — but no minify step existed, so the store package
+    // shipped 141k lines of readable JS (SW: 5.47 MB). Minify runs AFTER the
+    // eval scrub: the scrub's textual patterns (new Function / new F("")) are
+    // only reliable on unminified code, and minification never reintroduces
+    // them (globals are never renamed). The developer build is untouched.
+    if (!DEBUG_BUILD) {
+      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE]) {
+        const source = await readFile(minifyPath, "utf8");
+        const minified = await transform(source, {
+          minify: true,
+          target: "chrome120",
+          legalComments: "none",
+          // Keep the ESM shape — the SW loads as type:module.
+          format: "esm",
+        });
+        // Defense in depth: the minified bytes must carry no eval shape.
+        const evalSites = (minified.code.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
+        if (evalSites > 0) {
+          throw new Error(`minified bundle ${path.basename(minifyPath)} contains ${evalSites} eval site(s) — refusing to publish`);
+        }
+        await writeFile(minifyPath, minified.code);
+      }
+    }
+
+    // The bundle budget gate (CAP-FB-20260830-BUNDLE-BUDGET-01): the store
+    // build FAILS over budget and names the top contributors; the developer
+    // build warns (its unminified bytes are larger by design).
+    {
+      const { assertBundleBudget, STORE_SW_BUDGET_BYTES, formatContributors } = await import("./scripts/bundle-budget.mjs");
+      const swSize = (await stat(SW)).size;
+      if (DEBUG_BUILD) {
+        if (swSize > STORE_SW_BUDGET_BYTES) {
+          console.log(`bundle budget: developer SW bundle is ${swSize} bytes (unminified; store budget ${STORE_SW_BUDGET_BYTES} applies to the minified store build)`);
+        }
+      } else {
+        assertBundleBudget({ label: "background/service-worker.js", bytes: swSize, metafile: swResult.metafile });
+        console.log(`bundle budget: store SW bundle ${swSize} bytes <= ${STORE_SW_BUDGET_BYTES} budget`);
+      }
     }
 
     // Per-FILE mode preservation from the previous tree (fall back to defaults
