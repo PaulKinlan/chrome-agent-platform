@@ -18,13 +18,65 @@ static int byte_compare(const line_t *a, const line_t *b) {
   return result;
 }
 
+typedef struct {
+  int negative;
+  const char *integer;
+  size_t integer_length;
+  const char *fraction;
+  size_t fraction_length;
+} numeric_key_t;
+
+static numeric_key_t numeric_key(const line_t *line) {
+  const char *p = line->text, *end = line->text + line->length;
+  while (p < end && (*p == ' ' || *p == '\t' || *p == '\v' || *p == '\f' || *p == '\r')) p++;
+  int negative = 0;
+  if (p < end && (*p == '+' || *p == '-')) { negative = *p == '-'; p++; }
+  while (p < end && *p == '0') p++;
+  const char *integer = p;
+  while (p < end && *p >= '0' && *p <= '9') p++;
+  size_t integer_length = (size_t)(p - integer);
+  const char *fraction = p;
+  size_t fraction_length = 0;
+  if (p < end && *p == '.') {
+    fraction = ++p;
+    while (p < end && *p >= '0' && *p <= '9') {
+      if (*p != '0') fraction_length = (size_t)(p - fraction) + 1;
+      p++;
+    }
+  }
+  if (integer_length == 0 && fraction_length == 0) negative = 0;
+  numeric_key_t key = { negative, integer, integer_length, fraction, fraction_length };
+  return key;
+}
+
+static int compare_padded(const char *a, size_t a_length, const char *b, size_t b_length) {
+  size_t length = a_length > b_length ? a_length : b_length;
+  for (size_t i = 0; i < length; i++) {
+    unsigned char av = i < a_length ? (unsigned char)a[i] : (unsigned char)'0';
+    unsigned char bv = i < b_length ? (unsigned char)b[i] : (unsigned char)'0';
+    if (av != bv) return av < bv ? -1 : 1;
+  }
+  return 0;
+}
+
+static int numeric_compare(const line_t *a, const line_t *b) {
+  numeric_key_t ak = numeric_key(a), bk = numeric_key(b);
+  if (ak.negative != bk.negative) return ak.negative ? -1 : 1;
+  int absolute;
+  if (ak.integer_length != bk.integer_length) absolute = ak.integer_length < bk.integer_length ? -1 : 1;
+  else {
+    absolute = memcmp(ak.integer, bk.integer, ak.integer_length);
+    if (absolute < 0) absolute = -1;
+    else if (absolute > 0) absolute = 1;
+    else absolute = compare_padded(ak.fraction, ak.fraction_length, bk.fraction, bk.fraction_length);
+  }
+  return ak.negative ? -absolute : absolute;
+}
+
 static int compare_lines(const void *left, const void *right) {
   const line_t *a = left, *b = right;
-  int result;
-  if (numeric_order) {
-    double av = strtod(a->text, NULL), bv = strtod(b->text, NULL);
-    result = av < bv ? -1 : av > bv ? 1 : byte_compare(a, b);
-  } else result = byte_compare(a, b);
+  int result = numeric_order ? numeric_compare(a, b) : byte_compare(a, b);
+  if (result == 0 && numeric_order) result = byte_compare(a, b);
   return reverse_order ? -result : result;
 }
 

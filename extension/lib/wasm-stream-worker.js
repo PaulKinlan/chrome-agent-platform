@@ -116,14 +116,14 @@ function runtimeMemory(getInstance) {
   };
 }
 
-async function execute(message) {
+export async function executeWasmStreamJob(message, { storage = navigator.storage } = {}) {
   if (!(message.wasmBytes instanceof Uint8Array) || !message.job || typeof message.owner !== "string") {
     fail("wasm_stream_job");
   }
   const inputRef = validateWasmStreamRef(message.inputRef);
   const outputRef = validateWasmStreamRef(message.outputRef, { kinds: ["stdout"] });
-  const inputHandles = await openWasmStreamHandles({ ref: inputRef, owner: message.owner });
-  const outputHandles = await openWasmStreamHandles({ ref: outputRef, owner: message.owner, allowUnsealedOutput: true });
+  const inputHandles = await openWasmStreamHandles({ ref: inputRef, owner: message.owner, storage });
+  const outputHandles = await openWasmStreamHandles({ ref: outputRef, owner: message.owner, allowUnsealedOutput: true, storage });
   const adapters = await makeStreamAdapters({
     inputFile: inputHandles.inputFile,
     stdoutFile: outputHandles.stdoutFile,
@@ -181,7 +181,7 @@ self.addEventListener("message", async (event) => {
   const message = event.data;
   if (!message || message.type !== "wasm.stream.job") return;
   try {
-    const result = await execute(message);
+    const result = await executeWasmStreamJob(message);
     self.postMessage({
       type: "wasm.stream.result",
       sessionId: message.sessionId,

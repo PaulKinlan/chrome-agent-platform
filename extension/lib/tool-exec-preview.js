@@ -78,11 +78,12 @@ export const PREVIEW_SPECS = Object.freeze(
           size: row.binary?.bytes,
           caps: Object.freeze([...(row.capabilities ?? [])].sort()),
           argv0: row.toolId,
-          // The immutable acceptedExitCodes: diff's exit 1 is the NORMAL
-          // "differences found" result (the hunk on stdout); everything else
-          // accepts only exit 0. NEVER request-borne — the SW copies this into
-          // the trusted job envelope.
-          acceptedExitCodes: row.toolId === "diff" ? Object.freeze([0, 1]) : Object.freeze([0]),
+          // The immutable acceptedExitCodes: diff's exit 1 means differences
+          // found; grep's exit 1 means no selected lines. Both are normal,
+          // useful results. Everything else accepts only exit 0. This is never
+          // request-borne — the SW copies it into the trusted job envelope.
+          acceptedExitCodes: row.toolId === "diff" || row.toolId === "grep"
+            ? Object.freeze([0, 1]) : Object.freeze([0]),
           // Output policy is immutable spec authority. gzip alone uses the
           // lossless binary arm; every predecessor remains byte-identical UTF-8.
           stdoutEncoding: row.toolId === "gzip" ? "base64" : "utf8",
@@ -127,6 +128,24 @@ export const PREVIEW_SPECS = Object.freeze(
 export const PREVIEW_TOOL_IDS = Object.freeze(Object.keys(PREVIEW_SPECS).sort());
 export function previewSpecFor(toolId) {
   return PREVIEW_SPECS[toolId] ?? null;
+}
+
+/** Resolve the exact argv vector used by both inline preview and file-backed
+ * execution. Defaults therefore cannot drift between the two hosts. jq runs
+ * against file-backed stdout, so disable terminal colour unless the caller
+ * explicitly requests colour with -C/--color-output. */
+export function previewWasiArgs(toolId, inputArgs) {
+  const spec = previewSpecFor(toolId);
+  if (!spec || !Array.isArray(inputArgs)) fail("preview_args");
+  const selected = inputArgs.length === 0 && spec.defaultArgs
+    ? [...spec.defaultArgs]
+    : [...inputArgs];
+  if (toolId === "jq") {
+    const explicitColour = selected.some((arg) => arg === "--color-output" || /^-[^-]*C/u.test(arg));
+    const explicitMono = selected.some((arg) => arg === "--monochrome-output" || /^-[^-]*M/u.test(arg));
+    if (!explicitColour && !explicitMono) selected.unshift("-M");
+  }
+  return Object.freeze([spec.argv0, ...selected]);
 }
 // The reserved https origin representing the exact Settings surface in the WASI
 // job context (boundedOrigin accepts http(s) only — chrome-extension:// cannot
@@ -348,10 +367,7 @@ export function buildPreviewJob({ input, authority, quota = null }) {
   // by the UI and never request-borne beyond the allowlisted toolId.
   const spec = previewSpecFor(input.toolId);
   if (!spec) fail("preview_unknown_tool");
-  const effectiveArgs = input.args.length === 0 && spec.defaultArgs
-    ? spec.defaultArgs
-    : input.args;
-  const args = [spec.argv0, ...effectiveArgs];
+  const args = previewWasiArgs(input.toolId, input.args);
   let stdinBytes;
   if (input.toolId === "gzip" && input.args.length === 1) {
     try { stdinBytes = decodeCanonicalBase64(input.stdin); }

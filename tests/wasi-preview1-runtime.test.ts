@@ -441,11 +441,10 @@ Deno.test("WASI host types: constants, job/context/quota and FD records are stri
   assertEquals(createWasiJob({ ...rawJob(), args: ["valid-😀"] }).args, [
     "valid-😀",
   ]);
-  assertThrows(
-    () =>
-      createWasiQuota({ hostCalls: WASI_HOST_HARD_LIMITS.MAX_HOST_CALLS + 1 }),
-    TypeError,
-    "quota_hostCalls",
+  assertEquals(
+    createWasiQuota({ hostCalls: WASI_HOST_HARD_LIMITS.MAX_HOST_CALLS + 1 }).hostCalls,
+    WASI_HOST_HARD_LIMITS.MAX_HOST_CALLS + 1,
+    "file-backed jobs may raise the call count without introducing a content-size cap",
   );
   const hostileQuota = {};
   Object.defineProperty(hostileQuota, "hostCalls", {
@@ -520,6 +519,24 @@ Deno.test("WASI imports: 37-tool measured union is explicit; foreign/unknown imp
     TypeError,
     "wasi_import_shape",
   );
+});
+
+Deno.test("fd_renumber moves only dynamic descriptors and closes an occupied target", () => {
+  const h = harness();
+  assertEquals(h.wasi.fd_renumber(999, 7), WASI_ERRNO.EBADF, "unknown source fails first");
+  assertEquals(h.wasi.fd_renumber(0, 7), WASI_ERRNO.ENOTSUP, "fixed stdin cannot move");
+  assertEquals(h.wasi.fd_renumber(1, 1), WASI_ERRNO.SUCCESS, "same descriptor is a no-op");
+  const first = openPath(h, "inputs/in.txt", PATH_CLASS_RIGHTS.inputs.rights, { openedPtr: 3000 });
+  const second = openPath(h, "inputs/in.txt", PATH_CLASS_RIGHTS.inputs.rights, { openedPtr: 3010 });
+  assertEquals(first.errno, WASI_ERRNO.SUCCESS);
+  assertEquals(second.errno, WASI_ERRNO.SUCCESS);
+  assert(first.fd >= 5 && second.fd >= 5 && first.fd !== second.fd);
+  assertEquals(h.wasi.fd_renumber(first.fd, second.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.wasi.fd_fdstat_get(first.fd, 4000), WASI_ERRNO.EBADF, "source number is released");
+  assertEquals(h.wasi.fd_fdstat_get(second.fd, 4000), WASI_ERRNO.SUCCESS, "target now names source record");
+  assertEquals(h.workspace.closed, 1, "occupied target handle was closed");
+  assertEquals(h.wasi.fd_close(second.fd), WASI_ERRNO.SUCCESS);
+  assertEquals(h.workspace.closed, 2, "moved source closes exactly once");
 });
 
 Deno.test("WASI memory gate: exact package tiers and scanner readback are revalidated without instantiation", () => {
@@ -1383,7 +1400,7 @@ Deno.test("D-minus: DIR-base path_filestat_get joins only inside the immutable b
   assertEquals(h.runtime.snapshot().counters.openDynamicFds, 0);
 });
 
-Deno.test("WASI source boundary: only two new pure modules exist and no product route/execution primitive reaches them", async () => {
+Deno.test("WASI core stays browser-primitive-free and is reached only by canonical executor modules", async () => {
   const types = await Deno.readTextFile(
     new URL("../extension/lib/wasm-host-types.js", import.meta.url),
   );
@@ -1425,14 +1442,9 @@ Deno.test("WASI source boundary: only two new pure modules exist and no product 
       `${rel} remains unbound`,
     );
   }
-  // R11: the first22 stay byte-for-byte; the six append in the exact order.
   assertEquals(
-    SUPPORTED_WASI_PREVIEW1_IMPORTS.slice(0, 22),
-    ["args_get", "args_sizes_get", "clock_time_get", "environ_get", "environ_sizes_get", "fd_close", "fd_fdstat_get", "fd_fdstat_set_flags", "fd_filestat_get", "fd_filestat_set_size", "fd_prestat_dir_name", "fd_prestat_get", "fd_read", "fd_readdir", "fd_seek", "fd_tell", "fd_write", "path_filestat_get", "path_filestat_set_times", "path_open", "proc_exit", "random_get"],
-  );
-  assertEquals(
-    SUPPORTED_WASI_PREVIEW1_IMPORTS.slice(22),
-    ["fd_sync", "path_create_directory", "path_remove_directory", "path_unlink_file", "path_readlink", "poll_oneoff"],
+    SUPPORTED_WASI_PREVIEW1_IMPORTS,
+    ["args_get", "args_sizes_get", "clock_time_get", "environ_get", "environ_sizes_get", "fd_close", "fd_fdstat_get", "fd_fdstat_set_flags", "fd_filestat_get", "fd_filestat_set_size", "fd_prestat_dir_name", "fd_prestat_get", "fd_read", "fd_readdir", "fd_renumber", "fd_seek", "fd_tell", "fd_write", "path_filestat_get", "path_filestat_set_times", "path_open", "proc_exit", "random_get", "fd_sync", "path_create_directory", "path_remove_directory", "path_unlink_file", "path_readlink", "poll_oneoff"],
   );
   assert(Object.isFrozen(SUPPORTED_WASI_PREVIEW1_IMPORTS));
   assert(Object.isFrozen(REBUILT_WASI_IMPORTS));
@@ -1930,9 +1942,9 @@ Deno.test("R5 syscall mutants: kind/right/class/ceiling; rollback leaves bytes+a
 
 Deno.test("R5 census + boundary: SUPPORTED is exactly +1 (fd_filestat_set_size); planner referenced only by the syscall", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("fd_filestat_set_size"), true);
-  // R6 added path_filestat_set_times (21→22); R11 added the six sqlite imports
-  // (22→28). This test was the R5 pin (21) — updated to the R11 census.
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 28, "the R11 census 22→28, deliberate");
+  // R6 added path_filestat_set_times (21→22), R11 added six SQLite
+  // imports (22→28), and sed admission adds fd_renumber (28→29).
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 29, "the deliberate import census is 29");
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planFdFilestatSetSize").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
@@ -2008,7 +2020,7 @@ Deno.test("R6 syscall mutants: fd3/right/flags/NOW/missing/dir fail closed, no m
 
 Deno.test("R6 census + boundary: SUPPORTED +1 (path_filestat_set_times); planner referenced only by the syscall", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("path_filestat_set_times"), true);
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 28, "the R11 census 22→28, deliberate");
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 29, "fd_renumber extends the deliberate import census to 29");
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planPathFilestatSetTimes").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");

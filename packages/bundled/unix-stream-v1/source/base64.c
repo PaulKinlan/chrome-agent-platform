@@ -17,6 +17,7 @@ static int value_of(unsigned char c) {
 
 static int encode_stream(void) {
   unsigned char in[3];
+  int wrote = 0;
   for (;;) {
     size_t n = fread(in, 1, sizeof in, stdin);
     if (n == 0) break;
@@ -27,9 +28,10 @@ static int encode_stream(void) {
       (unsigned char)(n > 2 ? alphabet[in[2] & 63u] : '='),
     };
     if (fwrite(out, 1, sizeof out, stdout) != sizeof out) return 1;
+    wrote = 1;
     if (n < sizeof in) break;
   }
-  if (ferror(stdin) || fputc('\n', stdout) == EOF) return 1;
+  if (ferror(stdin) || (wrote && fputc('\n', stdout) == EOF)) return 1;
   return 0;
 }
 

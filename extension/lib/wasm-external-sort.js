@@ -293,75 +293,93 @@ export async function runExternalSort({ wasmBytes, args, job, inputAccess, stdin
   const options = parseSortArgs(args);
   if (typeof instantiateWasi !== "function") fail("sort_kernel_host");
   const runs = [];
+  const scratchNames = new Set();
   let runNumber = 0;
   let absolute = 0, batchStart = 0, lineStart = 0, lineCount = 0;
+  const removeScratch = async (name) => {
+    await scratchDirectory.removeEntry(name);
+    scratchNames.delete(name);
+  };
   const flushRange = async (start, end, singleton = false) => {
     if (end <= start) return;
+    const name = `run-${runNumber++}.bin`;
+    scratchNames.add(name);
     runs.push(await sortRange({
       source: inputAccess, start, end, singleton, scratchDirectory,
-      name: `run-${runNumber++}.bin`, wasmBytes, job, stderr, instantiateWasi,
+      name, wasmBytes, job, stderr, instantiateWasi,
     }));
   };
 
-  for (;;) {
-    const bytes = stdin.read(256 * 1024);
-    if (bytes.byteLength === 0) break;
-    for (let index = 0; index < bytes.byteLength; index++) {
-      if (bytes[index] !== 10) continue;
-      const lineEnd = absolute + index + 1;
-      const lineLength = lineEnd - lineStart;
-      if (lineLength > RUN_BYTES) {
-        await flushRange(batchStart, lineStart);
-        await flushRange(lineStart, lineEnd, true);
-        batchStart = lineEnd;
-        lineCount = 0;
-      } else {
-        lineCount++;
-        if (lineEnd - batchStart >= RUN_BYTES || lineCount >= RUN_LINES) {
-          await flushRange(batchStart, lineEnd);
+  try {
+    for (;;) {
+      const bytes = stdin.read(256 * 1024);
+      if (bytes.byteLength === 0) break;
+      for (let index = 0; index < bytes.byteLength; index++) {
+        if (bytes[index] === 0) fail("sort_nul_input");
+        if (bytes[index] !== 10) continue;
+        const lineEnd = absolute + index + 1;
+        const lineLength = lineEnd - lineStart;
+        if (lineLength > RUN_BYTES) {
+          await flushRange(batchStart, lineStart);
+          await flushRange(lineStart, lineEnd, true);
           batchStart = lineEnd;
           lineCount = 0;
+        } else {
+          if ((lineEnd - batchStart > RUN_BYTES || lineCount >= RUN_LINES) && lineStart > batchStart) {
+            await flushRange(batchStart, lineStart);
+            batchStart = lineStart;
+            lineCount = 0;
+          }
+          lineCount++;
+          if (lineEnd - batchStart >= RUN_BYTES || lineCount >= RUN_LINES) {
+            await flushRange(batchStart, lineEnd);
+            batchStart = lineEnd;
+            lineCount = 0;
+          }
         }
+        lineStart = lineEnd;
       }
-      lineStart = lineEnd;
+      absolute += bytes.byteLength;
     }
-    absolute += bytes.byteLength;
-  }
-  if (lineStart < absolute && absolute - lineStart > RUN_BYTES) {
-    await flushRange(batchStart, lineStart);
-    await flushRange(lineStart, absolute, true);
-    batchStart = absolute;
-  }
-  await flushRange(batchStart, absolute);
+    if (lineStart < absolute && absolute - lineStart > RUN_BYTES) {
+      await flushRange(batchStart, lineStart);
+      await flushRange(lineStart, absolute, true);
+      batchStart = absolute;
+    }
+    await flushRange(batchStart, absolute);
 
-  let round = 0;
-  try {
     let active = runs;
-    while (active.length > 1) {
+    for (let round = 0; active.length > 1; round++) {
       const next = [];
       for (let index = 0; index < active.length; index += 2) {
         if (index + 1 >= active.length) { next.push(active[index]); continue; }
+        const name = `merge-${round}-${index >> 1}.bin`;
+        scratchNames.add(name);
         const merged = await mergePair({
           left: active[index], right: active[index + 1], scratchDirectory,
-          name: `merge-${round}-${index >> 1}.bin`, options,
+          name, options,
         });
-        await scratchDirectory.removeEntry(active[index].name);
-        await scratchDirectory.removeEntry(active[index + 1].name);
+        await removeScratch(active[index].name);
+        await removeScratch(active[index + 1].name);
         next.push(merged);
       }
       active = next;
-      round++;
     }
     if (active.length === 1) {
       const finalAccess = await active[0].handle.createSyncAccessHandle();
       try { copyRange(finalAccess, 0, finalAccess.getSize(), (bytes) => stdout.write(bytes)); }
       finally { finalAccess.close(); }
-      await scratchDirectory.removeEntry(active[0].name);
+      await removeScratch(active[0].name);
     }
     return 0;
   } catch (error) {
     try { stderr.write(encoder.encode(`sort: ${String(error?.message ?? error)}\n`)); } catch {}
     throw error;
+  } finally {
+    for (const name of [...scratchNames]) {
+      try { await scratchDirectory.removeEntry(name); } catch {}
+      scratchNames.delete(name);
+    }
   }
 }
 

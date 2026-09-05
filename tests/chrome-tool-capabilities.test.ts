@@ -413,7 +413,7 @@ Deno.test("shadow summary: the full BUNDLED row set projects into the catalog (2
   });
   const summary = await controller.inspect({ action: "summary" });
   const bundled = summary.toolsBySource["bundled-package"] ?? [];
-  assertEquals(bundled.length, 28, "all 28 bundled rows are listed");
+  assertEquals(bundled.length, 31, "all 31 bundled rows are listed");
   assertEquals(summary.bySource["bundled-package"], 28, "the bySource count matches");
   // every row carries the summary-only fields + the admitted-preview availability
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((r) => r.admitted === true && r.settingsPreview === true).length;

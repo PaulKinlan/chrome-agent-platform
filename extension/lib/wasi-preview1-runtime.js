@@ -51,6 +51,7 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "fd_prestat_get",
   "fd_read",
   "fd_readdir",
+  "fd_renumber",
   "fd_seek",
   "fd_tell",
   "fd_write",
@@ -1833,6 +1834,29 @@ export function createWasiPreview1Runtime({
       }
       if (record.kind === FD_KIND.FILE) syncResult(record.handle.close());
       recycleDynamicFd(fd, record);
+      return WASI_ERRNO.SUCCESS;
+    },
+
+    // Dynamic-descriptor-only renumbering. The five fixed stdio/preopen
+    // descriptors remain immutable authority roots; attempting to move from or
+    // onto one is unsupported rather than silently changing its rights.
+    fd_renumber: (fromValue, toValue) => {
+      const from = asU32(fromValue);
+      const source = fdFor(from);
+      const to = asU32(toValue);
+      if (from === to) return WASI_ERRNO.SUCCESS;
+      if (from < STATIC_FD_COUNT || to < STATIC_FD_COUNT) fault(WASI_ERRNO.ENOTSUP);
+      const target = fds.get(to);
+      if (target?.kind === FD_KIND.FILE) syncResult(target.handle.close());
+      fds.delete(from);
+      fds.delete(to);
+      putFd({ ...source, fd: to });
+      const occupiedIndex = freeFds.indexOf(to);
+      if (occupiedIndex >= 0) freeFds.splice(occupiedIndex, 1);
+      if (!freeFds.includes(from)) {
+        freeFds.push(from);
+        freeFds.sort((a, b) => a - b);
+      }
       return WASI_ERRNO.SUCCESS;
     },
 

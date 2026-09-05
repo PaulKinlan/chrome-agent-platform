@@ -16,13 +16,15 @@ import { createWasiPreview1Runtime } from "../extension/lib/wasi-preview1-runtim
 import { buildPreviewAuthority, buildPreviewJob, validatePreviewInput } from "../extension/lib/tool-exec-preview.js";
 import { createSyncWorkspace } from "../extension/lib/wasm-sync-workspace.js";
 import { WasiProcExit } from "../extension/lib/wasm-host-types.js";
+import { executeWasmStreamJob } from "../extension/lib/wasm-stream-worker.js";
+import { BUNDLED_TOOL_PACKAGE_ROWS } from "../extension/lib/bundled-tool-packages.data.js";
 
 function assert(condition, message = "assertion failed") { if (!condition) throw new Error(message); }
 function equal(actual, expected, message = "values differ") {
   if (actual !== expected) throw new Error(`${message}: ${JSON.stringify(actual)} !== ${JSON.stringify(expected)}`);
 }
 
-const fileNode = () => ({ kind: "file", bytes: new Uint8Array() });
+const fileNode = () => ({ kind: "file", bytes: new Uint8Array(), syncOpen: false });
 const directoryNode = () => ({ kind: "directory", children: new Map() });
 
 class MemoryWritable {
@@ -38,10 +40,36 @@ class MemoryWritable {
   async close() { this.node.bytes = this.bytes; }
   async abort() {}
 }
+class MemorySyncAccess {
+  constructor(node) {
+    if (node.syncOpen) throw new Error("sync handle already open");
+    node.syncOpen = true; this.node = node; this.closed = false;
+  }
+  read(target, { at = 0 } = {}) {
+    if (this.closed) throw new Error("closed");
+    const count = Math.max(0, Math.min(target.byteLength, this.node.bytes.byteLength - at));
+    target.set(this.node.bytes.subarray(at, at + count));
+    return count;
+  }
+  write(bytes, { at = 0 } = {}) {
+    if (this.closed) throw new Error("closed");
+    const end = at + bytes.byteLength;
+    if (end > this.node.bytes.byteLength) {
+      const next = new Uint8Array(end); next.set(this.node.bytes); this.node.bytes = next;
+    }
+    this.node.bytes.set(bytes, at);
+    return bytes.byteLength;
+  }
+  truncate(size) { const next = new Uint8Array(size); next.set(this.node.bytes.subarray(0, size)); this.node.bytes = next; }
+  getSize() { return this.node.bytes.byteLength; }
+  flush() {}
+  close() { if (!this.closed) { this.closed = true; this.node.syncOpen = false; } }
+}
 class MemoryFile {
   constructor(node) { this.node = node; this.kind = "file"; }
   async getFile() { return new Blob([this.node.bytes]); }
   async createWritable({ keepExistingData = false } = {}) { return new MemoryWritable(this.node, keepExistingData); }
+  async createSyncAccessHandle() { return new MemorySyncAccess(this.node); }
 }
 class MemoryDirectory {
   constructor(node) { this.node = node; this.kind = "directory"; }
@@ -149,4 +177,43 @@ Deno.test("WASI stdio adapters stream complete input/output without runtime accu
   equal(new TextDecoder().decode(output), "2 3 14\n");
   equal(runtime.snapshot().stdout.byteLength, 0, "streaming runtime must not retain stdout chunks");
   equal(runtime.snapshot().counters.stdinBytesRead, source.byteLength);
+});
+
+Deno.test("stream worker core executes exact shipped CAS bytes through sync OPFS handles", async () => {
+  const { storage } = memoryStorage();
+  const owner = "agent:run-1:hub";
+  const inputRef = await createWasmStreamInput({ owner, storage });
+  const inputBytes = new TextEncoder().encode("one two\nthree\n");
+  await appendWasmStreamInput({ ref: inputRef, owner, bytes: inputBytes, storage });
+  await sealWasmStreamInput({ ref: inputRef, owner, storage });
+  const outputRef = await createWasmStreamOutput({ owner, storage });
+  const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === "wc");
+  const wasmBytes = await Deno.readFile(`extension/wasm/cas/${row.binary.sha256}.wasm`);
+  const authority = buildPreviewAuthority({ origin: "https://agent.cap", documentId: "run-1", now: () => 1 });
+  const validated = validatePreviewInput({ toolId: "wc", args: [], stdin: "" });
+  const job = buildPreviewJob({ input: validated, authority, quota: {
+    hostCalls: Number.POSITIVE_INFINITY, pathCalls: 4096,
+    stdinBytes: Number.POSITIVE_INFINITY, stdoutBytes: Number.POSITIVE_INFINITY,
+    stderrBytes: Number.POSITIVE_INFINITY, fileBytes: Number.POSITIVE_INFINITY,
+    fileSize: Number.POSITIVE_INFINITY, dynamicFds: 256,
+  } });
+  const result = await executeWasmStreamJob({
+    wasmBytes, job, owner, inputRef, outputRef, toolId: "wc",
+  }, { storage });
+  assert(result.ok, result.error);
+  equal(result.exitCode, 0);
+  equal(result.outputRef.id, outputRef.id);
+  equal(result.receipt.stdinBytes, inputBytes.byteLength);
+  equal(result.receipt.stdoutBytes, 7);
+  const expectedInputSha = [...new Uint8Array(await crypto.subtle.digest("SHA-256", inputBytes))]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  equal(result.receipt.stdinSha256, expectedInputSha);
+  await sealWasmStreamOutput({ ref: outputRef, owner, bytes: result.receipt.stdoutBytes, receipt: result.receipt, storage });
+  const window = await readWasmStreamWindow({ ref: outputRef, owner, offset: 0, length: 7, storage });
+  equal(atob(window.base64), "2 3 14\n");
+  let rejected = false;
+  try {
+    await executeWasmStreamJob({ wasmBytes, job, owner: "agent:other:hub", inputRef, outputRef, toolId: "wc" }, { storage });
+  } catch (error) { rejected = error?.code === "wasm_stream_authority"; }
+  assert(rejected, "worker core rejects a foreign owner before execution");
 });

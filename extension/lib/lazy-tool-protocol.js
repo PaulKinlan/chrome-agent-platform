@@ -1308,19 +1308,27 @@ export function executableBundledToolRecords(rows, context = {}) {
         let normalizedStdin = "";
         let normalizedInputRef = null;
         if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-          if (Array.isArray(rawArgs.args)) {
-            normalizedArgs = rawArgs.args.filter((a) => typeof a === "string");
+          const keys = Object.keys(rawArgs);
+          const allowed = new Set(["toolId", "args", "stdin", "inputRef", "input", "text", "docA", "docB"]);
+          if ((Object.hasOwn(rawArgs, "toolId") && rawArgs.toolId !== toolId) ||
+              keys.some((key) => !allowed.has(key)) ||
+              (Object.hasOwn(rawArgs, "args") &&
+                (!Array.isArray(rawArgs.args) || rawArgs.args.some((arg) => typeof arg !== "string")))) {
+            return { ok: false, error: "invalid_arguments: shape" };
           }
-          if (typeof rawArgs.stdin === "string") {
-            normalizedStdin = rawArgs.stdin;
-          } else if (typeof rawArgs.input === "string") {
-            normalizedStdin = rawArgs.input;
-          } else if (typeof rawArgs.text === "string") {
-            normalizedStdin = rawArgs.text;
-          } else if (typeof rawArgs.docA === "string" && typeof rawArgs.docB === "string") {
-            normalizedArgs = [rawArgs.docA, rawArgs.docB];
+          if (Array.isArray(rawArgs.args)) normalizedArgs = [...rawArgs.args];
+          const textKeys = ["stdin", "input", "text"].filter((key) => Object.hasOwn(rawArgs, key));
+          const hasDocs = Object.hasOwn(rawArgs, "docA") || Object.hasOwn(rawArgs, "docB");
+          if (textKeys.length > 1 || (hasDocs && textKeys.length) ||
+              (hasDocs && Object.hasOwn(rawArgs, "args")) ||
+              (hasDocs && !(typeof rawArgs.docA === "string" && typeof rawArgs.docB === "string")) ||
+              (textKeys.length && typeof rawArgs[textKeys[0]] !== "string") ||
+              (Object.hasOwn(rawArgs, "inputRef") && (textKeys.length || hasDocs))) {
+            return { ok: false, error: "invalid_arguments: ambiguous input" };
           }
-          if (rawArgs.inputRef !== undefined) {
+          if (textKeys.length) normalizedStdin = rawArgs[textKeys[0]];
+          else if (hasDocs) normalizedArgs = [rawArgs.docA, rawArgs.docB];
+          if (Object.hasOwn(rawArgs, "inputRef")) {
             const ref = rawArgs.inputRef;
             if (!ref || typeof ref !== "object" || Array.isArray(ref) ||
                 JSON.stringify(Object.keys(ref).sort()) !== JSON.stringify(["id", "kind", "version"]) ||
@@ -1333,7 +1341,12 @@ export function executableBundledToolRecords(rows, context = {}) {
         } else if (typeof rawArgs === "string") {
           normalizedStdin = rawArgs;
         } else if (Array.isArray(rawArgs)) {
-          normalizedArgs = rawArgs.filter((a) => typeof a === "string");
+          if (rawArgs.some((arg) => typeof arg !== "string")) {
+            return { ok: false, error: "invalid_arguments: args" };
+          }
+          normalizedArgs = [...rawArgs];
+        } else if (rawArgs != null) {
+          return { ok: false, error: "invalid_arguments: shape" };
         }
 
         const validated = validatePreviewInput({
@@ -1343,7 +1356,9 @@ export function executableBundledToolRecords(rows, context = {}) {
         });
         return {
           ok: true,
-          data: Object.freeze({ ...validated, ...(normalizedInputRef ? { inputRef: normalizedInputRef } : {}) }),
+          data: normalizedInputRef
+            ? Object.freeze({ toolId: validated.toolId, args: validated.args, inputRef: normalizedInputRef })
+            : validated,
         };
       } catch (err) {
         return { ok: false, error: `invalid_arguments: ${err?.message || err}` };

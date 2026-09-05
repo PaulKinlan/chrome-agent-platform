@@ -1,5 +1,5 @@
 // tests/wasm-task-execution.test.ts — Verification of model-invoked WebAssembly task
-// execution dispatch closures, argument validation, authorization, and output bounding
+// execution dispatch closures, argument validation, authorization, and file-backed output
 // (CAP-FB-20260823-WASM-TASK-EXECUTION-01).
 // @ts-nocheck
 
@@ -37,7 +37,7 @@ Deno.test("executableBundledToolRecords: constructs non-null validateArguments, 
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
   });
 
-  assertEquals(records.length, 28, "exact 28 bundled tool records");
+  assertEquals(records.length, 31, "exact 31 bundled tool records");
 
   for (const rec of records) {
     const toolId = rec.descriptorInput.toolId;
@@ -78,6 +78,17 @@ Deno.test("executableBundledToolRecords: validateArguments validates valid and r
   const bigStdin = await base64Rec.validateArguments({ stdin: hugeStdin });
   assertEquals(bigStdin.ok, true, "stdin past the removed 2 KiB bound validates");
   assertEquals(bigStdin.data.stdin, hugeStdin, "the stdin arrives whole");
+
+  const ref = { version: 1, id: "0123456789abcdef0123456789abcdef", kind: "stdout" };
+  const chained = await base64Rec.validateArguments({ args: ["-d"], inputRef: ref });
+  assertEquals(chained.ok, true, "a prior owner-bound output reference is valid input");
+  assertEquals(chained.data.inputRef.id, ref.id);
+  assertEquals((await base64Rec.validateArguments({ stdin: "inline", inputRef: ref })).ok, false,
+    "inline and referenced input are mutually exclusive");
+  assertEquals((await base64Rec.validateArguments({ args: ["-d", 7], stdin: "x" })).ok, false,
+    "non-string argv entries are rejected, never filtered");
+  assertEquals((await base64Rec.validateArguments({ stdin: "x", authority: "forged" })).ok, false,
+    "unknown request fields cannot cross the validator");
 
   // Two document tool (diff)
   const diffRec = records.find((r) => r.descriptorInput.toolId === "diff");
@@ -143,7 +154,7 @@ Deno.test("assertBundledExecutionAuthority: admits installed tools and fails clo
     assertEquals(auth1.authorized, true);
     assertEquals(auth1.policy, "owner-build-admission");
 
-    // A non-admitted descriptor fails closed (all 28 bundled tools are now
+    // A non-admitted descriptor fails closed (all 31 bundled tools are now
     // admitted after the R12 sqlite admission, so a fictional disabled row
     // stands in for the fail-closed check).
     let disabledThrew = false;

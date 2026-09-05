@@ -2,7 +2,7 @@
 // revalidates the shipped manifest/CAS, then gives one fresh Worker only opaque
 // OPFS references plus the audited executable bytes.
 
-import { previewSpecFor, revalidatePreviewExecution } from "./tool-exec-preview.js";
+import { previewSpecFor, previewWasiArgs, revalidatePreviewExecution } from "./tool-exec-preview.js";
 import { createWasiJob } from "./wasm-host-types.js";
 import { BUNDLED_INVENTORY } from "./bundled-inventory-data.js";
 import { validateAuthorityRecord } from "./wasm-executor.js";
@@ -79,7 +79,7 @@ export async function executeWasmStreamRequest(raw, {
       origin: request.authority.origin,
       workspaceRoot: `tool-jobs/${request.authority.executionId}/${request.authority.callId}/`,
     },
-    args: [request.spec.argv0, ...request.args],
+    args: previewWasiArgs(request.toolId, request.args),
     stdin: new Uint8Array(0),
     acceptedExitCodes: request.spec.acceptedExitCodes,
     stdoutEncoding: request.spec.stdoutEncoding,
@@ -153,7 +153,21 @@ export async function executeWasmStreamRequest(raw, {
           }));
           return;
         }
-        finish(result);
+        try {
+          finish(validateWorkerResult(result, request));
+        } catch (error) {
+          finish(Object.freeze({
+            type: "wasm.stream.result",
+            sessionId: request.authority.sessionId,
+            ok: false,
+            phase: "failed",
+            toolId: request.toolId,
+            outputRef: null,
+            receipt: null,
+            error: String(error?.message ?? "stream worker result rejected").slice(0, 1024),
+            exitCode: null,
+          }));
+        }
       };
       worker.postMessage({
         type: "wasm.stream.job",
@@ -171,12 +185,54 @@ export async function executeWasmStreamRequest(raw, {
   }
 }
 
+function validateWorkerResult(result, request) {
+  if (!plain(result) || typeof result.ok !== "boolean" ||
+      result.type !== "wasm.stream.result" ||
+      result.sessionId !== request.authority.sessionId ||
+      result.toolId !== request.toolId) fail("wasm_stream_worker_result");
+  if (!result.ok) {
+    return Object.freeze({
+      type: "wasm.stream.result",
+      sessionId: request.authority.sessionId,
+      ok: false,
+      phase: result.phase === "timeout" ? "timeout" : "failed",
+      toolId: request.toolId,
+      outputRef: null,
+      receipt: null,
+      error: String(result.error ?? "stream worker failed").slice(0, 1024),
+      exitCode: Number.isSafeInteger(result.exitCode) ? result.exitCode : null,
+      workerInstanceId: typeof result.workerInstanceId === "string" ? result.workerInstanceId.slice(0, 128) : null,
+    });
+  }
+  const receipt = result.receipt;
+  const outputRef = validateWasmStreamRef(result.outputRef, { kinds: ["stdout"] });
+  const numberFields = ["stdinBytes", "stdoutBytes", "stderrBytes"];
+  const digestFields = ["stdinSha256", "stdoutSha256", "stderrSha256"];
+  if (result.phase !== "completed" || outputRef.id !== request.outputRef.id ||
+      !request.spec.acceptedExitCodes.includes(result.exitCode) || !plain(receipt) ||
+      numberFields.some((field) => !Number.isSafeInteger(receipt[field]) || receipt[field] < 0) ||
+      digestFields.some((field) => typeof receipt[field] !== "string" || !/^[0-9a-f]{64}$/u.test(receipt[field])) ||
+      typeof result.workerInstanceId !== "string" || result.workerInstanceId.length === 0 || result.workerInstanceId.length > 128 ||
+      receipt.workerInstanceId !== result.workerInstanceId ||
+      typeof receipt.elapsedMs !== "number" || !Number.isFinite(receipt.elapsedMs) || receipt.elapsedMs < 0) {
+    fail("wasm_stream_worker_result");
+  }
+  return Object.freeze({ ...result, outputRef, receipt: Object.freeze({ ...receipt }) });
+}
+
+export function isTrustedWasmStreamSender(sender, runtime = chrome.runtime) {
+  if (sender?.id !== runtime.id || sender?.tab != null || sender?.documentId != null) return false;
+  const url = typeof sender?.url === "string" ? sender.url : "";
+  return url === "" || url === runtime.getURL("background/service-worker.js");
+}
+
 export function registerWasmStreamHost() {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== WASM_STREAM_RUN_TYPE) return undefined;
-    // Runtime messages from other extensions are never accepted. Extension
-    // pages and this extension's service worker share sender.id.
-    if (sender?.id !== chrome.runtime.id) {
+    // Only the extension service worker may submit a stream job. Same-extension
+    // pages and content scripts share sender.id, so id-only checking is not an
+    // authority boundary; document/tab senders are rejected explicitly.
+    if (!isTrustedWasmStreamSender(sender)) {
       sendResponse({ ok: false, error: "wasm_stream_sender" });
       return false;
     }

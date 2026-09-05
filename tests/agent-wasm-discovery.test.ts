@@ -47,7 +47,7 @@ Deno.test("list_tools: enumerates all categories including the 28 admitted bundl
   const result = await toolset.tools.list_tools.execute({});
   assertEquals(result.ok, true);
   assertEquals(result.counts.bundledWasm, 28, "must report exactly 28 bundled Wasm tools");
-  assertEquals(result.tools["bundled-wasm"].length, 28, "must list all 28 bundled Wasm tools");
+  assertEquals(result.tools["bundled-wasm"].length, 31, "must list all 31 bundled Wasm tools");
 
   const names = result.tools["bundled-wasm"].map((t) => t.name);
   const expectedSubset = ["awk_filter_bounded", "date_formatter_bounded", "diff", "patch", "truncate", "csvtool", "gzip", "md5sum", "sha256sum", "sqlite3_query_bounded"];
@@ -77,7 +77,7 @@ Deno.test("list_tools: category filter returns only the requested category", asy
 
   const filtered = await toolset.tools.list_tools.execute({ source: "bundled-wasm" });
   assertEquals(filtered.ok, true);
-  assertEquals(filtered.tools["bundled-wasm"].length, 28);
+  assertEquals(filtered.tools["bundled-wasm"].length, 31);
   assertEquals(filtered.tools.builtin.length, 0, "filtered category should not populate other categories");
 });
 

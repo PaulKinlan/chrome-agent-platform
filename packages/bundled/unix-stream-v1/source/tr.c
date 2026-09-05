@@ -92,7 +92,10 @@ int main(int argc, char **argv) {
     index++;
   }
   int operands = argc - index;
-  if ((!delete_mode && operands != 2) || (delete_mode && (operands < 1 || operands > 2))) {
+  int valid = delete_mode
+    ? (operands >= 1 && operands <= 2)
+    : (squeeze ? (operands >= 1 && operands <= 2) : operands == 2);
+  if (!valid) {
     fprintf(stderr, "usage: tr [-cds] SET1 [SET2]\n");
     return 1;
   }
@@ -101,7 +104,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "tr: invalid or unsupported set expression\n");
     free(first.bytes); free(second.bytes); return 1;
   }
-  if (!delete_mode && second.length == 0) {
+  if (!delete_mode && operands == 2 && second.length == 0) {
     fprintf(stderr, "tr: SET2 must not be empty\n");
     free(first.bytes); free(second.bytes); return 1;
   }
@@ -110,7 +113,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 256; i++) translate[i] = (unsigned char)i;
   for (size_t i = 0; i < first.length; i++) selected[first.bytes[i]] = 1;
   if (complement) for (int i = 0; i < 256; i++) selected[i] = !selected[i];
-  if (!delete_mode) {
+  if (!delete_mode && operands == 2) {
     if (complement) {
       size_t target = 0;
       for (int c = 0; c < 256; c++) if (selected[c]) {
@@ -125,6 +128,9 @@ int main(int argc, char **argv) {
   }
   const set_t *squeezed = operands == 2 ? &second : &first;
   for (size_t i = 0; i < squeezed->length; i++) squeeze_set[squeezed->bytes[i]] = 1;
+  if (squeeze && complement && operands == 1) {
+    for (int i = 0; i < 256; i++) squeeze_set[i] = selected[i];
+  }
 
   unsigned char input[32768], output[32768];
   int have_previous = 0;
