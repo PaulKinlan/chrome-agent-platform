@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.252] — 2026-09-05
+- Test runs are quicker to give results: checks that only pretend to launch a browser no longer wait in line behind real browser tests.
+
 ## [0.3.251] — 2026-09-05
 - When your model thinks before answering (supported on Gemini, Claude, DeepSeek and others), you can now watch it happen: a collapsed “Thinking” panel appears under the status line while the model works — tap it to read the live thinking as it streams. It tucks itself away when the answer starts.
 
