@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.147] — 2026-09-05
+- The packaged extension is half the size: store bundles are minified, and the build fails if the background worker outgrows its budget
+
 ## [0.3.146] — 2026-09-05
 - ensure approval card truthfully discloses truncated source previews and full-run digest
 
