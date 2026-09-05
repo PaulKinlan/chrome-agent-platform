@@ -467,7 +467,8 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
       runContext: context,
     });
   }
-  const runId = String(context?.runId ?? context?.executionId ?? "run");
+  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  if (!runId) throw new Error("wasm_stream_run_required");
   const agentId = String(context?.agentId ?? "hub");
   const owner = `agent:${runId}:${agentId}`;
   let inputRef = validatedArgs?.inputRef ?? null;

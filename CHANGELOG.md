@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.171] — 2026-09-05
+- Tie temporary tool files to the exact agent run
+
 ## [0.3.170] — 2026-09-05
 - Keep binary stream results byte exact
 
