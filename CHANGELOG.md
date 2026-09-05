@@ -1,10 +1,7 @@
 # Changelog
 
-## [0.3.230] — 2026-09-05
-- Site-tool consent design: first-call card, audit ledger, easy disable
-
-## [0.3.229] — 2026-09-05
-- Site-tool consent design: first-call card, audit ledger, easy disable
+## [0.3.231] — 2026-09-05
+- Site tools now ask once before their first run, and every call is audited
 
 ## [0.3.228] — 2026-09-05
 - Pipeline dispatcher now fails closed when two tools share a name

@@ -66,39 +66,43 @@ Object.defineProperty(globalThis, "navigator", {
 
 const BOOK = { name: "book_table_le_petit_bistro", source: "declared", description: "Book a table", inputSchema: { type: "object" } };
 
-Deno.test("auto-approve: an enrolled origin's declared tool is approved with NO per-tool approval", async () => {
+Deno.test("eo4d: an enrolled origin's declared tool is NOT approved until its first call is approved", async () => {
   const origin = "https://autoapprove-a.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [BOOK]);
-  // The owner never approved this tool — there is no UI to do so. Enrollment
-  // alone must make it callable.
-  assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), true, "enrolled ⇒ approved");
-  assertEquals(await pendingApprovals(origin), [], "nothing pends for an enrolled origin");
+  // eo4d FIRST-CALL CONSENT: enrollment no longer blanket-approves. The tool
+  // is callable only after the first call's card is allowed (approveTool).
+  assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), false, "enrolled ⇒ unconsumed until first-call approval");
+  await approveTool(origin, "book_table_le_petit_bistro", true);
+  assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), true, "first-call Allow consumes the consent");
 });
 
-Deno.test("auto-approve: a tool declared AFTER enrollment is approved too (later declarations covered)", async () => {
+Deno.test("eo4d: a tool declared AFTER enrollment also waits for its own first call", async () => {
   const origin = "https://autoapprove-b.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [BOOK]);
+  await approveTool(origin, "book_table_le_petit_bistro", true);
   assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), true);
-  // The page declares/updates a NEW tool in a later snapshot.
+  // The page declares/updates a NEW tool in a later snapshot — it has its
+  // OWN first-call consent to consume; the earlier approval does not cover it.
   const LATE = { name: "cancel_reservation", source: "declared", description: "Cancel", inputSchema: { type: "object" } };
   await replaceTools(origin, [BOOK, LATE]);
   assertEquals((await listTools(origin)).length, 2);
-  assertEquals(await isApproved(origin, "cancel_reservation"), true, "post-enrollment declarations inherit the enrollment consent");
+  assertEquals(await isApproved(origin, "cancel_reservation"), false, "each tool's first call is its own consent");
 });
 
-Deno.test("auto-approve: disenrollment REVOKES approval; re-enrollment restores it", async () => {
+Deno.test("eo4d: disenrollment REVOKES; re-enrollment starts consent FRESH (consumed state is not silently restored)", async () => {
   const origin = "https://autoapprove-c.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [BOOK]);
+  await approveTool(origin, "book_table_le_petit_bistro", true);
   assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), true);
   await disenrollOrigin(origin);
   assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), false, "disenroll revokes (fail closed)");
-  const pending = await pendingApprovals(origin);
-  assertEquals(pending.length, 1, "a disenrolled origin's tools pend again");
   await enrollOrigin(origin);
-  assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), true, "re-enrollment re-approves");
+  // eo4d: the owner re-admitting the site re-arms the first-call card — the
+  // old consumed consent must not resurrect silently.
+  assertEquals(await isApproved(origin, "book_table_le_petit_bistro"), false, "re-enrollment re-arms the first-call card");
 });
 
 Deno.test("auto-approve: the explicit per-tool record still serves NON-enrolled origins (legacy path intact)", async () => {
@@ -124,6 +128,5 @@ Deno.test("auto-approve SW wiring: availability + guard + execute path all consu
   assert(!sw.includes("async function siteToolset"), "dead siteToolset is removed from service-worker.js");
   // tools.js derivation pins
   const tools = await Deno.readTextFile(new URL("../extension/lib/tools.js", import.meta.url));
-  assert(tools.includes("if (enrolled) return true;"), "isApproved derives from enrollment");
-  assert(tools.includes("if (await isEnrolled(origin)) return [];"), "pendingApprovals empty for enrolled origins");
+  assert(tools.includes("return Boolean(approved[toolName]);"), "eo4d: isApproved consults the per-tool consent map for enrolled origins too");
 });

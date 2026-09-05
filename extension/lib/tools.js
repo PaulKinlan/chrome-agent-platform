@@ -454,6 +454,15 @@ export async function disenrollOriginLocked(origin) {
     gen: await nextGeneration(),
   };
   await kvSet({ [ENROLL_KEY]: map });
+  // eo4d: disenroll must also clear the per-tool consent map — a tombstoned
+  // origin's tools fail closed (isApproved consults the same map now), and a
+  // later re-enrollment starts consent FRESH (the first-call card re-arms).
+  try {
+    await siteMemory(canonical).setTrusted("approvals", {});
+  } catch {
+    // The consent-map clear is best-effort: the tombstone itself already
+    // fails the origin closed at every authority check.
+  }
   // Bound tombstone retention: enrolled:false entries only exist to fence a
   // still-running bridge's generation. Keep at most MAX_TOMBSTONES (oldest
   // first) so a churn of enroll/delete cycles cannot grow the registry without
@@ -489,11 +498,24 @@ export async function disenrollOriginLocked(origin) {
  * NON-enrolled origin (legacy/route compat). Revocation rides the disenroll
  * tombstone + generation bump: isApproved derives from the LIVE enrollment
  * snapshot, so a tombstoned origin fails closed at the very next check.
+ *
+ * eo4d (first-call consent): ENROLLED origins now consult the SAME per-tool
+ * map — enrollment seeds the map with every listed tool marked UNCONSUMED
+ * (absent), and the first authorized call writes approved[tool]. Deleting a
+ * key (Settings disable, per site or per tool) re-arms the first-call card:
+ * the next call is treated as a first call again. Enrollment no longer
+ * short-circuits per-tool consent; it only gates WHETHER the site's tools
+ * are callable at all.
  */
 export async function isApproved(origin, toolName) {
   const { enrolled } = await enrollmentSnapshot(origin);
-  if (enrolled) return true;
-  const approved = (await siteMemory(origin).get("approvals")) ?? {};
+  const store = siteMemory(origin);
+  const approved = (await store.get("approvals")) ?? {};
+  if (enrolled) {
+    // First-call consent: an enrolled origin's tool is callable only once
+    // its first call has been approved (the card) — absent key = unconsumed.
+    return Boolean(approved[toolName]);
+  }
   return Boolean(approved[toolName]);
 }
 

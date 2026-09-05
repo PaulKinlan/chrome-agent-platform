@@ -20,7 +20,7 @@ class FakeDirHandle { constructor(n) { this.node = n; } get kind() { return "dir
 const root = dirNode();
 Object.defineProperty(globalThis, "navigator", { value: { storage: { async getDirectory() { return new FakeDirHandle(root); } } }, configurable: true, writable: true });
 
-import { disenrollOrigin, enrollOrigin, enrollmentSnapshot, isApproved, listTools, replaceTools } from "../extension/lib/tools.js";
+import { approveTool, disenrollOrigin, enrollOrigin, enrollmentSnapshot, isApproved, listTools, replaceTools } from "../extension/lib/tools.js";
 import { createWebmcpAuthorizationGuard, evaluateWebmcpAuthority, WEBMCP_AUTHORITY_REASONS } from "../extension/lib/webmcp-authority.js";
 import { executableWebMcpToolRecords, LazyToolProtocol } from "../extension/lib/lazy-tool-protocol.js";
 import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
@@ -68,10 +68,15 @@ async function drive(origin, runGenCell) {
   return { search, exec, denials, dispatched };
 }
 
-Deno.test("lazyauth: an ENROLLED site's declared tool dispatches via the REAL guard — no authorization dead-end", async () => {
+Deno.test("lazyauth: an ENROLLED site's declared tool dispatches after its FIRST-CALL approval — no authorization dead-end", async () => {
   const origin = "https://lazyauth-a.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
+  // eo4d: BEFORE the first-call approval the tool is not callable...
+  assertEquals(await isApproved(origin, TOOL.name), false, "unconsumed before the first call");
+  // ...the first-call card Allow consumes the consent, and the delegated
+  // lazy path dispatches exactly as before (no authorization dead-end).
+  await approveTool(origin, TOOL.name, true);
   const gen = (await enrollmentSnapshot(origin)).gen;
   const { search, exec, denials, dispatched } = await drive(origin, { get: () => gen });
   assertEquals(search.results[0].availability, "ready");
@@ -102,6 +107,7 @@ Deno.test("lazyauth: a mid-run re-enrollment (gen bump) fails the STALE run clos
   const origin = "https://lazyauth-c.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
+  await approveTool(origin, TOOL.name, true); // consume first-call consent so the GEN fence is what fails
   const runGen = (await enrollmentSnapshot(origin)).gen;
   // Re-enroll MID-RUN: the enrollment generation bumps; the run's captured gen is stale.
   await enrollOrigin(origin);
@@ -115,6 +121,7 @@ Deno.test("lazyauth: a missing run generation fails closed AND named (run-genera
   const origin = "https://lazyauth-d.example.com";
   await enrollOrigin(origin);
   await replaceTools(origin, [TOOL]);
+  await approveTool(origin, TOOL.name, true); // consume consent so the MISSING-GEN fence is what fails
   const { exec, denials, dispatched } = await drive(origin, { get: () => null });
   assertEquals(exec?.ok, false);
   assertEquals(dispatched.length, 0);
