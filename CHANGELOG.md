@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.212] — 2026-09-05
+- Add bounded table formulas
+
 ## [0.3.211] — 2026-09-05
 - Maintenance and fixes.
 
