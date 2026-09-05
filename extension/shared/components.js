@@ -2408,6 +2408,25 @@ class ToolDirectoryCard extends Component {
     const source = String(tool.source || "inferred");
     const sourceLabel = source === "declared" ? "Declared" : source === "linked" ? "Linked" : "Inferred";
     const approved = tool.approved === true;
+    // The per-site enrollment policy (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-
+    // 01): when a site is NOT "allow", the card's state chip must say what is
+    // true for THIS tool — the policy badge stays contained in and labelled to
+    // the exact tool card (never a detached site-level note). A blocked tool is
+    // not "Approved" (its enrolment-derived approval is suspended); an ask tool
+    // pays a card before every call.
+    const policy = tool.policy === "deny" || tool.policy === "ask" ? tool.policy : "allow";
+    const policyStatus = policy === "deny"
+      ? { cls: "blocked", text: "Blocked by policy", label: "Blocked by enrollment policy" }
+      : policy === "ask"
+        ? { cls: "ask", text: "Ask before use", label: "Ask the owner before each use" }
+        : null;
+    const approvedStatus = policyStatus
+      ? null
+      : approved
+        ? { cls: "approved", text: "Approved", label: "Approved" }
+        : { cls: "pending", text: "Approval required", label: "Approval required" };
+    const statusChip = policyStatus ?? approvedStatus;
+    const pageUrl = typeof tool.pageUrl === "string" && tool.pageUrl ? tool.pageUrl : "";
     const titleId = `tool-title-${Math.random().toString(36).slice(2)}`;
     const descriptionId = `${titleId}-description`;
     mountTemplate(this, `
@@ -2437,6 +2456,8 @@ class ToolDirectoryCard extends Component {
       .tool-status.source { color:var(--accent,#0e6e63); border-color:currentColor; }
       .tool-status.approved { color:var(--success,#1a7f37); border-color:currentColor; }
       .tool-status.pending { color:var(--warning,#9a6700); border-color:currentColor; }
+      .tool-status.blocked { color:var(--danger,#cf222e); border-color:currentColor; }
+      .tool-status.ask { color:var(--warning,#9a6700); border-color:currentColor; }
       .approve { min-block-size:36px; max-inline-size:100%; padding:6px 10px;
         border:0; border-radius:var(--radius-sm,6px); background:var(--accent,#0e6e63);
         color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1.4 inherit;
@@ -2455,11 +2476,12 @@ class ToolDirectoryCard extends Component {
       <p class="tool-description" id="${descriptionId}">${escapeHtml(description)}</p>
       <dl class="tool-metadata">
         <div><dt>Site:</dt><dd>${escapeHtml(origin)}</dd></div>
+        ${pageUrl ? `<div><dt>Page:</dt><dd>${escapeHtml(pageUrl)}</dd></div>` : ""}
         <div><dt>Schema:</dt><dd>${escapeHtml(summarizeInputSchema(tool.inputSchema))}</dd></div>
       </dl>
       <div class="tool-states" aria-label="States for ${escapeHtml(name)}">
         <span class="tool-status source" role="status" aria-label="${escapeHtml(name)}: ${sourceLabel}">${sourceLabel}</span>
-        <span class="tool-status ${approved ? "approved" : "pending"}" role="status" aria-label="${escapeHtml(name)}: ${approved ? "Approved" : "Approval required"}">${approved ? "Approved" : "Approval required"}</span>
+        <span class="tool-status ${statusChip.cls}" role="status" aria-label="${escapeHtml(name)}: ${statusChip.label}">${statusChip.text}</span>
         ${approved ? "" : `<button class="approve" type="button" aria-label="Approve ${escapeHtml(name)} for ${escapeHtml(origin)}">Approve</button>`}
       </div>
     </article>`);
