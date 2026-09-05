@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.263] — 2026-09-05
+- Internal cleanup: stop checking the retired task file's layout on every full test run
+
+## [0.3.262] — 2026-09-05
+- Internal cleanup: stop checking the retired task file's layout on every full test run
+
 ## [0.3.261] — 2026-09-05
 - Tools that currently run only in Settings preview now fail with an honest refusal message when called from a live task
 
