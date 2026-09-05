@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.170] — 2026-09-05
+- Keep binary stream results byte exact
+
 ## [0.3.169] — 2026-09-05
 - Verify every Unix tool rebuild byte for byte
 

@@ -557,6 +557,7 @@ async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVI
   // never squeezed into context: the explicit OPFS reference, size, and digest
   // are authoritative and can feed the next tool without copying.
   const outputDescriptor = wasmStreamOutputDescriptor(toolId, args);
+  const outputLifetime = owner.startsWith("agent:") ? "run" : "explicit-remove";
   let stdout = null;
   if (result.receipt.stdoutBytes <= 64 * 1024 && outputDescriptor.type === "utf8") {
     const window = await readWasmStreamWindow({
@@ -581,7 +582,7 @@ async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVI
       stderrSha256: result.receipt.stderrSha256,
       type: outputDescriptor.type,
       mediaType: outputDescriptor.mediaType,
-      lifetime: "run",
+      lifetime: outputLifetime,
     }),
     input: Object.freeze({
       ref: inputRef,

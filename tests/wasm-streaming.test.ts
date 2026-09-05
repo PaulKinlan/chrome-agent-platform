@@ -332,7 +332,8 @@ Deno.test("service worker exposes one owner-derived stream lifecycle instead of 
   assert(!platformRoutes.includes('owner = "hub"'), "platform bridges must not accept caller-selected owners");
   assert(source.includes("releaseRunWasmStreamOutputs(executionId)"),
     "run settlement must release model-owned stream results");
-  assert(source.includes('lifetime: "run"'), "stream results must disclose their temporary lifetime");
+  assert(source.includes('owner.startsWith("agent:") ? "run" : "explicit-remove"'),
+    "stream results must disclose run-scoped versus owner-controlled lifetime");
 });
 
 Deno.test("stream worker core executes exact shipped CAS bytes through sync OPFS handles", async () => {

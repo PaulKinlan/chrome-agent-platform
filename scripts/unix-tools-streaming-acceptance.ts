@@ -117,6 +117,7 @@ const state: any = {
   loadedPackages: null,
   runs: {},
   chain: null,
+  binaryDecode: null,
   failureCleanup: null,
   workerInstanceIds: [],
   cleanup: { input: null, trOutput: null },
@@ -204,6 +205,57 @@ try {
   assert(chainProbe.removed?.ok === true && chainProbe.postRemove?.ok === false, "chain output cleanup failed");
   state.chain = { from: "tr", to: "wc", probe: chainProbe };
   state.workerInstanceIds.push(chainProbe.result.workerInstanceId);
+
+  state.binaryDecode = await cdp.eval(page.sessionId, `(async () => {
+    let inputRef = null;
+    let outputRef = null;
+    const probe = { result: null, window: null, inputRemoved: null, outputRemoved: null };
+    try {
+      const created = await chrome.runtime.sendMessage({ type: "tool-stream.input.create" });
+      if (!created?.ok) throw new Error(JSON.stringify(created));
+      inputRef = created.ref;
+      const appended = await chrome.runtime.sendMessage({
+        type: "tool-stream.input.append",
+        ref: inputRef,
+        base64: btoa("AP+A\\n"),
+      });
+      if (!appended?.ok) throw new Error(JSON.stringify(appended));
+      const sealed = await chrome.runtime.sendMessage({ type: "tool-stream.input.seal", ref: inputRef });
+      if (!sealed?.ok) throw new Error(JSON.stringify(sealed));
+      probe.result = await chrome.runtime.sendMessage({
+        type: "tool-stream.run",
+        toolId: "base64",
+        args: ["-d"],
+        inputRef,
+      });
+      if (!probe.result?.ok) throw new Error(JSON.stringify(probe.result));
+      outputRef = probe.result.output.ref;
+      probe.window = await chrome.runtime.sendMessage({
+        type: "tool-stream.output.read",
+        ref: outputRef,
+        offset: 0,
+        length: 3,
+      });
+    } finally {
+      if (outputRef) probe.outputRemoved = await chrome.runtime.sendMessage({ type: "tool-stream.remove", ref: outputRef });
+      if (inputRef) probe.inputRemoved = await chrome.runtime.sendMessage({ type: "tool-stream.remove", ref: inputRef });
+    }
+    return probe;
+  })()`);
+  assert(state.binaryDecode?.result?.ok === true, "base64 binary decode failed");
+  assert(state.binaryDecode.result.output?.type === "binary" &&
+    state.binaryDecode.result.output?.mediaType === "application/octet-stream" &&
+    state.binaryDecode.result.output?.lifetime === "explicit-remove",
+  "base64 decode did not return an explicit owner-controlled binary descriptor");
+  assert(state.binaryDecode.result.output?.bytes === 3 &&
+    state.binaryDecode.result.output?.sha256 === "f742b965f156c10374bc23aea96e3a8aff8facd6fc079defeaa30219ad86f211",
+  "base64 binary decode receipt drifted");
+  assert(state.binaryDecode.result.stdout === null && state.binaryDecode.result.stdoutComplete === false &&
+    state.binaryDecode.window?.base64 === "AP+A",
+  "base64 binary decode was text-decoded or lost exact bytes");
+  assert(state.binaryDecode.outputRemoved?.ok === true && state.binaryDecode.inputRemoved?.ok === true,
+    "base64 binary probe cleanup failed");
+  state.workerInstanceIds.push(state.binaryDecode.result.workerInstanceId);
   assert(new Set(state.workerInstanceIds).size === state.workerInstanceIds.length, "a worker instance was reused across jobs");
 
   state.failureCleanup = await cdp.eval(page.sessionId, `(async () => {
@@ -250,7 +302,7 @@ try {
     card.id = "unix-stream-acceptance-result";
     card.textContent = ${JSON.stringify("PASS — loaded extension, exact 100 MiB OPFS input\n")}
       + ${JSON.stringify(Object.entries(EXPECTED).map(([id, row]) => `${id.padEnd(7)} ${String(row.bytes).padStart(9)} B  ${row.sha256.slice(0, 16)}…`).join("\n"))}
-      + ${JSON.stringify("\ntr → wc chained by sealed OPFS reference\nfresh workers: 10/10 · rejected-exit cleanup: complete")};
+      + ${JSON.stringify("\ntr → wc chained by sealed OPFS reference\nbinary base64 decode: exact 00 ff 80\nfresh workers: 11/11 · rejected-exit cleanup: complete")};
     Object.assign(card.style, {
       position: "fixed", inset: "48px", zIndex: "2147483647", margin: "0",
       padding: "28px", overflow: "auto", border: "3px solid #087f5b",
