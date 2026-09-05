@@ -51,7 +51,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.grep",
    "version": "2.0.0",
-   "digest": "c622cf63280d7613681579305b51a7c9a58d699268b32e6a894fcbbe9dfdff24"
+   "digest": "ebd87af1e36286f56602c6056da9fa4bb75c1b1aad69be1b16cbf7877cdfe089"
   },
   {
    "pkg": "cap.bundled.gzip",
@@ -427,8 +427,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.grep-2.0.0.manifest.json",
-   "sha256": "c622cf63280d7613681579305b51a7c9a58d699268b32e6a894fcbbe9dfdff24",
-   "size": 1765
+   "sha256": "ebd87af1e36286f56602c6056da9fa4bb75c1b1aad69be1b16cbf7877cdfe089",
+   "size": 1772
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.gzip-1.0.0.manifest.json",

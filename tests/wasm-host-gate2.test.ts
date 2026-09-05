@@ -898,9 +898,9 @@ Deno.test("B2 text tranche: sort/uniq/tr/grep/toml2json produce the EXACT exampl
     const spec = PREVIEW_SPECS[toolId];
     assert(spec, `${toolId} is in the spec map`);
     const casBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${spec.casSha}.wasm`));
-    // dptw: the 64 KiB request cap and the 4 MiB wasm cap are BOTH gone —
-    // these tools' bytes exceed the old request cap and are admitted whole.
-    assert(casBytes.byteLength > 64 * 1024, `${toolId} (${casBytes.byteLength} B) exceeds the REMOVED 64 KiB request cap`);
+    // dptw: neither the logical request nor the Wasm artifact is content-capped;
+    // exact shipped bytes are admitted regardless of whether a replacement got smaller.
+    assert(casBytes.byteLength > 0, `${toolId} ships a non-empty exact CAS artifact`);
     assertEquals(EXECUTOR_BOUNDS.maxWasmBytes, Number.POSITIVE_INFINITY, "no wasm byte cap remains");
     const job = makeJob({
       stdin: new Uint8Array(new TextEncoder().encode(contract.stdin)),

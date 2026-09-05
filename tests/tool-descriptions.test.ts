@@ -17,7 +17,7 @@ const FORBIDDEN_JARGON_PATTERNS = Object.freeze([
   "CAP-authored",
 ]);
 
-Deno.test("tool naming & descriptions: all 28 tools have Unix-name displayName and lead with '<toolname> - '", () => {
+Deno.test("tool naming & descriptions: all 31 tools have Unix-name displayName and lead with '<toolname> - '", () => {
   assertEquals(BUNDLED_TOOL_PACKAGE_ROWS.length, 31, "exact 31 bundled tool rows");
   assertEquals(Object.keys(AGENT_DESCRIPTIONS).length, 31, "exact 31 agent descriptions");
 
@@ -104,7 +104,7 @@ Deno.test("tool descriptions: natural query vocabulary appears organically in fu
   assert(sql.includes("filter"), "sqlite3 description must include 'filter'");
 });
 
-Deno.test("manifest descriptions: all 28 manifests contain matching agent-useful descriptions", async () => {
+Deno.test("manifest descriptions: all 31 manifests contain matching agent-useful descriptions", async () => {
   for (const row of BUNDLED_TOOL_PACKAGE_ROWS) {
     const manifestPath = new URL(`../${row.manifestRef}`, import.meta.url);
     const manifestText = await Deno.readTextFile(manifestPath);

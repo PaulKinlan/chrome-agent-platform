@@ -206,7 +206,7 @@ Deno.test("gzip retained Worker: malformed header/truncation/deflate/CRC failure
   }
 });
 
-Deno.test("gzip admission census: all 28 exact CAS parse against SUPPORTED28 with exact 28/0 posture", async () => {
+Deno.test("gzip admission census: all 31 exact CAS parse against the 29-import host with exact 31/0 posture", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 29, "fd_renumber is the exact twenty-ninth supported import");
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
   const census = new Map();
@@ -217,7 +217,7 @@ Deno.test("gzip admission census: all 28 exact CAS parse against SUPPORTED28 wit
       .map((entry) => entry.name);
     census.set(row.toolId, imports.filter((name) => !supported.has(name)).sort());
   }
-  assertEquals(census.size, 28);
+  assertEquals(census.size, 31);
   const enabled = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(enabled.length, 31);
   for (const row of enabled) assertEquals(census.get(row.toolId), [], `${row.toolId}: admitted imports`);
@@ -226,7 +226,7 @@ Deno.test("gzip admission census: all 28 exact CAS parse against SUPPORTED28 wit
   assertEquals(census.get("sqlite3_query_bounded"), [], "R11: the six sqlite imports are now SUPPORTED — sqlite's missing list is EMPTY (import-complete, admitted in R12)");
   assertEquals(census.get("touch"), [], "R6: path_filestat_set_times is now SUPPORTED, so touch's missing list is EMPTY — the R9 admission flips the descriptor only (no new import)");
   assertEquals(census.get("truncate"), [], "R5: fd_filestat_set_size is now SUPPORTED, so truncate's missing list is EMPTY — the R8 admission flips the descriptor only (no new import)");
-  assertEquals(census.get("sqlite3_query_bounded"), [], "R11: the six sqlite imports are now SUPPORTED — sqlite's missing list is EMPTY (import-complete, still disabled)");
+  assertEquals(census.get("sqlite3_query_bounded"), [], "R12: sqlite's supported-import gap is empty and the package is admitted");
 });
 
 Deno.test("gzip service boundary: trusted expected encoding admits one arm and rejects hostile/mismatched arms", () => {

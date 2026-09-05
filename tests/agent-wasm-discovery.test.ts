@@ -22,7 +22,7 @@ function assertEquals(actual, expected, message) {
   }
 }
 
-Deno.test("list_tools: enumerates all categories including the 28 admitted bundled Wasm tools", async () => {
+Deno.test("list_tools: enumerates all categories including the 31 admitted bundled Wasm tools", async () => {
   const bundledRecords = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
     scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
@@ -46,7 +46,7 @@ Deno.test("list_tools: enumerates all categories including the 28 admitted bundl
   // Call list_tools
   const result = await toolset.tools.list_tools.execute({});
   assertEquals(result.ok, true);
-  assertEquals(result.counts.bundledWasm, 28, "must report exactly 28 bundled Wasm tools");
+  assertEquals(result.counts.bundledWasm, 31, "must report exactly 31 bundled Wasm tools");
   assertEquals(result.tools["bundled-wasm"].length, 31, "must list all 31 bundled Wasm tools");
 
   const names = result.tools["bundled-wasm"].map((t) => t.name);
@@ -81,7 +81,7 @@ Deno.test("list_tools: category filter returns only the requested category", asy
   assertEquals(filtered.tools.builtin.length, 0, "filtered category should not populate other categories");
 });
 
-Deno.test("list_tools: result stays strictly bounded under 32 KiB and includes truncated flag", async () => {
+Deno.test("list_tools: returns every complete descriptor without the retired 32 KiB truncation cap", async () => {
   const bundledRecords = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
     scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
@@ -102,17 +102,17 @@ Deno.test("list_tools: result stays strictly bounded under 32 KiB and includes t
 
   const result = await toolset.tools.list_tools.execute({});
   assertEquals(result.ok, true);
-  assertEquals(typeof result.truncated, "boolean");
-
+  assertEquals(result.truncated, false);
+  assertEquals(result.tools["bundled-wasm"].length, 31);
   const jsonBytes = new TextEncoder().encode(JSON.stringify(result)).byteLength;
-  assert(jsonBytes <= 32 * 1024, `list_tools result exceeds 32 KiB cap (${jsonBytes} bytes)`);
+  assert(jsonBytes > 32 * 1024, `fixture must falsify the retired 32 KiB cap (${jsonBytes} bytes)`);
 });
 
-Deno.test("master-skill: operating manual truthfully includes list_tools and the 28 bundled Wasm tools", () => {
+Deno.test("master-skill: operating manual truthfully includes list_tools and the 31 bundled Wasm tools", () => {
   assert(MASTER_SKILL.includes("list_tools"), "MASTER_SKILL must describe list_tools");
   assert(MASTER_SKILL.includes("search_tools"), "MASTER_SKILL must describe search_tools");
   assert(MASTER_SKILL.includes("execute_tool"), "MASTER_SKILL must describe execute_tool");
-  assert(MASTER_SKILL.includes("28 on-device bundled Wasm tools"), "MASTER_SKILL must mention 28 bundled Wasm tools");
+  assert(MASTER_SKILL.includes("31 on-device bundled Wasm tools"), "MASTER_SKILL must mention 31 bundled Wasm tools");
   assert(!MASTER_SKILL.includes("there are no native WebAssembly tools"), "must NOT claim no Wasm tools");
 });
 

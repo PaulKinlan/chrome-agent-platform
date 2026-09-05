@@ -1,6 +1,6 @@
 // lib/tool-exec-preview.js — Settings-only bounded Wasm tool execution
 // (CAP-FB-20260822-TOOL-PREVIEW-EXEC-01/02/03/04). The technically-admitted
-// static allowlist of bundled packages (28 tools) may be run ONLY from the
+// static allowlist of bundled packages (31 tools) may be run from the
 // exact Settings options document by an EXPLICIT owner click.
 //
 // Invariants:

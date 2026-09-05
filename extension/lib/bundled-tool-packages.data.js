@@ -494,7 +494,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "unix-stream-v1",
   "displayName": "grep",
   "category": "text",
-  "description": "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
+  "description": "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
   "caveats": [
    "Stdin/stdout only; file operands are rejected.",
    "C byte-locale semantics.",

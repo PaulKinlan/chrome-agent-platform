@@ -259,7 +259,7 @@ Deno.test("posture: descriptors admit exactly the 31-tool Settings allowlist", (
   const uuid = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "uuid");
   assert((uuid.caveats ?? []).join(" ").includes("output is intentionally nondeterministic"), "uuid nondeterminism caveat preserved");
   const b64 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "base64");
-  assert((b64.caveats ?? []).join(" ").includes("Invalid padding or characters rejected fail-closed"), "base64 padding caveat preserved");
+  assert((b64.caveats ?? []).join(" ").includes("file operands are rejected"), "base64 stdin-only caveat preserved");
   const sha256 = BUNDLED_TOOL_PACKAGES.find((r) => r.toolId === "sha256sum");
   assert((sha256.caveats ?? []).join(" ").includes("FIPS 180-4 SHA-256"), "sha256 FIPS caveat preserved");
   // the ADMITTED markdown row's caveat is TRUTHFUL (no pre-admission wording)

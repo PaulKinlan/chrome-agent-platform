@@ -128,7 +128,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   sort: "sort - external merge-sort file-backed text in the C byte locale. Use to order data larger than Wasm memory. In/out: chainable references. Flags: -r, -n, -u. Example: 'b\\na\\n' -> 'a\\nb\\n'.",
   uniq: "uniq - stream adjacent lines and remove or count duplicates. Use after sort for deduplication. In/out: file-backed stdin to chainable output. Flags: -c, -d, -u. Example: 'a\\na\\nb' -> 'a\\nb'.",
   tr: "tr - stream byte translation, deletion, and squeezing in the C locale. Use for case shifts and character maps. In/out: file-backed stdin to chainable output. Flags: -c, -d, -s. Example: 'a-z' 'A-Z' maps 'hi' to 'HI'.",
-  grep: "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
+  grep: "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
   sed: "sed - stream-edit text with minised 1.16. Use for substitutions, selection, deletion, and standard sed scripts. In/out: file-backed stdin to chainable output. Flags: -e, -n. Example: 's/a/b/g'.",
   awk: "awk - run the posixutils-rs parser and interpreter over streaming records. Use for fields, expressions, regex, arrays, and reports. In/out: file-backed stdin to chainable output. Command pipes and system() are unavailable.",
   jq: "jq - parse and transform JSON with upstream jq 1.8.2. Use for object, array, filter, reduction, and formatting operations over JSON streams. In/out: file-backed stdin to chainable output. Oniguruma regex built-ins are unavailable.",
