@@ -12042,6 +12042,14 @@ class ToolLibrary extends Component {
       .framing { margin:0 0 12px; padding:10px 12px; border-radius:var(--radius-md,10px);
         background:var(--bg, #f7f6f3); color:var(--muted, #625d57); font-size:13px; }
       .groups { margin:0 0 16px; padding:0; display:grid; gap:6px; }
+      .purpose-family { display:grid; gap:6px; margin:0 0 14px; }
+      .purpose-family-label { margin:0; font-size:15px; }
+      .purpose-family-line { margin:2px 0 4px; font-size:12px; color:var(--muted, #625d57); }
+      .groups .purpose-label { font-weight:600; }
+      .groups .purpose-line { flex:1 1 100%; order:3; font-size:12px; font-weight:400;
+        color:var(--muted, #625d57); overflow-wrap:anywhere; }
+      .source-tool-head .src { font-size:11px; padding:1px 8px; border:1px solid var(--border, #ddd8d2);
+        border-radius:999px; color:var(--muted, #625d57); white-space:nowrap; }
       .groups details { border:1px solid var(--border, #ddd8d2); border-radius:var(--radius-md,10px);
         background:var(--panel, #fff); }
       .groups summary { display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; cursor:pointer;
@@ -12052,7 +12060,7 @@ class ToolLibrary extends Component {
       .groups .source-tools { margin:0; padding:0 12px 10px; list-style:none; display:grid; gap:8px; }
       .source-tool { min-inline-size:0; }
       .source-tool + .source-tool { border-block-start:1px solid var(--border, #ddd8d2); padding-block-start:8px; }
-      .source-tool-head { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:8px; align-items:start; }
+      .source-tool-head { display:grid; grid-template-columns:minmax(0, 1fr) auto auto; gap:8px; align-items:start; }
       .source-tool-head strong { font-size:13px; overflow-wrap:anywhere; min-inline-size:0; }
       .source-tool-head .avail { font-size:11px; padding:1px 8px; border:1px solid var(--border, #ddd8d2);
         border-radius:999px; color:var(--muted, #625d57); white-space:nowrap; }
@@ -12274,28 +12282,62 @@ class ToolLibrary extends Component {
           : "No bundled Wasm packages are admitted in this build. If a future reviewed package host lands, admitted bundles and their pins will be listed here.";
       }
 
+      // CAP-FB-20260828-TOOL-LIBRARY-GROUPING-01: group by PURPOSE (the two
+      // families + task-shaped groups from docs/TOOL-PURPOSE-GROUPS.md), not
+      // by which Chrome API implements the tool. The source axis survives
+      // demoted: each row still names its source, and the diagnostics detail
+      // keeps the by-source counts.
+      const rowsBySource = s.toolsBySource ?? {};
+      const allRows = [];
+      for (const kind of Object.keys(TOOL_LIBRARY_SOURCE_LABELS)) {
+        // Bounded at 256 rows per source to match
+        // TOOL_LIBRARY_SUMMARY_LIMITS.maxRowsPerSource (the full registry).
+        const rows = Array.isArray(rowsBySource[kind]) ? rowsBySource[kind].slice(0, 256) : [];
+        for (const row of rows) allRows.push(row);
+      }
+      // The taxonomy arrives IN the payload (one source of truth, SW-side).
+      // A legacy/corrupt summary without it renders every row as Ungrouped —
+      // honest, never a silent drop.
+      const payloadGroups = s.purposeGroups && typeof s.purposeGroups === "object" ? s.purposeGroups : {};
+      const payloadFamilies = Array.isArray(s.purposeFamilies) ? s.purposeFamilies : [];
+      const rowsByGroup = new Map();
+      const ungroupedRows = [];
+      for (const row of allRows) {
+        const gid = row && typeof row.purpose === "string" &&
+            Object.prototype.hasOwnProperty.call(payloadGroups, row.purpose)
+          ? row.purpose
+          : null;
+        if (gid) {
+          if (!rowsByGroup.has(gid)) rowsByGroup.set(gid, []);
+          rowsByGroup.get(gid).push(row);
+        } else {
+          // Never silently drop a row: an unclassified tool renders under an
+          // honest "Ungrouped" section so the count and the rows still agree.
+          ungroupedRows.push(row);
+        }
+      }
       const groups = document.createElement("section");
       groups.className = "groups";
-      groups.setAttribute("aria-label", "Tools by source");
-      const rowsBySource = s.toolsBySource ?? {};
-      for (const [kind, label] of Object.entries(TOOL_LIBRARY_SOURCE_LABELS)) {
-        const count = s.bySource?.[kind] ?? 0;
+      groups.setAttribute("aria-label", "Tools by purpose");
+      const renderGroupDetails = (gid, label, line, rows) => {
         const details = document.createElement("details");
         details.className = "source-group";
-        details.setAttribute("data-source", kind);
+        details.setAttribute("data-purpose", gid);
         const summaryEl = document.createElement("summary");
         const name = document.createElement("span");
+        name.className = "purpose-label";
         name.textContent = label;
+        const purposeLine = document.createElement("span");
+        purposeLine.className = "purpose-line";
+        purposeLine.textContent = line;
         const n = document.createElement("span");
         n.className = "count";
-        n.textContent = String(count);
-        summaryEl.append(name, n);
+        n.textContent = String(rows.length);
+        summaryEl.append(name, purposeLine, n);
         details.append(summaryEl);
-        // ONE bounded per-tool summary list per category (name, source label,
+        // ONE bounded per-tool summary list per group (name, source label,
         // version/availability, one-line description). Read-only — no action,
-        // grant or verify surface is ever rendered here. Bounded at 256 rows to
-        // match TOOL_LIBRARY_SUMMARY_LIMITS.maxRowsPerSource (the full registry).
-        const rows = Array.isArray(rowsBySource[kind]) ? rowsBySource[kind].slice(0, 256) : [];
+        // grant or verify surface is ever rendered here.
         if (rows.length) {
           const list = document.createElement("ul");
           list.className = "source-tools";
@@ -12307,12 +12349,15 @@ class ToolLibrary extends Component {
             head.className = "source-tool-head";
             const title = document.createElement("strong");
             title.textContent = String(row.name ?? row.toolId ?? "");
+            const src = document.createElement("span");
+            src.className = "src";
+            src.textContent = String(row.sourceLabel ?? "");
             const avail = document.createElement("span");
             avail.className = `avail${row.available === true ? "" : " unavailable"}`;
             avail.textContent = typeof row.version === "string" && row.version
               ? `v${row.version}`
               : (row.available === true ? "available" : "unavailable");
-            head.append(title, avail);
+            head.append(title, src, avail);
             const desc = document.createElement("p");
             desc.className = "source-tool-desc";
             desc.textContent = String(row.description ?? "");
@@ -12321,13 +12366,44 @@ class ToolLibrary extends Component {
           }
           details.append(list);
         }
-        groups.append(details);
+        return details;
+      };
+      for (const family of payloadFamilies) {
+        if (!family || typeof family.id !== "string") continue;
+        const famSection = document.createElement("section");
+        famSection.className = "purpose-family";
+        famSection.setAttribute("data-family", family.id);
+        const famHead = document.createElement("h3");
+        famHead.className = "purpose-family-label";
+        famHead.textContent = String(family.label ?? family.id);
+        const famLine = document.createElement("p");
+        famLine.className = "purpose-family-line";
+        famLine.textContent = String(family.line ?? "");
+        famSection.append(famHead, famLine);
+        for (const [gid, meta] of Object.entries(payloadGroups)) {
+          if (!meta || meta.family !== family.id) continue;
+          famSection.append(renderGroupDetails(gid, String(meta.label ?? gid), String(meta.line ?? ""), rowsByGroup.get(gid) ?? []));
+        }
+        groups.append(famSection);
+      }
+      if (ungroupedRows.length) {
+        groups.append(renderGroupDetails(
+          "ungrouped",
+          "Ungrouped",
+          "Tools the purpose taxonomy has not classified yet — shown so the count and the rows still agree.",
+          ungroupedRows,
+        ));
       }
       host.append(groups);
 
       const diag = s.catalogDiagnostics ?? {};
       const sel = s.selectionDiagnostics ?? {};
       const lines = [];
+      // The demoted source axis: per-source counts live in diagnostics now.
+      const sourceCounts = Object.entries(TOOL_LIBRARY_SOURCE_LABELS)
+        .map(([kind, label]) => `${label} ${Number(s.bySource?.[kind] ?? 0)}`)
+        .join(" · ");
+      lines.push(`Tools by source: ${sourceCounts}.`);
       if ((diag.rejected ?? 0) > 0) lines.push(`${diag.rejected} descriptors rejected by validation (fail-closed).`);
       if ((diag.collisions ?? 0) > 0) lines.push(`${diag.collisions} tool name${diag.collisions === 1 ? "" : "s"} claimed by more than one source — all excluded.`);
       if ((diag.duplicateStableIds ?? 0) > 0) lines.push(`${diag.duplicateStableIds} duplicate identities ignored.`);

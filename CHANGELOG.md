@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.166] — 2026-09-05
+- The tool library groups tools by what they are for — 'Running the browser' and 'Doing the work' — instead of by technical source
+
 ## [0.3.165] — 2026-09-05
 - feat(9tg): Milestone 3 — tabular & structured data contracts, def alignment, and stream promotion hardening
 

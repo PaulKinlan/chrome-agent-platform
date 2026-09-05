@@ -372,7 +372,7 @@ Deno.test("shadow summary: toolsBySource is a bounded read-only per-tool list (n
     assert(rows.length <= 64, "bounded rows per source");
     for (const row of rows) {
       for (const key of Object.keys(row)) {
-        assert(["toolId", "name", "sourceLabel", "version", "available", "description"].includes(key), `only summary fields: ${key}`);
+        assert(["toolId", "name", "sourceLabel", "purpose", "version", "available", "description"].includes(key), `only summary fields: ${key}`);
       }
       assertEquals(typeof row.name, "string");
       assertEquals(typeof row.description, "string");

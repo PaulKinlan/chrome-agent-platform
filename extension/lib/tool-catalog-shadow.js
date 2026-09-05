@@ -10,6 +10,11 @@ import { loadToolVectorTable } from "./tool-vectors.js";
 import { ToolSelectionAuthority } from "./tool-selection.js";
 import { buildLazyProviderCapture } from "./lazy-tool-wire.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "./bundled-tool-packages.data.js";
+import {
+  TOOL_PURPOSE_FAMILIES,
+  TOOL_PURPOSE_GROUPS,
+  toolPurposeGroup,
+} from "./tool-purpose-groups.js";
 
 // Bounded read-only per-tool summary limits (the tool-library `<details>`
 // slice). Metadata only — never execution/grant/verify authority.
@@ -114,6 +119,12 @@ export class ShadowToolCatalogController {
             .slice(0, TOOL_LIBRARY_SUMMARY_LIMITS.maxNameBytes),
           sourceLabel: TOOL_LIBRARY_SOURCE_LABELS[descriptor.sourceKind] ??
             descriptor.sourceKind,
+          // CAP-FB-20260828-TOOL-LIBRARY-GROUPING-01: the purpose group the
+          // library renders under (docs/TOOL-PURPOSE-GROUPS.md). Null only
+          // for a descriptor the taxonomy has never seen — the component
+          // renders those under an honest "Ungrouped" section so the count
+          // and the rows still agree.
+          purpose: toolPurposeGroup(descriptor.toolId, descriptor.sourceKind),
           version: bundled?.version ?? null,
           available: previewAdmitted || descriptor.availability === "ready",
           description: String(bundled?.description ?? descriptor.description ?? "")
@@ -126,6 +137,12 @@ export class ShadowToolCatalogController {
         catalogGeneration: catalog.generation,
         descriptorCount: catalog.descriptors.length,
         bySource: Object.freeze(bySource),
+        // The purpose taxonomy the tool library groups by
+        // (CAP-FB-20260828-TOOL-LIBRARY-GROUPING-01). Carried IN the payload so
+        // the component renders one source of truth and never imports the
+        // registry-side module (keeps the docs/ gallery's module graph closed).
+        purposeFamilies: TOOL_PURPOSE_FAMILIES,
+        purposeGroups: TOOL_PURPOSE_GROUPS,
         catalogDiagnostics: catalog.diagnostics,
         selectionDiagnostics: this.#selections.diagnostics(),
         canExecute: false,
