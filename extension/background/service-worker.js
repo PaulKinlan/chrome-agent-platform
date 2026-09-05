@@ -154,7 +154,7 @@ import {
   takeLastProviderError,
 } from "../lib/agent.js";
 import { clearUsage, getServerToolUsage, getUsage, onUsageChanged, recordServerToolUsage, recordToolCall, recordUsage } from "../lib/usage.js";
-import { createWebmcpAuthorizationGuard } from "../lib/webmcp-authority.js";
+import { createWebmcpAuthorizationGuard, gateWebmcpToolDispatch } from "../lib/webmcp-authority.js";
 import {
   diagnosticClear,
   diagnosticList,
@@ -171,6 +171,7 @@ import {
   disenrollOrigin,
   disenrollOriginLocked,
   enrollmentGeneration,
+  enrollmentPolicy,
   enrollmentSnapshot,
   enrollOrigin,
   getCurrentSiteIdentity,
@@ -181,6 +182,7 @@ import {
   pendingApprovals,
   replacePageTools,
   replaceTools,
+  setEnrollmentPolicy,
   withEnrollmentLock,
 } from "../lib/tools.js";
 import {
@@ -1686,8 +1688,15 @@ async function readSiteLazyScope(origin) {
   };
 }
 
-async function readSiteLazySources(origin, runGenCell) {
+async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
   const enrollment = await enrollmentSnapshot(origin);
+  // SITE TOOL-USE POLICY (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01): a
+  // DENIED site's tools never enter the agent's toolset — no records are
+  // built, so no search result can surface them and no stale descriptor can
+  // be selected. This is the falsification gate for the enrollment policy.
+  // The site stays enrolled (its agent record/memory/discovery remain); only
+  // its tools are excluded from every agent.
+  if (enrollment.policy === "deny") return [];
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
   const gate = gateMap[origin] ?? {};
   const documentId = typeof gate.documentId === "string" ? gate.documentId : "";
@@ -1756,6 +1765,29 @@ async function readSiteLazySources(origin, runGenCell) {
       );
     },
   }, async ({ name, source, args }) => {
+    // LIVE policy re-check at dispatch time (CAP-FB-20260819-DIRECTORY-TOOL-
+    // EXPLORER-01): the toolset exclusion above covers discovery, but an
+    // in-flight catalog built before a flip must still fail closed. "deny"
+    // never runs; "ask" pays the in-conversation owner card (Allow once /
+    // Deny) before the page call — a run with no owner channel fails closed
+    // here (the gate result carries the honest error, never a silent run).
+    // The gate IS the unit-tested factory (lib/webmcp-authority.js) — zero
+    // replica drift between the shipped fence and the enrollment-policy KATs.
+    const live = await enrollmentSnapshot(origin);
+    const gate = await gateWebmcpToolDispatch({
+      enrolled: live.enrolled,
+      policy: live.policy,
+      askGate: typeof askGateGetter === "function" ? askGateGetter() : null,
+      askPayload: { origin, name, source },
+    });
+    if (gate.ok !== true) {
+      return {
+        ok: false,
+        approvalDenied: gate.approvalDenied === true,
+        approvalExpired: gate.approvalExpired === true,
+        error: gate.error ?? "tool dispatch denied by policy",
+      };
+    }
     const res = await invokeSiteTool(
       origin,
       name,
@@ -1814,6 +1846,13 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // binds EXACTLY the cells it created, and the map is GC'd with the build.
     const buildCells = new Map(); // canonical origin -> { get: () => number|null }
     const workerComposed = new Map(); // canonical origin -> composed prompt (for layered attestation)
+    // Build-local site-tool ask gate (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01):
+    // bound AFTER the run's model dispatcher below (the workers are built
+    // first), then read lazily at dispatch time — a readLazySources closure
+    // runs only after this build completes, so the late binding is always set
+    // before any tool call. A null gate (scoped/no-approval builds) makes an
+    // "ask"-policy site's tool call fail closed with an honest error.
+    let webmcpAskGate = null;
     const workers = await Promise.all(origins.map(async (origin) => {
       const cell = { get: () => null };
       buildCells.set(origin, cell);
@@ -1843,7 +1882,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         // WebMCP directories/navigation/approval are read for every lazy
         // search/execute fence; no build-time snapshot reaches the provider.
         tools: {},
-        readLazySources: () => readSiteLazySources(origin, cell),
+        readLazySources: () => readSiteLazySources(origin, cell, () => webmcpAskGate),
         readLazyScope: () => readSiteLazyScope(origin),
       };
     }));
@@ -1894,6 +1933,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       dispatchRoute,
       (event) => onProgress?.(event),
     );
+    // Bind the workers' site-tool ask gate to THIS run's dispatcher (see the
+    // late-bound declaration above): an "ask"-policy site's tool call pays the
+    // run's in-conversation owner card through the same approval machinery the
+    // cookie/destructive classes use.
+    webmcpAskGate = (payload) => modelManagementDispatch("webmcp.use-tool", payload);
     const liveBrowserTools = browserToolset(scoped, {
       // schedule_task with a scriptId pays the same source-disclosing card as
       // run_script — through the run's bound model dispatcher.
@@ -2246,6 +2290,16 @@ async function invokeSiteToolCore(
   const snap = await enrollmentSnapshot(canonical);
   if (!snap.enrolled) {
     return { error: `origin ${canonical} is not enrolled` };
+  }
+  // SITE TOOL-USE POLICY (CAP-FB-20260819-DIRECTORY-TOOL-EXPLORER-01): a
+  // DENIED site's tools fail closed on EVERY invocation path (agent dispatch,
+  // tools.invoke, legacy siteToolset) — "blocked" means blocked. The site
+  // stays enrolled; the owner flips the policy in the Directory to restore
+  // tool use. This check is belt-and-braces: the toolset exclusion keeps
+  // denied tools out of agent catalogs, the authorization guard re-denies
+  // stale records, and the generation bump fences in-flight runs.
+  if (snap.policy === "deny") {
+    return { error: `site tools on ${canonical} are blocked by the enrollment policy` };
   }
   // The IMMUTABLE run-start generation (threaded from the worker's run) takes
   // precedence over the current snapshot's generation. A stale run whose origin
@@ -6747,6 +6801,65 @@ const handlers = mergeRouteMaps(
       return out;
     }
     return { ok: true, result: res?.result };
+  },
+  async "tools.policies"() {
+    const out = {};
+    for (const origin of await listOrigins()) {
+      out[origin] = await enrollmentPolicy(origin);
+    }
+    return { ok: true, policies: out };
+  },
+  // The Directory's enrollment-policy control (owner surface only): sets an
+  // enrolled origin's tool-use policy to allow | deny | ask. A policy flip
+  // bumps the enrollment generation (revocation fence) — the route returns
+  // the new snapshot so the UI can re-render exactly the applied state.
+  async "tools.policy.set"({ origin, policy }) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    try {
+      const applied = await setEnrollmentPolicy(canonical, policy);
+      invalidateAgent();
+      broadcastRegistryChanged();
+      const snap = await enrollmentSnapshot(canonical);
+      return { ok: true, origin: canonical, policy: applied, gen: snap.gen };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+  // The approval leg of an "ask"-policy site tool (CAP-FB-20260819-DIRECTORY-
+  // TOOL-EXPLORER-01): the WebMCP dispatch gate calls this route (model
+  // context) BEFORE the page call. The owner approves ONE invocation on an
+  // in-conversation card; the payload binds the exact origin + tool name, and
+  // every invocation path (invokeSiteTool's enrollment/generation/tab fences)
+  // still runs after the approval — this card decides WHETHER this call may
+  // run, never WHAT runs.
+  async "webmcp.use-tool"({ origin, name }, context) {
+    const canonical = canonicalOrigin(origin);
+    if (!canonical) return { ok: false, error: "invalid origin" };
+    const toolName = typeof name === "string" ? name.slice(0, 200) : "";
+    if (!toolName) return { ok: false, error: "invalid tool name" };
+    const snap = await enrollmentSnapshot(canonical);
+    if (!snap.enrolled) return { ok: false, error: "origin not enrolled" };
+    if (snap.policy !== "ask") return { ok: true }; // no longer ask — let the normal path decide
+    const dir = await listTools(canonical);
+    if (!dir.some((t) => t?.name === toolName)) {
+      return { ok: false, error: `no such tool on ${canonical}: ${toolName}` };
+    }
+    const target = canonicalOperationTarget("webmcp-tool", {
+      origin: canonical,
+      name: toolName,
+    });
+    if (!target) return { ok: false, error: "this site tool is not approvable" };
+    let payload;
+    try {
+      payload = payloadFields([
+        ["origin", canonicalOrigin(canonical)],
+        ["name", toolName],
+      ]);
+    } catch {
+      return { ok: false, error: "this site tool is not approvable" };
+    }
+    return await requireOwnerApproval(context, "webmcp.use-tool", target, payload);
   },
   async "webmcp.detect.bootstrap"({ origin, __sender }) {
     const canonical = canonicalOrigin(origin);

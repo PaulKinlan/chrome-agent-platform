@@ -3568,6 +3568,14 @@ applyDeveloperVisibility(developerFeaturesEnabled);
 // Only the active section is rendered on boot (and on section switch);
 // the remaining sections are lazy-mounted when navigated to.
 await renderLocalFolders();
+// Skills panel: mount EAGERLY at load, exactly like mcp-servers and
+// local-folders. The mount wires the Import button + list; without this,
+// reaching the panel by SCROLLING (no nav event, no hash change) leaves the
+// Import button dead — the nav handler's mount never fires, and the owner's
+// click does nothing (CAP-FB-20260901-SKILLS-IMPORT-BUTTON-01). The
+// dataset.skillsMounted guard makes the later nav-handler call a no-op.
+mountSkillsSection(document.getElementById("skills"));
+if (developerFeaturesEnabled) await renderToolLibrary();
 await navigationController.syncCurrent();
 
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run

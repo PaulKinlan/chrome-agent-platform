@@ -89,7 +89,7 @@ Deno.test("skills-in-settings: the Skills panel mounts EAGERLY at init (import b
   // and the developer-tool-library render, and require the mount call in that
   // segment — the nav-handler call lives far outside it, so a nav-only mount
   // (the pre-fix bug) fails this check.
-  const initSegment = js.slice(js.indexOf("await renderLocalFolders();"), js.indexOf("if (developerFeaturesEnabled) await renderToolLibrary();"));
+  const initSegment = js.slice(js.lastIndexOf("await renderLocalFolders();"), js.lastIndexOf("if (developerFeaturesEnabled) await renderToolLibrary();"));
   assert(
     initSegment.includes('mountSkillsSection(document.getElementById("skills"));'),
     "mountSkillsSection must be called eagerly in the init block (between renderLocalFolders and renderToolLibrary), not only in the nav handler",
