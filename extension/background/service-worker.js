@@ -68,7 +68,6 @@ import {
   buildPreviewJob,
   executeBundledWasiJob,
   extractPreviewInput,
-  previewOnlyToolEnvelope,
   previewSpecFor,
   revalidatePreviewExecution,
   validatePreviewInput,
@@ -94,6 +93,7 @@ import {
 } from "../lib/wasm-stream-run-lifecycle.js";
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
 import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
+import { WASI_JOB_RUN_TYPE } from "../lib/wasm-job-host.js";
 import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
@@ -549,7 +549,29 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
     }
   }
   if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
-    return previewOnlyToolEnvelope(toolId);
+    // ten9 (owner directive: no tool may be preview-gated): non-stream bundled
+    // tools execute the WASI job in the offscreen host — the same executor the
+    // Settings preview uses, with manifest/CAS re-validation per run. Mirrors
+    // the callexport lane above.
+    const spec = previewSpecFor(toolId);
+    if (!spec) return { ok: false, phase: "failed", error: `unknown_bundled_tool: ${toolId}` };
+    const host = await ensureOffscreen();
+    if (!host.ok) return host;
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: WASI_JOB_RUN_TYPE,
+        toolId,
+        args: Array.isArray(validatedArgs?.args) ? validatedArgs.args : [],
+        stdin: typeof validatedArgs?.stdin === "string" ? validatedArgs.stdin : "",
+        origin: typeof context?.origin === "string" && context.origin.startsWith("http")
+          ? new URL(context.origin).origin
+          : "https://agent.cap",
+        documentId: String(context?.documentId || ""),
+      });
+      return result ?? { ok: false, phase: "failed", error: "wasi_job_no_response" };
+    } catch (error) {
+      return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+    }
   }
   const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
   if (!runId) throw new Error("wasm_stream_run_required");
@@ -592,7 +614,9 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
 
 async function runWasmStreamTool({ toolId, args, inputRef, owner, origin = PREVIEW_SETTINGS_ORIGIN, documentId = "settings-options" }) {
   if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
-    return previewOnlyToolEnvelope(toolId);
+    // ten9: the stream route only serves stream-backed tools; non-stream tools
+    // dispatch through the offscreen WASI-job lane (dispatchBundledWasmStream).
+    return { ok: false, phase: "failed", error: `not_a_stream_tool: ${toolId}` };
   }
   const spec = previewSpecFor(toolId);
   if (!spec) return { ok: false, error: `unknown_bundled_tool: ${toolId}` };

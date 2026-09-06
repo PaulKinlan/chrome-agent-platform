@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.3.287] — 2026-09-06
+- ten9: no bundled tool is preview-gated — all 35 execute in live agent tasks
+
 ## [0.3.286] — 2026-09-06
-- bundled tool invocation spot-check harness
+- Every built-in tool can now be used by the agent end to end — gzip, hashing and the other previously preview-only tools run for real instead of pointing at Settings
 
 ## [0.3.285] — 2026-09-06
-- bundled wasm provenance audit — hash_blake3 manifest status truth
+- The bundled tools' records now state truthfully which ones run live (hash_blake3 was listed as disabled while already working)
 
 ## [0.3.284] — 2026-09-06
 - The user WebAssembly store now supports shared owner-managed binary files

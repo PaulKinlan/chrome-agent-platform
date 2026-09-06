@@ -10,6 +10,7 @@ import { createOffscreenWasmHost } from "../lib/wasm-offscreen-host.js";
 import { WasmExecutor } from "../lib/wasm-executor.js";
 import { registerWasmStreamHost } from "../lib/wasm-stream-host.js";
 import { registerCallexportHost } from "../lib/wasm-callexport-host.js";
+import { registerWasmJobHost } from "../lib/wasm-job-host.js";
 import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
 import { registerTableWorkerHost } from "../lib/table-worker-host.js";
@@ -40,6 +41,11 @@ registerWasmStreamHost();
 // The call-export lane (uslb): zero-import compute modules (hash_blake3 pilot)
 // run through the CAP-authored harness here — no package JS ever executes.
 registerCallexportHost();
+
+// The WASI-job lane (ten9): every non-stream bundled tool executes here — the
+// former in-SW preview-only refusal is gone; this host runs the shared
+// executor with full manifest/CAS re-validation per run.
+registerWasmJobHost();
 
 // Bounded local table operations use a fresh module Worker here because MV3
 // service workers do not expose the Worker constructor.

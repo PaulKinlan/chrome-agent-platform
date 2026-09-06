@@ -8,12 +8,13 @@
 // dispatch class, the actual output, and latency; durable evidence only.
 //
 // Dispatch matrix under test (service-worker dispatchBundledWasmStream):
-//   stream-backed  (grep, sort, imageops) → offscreen WASI stream run
-//   call-export    (hash_blake3)          → offscreen call-export host
-//   preview-only   (gzip)                 → the run protocol REFUSES by design;
-//                                           the tool's real surface is the
-//                                           Settings preview route
-//                                           (tool.preview.run), driven here too
+//   stream-backed          (grep, sort, imageops)  → offscreen WASI stream run
+//   call-export            (hash_blake3)           → offscreen call-export host
+//   formerly preview-only  (gzip, sha256sum, uuid) → offscreen WASI job run
+//                                                    (ten9: the preview gate
+//                                                    is REMOVED — every
+//                                                    bundled tool executes
+//                                                    in-run)
 //                                           so the class is proven end-to-end.
 //
 // Run: deno run -A scripts/kat-bundled-execute.ts   (takes the Chrome slot)
@@ -105,6 +106,16 @@ try {
         selectionRef: refFor(req, "gzip"),
         arguments: { args: [], stdin: "hello gzip" },
       }) },
+      { tool: "search_tools", args: { query: "sha256sum", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "sha256sum"),
+        arguments: { args: [], stdin: "ten9 ungate vector" },
+      }) },
+      { tool: "search_tools", args: { query: "uuid", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "uuid"),
+        arguments: { args: [], stdin: "" },
+      }) },
       { text: "Bundled execute spot-check complete." },
     ],
   });
@@ -137,9 +148,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('#run-task')?.click()`);
 
-  // 5 searches + 5 executes + the final text = 11 model calls; the 11th
+  // 7 searches + 7 executes + the final text = 15 model calls; the 15th
   // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 11;
+  const EXPECTED_CALLS = 15;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;
@@ -196,12 +207,28 @@ try {
       assert(out.includes(ABC_HASH), `hash_blake3 vector wrong: ${out.slice(0, 200)}`);
     }],
     ["gzip", "execute_tool", (env) => {
-      // BY DESIGN: preview-only tools refuse in-run dispatch.
-      const out = JSON.stringify(env ?? "");
+      // ten9 (no tool may be preview-gated): gzip now EXECUTES in-run through
+      // the offscreen WASI host — output must be real gzip bytes (magic 1f8b),
+      // not the former preview-only refusal.
+      assert(env?.ok === true, `gzip in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
       assert(
-        env?.ok === false || /preview/i.test(out),
-        `gzip in-run result unexpected (neither ok nor preview-only): ${out.slice(0, 300)}`,
+        out.includes("1f8b") || out.includes("H4sI"),
+        `gzip in-run output lacks the gzip magic (hex or base64): ${out.slice(0, 300)}`,
       );
+    }],
+    ["sha256sum", "execute_tool", (env) => {
+      // ten9: formerly preview-only — must now produce a real 64-hex digest.
+      assert(env?.ok === true, `sha256sum in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(/[0-9a-f]{64}/.test(out), `sha256sum output lacks a 64-hex digest: ${out.slice(0, 300)}`);
+    }],
+    ["uuid", "execute_tool", (env) => {
+      // ten9: formerly preview-only — must now produce a real UUID shape.
+      assert(env?.ok === true, `uuid in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(out),
+        `uuid output lacks a UUID: ${out.slice(0, 300)}`);
     }],
   ];
 
@@ -220,8 +247,8 @@ try {
     verify(env);
     state.tools[toolId] = {
       invoked: true,
-      dispatchPath: toolId === "gzip"
-        ? "preview-only-in-run (by design; settings surface below)"
+      dispatchPath: toolId === "gzip" || toolId === "sha256sum" || toolId === "uuid"
+        ? "offscreen WASI job (ten9 ungate: formerly preview-only)"
         : toolId === "hash_blake3" ? "call-export host" : "offscreen WASI stream",
       ok: env?.ok === true,
       result: env?.result ?? env,
