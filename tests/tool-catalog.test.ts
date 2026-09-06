@@ -318,6 +318,33 @@ Deno.test("tool catalog: bundled-package metadata is searchable only with an exa
   assert(threw, "malformed bundled package identity must fail closed");
 });
 
+Deno.test("tool catalog: user-wasm metadata requires 64-hex packageDigest and registers under user-wasm", () => {
+  assert(TOOL_SOURCE_KINDS.includes("user-wasm"));
+  const input = descriptor({
+    sourceKind: "user-wasm",
+    packageId: "cap.user-wasm",
+    toolId: "sha256",
+    packageDigest: "b".repeat(64),
+    availability: "ready",
+    dispatcherKind: "user-wasm-task",
+  });
+  const canonical = canonicalToolDescriptor(input);
+  assertEquals(canonical.packageDigest, "b".repeat(64));
+  assertEquals(canonical.sourceKind, "user-wasm");
+  assertEquals(canonical.availability, "ready");
+  assertEquals(canonical.dispatcherKind, "user-wasm-task");
+
+  let threw = false;
+  try {
+    canonicalToolDescriptor({ ...input, packageDigest: "not-a-digest" });
+  } catch (err) {
+    threw = true;
+    assertEquals(err.code, "package-digest");
+  }
+  assert(threw, "malformed user-wasm package identity must fail closed");
+});
+
+
 Deno.test("tool catalog: availability changes invalidate catalog generation", () => {
   const readyTool = descriptor({ toolId: "a", name: "a", availability: "ready" });
   const disabledTool = descriptor({ toolId: "a", name: "a", availability: "disabled" });

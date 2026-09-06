@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.290] — 2026-09-06
+- .3: User-uploaded WebAssembly modules now appear in tool search as soon as they are added in Settings
+
 ## [0.3.289] — 2026-09-06
 - .1: Python code can no longer reach the network on its own
 

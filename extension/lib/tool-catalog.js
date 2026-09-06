@@ -39,6 +39,7 @@ export const TOOL_SOURCE_KINDS = Object.freeze([
   "webmcp-declared",
   "webmcp-inferred",
   "bundled-package",
+  "user-wasm",
   // Remote MCP servers the agent connects OUT to (Streamable HTTP / SSE). Their
   // tools are namespaced `mcp__<server>__<tool>` and their output is untrusted
   // external content (extension/lib/mcp-run-tools.js, MCP-TOOL-INJECTION-01).
@@ -331,7 +332,7 @@ export function canonicalToolDescriptor(input) {
     "grant-digest",
   );
   if (
-    sourceKind === "bundled-package" &&
+    (sourceKind === "bundled-package" || sourceKind === "user-wasm") &&
     !/^[a-f0-9]{64}$/u.test(packageDigest)
   ) {
     throw new ToolCatalogValidationError("package-digest");
@@ -348,7 +349,7 @@ export function canonicalToolDescriptor(input) {
   // WebMCP/page metadata is always unknown regardless of page claims, and a
   // REMOTE MCP server's tool is an external side effect of unknown class — never
   // auto-resumed after an interruption (fail closed).
-  const trustedReplaySafety = (sourceKind.startsWith("webmcp-") || sourceKind === "mcp")
+  const trustedReplaySafety = (sourceKind.startsWith("webmcp-") || sourceKind === "mcp" || sourceKind === "user-wasm")
     ? REPLAY_UNKNOWN
     : replaySafetyForTool(toolId);
   const capabilityDigest = sha256Hex(canonicalJson(capabilities));
@@ -722,3 +723,52 @@ export function adaptBundledTools(rows, context = {}) {
   }
   return inputs;
 }
+
+const USER_WASM_INPUT_SCHEMA = Object.freeze({
+  type: "object",
+  properties: {
+    args: { type: "array", items: { type: "string" }, description: "argv" },
+    stdin: { type: "string", description: "stdin text" },
+  },
+  additionalProperties: false,
+});
+
+/** Catalog-only user-uploaded Wasm projection. Mapping S1 store rows to
+ * canonical descriptors. Execution is dispatched through user-wasm-task (S4). */
+export function adaptUserWasmTools(rows, context = {}) {
+  const inputs = [];
+  for (const row of (Array.isArray(rows) ? rows : [])) {
+    if (row?.kind !== "wasm") continue;
+    const name = ownData(row, "name");
+    const toolId = ownData(row, "toolId") ?? name;
+    const packageDigest = ownData(row, "digest") ?? ownData(row, "packageDigest");
+    const availability = context?.availabilityByTool?.[toolId] ?? context?.availability ?? "ready";
+    const dispatcherKind = context?.dispatcherKind ?? "user-wasm-task";
+    inputs.push({
+      sourceKind: "user-wasm",
+      packageId: ownData(row, "packageId") ?? context?.packageId ?? `user-wasm:${packageDigest}`,
+      toolId,
+      version: String(ownData(row, "version") ?? context?.version ?? "1"),
+      name: name ?? toolId,
+      aliases: ownData(row, "aliases") ?? [],
+      description: ownData(row, "description") ?? "",
+      inputSchema: context?.inputSchemaByTool?.[toolId] ?? ownData(row, "inputSchema") ?? USER_WASM_INPUT_SCHEMA,
+      outputSchema: context?.outputSchemaByTool?.[toolId] ?? ownData(row, "outputSchema"),
+      capabilities: ownData(row, "capabilities") ?? context?.capabilities ?? [],
+      scope: context?.scope ?? { hub: true, agentId: "hub", origin: "", documentId: "" },
+      sourceGeneration: context?.sourceGeneration ?? `user-wasm:${packageDigest}`,
+      closureGeneration: context?.closureGeneration ?? "task-execution-core:user-wasm-v1",
+      packageDigest,
+      permissionDigest: "none",
+      grantDigest: "none",
+      availability,
+      dispatcherKind,
+    });
+  }
+  return inputs;
+}
+
+export function userWasmCatalogInputs(rows, context = {}) {
+  return adaptUserWasmTools(rows, context);
+}
+

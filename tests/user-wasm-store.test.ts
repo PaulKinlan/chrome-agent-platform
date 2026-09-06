@@ -417,3 +417,24 @@ Deno.test("owner-blobs: stored metadata with an out-of-set kind fails closed (ki
   const reopened = createOwnerBlobStore(f.options);
   await assertRejects(() => reopened.list(), Error, "Invalid stored metadata for blob");
 });
+
+Deno.test("owner-blobs: list({ kind }) filters strictly by kind and excludes other kinds (M2 guard)", async () => {
+  const f = fixture();
+  const store = createOwnerBlobStore(f.options);
+  await store.put({ bytes: new Uint8Array([1, 2, 3]), name: "w1", kind: "wasm" });
+  await store.put({ bytes: new Uint8Array([4, 5, 6]), name: "wh1", kind: "wheel" });
+
+  const wasmOnly = await store.list({ kind: "wasm" });
+  assertEquals(wasmOnly.length, 1, "list({ kind: 'wasm' }) must return only wasm blobs and exclude wheels");
+  assertEquals(wasmOnly[0].name, "w1");
+  assertEquals(wasmOnly[0].kind, "wasm");
+
+  const wheelOnly = await store.list({ kind: "wheel" });
+  assertEquals(wheelOnly.length, 1, "list({ kind: 'wheel' }) must return only wheel blobs");
+  assertEquals(wheelOnly[0].name, "wh1");
+  assertEquals(wheelOnly[0].kind, "wheel");
+
+  const all = await store.list();
+  assertEquals(all.length, 2, "list() with no kind returns all blobs");
+});
+
