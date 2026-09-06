@@ -131,6 +131,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-scheduled-next-run-widget.ts": { class: "kat" },
   "kat-scheduled-run-output.ts": { class: "kat" },
   "kat-settings-cleanliness.ts": { class: "kat" },
+  "kat-python-no-ambient-network.ts": { class: "kat" },
   "kat-settings-multi-section.ts": { class: "kat" },
   "kat-settings-server-tools.ts": { class: "kat" },
   "kat-site-delegation-attachments.ts": { class: "kat" },

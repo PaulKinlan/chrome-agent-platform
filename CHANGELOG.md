@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.289] — 2026-09-06
+- .1: Python code can no longer reach the network on its own
+
 ## [0.3.288] — 2026-09-06
 - Internal cleanup: the full test command runs again instead of stopping on a check that was removed
 
