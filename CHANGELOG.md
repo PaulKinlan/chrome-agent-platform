@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.288] — 2026-09-06
+- Internal cleanup: the full test command runs again instead of stopping on a check that was removed
+
 ## [0.3.287] — 2026-09-06
 - The data archive registry now validates file path grammar and protects board policy rules
 
