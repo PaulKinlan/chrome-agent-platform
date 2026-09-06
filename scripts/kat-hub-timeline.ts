@@ -11,7 +11,7 @@
 //
 //   deno run -A scripts/kat-hub-timeline.ts [extension-dir] [out-dir]
 
-import { instanceProfile, launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -33,7 +33,7 @@ const { proc, wsUrl } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${instanceProfile(OUT)}`, "about:blank"],
+    `--user-data-dir=${OUT}/profile`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);

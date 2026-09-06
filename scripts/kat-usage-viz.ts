@@ -17,6 +17,7 @@
 // product decision changes, needs a run-driven probe then.
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -36,7 +37,7 @@ const { proc, wsUrl } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-usage-viz-${Date.now()}`, "about:blank"],
+    `--user-data-dir=${chromeProfileDir("kat-usage-viz")}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);

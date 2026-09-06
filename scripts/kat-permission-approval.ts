@@ -14,10 +14,11 @@
 //   5. Captures screenshots, console messages, network activity, and accessibility tree.
 
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
-const EVIDENCE_DIR = `${ROOT}.cache/kat-permissions-${Date.now()}`;
+const EVIDENCE_DIR = chromeProfileDir("kat-permissions");
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 
 let passCount = 0;
@@ -43,7 +44,7 @@ console.log(`Extension path: ${EXT}`);
 console.log(`Evidence directory: ${EVIDENCE_DIR}`);
 
 // 1. Launch Chromium with extension loaded
-const userDataDir = `${ROOT}.cache/kat-permissions-profile-${Date.now()}`;
+const userDataDir = chromeProfileDir("kat-permissions-profile");
 await Deno.mkdir(userDataDir, { recursive: true });
 
 // The shared launcher: kernel-assigned port, endpoint read from this child's

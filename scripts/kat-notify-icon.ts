@@ -16,6 +16,7 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -39,7 +40,7 @@ async function unpackedExtensionId(path: string): Promise<string> {
   return [...hex].map((c) => String.fromCharCode("a".charCodeAt(0) + parseInt(c, 16))).join("");
 }
 
-const profile = `${ROOT}.cache/kat-notify-icon-profile-${Date.now()}`;
+const profile = chromeProfileDir("kat-notify-icon-profile");
 const expectedId = await unpackedExtensionId(EXT);
 const perms = { api: ["notifications"], explicit_host: [], manifest_permissions: [], scriptable_host: [] };
 const prefs = { extensions: { settings: { [expectedId]: { granted_permissions: perms, active_permissions: perms } } } };

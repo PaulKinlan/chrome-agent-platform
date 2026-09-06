@@ -17,6 +17,7 @@
 //
 //   deno run -A scripts/kat-bgagent-delete.ts <path-to-extension> [<out-dir>]
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -51,7 +52,7 @@ try {
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
       "--remote-allow-origins=*",
-      `--user-data-dir=${ROOT}.cache/kat-bgagent-delete-${STAMP}`, "about:blank"],
+      `--user-data-dir=${chromeProfileDir("kat-bgagent-delete")}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
@@ -76,7 +77,7 @@ const sw = await waitForServiceWorker(send, {
 let extId: string;
 if (sw) extId = new URL(sw.url).host;
 else {
-  const prof = `${ROOT}.cache/kat-bgagent-delete-${STAMP}/Default/Preferences`;
+  const prof = `${chromeProfileDir("kat-bgagent-delete")}/Default/Preferences`;
   // Under fleet load Chrome can take >10s to materialize the profile — poll.
   let prefsRaw: string | null = null;
   for (let i = 0; i < 30 && prefsRaw === null; i++) {

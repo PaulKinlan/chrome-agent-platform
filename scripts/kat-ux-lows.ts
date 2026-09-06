@@ -14,6 +14,7 @@
 //   deno run -A scripts/kat-ux-lows.ts <path-to-extension> [<out-dir>]
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -38,7 +39,7 @@ const { proc, wsUrl } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-ux-lows-${userDataStamp}`, "about:blank"],
+    `--user-data-dir=${chromeProfileDir("kat-ux-lows")}`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);
@@ -64,7 +65,7 @@ for (let i = 0; i < 20 && !sw; i++) {
 let extId: string;
 if (sw) extId = new URL(sw.url).host;
 else {
-  const prof = `${ROOT}.cache/kat-ux-lows-${userDataStamp}/Default/Preferences`;
+  const prof = `${chromeProfileDir("kat-ux-lows")}/Default/Preferences`;
   const prefs = JSON.parse(await Deno.readTextFile(prof));
   const entry = Object.entries<any>(prefs.extensions?.settings ?? {}).find(([, v]) => String(v?.path ?? "").endsWith("extension") && v?.location === 8);
   if (!entry) { console.log("FAIL: extension never registered"); Deno.exit(1); }

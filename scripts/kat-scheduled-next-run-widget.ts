@@ -12,6 +12,7 @@
 //
 //   deno run -A scripts/kat-scheduled-next-run-widget.ts [extension] [out-dir]
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -35,7 +36,7 @@ const { proc, wsUrl } = await launchChrome({
     "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*", "--window-size=1440,1600",
-    `--user-data-dir=${ROOT}.cache/kat-scheduled-next-run-widget-${STAMP}`,
+    `--user-data-dir=${chromeProfileDir("kat-scheduled-next-run-widget")}`,
     "about:blank",
   ],
 });

@@ -27,6 +27,7 @@ import { HARNESSES, isKat, KAT_VERDICTS_PATH, readKatVerdicts } from "./lib/harn
 import { makeChecker } from "./lib/expected-red.ts";
 import { runLockAware } from "./lib/lock-aware-command.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const GREEN_BUDGET_MS = 600_000;
@@ -69,6 +70,15 @@ async function runOne(file: string, budgetMs: number): Promise<{ code: number; m
   await Deno.writeTextFile(log, r.text);
   const code = r.killedFor ? 124 : r.code;
   return { code, ms: r.ranMs, lockWaitMs: r.lockWaitMs, tail: r.text.slice(-1200) };
+}
+
+// Chrome profiles live outside the repo now (chrome-agent-platform-9t1b), and
+// harnesses have never cleaned up after themselves, so the durable profile dir
+// self-prunes once per run. A profile in use is minutes old, never hours: this
+// cannot touch a live browser, and a removal failure is hygiene, not a red gate.
+const pruned = await pruneChromeProfileDirs();
+if (pruned.removed > 0 || pruned.errors.length > 0) {
+  console.log(`kat-runner: pruned ${pruned.removed} stale Chrome profile(s), kept ${pruned.kept}${pruned.errors.length ? `, ${pruned.errors.length} error(s): ${pruned.errors.slice(0, 3).join("; ")}` : ""}`);
 }
 
 console.log(`kat-runner: ${kats.length} KATs (${Object.keys(expectedRed).length} owned reds) — logs in ${LOG_DIR}`);

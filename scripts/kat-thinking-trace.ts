@@ -7,6 +7,7 @@
 // trace at all. Evidence screenshots land in test-artifacts/.
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -19,7 +20,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-const profile = `${ROOT}.cache/kat-thinking-trace-${Date.now()}`;
+const profile = chromeProfileDir("kat-thinking-trace");
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",
   args: [

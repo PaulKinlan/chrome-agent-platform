@@ -13,6 +13,7 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -37,7 +38,7 @@ const { proc, wsUrl } = await launchChrome({
     "--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-mic-state-${Date.now()}`, "about:blank"],
+    `--user-data-dir=${chromeProfileDir("kat-mic-state")}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
 await new Promise(r => ws.onopen = r);

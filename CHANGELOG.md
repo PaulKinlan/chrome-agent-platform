@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.279] — 2026-09-06
+- Chrome test profiles move out of the repository to prevent copy races with a live browser
+
 ## [0.3.278] — 2026-09-06
 - one AI SDK instance per bundle, enforced by the build
 

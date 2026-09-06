@@ -14,6 +14,7 @@
 //   deno run -A scripts/kat-providers-recommended.ts <path-to-extension> [<out-dir>]
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -32,7 +33,7 @@ const { proc, wsUrl } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-providers-recommended-${Date.now()}`, "about:blank"],
+    `--user-data-dir=${chromeProfileDir("kat-providers-recommended")}`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);
