@@ -433,119 +433,6 @@ Deno.test("a bundle with corrupt base64 refuses at parse and a failed overwrite 
   await assertRejects(
     () =>
       importArchive(bundle, {
-// ── 8. chrome-agent-platform-5l73: owner-approval HMAC & internal root exclusion ──
-
-Deno.test("5l73 exclusion: owner-approval HMAC and transient roots NEVER enter export across chunk boundaries", async () => {
-  // Sentinel across chunk boundary (65,536 bytes)
-  const hmacSentinel = "SENTINEL_OWNER_APPROVAL_HMAC_SECRET_" + "K".repeat(65536) + "_END";
-  const streamSentinel = "SENTINEL_WASM_TOOL_STREAM_" + "S".repeat(65536) + "_END";
-  const cacheSentinel = "SENTINEL_CACHE_DATA_" + "C".repeat(65536) + "_END";
-  const userSentinel = "USER_AUTHORED_DATA_WITH_WORD_SECRET_" + "U".repeat(65536) + "_PRESERVED";
-
-  const opfs = mockOpfs({
-    // Internal authority / secret roots:
-    "chrome-agent-platform-private/owner-approval-hmac-v1": hmacSentinel,
-    "chrome-agent-platform-private/site-tool-audit-v1/audit.jsonl": "{\"internal\":true}",
-    "wasm-tool-streams-v1/transient-pipe/stdout.bin": streamSentinel,
-    "cache/models/catalog.json": cacheSentinel,
-    // Legitimate user data (must be preserved byte-faithfully):
-    "memory/master/notes.txt": userSentinel,
-    "agent-workspaces/writer/draft.md": "# My Document\nSecret analysis",
-  });
-  const kv = mockKv({
-    "cap:namedAgents": [{ id: "writer", name: "Writer" }],
-  });
-  const alarms = mockAlarms([]);
-
-  const snapshot = await collectExportData({ kvGet: kv.kvGet, opfs, alarms });
-
-  // 1. snapshot.files excludes every internal authority / secret / transient root
-  const exportedPaths = snapshot.files.map((f) => f.path);
-  assertEquals(exportedPaths.includes("chrome-agent-platform-private/owner-approval-hmac-v1"), false);
-  assertEquals(exportedPaths.includes("chrome-agent-platform-private/site-tool-audit-v1/audit.jsonl"), false);
-  assertEquals(exportedPaths.includes("wasm-tool-streams-v1/transient-pipe/stdout.bin"), false);
-  assertEquals(exportedPaths.includes("cache/models/catalog.json"), false);
-  assertEquals(exportedPaths.includes("memory/master/notes.txt"), true);
-  assertEquals(exportedPaths.includes("agent-workspaces/writer/draft.md"), true);
-
-  // 2. Serialized bundle bytes contain NONE of the secret or transient sentinels
-  const bundle = buildArchive(snapshot, { extensionVersion: "0.3.265", now: () => 1750000000000 });
-  assert(!bundle.includes(hmacSentinel), "HMAC secret sentinel must NEVER enter archive bytes");
-  assert(!bundle.includes("SENTINEL_OWNER_APPROVAL_HMAC"), "no HMAC sentinel fragment in archive");
-  assert(!bundle.includes(streamSentinel), "transient stream sentinel must NEVER enter archive bytes");
-  assert(!bundle.includes(cacheSentinel), "cache sentinel must NEVER enter archive bytes");
-
-  // 3. User-authored data is byte-faithful (not heuristically redacted)
-  assert(bundle.includes(userSentinel), "user-authored sentinel must be preserved whole");
-  assert(bundle.includes("Secret analysis"), "user-authored content is not heuristically stripped");
-
-  // 4. Round-trip restore preserves user data byte-faithfully
-  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
-  await importArchive(bundle, {
-    kvSet: target.kv.kvSet,
-    kvGet: target.kv.kvGet,
-    kvRemove: target.kv.kvRemove,
-    opfs: target.opfs,
-    alarms: target.alarms,
-  });
-  assertEquals(
-    new TextDecoder().decode(target.opfs.map.get("memory/master/notes.txt")),
-    userSentinel,
-    "restored user file is byte-identical",
-  );
-  assertEquals(
-    target.opfs.map.has("chrome-agent-platform-private/owner-approval-hmac-v1"),
-    false,
-    "HMAC file was never restored into target",
-  );
-});
-
-Deno.test("5l73 security: import REJECTS bundles targeting internal authority, secrets, or transient roots", async () => {
-  const validBundle = JSON.parse(await runExport(fixtureBackends()));
-
-  // A hostile or compromised bundle attempting to overwrite the install HMAC key
-  const forgedHmacBundle = structuredClone(validBundle);
-  forgedHmacBundle.opfs.push({
-    path: "chrome-agent-platform-private/owner-approval-hmac-v1",
-    encoding: "utf8",
-    data: "forged-evil-hmac-key",
-  });
-
-  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
-
-  let threw = false;
-  try {
-    parseArchive(JSON.stringify(forgedHmacBundle));
-  } catch (err) {
-    threw = true;
-    assert(err instanceof ArchiveFormatError);
-    assertEquals(err.code, "archive-forbidden-target");
-    assertStringIncludes(err.message, "chrome-agent-platform-private/owner-approval-hmac-v1");
-  }
-  assert(threw, "parseArchive must reject bundle targeting internal HMAC path");
-
-  // Same rejection on importArchive
-  await assertRejects(
-    () => importArchive(JSON.stringify(forgedHmacBundle), {
-      kvSet: target.kv.kvSet,
-      kvGet: target.kv.kvGet,
-      kvRemove: target.kv.kvRemove,
-      opfs: target.opfs,
-      alarms: target.alarms,
-    }),
-    ArchiveFormatError,
-  );
-
-  // Also reject transient streams and cache injection
-  for (const forbidden of [
-    "wasm-tool-streams-v1/forged-pipe.bin",
-    "cache/forged-cache.json",
-    ".staging/exploit.bin",
-  ]) {
-    const forged = structuredClone(validBundle);
-    forged.opfs.push({ path: forbidden, encoding: "utf8", data: "injected" });
-    await assertRejects(
-      () => importArchive(JSON.stringify(forged), {
         kvSet: target.kv.kvSet,
         kvGet: target.kv.kvGet,
         kvRemove: target.kv.kvRemove,
@@ -589,7 +476,7 @@ Deno.test("a lone surrogate in utf8 file data is refused; a valid surrogate pair
   assertEquals(target.opfs.map.get("memory/x"), new TextEncoder().encode("🚀 done"));
 });
 
-Deno.test("opfs path classification: traversal, absolute, dotted and NUL paths refused; dot-prefixed names are legal", async () => {
+Deno.test("opfs path classification: traversal, absolute, dotted and NUL paths refused", async () => {
   for (const bad of ["a/../b", "/abs", "a//b", "a/", "", "a\u0000b", "./a"]) {
     let threw: any = null;
     try {
@@ -600,20 +487,20 @@ Deno.test("opfs path classification: traversal, absolute, dotted and NUL paths r
     assert(threw instanceof ArchiveFormatError, `typed refusal for path ${JSON.stringify(bad)}`);
     assertEquals(threw.code, "archive-bad-shape");
   }
-  // "..b" and "a/..b" are legal FILENAMES (no traversal) — they must import.
-  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
-  const report = await importArchive(
-    craftBundle({
-      opfs: [
-        { path: "..b", encoding: "utf8", data: "one" },
-        { path: "a/..b", encoding: "utf8", data: "two" },
-      ],
-    }),
-    { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms },
-  );
-  assertEquals(report.ok, true);
-  assertEquals(new TextDecoder().decode(target.opfs.map.get("..b")), "one");
-  assertEquals(new TextDecoder().decode(target.opfs.map.get("a/..b")), "two");
+  // "..b"/"a/..b" are legal FILENAMES grammatically (no traversal), but the
+  // landed 5l73 exclusion policy classifies any dot-dot substring as an
+  // internal target — refused with archive-forbidden-target (union semantics:
+  // the stricter landed policy wins; traversal itself stays archive-bad-shape).
+  for (const dotdot of ["..b", "a/..b"]) {
+    let threw: any = null;
+    try {
+      parseArchive(craftBundle({ opfs: [{ path: dotdot, encoding: "utf8", data: "x" }] }));
+    } catch (err) {
+      threw = err;
+    }
+    assert(threw instanceof ArchiveFormatError, `typed refusal for dot-dot name ${JSON.stringify(dotdot)}`);
+    assertEquals(threw.code, "archive-forbidden-target");
+  }
 });
 
 Deno.test("duplicate opfs paths in one bundle are refused (never a silent last-wins)", () => {
@@ -785,12 +672,12 @@ Deno.test("a leftover recovery journal self-heals at the next import: originals 
     kv: mockKv({
       "cap:namedAgents": [{ id: "post-death-value" }],
       "cap:importBackup": {
-        kvNew: ["cap:namedAgents"],
-        kvOld: { "cap:namedAgents": [{ id: "original-agent" }] },
-        filesNew: ["memory/master/threads"],
-        filesOld: { "memory/master/threads": b64Encode(new TextEncoder().encode("{}")) },
-        alarmsNew: ["cap-scheduled:crashed-import"],
-        alarmsOld: [{ name: "orig-alarm", periodInMinutes: 5 }],
+        ops: [
+          [2, "orig-alarm", { periodInMinutes: 5 }],
+          [2, "cap-scheduled:crashed-import", null],
+          [1, "memory/master/threads", b64Encode(new TextEncoder().encode("{}"))],
+          [0, "cap:namedAgents", [{ id: "original-agent" }]],
+        ],
       },
     }),
     opfs: mockOpfs({ "memory/master/threads": "post-death-bytes" }),
@@ -865,12 +752,12 @@ Deno.test("recoverPendingImport reads the sidecar through the real {key: value} 
   // envelope {} as a live journal made every boot call kvRemove).
   const kv = mockKv({
     "cap:importBackup": {
-      kvNew: ["cap:namedAgents"],
-      kvOld: { "cap:namedAgents": [{ id: "original-agent" }] },
-      filesNew: ["memory/master/threads"],
-      filesOld: { "memory/master/threads": b64Encode(new TextEncoder().encode("{}")) },
-      alarmsNew: ["crashed-import-alarm"],
-      alarmsOld: [{ name: "orig-alarm", periodInMinutes: 5 }],
+      ops: [
+        [2, "orig-alarm", { periodInMinutes: 5 }],
+        [2, "crashed-import-alarm", null],
+        [1, "memory/master/threads", b64Encode(new TextEncoder().encode("{}"))],
+        [0, "cap:namedAgents", [{ id: "original-agent" }]],
+      ],
     },
   });
   const realKvGet = kv.kvGet;
@@ -950,6 +837,126 @@ Deno.test("sidecar lifecycle: deleted on success and completed rollback; kept ON
   const backends = { kvGet: after.kv.kvGet, kvSet: after.kv.kvSet, kvRemove: after.kv.kvRemove, opfs: after.opfs, alarms: after.alarms };
   assertEquals(await recoverPendingImport(backends), true);
   assertEquals(after.kv.store.has("cap:importBackup"), false, "a later completed recovery deletes the sidecar");
+});
+
+// ── 8. chrome-agent-platform-5l73: owner-approval HMAC & internal root exclusion ──
+
+Deno.test("5l73 exclusion: owner-approval HMAC and transient roots NEVER enter export across chunk boundaries", async () => {
+  // Sentinel across chunk boundary (65,536 bytes)
+  const hmacSentinel = "SENTINEL_OWNER_APPROVAL_HMAC_SECRET_" + "K".repeat(65536) + "_END";
+  const streamSentinel = "SENTINEL_WASM_TOOL_STREAM_" + "S".repeat(65536) + "_END";
+  const cacheSentinel = "SENTINEL_CACHE_DATA_" + "C".repeat(65536) + "_END";
+  const userSentinel = "USER_AUTHORED_DATA_WITH_WORD_SECRET_" + "U".repeat(65536) + "_PRESERVED";
+
+  const opfs = mockOpfs({
+    // Internal authority / secret roots:
+    "chrome-agent-platform-private/owner-approval-hmac-v1": hmacSentinel,
+    "chrome-agent-platform-private/site-tool-audit-v1/audit.jsonl": "{\"internal\":true}",
+    "wasm-tool-streams-v1/transient-pipe/stdout.bin": streamSentinel,
+    "cache/models/catalog.json": cacheSentinel,
+    // Legitimate user data (must be preserved byte-faithfully):
+    "memory/master/notes.txt": userSentinel,
+    "agent-workspaces/writer/draft.md": "# My Document\nSecret analysis",
+  });
+  const kv = mockKv({
+    "cap:namedAgents": [{ id: "writer", name: "Writer" }],
+  });
+  const alarms = mockAlarms([]);
+
+  const snapshot = await collectExportData({ kvGet: kv.kvGet, opfs, alarms });
+
+  // 1. snapshot.files excludes every internal authority / secret / transient root
+  const exportedPaths = snapshot.files.map((f) => f.path);
+  assertEquals(exportedPaths.includes("chrome-agent-platform-private/owner-approval-hmac-v1"), false);
+  assertEquals(exportedPaths.includes("chrome-agent-platform-private/site-tool-audit-v1/audit.jsonl"), false);
+  assertEquals(exportedPaths.includes("wasm-tool-streams-v1/transient-pipe/stdout.bin"), false);
+  assertEquals(exportedPaths.includes("cache/models/catalog.json"), false);
+  assertEquals(exportedPaths.includes("memory/master/notes.txt"), true);
+  assertEquals(exportedPaths.includes("agent-workspaces/writer/draft.md"), true);
+
+  // 2. Serialized bundle bytes contain NONE of the secret or transient sentinels
+  const bundle = buildArchive(snapshot, { extensionVersion: "0.3.265", now: () => 1750000000000 });
+  assert(!bundle.includes(hmacSentinel), "HMAC secret sentinel must NEVER enter archive bytes");
+  assert(!bundle.includes("SENTINEL_OWNER_APPROVAL_HMAC"), "no HMAC sentinel fragment in archive");
+  assert(!bundle.includes(streamSentinel), "transient stream sentinel must NEVER enter archive bytes");
+  assert(!bundle.includes(cacheSentinel), "cache sentinel must NEVER enter archive bytes");
+
+  // 3. User-authored data is byte-faithful (not heuristically redacted)
+  assert(bundle.includes(userSentinel), "user-authored sentinel must be preserved whole");
+  assert(bundle.includes("Secret analysis"), "user-authored content is not heuristically stripped");
+
+  // 4. Round-trip restore preserves user data byte-faithfully
+  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
+  await importArchive(bundle, {
+    kvSet: target.kv.kvSet,
+    kvGet: target.kv.kvGet,
+    kvRemove: target.kv.kvRemove,
+    opfs: target.opfs,
+    alarms: target.alarms,
+  });
+  assertEquals(
+    new TextDecoder().decode(target.opfs.map.get("memory/master/notes.txt")),
+    userSentinel,
+    "restored user file is byte-identical",
+  );
+  assertEquals(
+    target.opfs.map.has("chrome-agent-platform-private/owner-approval-hmac-v1"),
+    false,
+    "HMAC file was never restored into target",
+  );
+});
+
+Deno.test("5l73 security: import REJECTS bundles targeting internal authority, secrets, or transient roots", async () => {
+  const validBundle = JSON.parse(await runExport(fixtureBackends()));
+
+  // A hostile or compromised bundle attempting to overwrite the install HMAC key
+  const forgedHmacBundle = structuredClone(validBundle);
+  forgedHmacBundle.opfs.push({
+    path: "chrome-agent-platform-private/owner-approval-hmac-v1",
+    encoding: "utf8",
+    data: "forged-evil-hmac-key",
+  });
+
+  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
+
+  let threw = false;
+  try {
+    parseArchive(JSON.stringify(forgedHmacBundle));
+  } catch (err) {
+    threw = true;
+    assert(err instanceof ArchiveFormatError);
+    assertEquals(err.code, "archive-forbidden-target");
+    assertStringIncludes(err.message, "chrome-agent-platform-private/owner-approval-hmac-v1");
+  }
+  assert(threw, "parseArchive must reject bundle targeting internal HMAC path");
+
+  // Same rejection on importArchive
+  await assertRejects(
+    () => importArchive(JSON.stringify(forgedHmacBundle), {
+      kvSet: target.kv.kvSet,
+      kvGet: target.kv.kvGet,
+      kvRemove: target.kv.kvRemove,
+      opfs: target.opfs,
+      alarms: target.alarms,
+    }),
+    ArchiveFormatError,
+  );
+
+  // Also reject transient streams and cache injection
+  for (const forbidden of [
+    "wasm-tool-streams-v1/forged-pipe.bin",
+    "cache/forged-cache.json",
+    ".staging/exploit.bin",
+  ]) {
+    const forged = structuredClone(validBundle);
+    forged.opfs.push({ path: forbidden, encoding: "utf8", data: "injected" });
+    await assertRejects(
+      () => importArchive(JSON.stringify(forged), {
+        kvSet: target.kv.kvSet,
+        kvGet: target.kv.kvGet,
+        kvRemove: target.kv.kvRemove,
+        opfs: target.opfs,
+        alarms: target.alarms,
       }),
       ArchiveFormatError,
     );

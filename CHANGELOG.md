@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.272] — 2026-09-06
+- compact import recovery to fit the store bundle budget
+
 ## [0.3.271] — 2026-09-06
 - import verifies the whole bundle before any destructive clear
 
