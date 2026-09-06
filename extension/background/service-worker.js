@@ -381,7 +381,9 @@ import {
   adaptBundledTools,
   adaptBuiltinTools,
   adaptManagementTools,
+  adaptUserWasmTools,
   adaptWebMcpTools,
+  userWasmCatalogInputs,
   TOOL_CATALOG_BOUNDS,
 } from "../lib/tool-catalog.js";
 import { ShadowToolCatalogController } from "../lib/tool-catalog-shadow.js";
@@ -400,9 +402,12 @@ import {
   executableBundledToolRecords,
   executableManagementToolRecords,
   executableMcpToolRecords,
+  executableUserWasmToolRecords,
   executableWebMcpToolRecords,
+  userWasmLazyRecords,
   withOwnerSiteToolActivity,
 } from "../lib/lazy-tool-protocol.js";
+import { listOwnerBlobs } from "../lib/user-wasm-store.js";
 
 const notificationRegistry = new NotificationRegistry();
 
@@ -1812,6 +1817,20 @@ async function lazyPermissionDigest() {
   }
 }
 
+async function readUserWasmRows() {
+  try {
+    return await listOwnerBlobs({ kind: "wasm" });
+  } catch (err) {
+    pushDiagnostic(
+      "error",
+      `User Wasm catalog listing failed: ${String(err?.message ?? err).slice(0, 160)}`,
+      "user-wasm",
+      "catalog",
+    );
+    return [];
+  }
+}
+
 async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null, agentTools = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
@@ -1843,6 +1862,7 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
       grantDigest: currentGrantDigest,
     };
   };
+  const userWasmRows = await readUserWasmRows();
   const records = [
     ...executableBrowserToolRecords(browserTools, {
       version,
@@ -1889,6 +1909,10 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
         dispatchBundledTool: dispatchBundledWasmStream,
       },
     ),
+    ...userWasmLazyRecords(userWasmRows, {
+      agentTools,
+      scope,
+    }),
     // Provider-EXECUTED (server-side) tools — discovery through the same lazy
     // index; "execution" latches the provider-defined tool onto the run (the
     // agent-core proxy declares it on the next model call). Availability is
@@ -4408,10 +4432,13 @@ async function readShadowCatalogInputs() {
       sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
       scope: hubScope,
     }),
+    ...userWasmCatalogInputs(await readUserWasmRows(), {
+      version,
+      scope: hubScope,
+    }),
   ];
   const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
   for (const origin of (await listOrigins()).slice(0, 200)) {
-    if (inputs.length >= TOOL_CATALOG_BOUNDS.maxDescriptors * 2) break;
     const enrollment = await enrollmentSnapshot(origin);
     const gate = gateMap[origin] ?? {};
     const sourceGeneration = siteToolSourceGeneration(enrollment.gen, gate);
@@ -4420,14 +4447,13 @@ async function readShadowCatalogInputs() {
       : "";
     const currentDocument = enrollment.enrolled && documentId &&
       Number.isFinite(gate.epoch) && gate.epoch > 0;
-    const remaining = TOOL_CATALOG_BOUNDS.maxDescriptors * 2 - inputs.length;
     inputs.push(...adaptWebMcpTools(await listTools(origin), {
       origin,
       agentId: `site:${origin}`,
       documentId,
       sourceGeneration,
       availability: currentDocument ? "ready" : "stale",
-    }).slice(0, remaining));
+    }));
   }
   return inputs;
 }

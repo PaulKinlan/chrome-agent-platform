@@ -15,6 +15,7 @@ import {
   adaptBundledTools,
   adaptManagementTools,
   adaptMcpTools,
+  adaptUserWasmTools,
   adaptWebMcpTools,
   buildToolCatalog,
   canonicalToolDescriptor,
@@ -927,6 +928,7 @@ export class LazyToolProtocol {
       browser: [],
       management: [],
       "bundled-wasm": [],
+      "user-wasm": [],
       webmcp: [],
       "provider-server": [],
     };
@@ -940,6 +942,7 @@ export class LazyToolProtocol {
       if (srcKind === "chrome-api") group = "browser";
       else if (srcKind === "management") group = "management";
       else if (srcKind === "bundled-package") group = "bundled-wasm";
+      else if (srcKind === "user-wasm") group = "user-wasm";
       else if (srcKind === "provider-server") group = "provider-server";
       else if (srcKind.startsWith("webmcp")) group = "webmcp";
 
@@ -966,6 +969,7 @@ export class LazyToolProtocol {
       browser: bySource.browser.length,
       management: bySource.management.length,
       bundledWasm: bySource["bundled-wasm"].length,
+      userWasm: bySource["user-wasm"].length,
       webmcp: bySource.webmcp.length,
       providerServer: bySource["provider-server"].length,
     };
@@ -975,7 +979,7 @@ export class LazyToolProtocol {
       counts,
       truncated: false,
       tools: bySource,
-      summary: `Total tools: ${descriptors.length} (builtin: ${counts.builtin}, browser: ${counts.browser}, management: ${counts.management}, bundled-wasm: ${counts.bundledWasm}, webmcp: ${counts.webmcp}, provider-server: ${counts.providerServer}). Use search_tools to get an executable selectionRef for a tool.`,
+      summary: `Total tools: ${descriptors.length} (builtin: ${counts.builtin}, browser: ${counts.browser}, management: ${counts.management}, bundled-wasm: ${counts.bundledWasm}, user-wasm: ${counts.userWasm}, webmcp: ${counts.webmcp}, provider-server: ${counts.providerServer}). Use search_tools to get an executable selectionRef for a tool.`,
     });
   }
 
@@ -1560,6 +1564,25 @@ export function executableBundledToolRecords(rows, context = {}) {
       dispatch: isAdmitted ? dispatcher : null,
     });
   });
+}
+
+export function executableUserWasmToolRecords(rows, context = {}) {
+  return adaptUserWasmTools(rows, context).map((descriptorInput) => {
+    return Object.freeze({
+      descriptorInput,
+      validateArguments: null,
+      authorize: null,
+      dispatch: null,
+    });
+  });
+}
+
+export function userWasmLazyRecords(rows, { agentTools, scope } = {}) {
+  const allowed = agentTools?.userWasm ? new Set(agentTools.userWasm) : null;
+  const filtered = allowed
+    ? (rows || []).filter((row) => allowed.has(row.digest))
+    : (rows || []);
+  return executableUserWasmToolRecords(filtered, { scope });
 }
 
 /**

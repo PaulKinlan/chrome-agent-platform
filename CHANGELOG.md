@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.287] — 2026-09-06
+- .3: [] S3 user-wasm catalog registration: review r2 wiring & mutant proofs
+
+## [0.3.286] — 2026-09-06
+- User-uploaded WebAssembly modules register in the tool catalog with WASI execution schema and digest-only grants
+
 ## [0.3.285] — 2026-09-06
 - The project docs now point at the live task list rather than the retired markdown files, and describe the review rule that actually exists
 

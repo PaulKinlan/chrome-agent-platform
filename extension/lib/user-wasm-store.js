@@ -272,10 +272,12 @@ export function createOwnerBlobStore({
         }
       });
     },
-    async list() {
-      return await run((_root, records) => [...records.values()].sort(
-        (a, b) => b.addedAt - a.addedAt || a.digest.localeCompare(b.digest),
-      ));
+    async list({ kind = null } = {}) {
+      if (kind !== null && !KINDS.has(kind)) throw new TypeError(`Unknown blob kind: ${JSON.stringify(kind)}`);
+      return await run((_root, records) => [...records.values()]
+        .filter((r) => kind === null || r.kind === kind)
+        .sort((a, b) => b.addedAt - a.addedAt || a.digest.localeCompare(b.digest)),
+      );
     },
     // Named getFile for the File reference it returns (9ux7.1 asked for
     // "get"; the bead-vs-code naming difference is deliberate — bytes never
@@ -299,3 +301,18 @@ export function createOwnerBlobStore({
     },
   };
 }
+
+export async function listOwnerBlobs({
+  kind = null,
+  storage = globalThis.navigator?.storage,
+  locks = globalThis.navigator?.locks,
+} = {}) {
+  const store = createOwnerBlobStore({ storage, locks });
+  return await store.list({ kind });
+}
+
+export const listUserWasmStore = ({ storage, locks } = {}) =>
+  listOwnerBlobs({ kind: "wasm", storage, locks });
+
+export const createUserWasmStore = createOwnerBlobStore;
+
