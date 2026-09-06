@@ -1,7 +1,13 @@
 # Changelog
 
+## [0.3.270] — 2026-09-06
+- feat(tool-platform): add promotion abuse and tabular injection gates (78s)
+
+## [0.3.269] — 2026-09-06
+- Add adversarial abuse and formula injection safety checks to the tool operating platform
+
 ## [0.3.268] — 2026-09-06
-- Revert "Merge commit 'fb6ff714' into HEAD"
+- Internal cleanup: revert unconfirmed browser test changes
 
 ## [0.3.267] — 2026-09-06
 - The toolbox gains zxing — read barcodes from images and write new ones (QR, EAN-13, Code 128, Data Matrix, and more), entirely on-device.
