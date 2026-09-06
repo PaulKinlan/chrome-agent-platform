@@ -36,11 +36,18 @@
 // registered in any model-callable tool catalog — a full memory export is a
 // high-value exfiltration target (tests/data-archive.test.ts pins this).
 //
-// TRANSACTIONALITY: import is two-phase. Phase 1 validates the whole bundle
-// and the target state (a non-empty target refuses without the explicit
-// overwrite choice and is left untouched). Phase 2 applies everything, then
-// verifies every restored byte by re-reading it; a mismatch throws with the
-// exact item — never a silent partial restore.
+// TRANSACTIONALITY: import is phased. Phase 1 validates the whole bundle
+// DEEPLY (every entry decoded, every path classified, the manifest cross-
+// checked) and the target state (a non-empty target refuses without the
+// explicit overwrite choice and is left untouched). Phase 2 applies
+// WRITE-BEFORE-WIPE under a durable sidecar journal ("cap:importBackup"):
+// bundle content is written and byte-verified BEFORE any pre-existing state
+// is destroyed, so an injected failure or an MV3 worker death mid-apply is
+// recoverable to a byte-identical original (recoverPendingImport — run at
+// import entry and on every worker boot). Only after full verification does
+// the commit prune delete pre-existing state the bundle does not carry; a
+// failure after that commit point leaves the complete verified bundle plus
+// possibly stale extras — loss-free, cleaned by the next import.
 
 const ENCODER = new TextEncoder();
 const FATAL_DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -69,6 +76,10 @@ export function b64Encode(bytes) {
 
 export function b64Decode(text) {
   const clean = String(text).replace(/=+$/, "");
+  // b64Encode never emits a clean length ≡1 mod 4, so a bundle that does was
+  // damaged — refuse it here (at parse) instead of decoding an empty/wrong
+  // buffer after the import has already started mutating the profile.
+  if (clean.length % 4 === 1) throw new ArchiveFormatError("archive-bad-encoding", "invalid base64 length in bundle");
   const out = new Uint8Array(Math.floor((clean.length * 6) / 8));
   let bits = 0;
   let value = 0;
@@ -102,10 +113,55 @@ export class ArchiveFormatError extends Error {
   }
 }
 
-/** KV keys that are EPHEMERAL coordination state — meaningless off-profile. */
+/** The reserved KV key of the import-recovery journal. A bundle writing it
+ * could clobber or impersonate a live journal. */
+const IMPORT_SIDECAR_KEY = "cap:importBackup";
+
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+/** {scheduledTime?, periodInMinutes?} → {when?, periodInMinutes?} (chrome.alarms shape). */
+function alarmRecInfo(rec) {
+  const info = {};
+  if (typeof rec.scheduledTime === "number") info.when = rec.scheduledTime;
+  if (typeof rec.periodInMinutes === "number") info.periodInMinutes = rec.periodInMinutes;
+  return info;
+}
+
+/** Segment-wise path classification for bundle opfs entries. A path is legal
+ * iff every "/"-segment is non-empty and not "." or ".." (no traversal, no
+ * absolute/double-slash/trailing-slash smuggling), carries no NUL, and does
+ * not write into the reserved recovery namespace. */
+function validateOpfsPath(path) {
+  const segs = typeof path === "string" ? path.split("/") : [];
+  if (typeof path !== "string" || path.includes("\0") || segs.some((s) => !s.length || s === "." || s === "..")) {
+    throw new ArchiveFormatError("archive-bad-shape", "bundle carries a malformed or escaping file path");
+  }
+  if (segs[0] === "cap-import-backup") {
+    throw new ArchiveFormatError("archive-bad-shape", "reserved recovery path in bundle");
+  }
+}
+
+/** Reject lone surrogates (paired-aware): ENCODER.encode would silently turn
+ * them into U+FFFD, so restored bytes would differ from the original file. */
+function assertNoLoneSurrogates(str) {
+  const bad = () => new ArchiveFormatError("archive-bad-shape", "lone surrogate in bundle data");
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      if (i + 1 >= str.length || str.charCodeAt(i + 1) < 0xdc00 || str.charCodeAt(i + 1) > 0xdfff) throw bad();
+      i++; // skip the low surrogate of a valid pair
+    } else if (c >= 0xdc00 && c <= 0xdfff) throw bad();
+  }
+}
+
+/** KV keys that are EPHEMERAL coordination state — meaningless off-profile.
+ * "cap:importBackup" is the import-recovery journal (chrome-agent-platform-
+ * ch8x): it holds PRE-sanitization colliding values while an import runs, so
+ * it must never ride an export into another bundle. */
 const EPHEMERAL_KV_KEYS = new Set([
   "cap:webmcpBridgeNonces",
   "cap:webmcpSnapshotGate",
+  "cap:importBackup",
 ]);
 
 /** Keys that must NEVER leave the profile (secret material). The bundle
@@ -183,6 +239,9 @@ export function createChromeAlarmsAdapter() {
     getAll: async () => (await chrome.alarms.getAll()) || [],
     create: async (name, info) => {
       await chrome.alarms.create(name, info);
+    },
+    clear: async (name) => {
+      await chrome.alarms.clear(name);
     },
     clearAll: async () => {
       await chrome.alarms.clearAll();
@@ -331,7 +390,12 @@ export function buildArchive(snapshot, { extensionVersion = "unknown", now = () 
   return JSON.stringify(archive);
 }
 
-/** Parse + validate a bundle. Any foreign/corrupt input is a typed refusal. */
+/** Parse + validate a bundle. Any foreign/corrupt input is a typed refusal.
+ * Deep validation happens HERE — entry data is fully decoded (base64 checked,
+ * utf8 surrogate-checked), every path classified, alarm shapes and duplicate
+ * names checked, and the manifest cross-checked against the contents — so a
+ * damaged bundle is refused BEFORE an import can touch the profile. Decoded
+ * bytes ride along as entry._bytes so the apply phase never re-decodes. */
 export function parseArchive(text) {
   let parsed;
   try {
@@ -357,85 +421,234 @@ export function parseArchive(text) {
   if (!Array.isArray(parsed.opfs)) {
     throw new ArchiveFormatError("archive-bad-shape", "bundle opfs section missing or malformed");
   }
+  if (hasOwn(parsed.kv, IMPORT_SIDECAR_KEY)) {
+    throw new ArchiveFormatError("archive-bad-shape", "reserved recovery key in bundle kv");
+  }
+  const seenPaths = new Set();
   for (const entry of parsed.opfs) {
-    if (!entry || typeof entry.path !== "string" || entry.path.includes("..")) {
-      throw new ArchiveFormatError("archive-bad-shape", "bundle carries a malformed or escaping file path");
+    validateOpfsPath(entry?.path);
+    if ((entry.encoding !== "utf8" && entry.encoding !== "base64") || typeof entry.data !== "string") {
+      throw new ArchiveFormatError("archive-bad-shape", "bad bundle entry encoding or data");
     }
-    if (entry.encoding !== "utf8" && entry.encoding !== "base64") {
-      throw new ArchiveFormatError("archive-bad-shape", `bundle carries an unknown encoding for ${entry.path}`);
+    if (entry.encoding === "utf8") {
+      assertNoLoneSurrogates(entry.data);
+      entry._bytes = ENCODER.encode(entry.data);
+    } else {
+      entry._bytes = b64Decode(entry.data);
     }
+    if (seenPaths.has(entry.path)) {
+      throw new ArchiveFormatError("archive-bad-shape", "duplicate paths in bundle");
+    }
+    seenPaths.add(entry.path);
   }
   if (!Array.isArray(parsed.alarms)) parsed.alarms = [];
+  const seenAlarms = new Set();
+  for (const alarm of parsed.alarms) {
+    if (
+      !alarm || typeof alarm !== "object" || Array.isArray(alarm) || typeof alarm.name !== "string" ||
+      (alarm.scheduledTime != null && typeof alarm.scheduledTime !== "number") ||
+      (alarm.periodInMinutes != null && typeof alarm.periodInMinutes !== "number")
+    ) {
+      throw new ArchiveFormatError("archive-bad-shape", "malformed alarm record in bundle");
+    }
+    if (seenAlarms.has(alarm.name)) {
+      throw new ArchiveFormatError("archive-bad-shape", "duplicate alarm names in bundle");
+    }
+    seenAlarms.add(alarm.name);
+  }
   if (!Array.isArray(parsed.configuredProviders)) parsed.configuredProviders = [];
   if (!Array.isArray(parsed.mcpServers)) parsed.mcpServers = [];
   if (!parsed.policy || !Array.isArray(parsed.policy.excluded)) parsed.policy = { excluded: [...EXCLUSION_POLICY] };
+  // Manifest integrity: REQUIRED and internally consistent. A mismatch means
+  // the bundle is truncated or tampered — refuse before any mutation.
+  const m = parsed.manifest;
+  if (!m || typeof m !== "object" || Array.isArray(m) || ["kvKeys", "opfsFiles", "alarms", "totalBytes"].some((f) => !Number.isInteger(m[f]))) {
+    throw new ArchiveFormatError("archive-bad-manifest", "bundle carries no valid manifest");
+  }
+  const actualTotalBytes =
+    parsed.opfs.reduce((n, e) => n + e._bytes.length, 0) + ENCODER.encode(JSON.stringify(parsed.kv)).length;
+  if (
+    m.kvKeys !== Object.keys(parsed.kv).length ||
+    m.opfsFiles !== parsed.opfs.length ||
+    m.alarms !== parsed.alarms.length ||
+    m.totalBytes !== actualTotalBytes
+  ) {
+    throw new ArchiveFormatError(
+      "archive-manifest-mismatch",
+      `manifest mismatch: declared ${m.totalBytes} bytes, actual ${actualTotalBytes}`,
+    );
+  }
   return parsed;
 }
 
 /**
- * Import a bundle into a target profile. Two-phase: validate + target check
- * first (nothing touched), then apply + verify. A non-empty target refuses
- * without `overwrite: true` — the owner's explicit choice.
+ * Recover a crashed import from its durable sidecar journal. The journal
+ * ("cap:importBackup", written by importArchive before any mutation) records
+ * what the import would create and byte-backups of everything it would
+ * overwrite; this restores the original profile exactly, then deletes the
+ * journal. No-op (returns false) when no journal is present. Runs at every
+ * import entry AND on every worker boot, so even an MV3 worker death
+ * mid-apply cannot expose a mixed profile beyond the next restart/import.
+ */
+export async function recoverPendingImport({ kvGet, kvSet, kvRemove, opfs, alarms } = {}) {
+  // The injected kvGet mirrors chrome.storage.local.get: a single-key read
+  // returns the {key: value} ENVELOPE (lib/kv.js), while test fakes may
+  // return the bare value — normalize both.
+  const raw = await kvGet(IMPORT_SIDECAR_KEY);
+  const journal = raw && typeof raw === "object" && hasOwn(raw, IMPORT_SIDECAR_KEY) ? raw[IMPORT_SIDECAR_KEY] : raw;
+  if (!journal || typeof journal !== "object" || Array.isArray(journal)) return false;
+  const kvOld = journal.kvOld || {};
+  const filesOld = journal.filesOld || {};
+  // Undo in the inverse order of the apply phase.
+  for (const name of journal.alarmsNew || []) await alarms.clear(name);
+  for (const rec of journal.alarmsOld || []) {
+    const { name, ...info } = rec; // journal records carry the chrome.alarms.create shape
+    await alarms.create(name, info);
+  }
+  for (const path of journal.filesNew || []) {
+    if (hasOwn(filesOld, path)) continue; // restored below from its backup
+    try {
+      await opfs.removeFile(path);
+    } catch {
+      /* the crash happened before this file was written — nothing to undo */
+    }
+  }
+  for (const [path, b64] of Object.entries(filesOld)) {
+    await opfs.writeFile(path, b64Decode(b64));
+  }
+  for (const key of journal.kvNew || []) await kvRemove(key);
+  const kvOldEntries = Object.entries(kvOld);
+  if (kvOldEntries.length) await kvSet(Object.fromEntries(kvOldEntries));
+  await kvRemove(IMPORT_SIDECAR_KEY);
+  return true;
+}
+
+/**
+ * Import a bundle into a target profile — verified write-before-wipe with a
+ * durable rollback journal. Phase 1 validates the whole bundle (deeply, at
+ * parse) and the target state (a non-empty target refuses without
+ * `overwrite: true` and is left untouched). Phase 2 stages the bundle's
+ * content on the target and byte-verifies it BEFORE any pre-existing state is
+ * destroyed; a journal written first makes every pre-publication failure —
+ * including an MV3 worker death — recoverable to a byte-identical original.
+ * Only after full verification does the commit prune delete pre-existing
+ * state the bundle does not carry.
  */
 export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, alarms, overwrite = false } = {}) {
   const parsed = parseArchive(bundleText);
+
+  // Self-heal FIRST: a previous import that died mid-apply left a recovery
+  // journal — restore the original profile before anything else reads it.
+  const backends = { kvGet, kvSet, kvRemove, opfs, alarms };
+  await recoverPendingImport(backends);
 
   // Phase 1 — target state check BEFORE any mutation.
   const existingKv = (await kvGet(null)) || {};
   const existingKeys = Object.keys(existingKv);
   const existingFiles = await opfs.listFiles();
-  const existingAlarms = await alarms.getAll();
-  if (!overwrite && (existingKeys.length || existingFiles.length || (existingAlarms || []).length)) {
+  const existingAlarms = (await alarms.getAll()) || [];
+  if (!overwrite && (existingKeys.length || existingFiles.length || existingAlarms.length)) {
     throw new Error(
-      `import refused: the target profile is not empty (${existingKeys.length} settings keys, ${existingFiles.length} stored files, ${(existingAlarms || []).length} alarms) — nothing was touched without the explicit overwrite choice`,
+      `import refused: the target profile is not empty (${existingKeys.length} settings keys, ${existingFiles.length} stored files, ${existingAlarms.length} alarms) — nothing was touched without the explicit overwrite choice`,
     );
   }
 
-  // Phase 2a — clear the target when the owner chose overwrite.
-  if (overwrite) {
-    for (const key of existingKeys) await kvRemove(key);
-    for (const path of existingFiles) await opfs.removeFile(path);
-    if ((existingAlarms || []).length) await alarms.clearAll();
-  }
-
-  // Phase 2b — apply the bundle.
   const kvEntries = Object.entries(parsed.kv);
-  if (kvEntries.length) await kvSet(Object.fromEntries(kvEntries.map(([k, v]) => [k, structuredClone(v)])));
+  const bundlePathList = parsed.opfs.map((e) => e.path);
+  const bundlePaths = new Set(bundlePathList);
+  const bundleAlarmNames = new Set(parsed.alarms.map((a) => a.name));
 
-  const restoredFiles = [];
-  for (const entry of parsed.opfs) {
-    const bytes = entry.encoding === "utf8" ? ENCODER.encode(entry.data) : b64Decode(entry.data);
-    await opfs.writeFile(entry.path, bytes);
-    restoredFiles.push({ path: entry.path, bytes });
+  // The sidecar journal: what the bundle will create (kvNew/filesNew/
+  // alarmsNew) and backups of everything it OVERWRITES (kvOld/filesOld/
+  // alarmsOld — file bytes as base64 so chrome.storage persists it verbatim).
+  // Staged in BOTH modes — a clean target can also die mid-apply and leave
+  // orphan partials. Pre-existing state the bundle does NOT carry is never
+  // touched before the commit prune, so it needs no backup. A failure here
+  // refuses before ANY mutation. (Quota-ceiling ponytail note: the journal
+  // duplicates only the overwritten subset in memory/KV; streaming is 11rm's.)
+  const cleanAlarms = existingAlarms.filter((a) => a && typeof a.name === "string");
+  const kvOld = {};
+  for (const key of existingKeys) {
+    if (hasOwn(parsed.kv, key)) kvOld[key] = structuredClone(existingKv[key]);
+  }
+  const filesOld = {};
+  for (const path of existingFiles) {
+    if (bundlePaths.has(path)) filesOld[path] = b64Encode(await opfs.readFile(path));
+  }
+  const journal = {
+    kvNew: kvEntries.map(([k]) => k),
+    kvOld,
+    filesNew: bundlePathList,
+    filesOld,
+    alarmsNew: parsed.alarms.map((a) => a.name),
+    alarmsOld: cleanAlarms.map((a) => ({ name: a.name, ...alarmRecInfo(a) })),
+  };
+  try {
+    await kvSet({ [IMPORT_SIDECAR_KEY]: journal });
+  } catch (err) {
+    throw new ArchiveFormatError("import-sidecar-failed", `recovery journal write failed (${err?.message || err}); nothing was modified`);
   }
 
-  for (const alarm of parsed.alarms) {
-    const info = {};
-    if (typeof alarm.scheduledTime === "number") info.when = alarm.scheduledTime;
-    if (typeof alarm.periodInMinutes === "number") info.periodInMinutes = alarm.periodInMinutes;
-    await alarms.create(alarm.name, info);
-  }
+  try {
+    if (kvEntries.length) await kvSet(Object.fromEntries(kvEntries.map(([k, v]) => [k, structuredClone(v)])));
+    for (const entry of parsed.opfs) await opfs.writeFile(entry.path, entry._bytes);
 
-  // Phase 2c — verify EVERY restored byte by re-reading it (never a silent
-  // partial restore).
-  for (const { path, bytes } of restoredFiles) {
-    const back = await opfs.readFile(path);
-    if (back.length !== bytes.length || back.some((b, i) => b !== bytes[i])) {
-      throw new ArchiveFormatError("import-verify-failed", `restored file failed verification: ${path}`);
+    // Verify EVERY restored byte by re-reading it — BEFORE the destructive
+    // prune, so a mismatch can never cost pre-existing data.
+    for (const entry of parsed.opfs) {
+      const back = await opfs.readFile(entry.path);
+      if (back.length !== entry._bytes.length || back.some((b, i) => b !== entry._bytes[i])) {
+        throw new ArchiveFormatError("import-verify-failed", `restored file failed verification: ${entry.path}`);
+      }
     }
-  }
-  const kvBack = (await kvGet(null)) || {};
-  for (const [key, value] of kvEntries) {
-    if (JSON.stringify(kvBack[key]) !== JSON.stringify(value)) {
-      throw new ArchiveFormatError("import-verify-failed", `restored setting failed verification: ${key}`);
+    const kvBack = (await kvGet(null)) || {};
+    for (const [key, value] of kvEntries) {
+      if (JSON.stringify(kvBack[key]) !== JSON.stringify(value)) {
+        throw new ArchiveFormatError("import-verify-failed", `restored setting failed verification: ${key}`);
+      }
     }
+
+    for (const alarm of parsed.alarms) await alarms.create(alarm.name, alarmRecInfo(alarm));
+  } catch (err) {
+    // Pre-publication failure — restore the original profile byte-for-byte.
+    let restored = false;
+    try {
+      restored = await recoverPendingImport(backends);
+    } catch {
+      restored = false;
+    }
+    if (!restored) {
+      throw new ArchiveFormatError(
+        "import-rollback-failed",
+        `import failed (${err?.message || err}) and recovery failed; import again or restart to recover`,
+      );
+    }
+    throw new ArchiveFormatError("import-rollback", `import failed pre-commit; original profile restored (${err?.message || err})`);
   }
+
+  // COMMIT — every bundle byte is verified on the target. Destructive from
+  // here on: prune pre-existing state the bundle does not carry, then delete
+  // the journal (the commit point). A failure or worker death inside THIS
+  // phase leaves the full verified bundle plus possibly stale extras —
+  // loss-free, and the next import (which self-heals, then re-applies) cleans
+  // it up. A restored alarm whose `when` already passed may fire once after
+  // recovery — cosmetic.
+  for (const a of cleanAlarms) {
+    if (!bundleAlarmNames.has(a.name)) await alarms.clear(a.name);
+  }
+  for (const path of existingFiles) {
+    if (!bundlePaths.has(path)) await opfs.removeFile(path);
+  }
+  for (const key of existingKeys) {
+    if (!hasOwn(parsed.kv, key)) await kvRemove(key);
+  }
+  await kvRemove(IMPORT_SIDECAR_KEY);
 
   return Object.freeze({
     ok: true,
     restored: Object.freeze({
       kvKeys: kvEntries.length,
-      opfsFiles: restoredFiles.length,
+      opfsFiles: parsed.opfs.length,
       alarms: parsed.alarms.length,
     }),
     exclusions: Object.freeze([...parsed.policy.excluded]),

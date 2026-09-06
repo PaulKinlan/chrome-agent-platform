@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.271] — 2026-09-06
+- import verifies the whole bundle before any destructive clear
+
+## [0.3.270] — 2026-09-06
+- Import All verifies the whole bundle before it clears anything: a malformed or failed restore now leaves your current profile untouched, and a crashed import repairs itself on the next restart
+
 ## [0.3.269] — 2026-09-06
 - the toolbox gains hash_blake3 — BLAKE3 hashing on-device, the first call-export Wasm tool
 

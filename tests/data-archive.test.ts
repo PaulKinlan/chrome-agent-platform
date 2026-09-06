@@ -17,11 +17,14 @@ import {
   ARCHIVE_FORMAT_VERSION,
   MAX_ARCHIVE_OPFS_FILES,
   MAX_ARCHIVE_TOTAL_BYTES,
+  b64Decode,
+  b64Encode,
   buildArchive,
   parseArchive,
   collectExportData,
   sanitizeKvForExport,
   importArchive,
+  recoverPendingImport,
   ArchiveFormatError,
 } from "../extension/lib/data-archive.js";
 
@@ -70,6 +73,9 @@ function mockAlarms(alarms = []) {
     create: async (name: string, info: Record<string, unknown>) => {
       list = list.filter((a) => a.name !== name);
       list.push({ name, ...info });
+    },
+    clear: async (name: string) => {
+      list = list.filter((a) => a.name !== name);
     },
     clearAll: async () => {
       list = [];
@@ -323,4 +329,511 @@ Deno.test("export/import are owner routes: no model-callable tool registers them
     const text = await Deno.readTextFile(new URL(`../${src}`, import.meta.url));
     assert(!/owner\.export\.all|owner\.import\.all/.test(text), `${src} must not expose the archive routes`);
   }
+});
+
+// ── 8. import never destroys a profile before the bundle is proven good ────
+// (chrome-agent-platform-ch8x — verified write-before-wipe + durable rollback)
+//
+// Every refusal here must fire BEFORE the first mutation, and every mid-apply
+// failure must leave the original profile byte-identical. RED evidence for the
+// falsification gate: on the unfixed lib the destructive clear ran before
+// decode/verify, so the byte-identical assertions below failed.
+
+/** Deep snapshot of a profile (kv + opfs bytes + alarms) for byte-identical asserts. */
+async function snapshotProfile(b: { kv: any; opfs: any; alarms: any }) {
+  return {
+    kv: Object.fromEntries(b.kv.store),
+    opfs: Object.fromEntries([...b.opfs.map].map(([p, v]) => [p, (v as Uint8Array).slice()])),
+    alarms: await b.alarms.getAll(),
+  };
+}
+
+/** Same accounting as buildArchive's manifest: raw bytes per entry + kv JSON bytes. */
+function b64ByteLength(data: string) {
+  return Math.floor(String(data).replace(/=+$/, "").length * 3 / 4);
+}
+
+/** A minimal VALID bundle with the given sections, manifest recomputed to match. */
+function craftBundle(sections: { kv?: any; opfs?: any[]; alarms?: any[] }) {
+  const kv = sections.kv ?? {};
+  const opfs = sections.opfs ?? [];
+  const alarms = sections.alarms ?? [];
+  const bundle: any = {
+    magic: ARCHIVE_MAGIC,
+    formatVersion: ARCHIVE_FORMAT_VERSION,
+    exportedAt: 1750000000000,
+    extensionVersion: "0.3.39",
+    policy: { excluded: [] },
+    configuredProviders: [],
+    mcpServers: [],
+    kv,
+    alarms,
+    opfs,
+  };
+  bundle.manifest = {
+    kvKeys: Object.keys(kv).length,
+    opfsFiles: opfs.length,
+    alarms: alarms.length,
+    totalBytes:
+      opfs.reduce((n, e) => n + (e.encoding === "utf8" ? new TextEncoder().encode(e.data).length : b64ByteLength(e.data)), 0) +
+      new TextEncoder().encode(JSON.stringify(kv)).length,
+  };
+  return JSON.stringify(bundle);
+}
+
+/** Re-wipe a hand-edited bundle's manifest so it stays internally consistent. */
+function withRecomputedManifest(bundleText: string) {
+  return craftBundle(JSON.parse(bundleText));
+}
+
+function nonEmptyTarget() {
+  return {
+    kv: mockKv({ "cap:namedAgents": [{ id: "existing-agent" }], "cap:fetch": { allow: ["old.com"] } }),
+    opfs: mockOpfs({ "memory/master/threads": "{}", "memory/agents/old/notes": "old notes" }),
+    alarms: mockAlarms([{ name: "stale-alarm", periodInMinutes: 5 }]),
+  };
+}
+
+async function assertByteIdentical(before: any, b: { kv: any; opfs: any; alarms: any }) {
+  assertEquals(await snapshotProfile(b), before);
+}
+
+Deno.test("parseArchive refuses opfs entries whose data is not a string", () => {
+  for (const bad of [123, null, true, {}, [1]]) {
+    for (const encoding of ["utf8", "base64"] as const) {
+      let threw: any = null;
+      try {
+        parseArchive(craftBundle({ opfs: [{ path: "memory/x", encoding, data: bad }] }));
+      } catch (err) {
+        threw = err;
+      }
+      assert(threw instanceof ArchiveFormatError, `typed refusal for data ${JSON.stringify(bad)} (${encoding})`);
+      assertEquals(threw.code, "archive-bad-shape");
+    }
+  }
+});
+
+Deno.test("a bundle with corrupt base64 refuses at parse and a failed overwrite import leaves the target byte-identical", async () => {
+  const b = JSON.parse(await runExport(fixtureBackends()));
+  b.opfs[0].encoding = "base64"; // raw utf8 text reinterpreted as base64 → invalid characters
+  const bundle = JSON.stringify(b);
+  // Parse-time refusal (decode happens at parse, before anything can mutate).
+  let threw: any = null;
+  try {
+    parseArchive(bundle);
+  } catch (err) {
+    threw = err;
+  }
+  assert(threw instanceof ArchiveFormatError);
+  assertEquals(threw.code, "archive-bad-encoding");
+  // And import with overwrite against a NON-EMPTY target touches nothing.
+  const target = nonEmptyTarget();
+  const before = await snapshotProfile(target);
+  await assertRejects(
+    () =>
+      importArchive(bundle, {
+        kvSet: target.kv.kvSet,
+        kvGet: target.kv.kvGet,
+        kvRemove: target.kv.kvRemove,
+        opfs: target.opfs,
+        alarms: target.alarms,
+        overwrite: true,
+      }),
+    ArchiveFormatError,
+  );
+  await assertByteIdentical(before, target);
+});
+
+Deno.test("base64 whose length is ≡1 mod 4 is refused (it can only be damaged data)", () => {
+  let threw: any = null;
+  try {
+    parseArchive(craftBundle({ opfs: [{ path: "memory/x", encoding: "base64", data: "A" }] }));
+  } catch (err) {
+    threw = err;
+  }
+  assert(threw instanceof ArchiveFormatError);
+  assertEquals(threw.code, "archive-bad-encoding");
+});
+
+Deno.test("a lone surrogate in utf8 file data is refused; a valid surrogate pair round-trips byte-identically", async () => {
+  let threw: any = null;
+  try {
+    parseArchive(craftBundle({ opfs: [{ path: "memory/x", encoding: "utf8", data: "\uD83D" }] }));
+  } catch (err) {
+    threw = err;
+  }
+  assert(threw instanceof ArchiveFormatError);
+  assertEquals(threw.code, "archive-bad-shape");
+
+  // A valid emoji pair is NOT a lone surrogate — it round-trips exactly.
+  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
+  const report = await importArchive(
+    craftBundle({ opfs: [{ path: "memory/x", encoding: "utf8", data: "🚀 done" }] }),
+    { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms },
+  );
+  assertEquals(report.ok, true);
+  assertEquals(target.opfs.map.get("memory/x"), new TextEncoder().encode("🚀 done"));
+});
+
+Deno.test("opfs path classification: traversal, absolute, dotted and NUL paths refused; dot-prefixed names are legal", async () => {
+  for (const bad of ["a/../b", "/abs", "a//b", "a/", "", "a\u0000b", "./a"]) {
+    let threw: any = null;
+    try {
+      parseArchive(craftBundle({ opfs: [{ path: bad, encoding: "utf8", data: "x" }] }));
+    } catch (err) {
+      threw = err;
+    }
+    assert(threw instanceof ArchiveFormatError, `typed refusal for path ${JSON.stringify(bad)}`);
+    assertEquals(threw.code, "archive-bad-shape");
+  }
+  // "..b" and "a/..b" are legal FILENAMES (no traversal) — they must import.
+  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
+  const report = await importArchive(
+    craftBundle({
+      opfs: [
+        { path: "..b", encoding: "utf8", data: "one" },
+        { path: "a/..b", encoding: "utf8", data: "two" },
+      ],
+    }),
+    { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms },
+  );
+  assertEquals(report.ok, true);
+  assertEquals(new TextDecoder().decode(target.opfs.map.get("..b")), "one");
+  assertEquals(new TextDecoder().decode(target.opfs.map.get("a/..b")), "two");
+});
+
+Deno.test("duplicate opfs paths in one bundle are refused (never a silent last-wins)", () => {
+  let threw: any = null;
+  try {
+    parseArchive(
+      craftBundle({
+        opfs: [
+          { path: "memory/x", encoding: "utf8", data: "a" },
+          { path: "memory/x", encoding: "utf8", data: "b" },
+        ],
+      }),
+    );
+  } catch (err) {
+    threw = err;
+  }
+  assert(threw instanceof ArchiveFormatError);
+  assertEquals(threw.code, "archive-bad-shape");
+});
+
+Deno.test("malformed or duplicate alarm records are refused at parse", () => {
+  for (const alarms of [[{ scheduledTime: 5 }], [{ name: 123 }], [{ name: "a", scheduledTime: "soon" }], [{ name: "a", periodInMinutes: "x" }], [{ name: "a" }, { name: "a" }]]) {
+    let threw: any = null;
+    try {
+      parseArchive(craftBundle({ alarms }));
+    } catch (err) {
+      threw = err;
+    }
+    assert(threw instanceof ArchiveFormatError, `typed refusal for alarms ${JSON.stringify(alarms)}`);
+    assertEquals(threw.code, "archive-bad-shape");
+  }
+});
+
+Deno.test("a missing or internally inconsistent manifest is a typed refusal", () => {
+  // Missing manifest.
+  const noManifest: any = JSON.parse(craftBundle({ kv: { a: 1 } }));
+  delete noManifest.manifest;
+  let threw: any = null;
+  try {
+    parseArchive(JSON.stringify(noManifest));
+  } catch (err) {
+    threw = err;
+  }
+  assert(threw instanceof ArchiveFormatError);
+  assertEquals(threw.code, "archive-bad-manifest");
+
+  // Wrong counts.
+  for (const tamper of [(b: any) => { b.manifest.kvKeys += 1; }, (b: any) => { b.manifest.opfsFiles += 1; }, (b: any) => { b.manifest.alarms += 1; }, (b: any) => { b.manifest.totalBytes += 1; }]) {
+    const b: any = JSON.parse(
+      craftBundle({
+        kv: { a: 1 },
+        opfs: [{ path: "memory/x", encoding: "utf8", data: "x" }],
+        alarms: [{ name: "n" }],
+      }),
+    );
+    tamper(b);
+    threw = null;
+    try {
+      parseArchive(JSON.stringify(b));
+    } catch (err) {
+      threw = err;
+    }
+    assert(threw instanceof ArchiveFormatError, "typed refusal for tampered manifest");
+    assertEquals(threw.code, "archive-manifest-mismatch");
+  }
+});
+
+Deno.test("a mid-apply kvSet failure rolls back to a byte-identical profile", async () => {
+  const bundle = await runExport(fixtureBackends());
+  const target = nonEmptyTarget();
+  const before = await snapshotProfile(target);
+  const realKvSet = target.kv.kvSet.bind(target.kv);
+  let kvSetCalls = 0;
+  const kvSet = async (o: any) => {
+    if (++kvSetCalls === 2) throw new Error("QUOTA_BYTES exceeded"); // #1 is the recovery journal, #2 the bundle kv
+    return realKvSet(o);
+  };
+  let err: any = null;
+  try {
+    await importArchive(bundle, { kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms, overwrite: true });
+  } catch (e) {
+    err = e;
+  }
+  assertEquals(err?.code, "import-rollback");
+  await assertByteIdentical(before, target);
+});
+
+Deno.test("an OPFS write failure mid-apply rolls back and restores collided files exactly", async () => {
+  const bundle = await runExport(fixtureBackends());
+  const target = nonEmptyTarget();
+  const before = await snapshotProfile(target);
+  const realWrite = target.opfs.writeFile.bind(target.opfs);
+  let writes = 0;
+  target.opfs.writeFile = async (p: string, bytes: Uint8Array) => {
+    if (++writes === 3) throw new Error("EWRITE: quota exceeded on the third file");
+    return realWrite(p, bytes);
+  };
+  let err: any = null;
+  try {
+    await importArchive(bundle, { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms, overwrite: true });
+  } catch (e) {
+    err = e;
+  }
+  assertEquals(err?.code, "import-rollback");
+  await assertByteIdentical(before, target);
+});
+
+Deno.test("a verify-time read failure rolls back instead of leaving a half-restored profile", async () => {
+  const bundle = await runExport(fixtureBackends());
+  const target = nonEmptyTarget(); // memory/master/threads collides → 1 sidecar read
+  const before = await snapshotProfile(target);
+  const realRead = target.opfs.readFile.bind(target.opfs);
+  let reads = 0;
+  target.opfs.readFile = async (p: string) => {
+    if (++reads === 3) return new Uint8Array([1, 2, 3]); // corrupt the 2nd verify read
+    return realRead(p);
+  };
+  let err: any = null;
+  try {
+    await importArchive(bundle, { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms, overwrite: true });
+  } catch (e) {
+    err = e;
+  }
+  assertEquals(err?.code, "import-rollback");
+  await assertByteIdentical(before, target);
+});
+
+Deno.test("an alarms.create failure rolls back and the pre-existing alarm survives", async () => {
+  const bundle = await runExport(fixtureBackends());
+  const target = nonEmptyTarget();
+  const before = await snapshotProfile(target);
+  const realCreate = target.alarms.create.bind(target.alarms);
+  let creates = 0;
+  target.alarms.create = async (name: string, info: any) => {
+    if (++creates === 1) throw new Error("alarm create failed");
+    return realCreate(name, info);
+  };
+  let err: any = null;
+  try {
+    await importArchive(bundle, { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms, overwrite: true });
+  } catch (e) {
+    err = e;
+  }
+  assertEquals(err?.code, "import-rollback");
+  await assertByteIdentical(before, target);
+});
+
+Deno.test("when the rollback itself fails the error says so (import-rollback-failed)", async () => {
+  const bundle = await runExport(fixtureBackends());
+  const target = nonEmptyTarget();
+  const realWrite = target.opfs.writeFile.bind(target.opfs);
+  let writes = 0;
+  target.opfs.writeFile = async (p: string, bytes: Uint8Array) => {
+    if (++writes >= 3) throw new Error("EWRITE: failing the apply AND the rollback restore");
+    return realWrite(p, bytes);
+  };
+  let err: any = null;
+  try {
+    await importArchive(bundle, { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms, overwrite: true });
+  } catch (e) {
+    err = e;
+  }
+  assert(err instanceof ArchiveFormatError);
+  assertEquals(err.code, "import-rollback-failed");
+});
+
+Deno.test("a leftover recovery journal self-heals at the next import: originals restored, then the target check still refuses", async () => {
+  const target = {
+    kv: mockKv({
+      "cap:namedAgents": [{ id: "post-death-value" }],
+      "cap:importBackup": {
+        kvNew: ["cap:namedAgents"],
+        kvOld: { "cap:namedAgents": [{ id: "original-agent" }] },
+        filesNew: ["memory/master/threads"],
+        filesOld: { "memory/master/threads": b64Encode(new TextEncoder().encode("{}")) },
+        alarmsNew: ["cap-scheduled:crashed-import"],
+        alarmsOld: [{ name: "orig-alarm", periodInMinutes: 5 }],
+      },
+    }),
+    opfs: mockOpfs({ "memory/master/threads": "post-death-bytes" }),
+    alarms: mockAlarms([{ name: "cap-scheduled:crashed-import" }]),
+  };
+  const bundle = await runExport(fixtureBackends());
+  await assertRejects(
+    () => importArchive(bundle, { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms }),
+    Error,
+    "not empty",
+  );
+  // The journal was applied BEFORE the target check: originals back, sidecar gone.
+  assertEquals(target.kv.store.get("cap:namedAgents"), [{ id: "original-agent" }]);
+  assertEquals(target.kv.store.has("cap:importBackup"), false);
+  assertEquals(new TextDecoder().decode(target.opfs.map.get("memory/master/threads")), "{}");
+  const alarms = await target.alarms.getAll();
+  assertEquals(alarms, [{ name: "orig-alarm", periodInMinutes: 5 }]);
+});
+
+Deno.test("reserved recovery namespaces are refused in bundles (kv key and opfs root)", () => {
+  for (const sections of [{ kv: { "cap:importBackup": { stale: true } } }, { opfs: [{ path: "cap-import-backup/journal", encoding: "utf8", data: "x" }] }] as any[]) {
+    let threw: any = null;
+    try {
+      parseArchive(craftBundle(sections));
+    } catch (err) {
+      threw = err;
+    }
+    assert(threw instanceof ArchiveFormatError, "typed refusal for reserved namespace");
+    assertEquals(threw.code, "archive-bad-shape");
+  }
+});
+
+Deno.test("empty-section bundles restore an empty profile cleanly in both overwrite modes (regression guard)", async () => {
+  const emptyBundle = craftBundle({});
+  // Overwrite onto a non-empty target: everything pre-existing is pruned.
+  const target = nonEmptyTarget();
+  const report = await importArchive(emptyBundle, { kvSet: target.kv.kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms, overwrite: true });
+  assertEquals(report.ok, true);
+  assertEquals(report.restored, { kvKeys: 0, opfsFiles: 0, alarms: 0 });
+  await assertByteIdentical(await snapshotProfile({ kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) }), target);
+  // Clean target, no overwrite needed.
+  const clean = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
+  const report2 = await importArchive(emptyBundle, { kvSet: clean.kv.kvSet, kvGet: clean.kv.kvGet, kvRemove: clean.kv.kvRemove, opfs: clean.opfs, alarms: clean.alarms });
+  assertEquals(report2.ok, true);
+  assertEquals(report2.restored, { kvKeys: 0, opfsFiles: 0, alarms: 0 });
+});
+
+Deno.test("a recovery-journal write failure is a typed refusal that touches nothing", async () => {
+  const bundle = await runExport(fixtureBackends());
+  const target = nonEmptyTarget();
+  const before = await snapshotProfile(target);
+  const realKvSet = target.kv.kvSet.bind(target.kv);
+  let kvSetCalls = 0;
+  const kvSet = async (o: any) => {
+    if (++kvSetCalls === 1) throw new Error("QUOTA_BYTES exceeded on the journal write");
+    return realKvSet(o);
+  };
+  let err: any = null;
+  try {
+    await importArchive(bundle, { kvSet, kvGet: target.kv.kvGet, kvRemove: target.kv.kvRemove, opfs: target.opfs, alarms: target.alarms, overwrite: true });
+  } catch (e) {
+    err = e;
+  }
+  assert(err instanceof ArchiveFormatError, "typed refusal before any mutation");
+  await assertByteIdentical(before, target);
+});
+
+Deno.test("recoverPendingImport reads the sidecar through the real {key: value} get-envelope contract", async () => {
+  // lib/kv.js mirrors chrome.storage.local.get: a single-key read returns the
+  // {key: value} envelope, NOT the bare value. recoverPendingImport must read
+  // the journal through that envelope (regression guard: treating the empty
+  // envelope {} as a live journal made every boot call kvRemove).
+  const kv = mockKv({
+    "cap:importBackup": {
+      kvNew: ["cap:namedAgents"],
+      kvOld: { "cap:namedAgents": [{ id: "original-agent" }] },
+      filesNew: ["memory/master/threads"],
+      filesOld: { "memory/master/threads": b64Encode(new TextEncoder().encode("{}")) },
+      alarmsNew: ["crashed-import-alarm"],
+      alarmsOld: [{ name: "orig-alarm", periodInMinutes: 5 }],
+    },
+  });
+  const realKvGet = kv.kvGet;
+  const envelopeKvGet = async (key: string | null) => {
+    if (key === null) return realKvGet(null);
+    return { [key]: await realKvGet(key) }; // the real chrome.storage.local.get shape
+  };
+  const opfs = mockOpfs({ "memory/master/threads": "post-death-bytes" });
+  const alarms = mockAlarms([{ name: "crashed-import-alarm" }]);
+  const recovered = await recoverPendingImport({ kvGet: envelopeKvGet, kvSet: kv.kvSet, kvRemove: kv.kvRemove, opfs, alarms });
+  assertEquals(recovered, true);
+  assertEquals(kv.store.get("cap:namedAgents"), [{ id: "original-agent" }]);
+  assertEquals(kv.store.has("cap:importBackup"), false);
+  assertEquals(new TextDecoder().decode(opfs.map.get("memory/master/threads")), "{}");
+  assertEquals(await alarms.getAll(), [{ name: "orig-alarm", periodInMinutes: 5 }]);
+  // And an absent journal through the same envelope is a no-op (no writes).
+  const kv2 = mockKv({});
+  const envelopeKvGet2 = async (key: string | null) => (key === null ? {} : { [key]: undefined });
+  const opfs2 = mockOpfs({});
+  const removed: string[] = [];
+  const noJournal = await recoverPendingImport({
+    kvGet: envelopeKvGet2,
+    kvSet: kv2.kvSet,
+    kvRemove: async (k: string) => {
+      removed.push(k);
+    },
+    opfs: opfs2,
+    alarms: mockAlarms([]),
+  });
+  assertEquals(noJournal, false);
+  assertEquals(removed, []);
+});
+
+Deno.test("sidecar lifecycle: deleted on success and completed rollback; kept ONLY on failed recovery", async () => {
+  const bundle = await runExport(fixtureBackends());
+  // (a) success: the commit KV sweep deletes the journal.
+  const ok = nonEmptyTarget();
+  await importArchive(bundle, { kvSet: ok.kv.kvSet, kvGet: ok.kv.kvGet, kvRemove: ok.kv.kvRemove, opfs: ok.opfs, alarms: ok.alarms, overwrite: true });
+  assertEquals(ok.kv.store.has("cap:importBackup"), false, "success path must delete the sidecar");
+  // (b) completed rollback: recoverPendingImport's last statement deletes it.
+  const rb = nonEmptyTarget();
+  const realWrite = rb.opfs.writeFile.bind(rb.opfs);
+  let writes = 0;
+  rb.opfs.writeFile = async (p: string, bytes: Uint8Array) => {
+    if (++writes === 3) throw new Error("EWRITE");
+    return realWrite(p, bytes);
+  };
+  let err: any = null;
+  try {
+    await importArchive(bundle, { kvSet: rb.kv.kvSet, kvGet: rb.kv.kvGet, kvRemove: rb.kv.kvRemove, opfs: rb.opfs, alarms: rb.alarms, overwrite: true });
+  } catch (e) {
+    err = e;
+  }
+  assertEquals(err?.code, "import-rollback");
+  assertEquals(rb.kv.store.has("cap:importBackup"), false, "completed rollback must delete the sidecar");
+  // (c) FAILED recovery is the ONLY state where the sidecar survives — it is
+  // the last durable copy of the original profile for boot-recovery retry.
+  const fail = nonEmptyTarget();
+  const fw = fail.opfs.writeFile.bind(fail.opfs);
+  let fwrites = 0;
+  fail.opfs.writeFile = async (p: string, bytes: Uint8Array) => {
+    if (++fwrites >= 3) throw new Error("EWRITE: apply AND rollback fail");
+    return fw(p, bytes);
+  };
+  let err2: any = null;
+  try {
+    await importArchive(bundle, { kvSet: fail.kv.kvSet, kvGet: fail.kv.kvGet, kvRemove: fail.kv.kvRemove, opfs: fail.opfs, alarms: fail.alarms, overwrite: true });
+  } catch (e) {
+    err2 = e;
+  }
+  assertEquals(err2?.code, "import-rollback-failed");
+  assertEquals(fail.kv.store.has("cap:importBackup"), true, "a failed recovery must KEEP the sidecar for boot retry");
+  // And a later successful recovery (as boot would do once the fault clears)
+  // finally deletes it.
+  fail.opfs.writeFile = fw; // the transient I/O fault clears
+  const after = { kv: fail.kv, opfs: fail.opfs, alarms: fail.alarms };
+  const backends = { kvGet: after.kv.kvGet, kvSet: after.kv.kvSet, kvRemove: after.kv.kvRemove, opfs: after.opfs, alarms: after.alarms };
+  assertEquals(await recoverPendingImport(backends), true);
+  assertEquals(after.kv.store.has("cap:importBackup"), false, "a later completed recovery deletes the sidecar");
 });
