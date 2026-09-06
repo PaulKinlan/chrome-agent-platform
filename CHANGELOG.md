@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.286] — 2026-09-06
+- Internal cleanup: the full test command runs again instead of stopping on a check that was removed
+
 ## [0.3.285] — 2026-09-06
 - The project docs now point at the live task list rather than the retired markdown files, and describe the review rule that actually exists
 
