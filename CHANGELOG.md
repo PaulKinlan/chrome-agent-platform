@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.294] — 2026-09-06
+- Automated browser checks now detect when a page throws an internal error and when a browser command is rejected
+
 ## [0.3.293] — 2026-09-06
 - Bundled tools that need more memory — the barcode tool and the zstd/brotli tool — no longer refuse to start inside an agent task
 
