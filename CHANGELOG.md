@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.285] — 2026-09-06
+- bundled wasm provenance audit — hash_blake3 manifest status truth
+
 ## [0.3.284] — 2026-09-06
 - The user WebAssembly store now supports shared owner-managed binary files
 
