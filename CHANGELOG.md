@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.286] — 2026-09-06
+- bundled tool invocation spot-check harness
+
 ## [0.3.285] — 2026-09-06
 - bundled wasm provenance audit — hash_blake3 manifest status truth
 
