@@ -1,0 +1,199 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:3wei0000-0000-4000-8000-000000000001",
+  "version": 1,
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00Z",
+    "tools": {
+      "components": [
+        {
+          "type": "application",
+          "name": "rustc",
+          "version": "stable (rustup)"
+        },
+        {
+          "type": "application",
+          "name": "cargo",
+          "version": "stable (rustup)"
+        }
+      ]
+    },
+    "component": {
+      "type": "application",
+      "bom-ref": "hasher@1.0.0",
+      "name": "hasher",
+      "version": "1.0.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c5f0f9b744f1c5c5620ccf48bfa894c932c2f5ebb0105d7d8cadfa1df5de7d3b"
+        }
+      ],
+      "description": "CAP-authored WASI hash tool: sha2/sha3/blake2b/blake3 digests over stdin/stdout (chrome-agent-platform-3wei)"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "arrayref@0.3.9",
+      "name": "arrayref",
+      "version": "0.3.9",
+      "purl": "pkg:cargo/arrayref@0.3.9"
+    },
+    {
+      "type": "library",
+      "bom-ref": "arrayvec@0.7.8",
+      "name": "arrayvec",
+      "version": "0.7.8",
+      "purl": "pkg:cargo/arrayvec@0.7.8"
+    },
+    {
+      "type": "library",
+      "bom-ref": "blake2@0.10.6",
+      "name": "blake2",
+      "version": "0.10.6",
+      "purl": "pkg:cargo/blake2@0.10.6"
+    },
+    {
+      "type": "library",
+      "bom-ref": "blake3@1.8.2",
+      "name": "blake3",
+      "version": "1.8.2",
+      "purl": "pkg:cargo/blake3@1.8.2"
+    },
+    {
+      "type": "library",
+      "bom-ref": "block-buffer@0.10.4",
+      "name": "block-buffer",
+      "version": "0.10.4",
+      "purl": "pkg:cargo/block-buffer@0.10.4"
+    },
+    {
+      "type": "library",
+      "bom-ref": "cc@1.4.5",
+      "name": "cc",
+      "version": "1.4.5",
+      "purl": "pkg:cargo/cc@1.4.5"
+    },
+    {
+      "type": "library",
+      "bom-ref": "cfg-if@1.0.4",
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "purl": "pkg:cargo/cfg-if@1.0.4"
+    },
+    {
+      "type": "library",
+      "bom-ref": "constant_time_eq@0.3.1",
+      "name": "constant_time_eq",
+      "version": "0.3.1",
+      "purl": "pkg:cargo/constant_time_eq@0.3.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "cpufeatures@0.2.17",
+      "name": "cpufeatures",
+      "version": "0.2.17",
+      "purl": "pkg:cargo/cpufeatures@0.2.17"
+    },
+    {
+      "type": "library",
+      "bom-ref": "crypto-common@0.1.7",
+      "name": "crypto-common",
+      "version": "0.1.7",
+      "purl": "pkg:cargo/crypto-common@0.1.7"
+    },
+    {
+      "type": "library",
+      "bom-ref": "digest@0.10.7",
+      "name": "digest",
+      "version": "0.10.7",
+      "purl": "pkg:cargo/digest@0.10.7"
+    },
+    {
+      "type": "library",
+      "bom-ref": "find-msvc-tools@0.1.12",
+      "name": "find-msvc-tools",
+      "version": "0.1.12",
+      "purl": "pkg:cargo/find-msvc-tools@0.1.12"
+    },
+    {
+      "type": "library",
+      "bom-ref": "generic-array@0.14.7",
+      "name": "generic-array",
+      "version": "0.14.7",
+      "purl": "pkg:cargo/generic-array@0.14.7"
+    },
+    {
+      "type": "library",
+      "bom-ref": "hasher@1.0.0",
+      "name": "hasher",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/hasher@1.0.0"
+    },
+    {
+      "type": "library",
+      "bom-ref": "hex@0.4.3",
+      "name": "hex",
+      "version": "0.4.3",
+      "purl": "pkg:cargo/hex@0.4.3"
+    },
+    {
+      "type": "library",
+      "bom-ref": "keccak@0.1.6",
+      "name": "keccak",
+      "version": "0.1.6",
+      "purl": "pkg:cargo/keccak@0.1.6"
+    },
+    {
+      "type": "library",
+      "bom-ref": "libc@0.2.189",
+      "name": "libc",
+      "version": "0.2.189",
+      "purl": "pkg:cargo/libc@0.2.189"
+    },
+    {
+      "type": "library",
+      "bom-ref": "sha2@0.10.9",
+      "name": "sha2",
+      "version": "0.10.9",
+      "purl": "pkg:cargo/sha2@0.10.9"
+    },
+    {
+      "type": "library",
+      "bom-ref": "sha3@0.10.8",
+      "name": "sha3",
+      "version": "0.10.8",
+      "purl": "pkg:cargo/sha3@0.10.8"
+    },
+    {
+      "type": "library",
+      "bom-ref": "shlex@2.0.1",
+      "name": "shlex",
+      "version": "2.0.1",
+      "purl": "pkg:cargo/shlex@2.0.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "subtle@2.6.1",
+      "name": "subtle",
+      "version": "2.6.1",
+      "purl": "pkg:cargo/subtle@2.6.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "typenum@1.20.1",
+      "name": "typenum",
+      "version": "1.20.1",
+      "purl": "pkg:cargo/typenum@1.20.1"
+    },
+    {
+      "type": "library",
+      "bom-ref": "version_check@0.9.5",
+      "name": "version_check",
+      "version": "0.9.5",
+      "purl": "pkg:cargo/version_check@0.9.5"
+    }
+  ]
+}

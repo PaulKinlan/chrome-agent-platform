@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.266] — 2026-09-06
+- Merge commit 'a4ae5c4c' into cap-beads-3wei
+
 ## [0.3.265] — 2026-09-06
 - Internal cleanup: remove a folder of old screenshots that were stored in the wrong place
 

@@ -1,0 +1,6 @@
+# The bundled admission authority requires a DECLARED memory maximum
+# (wasm-package-authority.js readMemoryLimits → memory_max_missing).
+# The effective flags live in build.sh's RUSTFLAGS (env rustflags REPLACE
+# config rustflags in cargo): -C link-arg=--max-memory=134217728 (2048 pages,
+# the authority's default tier) plus the --remap-path-prefix pair (no
+# builder-local path embedded).
