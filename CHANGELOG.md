@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.289] — 2026-09-06
+- Internal cleanup: the agent guidance file points at the live task list, names only paths that exist, and spells out every step of setting up a fresh checkout
+
 ## [0.3.288] — 2026-09-06
 - Internal cleanup: the full test command runs again instead of stopping on a check that was removed
 

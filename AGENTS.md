@@ -29,7 +29,13 @@ Many agents work on this repo AT THE SAME TIME. That is the expected mode, not
 an exception. These rules make that safe:
 
 1. **Every agent works in its OWN git worktree on a fresh branch off the
-   `origin/main` tip** (`git fetch origin && git worktree add <path> -b <branch> origin/main`).
+   `origin/main` tip** — `git fetch origin && git worktree add <path> -b <branch> origin/main`,
+   then set it up before the first gate: `npm ci` (the npm deps), `deno install` (the deno
+   store — since chrome-agent-platform-63et `build.mjs` resolves a deno.lock transitive from
+   `node_modules/.deno/`, and a worktree without it fails the store build and the whole
+   serial test phase with "build target mismatch"), then `npm run build` (the
+   `extension/dist/` artifacts the type-checked suite imports). A fresh worktree has none
+   of the three, and each gap fails somewhere that does not name it.
    Never implement directly in the primary checkout (`~/chrome-agent-platform`)
    — the primary checkout is shared by every session, and one session moving
    its `main` ref or leaving dirty files breaks everyone else (this happened
@@ -52,9 +58,9 @@ an exception. These rules make that safe:
 
 ## Task tracking: beads only (Paul, 2026-09-02 — HARD RULE)
 
-**bd (beads) is the ONLY task/bug/next-work tracker.** TASKS.md, TASKS-DONE.md,
-KNOWN-ISSUES.md and every other markdown tracker are RETIRED — they are legacy
-views kept only for history. Never create, update, or consult them for state;
+**bd (beads) is the ONLY task/bug/next-work tracker.** The RETIRED markdown trackers —
+TASKS.md, TASKS-DONE.md, KNOWN-ISSUES.md, docs/UI-FIXES-TRACKER.md — are legacy views
+kept only for history. Never create, update, or consult them for state;
 a markdown tracker entry is not a task. Everything lives in beads, synced to
 the GitHub remote via `bd dolt push` (a post-commit hook does this
 automatically; run it manually after beads-only changes).
@@ -177,13 +183,15 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
 
 ## The skills
 - **beads-flow** (.agents/skills/beads-flow) — the fast loop: pick the next
-  bead, work it, gate it, ship it. Start here when picking up work.
-- **beads** (.agents/skills/beads) — full beads workflow guidance.
+  bead, work it, gate it, ship it. Start here when picking up work. There is no
+  separate in-repo beads skill: `bd --help` and https://beads.gascity.com/workflows
+  are the full workflow reference.
 - **impeccable** (.agents/skills/impeccable) — the design skill. Use it for EVERY
-  UI/design task (the craft-floor, PRODUCT.md, DESIGN.md). Always loaded for design work.
-- **modern-web-guidance** (.agents/skills/modern-web-guidance) — modern web APIs
-  (base-select, Popover API, CSS anchor-positioning, View Transitions). Use it for
-  any modern-web feature.
+  UI/design task (the craft-floor, PRODUCT.md, docs/DESIGN.md). Always loaded for design work.
+- **modern-web-guidance** (a user-level pi skill on this machine,
+  `~/.pi/agent/skills/modern-web-guidance` — not in this repo; it appears in the
+  session's skill list) — modern web APIs (base-select, Popover API, CSS
+  anchor-positioning, View Transitions). Use it for any modern-web feature.
 - skills/web-resilience-audit + skills/web-resilience-fix — the project's
   resilience checks. Run them on the surfaces where applicable.
 
@@ -214,9 +222,9 @@ read in run 2.
   workspace at all, and agent A's files are never visible to agent B.
 
 ## Working conventions (Paul, 2026-08-16)
-- **Track every ask.** Every product issue/request gets a stable entry in root
-  beads; UI detail also lives in `docs/UI-FIXES-TRACKER.md` (legacy view), and review/system
-  findings live in root `KNOWN-ISSUES.md`. Nothing is dropped.
+- **Track every ask.** Every product issue/request becomes a bead (`bd create`), with the
+  UI detail and the review/system findings in the bead itself — the markdown views that
+  once held them (`docs/UI-FIXES-TRACKER.md`, root `KNOWN-ISSUES.md`) are retired history. Nothing is dropped.
   Work through them in subagents; advance each only with the required evidence.
 - **Resolve open questions.** Read docs/OPEN-QUESTIONS.md; mark the questions Paul
   has answered (with the answer) + surface the genuinely-open ones.
@@ -258,8 +266,8 @@ read in run 2.
   for parallel implementation where the work genuinely divides. The review half of this
   rule — delegating to other instances (sol, GLM-5.3, deepseek-v4-pro) — no longer
   applies: that fleet is not available. See "Review without a second model". Findings
-  are still tracked in KNOWN-ISSUES and actioned; they now come from review passes and
-  from the owner using the product.
+  are still tracked — as beads now; the KNOWN-ISSUES file is retired history — and
+  actioned; they now come from review passes and from the owner using the product.
 - **Continuous skill/quality runs (Paul, 2026-08-17).** Spin up subagents to
   regularly run the quality skills in the background: the impeccable design pass
   (the UI consistency), the modern-web-guidance checks, and the web-resilience
@@ -274,9 +282,10 @@ read in run 2.
   moment of need, with a clear grant flow + a clear error only if the user denies.
   A feature that just fails with "permission required" is a bug.
 - **Docs never drift (Paul, 2026-08-17).** Before every commit, update the docs to
-  match the change: PLAN.md (the roadmap state), root KNOWN-ISSUES.md (the open/
-  fixed findings), docs/DESIGN.md (the design system), docs/OPEN-QUESTIONS.md,
-  docs/UI-FIXES-TRACKER.md, CHANGELOG.md (the version entry). A commit that lands
+  match the change: PLAN.md (the roadmap state), the bead (the open/fixed findings —
+  root KNOWN-ISSUES.md and docs/UI-FIXES-TRACKER.md are retired history, never updated),
+  docs/DESIGN.md (the design system), docs/OPEN-QUESTIONS.md, CHANGELOG.md (the version
+  entry). A commit that lands
   a feature/fix WITHOUT updating the docs is incomplete — the docs are part of the
   change. Stale docs are a defect (GLM flagged PLAN.md showing landed items as
   "in flight"). When in doubt, grep the docs for the thing you changed.
@@ -405,9 +414,12 @@ that the exec demo fails today on tool gating, on what the transcript keeps, and
 first screen — not on the tools, the models or the security boundaries. **Section 5 is the
 dependency-ordered work queue** (before the demo / the coworker thesis / hygiene) and
 **section 6 is the five-minute demo script with its ranked blockers.** Every finding carries
-a `CAP-FB-*` ID that exists in [`TASKS.md`](TASKS.md) with full acceptance criteria, gates
-and blockers; `CAP-FB-20260830-EXEC-DEMO-01` is the umbrella. The P0 ids are listed in
-[`KNOWN-ISSUES.md`](KNOWN-ISSUES.md). Three owner decisions gate the demo path (Q18 host
+a `CAP-FB-*` ID, and each id is a bead — find it with
+`bd list --desc-contains <CAP-FB-id> --status open,in_progress,blocked,deferred,closed`
+(the id sits in the bead's description or External field; the retired TASKS.md entries
+the ids once pointed at are history). `CAP-FB-20260830-EXEC-DEMO-01` is the umbrella. The
+P0 ids: `bd list -p 0 --status open,in_progress,blocked` (the retired KNOWN-ISSUES.md
+list of them is history). Three owner decisions gate the demo path (Q18 host
 access, Q19 page actions, Q12 default model) and carry recommended defaults in
 [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md).
 
@@ -415,13 +427,12 @@ Take work by following the beads-flow loop (`bd ready` → claim → durable wor
 alone. The earlier [`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md) (the delivery diagnosis)
 is kept as history; its two behavioural rules still apply:
 
-- **Put the `CAP-FB-*` ID in the commit subject**, so every `Recover:` command in the
-  tracker can find its own work.
+- **Put the bead id in the commit subject** (`chrome-agent-platform-<id>: <what the user
+  gets>`, plus the `CAP-FB-*` id where the bead carries one), so `git log --grep=<id>`
+  finds a lane's work; the `Recover:` commands this rule served lived in the retired TASKS.md.
 - **Never create a `-vN+1` attempt with no commit in `-vN`.** Stop and escalate instead.
 
-## Repository-local task recovery (2026-08-19)
-
-## Task recovery (2026-09-03)
+## Task recovery (2026-09-03; supersedes the 2026-08-19 repository-local recovery notes)
 
 Task state lives in beads (bd) — the Dolt database synced via `refs/dolt/data`
 on the GitHub remote. Recovery after a crash: `bd list --status in_progress`
@@ -559,8 +570,10 @@ the machinery.
    and land it. Re-review only what actually changed. Do not recreate reviewed work on a
    new base as a matter of course; that treadmill is what converted finished work into 46
    stale branches.
-4. **Put the `CAP-FB-*` ID in the commit subject.** Today 2 of 430 commits do, which is
-   why every `Recover:` command in `TASKS.md` fails to find its own work.
+4. **Put the bead id in the commit subject** (and the `CAP-FB-*` id where the bead carries
+   one). When this was written 2 of 430 commits carried their id, which is why every
+   `Recover:` command in the retired `TASKS.md` failed to find its own work; today
+   `git log --grep=<bead-id>` is how a lane's commits are found.
 5. **No worktree or retained evidence on a RAM-backed filesystem.** Both live on durable
    storage. Evidence whose only copy is on tmpfs is not evidence.
 6. **No `-vN+1` without a commit in `-vN`.** An agent about to create the next versioned
