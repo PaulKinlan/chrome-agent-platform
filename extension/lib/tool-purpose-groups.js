@@ -261,6 +261,7 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "uuid": "hashes-ids",
   // Bundled packages — images & media.
   "imageops": "media-images",
+  "zxing": "media-images",
   // Built-in core tools.
   "memory_get": "memory-usage",
   "memory_set": "memory-usage",

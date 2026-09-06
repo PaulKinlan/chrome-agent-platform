@@ -906,6 +906,42 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.zxing",
+  "version": "1.0.0",
+  "toolId": "zxing",
+  "lane": "zxing",
+  "displayName": "zxing",
+  "category": "media",
+  "description": "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
+  "caveats": [
+   "reads png/jpeg (anything stb_image decodes); writes png only; stdin/stdout; text is UTF-8.",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+  ],
+  "capabilities": [
+   "compute"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "Apache-2.0",
+   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "f0e567aebad58ed30b0ca751918c59c2b81642e58a5df81d6dbdce3334c0f98f",
+   "bytes": 1173493,
+   "tier": "default",
+   "initialPages": 22,
+   "maxPages": 2048
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.zxing-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.imageops",
   "version": "1.0.0",
   "toolId": "imageops",

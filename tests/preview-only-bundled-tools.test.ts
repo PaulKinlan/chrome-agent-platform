@@ -22,8 +22,8 @@ import { setRunFence, clearRunFence } from "../extension/lib/run-fence.js";
 import { ToolSelectionAuthority } from "../extension/lib/tool-selection.js";
 import { BUNDLED_INVENTORY } from "../extension/lib/bundled-inventory-data.js";
 
-Deno.test("hl4f census: partition of 33 admitted bundled tools into stream-backed and preview-only is exact", () => {
-  assertEquals(PREVIEW_TOOL_IDS.length, 33, "exactly 33 bundled tools admitted in catalog");
+Deno.test("hl4f census: partition of 34 admitted bundled tools into stream-backed and preview-only is exact", () => {
+  assertEquals(PREVIEW_TOOL_IDS.length, 34, "exactly 34 bundled tools admitted in catalog");
   const streamBacked = PREVIEW_TOOL_IDS.filter((id) => isStreamBackedBundledTool(id));
   const previewOnly = PREVIEW_TOOL_IDS.filter((id) => !isStreamBackedBundledTool(id));
 
@@ -34,7 +34,7 @@ Deno.test("hl4f census: partition of 33 admitted bundled tools into stream-backe
     "stream-backed allowlist matches known stream tools",
   );
 
-  assertEquals(previewOnly.length, 23, "exactly 23 preview-only tools");
+  assertEquals(previewOnly.length, 24, "exactly 24 preview-only tools");
   const expectedPreviewOnly = [
     "awk_filter_bounded",
     "compressops",
@@ -59,6 +59,7 @@ Deno.test("hl4f census: partition of 33 admitted bundled tools into stream-backe
     "truncate",
     "uuid",
     "xxd",
+    "zxing",
   ];
   assertEquals(
     JSON.stringify(previewOnly.sort()),

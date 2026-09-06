@@ -364,7 +364,11 @@ Rust wasm core, Python + JS; new)
 - Built with wasi-sdk (not Emscripten) → genuinely WASI-compiled, small
 - Upstream: https://github.com/nayuki/QR-Code-generator
 
-### zxing-wasm — ADMIT-NOW (barcode read + write)
+### zxing-wasm — SUPERSEDED (2026-09-06, 2htn: same blocker class as wasm-vips)
+- Measured at admission: zxing-wasm@3.1.3 ships Emscripten-built wasm whose imports are a minified JS-glue module (78 imports from module "a"; reader wasm sha256 2ebda08a93eea3efcd8399cda6b276e6a0b1de4fec60b4d8988a047de4c6d1ba). The bundled WASI-preview1-only authority cannot host it.
+- Shipped instead: **zxing** (cap.bundled.zxing 1.0.0) — CAP-authored WASI wrapper over zxing-cpp 2.3.0 (Apache-2.0) + stb_image/stb_image_write (MIT OR public domain): read (png/jpeg stdin → one JSON line per barcode) and write <format> <text> (→ png stdout) across qrcode/ean13/ean8/code128/code39/datamatrix/pdf417/aztec/upca; 1,173,493 bytes, 12 WASI imports, sha256 f0e567aebad58ed30b0ca751918c59c2b81642e58a5df81d6dbdce3334c0f98f, byte-reproducible (build-a == build-b). Evidence: packages/bundled/evidence/zxing/.
+
+### zxing-wasm — ADMIT-NOW (catalogue verdict history — see the SUPERSEDED note above)
 - Repo: https://github.com/Sec-ant/zxing-wasm · npm: https://www.npmjs.com/package/zxing-wasm
 - License: MIT (wrapper) + Apache-2.0 (zxing-cpp) + BSD-3-Clause (zint)
 - v3.1.3 · 1.87M weekly downloads · Web/Node/Bun/Deno, typed ESM+CJS

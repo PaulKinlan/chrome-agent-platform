@@ -1,0 +1,133 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "cap-zxing",
+      "version": "1.0.0",
+      "description": "CAP-authored WASI barcode read/write wrapper over zxing-cpp + stb"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "zxing-cpp",
+      "version": "2.3.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/zxing-cpp/zxing-cpp"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "64e4139103fdbc57752698ee15b5f0b0f7af9a0331ecbdc492047e0772c417ba"
+        }
+      ],
+      "properties": [
+        {
+          "name": "artifact",
+          "value": "v2.3.0 release tarball"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "stb_image",
+      "version": "2.30",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        },
+        {
+          "license": {
+            "name": "public domain"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/nothings/stb"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "594c2fe35d49488b4382dbfaec8f98366defca819d916ac95becf3e75f4200b3"
+        }
+      ],
+      "properties": [
+        {
+          "name": "commit",
+          "value": "2c980bb59875b0d32144a71867fbdebb2f77cd20"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "stb_image_write",
+      "version": "1.16",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        },
+        {
+          "license": {
+            "name": "public domain"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/nothings/stb"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cbd5f0ad7a9cf4468affb36354a1d2338034f2c12473cf1a8e32053cb6914a05"
+        }
+      ],
+      "properties": [
+        {
+          "name": "commit",
+          "value": "2c980bb59875b0d32144a71867fbdebb2f77cd20"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "wasi-libc",
+      "version": "wasi-sdk-22.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/WebAssembly/wasi-sdk"
+        }
+      ]
+    }
+  ]
+}

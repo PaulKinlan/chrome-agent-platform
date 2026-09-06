@@ -1,0 +1,4 @@
+toolchain=clang version 22.1.8
+sdk=wasi-sysroot (path intentionally not recorded — evidence must stay relocation-neutral)
+flags=-O2 -DNDEBUG -g0 -std=c++17 -Wno-deprecated-declarations -ffile-prefix-map=<root>=/src -ffile-prefix-map=<sysroot>=/wasi-sysroot -Wl,--strip-all -Wl,-z,stack-size=1048576 -Wl,--max-memory=134217728
+reproducible: byte-identical

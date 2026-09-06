@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.267] — 2026-09-06
+- The toolbox gains zxing — read barcodes from images and write new ones (QR, EAN-13, Code 128, Data Matrix, and more), entirely on-device.
+
 ## [0.3.266] — 2026-09-06
 - Settings once again saves your WebAssembly files locally, native WebMCP tools again receive valid JSON arguments, and test-only browsers no longer block real Chrome checks.
 

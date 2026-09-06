@@ -260,7 +260,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   assertEquals(validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true }) }).toolId, "sqlite3_query_bounded");
   // gzip + truncate + touch + sqlite are the appended tools after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -269,7 +269,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assertEquals(spec.argv0, spec.toolId, "argv0 == the exact toolId");
     // Binary-at-the-pipe tools emit base64: gzip always; imageops except its
     // info subcommand (per-argv, previewStdoutEncoding).
-    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" ? "base64" : "utf8";
+    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" || spec.toolId === "zxing" ? "base64" : "utf8";
     assertEquals(spec.stdoutEncoding, expectedEncoding, `${spec.toolId}: immutable output encoding`);
   }
 });
@@ -361,7 +361,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 33 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 34 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
@@ -481,10 +481,10 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 33-tool static allowlist admits every shipped package", async () => {
+Deno.test("preview: the EXACT 34-tool static allowlist admits every shipped package", async () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd"],
+    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "markdown", "md5sum", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const row of admitted) {
     assertEquals(row.settingsPreview, true, row.toolId);
@@ -492,7 +492,7 @@ Deno.test("preview: the EXACT 33-tool static allowlist admits every shipped pack
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 0, "all 33 are enabled");
+  assertEquals(notAdmitted.length, 0, "all 34 are enabled");
   assertEquals(notAdmitted.map((row) => row.toolId).sort(), []);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);

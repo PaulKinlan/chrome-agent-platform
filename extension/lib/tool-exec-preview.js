@@ -89,7 +89,7 @@ export const PREVIEW_SPECS = Object.freeze(
           // its validated trusted argv through previewStdoutEncoding().
           // Binary-at-the-pipe tools emit base64 (gzip always; imageops except
           // its info subcommand, resolved per-argv in previewStdoutEncoding).
-          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" ? "base64" : "utf8",
+          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" ? "base64" : "utf8",
           ...(row.toolId === "gzip" ? {
             allowedArgs: Object.freeze([
               Object.freeze([]),
@@ -173,6 +173,11 @@ export function previewStdoutEncoding(toolId, inputArgs = []) {
     // info emits a small JSON line (utf8); resize/convert emit image bytes
     // (base64 at the tool boundary).
     return inputArgs[0] === "info" ? "utf8" : "base64";
+  }
+  if (toolId === "zxing") {
+    // read emits JSON lines (utf8); write emits PNG bytes (base64 at the
+    // tool boundary).
+    return inputArgs[0] === "read" ? "utf8" : "base64";
   }
   return toolId === "base64" && inputArgs.length === 1 &&
       (inputArgs[0] === "-d" || inputArgs[0] === "--decode")
