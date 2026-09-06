@@ -24,10 +24,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Each is still run and printed as EXPECTED-RED with its owner every time; the
 // run FAILS the moment one passes so the entry is removed here. Never a skip.
 const EXPECTED_RED: Record<string, string> = {
-  // The Usage "7 days" range chip: white on the dark-scheme accent (2.39:1).
-  "settings: contrast — no AA failures": "CAP-FB-20260827-SETTINGS-MONOLITH-01",
   // The four "Get a … API key" provider links render 69x19 (under the 24px floor).
   "settings: no interactive element under 24x24 px (canonical switch-toggle allowed)": "CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01",
+  // RETIRED (chrome-agent-platform-57mu): "settings: contrast — no AA failures"
+  // used to be owned by CAP-FB-20260827-SETTINGS-MONOLITH-01 and now passes, so
+  // the harness reported UNEXPECTED-GREEN and failed the run by design. The
+  // entry was also too broad to keep: contrast is a PER-SECTION property, and a
+  // blanket "settings" key silently covered only whichever section rendered on
+  // load. Section surfaces ("settings:permissions", …) carry their own keys.
 };
 const checker = makeChecker({ expectedRed: EXPECTED_RED });
 const check = (name: string, cond: boolean, detail?: unknown) => checker.check(name, cond, detail);
@@ -455,10 +459,62 @@ async function main() {
     const nonSwitch = (a.smallTargets || []).filter((s: string) => !/ 36x20$/.test(s));
     check("settings: no interactive element under 24x24 px (canonical switch-toggle allowed)", nonSwitch.length === 0, nonSwitch);
 
-    // the settings must expose every optional capability (the permission rows)
-    const capRows = await cdp.evl(page.sessionId,
-      `document.querySelectorAll('#permission-list capability-row, #permission-list .perm-row').length`);
-    check("settings: the permission list renders the capability rows", Number(capRows) >= 6, capRows);
+    // The Settings page is MULTI-SECTION and renders a section only when the
+    // owner navigates to it (extension/options/options.js renderSection() →
+    // renderPermissions() for `permissions`, guarded by ensureSectionRendered),
+    // so the capability rows do not exist on a freshly opened page. Reading the
+    // count there was always 0 — a stale-timing test defect, not a missing
+    // product feature (chrome-agent-platform-57mu).
+    //
+    // Navigate with REAL mouse events at the nav item's own box: that the
+    // target is hit-testable and big enough to hit is part of what this audit
+    // exists to check, and a synthetic .click() would prove less.
+    const navBoxRaw = await cdp.evl(page.sessionId, `(() => {
+      const link = document.querySelector('a.nav-item[data-section="permissions"]');
+      if (!link) return "absent";
+      const r = link.getBoundingClientRect();
+      return JSON.stringify({ x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height });
+    })()`);
+    // A missing nav item is a FAILED CHECK, not a thrown page error: the audit
+    // must still report the rows it never got, so the red names both halves.
+    const navBox = String(navBoxRaw ?? "absent") === "absent"
+      ? null
+      : JSON.parse(String(navBoxRaw));
+    check("settings: the permissions nav item exists and is a real hit target (at least 24x24)",
+      navBox !== null && Number(navBox.w) >= 24 && Number(navBox.h) >= 24, navBox ?? "no a.nav-item[data-section=permissions]");
+    if (navBox) {
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await cdp.send("Input.dispatchMouseEvent", {
+          type, x: navBox.x, y: navBox.y, button: "left", clickCount: 1,
+        }, page.sessionId);
+      }
+    }
+    // Bounded wait for the section's rows: rendering is async (each capability
+    // resolves its own state), so poll instead of sleeping a guessed length.
+    let capRows = 0;
+    const rowsDeadline = Date.now() + 15000;
+    for (;;) {
+      capRows = Number(await cdp.evl(page.sessionId,
+        `document.querySelectorAll('#permission-list capability-row, #permission-list .perm-row').length`));
+      if (capRows > 0 || Date.now() > rowsDeadline) break;
+      await sleep(150);
+    }
+    // The settings must expose every optional capability (the permission rows).
+    check("settings: the permission list renders the capability rows", capRows >= 6, capRows);
+
+    // Contrast, labels and target sizes are PER SECTION: the page-level pass
+    // above only ever saw whichever section rendered on load, which is how a
+    // blanket "settings: contrast" EXPECTED_RED entry went stale while nobody
+    // audited the other eleven sections (57mu). Analyse the section we just
+    // navigated to as its own surface.
+    const perm = await analyze(cdp, page.sessionId, "settings:permissions");
+    check("settings:permissions: no unlabeled interactive controls",
+      (perm.unlabeled || []).length === 0, perm.unlabeled);
+    check("settings:permissions: contrast — no AA failures",
+      (perm.contrastFails || []).length === 0, perm.contrastFails);
+    const permNonSwitch = (perm.smallTargets || []).filter((s: string) => !/ 36x20$/.test(s));
+    check("settings:permissions: no interactive element under 24x24 px (canonical switch-toggle allowed)",
+      permNonSwitch.length === 0, permNonSwitch);
 
     // ── the privacy page (CAP-FB-20260830-PRIVACY-STATEMENT-01) ──
     // "What this extension sends and stores": one h1, headed lists, two links.
