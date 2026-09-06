@@ -140,11 +140,11 @@ async function reload() {
 async function inspectBytes(digest: string) {
   return await cdp.eval(options, `(async () => {
     const root = await navigator.storage.getDirectory();
-    const directory = await root.getDirectoryHandle('cap-user-wasm-v1');
-    const file = await (await directory.getFileHandle('${digest}.wasm')).getFile();
+    const directory = await root.getDirectoryHandle('cap-owner-blobs-v1');
+    const file = await (await directory.getFileHandle('${digest}.bin')).getFile();
     const metadata = JSON.parse(await (await (await directory.getFileHandle('${digest}.json')).getFile()).text());
     const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
-    return { size:file.size, metadata, digest:[...new Uint8Array(hash)].map(x=>x.toString(16).padStart(2,'0')).join('') };
+    return { size:file.size, metadata, kind:metadata.kind, digest:[...new Uint8Array(hash)].map(x=>x.toString(16).padStart(2,'0')).join('') };
   })()`);
 }
 try {
@@ -164,7 +164,7 @@ try {
   let list = await rows();
   check("typed name, description and content digest appear in the actual list", list.length === 1 && list[0].name === firstName && list[0].description === firstDescription && list[0].digest === smallDigest, list);
   let stored = await inspectBytes(smallDigest);
-  check("real OPFS bytes match the independently computed digest", stored.digest === smallDigest && stored.size === small.length, stored);
+  check("real OPFS bytes match the independently computed digest, stored as kind wasm", stored.digest === smallDigest && stored.size === small.length && stored.kind === "wasm", stored);
   await screenshot("02-small-saved.png");
   await reload();
   list = await rows();
@@ -188,7 +188,7 @@ try {
   const ntp = await cdp.open(`chrome-extension://${extensionId}/ntp/ntp.html`);
   const rejected = await cdp.eval(ntp.sessionId, `(async () => {
     const client = await import(chrome.runtime.getURL('lib/user-wasm-store-client.js'));
-    try { await client.runUserWasmStore('remove', {digest:'${smallDigest}'}); return false; }
+    try { await client.runOwnerBlobStore('remove', {digest:'${smallDigest}'}); return false; }
     catch (error) { return error.message.includes('only be managed in Settings'); }
   })()`);
   check("non-Settings extension page cannot use the owner storage client", rejected);
@@ -204,7 +204,7 @@ try {
   check("Remove controls delete every list row", (await rows()).length === 0);
   await reload();
   check("removed files stay gone after reload", (await rows()).length === 0);
-  const remaining = await cdp.eval(options, `(async () => { const root=await navigator.storage.getDirectory(); const dir=await root.getDirectoryHandle('cap-user-wasm-v1'); const names=[]; for await(const name of dir.keys()) names.push(name); return names; })()`);
+  const remaining = await cdp.eval(options, `(async () => { const root=await navigator.storage.getDirectory(); const dir=await root.getDirectoryHandle('cap-owner-blobs-v1'); const names=[]; for await(const name of dir.keys()) names.push(name); return names; })()`);
   check("removal leaves neither bytes nor metadata nor staging files", remaining.length === 0, remaining);
   await screenshot("05-removed-after-reload.png");
 } catch (e) {

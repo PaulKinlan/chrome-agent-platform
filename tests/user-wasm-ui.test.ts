@@ -1,6 +1,6 @@
 // @ts-nocheck — browser globals and Worker are injected; real UI has a CDP KAT.
 import { assert, assertEquals, assertRejects, assertStrictEquals } from "jsr:@std/assert@1";
-import { runUserWasmStore } from "../extension/lib/user-wasm-store-client.js";
+import { runOwnerBlobStore } from "../extension/lib/user-wasm-store-client.js";
 import { SETTINGS_SECTIONS, OPTIONS_PRODUCT_HASHES, DEVELOPER_SECTIONS_SET } from "../extension/lib/pure.js";
 import { scanShippedJs } from "../scripts/scan-shipped.mjs";
 
@@ -17,7 +17,7 @@ Deno.test("user-wasm UI: normal Settings section uses the shared, gallery-docume
   assert((await read("extension/options/options.js")).includes("mountUserWasmPanel"));
 });
 
-Deno.test("user-wasm client: only exact Settings document can start the storage Worker", async () => {
+Deno.test("owner-blob client: only exact Settings document can start the storage Worker", async () => {
   const previous = new Map(["chrome", "location", "Worker"].map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const messages = [];
   let workers = 0, terminated = 0;
@@ -43,12 +43,12 @@ Deno.test("user-wasm client: only exact Settings document can start the storage 
       "chrome-extension://owner/ntp/ntp.html", "chrome-extension://owner/options/options.html.evil",
     ]) {
       Object.defineProperty(globalThis, "location", { value: { href }, configurable: true });
-      await assertRejects(() => runUserWasmStore("list"), Error, "only be managed in Settings");
+      await assertRejects(() => runOwnerBlobStore("list"), Error, "only be managed in Settings");
     }
     assertEquals(workers, 0);
     Object.defineProperty(globalThis, "location", { value: { href: "chrome-extension://owner/options/options.html#user-wasm" }, configurable: true });
     const file = new Blob(["opaque bytes"]);
-    assertEquals(await runUserWasmStore("put", { file, name: "Owner", description: "Description" }), { saved: true });
+    assertEquals(await runOwnerBlobStore("put", { file, name: "Owner", description: "Description" }), { saved: true });
     assertStrictEquals(messages[0].payload.file, file, "File is passed to native structured clone, not serialized");
     assertEquals(workers, 1);
     assertEquals(terminated, 1);
@@ -60,7 +60,7 @@ Deno.test("user-wasm client: only exact Settings document can start the storage 
   }
 });
 
-Deno.test("user-wasm scanner: only the exact packaged storage Worker constructor is approved", async () => {
+Deno.test("owner-blob scanner: only the exact packaged storage Worker constructor is approved", async () => {
   const path = "extension/lib/user-wasm-store-client.js";
   const source = await read(path);
   async function scan(file, text) {

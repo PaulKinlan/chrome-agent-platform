@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.284] — 2026-09-06
+- The user WebAssembly store now supports shared owner-managed binary files
+
 ## [0.3.283] — 2026-09-06
 - Internal verification: twenty-two guarantees of the French Bistro compatibility check are now pinned at the code that provides them
 

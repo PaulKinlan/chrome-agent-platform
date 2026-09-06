@@ -34,7 +34,7 @@ const SCRIPTS = `${ROOT}scripts`;
  *  and an operator knob (`HEADED_EVIDENCE_DIR`, `Deno.args[1]`) can pin the base
  *  dir entirely, which is precisely how two runs end up sharing one live
  *  profile. Those sites use `instanceProfile()` (pid + ms + random). */
-const UNIQUE = /Date\.now\(\)|randomUUID|makeTempDir|mkdtemp|Deno\.pid|performance\.now|instanceProfile|\bSTAMP\b/u;
+const UNIQUE = /Date\.now\(\)|randomUUID|makeTempDir|mkdtemp|Deno\.pid|performance\.now|instanceProfile|chromeProfileDir|\bSTAMP\b/u;
 
 /** Sites allowed to name a bare parameter. An exemption is only as good as its
  *  justification, so each one carries the source patterns that MUST still be

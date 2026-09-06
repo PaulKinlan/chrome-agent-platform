@@ -1,8 +1,8 @@
 // Dedicated storage Worker, NOT a Wasm executor. File uses structured clone;
 // bytes never pass through Chrome runtime messaging or a whole-file buffer.
-import { createUserWasmStore } from "./user-wasm-store.js";
+import { createOwnerBlobStore } from "./user-wasm-store.js";
 
-const store = createUserWasmStore();
+const store = createOwnerBlobStore();
 self.onmessage = async ({ data }) => {
   try {
     let result;
@@ -21,7 +21,7 @@ self.onmessage = async ({ data }) => {
       await store.remove(data.payload?.digest);
       result = null;
     } else {
-      throw new Error("Unknown user-wasm storage operation");
+      throw new Error("Unknown storage operation");
     }
     self.postMessage({ ok: true, result });
   } catch (error) {
