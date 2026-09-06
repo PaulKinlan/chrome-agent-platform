@@ -72,6 +72,14 @@ const sanitizeEntry = (note) => String(note)
   .replace(/^\s*(Merge remote-tracking branch|Merge branch)\b.*$/i, "")
   .replace(/^\s*(cap-beads-|cap-|work-)[a-z0-9-]+\s*$/i, "")
   .replace(/\s{2,}/g, " ")
+  .trim()
+  // y6z6: a subject that closes several beads at once ("<id> + <id>: the
+  // change") loses EVERY id to the strips above and keeps the joiner, so the
+  // entry read "- + : the change". Drop a leading run of joiner punctuation —
+  // but only when whitespace (or the end) follows it: "/folder work" is copy,
+  // not a leaked joiner. A subject that is nothing but ids and joiners now
+  // sanitizes to EMPTY, so skip-on-empty treats it as bookkeeping.
+  .replace(/^(?:[+&:;,./|—–-]+(?:\s+|$))+/, "")
   .trim();
 const cleanNote = finalNote ? sanitizeEntry(finalNote) : null;
 

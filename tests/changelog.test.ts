@@ -76,6 +76,16 @@ Deno.test("changelog filter: isUserFacingEntry rejects engineering and workflow 
     "two more fixes are in progress",
     "recorded as landed",
     "the job was claimed by the Research agent",
+    // p7k4: joiner punctuation leaked from a multi-bead commit subject once
+    // the ids were stripped ("<id> + <id>: the change" → "+ : the change").
+    // The sanitizer in scripts/bump-version.mjs drops it since y6z6; the
+    // filter must reject it too, or a regression ships as a readable entry.
+    "+ : the browser self-test now reports failures honestly",
+    ": merge — the agent connects and calls MCP server tools on a run",
+    "& : the change",
+    "— the change",
+    "/ the change",
+    "+",
   ];
   for (const s of reject) {
     assert(!isUserFacingEntry(s), `should reject: ${s}`);
@@ -90,6 +100,13 @@ Deno.test("changelog filter: isUserFacingEntry accepts plain user copy", () => {
     "The hub stays fast as you use it.",
     "Notifications from the agent work again.",
     "The new tab opens on the composer.",
+    // p7k4: punctuation GLUED to a word is copy, not a leaked joiner — the
+    // slash commands, a quoted term, a parenthetical, an ellipsis.
+    "/folder work — attach a granted local folder as a task reference, complementing /files",
+    "/files now accepts a dropped folder.",
+    "\"Show all\" lists every earlier change once.",
+    "(Beta) The composer remembers your last provider.",
+    "...and the composer remembers your last provider.",
   ];
   for (const s of accept) {
     assert(isUserFacingEntry(s), `should accept: ${s}`);
