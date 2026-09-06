@@ -7,6 +7,7 @@
 //
 //   deno run -A scripts/kat-background-run-transcript.ts [extension] [out-dir]
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -39,7 +40,7 @@ const { proc, wsUrl } = await launchChrome({
     `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
     "--window-size=1400,2000",
-    `--user-data-dir=${ROOT}.cache/kat-background-run-transcript-${STAMP}`,
+    `--user-data-dir=${chromeProfileDir("kat-background-run-transcript")}`,
     "about:blank",
   ],
 });

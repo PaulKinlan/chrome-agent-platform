@@ -30,6 +30,7 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -60,7 +61,7 @@ const VARIANT = durableDir(`cap-webmcp-probe-variant-${Date.now()}`);
   await Deno.writeTextFile(`${VARIANT}/manifest.json`, JSON.stringify(mf, null, 2) + "\n");
 }
 
-const profile = `${ROOT}.cache/webmcp-realsite-probe-${Date.now()}`;
+const profile = chromeProfileDir("webmcp-realsite-probe");
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",

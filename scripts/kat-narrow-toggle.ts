@@ -17,6 +17,7 @@
 // Defaults to the in-repo extension dir.
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -37,7 +38,7 @@ const { proc, wsUrl } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-narrow-toggle-${Date.now()}`, "about:blank"],
+    `--user-data-dir=${chromeProfileDir("kat-narrow-toggle")}`, "about:blank"],
 });
 
 const ws = new WebSocket(wsUrl);

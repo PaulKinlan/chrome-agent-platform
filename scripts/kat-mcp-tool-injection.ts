@@ -26,6 +26,7 @@
 
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { startMcpTestServer } from "./mcp-test-server.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -67,7 +68,7 @@ try {
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
       "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--remote-allow-origins=*",
-      `--user-data-dir=${ROOT}.cache/kat-mcp-tool-injection-${STAMP}`, "about:blank"],
+      `--user-data-dir=${chromeProfileDir("kat-mcp-tool-injection")}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
@@ -91,7 +92,7 @@ async function cleanup(code: number) {
   try { proc?.kill("SIGKILL"); } catch { /* */ }
   try { await proc?.status; } catch { /* */ }
   try { await good.close(); } catch { /* */ }
-  try { await Deno.remove(`${ROOT}.cache/kat-mcp-tool-injection-${STAMP}`, { recursive: true }); } catch { /* */ }
+  try { await Deno.remove(chromeProfileDir("kat-mcp-tool-injection"), { recursive: true }); } catch { /* */ }
   Deno.exit(code);
 }
 

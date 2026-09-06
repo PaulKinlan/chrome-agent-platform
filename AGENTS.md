@@ -345,6 +345,21 @@ the retired markdown trackers (`TASKS.md`, `KNOWN-ISSUES.md` — history only).
   never destroyed — until an owner decision reconciles them.
 - **Serialized Chrome evidence** (the canonical lock, acceptance runs, screenshots) is written
   outside the tmpfs to a durable evidence path; the evidence survives reboots.
+- **Chrome profiles live OUTSIDE the repository** (chrome-agent-platform-9t1b):
+  `chromeProfileDir(name)` from `scripts/lib/chrome-profile-dir.ts` returns a
+  per-instance directory under the durable root
+  (`~/cap-evidence/cap-chrome-profiles/<name>-<pid>-<ms>-<rand>`), created and
+  ready to pass as `--user-data-dir`. A live profile is a directory the browser
+  mutates continuously (`Default/DIPS-journal`, `SingletonLock`, WAL), so a
+  profile inside the tree makes every whole-tree copy, package or archive race a
+  running browser — `cp: cannot stat '…/.cache/kat-*/Default/DIPS-journal'`
+  reddened `tests/cdp-client.test.ts` during a full `npm test`. Never write
+  `--user-data-dir=${ROOT}.cache/…`; `tests/chrome-profile-location.test.ts`
+  scans every launch site and copies the whole tree under a live browser to
+  prove it. KAT evidence dirs (screenshots, verdicts) may stay under `.cache/` —
+  a file written once is not a directory a browser churns. Stale profiles
+  self-prune: `pruneChromeProfileDirs()` runs once per `scripts/kat-runner.ts`
+  run (6 h threshold, so a live browser is never touched).
 - **Scripts and tests route evidence, Chrome profiles, and big scratch copies through
   `scripts/lib/durable-root.mjs`** (`durableRoot()`/`durableDir()`; default `$HOME/cap-evidence`,
   override `CAP_DURABLE_ROOT`). The helper REFUSES a RAM-backed target rather than silently

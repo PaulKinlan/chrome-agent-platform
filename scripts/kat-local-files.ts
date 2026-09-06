@@ -14,11 +14,12 @@
 //   deno run -A scripts/kat-local-files.ts [extension-dir] [evidence-dir]
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-local-files`;
-const PROFILE = `${ROOT}.cache/kat-local-files-profile-${Date.now()}`;
+const PROFILE = chromeProfileDir("kat-local-files-profile");
 const FIXTURE_NAME = "composer-local-file-known.txt";
 const FIXTURE_TEXT = "Known local filesystem context from the browser KAT.";
 const BINARY_FIXTURE_NAME = "mislabelled-binary.txt";

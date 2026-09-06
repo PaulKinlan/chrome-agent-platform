@@ -24,6 +24,7 @@ const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-patch-asset`;
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const CHROMIUM = "/usr/bin/chromium";
 
@@ -47,7 +48,7 @@ const { proc, wsUrl, port } = await launchChrome({
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-patch-asset-${Date.now()}`, "about:blank"],
+    `--user-data-dir=${chromeProfileDir("kat-patch-asset")}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => { ws.onopen = () => r(null); });

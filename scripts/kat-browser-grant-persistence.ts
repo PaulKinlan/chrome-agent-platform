@@ -10,6 +10,7 @@
 // 7. Reload options page: toggle remains unchecked, active false.
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -21,7 +22,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-const profile = `${ROOT}.cache/kat-browser-grant-persistence-${Date.now()}`;
+const profile = chromeProfileDir("kat-browser-grant-persistence");
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",
   args: [

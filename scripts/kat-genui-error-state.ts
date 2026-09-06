@@ -14,6 +14,7 @@
 //
 //   deno run -A scripts/kat-genui-error-state.ts <path-to-extension> [<out-dir>]
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -43,7 +44,7 @@ try {
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
       "--remote-allow-origins=*",
-      `--user-data-dir=${ROOT}.cache/kat-genui-error-state-${STAMP}`, "about:blank"],
+      `--user-data-dir=${chromeProfileDir("kat-genui-error-state")}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
@@ -75,7 +76,7 @@ for (let i = 0; i < 20 && !sw; i++) {
 let extId: string;
 if (sw) extId = new URL(sw.url).host;
 else {
-  const prof = `${ROOT}.cache/kat-genui-error-state-${STAMP}/Default/Preferences`;
+  const prof = `${chromeProfileDir("kat-genui-error-state")}/Default/Preferences`;
   // Under fleet load Chrome can take >10s to materialize the profile — poll.
   let prefsRaw: string | null = null;
   for (let i = 0; i < 30 && prefsRaw === null; i++) {

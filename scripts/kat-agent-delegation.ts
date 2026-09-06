@@ -23,6 +23,7 @@ import { launchChrome } from "./lib/chrome-launch.ts";
 // The pure delegation guard's own constants — the over-cap checks pin the
 // production floor and child cap, never a copied number.
 import { CHILD_ITERATION_CAP, MIN_REMAINING_ITERATIONS } from "../extension/lib/agent-delegation.js";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -49,7 +50,7 @@ try {
     binary: CHROMIUM,
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--remote-allow-origins=*",
-      `--user-data-dir=${ROOT}.cache/kat-agent-delegation-${STAMP}`, "about:blank"],
+      `--user-data-dir=${chromeProfileDir("kat-agent-delegation")}`, "about:blank"],
   });
   proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);

@@ -7,6 +7,7 @@
 // 4. Navigate directly to #about deep link -> assert #about is visible, others hidden.
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -18,7 +19,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
 }
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-const profile = `${ROOT}.cache/kat-settings-multi-section-${Date.now()}`;
+const profile = chromeProfileDir("kat-settings-multi-section");
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",
   args: [

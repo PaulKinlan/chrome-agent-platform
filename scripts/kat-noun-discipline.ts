@@ -10,6 +10,7 @@
 // Screenshots land in <out-dir> (default ./.cache/kat-noun-discipline).
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -34,7 +35,7 @@ const { proc, wsUrl } = await launchChrome({
     "--window-size=1280,900",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${ROOT}.cache/kat-noun-discipline-${Date.now()}`, "about:blank"],
+    `--user-data-dir=${chromeProfileDir("kat-noun-discipline")}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
 await new Promise((r) => ws.onopen = r);
