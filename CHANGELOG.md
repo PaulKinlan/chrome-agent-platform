@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.271] — 2026-09-06
+- Chrome test gates run concurrently — bounded slots instead of one machine-wide lock
+
 ## [0.3.270] — 2026-09-06
 - The French Bistro browser compatibility check now completes automatically and reports cleanup failures instead of a false success
 - Export All and Import All now protect internal security keys and transient files, ensuring backups contain only your portable data

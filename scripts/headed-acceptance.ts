@@ -36,7 +36,7 @@
 //      or idle session (monitors: []) cannot show the OS permission prompts.
 //   4. /usr/bin/chromium must exist.
 
-import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
+import { CHROMIUM, instanceProfile, launchChrome } from "./lib/chrome-launch.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -372,7 +372,9 @@ async function main() {
 
   const fixture = new Deno.Command("deno", { args: ["run", "-A", `${ROOT}fixtures/webmcp-server.ts`], stdout: "null", stderr: "null" }).spawn();
 
-  const profile = `${EVIDENCE_DIR}/profile`;
+  // Per-instance (uzik): HEADED_EVIDENCE_DIR is an operator knob and two runs
+  // pointing at the same dir must not share a live profile.
+  const profile = instanceProfile(EVIDENCE_DIR);
   const launched = await launchHeadedChrome(profile);
   const chrome = launched.proc;
   const port = launched.port;

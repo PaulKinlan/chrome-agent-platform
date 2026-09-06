@@ -17,7 +17,16 @@ import process from "node:process";
 import { durableDir } from "./lib/durable-root.mjs";
 
 export const CANONICAL_LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
-export const SLOT_POISON = "/tmp/cap-chrome-slot-POISON";
+// SLOT_POISON ("/tmp/cap-chrome-slot-POISON") was retired by
+// chrome-agent-platform-uzik. It existed because the whole machine shared ONE
+// Chrome slot: a supervisor that saw residue after its run marked the slot
+// poisoned so the NEXT lane would refuse to use a contaminated browser. With
+// per-instance isolation (own profile, kernel-assigned port) and a bounded
+// slot semaphore there is no shared slot to contaminate, and the marker itself
+// became the defect (chrome-agent-platform-yr6e: a transient marker from an
+// unrelated lane turned a full `npm test` red). Custody failures are still
+// failures — they are reported per run (exit 70/71/72 + `custodyReason` in the
+// receipt) instead of being smeared across every later run on the box.
 export const PROFILE_ROOT = durableDir("cap-sec-profiles");
 export const PRODUCTION_TIMEOUT_MS = 120_000;
 export const SELF_TEST_TOKEN = "security-suite-custody-v1";

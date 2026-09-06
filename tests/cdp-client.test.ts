@@ -298,7 +298,14 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
   try {
     const cpMod2 = "node:child_process";
     const { execSync } = await import(cpMod2);
-    execSync(`cp -a ${JSON.stringify(new URL("..", import.meta.url).pathname + "/.")} ${JSON.stringify(repo + "/.")}`, { shell: "/bin/bash", stdio: "pipe" });
+    // Copy the tree WITHOUT `.cache/`: that directory holds live Chrome profile
+    // dirs (`${ROOT}.cache/kat-<name>-<stamp>`) that other tests are driving
+    // RIGHT NOW. `cp -a` of a profile mid-run fails on files Chrome unlinks as
+    // it goes (`cannot stat '…/Default/DIPS-journal': No such file or
+    // directory`), which read as a startup-handling defect in this test.
+    // chrome-agent-platform-uzik made the gates concurrent, so the race is
+    // reachable; `.cache/` is gitignored scratch and the child never needs it.
+    execSync(`rsync -a --exclude '/.cache/' ${JSON.stringify(new URL("..", import.meta.url).pathname + "/")} ${JSON.stringify(repo + "/")}`, { shell: "/bin/bash", stdio: "pipe" });
     // Break the builder so the child exits nonzero:
     await fsp2.writeFile(path2.join(repo, "scripts/build-test-extension.mjs"), "process.exit(97);\n");
     // Run the journey; it must exit nonzero and emit an early manifest naming code=97.

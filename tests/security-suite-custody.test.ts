@@ -13,7 +13,6 @@ import {
   readProcIdentity,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
-  SLOT_POISON,
   waitUntil,
 } from "../scripts/security-suite-custody.mjs";
 
@@ -25,26 +24,13 @@ const FIXTURE = `${ROOT}/tests/fixtures/security-suite-fake-runner.mjs`;
 const LOCK = "/tmp/cap-serialized-chrome-acceptance.lock";
 const decoder = new TextDecoder();
 
-// Suite-load flake fix (review P2 on 62696628): the supervisor REFUSES when a
-// poison marker exists, and an interrupted earlier run (killed test, suite
-// timeout) leaves one behind — every supervisor-running test then failed with
-// "no result marker: … slot is poisoned" (the recurring N/1 custody flake).
-// Clear a STALE marker once before this file's tests run. Guards mirror the
-// escape test's teardown: only a regular file we own is test debris; a
-// symlink or foreign-owned marker still blocks loudly (that is not ours to
-// clear). The escape scenario re-poisons during its own run and cleans up in
-// its finally — this setup clear only removes debris from PRIOR runs.
-async function clearStaleSlotPoison(): Promise<void> {
-  const info = await Deno.lstat(SLOT_POISON).catch(() => null);
-  if (info?.isFile && !info.isSymlink && info.uid === Deno.uid()) {
-    const reason = (await Deno.readTextFile(SLOT_POISON)).trim();
-    console.log(
-      `clearing stale Chrome-slot poison marker (${reason || "empty"}) left by an interrupted run`,
-    );
-    await Deno.remove(SLOT_POISON);
-  }
-}
-await clearStaleSlotPoison();
+// The slot poison marker is RETIRED (chrome-agent-platform-uzik, which also
+// closes chrome-agent-platform-yr6e). This file used to clear a stale marker at
+// suite load because the supervisor refused to run while one existed — and an
+// unrelated lane's transient marker turned a whole `npm test` red. There is
+// nothing to clear now: the supervisor never reads or writes it, and the guard
+// test below fails if the mechanism comes back.
+const RETIRED_POISON = "/tmp/cap-chrome-slot-POISON";
 
 type RunResult = {
   code: number;
@@ -371,14 +357,14 @@ Deno.test("security-suite custody: live cleanup helper refuses real symlink/wron
   await Deno.remove(outsideRoot, { recursive: true });
 });
 
-Deno.test("security-suite custody: escaped descendant poisons/nonzeros and the test cleans only its exact pid", async () => {
+Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) and leaves no shared marker behind", async () => {
   assertEquals(pidAlive(Deno.pid), true);
   const result = await runSupervisor("escape", 2_000);
   let escapedPid = 0;
   let escapedStart = "";
   try {
     assertEquals(result.code, 70);
-    assertEquals(result.receipt?.poisonReason, "descendant-residue");
+    assertEquals(result.receipt?.custodyReason, "descendant-residue");
     const residue = result.receipt?.residue as Array<Record<string, unknown>>;
     assert(residue.length >= 1);
     escapedPid = Number(residue[0].pid);
@@ -386,9 +372,13 @@ Deno.test("security-suite custody: escaped descendant poisons/nonzeros and the t
     const live = await readProcIdentity(escapedPid);
     assertEquals(live.starttime, escapedStart);
     assertEquals(live.uid, Deno.uid());
+    // uzik: the finding is this run's own (receipt + exit code). It must NOT be
+    // smeared onto every later run on the box via a shared marker — that was
+    // yr6e, a full-suite red caused by another lane's transient file.
     assertEquals(
-      (await Deno.readTextFile(SLOT_POISON)).trim(),
-      "descendant-residue",
+      await Deno.lstat(RETIRED_POISON).catch(() => null),
+      null,
+      "the retired poison marker must not be recreated",
     );
   } finally {
     if (escapedPid > 0) {
@@ -402,14 +392,36 @@ Deno.test("security-suite custody: escaped descendant poisons/nonzeros and the t
       }
       await waitUntil(() => pidAlive(escapedPid), 2_000);
     }
-    const poisonInfo = await Deno.lstat(SLOT_POISON).catch(() => null);
-    if (
-      poisonInfo?.isFile && !poisonInfo.isSymlink &&
-      poisonInfo.uid === Deno.uid()
-    ) {
-      await Deno.remove(SLOT_POISON);
-    }
     await removeEvidence(result);
   }
   assertEquals(pidAlive(escapedPid), false);
+});
+
+
+Deno.test("uzik guard: the shared Chrome-slot poison mechanism is gone from production source", async () => {
+  // Deleting coverage requires a guard: the poison marker only existed because
+  // the whole machine shared ONE Chrome slot. Per-instance isolation (own
+  // profile + kernel-assigned port) plus a bounded slot semaphore removes the
+  // shared state it protected, and the marker itself became the defect (yr6e).
+  // If it ever comes back, this fails — re-justify it in a bead, do not
+  // silently reintroduce a machine-wide refusal path.
+  const files = [
+    "scripts/security-suite-custody.mjs",
+    "scripts/security-suite-supervisor.mjs",
+    "scripts/security-suite-supervisor.sh",
+    "scripts/lib/chrome-launch.ts",
+    "scripts/lib/chrome-slots.ts",
+  ];
+  for (const rel of files) {
+    const text = await Deno.readTextFile(`${ROOT}/${rel}`);
+    const code = text
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("//") && !line.trimStart().startsWith("*"))
+      .join("\n");
+    assertEquals(code.includes("SLOT_POISON"), false, `${rel} still references SLOT_POISON in code`);
+    assertEquals(code.includes("cap-chrome-slot-POISON"), false, `${rel} still names the poison marker in code`);
+    assertEquals(code.includes("poisonReason"), false, `${rel} still reports poisonReason (use custodyReason)`);
+  }
+  // And the retired marker is not sitting on this box making gates refuse.
+  assertEquals(await Deno.lstat(RETIRED_POISON).catch(() => null), null);
 });
