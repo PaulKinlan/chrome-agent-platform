@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.268] — 2026-09-06
+- format user-facing changelog entry for v0.3.272
+
 ## [0.3.267] — 2026-09-06
 - The toolbox gains zxing — read barcodes from images and write new ones (QR, EAN-13, Code 128, Data Matrix, and more), entirely on-device.
 

@@ -1,15 +1,29 @@
-// scripts/kat-webmcp-bistro.ts — real-browser KAT for chrome-agent-platform-l3vc:
+// scripts/kat-webmcp-bistro.ts — real-browser KAT for chrome-agent-platform-l3vc / 06qj:
 // asserts WebMCP tool execution on GoogleChromeLabs French Bistro declarative demo
 // accepts JSON-formatted string arguments for native WebMCP WebIDL compatibility.
+// Bounded execution with ?toolautosubmit, CDP interception, and clean process lifecycle.
+// Usage: deno run -A scripts/kat-webmcp-bistro.ts [extension-dir] [evidence-dir]
 
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { createHash } from "node:crypto";
+import { launchChrome, openCdp, withTimeout } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
+import { teardownChromeAndProfile } from "./lib/kat-finalizer.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const EXT = `${ROOT}extension`;
-const BISTRO = "https://googlechromelabs.github.io/webmcp-tools/demos/french-bistro/";
+const EXT = Deno.args[0] ?? `${ROOT}extension`;
+const OUT = Deno.args[1] ?? durableDir(`kat-webmcp-bistro-${Date.now()}`);
+const PROFILE = durableDir(`kat-webmcp-bistro-profile-${Date.now()}`);
+const URL_BISTRO = "https://googlechromelabs.github.io/webmcp-tools/demos/french-bistro/?toolautosubmit";
 
+await Deno.mkdir(OUT, { recursive: true });
+await Deno.mkdir(PROFILE, { recursive: true });
+
+const checks: Array<{ name: string; passed: boolean; detail?: unknown }> = [];
 let pass = 0, fail = 0;
+
 function check(name: string, cond: boolean, detail?: unknown) {
+  const entry = { name, passed: cond, ...(detail === undefined ? {} : { detail }) };
+  checks.push(entry);
   if (cond) {
     pass++;
     console.log(`PASS: ${name}`);
@@ -19,90 +33,81 @@ function check(name: string, cond: boolean, detail?: unknown) {
   }
 }
 
-async function fetchJson(url: string, init?: RequestInit) {
-  const res = await fetch(url, init);
-  return await res.json();
+async function waitFor(
+  cdp: Awaited<ReturnType<typeof openCdp>>,
+  sessionId: string,
+  expression: string,
+  timeoutMs = 30_000,
+) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    try {
+      if (await cdp.eval(sessionId, expression)) return;
+    } catch {
+      /* navigation / pending load */
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`timed out waiting for: ${expression}`);
 }
 
-async function evalIn(ws: WebSocket, sessionId: string, expr: string) {
-  const id = Math.floor(Math.random() * 1e6);
-  ws.send(JSON.stringify({
-    id,
-    sessionId,
-    method: "Runtime.evaluate",
-    params: { expression: expr, awaitPromise: true, returnByValue: true },
-  }));
-  return new Promise((resolve) => {
-    const handler = (event: MessageEvent) => {
-      const data = JSON.parse(event.data);
-      if (data.id === id) {
-        ws.removeEventListener("message", handler);
-        resolve(data.result?.result?.value);
-      }
-    };
-    ws.addEventListener("message", handler);
-  });
+async function git(...args: string[]) {
+  const out = await new Deno.Command("git", { cwd: ROOT, args, stdout: "piped" }).output();
+  if (!out.success) throw new Error(`git ${args.join(" ")} failed`);
+  return new TextDecoder().decode(out.stdout).trim();
 }
 
-console.log("Launching Chromium with WebMCP feature...");
-const chrome = await launchChrome({
-  binary: "/usr/bin/chromium",
-  args: [
-    `--disable-extensions-except=${EXT}`,
-    `--load-extension=${EXT}`,
-    "--enable-features=WebMCP",
-  ],
-});
+let chrome: Awaited<ReturnType<typeof launchChrome>> | undefined;
+let cdp: Awaited<ReturnType<typeof openCdp>> | undefined;
+let page: { targetId: string; sessionId: string } | undefined;
+let runError: string | null = null;
+let browserVersion: unknown = null;
+let mainWorldSha256: string = "";
+
+const head = await git("rev-parse", "HEAD").catch(() => "unknown");
+const tree = await git("rev-parse", "HEAD^{tree}").catch(() => "unknown");
+const dirty = (await git("status", "--porcelain").catch(() => "")).length > 0;
 
 try {
-  const ws = new WebSocket(chrome.wsUrl);
-  await new Promise((r) => ws.addEventListener("open", r, { once: true }));
+  const mwBytes = await Deno.readFile(`${EXT}/content/main-world.js`).catch(() => new Uint8Array());
+  mainWorldSha256 = createHash("sha256").update(mwBytes).digest("hex");
+} catch {
+  mainWorldSha256 = "unknown";
+}
 
-  console.log("Navigating to French Bistro demo...");
-  const tab = await fetchJson(`http://127.0.0.1:${chrome.port}/json/new?${encodeURIComponent(BISTRO)}`, { method: "PUT" });
+console.log(`Launching Chromium with WebMCP feature (profile: ${PROFILE})...`);
 
-  const id = Math.floor(Math.random() * 1e6);
-  ws.send(JSON.stringify({ id, method: "Target.attachToTarget", params: { targetId: tab.id, flatten: true } }));
-  const session = await new Promise<string>((resolve) => {
-    const handler = (event: MessageEvent) => {
-      const data = JSON.parse(event.data);
-      if (data.id === id) {
-        ws.removeEventListener("message", handler);
-        resolve(data.result?.sessionId);
-      }
-    };
-    ws.addEventListener("message", handler);
+try {
+  chrome = await launchChrome({
+    binary: "/usr/bin/chromium",
+    extension: EXT,
+    profile: PROFILE,
+    timeoutMs: 30_000,
+    args: [
+      "--enable-features=WebMCP",
+    ],
   });
 
-  ws.send(JSON.stringify({ id: 101, sessionId: session, method: "Runtime.enable" }));
-  await new Promise((r) => setTimeout(r, 2000));
+  cdp = await openCdp(chrome.wsUrl, { timeoutMs: 30_000 });
+  browserVersion = await cdp.send("Browser.getVersion");
 
-  const mcInfo = await evalIn(ws, session, `({
+  const worker = await cdp.serviceWorker({ timeoutMs: 20_000 });
+  check("this fresh-profile extension registered its service worker", !!worker?.url?.startsWith("chrome-extension://"), worker?.url);
+
+  console.log("Navigating to French Bistro demo with ?toolautosubmit...");
+  page = await cdp.open(URL_BISTRO);
+
+  await waitFor(cdp, page.sessionId, `document.readyState === "complete" && typeof document.modelContext?.getTools === "function"`, 30_000);
+  const mcInfo = await cdp.eval(page.sessionId, `({
     hasModelContext: !!document.modelContext,
     hasExecuteTool: typeof document.modelContext?.executeTool === "function",
     hasGetTools: typeof document.modelContext?.getTools === "function",
   })`);
-  check("document.modelContext is present on page", mcInfo?.hasModelContext === true && mcInfo?.hasExecuteTool === true);
+  check("document.modelContext is present on page", mcInfo?.hasModelContext === true && mcInfo?.hasExecuteTool === true, mcInfo);
 
-  const tools = await evalIn(ws, session, `document.modelContext.getTools().then(t => t.map(x => x.name))`);
-  check("book_table_le_petit_bistro tool discovered", Array.isArray(tools) && tools.includes("book_table_le_petit_bistro"));
+  const discovered = await cdp.eval(page.sessionId, `(async () => (await document.modelContext.getTools()).map(t => t.name))()`);
+  check("French Bistro native WebMCP tool is discovered", Array.isArray(discovered) && discovered.includes("book_table_le_petit_bistro"), discovered);
 
-  // 1. FALSIFICATION: Object args trigger WebIDL DOMString coercion to '[object Object]', failing C++ JSONReader parse
-  const objRes = await evalIn(ws, session, `(async () => {
-    try {
-      const [tool] = await document.modelContext.getTools();
-      const res = await document.modelContext.executeTool(tool, { name: "Test User", phone: "1234567890", date: "2026-09-10", time: "19:00", guests: "2", seating: "Main Dining" });
-      return { ok: true, res };
-    } catch (err) {
-      return { ok: false, error: err.name + ": " + err.message };
-    }
-  })()`);
-  check("falsification: unstringified object args fail with JSON parse error in native WebMCP",
-    objRes?.ok === false && /Failed to parse input string as JSON/i.test(objRes?.error ?? ""),
-    objRes
-  );
-
-  // 2. SUCCESS: JSON-formatted string args pass WebIDL DOMString check, parse cleanly, and execute the booking
   const validBooking = {
     name: "Jean-Luc Picard",
     phone: "1234567890",
@@ -111,25 +116,110 @@ try {
     guests: "2",
     seating: "Main Dining",
   };
-  const strRes = await evalIn(ws, session, `(async () => {
+
+  // 1. FALSIFICATION: Object args trigger WebIDL DOMString coercion to '[object Object]', failing native C++ JSONReader parse
+  const objRes = await cdp.eval(page.sessionId, `(async () => {
+    const tool = (await document.modelContext.getTools()).find(t => t.name === "book_table_le_petit_bistro");
     try {
-      const [tool] = await document.modelContext.getTools();
-      const res = await document.modelContext.executeTool(tool, ${JSON.stringify(JSON.stringify(validBooking))});
+      const res = await document.modelContext.executeTool(tool, ${JSON.stringify(validBooking)});
       return { ok: true, res };
     } catch (err) {
-      return { ok: false, error: err.name + ": " + err.message };
+      return { ok: false, error: String(err?.name) + ": " + String(err?.message) };
     }
   })()`);
-  check("valid booking executes successfully with JSON string arguments",
-    strRes?.ok === true && typeof strRes?.res === "string" && strRes.res.includes("We look forward to welcoming you"),
-    strRes
+  check("falsification: unstringified object args fail with JSON parse error in native WebMCP",
+    objRes?.ok === false && /Failed to parse input string as JSON/i.test(objRes?.error ?? ""),
+    objRes,
   );
 
-  ws.close();
-} finally {
-  chrome.proc.kill("SIGTERM");
-  await chrome.proc.status;
-}
+  // 2. SUCCESS: JSON-formatted string args pass WebIDL DOMString check, parse cleanly, and execute the booking
+  const payload = JSON.stringify(validBooking);
+  const strRes = await withTimeout(cdp.eval(page.sessionId, `(async () => {
+    const tool = (await document.modelContext.getTools()).find(t => t.name === "book_table_le_petit_bistro");
+    try {
+      const res = await document.modelContext.executeTool(tool, ${JSON.stringify(payload)});
+      return { ok: true, res };
+    } catch (err) {
+      return { ok: false, error: String(err?.name) + ": " + String(err?.message) };
+    }
+  })()`), 30_000);
+  check("JSON-string arguments settle successfully through native WebMCP",
+    strRes?.ok === true && typeof strRes?.res === "string" && strRes.res.includes("We look forward to welcoming you"),
+    strRes,
+  );
 
-console.log(`\nKAT Result: ${pass} passed, ${fail} failed.`);
-if (fail > 0) Deno.exit(1);
+  // 3. DOM & DIALOG VISIBLE VERIFICATION: Page reflects exact form fields and booking confirmation dialog
+  const visible = await cdp.eval(page.sessionId, `({
+    dialogOpen: document.getElementById("bookingDialog")?.open === true,
+    modalText: document.getElementById("modalDetails")?.textContent ?? "",
+    name: document.getElementById("name")?.value ?? "",
+    phone: document.getElementById("phone")?.value ?? "",
+    date: document.getElementById("date")?.value ?? "",
+    time: document.getElementById("time")?.value ?? "",
+    guests: document.getElementById("guests")?.value ?? "",
+    seating: document.getElementById("seating")?.value ?? "",
+  })`);
+  check("the real page visibly reflects the exact booking and opens its result dialog",
+    visible?.dialogOpen === true &&
+    visible?.name === validBooking.name &&
+    visible?.phone === validBooking.phone &&
+    visible?.date === validBooking.date &&
+    visible?.time === validBooking.time &&
+    visible?.guests === validBooking.guests &&
+    visible?.seating === validBooking.seating &&
+    visible?.modalText.includes("We look forward to welcoming you"),
+    visible,
+  );
+
+  // 4. SCREENSHOT CAPTURE: capture the open dialog
+  const shot = await cdp.screenshot(page.sessionId, { captureBeyondViewport: true, fromSurface: false });
+  check("post-invocation screenshot captured", !!shot?.length, shot?.length ?? 0);
+  if (shot) {
+    await Deno.writeFile(`${OUT}/bistro-json-string-success.png`, shot);
+  }
+
+} catch (err) {
+  runError = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  console.error("KAT Execution Error:", runError);
+} finally {
+  // 1. GUARANTEED TEARDOWN: Delegate to canonical fail-closed helper.
+  const { cleanupError, poisonDetected } = await teardownChromeAndProfile({
+    cdp,
+    chrome,
+    profilePath: PROFILE,
+    withTimeout,
+  });
+
+  const isGreen = !runError && fail === 0 && !cleanupError && !poisonDetected;
+  const resultData = {
+    state: isGreen ? "GREEN" : "RED",
+    error: runError || cleanupError,
+    cleanupError,
+    poisonDetected,
+    expected: head,
+    head,
+    tree,
+    dirty,
+    mainWorldSha256,
+    url: URL_BISTRO,
+    browserVersion,
+    lockWaitMs: chrome?.lockWaitMs ?? null,
+    checks,
+  };
+
+  try {
+    await Deno.writeTextFile(`${OUT}/result.json`, JSON.stringify(resultData, null, 2) + "\n");
+    await Deno.writeTextFile(
+      `${OUT}/kat.log`,
+      checks.map((c) => `${c.passed ? "PASS" : "FAIL"}: ${c.name}`).join("\n") +
+        `\nRESULT: ${pass}/${checks.length}; ${isGreen ? "GREEN" : "RED"}\n` +
+        (cleanupError ? `CLEANUP ERROR: ${cleanupError}\n` : ""),
+    );
+  } catch (reportErr) {
+    console.error("FATAL: Failed to write KAT reports:", reportErr);
+    Deno.exit(1);
+  }
+
+  console.log(`\nKAT Result: ${pass} passed, ${fail} failed (cleanup: ${cleanupError ?? "ok"}); evidence ${OUT}`);
+  if (!isGreen) Deno.exit(1);
+}
