@@ -170,14 +170,52 @@ const SECRET_KV_KEYS = new Set([
   "providerConfig", // provider API keys live here
 ]);
 
-/** Rebuildable caches: excluded from the bundle (they refill on demand). */
-const EXCLUDED_OPFS_PREFIXES = ["cache/"];
+/**
+ * Root directory prefixes and path patterns for internal authority, secrets,
+ * and transient execution state. These must NEVER leave the profile via export,
+ * and must NEVER be accepted/overwritten via import.
+ */
+export const EXCLUDED_OPFS_PREFIXES = Object.freeze([
+  "cache/",
+  "chrome-agent-platform-private/",
+  "wasm-tool-streams-v1/",
+]);
+
+export function isExcludedOpfsPath(path) {
+  if (typeof path !== "string" || !path.length) return true;
+  const normalized = path.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+  if (normalized.includes("..")) return true;
+
+  for (const prefix of EXCLUDED_OPFS_PREFIXES) {
+    if (normalized.startsWith(prefix) || normalized === prefix.slice(0, -1)) {
+      return true;
+    }
+  }
+
+  if (normalized.includes("owner-approval-hmac")) return true;
+  if (normalized.includes("chrome-agent-platform-private")) return true;
+  if (normalized.includes("wasm-tool-streams-v1")) return true;
+
+  const rootSeg = normalized.split("/")[0];
+  if (
+    rootSeg.startsWith(".dist-stage-") ||
+    rootSeg.startsWith(".staging") ||
+    rootSeg.startsWith(".tmp") ||
+    rootSeg === ".staging" ||
+    rootSeg === ".tmp"
+  ) {
+    return true;
+  }
+
+  return false;
+}
 
 export const EXCLUSION_POLICY = Object.freeze([
   "provider API keys (the bundle records which providers were configured, never their secrets)",
   "MCP server auth headers (the bundle records which servers had them)",
   "session state (chrome.storage.session and in-memory coordination keys)",
   "rebuilt-on-demand caches (model catalogs and other cache trees)",
+  "internal authority and secret files (owner-approval HMAC, private keys, and transient tool streams)",
 ]);
 
 /**
@@ -310,7 +348,7 @@ export async function collectExportData({ kvGet, opfs, alarms, maxOpfsFiles = MA
   const files = [];
   let totalBytes = 0;
   for (const path of await opfs.listFiles()) {
-    if (EXCLUDED_OPFS_PREFIXES.some((p) => path.startsWith(p))) continue;
+    if (isExcludedOpfsPath(path)) continue;
     const bytes = await opfs.readFile(path);
     files.push({ path, bytes });
     totalBytes += bytes.length;
@@ -430,6 +468,12 @@ export function parseArchive(text) {
     if ((entry.encoding !== "utf8" && entry.encoding !== "base64") || typeof entry.data !== "string") {
       throw new ArchiveFormatError("archive-bad-shape", "bad bundle entry encoding or data");
     }
+    if (isExcludedOpfsPath(entry.path)) {
+      throw new ArchiveFormatError(
+        "archive-forbidden-target",
+        `bundle carries an internal authority/secret/transient target: ${entry.path}`,
+      );
+    }
     if (entry.encoding === "utf8") {
       assertNoLoneSurrogates(entry.data);
       entry._bytes = ENCODER.encode(entry.data);
@@ -545,7 +589,7 @@ export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, 
   // Phase 1 — target state check BEFORE any mutation.
   const existingKv = (await kvGet(null)) || {};
   const existingKeys = Object.keys(existingKv);
-  const existingFiles = await opfs.listFiles();
+  const existingFiles = (await opfs.listFiles()).filter((p) => !isExcludedOpfsPath(p));
   const existingAlarms = (await alarms.getAll()) || [];
   if (!overwrite && (existingKeys.length || existingFiles.length || existingAlarms.length)) {
     throw new Error(

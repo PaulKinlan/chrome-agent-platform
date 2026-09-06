@@ -25,6 +25,7 @@ import {
   sanitizeKvForExport,
   importArchive,
   recoverPendingImport,
+  isExcludedOpfsPath,
   ArchiveFormatError,
 } from "../extension/lib/data-archive.js";
 
@@ -432,6 +433,119 @@ Deno.test("a bundle with corrupt base64 refuses at parse and a failed overwrite 
   await assertRejects(
     () =>
       importArchive(bundle, {
+// ── 8. chrome-agent-platform-5l73: owner-approval HMAC & internal root exclusion ──
+
+Deno.test("5l73 exclusion: owner-approval HMAC and transient roots NEVER enter export across chunk boundaries", async () => {
+  // Sentinel across chunk boundary (65,536 bytes)
+  const hmacSentinel = "SENTINEL_OWNER_APPROVAL_HMAC_SECRET_" + "K".repeat(65536) + "_END";
+  const streamSentinel = "SENTINEL_WASM_TOOL_STREAM_" + "S".repeat(65536) + "_END";
+  const cacheSentinel = "SENTINEL_CACHE_DATA_" + "C".repeat(65536) + "_END";
+  const userSentinel = "USER_AUTHORED_DATA_WITH_WORD_SECRET_" + "U".repeat(65536) + "_PRESERVED";
+
+  const opfs = mockOpfs({
+    // Internal authority / secret roots:
+    "chrome-agent-platform-private/owner-approval-hmac-v1": hmacSentinel,
+    "chrome-agent-platform-private/site-tool-audit-v1/audit.jsonl": "{\"internal\":true}",
+    "wasm-tool-streams-v1/transient-pipe/stdout.bin": streamSentinel,
+    "cache/models/catalog.json": cacheSentinel,
+    // Legitimate user data (must be preserved byte-faithfully):
+    "memory/master/notes.txt": userSentinel,
+    "agent-workspaces/writer/draft.md": "# My Document\nSecret analysis",
+  });
+  const kv = mockKv({
+    "cap:namedAgents": [{ id: "writer", name: "Writer" }],
+  });
+  const alarms = mockAlarms([]);
+
+  const snapshot = await collectExportData({ kvGet: kv.kvGet, opfs, alarms });
+
+  // 1. snapshot.files excludes every internal authority / secret / transient root
+  const exportedPaths = snapshot.files.map((f) => f.path);
+  assertEquals(exportedPaths.includes("chrome-agent-platform-private/owner-approval-hmac-v1"), false);
+  assertEquals(exportedPaths.includes("chrome-agent-platform-private/site-tool-audit-v1/audit.jsonl"), false);
+  assertEquals(exportedPaths.includes("wasm-tool-streams-v1/transient-pipe/stdout.bin"), false);
+  assertEquals(exportedPaths.includes("cache/models/catalog.json"), false);
+  assertEquals(exportedPaths.includes("memory/master/notes.txt"), true);
+  assertEquals(exportedPaths.includes("agent-workspaces/writer/draft.md"), true);
+
+  // 2. Serialized bundle bytes contain NONE of the secret or transient sentinels
+  const bundle = buildArchive(snapshot, { extensionVersion: "0.3.265", now: () => 1750000000000 });
+  assert(!bundle.includes(hmacSentinel), "HMAC secret sentinel must NEVER enter archive bytes");
+  assert(!bundle.includes("SENTINEL_OWNER_APPROVAL_HMAC"), "no HMAC sentinel fragment in archive");
+  assert(!bundle.includes(streamSentinel), "transient stream sentinel must NEVER enter archive bytes");
+  assert(!bundle.includes(cacheSentinel), "cache sentinel must NEVER enter archive bytes");
+
+  // 3. User-authored data is byte-faithful (not heuristically redacted)
+  assert(bundle.includes(userSentinel), "user-authored sentinel must be preserved whole");
+  assert(bundle.includes("Secret analysis"), "user-authored content is not heuristically stripped");
+
+  // 4. Round-trip restore preserves user data byte-faithfully
+  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
+  await importArchive(bundle, {
+    kvSet: target.kv.kvSet,
+    kvGet: target.kv.kvGet,
+    kvRemove: target.kv.kvRemove,
+    opfs: target.opfs,
+    alarms: target.alarms,
+  });
+  assertEquals(
+    new TextDecoder().decode(target.opfs.map.get("memory/master/notes.txt")),
+    userSentinel,
+    "restored user file is byte-identical",
+  );
+  assertEquals(
+    target.opfs.map.has("chrome-agent-platform-private/owner-approval-hmac-v1"),
+    false,
+    "HMAC file was never restored into target",
+  );
+});
+
+Deno.test("5l73 security: import REJECTS bundles targeting internal authority, secrets, or transient roots", async () => {
+  const validBundle = JSON.parse(await runExport(fixtureBackends()));
+
+  // A hostile or compromised bundle attempting to overwrite the install HMAC key
+  const forgedHmacBundle = structuredClone(validBundle);
+  forgedHmacBundle.opfs.push({
+    path: "chrome-agent-platform-private/owner-approval-hmac-v1",
+    encoding: "utf8",
+    data: "forged-evil-hmac-key",
+  });
+
+  const target = { kv: mockKv({}), opfs: mockOpfs({}), alarms: mockAlarms([]) };
+
+  let threw = false;
+  try {
+    parseArchive(JSON.stringify(forgedHmacBundle));
+  } catch (err) {
+    threw = true;
+    assert(err instanceof ArchiveFormatError);
+    assertEquals(err.code, "archive-forbidden-target");
+    assertStringIncludes(err.message, "chrome-agent-platform-private/owner-approval-hmac-v1");
+  }
+  assert(threw, "parseArchive must reject bundle targeting internal HMAC path");
+
+  // Same rejection on importArchive
+  await assertRejects(
+    () => importArchive(JSON.stringify(forgedHmacBundle), {
+      kvSet: target.kv.kvSet,
+      kvGet: target.kv.kvGet,
+      kvRemove: target.kv.kvRemove,
+      opfs: target.opfs,
+      alarms: target.alarms,
+    }),
+    ArchiveFormatError,
+  );
+
+  // Also reject transient streams and cache injection
+  for (const forbidden of [
+    "wasm-tool-streams-v1/forged-pipe.bin",
+    "cache/forged-cache.json",
+    ".staging/exploit.bin",
+  ]) {
+    const forged = structuredClone(validBundle);
+    forged.opfs.push({ path: forbidden, encoding: "utf8", data: "injected" });
+    await assertRejects(
+      () => importArchive(JSON.stringify(forged), {
         kvSet: target.kv.kvSet,
         kvGet: target.kv.kvGet,
         kvRemove: target.kv.kvRemove,
@@ -836,4 +950,56 @@ Deno.test("sidecar lifecycle: deleted on success and completed rollback; kept ON
   const backends = { kvGet: after.kv.kvGet, kvSet: after.kv.kvSet, kvRemove: after.kv.kvRemove, opfs: after.opfs, alarms: after.alarms };
   assertEquals(await recoverPendingImport(backends), true);
   assertEquals(after.kv.store.has("cap:importBackup"), false, "a later completed recovery deletes the sidecar");
+      }),
+      ArchiveFormatError,
+    );
+  }
+});
+
+Deno.test("5l73 lifecycle: existing install HMAC key in OPFS does not block import on clean profile, and is not deleted on overwrite", async () => {
+  const source = fixtureBackends();
+  const bundle = await runExport(source);
+
+  // A freshly booted profile where owner-approval.js has already created the install HMAC key:
+  const localHmacKey = "LOCAL_INSTALL_HMAC_SECRET_KEY_NEVER_OVERWRITTEN";
+  const target = {
+    kv: mockKv({}),
+    opfs: mockOpfs({
+      "chrome-agent-platform-private/owner-approval-hmac-v1": localHmacKey,
+    }),
+    alarms: mockAlarms([]),
+  };
+
+  // 1. Importing WITHOUT overwrite:true SUCCEEDS because the target profile has NO user files:
+  const report = await importArchive(bundle, {
+    kvSet: target.kv.kvSet,
+    kvGet: target.kv.kvGet,
+    kvRemove: target.kv.kvRemove,
+    opfs: target.opfs,
+    alarms: target.alarms,
+    overwrite: false,
+  });
+  assertEquals(report.ok, true);
+
+  // The local install key is completely intact:
+  assertEquals(
+    new TextDecoder().decode(target.opfs.map.get("chrome-agent-platform-private/owner-approval-hmac-v1")),
+    localHmacKey,
+  );
+
+  // 2. Importing WITH overwrite:true also preserves the local install key:
+  const report2 = await importArchive(bundle, {
+    kvSet: target.kv.kvSet,
+    kvGet: target.kv.kvGet,
+    kvRemove: target.kv.kvRemove,
+    opfs: target.opfs,
+    alarms: target.alarms,
+    overwrite: true,
+  });
+  assertEquals(report2.ok, true);
+  assertEquals(
+    new TextDecoder().decode(target.opfs.map.get("chrome-agent-platform-private/owner-approval-hmac-v1")),
+    localHmacKey,
+    "overwrite:true must NOT wipe the install-scoped owner approval key",
+  );
 });
