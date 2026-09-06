@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.276] — 2026-09-06
+- the accessibility audit navigates to the Settings section it checks
+
 ## [0.3.275] — 2026-09-06
 - Committing from a second checkout no longer leaves a stray modified task-list file in the main checkout
 
