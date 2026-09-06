@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.272] — 2026-09-06
+- wire real teardown helper into Bistro KAT and enforce caller binding
+
+## [0.3.271] — 2026-09-06
+- The French Bistro browser test now delegates teardown to the shared finalizer helper and verifies clean process exit
+
 ## [0.3.270] — 2026-09-06
 - enforce confirmed process exit after SIGKILL and independently guard teardown steps
 

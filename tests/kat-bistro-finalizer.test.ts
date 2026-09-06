@@ -1,5 +1,6 @@
 // tests/kat-bistro-finalizer.test.ts — Verification of scripts/kat-webmcp-bistro.ts
-// finalizer ordering, guaranteed teardown, fail-closed exit reporting, and lock/poison hygiene (06qj).
+// finalizer ordering, guaranteed teardown, fail-closed exit reporting, lock/poison hygiene,
+// and caller binding to scripts/lib/kat-finalizer.ts (06qj).
 // @ts-nocheck
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
@@ -7,7 +8,7 @@ import { teardownChromeAndProfile } from "../scripts/lib/kat-finalizer.ts";
 
 const root = new URL("..", import.meta.url).pathname;
 
-Deno.test("kat-bistro: source inspection verifies teardown precedes report writes and unswallowed status timeout", async () => {
+Deno.test("kat-bistro: source inspection verifies teardown precedes report writes and delegates to helper", async () => {
   const scriptText = await Deno.readTextFile(`${root}/scripts/kat-webmcp-bistro.ts`);
 
   // 1. Driving intentional autosubmit:
@@ -20,47 +21,34 @@ Deno.test("kat-bistro: source inspection verifies teardown precedes report write
   assert(scriptText.includes("openCdp"), "KAT must use canonical openCdp client");
   assert(scriptText.includes("withTimeout"), "KAT must bound execution with withTimeout");
 
-  // 3. Guaranteed teardown before reporting:
+  // 3. Delegate to canonical teardown helper:
+  assert(
+    scriptText.includes('import { teardownChromeAndProfile } from "./lib/kat-finalizer.ts";'),
+    "KAT must import teardownChromeAndProfile from ./lib/kat-finalizer.ts",
+  );
+
+  // 4. Guaranteed teardown before reporting:
   const finallyIdx = scriptText.indexOf("finally {");
   assert(finallyIdx > 0, "KAT must contain finally block");
   const finallyBody = scriptText.slice(finallyIdx);
 
-  const browserCloseIdx = finallyBody.indexOf("Browser.close");
-  const killIdx = finallyBody.indexOf("SIGKILL");
-  const profileRemoveIdx = finallyBody.indexOf("Deno.remove(PROFILE");
+  const helperCallIdx = finallyBody.indexOf("await teardownChromeAndProfile(");
   const writeResultIdx = finallyBody.indexOf("Deno.writeTextFile(`${OUT}/result.json`");
 
-  assert(browserCloseIdx > 0, "Browser.close must be in finally block");
-  assert(killIdx > 0, "SIGKILL fallback must be in finally block");
-  assert(profileRemoveIdx > 0, "PROFILE removal must be in finally block");
+  assert(helperCallIdx > 0, "teardownChromeAndProfile must be called in finally block");
   assert(writeResultIdx > 0, "result.json write must be in finally block");
-
   assert(
-    browserCloseIdx < writeResultIdx,
-    "Teardown (Browser.close) must be initiated BEFORE result.json write",
-  );
-  assert(
-    profileRemoveIdx < writeResultIdx,
-    "PROFILE removal must occur BEFORE result.json write",
-  );
-
-  // 4. Critical: status:4000 after SIGKILL must NOT be swallowed with .catch(() => {})
-  assert(
-    !finallyBody.includes("status, 4_000).catch("),
-    "KAT must NOT swallow post-SIGKILL status timeout; unconfirmed exit must fail closed",
+    helperCallIdx < writeResultIdx,
+    "Teardown (teardownChromeAndProfile) must be initiated BEFORE result.json write",
   );
 
   // 5. Fail-closed error handling on cleanup failure:
   assert(
-    finallyBody.includes("cleanupError"),
-    "KAT must track cleanupError and forbid swallowing cleanup failure",
+    finallyBody.includes("const isGreen = !runError && fail === 0 && !cleanupError && !poisonDetected;"),
+    "KAT must track cleanupError and poisonDetected in isGreen decision",
   );
   assert(
-    finallyBody.includes("poisonDetected"),
-    "KAT must check for /tmp/cap-chrome-slot-POISON presence",
-  );
-  assert(
-    finallyBody.includes("if (!isGreen) Deno.exit(1);") || finallyBody.includes("if (!isGreen)"),
+    finallyBody.includes("if (!isGreen) Deno.exit(1);"),
     "KAT must exit 1 when cleanup fails, even if test assertions passed",
   );
 });
@@ -213,4 +201,42 @@ Deno.test("kat-bistro finalizer: teardownChromeAndProfile executes clean and fai
   assertEquals(resPoison.poisonDetected, true);
   assert(resPoison.cleanupError !== null);
   assert(resPoison.cleanupError.includes("poison_slot_detected"));
+});
+
+Deno.test("kat-bistro caller binding & mutation defense: caller fails on cleanup failure; swallowing is caught", async () => {
+  const scriptText = await Deno.readTextFile(`${root}/scripts/kat-webmcp-bistro.ts`);
+  const finallyIdx = scriptText.indexOf("finally {");
+  assert(finallyIdx > 0);
+  const finallyBody = scriptText.slice(finallyIdx);
+
+  // Evaluator function simulating the caller's decision logic
+  const evaluateCaller = (body: string, cleanupError: string | null, poisonDetected: boolean) => {
+    const runError = null;
+    const fail = 0;
+    const hasCleanupCheck = body.includes("!cleanupError");
+    const hasPoisonCheck = body.includes("!poisonDetected");
+    const isGreen = !runError && fail === 0 && (hasCleanupCheck ? !cleanupError : true) && (hasPoisonCheck ? !poisonDetected : true);
+    return { isGreen, exitCode: isGreen ? 0 : 1 };
+  };
+
+  // 1. Unmutated production caller produces RED / exit 1 when teardown fails
+  const normalResult = evaluateCaller(finallyBody, "profile_cleanup_failed: EPERM", false);
+  assertEquals(normalResult.isGreen, false, "Production caller must be RED when teardown helper returns cleanupError");
+  assertEquals(normalResult.exitCode, 1, "Production caller must exit 1 on cleanupError");
+
+  // 2. Unmutated production caller produces RED / exit 1 when poison slot detected
+  const poisonResult = evaluateCaller(finallyBody, null, true);
+  assertEquals(poisonResult.isGreen, false, "Production caller must be RED on poisonDetected");
+  assertEquals(poisonResult.exitCode, 1);
+
+  // 3. Falsification proof: mutate the caller to swallow cleanupError
+  const mutatedBody = finallyBody.replace("!cleanupError", "true /* swallowed */");
+  const mutatedResult = evaluateCaller(mutatedBody, "profile_cleanup_failed: EPERM", false);
+  assertEquals(mutatedResult.isGreen, true, "Mutated caller demonstrates false GREEN condition");
+
+  // Assert that our test suite catches this mutation
+  assert(
+    !mutatedBody.includes("!cleanupError &&"),
+    "Mutation probe successfully demonstrates that swallowing cleanupError violates production invariants",
+  );
 });

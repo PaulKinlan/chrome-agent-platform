@@ -7,6 +7,7 @@
 import { createHash } from "node:crypto";
 import { launchChrome, openCdp, withTimeout } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { teardownChromeAndProfile } from "./lib/kat-finalizer.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -181,67 +182,13 @@ try {
   runError = err instanceof Error ? (err.stack ?? err.message) : String(err);
   console.error("KAT Execution Error:", runError);
 } finally {
-  // 1. GUARANTEED TEARDOWN: Execute browser termination and profile cleanup independently.
-  let cleanupError: string | null = null;
-  function recordCleanupError(msg: string) {
-    cleanupError = cleanupError ? `${cleanupError}; ${msg}` : msg;
-    console.error(msg);
-  }
-
-  if (cdp) {
-    try {
-      await withTimeout(cdp.send("Browser.close"), 4_000).catch(() => {});
-    } catch (err) {
-      recordCleanupError(`cdp_browser_close_failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    try {
-      cdp.close();
-    } catch (err) {
-      recordCleanupError(`cdp_close_failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  if (chrome) {
-    try {
-      await withTimeout(chrome.proc.status, 8_000).catch(async () => {
-        try { chrome?.proc.kill("SIGKILL"); } catch { /* process already exited */ }
-        await withTimeout(chrome?.proc.status, 4_000);
-      });
-    } catch (procErr) {
-      recordCleanupError(`browser_teardown_failed: ${procErr instanceof Error ? procErr.message : String(procErr)}`);
-    }
-  }
-
-  if (PROFILE) {
-    try {
-      await Deno.remove(PROFILE, { recursive: true });
-    } catch (rmErr) {
-      recordCleanupError(`profile_cleanup_failed: ${rmErr instanceof Error ? rmErr.message : String(rmErr)}`);
-    }
-  }
-
-  // 2. CHECK POISON AND RESIDUAL LOCK
-  const POISON_FILE = "/tmp/cap-chrome-slot-POISON";
-  let poisonDetected = false;
-  try {
-    const exists = await Deno.stat(POISON_FILE).then(() => true).catch((error) => {
-      if (
-        error instanceof Deno.errors.NotFound ||
-        error?.name === "NotFound" ||
-        error?.code === "ENOENT" ||
-        String(error).includes("NotFound")
-      ) {
-        return false;
-      }
-      throw error;
-    });
-    if (exists) {
-      poisonDetected = true;
-      recordCleanupError("poison_slot_detected");
-    }
-  } catch (statErr) {
-    recordCleanupError(`poison_stat_failed: ${statErr instanceof Error ? statErr.message : String(statErr)}`);
-  }
+  // 1. GUARANTEED TEARDOWN: Delegate to canonical fail-closed helper.
+  const { cleanupError, poisonDetected } = await teardownChromeAndProfile({
+    cdp,
+    chrome,
+    profilePath: PROFILE,
+    withTimeout,
+  });
 
   const isGreen = !runError && fail === 0 && !cleanupError && !poisonDetected;
   const resultData = {
