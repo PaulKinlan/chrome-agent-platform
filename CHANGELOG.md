@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.287] — 2026-09-06
+- The data archive registry now validates file path grammar and protects board policy rules
+
 ## [0.3.286] — 2026-09-06
 - Internal verification: the browser-lock unit tests now rehearse on a scratch lock file instead of holding the real one that live browser checks use
 
