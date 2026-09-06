@@ -154,7 +154,9 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   on the long-lived surfaces (the hub, the chat) regularly.
 - **Performance budgets**: the SW must register fast (<500ms); the NTP/chat
   render fast (<1s); the agent loop doesn't block the UI thread; bundles stay
-  reasonable (the SW bundle is ~2.5mb — watch it). On a seeded profile (5 agents,
+  reasonable (the minified store SW bundle is hard-capped at 3.0 MB — 2.97 MB
+  as of 2026-09-06; ONE ai/zod/provider-utils instance per bundle, enforced
+  by the build — see scripts/bundle-budget.mjs). On a seeded profile (5 agents,
   50 artifacts, 60 runs): `agent.run` p50 < 400ms, `thread.get` < 40ms,
   `run.list` < 40ms, composer-ready < 150ms, data-visible < 250ms, zero long tasks > 50ms,
   CLS 0, and hub CPU non-idle < 150ms.

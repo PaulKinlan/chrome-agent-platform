@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.275] — 2026-09-06
+- one AI SDK instance per bundle, enforced by the build
+
+## [0.3.274] — 2026-09-06
+- The build now ships one copy of the AI SDK stack and refuses installs that would silently bloat or duplicate it, keeping the extension bundle safely under its store size cap
+
 ## [0.3.273] — 2026-09-06
 - Release notes written from a change that closes several tasks at once no longer begin with stray punctuation
 - The What's new list no longer shows an entry that begins with stray punctuation
