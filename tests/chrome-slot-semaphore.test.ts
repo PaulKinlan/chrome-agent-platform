@@ -28,10 +28,14 @@
 //   8. the slot wait is bounded by `CAP_CHROME_LOCK_WAIT_MS` and printed.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
-const CANONICAL = "/tmp/cap-serialized-chrome-acceptance.lock";
-
 const SLOT_DIR = await Deno.makeTempDir({ prefix: "cap-slot-dir-" });
 const CUSTOM_SCOPE = await Deno.makeTempFile({ prefix: "cap-slot-scope-" });
+// chrome-agent-platform-1qr3: the "another lane owns the canonical lock"
+// fixture is GATE, a scratch file the launcher resolves AS the canonical lock
+// through CAP_CHROME_LOCK_PATH (read per call) — never the machine's real gate,
+// which belongs to real browsers. The redirect itself is pinned by the
+// canonicalLock:true test below and by chrome-launch-lock.test.ts.
+const GATE = await Deno.makeTempFile({ prefix: "cap-slot-gate-" });
 Deno.env.delete("CAP_SECURITY_NONCE");
 Deno.env.delete("CAP_CHROME_LOCK_HELD");
 Deno.env.set("CAP_CHROME_SLOT_DIR", SLOT_DIR);
@@ -114,10 +118,10 @@ function withEnv(patch: Record<string, string | undefined>, fn: () => Promise<vo
 }
 
 Deno.test("uzik: a default launch takes NO canonical lock (profiles+ports already isolate)", withEnv(
-  { CAP_CHROME_MAX_CONCURRENT: "4", CAP_CHROME_LOCK_PATH: CANONICAL },
+  { CAP_CHROME_MAX_CONCURRENT: "4", CAP_CHROME_LOCK_PATH: GATE },
   async () => {
-    // Another lane owns the canonical lock for the whole machine.
-    const holder = await holdConfirmed(CANONICAL);
+    // Another lane owns the canonical lock (GATE, for this call) for the whole machine.
+    const holder = await holdConfirmed(GATE);
     const fake = await fakeBrowser();
     const t0 = Date.now();
     try {
@@ -300,12 +304,12 @@ Deno.test("uzik: canonicalLock:true keeps exclusive machine determinism (queue +
 ));
 
 Deno.test("uzik: a fixture with its own lockPath takes neither the canonical lock nor a slot", withEnv(
-  { CAP_CHROME_MAX_CONCURRENT: "1" },
+  { CAP_CHROME_MAX_CONCURRENT: "1", CAP_CHROME_LOCK_PATH: GATE },
   async () => {
     // Every slot held AND the canonical lock held: an isolated fixture scope
     // still launches (51x4 — unit fixtures never queue behind a real gate).
     const slotHolder = await holdConfirmed(slotFile(0));
-    const canonicalHolder = await holdConfirmed(CANONICAL);
+    const canonicalHolder = await holdConfirmed(GATE);
     const fake = await fakeBrowser();
     const t0 = Date.now();
     try {

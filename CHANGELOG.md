@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.285] — 2026-09-06
+- Internal verification: the browser-lock unit tests now rehearse on a scratch lock file instead of holding the real one that live browser checks use
+
 ## [0.3.284] — 2026-09-06
 - The user WebAssembly store now supports shared owner-managed binary files
 
