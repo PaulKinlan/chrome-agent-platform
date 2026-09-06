@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.274] — 2026-09-06
+- Tighten the French Bistro compatibility check's own verification so a previous run's pass record can never be mistaken for the current one
+
 ## [0.3.273] — 2026-09-06
 - Release notes written from a change that closes several tasks at once no longer begin with stray punctuation
 - The What's new list no longer shows an entry that begins with stray punctuation
