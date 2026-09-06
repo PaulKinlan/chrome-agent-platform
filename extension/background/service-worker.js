@@ -103,6 +103,7 @@ import {
   buildArchive,
   parseArchive,
   importArchive,
+  recoverPendingImport,
   createOpfsAdapter,
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
@@ -10970,6 +10971,19 @@ chrome.runtime.onStartup?.addListener(() => {
 recoverOnBoot().catch((e) =>
   console.error("recoverOnBoot:", e?.message ?? e)
 );
+// chrome-agent-platform-ch8x: a worker death mid-import leaves a durable
+// recovery journal — restore the original profile before anything reads it.
+// Module eval runs on EVERY worker start (onStartup does not), and the
+// recovery self-cancels once the journal is consumed. Skipped where the
+// storage surface does not exist (test harness contexts).
+if (navigator?.storage?.getDirectory) {
+  navigator.storage
+    .getDirectory()
+    .then((root) =>
+      recoverPendingImport({ kvGet, kvSet, kvRemove, opfs: createOpfsAdapter(root), alarms: createChromeAlarmsAdapter() }),
+    )
+    .catch((e) => console.error("import recovery:", e?.message ?? e));
+}
 reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
   console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
 );

@@ -1,9 +1,17 @@
 # Changelog
 
+## [0.3.273] — 2026-09-06
+- Release notes written from a change that closes several tasks at once no longer begin with stray punctuation
+- The What's new list no longer shows an entry that begins with stray punctuation
+
+## [0.3.272] — 2026-09-06
+- compact import recovery to fit the store bundle budget
+
 ## [0.3.271] — 2026-09-06
-- AGENTS beads examples match the installed bd CLI
+- import verifies the whole bundle before any destructive clear
 
 ## [0.3.270] — 2026-09-06
+- Import All verifies the whole bundle before it clears anything: a malformed or failed restore now leaves your current profile untouched, and a crashed import repairs itself on the next restart
 - The French Bistro browser compatibility check now completes automatically and reports cleanup failures instead of a false success
 - Export All and Import All now protect internal security keys and transient files, ensuring backups contain only your portable data
 
