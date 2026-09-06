@@ -15,6 +15,8 @@ import { WasmExecutor, TRANSPORT_MESSAGE_TYPES, validateAuthorityRecord, checkJo
 import { createWasiJob, WASI_HOST_DEFAULT_QUOTA } from "./wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
 
+export const DEFAULT_USER_WASM_WALL_MS = 15000;
+
 function failClosed(code, detail) {
   const error = new Error(`offscreen-host fail-closed: ${code}`);
   error.executorCode = code;
@@ -101,8 +103,8 @@ export function createOffscreenWasmHost({ executor, authority }) {
 
 /**
  * Execute a user-uploaded WebAssembly WASI module job.
- * Enforces pre-instantiate content re-hash against the claimed digest,
- * validates authority fences (defaulting documentId to 'task-run'),
+ * Enforces pre-instantiate content re-hash against the claimed digest before
+ * instantiating any module or spawning any worker, binds authority fences,
  * and executes in a fresh Worker via WasmExecutor with wall deadline.
  */
 export async function executeUserWasmRun({
@@ -112,7 +114,7 @@ export async function executeUserWasmRun({
   stdin = "",
   wasmBytes,
   authority,
-  wallMs = 15000,
+  wallMs = DEFAULT_USER_WASM_WALL_MS,
   createWorker = null,
   workerUrl = null,
 } = {}) {
@@ -122,11 +124,9 @@ export async function executeUserWasmRun({
   if (!(wasmBytes instanceof Uint8Array) || wasmBytes.byteLength < 8) {
     throw failClosed("request-wasm");
   }
-  if (wasmBytes.byteLength > EXECUTOR_BOUNDS.maxWasmBytes) {
-    throw failClosed("request-wasm-over-budget");
-  }
 
-  // 1. Pre-instantiate content re-hash (Acceptance addition 1)
+  // 1. Pre-instantiate content re-hash (Acceptance addition 1).
+  // Must run and verify BEFORE creating workers or compiling the module.
   const hashBuffer = await crypto.subtle.digest("SHA-256", wasmBytes);
   const computed = Array.from(new Uint8Array(hashBuffer))
     .map((b) => b.toString(16).padStart(2, "0"))
@@ -150,7 +150,9 @@ export async function executeUserWasmRun({
       ? stdin
       : new Uint8Array(0);
 
-  // 4. Build WasiJob
+  // 4. Build WasiJob. Binary bytes and stdio lengths are unbounded by repo
+  // policy (CAP-FB-20260903-DPTW); execution safety is governed by wall-time
+  // deadlines and host-call quota.
   const job = createWasiJob({
     tier: "default",
     context: {
@@ -170,11 +172,12 @@ export async function executeUserWasmRun({
   // 5. Fresh dedicated worker per call via WasmExecutor
   const defaultWorkerUrl = new URL("./wasm-execution-worker.js", import.meta.url).href;
   const resolvedWorkerUrl = workerUrl || defaultWorkerUrl;
+  const resolvedWallMs = Number.isSafeInteger(wallMs) && wallMs > 0 ? wallMs : DEFAULT_USER_WASM_WALL_MS;
 
   const executor = new WasmExecutor({
     workerUrl: resolvedWorkerUrl,
     createWorker: createWorker || undefined,
-    callMs: Number.isSafeInteger(wallMs) && wallMs > 0 ? wallMs : 15000,
+    callMs: resolvedWallMs,
   });
 
   const host = createOffscreenWasmHost({ executor, authority: fences });

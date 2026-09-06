@@ -220,7 +220,7 @@ export async function runWorkerJob({ sessionId, job, wasmBytes, post, respond })
       workspace,
     });
 
-    // 4. Compile + instantiate (the ONLY execution path).
+    stripAmbientNetwork(); // 4. Compile + instantiate (the ONLY execution path).
     const module = await WebAssembly.instantiate(wasmBytes, runtime.imports);
     const instance = module.instance;
     result = instance;
@@ -372,3 +372,25 @@ self.onmessage = (event) => {
     }));
   }
 };
+
+// Network-denial posture (chrome-agent-platform-4p7j.1 precedent):
+// Strip ambient network globals before any guest code runs.
+function stripAmbientNetwork() {
+  const reason = (name) =>
+    `${name} is not available in the WebAssembly execution worker. This environment has no ambient network access.`;
+  for (const name of ["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts"]) {
+    try {
+      Object.defineProperty(self, name, {
+        value: function denied() { throw new Error(reason(name)); },
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      });
+    } catch {
+      try { self[name] = undefined; } catch { /* ignore */ }
+    }
+  }
+}
+
+stripAmbientNetwork();
+

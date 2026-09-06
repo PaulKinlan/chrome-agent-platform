@@ -408,7 +408,8 @@ import {
   withOwnerSiteToolActivity,
 } from "../lib/lazy-tool-protocol.js";
 import { listOwnerBlobs, verifyAndReadOwnerBlobBytes } from "../lib/user-wasm-store.js";
-import { USER_WASM_RUN_TYPE } from "../lib/user-wasm-host.js";
+import { buildUserWasmAuthority, USER_WASM_RUN_TYPE } from "../lib/user-wasm-host.js";
+import { DEFAULT_USER_WASM_WALL_MS } from "../lib/wasm-offscreen-host.js";
 
 const notificationRegistry = new NotificationRegistry();
 
@@ -1863,13 +1864,12 @@ async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, cont
   }
 
   // 1. Fetch bytes from owner store and re-hash pre-instantiate (Acceptance addition 1)
-  let wasmBytes;
   try {
-    wasmBytes = await verifyAndReadOwnerBlobBytes({ digest });
+    await verifyAndReadOwnerBlobBytes({ digest });
   } catch (err) {
     pushDiagnostic(
       "error",
-      `User Wasm execution fetch failed: ${String(err?.message ?? err).slice(0, 160)}`,
+      `User Wasm execution fetch failed for ${digest.slice(0, 8)}: ${String(err?.message ?? err).slice(0, 160)}`,
       "user-wasm",
       "execute",
     );
@@ -1880,12 +1880,14 @@ async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, cont
   const host = await ensureOffscreen();
   if (!host.ok) return host;
 
-  // 3. Build authority with non-empty documentId ("task-run")
+  // 3. Build live user-wasm authority record (reflects active run and agent, not preview)
+  const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+  const agentId = String(context?.agentId ?? "hub");
   const origin = typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
     ? new URL(context.origin).origin
     : "https://agent.cap";
   const documentId = String(context?.documentId || "task-run");
-  const authority = buildPreviewAuthority({ origin, documentId });
+  const authority = buildUserWasmAuthority({ origin, documentId, runId, agentId });
 
   // 4. Send message to offscreen host to execute in a fresh Worker
   try {
@@ -1895,9 +1897,8 @@ async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, cont
       digest,
       args: Array.isArray(validatedArgs?.args) ? validatedArgs.args : [],
       stdin: typeof validatedArgs?.stdin === "string" ? validatedArgs.stdin : "",
-      wasmBytes: Array.from(wasmBytes),
       authority,
-      wallMs: 15000,
+      wallMs: DEFAULT_USER_WASM_WALL_MS,
     });
     return result ?? { ok: false, error: "user_wasm_no_response" };
   } catch (error) {

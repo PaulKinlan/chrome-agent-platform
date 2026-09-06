@@ -1,8 +1,5 @@
 # Changelog
 
-## [0.3.294] — 2026-09-06
-- .4: [] S4 user-wasm call path: pre-instantiate re-hash and offscreen worker dispatch
-
 ## [0.3.293] — 2026-09-06
 - Uploaded WebAssembly tools can now be called by agents with live execution and verified output
 

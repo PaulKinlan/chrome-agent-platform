@@ -3,14 +3,16 @@
 // 1. Upload genuinely user-supplied WASM via Settings UI
 // 2. Drive agent task through the hub composer calling the user module
 // 3. Pre-instantiate content re-hash and fresh Worker execution via offscreen host
-// 4. Model calls execute_tool and real stdout returns in conversation transcript
-// 5. Failure shape: a module that traps returns honest readable error and run continues
+// 4. Model calls execute_tool and real unique-token stdout returns in conversation transcript
+// 5. Ambient credentials and network denial in the worker (no chrome, fetch/WebSocket blocked)
+// 6. Foreign-import refusal: hostile imports rejected honestly, never reported as success
+// 7. Failure shape: a module that traps returns honest readable error and the run continues
 //
 // deno run -A scripts/kat-user-wasm-call.ts [extension-dir] [evidence-dir]
 import { createHash } from "node:crypto";
 import { launchChrome, openCdp, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
-import { buildWasiEntryExportWasm } from "../tests/wasm-fixture-builder.mjs";
+import { buildWasiStdoutBytesWasm } from "../tests/wasm-fixture-builder.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -21,9 +23,10 @@ await Deno.mkdir(PROFILE, { recursive: true });
 
 const tempDir = await Deno.makeTempDir({ dir: OUT, prefix: "inputs-" });
 
-// 1. Success module: writes "hi" to stdout via WASI _start
-const successWasm = buildWasiEntryExportWasm({ exportName: "_start" });
-const successPath = `${tempDir}/wasm_caller.wasm`;
+// 1. Success module with unique 20-char random token pin
+const UNIQUE_TOKEN = "S4_TOKEN_" + createHash("sha256").update(crypto.randomUUID()).digest("hex").slice(0, 11);
+const successWasm = buildWasiStdoutBytesWasm(new TextEncoder().encode(UNIQUE_TOKEN));
+const successPath = `${tempDir}/wasm_token.wasm`;
 await Deno.writeFile(successPath, successWasm);
 
 // 2. Trapping module: executes opcode unreachable (0x00)
@@ -37,6 +40,19 @@ const trapWasm = new Uint8Array([
 ]);
 const trapPath = `${tempDir}/wasm_trapping.wasm`;
 await Deno.writeFile(trapPath, trapWasm);
+
+// 3. Foreign import module (imports env.hostile): must be refused honestly
+const foreignWasm = new Uint8Array([
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+  0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+  0x02, 0x0f, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x07, 0x68, 0x6f, 0x73, 0x74, 0x69, 0x6c, 0x65, 0x00, 0x00,
+  0x03, 0x02, 0x01, 0x00,
+  0x05, 0x04, 0x01, 0x01, 0x01, 0x01,
+  0x07, 0x07, 0x01, 0x03, 0x72, 0x75, 0x6e, 0x00, 0x01,
+  0x0a, 0x06, 0x01, 0x04, 0x00, 0x10, 0x00, 0x0b,
+]);
+const foreignPath = `${tempDir}/wasm_foreign.wasm`;
+await Deno.writeFile(foreignPath, foreignWasm);
 
 let checksPassed = 0;
 let checksFailed = 0;
@@ -150,27 +166,15 @@ const THREAD_TEXT_EXPR = `(() => {
 try {
   chromeInstance = await launchChrome({ extension: EXT, profile: PROFILE, windowSize: "1400,1100" });
   cdp = await openCdp(chromeInstance.wsUrl, { timeoutMs: 60000 });
-  cdp.on("Runtime.consoleAPICalled", (params) => {
-    const text = (params.args || []).map((a: any) => typeof a.value === "object" ? JSON.stringify(a.value) : String(a.value ?? a.description ?? "")).join(" ");
-    console.log(`[Browser Console ${params.type}]`, text);
-  });
   const sw = await waitForServiceWorker(cdp.send, { match: (t: any) => t.type === "service_worker" && t.url.endsWith("/dist/background/service-worker.js") });
   check("extension service worker registered", Boolean(sw));
   const extensionId = new URL(sw.url).host;
 
-  // Subscribe to console on SW
-  try {
-    const swSession = (await cdp.send("Target.attachToTarget", { targetId: sw.targetId, flatten: true })).result.sessionId;
-    await cdp.send("Runtime.enable", {}, swSession);
-  } catch (e) {
-    console.log("Could not attach to SW target for logs:", e);
-  }
-
-  // Step 1: Open Settings and upload wasm_caller
+  // Step 1: Open Settings and upload wasm_token
   optionsSession = (await cdp.open(`chrome-extension://${extensionId}/options/options.html#user-wasm`)).sessionId;
   await waitIn(optionsSession, `document.querySelector('#user-wasm.active') && ${ui}?.shadowRoot?.querySelector('#files') && ${ui}.busy === false`);
 
-  await uploadModule(successPath, "wasm_caller", "A user-uploaded WASI caller module");
+  await uploadModule(successPath, "wasm_token", "User wasm module outputting unique token");
 
   // Step 2: Open Hub and enable developer features (for demo model)
   hubSession = (await cdp.open(`chrome-extension://${extensionId}/ntp/ntp.html`)).sessionId;
@@ -180,48 +184,106 @@ try {
 
   await cdp.eval(hubSession, `chrome.runtime.sendMessage({ type: 'kv.set', values: { 'cap:developerFeatures': true } })`);
 
-  // Step 3: Run task calling wasm_caller
-  const taskText1 = `@demo-site-tool wasm_caller {"args":[],"stdin":"ping"}`;
+  // Step 3: Run task calling wasm_token
+  const taskText1 = `@demo-site-tool wasm_token {"args":[],"stdin":"ping"}`;
   await cdp.eval(hubSession, `(() => {
     const composer = document.getElementById('composer');
     composer.dispatchEvent(new CustomEvent('send', { detail: { text: ${JSON.stringify(taskText1)}, attachments: [], agent: null }, bubbles: true }));
     return true;
   })()`);
 
-  // Poll for completion and stdout
+  // Poll for completion and verify UNIQUE_TOKEN reached transcript
   let threadText1 = "";
   const until1 = Date.now() + 60000;
   while (Date.now() < until1) {
     threadText1 = String(await cdp.eval(hubSession, THREAD_TEXT_EXPR) ?? "");
-    if (/\[demo model\] Site tool wasm_caller/.test(threadText1)) break;
+    if (/\[demo model\] Site tool wasm_token/.test(threadText1)) break;
     await sleep(250);
   }
-  console.log("threadText1 full:", threadText1);
 
   check(
-    "model executed user-wasm tool and transcript carries real stdout",
-    /\[demo model\] Site tool wasm_caller succeeded/.test(threadText1) && /hi/.test(threadText1),
+    "model executed user-wasm tool and transcript carries unique-token stdout pin",
+    /\[demo model\] Site tool wasm_token succeeded/.test(threadText1) && threadText1.includes(UNIQUE_TOKEN),
     threadText1.slice(-300),
   );
   await screenshot(hubSession, "01-user-wasm-call-success.png");
 
-  // Step 4: Upload trapping module in Settings
-  await uploadModule(trapPath, "wasm_trapping", "A user-uploaded trapping wasm module");
+  // Step 4: Interrogate worker ambient environment (no chrome, network denied)
+  const probeWorkerExpr = `(() => new Promise(async (resolve) => {
+    const url = chrome.runtime.getURL("lib/wasm-execution-worker.js");
+    const src = 'import ' + JSON.stringify(url) + ';'
+      + 'const out = { typeofChrome: typeof chrome,'
+      + ' typeofChromeRuntime: (typeof chrome !== "undefined" && chrome) ? typeof chrome.runtime : "n/a",'
+      + ' typeofFetch: typeof fetch,'
+      + ' typeofWebSocket: typeof WebSocket,'
+      + ' typeofImportScripts: typeof importScripts };'
+      + 'try { const r = await fetch("https://example.com/", { method: "GET" });'
+      + ' out.networkFetch = "SUCCEEDED " + r.status; }'
+      + 'catch (e) { out.networkFetch = "BLOCKED " + String(e && e.message || e).slice(0, 160); }'
+      + 'try { const ws = new WebSocket("wss://example.com/"); out.wsResult = "CONNECTED"; }'
+      + 'catch (e) { out.wsResult = "BLOCKED " + String(e && e.message || e).slice(0, 160); }'
+      + 'self.postMessage(out);';
+    const blobUrl = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+    let settled = false;
+    const done = (v) => { if (!settled) { settled = true; try { w.terminate(); } catch {} resolve(v); } };
+    const w = new Worker(blobUrl, { type: "module" });
+    w.onmessage = (e) => done(e.data);
+    w.onerror = (e) => done({ workerError: String(e.message || e) });
+    setTimeout(() => done({ timeout: true }), 15000);
+  }))()`;
 
-  // Step 5: Run task calling wasm_trapping
-  const taskText2 = `@demo-site-tool wasm_trapping {}`;
+  const probe = await cdp.eval(hubSession, probeWorkerExpr);
+  check("worker has zero ambient chrome credentials", probe?.typeofChrome === "undefined", probe);
+  check("worker network access is actively blocked (fetch denied)", probe?.networkFetch?.includes("BLOCKED"), probe);
+  check("worker network access is actively blocked (WebSocket denied)", probe?.wsResult?.includes("BLOCKED"), probe);
+
+  // Step 5: Upload foreign import module (env.hostile) in Settings
+  await uploadModule(foreignPath, "wasm_foreign", "A user module importing foreign env.hostile");
+
+  // Step 6: Run task calling wasm_foreign and verify honest refusal
+  const taskTextForeign = `@demo-site-tool wasm_foreign {}`;
   await cdp.eval(hubSession, `(() => {
-    // Navigate home to hub composer
     const homeBtn = document.querySelector('nav a[href="#home"]') || document.querySelector('#nav-home');
     if (homeBtn) homeBtn.click();
     return true;
   })()`);
   await sleep(400);
 
-  // Send from whichever composer is active
   await cdp.eval(hubSession, `(() => {
     const composer = document.getElementById('composer') || document.getElementById('thread-composer');
-    composer?.dispatchEvent(new CustomEvent('send', { detail: { text: ${JSON.stringify(taskText2)}, attachments: [], agent: null } }));
+    composer?.dispatchEvent(new CustomEvent('send', { detail: { text: ${JSON.stringify(taskTextForeign)}, attachments: [], agent: null }, bubbles: true }));
+    return true;
+  })()`);
+
+  let threadTextForeign = "";
+  const untilForeign = Date.now() + 60000;
+  while (Date.now() < untilForeign) {
+    threadTextForeign = String(await cdp.eval(hubSession, THREAD_TEXT_EXPR) ?? "");
+    if (/wasm_foreign/.test(threadTextForeign) && (/import/.test(threadTextForeign) || /error/.test(threadTextForeign))) break;
+    await sleep(250);
+  }
+
+  check(
+    "foreign-import module is refused honestly and never reported as success",
+    /wasm_foreign/.test(threadTextForeign) && !/Site tool wasm_foreign succeeded/.test(threadTextForeign),
+    threadTextForeign.slice(-300),
+  );
+
+  // Step 7: Upload trapping module in Settings
+  await uploadModule(trapPath, "wasm_trapping", "A user-uploaded trapping wasm module");
+
+  // Step 8: Run task calling wasm_trapping
+  const taskText2 = `@demo-site-tool wasm_trapping {}`;
+  await cdp.eval(hubSession, `(() => {
+    const homeBtn = document.querySelector('nav a[href="#home"]') || document.querySelector('#nav-home');
+    if (homeBtn) homeBtn.click();
+    return true;
+  })()`);
+  await sleep(400);
+
+  await cdp.eval(hubSession, `(() => {
+    const composer = document.getElementById('composer') || document.getElementById('thread-composer');
+    composer?.dispatchEvent(new CustomEvent('send', { detail: { text: ${JSON.stringify(taskText2)}, attachments: [], agent: null }, bubbles: true }));
     return true;
   })()`);
 
@@ -239,6 +301,35 @@ try {
     threadText2.slice(-300),
   );
   await screenshot(hubSession, "02-user-wasm-call-trap.png");
+
+  // Step 9: Verify agent run continues after a trap (follow-up task completes)
+  const taskText3 = `@demo-site-tool wasm_token {"args":[],"stdin":"second"}`;
+  await cdp.eval(hubSession, `(() => {
+    const homeBtn = document.querySelector('nav a[href="#home"]') || document.querySelector('#nav-home');
+    if (homeBtn) homeBtn.click();
+    return true;
+  })()`);
+  await sleep(400);
+
+  await cdp.eval(hubSession, `(() => {
+    const composer = document.getElementById('composer') || document.getElementById('thread-composer');
+    composer?.dispatchEvent(new CustomEvent('send', { detail: { text: ${JSON.stringify(taskText3)}, attachments: [], agent: null }, bubbles: true }));
+    return true;
+  })()`);
+
+  let threadText3 = "";
+  const until3 = Date.now() + 60000;
+  while (Date.now() < until3) {
+    threadText3 = String(await cdp.eval(hubSession, THREAD_TEXT_EXPR) ?? "");
+    if (/\[demo model\] Site tool wasm_token succeeded/.test(threadText3)) break;
+    await sleep(250);
+  }
+
+  check(
+    "agent continues executing successfully after a trapping module failure",
+    /\[demo model\] Site tool wasm_token succeeded/.test(threadText3) && threadText3.includes(UNIQUE_TOKEN),
+    threadText3.slice(-300),
+  );
 
 } catch (err) {
   check(`KAT execution threw: ${String(err?.message ?? err)}`, false, err);

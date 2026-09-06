@@ -462,4 +462,29 @@ Deno.test("owner-blobs: readOwnerBlobBytes and verifyAndReadOwnerBlobBytes read 
   );
 });
 
+Deno.test("owner-blobs: corrupted bytes on disk fail closed on pre-instantiate re-hash (B1)", async () => {
+  const f = fixture();
+  const legitimateBytes = new Uint8Array([1, 2, 3, 4, 5]);
+  const saved = await f.store.put({ bytes: legitimateBytes, name: "legit", kind: "wasm" });
+  const d = saved.digest;
+
+  // Corrupt the stored bytes directly on disk AFTER write so file size matches but content hash mismatches
+  const root = await (await f.options.storage.getDirectory()).getDirectoryHandle("cap-owner-blobs-v1");
+  const writer = await (await root.getFileHandle(`${d}.bin`)).createWritable();
+  await writer.write(new Uint8Array([1, 2, 99, 4, 5]));
+  await writer.close();
+
+  // getFile still succeeds on disk, but verifyAndReadOwnerBlobBytes must catch the hash corruption
+  let caughtError = null;
+  try {
+    await verifyAndReadOwnerBlobBytes({ digest: d, storage: f.options.storage, locks: f.options.locks });
+  } catch (err) {
+    caughtError = err;
+  }
+  assert(caughtError !== null, "corrupted bytes must reject");
+  assertEquals(caughtError.code, "digest_mismatch");
+  assert(caughtError.message.includes("blob_digest_mismatch"));
+});
+
+
 
