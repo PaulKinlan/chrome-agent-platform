@@ -14,10 +14,11 @@
 //   - per-FILE modes preserved from the previous tree; failures roll back and
 //     ROLLBACK FAILURE IS FATAL; every failure path cleans its staging.
 import { build, transform } from "esbuild";
+import { createRequire } from "node:module";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";
@@ -336,10 +337,95 @@ try {
         b.onResolve({ filter: /dist\/shared\/diff-core\.bundle\.js$/ }, () => ({ path: path.join(EXT_DIR, "shared/diff-core.js") }));
       },
     };
+    // chrome-agent-platform-63et: keep ONE AI SDK stack in the SW bundle.
+    // Root cause of the duplication (verified 2026-09-06): Deno PEER-CONTEXT
+    // instances — the extension root resolves ai@7.0.66 in a zod@3.25.76
+    // context while agent-do@0.7.0 hard-depends zod ^4.4.3, so installs can
+    // carry `_N`-suffixed second store instances (ai@7.0.66_1,
+    // provider-utils@5.0.27_1) that esbuild then bundles twice.
+    //
+    // Three mechanisms, all live-resolved and fail-closed:
+    // 1. ai imports resolve importer-anchored with any `_N` store suffix
+    //    stripped — same-version peer duplicates collapse onto one instance.
+    // 2. @ai-sdk/provider-utils is pinned to ONE line (5.0.27, anthropic's
+    //    context) for every importer. 5.0.33 (google's context) lacks
+    //    stream-error exports anthropic needs; 5.0.27 satisfies google's
+    //    imports too — esbuild's export check enforces this at build time.
+    //    (A blanket alias to 5.0.33 was tried first and hard-errored.)
+    // 3. agent-do's bare zod imports resolve to the full v4 implementation
+    //    shipped inside zod@3 (zod/v4 — its verified-compatible runtime
+    //    subset), so the zod@4.4.3 major does not ship for agent-do. The
+    //    @modelcontextprotocol/sdk keeps its genuine zod@4 peer.
+    // The metafile-side same-version duplicate + lockfile-drift guards in
+    // scripts/bundle-budget.mjs (assertBundleBudget) are the tripwires.
+    const requireFromRoot = createRequire(path.join(ROOT, "package.json"));
+    function resolveCanonical(spec, opts, what) {
+      try {
+        return requireFromRoot.resolve(spec, opts);
+      } catch (err) {
+        throw new Error(
+          `cap-ai-sdk-dedup: cannot resolve the canonical ${what} (${spec}) in this install — ${err?.message || err}. ` +
+          `Run deno install and retry; the build refuses to bundle duplicated AI SDK instances.`,
+        );
+      }
+    }
+    // Collapse a Deno peer-context duplicate: resolve from the IMPORTER's own
+    // context, then strip the `_N` store suffix so both instances load from
+    // the one canonical .deno directory. A no-op when no suffix exists.
+    function collapsePeerContextDuplicate(a) {
+      const resolved = requireFromRoot.resolve(a.path, { paths: [path.dirname(a.importer)] });
+      return { path: resolved.replace(/(\.deno\/[^/@]+@[0-9][^/]*)_\d+\//, "$1/") };
+    }
+    const CANON_ANTHROPIC = resolveCanonical("@ai-sdk/anthropic", { paths: [ROOT] }, "@ai-sdk/anthropic (root context)");
+    const CANON_PU = resolveCanonical(
+      "@ai-sdk/provider-utils",
+      { paths: [path.dirname(CANON_ANTHROPIC)] },
+      "@ai-sdk/provider-utils@5.0.27 (the anthropic provider context)",
+    );
+    const CANON_ZOD_V4 = resolveCanonical("zod/v4", { paths: [ROOT] }, "zod/v4 (the v4 implementation shipped inside zod@3)");
+    const capAiSdkDedup = {
+      name: "cap-ai-sdk-dedup",
+      setup(b) {
+        b.onResolve({ filter: /^ai$/ }, collapsePeerContextDuplicate);
+        b.onResolve({ filter: /^@ai-sdk\/provider-utils$/ }, () => {
+          // ONE line for all comers: 5.0.27 (anthropic's context) — 5.0.33
+          // lacks exports anthropic needs. If google's imports were missing
+          // here, esbuild fails the build loudly and we go back to two
+          // instances.
+          return { path: CANON_PU };
+        });
+
+        // Only agent-do is redirected to zod/v4: it is the importer whose
+        // peer context expects zod ^4. Every other zod import in the graph
+        // already means zod@3 — leaving them alone preserves exactly the
+        // semantics each importer compiled against.
+        b.onResolve({ filter: /^zod$/ }, (a) => (a.importer.includes("/agent-do") ? { path: CANON_ZOD_V4 } : undefined));
+      },
+    };
+    // chrome-agent-platform-63et: @modelcontextprotocol/sdk is a deno.lock
+    // TRANSITIVE (agent-do's MCP client) — it is NOT in package.json, so a
+    // conforming install places it ONLY under node_modules/.deno/…, which
+    // esbuild's node_modules walk-up cannot see. Past builds resolved it
+    // through npm-era leftovers in node_modules/ (install drift — exactly
+    // what the new lockfile-drift guard refuses). nodePaths hands esbuild
+    // the store instance's node_modules dir as a fallback search path: the
+    // SDK's own exports map then resolves the .js-suffixed subpaths natively
+    // (browser/ESM conditions — the KAT-proven flavor), live-resolved and
+    // fail-closed if the store copy is ever absent.
+    const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
+    const mcpStoreEntry = readdirSync(denoStoreDir).find((d) => d.startsWith("@modelcontextprotocol+sdk@"));
+    if (!mcpStoreEntry) {
+      throw new Error(
+        `cap-deno-store-resolve: no @modelcontextprotocol+sdk@* instance in ${denoStoreDir} — run deno install. ` +
+        `The SDK is a deno.lock transitive; the build refuses to guess.`,
+      );
+    }
+    const denoStoreNodeModules = path.join(denoStoreDir, mcpStoreEntry, "node_modules");
     const shared = {
       bundle: true, format: "esm", target: "chrome120", platform: "browser",
       logLevel: "silent", sourcemap: DEBUG_BUILD, legalComments: "none",
-      plugins: [diffCoreFromSource],
+      plugins: [diffCoreFromSource, capAiSdkDedup],
+      nodePaths: [denoStoreNodeModules],
       define: {
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify(DEBUG_BUILD ? "verbose" : "off"),
       },

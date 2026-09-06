@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.278] — 2026-09-06
+- one AI SDK instance per bundle, enforced by the build
+
 ## [0.3.277] — 2026-09-06
 - load-sensitive Chrome gates wait for a quiet box or refuse with exit 75
 

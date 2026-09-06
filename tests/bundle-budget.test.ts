@@ -18,7 +18,9 @@ import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@s
 import {
   assertBundleBudget,
   BUDGET_REPORTED_BUNDLES,
+  duplicateAiSdkInputs,
   formatContributors,
+  nonDenoStoreInputs,
   STORE_SW_BUDGET_BYTES,
   topContributors,
 } from "../scripts/bundle-budget.mjs";
@@ -123,4 +125,77 @@ Deno.test("bundle budget: a store-built dist ships a minified SW at or under bud
     size <= STORE_SW_BUDGET_BYTES,
     `store-built SW bundle is ${size} bytes — over the ${STORE_SW_BUDGET_BYTES} budget`,
   );
+});
+
+// ── chrome-agent-platform-63et: one AI SDK instance per bundle ─────────────
+// The SW bundle carried the AI SDK stack TWICE (Deno peer-context subtrees:
+// root resolves ai@7.0.66 in a zod@3 context, agent-do hard-depends zod ^4 →
+// ai@7.0.66_1 + provider-utils 5.0.27/_1 + zod@4.4.3), and a mis-installed
+// worktree silently produced a 272KB-bloated bundle while the primary
+// checkout measured 2,999,957. Both failure classes are now fail-closed
+// guards on the budget path.
+
+Deno.test("63et duplicateAiSdkInputs: one .deno instance per AI SDK package is clean", () => {
+  const metafile = { inputs: {
+    "node_modules/.deno/ai@7.0.66/node_modules/ai/dist/index.js": { bytes: 100 },
+    "node_modules/.deno/zod@3.25.76/node_modules/zod/v3/types.js": { bytes: 100 },
+    "node_modules/.deno/@ai-sdk+provider-utils@5.0.33/node_modules/@ai-sdk/provider-utils/dist/index.js": { bytes: 100 },
+    "node_modules/.deno/@ai-sdk+google@4.0.44/node_modules/@ai-sdk/google/dist/index.js": { bytes: 100 },
+    "extension/lib/agent.js": { bytes: 10 },
+  } };
+  assertEquals(duplicateAiSdkInputs(metafile), {});
+  assertEquals(duplicateAiSdkInputs(null), {});
+});
+
+Deno.test("63et duplicateAiSdkInputs: same-version peer-context duplicates are named; DISTINCT versions are legitimate and pass", () => {
+  const metafile = { inputs: {
+    // ai: same version, peer-context _1 duplicate — FLAGGED.
+    "node_modules/.deno/ai@7.0.66/node_modules/ai/dist/index.js": { bytes: 100 },
+    "node_modules/.deno/ai@7.0.66_1/node_modules/ai/dist/index.js": { bytes: 100 },
+    // provider-utils: two DISTINCT versions (the providers pin incompatible
+    // lines — a blanket alias broke @ai-sdk/anthropic) — NOT flagged.
+    "node_modules/.deno/@ai-sdk+provider-utils@5.0.33/node_modules/@ai-sdk/provider-utils/dist/index.js": { bytes: 100 },
+    "node_modules/.deno/@ai-sdk+provider-utils@5.0.27/node_modules/@ai-sdk/provider-utils/dist/index.js": { bytes: 100 },
+    // zod: two distinct majors (owner-scope migration) — NOT flagged…
+    "node_modules/.deno/zod@3.25.76/node_modules/zod/v3/types.js": { bytes: 100 },
+    "node_modules/.deno/zod@4.4.3/node_modules/zod/v4/index.js": { bytes: 100 },
+    // …but a same-version zod _1 duplicate WOULD be.
+    "node_modules/.deno/zod@4.4.3_1/node_modules/zod/v4/index.js": { bytes: 100 },
+  } };
+  const dups = duplicateAiSdkInputs(metafile);
+  assertEquals(Object.keys(dups).sort(), ["ai@7.0.66", "zod@4.4.3"]);
+  assertEquals(dups["ai@7.0.66"], [".deno/ai@7.0.66", ".deno/ai@7.0.66_1"]);
+  assertEquals(dups["zod@4.4.3"], [".deno/zod@4.4.3", ".deno/zod@4.4.3_1"]);
+});
+
+Deno.test("63et nonDenoStoreInputs: bare node_modules inputs are named; .deno paths and repo sources pass", () => {
+  const metafile = { inputs: {
+    "node_modules/ai/dist/index.js": { bytes: 1 },
+    "node_modules/.deno/ai@7.0.66/node_modules/ai/dist/index.js": { bytes: 1 },
+    "extension/lib/agent.js": { bytes: 1 },
+    "node_modules/zod/v3/types.js": { bytes: 1 },
+  } };
+  assertEquals(nonDenoStoreInputs(metafile), ["node_modules/ai/dist/index.js", "node_modules/zod/v3/types.js"]);
+  assertEquals(nonDenoStoreInputs(null), []);
+});
+
+Deno.test("63et assertBundleBudget fails closed on a duplicated AI SDK instance even under budget", () => {
+  const metafile = { inputs: {
+    "node_modules/.deno/ai@7.0.66/node_modules/ai/dist/index.js": { bytes: 10 },
+    "node_modules/.deno/ai@7.0.66_1/node_modules/ai/dist/index.js": { bytes: 10 },
+  } };
+  const error = assertThrows(() =>
+    assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile })
+  );
+  assertStringIncludes(error.message, "duplicated same-version AI SDK instances");
+  assertStringIncludes(error.message, "ai@7.0.66: .deno/ai@7.0.66, .deno/ai@7.0.66_1");
+});
+
+Deno.test("63et assertBundleBudget fails closed on lockfile drift (non-Deno-store inputs) even under budget", () => {
+  const metafile = { inputs: { "node_modules/ai/dist/index.js": { bytes: 10 } } };
+  const error = assertThrows(() =>
+    assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile })
+  );
+  assertStringIncludes(error.message, "lockfile drift");
+  assertStringIncludes(error.message, "node_modules/ai/dist/index.js");
 });
