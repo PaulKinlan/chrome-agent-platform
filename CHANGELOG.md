@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.293] — 2026-09-06
+- Bundled tools that need more memory — the barcode tool and the zstd/brotli tool — no longer refuse to start inside an agent task
+
 ## [0.3.292] — 2026-09-06
 - Internal cleanup: the agent guidance file points at the live task list, names only paths that exist, and spells out every step of setting up a fresh checkout
 

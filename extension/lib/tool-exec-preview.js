@@ -76,6 +76,14 @@ export const PREVIEW_SPECS = Object.freeze(
           casRel: `wasm/cas/${row.binary?.sha256}.wasm`,
           casSha: row.binary?.sha256,
           size: row.binary?.bytes,
+          // az4k: the tool's DECLARED memory tier rides the spec (from the
+          // generated row — never the request). The job worker audits the
+          // binary against the job's tier ceiling; a default-tier binary
+          // (2048 pages: compressops, zxing, oxipng) under a hardcoded tiny
+          // job (512) was memory-rejected on every live run. The large tier
+          // is never a job tier (createWasiJob refuses it).
+          tier: row.binary?.tier === "default" ? "default" : "tiny",
+          maxPages: row.binary?.maxPages,
           caps: Object.freeze([...(row.capabilities ?? [])].sort()),
           argv0: row.toolId,
           // The immutable acceptedExitCodes: diff's exit 1 means differences
@@ -439,7 +447,9 @@ export function buildPreviewJob({ input, authority, quota = null }) {
     stdinBytes = encoder.encode(input.stdin);
   }
   const job = createWasiJob({
-    tier: "tiny",
+    // The spec's declared tier (az4k) — createWasiJob still refuses anything
+    // but tiny/default, so a spec can never open the large tier.
+    tier: spec.tier,
     context: {
       executionId: authority.executionId,
       callId: authority.callId,

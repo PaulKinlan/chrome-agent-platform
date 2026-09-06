@@ -63,6 +63,17 @@ Deno.test("ten9 GUARD: live dispatch of EVERY admitted bundled tool reaches the 
       !String(res.error || "").includes("preview_only_tool"),
       `${toolId} error must not carry the preview_only_tool refusal`,
     );
+    // az4k: the executor's OWN refusals are not "reached the executor" either.
+    // In this unit environment dispatch stops at the transport layer (below),
+    // so these two cannot fire here — the class proof (real worker, real CAS
+    // bytes, real job) is tests/bundled-tools-job-lane-tier.test.ts. This pin
+    // stays so a future in-process executor cannot turn a memory/import
+    // refusal into a green "reached".
+    assert(
+      res.phase !== "memory-rejected" && res.phase !== "import-rejected" &&
+        !String(res.error || "").includes("memory_exceeds_ceiling"),
+      `${toolId} must not be refused by the executor's own audit (got ${res.phase}: ${res.error})`,
+    );
     assert(
       String(res.error || "").includes("asset_fetch_failed") ||
         String(res.error || "").includes("wasi_task_host_unavailable") ||

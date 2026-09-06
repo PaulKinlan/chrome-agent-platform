@@ -15,6 +15,14 @@
 //                                                    is REMOVED — every
 //                                                    bundled tool executes
 //                                                    in-run)
+//   default-tier job lane  (compressops)           → offscreen WASI job run
+//                                                    (az4k: the job carries
+//                                                    the tool's DECLARED
+//                                                    tier — a 2048-page
+//                                                    binary under the old
+//                                                    hardcoded tiny job was
+//                                                    memory-rejected on
+//                                                    every live run)
 //                                           so the class is proven end-to-end.
 //
 // Run: deno run -A scripts/kat-bundled-execute.ts   (takes the Chrome slot)
@@ -116,6 +124,15 @@ try {
         selectionRef: refFor(req, "uuid"),
         arguments: { args: [], stdin: "" },
       }) },
+      // az4k: "zstd compress" ranks compressops #1 in the real catalog search
+      // (measured). `info` is the utf8 subcommand — it proves the DEFAULT-TIER
+      // dispatch class without conflating the separate binary-stdout gap
+      // (chrome-agent-platform-8oil: zstd/brotli frames under a utf8 encoding).
+      { tool: "search_tools", args: { query: "zstd compress", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "compressops"),
+        arguments: { args: ["info"], stdin: "hello" },
+      }) },
       { text: "Bundled execute spot-check complete." },
     ],
   });
@@ -148,9 +165,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('#run-task')?.click()`);
 
-  // 7 searches + 7 executes + the final text = 15 model calls; the 15th
+  // 8 searches + 8 executes + the final text = 17 model calls; the 17th
   // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 15;
+  const EXPECTED_CALLS = 17;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;
@@ -230,6 +247,18 @@ try {
       assert(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(out),
         `uuid output lacks a UUID: ${out.slice(0, 300)}`);
     }],
+    ["compressops", "execute_tool", (env) => {
+      // az4k: compressops declares the DEFAULT tier (2048 pages). Under the
+      // old hardcoded tiny job the worker refused it (memory-rejected) on
+      // every live run since ten9. It must now EXECUTE: `info` on 5 bytes
+      // reports {"bytes":5,"magic":"unknown"}.
+      assert(env?.ok === true, `compressops in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(!out.includes("memory-rejected") && !out.includes("memory_exceeds_ceiling"),
+        `compressops was memory-rejected — the job lane dropped the declared tier again: ${out.slice(0, 300)}`);
+      assert(out.includes("magic") && out.includes("bytes"),
+        `compressops info output lacks the frame report: ${out.slice(0, 300)}`);
+    }],
   ];
 
   for (const [toolId, , verify] of pairs) {
@@ -249,6 +278,7 @@ try {
       invoked: true,
       dispatchPath: toolId === "gzip" || toolId === "sha256sum" || toolId === "uuid"
         ? "offscreen WASI job (ten9 ungate: formerly preview-only)"
+        : toolId === "compressops" ? "offscreen WASI job (az4k: default tier carried by the job)"
         : toolId === "hash_blake3" ? "call-export host" : "offscreen WASI stream",
       ok: env?.ok === true,
       result: env?.result ?? env,
@@ -266,9 +296,22 @@ try {
   // RED with this exact "offscreen unavailable/no offscreen response"
   // signature — a failure here is recorded as a finding (bead + report), not
   // absorbed, and not double-fixed in this pass.
-  for (const [toolId, args, stdin] of [
-    ["gzip", [], "hello gzip"],
-  ] as Array<[string, string[], string]>) {
+  // az4k: the Settings route builds its job through the SAME buildPreviewJob
+  // and the options page runs the SAME wasm-execution-worker — so a
+  // default-tier tool (compressops) is previewed here too, proving both
+  // routes carry the declared tier.
+  for (const [toolId, args, stdin, verify] of [
+    ["gzip", [], "hello gzip", (text: string) => {
+      assert(text.includes("1f8b") || text.includes("4X8") || text.includes("gB("),
+        `gzip preview output lacks the gzip magic: ${text.slice(0, 200)}`);
+    }],
+    ["compressops", ["info"], "hello", (text: string) => {
+      assert(!text.includes("memory-rejected") && !text.includes("memory_exceeds_ceiling"),
+        `compressops preview was memory-rejected — the Settings route dropped the declared tier: ${text.slice(0, 200)}`);
+      assert(text.includes("magic") && text.includes("bytes"),
+        `compressops preview output lacks the frame report: ${text.slice(0, 200)}`);
+    }],
+  ] as Array<[string, string[], string, (text: string) => void]>) {
     const t0 = Date.now();
     const out = await cdp.eval(options.sessionId, `chrome.runtime.sendMessage(${JSON.stringify({
       type: "tool.preview.run", toolId, args, stdin,
@@ -276,8 +319,7 @@ try {
     const latencyMs = Date.now() - t0;
     const text = JSON.stringify(out ?? {});
     if (out?.ok === true) {
-      assert(text.includes("1f8b") || text.includes("4X8") || text.includes("gB("),
-        `gzip preview output lacks the gzip magic: ${text.slice(0, 200)}`);
+      verify(text);
       state.previews[toolId] = { ok: true, latencyMs, result: out };
       console.log(`PASS preview ${toolId}`);
     } else if (/offscreen/i.test(text)) {
@@ -287,7 +329,7 @@ try {
       };
       console.log(`FINDING preview ${toolId}: ${text.slice(0, 200)} — recorded, owned red class (kat-wasi-tranche2)`);
     } else {
-      throw new Error(`gzip preview failed unexpectedly: ${text.slice(0, 300)}`);
+      throw new Error(`${toolId} preview failed unexpectedly: ${text.slice(0, 300)}`);
     }
     await Deno.writeTextFile(`${EVIDENCE}/preview-${toolId}.json`, JSON.stringify({ toolId, latencyMs, result: out }, null, 2));
   }
