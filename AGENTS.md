@@ -286,6 +286,33 @@ read in run 2.
   registers its service worker a beat after the browser is reachable, so wait
   for it with `waitForServiceWorker()` rather than relying on how long a
   handshake happens to take.
+- **Three verdicts for a load-sensitive gate (chrome-agent-platform-mkax).**
+  `0` = it ran and the tree passed. `1` = it ran and the tree failed (a product
+  red). `75` (EX_TEMPFAIL) = it REFUSED to run because the box was not quiet —
+  an environmental verdict, never a product red and never a pass. A harness
+  declares itself load-sensitive with `launchChrome({ requireQuiet: true })`
+  plus a `loadSensitive` reason in `scripts/lib/harness-registry.ts`;
+  `tests/quiet-window.test.ts` fails if the two sets disagree, so a declaration
+  nobody honours cannot survive. The wait is bounded, sampled and printed
+  (`scripts/lib/quiet-window.ts`: 1-minute loadavg per core plus a count of
+  heavy build processes — rustc/cargo/cc1/ld/esbuild/ninja/make/wasm-opt/
+  magick/ffmpeg, never browsers or test workers, so a gate cannot wait on
+  itself), and the quiet must be SUSTAINED across consecutive samples so a
+  one-sample dip does not start a ten-minute run that then starves. Tunables:
+  `CAP_QUIET_MAX_LOAD_PER_CORE` (0.35), `CAP_QUIET_MAX_COMPILERS` (1),
+  `CAP_QUIET_WAIT_MS` (10 min), `CAP_QUIET_SAMPLE_MS` (2 s),
+  `CAP_QUIET_SUSTAINED` (3). It FAILS CLOSED: an unmeasurable box is a refusal,
+  never an assumed quiet. On refusal the harness prints an `ENVIRONMENT:` line
+  with the measured numbers and `CAP_ENVIRONMENTAL_REFUSAL {sample}` so an
+  aggregator can classify it, and it does not start the browser at all. Two
+  hard rules: never relabel an environmental refusal as `EXPECTED-RED` (that
+  mechanism is for owned product failures with a named owner), and never
+  manufacture a quiet window by killing, renicing or otherwise interfering with
+  another lane's processes — measure and wait, or refuse.
+  Why: the journey gate's `cdp timeout: Runtime.evaluate` reds (eo4d.1: 59/370,
+  then 250/370, then 370/370 only in a quiet window) were machine load from
+  other lanes' builds. The serialized-Chrome lock never prevented them, because
+  exclusivity excludes other CAP browsers, not other lanes' compilers.
 - **One browser at a time, by construction.** `launchChrome()` takes the
   canonical serialized-Chrome lock (`/tmp/cap-serialized-chrome-acceptance.lock`)
   for the browser's lifetime: two lanes driving headless Chromes together produce

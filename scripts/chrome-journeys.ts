@@ -30,6 +30,11 @@ const GIT = "/usr/bin/git";
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
+import {
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+  QuietWindowRefusedError,
+} from "./lib/quiet-window.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -91,6 +96,12 @@ async function sha256Hex(bytes) {
  * printed) — CAP-FB-20260830-SUITE-HONESTY-01 folded the private copy here. */
 function launchJourneyChrome(profile: string) {
   return spawnChrome({
+    // mkax: this gate's load-induced reds are environmental, so it waits for a
+    // quiet box (bounded, printed) and refuses with exit 75 + the load numbers
+    // attached rather than dying at 250/370 on a CDP transport timeout. The
+    // declaration lives in scripts/lib/harness-registry.ts (`loadSensitive`)
+    // and tests/quiet-window.test.ts keeps the two in step.
+    requireQuiet: true,
     binary: CHROMIUM,
     args: [
       "--headless=new",
@@ -107,6 +118,15 @@ function launchJourneyChrome(profile: string) {
     stdout: "null",
     clearEnv: true,
     timeoutMs: 20000,
+  }).catch((e) => {
+    // An environmental refusal is a THIRD verdict. It must never be re-read as
+    // a product red (exit 1) and never as a pass (exit 0).
+    if (e instanceof QuietWindowRefusedError) {
+      console.error(e.message);
+      console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(e.sample)}`);
+      Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+    }
+    throw e;
   });
 }
 

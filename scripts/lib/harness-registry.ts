@@ -40,6 +40,14 @@ export interface HarnessEntry {
   noVerdict?: string;
   /** kat only: this KAT's own time budget in the runner, when the default (600 s green / 90 s red) does not fit. */
   budgetMs?: number;
+  /** This harness's failures under machine LOAD are environmental, not product
+   *  defects, so it waits for a quiet box and refuses with exit 75 rather than
+   *  reddening mid-run (chrome-agent-platform-mkax). The value is the evidence
+   *  for the declaration — which run history showed the load-induced red.
+   *  `tests/quiet-window.test.ts` fails when this field and the harness's own
+   *  `launchChrome({ requireQuiet })` disagree: a declaration nobody honours is
+   *  worse than none. */
+  loadSensitive?: string;
 }
 
 const RED = (tally: string, mode: string, owner = "unassigned (a fix or a retirement decision is the next action)") => ({
@@ -49,7 +57,11 @@ const RED = (tally: string, mode: string, owner = "unassigned (a fix or a retire
 
 export const HARNESSES: Record<string, HarnessEntry> = {
   // ── gates (npm run test:all) ────────────────────────────────────────────
-  "chrome-journeys.ts": { class: "gate", npm: "test:chrome" },
+  "chrome-journeys.ts": {
+    class: "gate",
+    npm: "test:chrome",
+    loadSensitive: "eo4d.1: 370 sequential CDP round-trips over minutes; r1 died at 59/370 and r3 at 250/370 on `cdp timeout: Runtime.evaluate` with machine load >7 (other lanes' imageops/esbuild + Rust/Wasm builds); r4 passed 370/370 only in an uninterrupted quiet window",
+  },
   "security-suite.ts": { class: "gate", npm: "test:security", via: "scripts/security-suite-supervisor.sh" },
   "security-injection.ts": { class: "gate", npm: "test:security:injection" },
   "component-gallery-smoke.ts": { class: "gate", npm: "test:components" },
