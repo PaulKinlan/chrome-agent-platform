@@ -60,6 +60,7 @@ const PATHS = {
   imageops: join(EVIDENCE, "imageops"),
   zxing: join(EVIDENCE, "zxing"),
   compressops: join(EVIDENCE, "compressops"),
+  hashwasmBlake3: join(EVIDENCE, "hashwasm-blake3"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
   stream: join(REPO, "packages/bundled/unix-stream-v1"),
@@ -147,6 +148,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
   zxing: "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
   imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
+  hash_blake3: "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
   compressops: "compressops - compress or decompress data with zstd or brotli. Use to compress and decompress data streams or check frame formats. In/out: bytes stdin to bytes stdout. Subcommands: zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
@@ -260,6 +262,13 @@ for (const toolId of LANES.c2.tools) {
   const buildB = readFileSync(join(PATHS.compressops, "build-b/compressops.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("compressops reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "compressops", lane: "compressops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.compressops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/compressops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "compressops", displayName: "compressops", category: "data", description: AGENT_DESCRIPTIONS.compressops, caveats: ["zstd and brotli only; stdin/stdout; no in-place archive manipulation."], replayClass: "read-only", capabilities: ["compute"] });
+}
+{ // hash_blake3 (uslb pilot — the call-export lane: hash-wasm 4.12.0's blake3,
+  // a ZERO-IMPORT compute module byte-extracted from the pinned npm tarball;
+  // no rebuild claimed. MIT, Dani Biró)
+  const wasm = readFileSync(join(PATHS.hashwasmBlake3, "binaries/blake3.wasm"));
+  if (sha256(wasm) !== "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1" || wasm.byteLength !== 11891) throw new Error("hashwasm-blake3 hash/size mismatch");
+  packages.push({ toolId: "hash_blake3", lane: "hashwasm-blake3", bytes: wasm, row: null, spdx: "MIT", licenseFile: "extension/wasm/licenses/MIT.txt", notices: null, sbom: { src: join(PATHS.hashwasmBlake3, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/hash_blake3.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "byte-exact extraction (extract.mjs; tarball sha512-pinned)", buildScriptLane: "hashwasm-blake3", displayName: "hash_blake3", category: "data", description: AGENT_DESCRIPTIONS.hash_blake3, caveats: ["One-shot hashing of base64 input up to 4 MiB; no streaming API yet."], replayClass: "read-only", capabilities: ["compute", "crypto"], callexport: { entry: "Hash_Calculate", inputBuffer: "Hash_GetBuffer", digestBytes: 32 } });
 }
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));
@@ -540,10 +549,12 @@ for (const pkg of packages) {
   const tier = pkg.tier ?? "tiny";
   const tierCeiling = WASM_PACKAGE_LIMITS.TIERS[tier]?.maxPages;
   if (!Number.isInteger(tierCeiling)) throw new Error(`${pkg.toolId}: unknown tier ${tier}`);
-  const probeExec = { memory: { tier, maxPages: tierCeiling }, imports: { allowed: ["wasi_snapshot_preview1"], disallowed: [] } };
+  // The call-export lane (uslb) declares ZERO imports — the probe audits
+  // against the empty set, and the executable carries the declared ABI.
+  const allowed = pkg.callexport ? [] : ["wasi_snapshot_preview1"];
+  const probeExec = { memory: { tier, maxPages: tierCeiling }, imports: { allowed, disallowed: [] }, ...(pkg.callexport ? { callExport: pkg.callexport } : {}) };
   const audit = auditWasmBinary(pkg.bytes, probeExec, {});
   const actualModules = [...new Set(audit.imports.map((i) => i.module))].sort();
-  const allowed = ["wasi_snapshot_preview1"];
   if (!actualModules.every((m) => allowed.includes(m))) throw new Error(`${pkg.toolId}: unaudited import module ${actualModules}`);
   const initialPages = pkg.memoryOverride?.initialPages ?? audit.measured.memoryInitial;
   const maxPages = pkg.memoryOverride?.maxPages ?? audit.measured.memoryMax ?? tierCeiling;
@@ -562,7 +573,7 @@ for (const pkg of packages) {
     // [a-z0-9.-]); e.g. sqlite3-query-bounded → cap.bundled.sqlite3.query.bounded.
     package: { id: `cap.bundled.${pkg.toolId.replace(/-/g, ".").replace(/_/g, ".")}`, version: pkgVersion, name: `cap_bundled_${pkg.toolId.replace(/-/g, "_")}`, type: "tool-bundle" },
     tools: [{ toolId: pkg.toolId, digest: wasmSha, capabilityDigest, replayClass: meta.replayClass, capabilities }],
-    executables: [{ id: pkg.toolId, sha256: wasmSha, size: pkg.bytes.byteLength, imports: { allowed, disallowed: [] }, memory: { tier, initialPages, maxPages }, runtimeCompat: ["wasm32"], replayClass: meta.replayClass, capabilities, capabilityDigest }],
+    executables: [{ id: pkg.toolId, sha256: wasmSha, size: pkg.bytes.byteLength, imports: { allowed, disallowed: [] }, memory: { tier, initialPages, maxPages }, runtimeCompat: ["wasm32"], replayClass: meta.replayClass, capabilities, capabilityDigest, ...(pkg.callexport ? { callExport: pkg.callexport } : {}) }],
     signer: { lane: SIGNER.lane, keyId: SIGNER.keyId, alg: "none" },
     source: pkg.sourceAnchor ?? SOURCE,
     build: { toolchain: pkg.toolchain, profile: "release", reproducible: true, rebuildRef: `packages/bundled/${pkg.buildScriptLane}/build.sh` },
@@ -658,6 +669,10 @@ for (const pkg of packages) {
     canonicalNameClaim: false,
     ...(settingsPreview
       ? { admitted: true, settingsPreview: true, disabled: false, disabledReason: null }
+      : pkg.callexport
+      // Call-export tools admit WITHOUT the WASI preview lane (their host is
+      // the offscreen harness, not the preview executor).
+      ? { admitted: true, settingsPreview: false, disabled: false, disabledReason: null, callexport: true }
       : { admitted: false, disabled: true, disabledReason: pkg.disabledReason ?? "no-execution-host" }),
   });
 }

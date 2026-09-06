@@ -38,12 +38,16 @@ Deno.test("executableBundledToolRecords: constructs non-null validateArguments, 
     sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
   });
 
-  assertEquals(records.length, 34, "exact 34 bundled tool records");
+  assertEquals(records.length, 35, "exact 35 bundled tool records");
 
   for (const rec of records) {
     const toolId = rec.descriptorInput.toolId;
     const spec = previewSpecFor(toolId);
-    if (spec && rec.descriptorInput.availability !== "disabled") {
+    // uslb: call-export tools have no preview spec — admitted by the
+    // callexport descriptor flag instead, and must still carry all three fns.
+    const isAdmitted = (spec || rec.descriptorInput.callexport === true) &&
+      rec.descriptorInput.availability !== "disabled";
+    if (isAdmitted) {
       assert(typeof rec.validateArguments === "function", `admitted tool ${toolId} must have validateArguments`);
       assert(typeof rec.authorize === "function", `admitted tool ${toolId} must have authorize`);
       assert(typeof rec.dispatch === "function", `admitted tool ${toolId} must have dispatch`);

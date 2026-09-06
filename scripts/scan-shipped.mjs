@@ -212,6 +212,17 @@ const EXECUTION_HOST_ALLOWED_ARG1_PROP = "imports";
 const STREAM_EXECUTION_HOST_CANONICAL_PATH = "extension/lib/wasm-stream-worker.js";
 const STREAM_EXECUTION_HOST_CANONICAL_LOCATION = { line: 99, column: 23 };
 const STREAM_EXECUTION_HOST_ALLOWED_CALL_RE = /WebAssembly\.instantiate\(/g;
+// The call-export host (chrome-agent-platform-uslb): zero-import compute
+// modules run in the offscreen harness — the ONLY NewExpression wasm
+// construction outside the two worker hosts. Pinned to this file, these two
+// exact locations, these exact shapes: new WebAssembly.Module(wasmBytes) and
+// new WebAssembly.Instance(module, {}) — the audited CAS bytes and an EMPTY
+// imports object, never anything else.
+const CALLEXPORT_HOST_CANONICAL_PATH = "extension/lib/wasm-callexport-host.js";
+const CALLEXPORT_HOST_MODULE_LOCATION = { line: 49, column: 19 };
+const CALLEXPORT_HOST_INSTANCE_LOCATION = { line: 50, column: 15 };
+const CALLEXPORT_HOST_MODULE_RE = /new\s+WebAssembly\.Module\(/g;
+const CALLEXPORT_HOST_INSTANCE_RE = /new\s+WebAssembly\.Instance\(/g;
 
 // THE WORKER-HOST exemption — a second FIXED canonical constant owned by the
 // scanner (NOT caller-supplied): the exact source-only, unreachable executor
@@ -577,6 +588,7 @@ export async function scanShippedJs(files, {
       ) {
         const isCanonicalHost = isCanonicalScannedPath(file, EXECUTION_HOST_CANONICAL_PATH);
         const isStreamHost = isCanonicalScannedPath(file, STREAM_EXECUTION_HOST_CANONICAL_PATH);
+        const isCallexportHost = isCanonicalScannedPath(file, CALLEXPORT_HOST_CANONICAL_PATH);
         const isCall = node.type === "CallExpression";
         const memberName = node.callee?.property?.type === "Identifier"
           ? node.callee.property.name
@@ -599,10 +611,31 @@ export async function scanShippedJs(files, {
           node.loc?.start?.column === STREAM_EXECUTION_HOST_CANONICAL_LOCATION.column;
         const legacyCount = (text.match(EXECUTION_HOST_ALLOWED_CALL_RE) ?? []).length;
         const streamCount = (text.match(STREAM_EXECUTION_HOST_ALLOWED_CALL_RE) ?? []).length;
-        const allowed = isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
+        const sameCallexportModule = node.loc?.start?.line ===
+            CALLEXPORT_HOST_MODULE_LOCATION.line &&
+          node.loc?.start?.column === CALLEXPORT_HOST_MODULE_LOCATION.column;
+        const sameCallexportInstance = node.loc?.start?.line ===
+            CALLEXPORT_HOST_INSTANCE_LOCATION.line &&
+          node.loc?.start?.column === CALLEXPORT_HOST_INSTANCE_LOCATION.column;
+        const callexportModuleCount = (text.match(CALLEXPORT_HOST_MODULE_RE) ?? []).length;
+        const callexportInstanceCount = (text.match(CALLEXPORT_HOST_INSTANCE_RE) ?? []).length;
+        // The call-export host (uslb): exactly ONE Module construction from the
+        // audited `wasmBytes` identifier and exactly ONE Instance construction
+        // from `module` with an EMPTY imports object — at the pinned locations.
+        const isCallexportAllowed = isCallexportHost && node.type === "NewExpression" && ((
+          memberName === "Module" && sameCallexportModule && callexportModuleCount === 1 &&
+          arg0?.type === "Identifier" && arg0.name === "wasmBytes" &&
+          (node.arguments?.length ?? 0) === 1
+        ) || (
+          memberName === "Instance" && sameCallexportInstance && callexportInstanceCount === 1 &&
+          arg0?.type === "Identifier" && arg0.name === "module" &&
+          (node.arguments?.length ?? 0) === 2 &&
+          arg1?.type === "ObjectExpression" && (arg1.properties?.length ?? -1) === 0
+        ));
+        const allowed = isCallexportAllowed || (isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
           (isCanonicalHost && sameLegacyLocation && legacyCount === 1) ||
           (isStreamHost && sameStreamLocation && streamCount === 1)
-        );
+        ));
         if (!allowed) {
           violations.push(`${file}: calls dynamic WebAssembly API (execution host is absent or the allowed call shape deviates)`);
         }

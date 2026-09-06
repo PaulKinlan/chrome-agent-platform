@@ -664,6 +664,7 @@ export function adaptBundledTools(rows, context = {}) {
     const availability = context?.availabilityByTool?.[toolId] ?? (isAdmitted ? "ready" : "disabled");
     const dispatcherKind = context?.dispatcherKind ?? (isAdmitted ? "bundled-wasm-task" : "bundled-wasm-disabled");
     const supportsStreamRef = isStreamBackedBundledTool(toolId);
+    const isCallExport = row?.callexport === true;
     inputs.push({
       sourceKind: "bundled-package",
       packageId: ownData(row, "packageId"),
@@ -672,7 +673,16 @@ export function adaptBundledTools(rows, context = {}) {
       name: toolId,
       aliases: [],
       description: ownData(row, "description") ?? ownData(row, "displayName") ?? "",
-      inputSchema: context.inputSchemaByTool?.[toolId] ?? {
+      inputSchema: context.inputSchemaByTool?.[toolId] ?? (isCallExport ? {
+        // The call-export lane (uslb): data is a base64 string — the tool
+        // protocol cannot carry raw binary.
+        type: "object",
+        properties: {
+          data: { type: "string", description: "base64-encoded input bytes" },
+        },
+        required: ["data"],
+        additionalProperties: false,
+      } : {
         type: "object",
         properties: {
           args: { type: "array", items: { type: "string" }, description: "command-line arguments, excluding argv[0]" },
@@ -696,8 +706,9 @@ export function adaptBundledTools(rows, context = {}) {
         },
         ...(supportsStreamRef ? { not: { required: ["stdin", "inputRef"] } } : {}),
         additionalProperties: false,
-      },
+      }),
       outputSchema: context.outputSchemaByTool?.[toolId],
+      callexport: isCallExport,
       capabilities: ownData(row, "capabilities") ?? [],
       scope: context.scope ?? { hub: true, agentId: "hub", origin: "", documentId: "" },
       sourceGeneration: context.sourceGeneration ?? `bundled:${packageDigest}`,

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.269] — 2026-09-06
+- the toolbox gains hash_blake3 — BLAKE3 hashing on-device, the first call-export Wasm tool
+
 ## [0.3.268] — 2026-09-06
 - The incomplete French Bistro browser compatibility update has been removed.
 

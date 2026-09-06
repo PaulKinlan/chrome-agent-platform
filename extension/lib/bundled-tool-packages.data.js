@@ -1014,6 +1014,43 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.hash.blake3",
+  "version": "1.0.0",
+  "toolId": "hash_blake3",
+  "lane": "hashwasm-blake3",
+  "displayName": "hash_blake3",
+  "category": "data",
+  "description": "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
+  "caveats": [
+   "One-shot hashing of base64 input up to 4 MiB; no streaming API yet."
+  ],
+  "capabilities": [
+   "compute",
+   "crypto"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "MIT",
+   "file": "extension/wasm/licenses/MIT.txt",
+   "notices": null
+  },
+  "binary": {
+   "sha256": "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1",
+   "bytes": 11891,
+   "tier": "tiny",
+   "initialPages": 2,
+   "maxPages": 2
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.hash.blake3-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": false,
+  "disabled": false,
+  "disabledReason": null,
+  "callexport": true
+ },
+ {
   "packageId": "cap.bundled.gzip",
   "version": "1.0.0",
   "toolId": "gzip",

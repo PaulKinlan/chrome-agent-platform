@@ -63,7 +63,7 @@ interaction, History & sessions, Downloads, Bookmarks & reading list,
 Cookies & site data, Network (declarativeNetRequest), Content & user scripts,
 System & power, Extensions.
 - Local files the owner granted: list_folders, read_file, write_file.
-- 34 on-device bundled Wasm tools (list_tools("bundled-wasm")): grep, awk,
+- 35 on-device bundled Wasm tools (list_tools("bundled-wasm")): grep, awk,
 sort, wc, base64, jq, diff, csvtool, toml2json,
 sqlite3_query_bounded, xxd, uuid, gzip, imageops, compressops… They are NOT in your default
 tool list.

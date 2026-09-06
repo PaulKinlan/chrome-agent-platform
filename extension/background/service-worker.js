@@ -93,6 +93,7 @@ import {
   retainRunWasmStreamOutput,
 } from "../lib/wasm-stream-run-lifecycle.js";
 import { WASM_STREAM_RUN_TYPE, WASM_STREAM_WALL_MS } from "../lib/wasm-stream-host.js";
+import { CALLEXPORT_RUN_TYPE } from "../lib/wasm-callexport-host.js";
 import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
@@ -515,6 +516,37 @@ async function stageInlineWasmInput({ stdin, owner }) {
 }
 
 async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context }) {
+  // The call-export lane (uslb): zero-import compute modules run through the
+  // offscreen harness — never the WASI preview executor (which cannot exist
+  // in a service worker — the 6s2c P0).
+  const callexportRow = BUNDLED_TOOL_PACKAGE_ROWS.find((row) => row.toolId === toolId && row.callexport === true);
+  if (callexportRow) {
+    const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
+    if (!runId) throw new Error("wasm_stream_run_required");
+    const agentId = String(context?.agentId ?? "hub");
+    const owner = `agent:${runId}:${agentId}`;
+    const authority = buildPreviewAuthority({
+      origin: typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
+        ? new URL(context.origin).origin
+        : "https://agent.cap",
+      // 6s2c: hub runs seed documentId as "" — truthy fallback, never ??.
+      documentId: String(context?.documentId || runId),
+    });
+    const host = await ensureOffscreen();
+    if (!host.ok) return host;
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: CALLEXPORT_RUN_TYPE,
+        toolId,
+        data: String(validatedArgs?.data ?? ""),
+        owner,
+        authority,
+      });
+      return result ?? { ok: false, error: "callexport_no_response" };
+    } catch (error) {
+      return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+    }
+  }
   if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
     return previewOnlyToolEnvelope(toolId);
   }

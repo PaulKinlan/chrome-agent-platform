@@ -255,6 +255,7 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "csvtool": "tables-queries",
   "sqlite3_query_bounded": "tables-queries",
   // Bundled packages — checksums & IDs.
+  "hash_blake3": "hashes-ids",
   "md5sum": "hashes-ids",
   "sha256sum": "hashes-ids",
   "sha512sum": "hashes-ids",

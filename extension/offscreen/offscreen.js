@@ -9,6 +9,7 @@ import { handleScriptRunMessage } from "../lib/script-host.js";
 import { createOffscreenWasmHost } from "../lib/wasm-offscreen-host.js";
 import { WasmExecutor } from "../lib/wasm-executor.js";
 import { registerWasmStreamHost } from "../lib/wasm-stream-host.js";
+import { registerCallexportHost } from "../lib/wasm-callexport-host.js";
 import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
 import { registerTableWorkerHost } from "../lib/table-worker-host.js";
@@ -35,6 +36,10 @@ registerPythonHost();
 // Large bundled tools keep stdin/stdout in OPFS and run in one fresh module
 // Worker. Only small authority/reference/receipt envelopes cross messaging.
 registerWasmStreamHost();
+
+// The call-export lane (uslb): zero-import compute modules (hash_blake3 pilot)
+// run through the CAP-authored harness here — no package JS ever executes.
+registerCallexportHost();
 
 // Bounded local table operations use a fresh module Worker here because MV3
 // service workers do not expose the Worker constructor.

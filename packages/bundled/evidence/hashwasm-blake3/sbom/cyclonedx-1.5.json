@@ -1,0 +1,57 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:984b12e3-b76a-470f-858f-43aa965658cd",
+  "version": 1,
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "hashwasm-blake3@4.12.0",
+      "name": "hashwasm-blake3",
+      "version": "4.12.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "provenance",
+          "value": "byte-exact extraction from the pinned hash-wasm npm tarball (no rebuild); chrome-agent-platform-uslb"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "npm:hash-wasm@4.12.0",
+      "name": "hash-wasm",
+      "version": "4.12.0",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ=="
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/hash-wasm/-/hash-wasm-4.12.0.tgz"
+        }
+      ]
+    }
+  ]
+}

@@ -261,7 +261,12 @@ function validateManifestObject(manifest) {
   for (let index = 0; index < manifest.executables.length; index++) {
     const path = `$.executables[${index}]`;
     const executable = manifest.executables[index];
-    exactKeys(executable, ["id", "sha256", "size", "imports", "memory", "runtimeCompat", "replayClass", "capabilities", "capabilityDigest"], [], path);
+    // callExport (chrome-agent-platform-uslb): an OPTIONAL ABI declaration for
+    // zero-import library-style modules (no _start, no stdin/stdout) executed
+    // by the call-export harness: write input at the inputBuffer export's
+    // pointer, call entry, read digestBytes of result from the state export.
+    // A callExport executable MUST declare zero allowed imports.
+    exactKeys(executable, ["id", "sha256", "size", "imports", "memory", "runtimeCompat", "replayClass", "capabilities", "capabilityDigest"], ["callExport"], path);
     if (!ID_RE.test(assertAscii(executable.id, `${path}.id`, { min: 1, max: 64 }))) fail("executable_id_invalid", `${path}.id`);
     if (executableIds.has(executable.id)) fail("executable_id_duplicate", `${path}.id`);
     executableIds.add(executable.id);
@@ -284,6 +289,16 @@ function validateManifestObject(manifest) {
         }
       }
       if (new Set(values).size !== values.length || JSON.stringify(values) !== JSON.stringify([...values].sort())) fail("import_order", `${path}.imports.${field}`);
+    }
+    if (executable.callExport != null) {
+      exactKeys(executable.callExport, ["entry", "inputBuffer", "digestBytes"], [], `${path}.callExport`);
+      // Wasm export names are case-sensitive identifiers (Hash_Calculate) —
+      // broader than the lowercase ID_RE used for tool/package ids.
+      const EXPORT_NAME_RE = /^[A-Za-z0-9_.$-]{1,64}$/u;
+      if (!EXPORT_NAME_RE.test(assertAscii(executable.callExport.entry, `${path}.callExport.entry`, { min: 1, max: 64 }))) fail("callexport_entry_invalid", `${path}.callExport.entry`);
+      if (!EXPORT_NAME_RE.test(assertAscii(executable.callExport.inputBuffer, `${path}.callExport.inputBuffer`, { min: 1, max: 64 }))) fail("callexport_buffer_invalid", `${path}.callExport.inputBuffer`);
+      if (!Number.isSafeInteger(executable.callExport.digestBytes) || executable.callExport.digestBytes < 1 || executable.callExport.digestBytes > 4096) fail("callexport_digest_invalid", `${path}.callExport.digestBytes`);
+      if (executable.imports.allowed.length !== 0) fail("callexport_imports_nonzero", `${path}.imports.allowed`);
     }
     exactKeys(executable.memory, ["tier", "initialPages", "maxPages"], [], `${path}.memory`);
     const tier = WASM_PACKAGE_LIMITS.TIERS[executable.memory.tier];
@@ -426,6 +441,7 @@ export function auditWasmBinary(input, executable, { limits = WASM_PACKAGE_LIMIT
   let customBytes = 0;
   const skippedSections = [];
   const imports = [];
+  const exports = [];
   const memories = [];
   while (!reader.done()) {
     sections += 1;
@@ -466,6 +482,20 @@ export function auditWasmBinary(input, executable, { limits = WASM_PACKAGE_LIMIT
       if (count > 2) fail("multi_memory_rejected");
       for (let index = 0; index < count; index++) memories.push({ ...readMemoryLimits(section), imported: false });
       if (!section.done()) fail("section_framing");
+    } else if (id === 7 && executable?.callExport != null) {
+      // The export section, audited ONLY for call-export executables: the
+      // declared ABI exports must exist with the right kinds (the harness
+      // calls them by name). Everything else stays in the skipped slice.
+      const count = section.u32();
+      if (count > 4096) fail("export_count_bound");
+      for (let index = 0; index < count; index++) {
+        const name = section.name();
+        const kind = section.byte();
+        if (!Object.hasOwn(KIND_NAMES, kind)) fail("export_kind_invalid");
+        section.u32(); // the index
+        exports.push({ name, kind: KIND_NAMES[kind] });
+      }
+      if (!section.done()) fail("section_framing");
     } else {
       skippedSections.push({ id, name: SECTION_NAMES[id], reason: "not_audited_in_authority_slice" });
     }
@@ -475,6 +505,18 @@ export function auditWasmBinary(input, executable, { limits = WASM_PACKAGE_LIMIT
   if (memories.length !== 1) fail("multi_memory_rejected");
   const measured = memories[0];
   if (measured.max > executable.memory.maxPages || measured.max > tier.maxPages) fail("memory_exceeds_ceiling", executable.memory.tier);
+  if (executable?.callExport != null) {
+    // The declared call-export ABI must EXIST in the binary: the entry and
+    // input-buffer exports as functions, plus a memory export (the harness
+    // reads the result through it).
+    const fnExports = new Set(exports.filter((e) => e.kind === "function").map((e) => e.name));
+    const memExports = new Set(exports.filter((e) => e.kind === "memory").map((e) => e.name));
+    if (!fnExports.has(executable.callExport.entry)) fail("callexport_entry_missing", executable.callExport.entry);
+    if (!fnExports.has(executable.callExport.inputBuffer)) fail("callexport_buffer_missing", executable.callExport.inputBuffer);
+    if (memExports.size === 0) fail("callexport_memory_export_missing");
+    // Zero imports by declaration AND by measurement.
+    if (imports.length !== 0) fail("callexport_imports_present", String(imports.length));
+  }
   return Object.freeze({
     ok: true,
     bytes: bytes.byteLength,

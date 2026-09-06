@@ -1357,8 +1357,11 @@ export async function assertBundledExecutionAuthority({
   await assertRunOwned();
 
   // 2. Admission check (owner policy: admission in build is the execution grant)
+  // Call-export tools (uslb) have no WASI preview spec — their admission is
+  // the descriptor row's callexport flag instead.
   const spec = previewSpecFor(toolId);
-  if (!spec || descriptorInput?.availability === "disabled") {
+  const isCallexportAdmitted = descriptorInput?.callexport === true;
+  if ((!spec && !isCallexportAdmitted) || descriptorInput?.availability === "disabled") {
     const error = new Error(`tool_${toolId}_not_admitted: bundled package is disabled or unadmitted`);
     error.code = "tool_not_admitted";
     throw error;
@@ -1390,8 +1393,61 @@ export async function assertBundledExecutionAuthority({
 }
 
 export function executableBundledToolRecords(rows, context = {}) {
-  return adaptBundledTools(rows, context).map((descriptorInput) => {
+  return adaptBundledTools(rows, context).map((descriptorInput, rowIndex) => {
     const toolId = descriptorInput.toolId;
+    const row = Array.isArray(rows) ? rows[rowIndex] : null;
+    // The call-export lane (uslb): zero-import compute modules — a different
+    // contract than the WASI preview tools (no args/stdin; a base64 `data`
+    // input, executed by the offscreen call-export harness).
+    if (descriptorInput.callexport === true) {
+      const isAdmitted = row?.admitted === true && descriptorInput.availability !== "disabled";
+      const validator = async (rawArgs) => {
+        if (!isAdmitted) return { ok: false, error: `tool_${toolId}_disabled` };
+        if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
+          return { ok: false, error: "invalid_arguments: shape" };
+        }
+        // The runtime may inject a matching toolId (the WASI validator's
+        // convention) — tolerate it, reject a MISMATCHED one.
+        if (Object.hasOwn(rawArgs, "toolId") && rawArgs.toolId !== toolId) {
+          return { ok: false, error: "invalid_arguments: toolId" };
+        }
+        const keys = Object.keys(rawArgs).filter((k) => k !== "toolId");
+        if (JSON.stringify(keys) !== JSON.stringify(["data"]) ||
+            typeof rawArgs.data !== "string") {
+          return { ok: false, error: "invalid_arguments: data" };
+        }
+        return { ok: true, data: Object.freeze({ toolId, data: rawArgs.data }) };
+      };
+      const authorizer = async (validatedArgs, _authorityContext) => {
+        try {
+          return await assertBundledExecutionAuthority({
+            toolId,
+            descriptorInput,
+            validatedArgs,
+            context,
+          });
+        } catch (err) {
+          return { ok: false, error: `authorization_failed: ${err?.message || err}` };
+        }
+      };
+      const dispatcher = async (validatedArgs, runContext) => {
+        if (typeof context.dispatchBundledTool === "function") {
+          return await context.dispatchBundledTool({
+            toolId,
+            args: validatedArgs,
+            context: runContext,
+            descriptorInput,
+          });
+        }
+        return { ok: false, error: "callexport_host_unavailable" };
+      };
+      return Object.freeze({
+        descriptorInput,
+        validateArguments: isAdmitted ? validator : null,
+        authorize: isAdmitted ? authorizer : null,
+        dispatch: isAdmitted ? dispatcher : null,
+      });
+    }
     const spec = previewSpecFor(toolId);
     const isAdmitted = Boolean(spec && descriptorInput.availability !== "disabled");
 

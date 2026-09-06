@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.268",
+ "release": "0.3.269",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -62,6 +62,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "pkg": "cap.bundled.gzip",
    "version": "1.0.0",
    "digest": "486d8548f2d123cb5474645460ac854037c692c3d316d5386e6365b88d369f88"
+  },
+  {
+   "pkg": "cap.bundled.hash.blake3",
+   "version": "1.0.0",
+   "digest": "3623b3f5c112b20a4813fd65d863bacd052a01d189a496b37a6ff33b190ca48c"
   },
   {
    "pkg": "cap.bundled.head",
@@ -249,6 +254,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/973d78aa28f825019fbfb4aa9463dc6940a65d7da6de80590ba1a691443154df.wasm",
    "sha256": "973d78aa28f825019fbfb4aa9463dc6940a65d7da6de80590ba1a691443154df",
    "size": 32627
+  },
+  {
+   "rel": "extension/wasm/cas/984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1.wasm",
+   "sha256": "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1",
+   "size": 11891
   },
   {
    "rel": "extension/wasm/cas/9c9cae983c3db00bdead5e7cf00bdb345d298dda194bd683915b4e7d083346ac.wasm",
@@ -471,6 +481,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1874
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.hash.blake3-1.0.0.manifest.json",
+   "sha256": "3623b3f5c112b20a4813fd65d863bacd052a01d189a496b37a6ff33b190ca48c",
+   "size": 1907
+  },
+  {
    "rel": "extension/wasm/manifests/cap.bundled.head-1.0.0.manifest.json",
    "sha256": "6ae3c0371efc56a72e5e946e459d1cadfbfd4957e32c5965679c4ce05a113485",
    "size": 1794
@@ -629,6 +644,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/sbom/gzip.cdx.json",
    "sha256": "a7c5c1f8e73d7e798d3619a3b092a59eac0eaf029e9f0e6036d81ca547a0f3fe",
    "size": 7233
+  },
+  {
+   "rel": "extension/wasm/sbom/hash_blake3.cdx.json",
+   "sha256": "14e02ee6bf76dea01339312780f881e96ce41b9d7539f161f8ebd44e54b78df4",
+   "size": 1395
   },
   {
    "rel": "extension/wasm/sbom/imageops.cdx.json",
