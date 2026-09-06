@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.283] — 2026-09-06
+- Internal verification: twenty-two guarantees of the French Bistro compatibility check are now pinned at the code that provides them
+
 ## [0.3.282] — 2026-09-06
 - A compatibility check that fails to save its result no longer leaves behind a log saying it passed
 
