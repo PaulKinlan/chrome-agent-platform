@@ -60,6 +60,7 @@ const PATHS = {
   imageops: join(EVIDENCE, "imageops"),
   zxing: join(EVIDENCE, "zxing"),
   compressops: join(EVIDENCE, "compressops"),
+  oxipng: join(EVIDENCE, "oxipng"),
   hashwasmBlake3: join(EVIDENCE, "hashwasm-blake3"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
@@ -150,6 +151,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
   hash_blake3: "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
   compressops: "compressops - compress or decompress data with zstd or brotli. Use to compress and decompress data streams or check frame formats. In/out: bytes stdin to bytes stdout. Subcommands: zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
+  oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
@@ -262,6 +264,13 @@ for (const toolId of LANES.c2.tools) {
   const buildB = readFileSync(join(PATHS.compressops, "build-b/compressops.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("compressops reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "compressops", lane: "compressops", bytes: wasm, row: null, tier: "default", spdx: "Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: null, sbom: { src: join(PATHS.compressops, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/compressops.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "compressops", displayName: "compressops", category: "data", description: AGENT_DESCRIPTIONS.compressops, caveats: ["zstd and brotli only; stdin/stdout; no in-place archive manipulation."], replayClass: "read-only", capabilities: ["compute"] });
+}
+{ // oxipng (CAP-authored WASI driver over the oxipng crate; libdeflate compiled freestanding; m3vb option B): MIT AND Apache-2.0
+  const wasm = readFileSync(join(PATHS.oxipng, "build-a/oxipng.wasm"));
+  if (sha256(wasm) !== "b93a6232119ec73eb82f2544a16e78f5eddfd36faa923cb6c99324bfe46de9eb" || wasm.byteLength !== 284734) throw new Error("oxipng hash/size mismatch");
+  const buildB = readFileSync(join(PATHS.oxipng, "build-b/oxipng.wasm"));
+  if (sha256(buildB) !== sha256(wasm)) throw new Error("oxipng reproducibility broken (build-a != build-b)");
+  packages.push({ toolId: "oxipng", lane: "oxipng", bytes: wasm, row: null, tier: "default", spdx: "MIT AND Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: "extension/wasm/licenses/oxipng-NOTICES.txt", sbom: { src: join(PATHS.oxipng, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/oxipng.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; clang 22.1.8 (libdeflate); wasm32-wasip1", buildScriptLane: "oxipng", displayName: "oxipng", category: "media", description: AGENT_DESCRIPTIONS.oxipng, caveats: ["PNG in, PNG out; stdin/stdout; lossless (pixels identical) but colour type or bit depth may be reduced; a 3.5 s internal deadline bounds the effort."], replayClass: "read-only", capabilities: ["compute"] });
 }
 { // hash_blake3 (uslb pilot — the call-export lane: hash-wasm 4.12.0's blake3,
   // a ZERO-IMPORT compute module byte-extracted from the pinned npm tarball;
@@ -405,6 +414,7 @@ const LICENSE_WRITES = {
   "extension/wasm/licenses/0BSD.txt": enc.encode(`Copyright (C) 2026 Chrome Agent Platform Authors\n\nPermission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted.\n\nTHE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.\n`),
   "extension/wasm/licenses/awk-NOTICES.txt": readFileSync(join(PATHS.awk, "NOTICES.md")),
   "extension/wasm/licenses/date-NOTICES.txt": readFileSync(join(PATHS.date, "NOTICES.md")),
+  "extension/wasm/licenses/oxipng-NOTICES.txt": readFileSync(join(PATHS.oxipng, "NOTICES.md")),
   "extension/wasm/licenses/minised-BSD-3-Clause.txt": readFileSync(join(PATHS.sed, "NOTICES.md")),
   "extension/wasm/licenses/posixutils-rs-MIT.txt": readFileSync(join(PATHS.awkFull, "source/LICENSE")),
   "extension/wasm/licenses/jq-MIT.txt": readFileSync(join(PATHS.jq, "COPYING-jq.txt")),
@@ -423,7 +433,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "zxing", "compressops", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "zxing", "compressops", "oxipng", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };

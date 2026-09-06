@@ -206,7 +206,7 @@ Deno.test("gzip retained Worker: malformed header/truncation/deflate/CRC failure
   }
 });
 
-Deno.test("gzip admission census: all 35 exact CAS parse against the 29-import host with exact 35/0 posture", async () => {
+Deno.test("gzip admission census: all 36 exact CAS parse against the 29-import host with exact 36/0 posture", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 29, "fd_renumber is the exact twenty-ninth supported import");
   const supported = new Set(SUPPORTED_WASI_PREVIEW1_IMPORTS);
   const census = new Map();
@@ -217,9 +217,9 @@ Deno.test("gzip admission census: all 35 exact CAS parse against the 29-import h
       .map((entry) => entry.name);
     census.set(row.toolId, imports.filter((name) => !supported.has(name)).sort());
   }
-  assertEquals(census.size, 35);
+  assertEquals(census.size, 36);
   const enabled = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
-  assertEquals(enabled.length, 35);
+  assertEquals(enabled.length, 36);
   for (const row of enabled) assertEquals(census.get(row.toolId), [], `${row.toolId}: admitted imports`);
   const disabled = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
   assertEquals(disabled.map((row) => row.toolId).sort(), []);

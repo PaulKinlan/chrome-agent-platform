@@ -27,11 +27,11 @@ import { BUNDLED_INVENTORY } from "../extension/lib/bundled-inventory-data.js";
 
 const LIVE_CONTEXT = { origin: "https://agent.cap", runId: "run-ten9", agentId: "hub", documentId: "doc-ten9" };
 
-Deno.test("ten9 census: 34 admitted bundled tools; the formerly preview-only 24 are named and none is gated", () => {
-  assertEquals(PREVIEW_TOOL_IDS.length, 34, "exactly 34 bundled tools admitted in catalog");
+Deno.test("ten9 census: 35 admitted bundled tools; the formerly preview-only 24 are named and none is gated", () => {
+  assertEquals(PREVIEW_TOOL_IDS.length, 35, "exactly 35 bundled tools admitted in catalog");
   assertEquals(STREAM_BACKED_BUNDLED_TOOL_IDS.length, 10, "10 tools keep stream-ref input capability");
   const formerlyPreviewOnly = PREVIEW_TOOL_IDS.filter((id) => !isStreamBackedBundledTool(id));
-  assertEquals(formerlyPreviewOnly.length, 24, "the 24 un-gated tools are present");
+  assertEquals(formerlyPreviewOnly.length, 25, "the 24 un-gated tools plus oxipng (m3vb, admitted straight into the job lane) are present");
   for (const id of ["gzip", "sha256sum", "uuid", "csvtool", "toml2json", "stat", "zxing", "markdown"]) {
     assert(formerlyPreviewOnly.includes(id), `${id} (explicitly named in the ten9 directive) must be admitted`);
   }
@@ -42,7 +42,7 @@ Deno.test("ten9 GUARD: live dispatch of EVERY admitted bundled tool reaches the 
     scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
   });
   const recordMap = new Map(records.map((r) => [r.descriptorInput.toolId, r]));
-  assertEquals(records.length, 35, "every admitted tool exposes an executable record (34 wasi + 1 call-export)");
+  assertEquals(records.length, 36, "every admitted tool exposes an executable record (35 wasi + 1 call-export)");
 
   for (const toolId of PREVIEW_TOOL_IDS) {
     const record = recordMap.get(toolId);

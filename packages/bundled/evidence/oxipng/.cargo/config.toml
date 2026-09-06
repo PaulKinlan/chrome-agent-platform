@@ -1,0 +1,9 @@
+# The bundled admission authority requires a DECLARED memory maximum
+# (wasm-package-authority.js readMemoryLimits → memory_max_missing).
+# 2048 wasm pages = 128 MiB — the authority's "default" tier ceiling.
+[target.wasm32-wasip1]
+# NOTE: the effective flags live in build.sh's RUSTFLAGS (env rustflags REPLACE
+# config rustflags in cargo, so they must carry both the memory ceiling and the
+# path remaps): -C link-arg=--max-memory=134217728 (the admission authority
+# requires a declared memory maximum; 2048 pages = the default tier) plus the
+# --remap-path-prefix pair (no builder-local path embedded).

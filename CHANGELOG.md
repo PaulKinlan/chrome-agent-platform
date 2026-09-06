@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.295] — 2026-09-07
+- The toolbox gains oxipng — shrink a PNG on-device without changing a single pixel
+
 ## [0.3.294] — 2026-09-06
 - Automated browser checks now detect when a page throws an internal error and when a browser command is rejected
 

@@ -1,0 +1,25 @@
+[package]
+name = "oxipng-tool"
+version = "1.0.0"
+edition = "2021"
+publish = false
+license = "MIT"
+description = "CAP-authored WASI PNG optimiser over the oxipng crate: base64 PNG on stdin -> optimised PNG on stdout (chrome-agent-platform-m3vb)"
+
+[[bin]]
+name = "oxipng"
+path = "src/main.rs"
+
+[dependencies]
+# default-features = false drops: binary (clap/glob/env_logger), parallel (rayon), zopfli.
+# freestanding: libdeflate compiled without libc — this box has no WASI sysroot
+# (the only one is on tmpfs), and a reproducible build must not depend on one.
+oxipng = { version = "=10.2.1", default-features = false, features = ["freestanding"] }
+base64 = "=0.22.1"
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

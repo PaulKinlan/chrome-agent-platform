@@ -97,7 +97,8 @@ export const PREVIEW_SPECS = Object.freeze(
           // its validated trusted argv through previewStdoutEncoding().
           // Binary-at-the-pipe tools emit base64 (gzip always; imageops except
           // its info subcommand, resolved per-argv in previewStdoutEncoding).
-          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" ? "base64" : "utf8",
+          // oxipng (m3vb) always emits PNG bytes.
+          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" || row.toolId === "oxipng" ? "base64" : "utf8",
           ...(row.toolId === "gzip" ? {
             allowedArgs: Object.freeze([
               Object.freeze([]),
