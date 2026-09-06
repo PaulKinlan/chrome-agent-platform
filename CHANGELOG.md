@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.270] — 2026-09-06
+- The hub's Directory view now shows discovered open pages offering tools, so you can see and add them without opening Settings.
+
 ## [0.3.269] — 2026-09-06
 - the toolbox gains hash_blake3 — BLAKE3 hashing on-device, the first call-export Wasm tool
 

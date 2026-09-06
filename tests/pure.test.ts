@@ -9,6 +9,7 @@ import { z } from "npm:zod@3";
 import { canonicalOrigin } from "../extension/lib/memory.js";
 import {
   authorizeToolReport,
+  discoveredOnly,
   fnv1a,
   PAGE_ALLOWED_ROUTES,
   parseOmniboxContent,
@@ -561,4 +562,25 @@ Deno.test("parseOmniboxContent maps recipe/thread/run intents", () => {
   // A "recipe:" prefix with an empty id is a recipe intent with an empty id
   // (the caller resolves it; an unknown recipe falls back to running the text).
   assertEquals(parseOmniboxContent("recipe:"), { kind: "recipe", id: "" });
+});
+
+Deno.test("discoveredOnly: discovered pages minus enrolled, deduped by origin", () => {
+  const tabs = [
+    { origin: "https://a.example", toolCount: 3, lastAccessed: 2 },
+    { origin: "https://b.example", toolCount: 1, lastAccessed: 1 },
+    { origin: "https://a.example", toolCount: 3, lastAccessed: 3 }, // same origin, newer tab
+    { origin: "", toolCount: 1 },
+    { toolCount: 1 }, // no origin
+    null,
+  ];
+  // nothing enrolled: one row per origin, route order preserved
+  const out = discoveredOnly(tabs, []);
+  assertEquals(out.map((t) => t.origin), ["https://a.example", "https://b.example"]);
+  // enrolled origins drop out entirely:
+  assertEquals(discoveredOnly(tabs, ["https://a.example"]).map((t) => t.origin), ["https://b.example"]);
+  // everything enrolled → empty (the directory shows the enrolled groups instead):
+  assertEquals(discoveredOnly(tabs, ["https://a.example", "https://b.example"]), []);
+  // non-arrays fail closed:
+  assertEquals(discoveredOnly(null, []), []);
+  assertEquals(discoveredOnly(undefined, []), []);
 });
