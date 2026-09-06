@@ -365,6 +365,17 @@ export async function finalizeKatExecution(
     // The unique temp is never authoritative — removal is best-effort hygiene,
     // never load-bearing (a removal failure changes nothing).
     try { await removeReportFile(tmpPath); } catch { /* best effort */ }
+    // kat.log IS load-bearing, in the other direction (ln0e; the report-order
+    // invariant above): it asserts a RESULT this run never published, so a
+    // surviving GREEN log beside no authoritative receipt is a dishonest
+    // artifact. Removed UNCONDITIONALLY on publication failure — the log is
+    // never authoritative (the returned receiptPath, the exit code and this
+    // FATAL line are), and a conditional "only when it claims GREEN" rule would
+    // add a branch that would itself need pinning. Accepted cost: an
+    // already-RED log goes too. Still best-effort — a read-only directory
+    // cannot be cleaned, and the honest answer there is a null receiptPath,
+    // never an exception escaping this catch.
+    try { await removeReportFile(`${report.outDir}/kat.log`); } catch { /* best effort */ }
     // ONE fail-closed exit path: exit, then RETURN the RED result immediately
     // (a returned exit seam in tests must not fall through to the RED exit
     // below and double-record).

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.282] — 2026-09-06
+- A compatibility check that fails to save its result no longer leaves behind a log saying it passed
+
 ## [0.3.281] — 2026-09-06
 - Internal verification: the French Bistro compatibility check's pass record is now pinned against fifteen ways it could be attributed to the wrong run
 
