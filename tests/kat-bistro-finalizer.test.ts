@@ -3,10 +3,11 @@
 // @ts-nocheck
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { teardownChromeAndProfile } from "../scripts/lib/kat-finalizer.ts";
 
 const root = new URL("..", import.meta.url).pathname;
 
-Deno.test("kat-bistro: source inspection verifies teardown precedes report writes and cleanup errors fail closed", async () => {
+Deno.test("kat-bistro: source inspection verifies teardown precedes report writes and unswallowed status timeout", async () => {
   const scriptText = await Deno.readTextFile(`${root}/scripts/kat-webmcp-bistro.ts`);
 
   // 1. Driving intentional autosubmit:
@@ -43,7 +44,13 @@ Deno.test("kat-bistro: source inspection verifies teardown precedes report write
     "PROFILE removal must occur BEFORE result.json write",
   );
 
-  // 4. Fail-closed error handling on cleanup failure:
+  // 4. Critical: status:4000 after SIGKILL must NOT be swallowed with .catch(() => {})
+  assert(
+    !finallyBody.includes("status, 4_000).catch("),
+    "KAT must NOT swallow post-SIGKILL status timeout; unconfirmed exit must fail closed",
+  );
+
+  // 5. Fail-closed error handling on cleanup failure:
   assert(
     finallyBody.includes("cleanupError"),
     "KAT must track cleanupError and forbid swallowing cleanup failure",
@@ -58,66 +65,152 @@ Deno.test("kat-bistro: source inspection verifies teardown precedes report write
   );
 });
 
-Deno.test("kat-bistro finalizer: failure injection proves cleanup failure marks state RED and forces nonzero exit", () => {
-  // Simulate the finalizer decision logic under injected failure conditions
-  function evaluateFinalizer({
-    runError,
-    failCount,
-    cleanupError,
-    poisonDetected,
-  }: {
-    runError: string | null;
-    failCount: number;
-    cleanupError: string | null;
-    poisonDetected: boolean;
-  }) {
-    const isGreen = !runError && failCount === 0 && !cleanupError && !poisonDetected;
-    const resultData = {
-      state: isGreen ? "GREEN" : "RED",
-      error: runError || cleanupError,
-      cleanupError,
-      poisonDetected,
-    };
-    const exitCode = isGreen ? 0 : 1;
-    return { isGreen, resultData, exitCode };
-  }
+Deno.test("kat-bistro finalizer: teardownChromeAndProfile executes clean and failure-injected paths correctly", async () => {
+  const calls: string[] = [];
 
-  // Case 1: Pure success with clean cleanup -> GREEN / exit 0
-  const clean = evaluateFinalizer({ runError: null, failCount: 0, cleanupError: null, poisonDetected: false });
-  assertEquals(clean.isGreen, true);
-  assertEquals(clean.resultData.state, "GREEN");
-  assertEquals(clean.exitCode, 0);
+  // Helper to mock withTimeout
+  const mockWithTimeout = async <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    calls.push(`withTimeout:${ms}`);
+    return await promise;
+  };
 
-  // Case 2: Injected browser teardown failure -> RED / exit 1 (Never swallowed!)
-  const teardownFail = evaluateFinalizer({
-    runError: null,
-    failCount: 0,
-    cleanupError: "browser_teardown_failed: process hung",
-    poisonDetected: false,
+  // Case 1: Clean teardown succeeds with null cleanupError
+  calls.length = 0;
+  const cleanProc = {
+    status: Promise.resolve({ success: true, code: 0 }),
+    kill: (sig: string) => calls.push(`kill:${sig}`),
+  };
+  const cleanCdp = {
+    send: async (method: string) => {
+      calls.push(method);
+      return {};
+    },
+    close: () => calls.push("CDP.close"),
+  };
+  const resClean = await teardownChromeAndProfile({
+    cdp: cleanCdp,
+    chrome: { proc: cleanProc },
+    profilePath: "/mock/profile",
+    withTimeout: mockWithTimeout,
+    removeDir: async (p) => {
+      calls.push(`remove:${p}`);
+    },
+    statFile: async () => false,
   });
-  assertEquals(teardownFail.isGreen, false);
-  assertEquals(teardownFail.resultData.state, "RED");
-  assertEquals(teardownFail.exitCode, 1);
 
-  // Case 3: Injected profile removal failure -> RED / exit 1
-  const profileFail = evaluateFinalizer({
-    runError: null,
-    failCount: 0,
-    cleanupError: "profile_cleanup_failed: EPERM",
-    poisonDetected: false,
-  });
-  assertEquals(profileFail.isGreen, false);
-  assertEquals(profileFail.resultData.state, "RED");
-  assertEquals(profileFail.exitCode, 1);
+  assertEquals(resClean.cleanupError, null);
+  assertEquals(resClean.poisonDetected, false);
+  assert(calls.includes("Browser.close"));
+  assert(calls.includes("CDP.close"));
+  assert(calls.includes("remove:/mock/profile"));
 
-  // Case 4: Injected poison file detection -> RED / exit 1
-  const poisonFail = evaluateFinalizer({
-    runError: null,
-    failCount: 0,
-    cleanupError: "poison_slot_detected",
-    poisonDetected: true,
+  // Case 2: Process hangs after SIGKILL -> status:4000 rejection is NOT swallowed and records cleanupError
+  calls.length = 0;
+  const hungProc = {
+    status: new Promise(() => {}), // never settles
+    kill: (sig: string) => calls.push(`kill:${sig}`),
+  };
+  const timeoutFailingWithTimeout = async <T>(promise: Promise<T>, ms: number): Promise<T> => {
+    calls.push(`withTimeout:${ms}`);
+    throw new Error(`injected process deadline ${ms}`);
+  };
+
+  const resHung = await teardownChromeAndProfile({
+    cdp: cleanCdp,
+    chrome: { proc: hungProc },
+    profilePath: "/mock/profile",
+    withTimeout: timeoutFailingWithTimeout,
+    removeDir: async (p) => {
+      calls.push(`remove:${p}`);
+    },
+    statFile: async () => false,
   });
-  assertEquals(poisonFail.isGreen, false);
-  assertEquals(poisonFail.resultData.state, "RED");
-  assertEquals(poisonFail.exitCode, 1);
+
+  assert(resHung.cleanupError !== null, "Hung process must produce non-null cleanupError");
+  assert(
+    resHung.cleanupError.includes("browser_teardown_failed"),
+    "cleanupError must indicate browser teardown failure",
+  );
+  assert(calls.includes("kill:SIGKILL"));
+
+  // Case 3: Profile removal rejection records cleanupError
+  calls.length = 0;
+  const resProfileFail = await teardownChromeAndProfile({
+    cdp: cleanCdp,
+    chrome: { proc: cleanProc },
+    profilePath: "/mock/profile",
+    withTimeout: mockWithTimeout,
+    removeDir: async () => {
+      throw new Error("injected profile removal EPERM");
+    },
+    statFile: async () => false,
+  });
+
+  assert(resProfileFail.cleanupError !== null);
+  assert(resProfileFail.cleanupError.includes("profile_cleanup_failed"));
+
+  // Case 4: cdp.close throw does NOT prevent Chrome process kill/status check
+  calls.length = 0;
+  const throwingCdp = {
+    send: async (method: string) => {
+      calls.push(method);
+      return {};
+    },
+    close: () => {
+      calls.push("CDP.close");
+      throw new Error("injected CDP transport crash");
+    },
+  };
+  const resCdpCrash = await teardownChromeAndProfile({
+    cdp: throwingCdp,
+    chrome: { proc: cleanProc },
+    profilePath: "/mock/profile",
+    withTimeout: mockWithTimeout,
+    removeDir: async (p) => {
+      calls.push(`remove:${p}`);
+    },
+    statFile: async () => false,
+  });
+
+  assert(resCdpCrash.cleanupError !== null);
+  assert(resCdpCrash.cleanupError.includes("cdp_close_failed"));
+  assert(calls.includes("CDP.close"));
+  assert(
+    calls.includes("withTimeout:8000"),
+    "Chrome status check MUST still execute after cdp.close fails",
+  );
+  assert(calls.includes("remove:/mock/profile"), "Profile cleanup MUST still execute");
+
+  // Case 5: Non-NotFound statFile error (e.g. EACCES / I/O) is NOT ignored and records cleanupError
+  calls.length = 0;
+  const resStatError = await teardownChromeAndProfile({
+    cdp: cleanCdp,
+    chrome: { proc: cleanProc },
+    profilePath: "/mock/profile",
+    withTimeout: mockWithTimeout,
+    removeDir: async () => {},
+    statFile: async () => {
+      throw new Error("EACCES: permission denied");
+    },
+  });
+
+  assert(resStatError.cleanupError !== null);
+  assert(
+    resStatError.cleanupError.includes("poison_stat_failed"),
+    "statFile failure must append poison_stat_failed",
+  );
+
+  // Case 6: Poison slot detection
+  const resPoison = await teardownChromeAndProfile({
+    cdp: cleanCdp,
+    chrome: { proc: cleanProc },
+    profilePath: "/mock/profile",
+    withTimeout: mockWithTimeout,
+    removeDir: async () => {},
+    statFile: async () => true, // poison file exists
+  });
+
+  assertEquals(resPoison.poisonDetected, true);
+  assert(resPoison.cleanupError !== null);
+  assert(resPoison.cleanupError.includes("poison_slot_detected"));
 });

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.270] — 2026-09-06
+- enforce confirmed process exit after SIGKILL and independently guard teardown steps
+
+## [0.3.269] — 2026-09-06
+- The French Bistro browser test now verifies process exit after forced shutdown and marks the test failed if termination stalls
+
 ## [0.3.268] — 2026-09-06
 - The French Bistro browser test now enforces strict teardown ordering and fails closed if cleanup is interrupted
 
