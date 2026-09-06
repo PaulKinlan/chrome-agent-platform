@@ -2,11 +2,10 @@
 
 > **This file is history, not a tracker.** It holds 27 rounds of review findings from the
 > intercom review fleet (sol / GLM / DeepSeek), which no longer exists. Every `CAP-FB-*`
-> id mentioned below has an entry in [`TASKS.md`](../TASKS.md) or
-> [`TASKS-DONE.md`](../TASKS-DONE.md), and those entries are the authority — at the time
-> of archiving, 15 of the 18 findings referenced here were already closed.
+> id mentioned below had an entry in [`TASKS.md`](../TASKS.md) or [`TASKS-DONE.md`](../TASKS-DONE.md) — both retired history since 2026-09-02 —
+> and at the time of archiving, 15 of the 18 findings referenced here were already closed.
 >
-> Live findings live in `TASKS.md`. Do not add to this file.
+> Live findings live in beads: `bd ready` for claimable work, `bd list` for the rest. Do not add to this file.
 
 ---
 
@@ -57,7 +56,7 @@ own assertion edits cannot see where one was weakened.
 
 Still live, still RAM-backed. `/tmp` is a 46 GB tmpfs at **92% inode use** (955,417 of
 1,048,576) with **71 registered git worktrees**. A reboot destroys every worktree and
-every retained evidence bundle referenced by a `Gates:` field in `TASKS.md`. Run
+every retained evidence bundle referenced by a `Gates:` field in the (now retired) `TASKS.md`. Run
 `node scripts/worktree-audit.mjs` before any cleanup; nothing is removed until its HEAD is
 reachable from `origin/main` or a `rescue/*` tag.
 
@@ -114,7 +113,7 @@ Closed by shipped work; kept as one line each so the history stays readable.
 An independent Claude/Opus 5 session with no prior custody reviewed exact
 `origin/main@300bea1` (`0.2.105`) by building it and driving it, not by reading trackers.
 Full rationale, evidence and the ordered work queue are in
-[`REVIEW-2026-08-21.md`](REVIEW-2026-08-21.md); the tasks are in [`TASKS.md`](TASKS.md).
+[`REVIEW-2026-08-21.md`](../REVIEW-2026-08-21.md); the tasks were in the retired [`TASKS.md`](../TASKS.md) (history; live work is `bd ready`).
 
 **Baseline confirmed healthy at that commit:** build clean, **633 unit tests pass, 0 fail**
 (green only with `TMPDIR` on durable storage — see the inode finding below),
@@ -132,7 +131,7 @@ The findings below are the exceptions, not a re-litigation of the architecture.
   the disk, not the code. Roughly 60 full git worktrees live there at ~7,560 inodes
   each, plus several hundred retained evidence bundles.
 - **That filesystem is RAM-backed.** A reboot destroys those worktrees and every retained
-  gate-evidence bundle referenced by a `Gates:` field in `TASKS.md`. Evidence whose only
+  gate-evidence bundle referenced by a `Gates:` field in the retired `TASKS.md`. Evidence whose only
   copy is on tmpfs is not durable evidence.
 
 ### [Open — mitigated] Seven commits reachable only from RAM-backed worktree HEADs — `CAP-FB-20260821-WORKTREE-HYGIENE-01`
@@ -295,14 +294,14 @@ reviewers keep re-deriving them. Detail in [`REVIEW-2026-08-21.md`](REVIEW-2026-
 
 ---
 
-# Paul's UI/UX issues (2026-08-16) — tracked in docs/UI-FIXES-TRACKER.md
+# Paul's UI/UX issues (2026-08-16) — tracked at the time in docs/UI-FIXES-TRACKER.md (retired history)
 
-The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
+The full tracker was docs/UI-FIXES-TRACKER.md (retired history; live asks are beads). Summary of the batch:
 - DONE: the 5 settings issues (the switch-collision double-toggle, hooks=permissions, the duplicate back button, the origins stretch), the notification icon path, the provider Test-connection buttons, the base-select background-agent picker, the thread navigation (fullscreen + sidebar + background-agents off the NTP), the collapsed-sidebar geometry (the edge nub + centred rail icons + SVG glyphs + reload persistence + RTL), the security fixes (apiKey leak + highs), semver.
 - IN PROGRESS (the tracker-remaining worker): View Transitions, HTML-output rendering, the unified Agents area, the + menu options + anchor-positioning, the @mention positioning, the error-console copy buttons + error surfacing.
 
 ## Paul meta-directives (2026-08-16)
-- Every ask → tracked (UI-FIXES-TRACKER.md / KNOWN-ISSUES.md) + worked in a subagent + visually verified. Nothing dropped.
+- Every ask → tracked (then in UI-FIXES-TRACKER.md / KNOWN-ISSUES.md, both retired history — now beads) + worked in a subagent + visually verified. Nothing dropped.
 - Use the impeccable skill for ALL design work + modern-web-guidance for modern-web features.
 - Resolve open questions; prioritize known issues; work the plan actively.
 - Full-suite-green gate; visual verification (no "it serves" as "it works").
@@ -317,7 +316,7 @@ The full tracker is docs/UI-FIXES-TRACKER.md. Summary of the batch:
 (Positive: manifest permissions=[], no debugger, no key literal, redactSecrets blocks the value leak, the deny-list rechecked, the suite green.)
 
 ## Security testing (Paul, 2026-08-16) — a standing suite
-- **A repeatable security test suite** (an agent/automated tests) reviewing the security of the site: **network exfiltration** (network traces/info must not escape), **sandbox escapes** (HTML/scripts in the double-iframe must not escape + influence the page). chaos + co-do were robust here; match that.
+- **A repeatable security test suite** (an agent/automated tests) reviewing the security of the site: **network exfiltration** (network traces/info must not escape), **sandbox escapes** (HTML/scripts in the double-iframe must not escape + influence the page). the owner's earlier extensions were robust here; match that.
 - **MCP-apps-style preference percolation** — user preferences should flow down through the layers (the double-iframe) properly (how? design + implement).
 
 ## CRITICAL (sol, HEAD 24dd3f7) — generative-UI sandbox network exfil

@@ -40,7 +40,7 @@ isolated OPFS memory, run history, skills, and avatar.
   live progress + per-task error detail + a nudge/continue composer).
 - **Skills** — reusable capabilities (the recipes reworked into skills): include a
   skill in a task (`/skill:<id>`), attach one to an agent, schedule one, or import an
-  external skill (the chaos skill-loader pattern: a GitHub repo/URL → SKILL.md).
+  external skill (the skill-loader pattern: a GitHub repo/URL → SKILL.md).
 - **Generative UI + artifacts** — the agent generates HTML UI rendered live in a
   sandboxed double-iframe, saved as a reusable artifact.
 - **Agent-generated scripts** — the agent writes JavaScript that runs repeatedly
@@ -118,7 +118,12 @@ isolated OPFS memory, run history, skills, and avatar.
   Chrome lock, supervises one fresh exact profile under a hard timeout, and proves
   network exfiltration, sandbox escapes, and prompt-injection → destructive-tool
   are all blocked. Do not execute `scripts/security-suite.ts` directly.
-- The review loop (sol / GLM / DeepSeek, independent sessions) reviews every change.
+- **Every change is reviewed, and the review is labelled for what it was** (Paul,
+  2026-08-27): `independent review` when a fresh session read only the diff, `author review`
+  otherwise — and an author review must clear the falsification gates (a changed test is
+  shown RED then GREEN, a fix is shown to fix in a real loaded extension, deleted coverage
+  leaves a guard, the full suite is green at the tip). See AGENTS.md, "Review without a
+  second model".
 
 See **docs/CONSTITUTION.md** for the full security/accessibility/design/memory
 constraints.
@@ -246,15 +251,14 @@ This README is the overview. The document map, in precedence order:
 
 | Document | What it is authoritative for |
 |---|---|
-| **[TASKS.md](TASKS.md)** | **Task state, and the only authority for it.** Holds ONLY what is in progress or still to do — merged is done, and done is archived to `TASKS-DONE.md` at triage. The entry always wins over any summary of it. |
+| **beads (`bd`)** | **Task, bug and next-work state, and the only authority for it** (owner directive, 2026-09-02). `bd ready` is the claimable frontier, `bd list --status in_progress` is what is in flight, `bd blocked` is what is waiting, `bd show <id>` is the entry — and the entry always wins over any summary of it. |
 | **[PLAN.md](PLAN.md)** | The roadmap view — what has landed, what is next, and the current gate results. |
 | **[CHANGELOG.md](CHANGELOG.md)** | What shipped, in plain English, one line per release. |
-| **[KNOWN-ISSUES.md](KNOWN-ISSUES.md)** | Gate state and the few open findings not obvious from a task title. A thin view over TASKS.md, not a second tracker. |
-| **[docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md)** | UI-detail asks and their fix state. |
-| **[TASKS-DONE.md](TASKS-DONE.md)** | Completed work, archived at triage. |
 | **[docs/CONSTITUTION.md](docs/CONSTITUTION.md)** | The non-negotiable security/a11y/design/perf constraints. |
 | **[docs/DESIGN.md](docs/DESIGN.md)** + **[PRODUCT.md](PRODUCT.md)** | The visual system and the product's voice. |
-| **[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md)** | The 2026-08-21 independent architectural review. Its *delivery* diagnosis has since been acted on (`0.2.105 → 0.2.319`); read it for the method, not for current status. |
+| **[REVIEW-2026-08-30.md](REVIEW-2026-08-30.md)** | The current full-project reanalysis — the dependency-ordered work queue (§5) and the demo script with its ranked blockers (§6). AGENTS.md names it the required entry point before picking up work. |
+| **[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md)** | History: the 2026-08-21 architectural review, superseded by the 2026-08-30 one. Its *delivery* diagnosis has since been acted on (`0.2.105 → 0.2.319`); read it for the method, not for current status. |
+| [TASKS.md](TASKS.md), [TASKS-DONE.md](TASKS-DONE.md), [KNOWN-ISSUES.md](KNOWN-ISSUES.md), [docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md) | **Retired** markdown trackers (2026-09-02) — kept as git history only, never consulted or updated for state. Each opens with a banner that says so and points at `bd`. |
 
 **Current gate status:** build clean · unit **1779/0** · Chrome journeys **127/127** ·
 security suite **PASS**. The journey suite had been red at 26/127 from `0.2.313` until

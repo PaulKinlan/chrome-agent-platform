@@ -243,7 +243,8 @@ docs/UNIX-TOOLS-ADMISSION.md, docs/wasm-tool-catalogue.md (all three new at tip)
 
 ## Fix plan (prioritized; each lands through the normal review flow — main is frozen)
 
-**P1 — truth about process (cheap, high-traffic):**
+**P1 — truth about process (cheap, high-traffic):** — DONE 2026-09-06 (chrome-agent-platform-6j8i);
+`tests/docs-process-truth.test.ts` pins findings 1-11 and 23-25 so they cannot come back.
 1. README.md doc map + PLAN.md authority lines: point task/bug state at beads (`bd ready`,
    `bd list`), mark the four markdown trackers retired-in-place (findings 1-11).
 2. README.md:115: replace the review-fleet claim with the 2026-08-27 labelled-review rule (23).

@@ -1,6 +1,10 @@
-# TASKS (Done)
+# TASKS (Done) — RETIRED
 
-> Archived completed tasks moved out of `TASKS.md`. Active work lives in `TASKS.md`, which holds ONLY what is in progress or still to do.
+> Task and bug tracking moved to **beads (bd)** on 2026-09-02 (owner directive). This file is
+> kept only as git history and is no longer updated: `bd ready` for claimable work,
+> `bd list --status in_progress` for what is in flight, `bd list` / `bd show <id>` for the rest.
+>
+> Archived completed tasks were moved out of `TASKS.md` (also retired history) at triage.
 >
 > **Merged is done** (Paul, 2026-08-28). A task on `origin/main` is complete; there is no separate MERGED state waiting on anything. Entries are archived here at triage. Last triage: 2026-08-28 (13 entries).
 

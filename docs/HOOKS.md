@@ -2,7 +2,7 @@
 
 Agents (the master hub agent, or a background recipe like the **Sorting Hat**) can listen to a Chrome system event and be invoked when it fires. The full candidate surface is catalogued below, with the required (OPTIONAL) permission and a candidate use.
 
-The reference implementation (the chaos extension) wires 11 of these (`action.onClicked`, `alarms.onAlarm`, `commands.onCommand`, `contextMenus.onClicked`, `runtime.onConnect/onInstalled/onMessage/onStartup`, `tabs.onCreated/onRemoved/onUpdated`). This project treats **every `chrome.*` `on*` event as a candidate hook** — anything that is an event in the extension API can be listened to + responded to.
+An earlier extension of the owner's wires 11 of these (`action.onClicked`, `alarms.onAlarm`, `commands.onCommand`, `contextMenus.onClicked`, `runtime.onConnect/onInstalled/onMessage/onStartup`, `tabs.onCreated/onRemoved/onUpdated`). This project treats **every `chrome.*` `on*` event as a candidate hook** — anything that is an event in the extension API can be listened to + responded to.
 
 ## Permissions layer (authoritative)
 

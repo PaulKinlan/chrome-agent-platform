@@ -38,14 +38,15 @@ changes that never updated the gate, all fixed 2026-08-27 under
    `CAPABILITIES.length` from the product's own table, so the next tranche cannot
    rot it.
 
-Task state lives in [TASKS.md](TASKS.md) (the authority); this file is the roadmap view.
+Task state lives in beads — `bd ready` is the claimable frontier, `bd list --status in_progress`
+is what is in flight (owner directive, 2026-09-02); this file is the roadmap view. `TASKS.md` is retired history.
 
 ## The project
 Chrome as the agent platform: a new-tab agent hub that orchestrates the web with
 persistent named agents (each with its own OPFS sandbox), per-site sub-agents (WebMCP
 tool discovery), the generative-UI artifacts surface, a skills system, agent-generated
 repeatable scripts, and a system-hooks layer — all under an all-optional-permissions
-security model. The README is the overview; TASKS.md is the task authority; THIS file is
+security model. The README is the overview; beads (`bd ready`) hold the task state; THIS file is
 the roadmap: what's landed vs what's next.
 
 ## Principles (from the 2026-08-15 thread — NON-NEGOTIABLE)
@@ -73,7 +74,7 @@ no `-vN+1` without a commit in `-vN`, durable worktrees) stands.
 
 **Lifecycle:** `OPEN → IN_REVIEW → DONE` with `BLOCKED`/`ABANDONED` off-ramps.
 **Merged is done** (Paul, 2026-08-28) — work on `origin/main` with the suite green is
-complete and is archived to `TASKS-DONE.md`, so `TASKS.md` holds only live work.
+complete; the bead closes with the merge sha (`TASKS.md` and `TASKS-DONE.md` are retired history).
 `DONE` does not require a
 per-task owner interaction. Real-browser verification is retained unchanged; the
 different-model review requirement was replaced on 2026-08-27 by a labelled review plus
@@ -232,7 +233,8 @@ defaults in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
       native template select, user-bubble dark contrast and JSON tool-response dark
       contrast are in the candidate; full gates and required review remain.
 
-The authority is the **Open work queue** table in [TASKS.md](TASKS.md) (39 open).
+The claimable frontier is `bd ready`; in flight is `bd list --status in_progress`; waiting is `bd blocked`
+(the **Open work queue** table in `TASKS.md` is retired history).
 **The demo path is the only P0 lane** (owner decision, 2026-08-27) — the Wasm platform
 dropped to P2 until after the exec demo, because it is invisible in one and largely blocked
 on owner licence/Store decisions.

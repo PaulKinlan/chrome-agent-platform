@@ -77,5 +77,8 @@ skills, not the master's.
 LANDED (2026-08-18): the named-agent layer + the unified agent access above
 (the canonical ref, the redacted `agent.registry` route, the shared
 `<agent-picker>`, the side-panel Agents view, the + menu Choose agent, the
-grouped /agent command). Residual: site-agent delegation carries the task text
-only (no attachments, no live per-run progress) — tracked in KNOWN-ISSUES.
+grouped /agent command). The residual noted at the time — site-agent delegation
+carried the task text only, with no attachments and no live per-run progress — has
+since been closed in code: the service worker's `agent.delegate` route validates and
+forwards attachments and re-broadcasts the child's progress under the caller's run id.
+The KNOWN-ISSUES entry it pointed at is retired history; open follow-ups live in beads (`bd ready`).

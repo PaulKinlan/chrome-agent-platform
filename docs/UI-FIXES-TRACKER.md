@@ -1,6 +1,10 @@
-# UI Fixes Tracker — Chrome Agent Platform
+# UI Fixes Tracker — Chrome Agent Platform — RETIRED
 
-Discipline: every Paul ask → an entry here → a subagent fixes + VERIFIES in the real extension → checked off. Nothing dropped. Stale/duplicate entries are a defect.
+> UI asks and their fix state moved to **beads (bd)** on 2026-09-02 (owner directive), with
+> every other tracker. This file is kept only as git history and is no longer updated:
+> `bd ready` for claimable work, `bd list` for everything else, `bd show <id>` for an entry.
+
+Discipline at the time: every Paul ask → an entry here → a subagent fixes + VERIFIES in the real extension → checked off. Nothing dropped. Stale/duplicate entries are a defect.
 
 **Reconciled 2026-08-27 against the current code (`0.2.319` / `origin/main@139b6f92`).**
 Items below are grouped; each is verified against the committed code, not the worker's claim.
@@ -25,7 +29,7 @@ Items below are grouped; each is verified against the committed code, not the wo
 ## Fixed since the 2026-08-21 revision
 
 The 2026-08-26 owner batch (Telegram, 12 items) and its follow-ons all landed. Full
-per-item evidence is under `CAP-FB-20260826-OWNER-BATCH-01` in [TASKS.md](../TASKS.md);
+per-item evidence is under `CAP-FB-20260826-OWNER-BATCH-01` in the retired [TASKS.md](../TASKS.md) (history);
 one line each here:
 
 - **Back button → blank screen** — fixed at the top frame (`0.2.296`, `0.2.304`).
@@ -144,7 +148,7 @@ one line each here:
 - The sticky sidebar nav + the "Back to hub" (single).
 - The per-provider model selector (current model lists per provider + an OpenAI-compatible + a working Custom… text input).
 - The "Test connection" button per provider (a real round-trip + the specific error).
-- Chaos-style semver (scripts/bump-version.mjs + the post-commit auto-bump).
+- Automatic patch semver (scripts/bump-version.mjs + the post-commit auto-bump).
 - Settings → Advanced: the layered, versioned system-prompt surface — the read-only built-in viewer (id/version/hash), the per-scope customization editor (append/prepend/replace, save/cancel/reset, dirty + UTF-8 byte-count states, the session-only durability badge), the built-in-updated banner with an old-vs-new diff + keep/reset (acting on the EFFECTIVE override), and the effective composed preview (every layer labelled; the protected runtime policy never editable, always last). The reusable `<system-prompt-editor>` component (single-source components.js + the gallery); full referenced-skill bodies compose before protected-last, every mutation is revision-CAS guarded, and every run records a unique-execution keyed attestation of the exact generate/stream provider-bound message (lib/system-prompts.js — docs/SYSTEM-PROMPTS.md). Verified locally: 50 system-prompt unit tests + 7 Prompt API tests and the 44-check real-extension journey with real pointer/keyboard input + screenshots; exact corrective-HEAD evidence is retained externally for independent review.
 
 ### Hub / sidebar / task list
@@ -215,7 +219,7 @@ one line each here:
 - The security shield: the granted permissions are removable.
 
 ### Unified agent access
-- **CAP-FB-20260818-AGENT-ACCESS-01 — FIXED (2026-08-18, worktree feat/agent-access-picker).** ONE reusable `<agent-picker>` renderer (grouped Named/Background/Site, search, selected/Current, empty/loading/error) consumes the redacted revisioned registry and serves the side panel, every composer's + menu, and strict-position `/agent`; canonical refs route named/background/site runs without collisions. Lifecycle broadcasts, request revision/sequence fences, stale-send rejection, and side-panel history fencing cover mutation races. The side panel includes browse/history/scheduled tasks, removes the iframe/morph stub, and opens real tabs only through the sender-authenticated + current-owner-gesture SW route. Evidence: `scripts/agent-access-journeys.ts` has 88 fixed real-CDP checks and writes nine screenshots plus commit/clean-tree/assertion-set/file-hash metadata outside the repo; general Chrome 119/119, unit 333/333, gallery 35/35, security 7/7, a11y 17/17. Residuals tracked in KNOWN-ISSUES (site-agent delegation is text-only; hub summary rows still use capability-row).
+- **CAP-FB-20260818-AGENT-ACCESS-01 — FIXED (2026-08-18, worktree feat/agent-access-picker).** ONE reusable `<agent-picker>` renderer (grouped Named/Background/Site, search, selected/Current, empty/loading/error) consumes the redacted revisioned registry and serves the side panel, every composer's + menu, and strict-position `/agent`; canonical refs route named/background/site runs without collisions. Lifecycle broadcasts, request revision/sequence fences, stale-send rejection, and side-panel history fencing cover mutation races. The side panel includes browse/history/scheduled tasks, removes the iframe/morph stub, and opens real tabs only through the sender-authenticated + current-owner-gesture SW route. Evidence: `scripts/agent-access-journeys.ts` has 88 fixed real-CDP checks and writes nine screenshots plus commit/clean-tree/assertion-set/file-hash metadata outside the repo; general Chrome 119/119, unit 333/333, gallery 35/35, security 7/7, a11y 17/17. Residuals at the time (tracked then in KNOWN-ISSUES — retired history; live follow-ups are beads): site-agent delegation was text-only (since closed in code — see docs/AGENT-MODEL.md), and hub summary rows still used capability-row.
 
 ## Open (genuinely remaining — action these)
 

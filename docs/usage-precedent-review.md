@@ -1,11 +1,11 @@
-# Usage authority — precedent review (CHAOS) + porting decisions
+# Usage authority — precedent review (the owner's earlier extension) + porting decisions
 
 Read-only review of Paul's proven usage trackers, as directed. NotebookLM and Kodu
-are NOT present locally (only CHAOS), so I record their absence rather than guess.
+are NOT present locally (only that earlier extension), so I record their absence rather than guess.
 
-## CHAOS contracts (present, read-only)
+## The precedent's contracts (present, read-only)
 
-`/home/paulkinlan/chaos/packages/extension/src/agents/usage.ts`:
+`packages/extension/src/agents/usage.ts` (in the precedent's repository):
 - `UsageRecord` schema: `id, timestamp, agentId, agentName, provider, model,
   inputTokens, outputTokens, totalTokens, estimatedCost, source`.
 - `recordUsage`: zero-token guard → fresh `crypto.randomUUID()` → append →
@@ -13,7 +13,7 @@ are NOT present locally (only CHAOS), so I record their absence rather than gues
 - `getUsage`/`getUsageRecords`: filter by agentId/provider/since, newest-first.
 - `getUsageSummary`: totals + byProvider/byAgent/byModel buckets.
 - `clearUsage`: `chrome.storage.local.remove(STORAGE_KEY)`.
-- `checkSpendingLimit`: daily limit under a separate `chaos:spending-limit:<id>` key.
+- `checkSpendingLimit`: daily limit under a separate per-agent `spending-limit:<id>` key.
 
 `pricing.ts`: static per-1M-token PRICING table + `estimateCost` (longest-prefix).
 
@@ -29,9 +29,9 @@ stat cards, provider/agent breakdowns, recent-requests table, spending alerts.
 
 `docs/help/usage.md` is absent (only the plan exists at plans/token-usage-tracking.md).
 
-## What CHAOS does NOT solve (this lane's specific requirements)
+## What the precedent does NOT solve (this lane's specific requirements)
 
-CHAOS assumes the optional `storage` permission is effectively available and writes
+The precedent assumes the optional `storage` permission is effectively available and writes
 `chrome.storage.local` directly. It has NO: IndexedDB durability, permissionless
 survival across SW restarts, idempotent callback identity, atomic legacy migration,
 mirror/outbox ordering, corruption quarantine, or preparse bounds. Its record id is
@@ -39,7 +39,7 @@ a fresh UUID per callback (so duplicate delivery double-counts).
 
 ## Porting decisions (semantics only, no framework code)
 
-- KEEP the CHAOS `UsageRecord` shape + retention/cap + zero-token guard + the
+- KEEP the precedent's `UsageRecord` shape + retention/cap + zero-token guard + the
   provider/agent/model aggregation semantics. My lane adds `taskId` (already in the
   existing platform ledger) and keeps `provider/model/agentId`; I will NOT add
   `agentName`/`source` (no broad UI churn).
@@ -48,7 +48,7 @@ a fresh UUID per callback (so duplicate delivery double-counts).
   exercised against `fake-indexeddb` (the SDK's InMemory-store spirit).
 - PORT `clearUsage` = empty ledger (but as a canonical empty generation-bump, not a
   key delete — this lane's no-resurrection requirement).
-- SPENDING LIMITS: out of scope for this increment (CHAOS's per-agent limit is a
+- SPENDING LIMITS: out of scope for this increment (the precedent's per-agent limit is a
   separate feature; I record it as a future port, not now).
 
 NotebookLM / Kodu: not present locally — no claims made about their internals.
