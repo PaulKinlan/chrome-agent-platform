@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.268] — 2026-09-06
+- The French Bistro browser test now enforces strict teardown ordering and fails closed if cleanup is interrupted
+
 ## [0.3.267] — 2026-09-06
 - The French Bistro browser test runs automatically with an internal time limit and cleans up reliably on completion
 

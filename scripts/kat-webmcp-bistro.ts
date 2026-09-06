@@ -181,9 +181,49 @@ try {
   runError = err instanceof Error ? (err.stack ?? err.message) : String(err);
   console.error("KAT Execution Error:", runError);
 } finally {
+  // 1. GUARANTEED TEARDOWN: Execute browser termination and profile cleanup first.
+  // Never let reporting failure skip cleanup, and never swallow cleanup failure.
+  let cleanupError: string | null = null;
+  try {
+    if (cdp) {
+      await withTimeout(cdp.send("Browser.close"), 4_000).catch(() => {});
+      cdp.close();
+    }
+    if (chrome) {
+      await withTimeout(chrome.proc.status, 8_000).catch(async () => {
+        try { chrome?.proc.kill("SIGKILL"); } catch { /* process already exited */ }
+        await withTimeout(chrome?.proc.status, 4_000).catch(() => {});
+      });
+    }
+  } catch (teardownErr) {
+    cleanupError = `browser_teardown_failed: ${teardownErr instanceof Error ? teardownErr.message : String(teardownErr)}`;
+    console.error(cleanupError);
+  }
+
+  try {
+    if (PROFILE) await Deno.remove(PROFILE, { recursive: true });
+  } catch (rmErr) {
+    const rmMsg = `profile_cleanup_failed: ${rmErr instanceof Error ? rmErr.message : String(rmErr)}`;
+    cleanupError = cleanupError ? `${cleanupError}; ${rmMsg}` : rmMsg;
+    console.error(rmMsg);
+  }
+
+  // 2. CHECK POISON AND RESIDUAL LOCK
+  const POISON_FILE = "/tmp/cap-chrome-slot-POISON";
+  let poisonDetected = false;
+  try {
+    if (await Deno.stat(POISON_FILE).then(() => true).catch(() => false)) {
+      poisonDetected = true;
+      cleanupError = cleanupError ? `${cleanupError}; poison_slot_detected` : "poison_slot_detected";
+    }
+  } catch {}
+
+  const isGreen = !runError && fail === 0 && !cleanupError && !poisonDetected;
   const resultData = {
-    state: runError || fail > 0 ? "RED" : "GREEN",
-    error: runError,
+    state: isGreen ? "GREEN" : "RED",
+    error: runError || cleanupError,
+    cleanupError,
+    poisonDetected,
     expected: head,
     head,
     tree,
@@ -194,18 +234,20 @@ try {
     lockWaitMs: chrome?.lockWaitMs ?? null,
     checks,
   };
-  await Deno.writeTextFile(`${OUT}/result.json`, JSON.stringify(resultData, null, 2) + "\n");
-  await Deno.writeTextFile(`${OUT}/kat.log`, checks.map((c) => `${c.passed ? "PASS" : "FAIL"}: ${c.name}`).join("\n") + `\nRESULT: ${pass}/${checks.length}; ${runError || fail > 0 ? "RED" : "GREEN"}\n`);
 
-  if (cdp) await cdp.send("Browser.close").catch(() => {});
-  if (chrome) {
-    await withTimeout(chrome.proc.status, 8_000).catch(() => {
-      try { chrome?.proc.kill("SIGKILL"); } catch { /* process already exited */ }
-    });
+  try {
+    await Deno.writeTextFile(`${OUT}/result.json`, JSON.stringify(resultData, null, 2) + "\n");
+    await Deno.writeTextFile(
+      `${OUT}/kat.log`,
+      checks.map((c) => `${c.passed ? "PASS" : "FAIL"}: ${c.name}`).join("\n") +
+        `\nRESULT: ${pass}/${checks.length}; ${isGreen ? "GREEN" : "RED"}\n` +
+        (cleanupError ? `CLEANUP ERROR: ${cleanupError}\n` : ""),
+    );
+  } catch (reportErr) {
+    console.error("FATAL: Failed to write KAT reports:", reportErr);
+    Deno.exit(1);
   }
-  cdp?.close();
-  await Deno.remove(PROFILE, { recursive: true }).catch(() => {});
-}
 
-console.log(`\nKAT Result: ${pass} passed, ${fail} failed; evidence ${OUT}`);
-if (fail > 0 || runError) Deno.exit(1);
+  console.log(`\nKAT Result: ${pass} passed, ${fail} failed (cleanup: ${cleanupError ?? "ok"}); evidence ${OUT}`);
+  if (!isGreen) Deno.exit(1);
+}
