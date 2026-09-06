@@ -127,6 +127,32 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
   and pickup (multiple coordinators exist). Before implementing: `git fetch
   origin` + check whether the behavior already exists. If complete: pin it with
   falsification tests, close with evidence. If partial: implement the remainder.
+- **Workflow scripts: build them so a finished child is never lost (kqib +
+  pa7r, 2026-09-06).** Two lanes lost a completed worker to the PARENT script,
+  not to the work. The construction rules:
+  1. Task text enters the script as a JSON-serialized value (a
+     `JSON.stringify`-built string), never a quoted JS literal with raw
+     newlines — kqib died at validation on `Unterminated string constant`
+     before either child launched.
+  2. `emit()` and `return` carry only fields you projected yourself:
+     `built.outputReference ?? null`, `Array.isArray(built.artifactPaths) ?
+     built.artifactPaths : []`, or a `JSON.parse(JSON.stringify(x))` round
+     trip. A raw optional child field that is `undefined` throws
+     `emit.<field> must be a JSON value` and fails the workflow AFTER the
+     child completed (pa7r: a 19-minute worker's report was written, the
+     review never launched). Today pi-subagents 0.65.1 hands the script NO
+     `outputReference` for a completed async child that wrote its declared
+     file (chrome-agent-platform-qz11, measured live) — reference the report
+     by the `output:` path you passed in, not by a field the child returns.
+  3. A fresh-equivalent retry names its agent explicitly (`agent: 'reviewer'`):
+     `resume:` was what carried the agent, and resume ids are session-bound, so
+     a restarted session cannot resume another session's child.
+  4. `subagent({ action: 'validate', workflowScriptPath })` before every
+     launch, with the script kept on disk under `cap-evidence/` so the exact
+     text that ran is the text that gets retried.
+  5. Recovery after a parent failure is a next-stage-only retry in the same
+     native protocol (review-only, no worker re-run), the failed run keeps its
+     `failed` state, and the completed child's source is left intact.
 
 ## Hard rules
 - **beads (bd) is the ONLY task/bug/next-work tracker** (owner directive 2026-09-02). TASKS.md, TASKS-DONE.md, KNOWN-ISSUES.md and every other markdown tracker are RETIRED — never create, update, or consult them for state. Pick work with `bd ready`, claim with `bd update <id> --claim`, close only when the complete fix is on the pushed branch. See "Task tracking: beads only" below.
