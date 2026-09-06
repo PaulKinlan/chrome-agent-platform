@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.273",
+ "release": "0.3.268",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -172,6 +172,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "pkg": "cap.bundled.xxd",
    "version": "1.0.0",
    "digest": "9e241cf7874d4b96f9c88a136f6b991637bf878974413f7d3eef2c4f974e9eae"
+  },
+  {
+   "pkg": "cap.bundled.zxing",
+   "version": "1.0.0",
+   "digest": "564e6f417e5a23f9ce85373df5ee6a8dc77814b98973a8bea81dc70e14c464b5"
   }
  ],
  "files": [
@@ -339,6 +344,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/cas/ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad.wasm",
    "sha256": "ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad",
    "size": 36095
+  },
+  {
+   "rel": "extension/wasm/cas/f0e567aebad58ed30b0ca751918c59c2b81642e58a5df81d6dbdce3334c0f98f.wasm",
+   "sha256": "f0e567aebad58ed30b0ca751918c59c2b81642e58a5df81d6dbdce3334c0f98f",
+   "size": 1173493
   },
   {
    "rel": "extension/wasm/licenses/0BSD.txt",
@@ -571,6 +581,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1779
   },
   {
+   "rel": "extension/wasm/manifests/cap.bundled.zxing-1.0.0.manifest.json",
+   "sha256": "564e6f417e5a23f9ce85373df5ee6a8dc77814b98973a8bea81dc70e14c464b5",
+   "size": 1840
+  },
+  {
    "rel": "extension/wasm/sbom/a2.cdx.json",
    "sha256": "bf6b8c984395e126575cbef6adb0428db0c9b58dde84076e098f842f60a8ebd4",
    "size": 8534
@@ -639,6 +654,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/sbom/unix-stream-v1.cdx.json",
    "sha256": "a3578eae86cec2f739828ee6358a5d9d39a85a9c589f7b0a047b4a8a5dc76067",
    "size": 1199
+  },
+  {
+   "rel": "extension/wasm/sbom/zxing.cdx.json",
+   "sha256": "54d2deec2abfdeedb21995b7669a2162b2d66f537e068e3535957d22a5af7f92",
+   "size": 2763
   }
  ],
  "evidence": [],
