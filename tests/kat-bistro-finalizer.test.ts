@@ -492,6 +492,76 @@ Deno.test("kat-bistro caller: rename rejects, read throws, inode ABSENT or MISMA
   }
 });
 
+// qml6: the sibling test above throws on EVERY read of result.json, so its (d)
+// post-publish verification read throws too and guard (d) decides the outcome.
+// That leaves guard (b)'s inode-identity check unpinned: moving `committed = true`
+// BEFORE the atomic rename keeps the whole suite GREEN while turning a foreign,
+// byte-identical prior receipt into an announced GREEN. This test closes exactly
+// that window — the (b) read is unavailable, the inode is FOREIGN, and the (d)
+// read SUCCEEDS with matching bytes, so guard (b) is the only thing left.
+Deno.test("kat-bistro caller: rename rejects, the (b) read is UNAVAILABLE, the inode is FOREIGN and the (d) read SUCCEEDS with matching bytes — RED, nothing announced (qml6)", async () => {
+  const seams = makeSeams();
+  let stagedPayload = "";
+  let resultReads = 0;
+  seams.seams.stageReport = async (path, payload) => {
+    seams.calls.push(`stage:${path}`);
+    seams.files.set(path, payload);
+    // Capture the EXACT payload so the (d) read can return byte-identical
+    // content: the receipt is a deterministic function of the run's identity
+    // fields, so a prior run of the same commit in a REUSED outDir leaves a
+    // byte-identical GREEN behind. Only the inode says whose file this is.
+    stagedPayload = payload;
+    return { dev: 1, ino: 42, size: payload.length };
+  };
+  seams.seams.renameReportFile = async () => {
+    seams.calls.push("rename:rejected");
+    throw new Error("EXDEV: rename rejected, no effect");
+  };
+  seams.seams.readReportFile = async (path) => {
+    seams.calls.push(`readback:${path}`);
+    if (path === "/mock/out/result.json") {
+      resultReads++;
+      // (b) reconciliation read: UNAVAILABLE — a transient error, so there are
+      // no contradictory bytes and the inode identity must decide.
+      if (resultReads === 1) throw new Error("EIO: transient read failure");
+      // (d) post-publish verification read: SUCCEEDS, bytes match exactly.
+      return stagedPayload;
+    }
+    if (!seams.files.has(path)) throw new Error(`ENOENT ${path}`);
+    return seams.files.get(path);
+  };
+  // The file at result.json is NOT this run's staged temp. Size matches (the
+  // prior receipt is byte-identical) — dev/ino do not, and size alone must never
+  // authorize an ACK.
+  seams.seams.statReportFile = async (path) => {
+    seams.calls.push(`stat:${path}`);
+    return { dev: 9, ino: 99, size: stagedPayload.length };
+  };
+
+  const result = await finalizeWith(seams);
+
+  assertEquals(
+    result.state,
+    "RED",
+    "a FOREIGN inode never ACKs a rejected rename, not even when the (d) read matches byte-for-byte",
+  );
+  assertEquals(result.exitCode, 1);
+  assert(seams.exits.includes(1), "the fail-closed exit seam fires with 1");
+  assertEquals(result.receiptPath, null, "no receipt is attributable to this run");
+  assert(
+    !seams.infos.some((line) => /KAT receipt:/i.test(line)),
+    "no receipt path is ever announced on a failed publication",
+  );
+  assert(
+    seams.calls.some((c) => c === "stat:/mock/out/result.json"),
+    "guard (b) actually consulted the inode identity — the mutant skips this call",
+  );
+  assert(
+    !seams.errors.some((line) => /reconciled to committed/i.test(line)),
+    "a rejected rename against a foreign inode is never logged as reconciled-to-committed",
+  );
+});
+
 Deno.test("kat-bistro caller: rename rejects and the final read returns CONTRADICTORY bytes — RED (corruption), the inode is never consulted", async () => {
   const seams = makeSeams();
   seams.seams.stageReport = async (path, payload) => {

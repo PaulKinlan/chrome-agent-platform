@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.280] — 2026-09-06
+- Tighten the French Bistro compatibility check's verification against prior run pass records
+
 ## [0.3.279] — 2026-09-06
 - Chrome test profiles move out of the repository to prevent copy races with a live browser
 
