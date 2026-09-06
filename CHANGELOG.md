@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.281] — 2026-09-06
+- Internal verification: the French Bistro compatibility check's pass record is now pinned against fifteen ways it could be attributed to the wrong run
+
 ## [0.3.280] — 2026-09-06
 - Tighten the French Bistro compatibility check's verification against prior run pass records
 
