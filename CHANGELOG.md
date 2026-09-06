@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.268] — 2026-09-06
+- The French Bistro browser compatibility check now completes automatically and reports cleanup failures instead of a false success
+
 ## [0.3.267] — 2026-09-06
 - Export All and Import All now protect internal security keys and transient files, ensuring backups contain only your portable data
 
