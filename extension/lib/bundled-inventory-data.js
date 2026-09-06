@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.293",
+ "release": "0.3.294",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -92,6 +92,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "pkg": "cap.bundled.md5sum",
    "version": "1.0.0",
    "digest": "89fb270b8007f376b4aea312cca3ac14a23f530d50049f67f031757ff0ec7083"
+  },
+  {
+   "pkg": "cap.bundled.oxipng",
+   "version": "1.0.0",
+   "digest": "6c57e689a58306e8043f8577ce9c6c947b7eeba6b8b238242d2b7c16c75a7a0c"
   },
   {
    "pkg": "cap.bundled.patch",
@@ -291,6 +296,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 33269
   },
   {
+   "rel": "extension/wasm/cas/b93a6232119ec73eb82f2544a16e78f5eddfd36faa923cb6c99324bfe46de9eb.wasm",
+   "sha256": "b93a6232119ec73eb82f2544a16e78f5eddfd36faa923cb6c99324bfe46de9eb",
+   "size": 284734
+  },
+  {
    "rel": "extension/wasm/cas/ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d.wasm",
    "sha256": "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d",
    "size": 1125792
@@ -406,6 +416,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 1088
   },
   {
+   "rel": "extension/wasm/licenses/oxipng-NOTICES.txt",
+   "sha256": "bd69b01836135882555b18dc2b8883fc4eb311a1c33fd815b80edc7bb1f12e5c",
+   "size": 3458
+  },
+  {
    "rel": "extension/wasm/licenses/posixutils-rs-MIT.txt",
    "sha256": "9a7b420402a2a0b0fbe160b79e5c430e8a367c1bfc8cc032598fe75ce3f84a1a",
    "size": 1068
@@ -509,6 +524,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/manifests/cap.bundled.md5sum-1.0.0.manifest.json",
    "sha256": "89fb270b8007f376b4aea312cca3ac14a23f530d50049f67f031757ff0ec7083",
    "size": 1792
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.oxipng-1.0.0.manifest.json",
+   "sha256": "6c57e689a58306e8043f8577ce9c6c947b7eeba6b8b238242d2b7c16c75a7a0c",
+   "size": 1917
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.patch-1.0.0.manifest.json",
@@ -659,6 +679,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/sbom/jq.cdx.json",
    "sha256": "224fbf2a50587ed3f0bdde68b6d097fb76ab86ccadc61b4e5147a8e553b228b3",
    "size": 417
+  },
+  {
+   "rel": "extension/wasm/sbom/oxipng.cdx.json",
+   "sha256": "e8d28965d370b29256514a294184dc137356ecefb91b957d61a023d38032344a",
+   "size": 6624
   },
   {
    "rel": "extension/wasm/sbom/sed.cdx.json",

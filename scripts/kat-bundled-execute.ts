@@ -23,6 +23,11 @@
 //                                                    hardcoded tiny job was
 //                                                    memory-rejected on
 //                                                    every live run)
+//   job-lane admission     (oxipng)                → offscreen WASI job run
+//                                                    (m3vb: the first tool
+//                                                    admitted STRAIGHT into
+//                                                    ten9's lane — PNG in,
+//                                                    smaller PNG out)
 //                                           so the class is proven end-to-end.
 //
 // Run: deno run -A scripts/kat-bundled-execute.ts   (takes the Chrome slot)
@@ -46,11 +51,73 @@ const PROFILE = durableDir("chrome-profiles", `kat-bundled-execute-${crypto.rand
 const ABC_HASH = "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85";
 // 1x1 transparent PNG, base64 — imageops info input.
 const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+// oxipng input (m3vb): a 32x32 RGBA8 PNG with thousands of colours AND varying
+// alpha (no lossless reduction applies — only filters/deflate can change),
+// naively encoded (filter 0 on every scanline, zlib default) the way most
+// producers emit. Built here deterministically so the harness carries no
+// binary fixture; the same encoder shape is pinned in oxipng-admission.test.ts.
+const OXIPNG_INPUT = await naiveRgbaPng(32, 32);
+const OXIPNG_INPUT_B64 = base64Of(OXIPNG_INPUT);
 const GREP_STDIN = "MATCH one\nnope\nMATCH two\n";
 const SORT_STDIN = "pear\napple\nfig\n";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
+}
+
+/** CRC-32 as PNG chunks use it. */
+function crc32(bytes: Uint8Array): number {
+  let c = 0xffffffff;
+  for (const b of bytes) {
+    c ^= b;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** A naive (filter-0, zlib default) RGBA8 PNG with a deterministic gradient +
+ *  alpha ramp: the input shape an optimiser has real headroom on. */
+async function naiveRgbaPng(width: number, height: number): Promise<Uint8Array> {
+  const be32 = (n: number) => new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+  const cat = (parts: Uint8Array[]) => {
+    const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  };
+  const chunk = (type: string, data: Uint8Array) => {
+    const t = new TextEncoder().encode(type);
+    return cat([be32(data.length), t, data, be32(crc32(cat([t, data])))]);
+  };
+  const raw = new Uint8Array(height * (1 + width * 4));
+  for (let y = 0; y < height; y++) {
+    const row = y * (1 + width * 4);
+    raw[row] = 0; // filter: None
+    for (let x = 0; x < width; x++) {
+      const p = row + 1 + x * 4;
+      raw[p] = (x * 8) & 255;
+      raw[p + 1] = (y * 8) & 255;
+      raw[p + 2] = (x * y) & 255;
+      raw[p + 3] = 128 + (((x + y) * 4) & 127);
+    }
+  }
+  const cs = new CompressionStream("deflate");
+  const writer = cs.writable.getWriter();
+  const collected = new Response(cs.readable).arrayBuffer();
+  await writer.write(raw);
+  await writer.close();
+  const idat = new Uint8Array(await collected);
+  const ihdr = cat([be32(width), be32(height), new Uint8Array([8, 6, 0, 0, 0])]);
+  return cat([
+    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", new Uint8Array()),
+  ]);
+}
+
+function base64Of(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
 }
 
 /** The selectionRef the search result NAMED for this exact tool — a real
@@ -133,6 +200,13 @@ try {
         selectionRef: refFor(req, "compressops"),
         arguments: { args: ["info"], stdin: "hello" },
       }) },
+      // m3vb: "optimise png" ranks oxipng #1 over all bundled descriptors in the
+      // real catalog search (measured before this pair was added).
+      { tool: "search_tools", args: { query: "optimise png", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "oxipng"),
+        arguments: { args: [], stdin: OXIPNG_INPUT_B64 },
+      }) },
       { text: "Bundled execute spot-check complete." },
     ],
   });
@@ -165,9 +239,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('#run-task')?.click()`);
 
-  // 8 searches + 8 executes + the final text = 17 model calls; the 17th
+  // 9 searches + 9 executes + the final text = 19 model calls; the 19th
   // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 17;
+  const EXPECTED_CALLS = 19;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;
@@ -259,6 +333,20 @@ try {
       assert(out.includes("magic") && out.includes("bytes"),
         `compressops info output lacks the frame report: ${out.slice(0, 300)}`);
     }],
+    ["oxipng", "execute_tool", (env) => {
+      // m3vb: the first tool admitted STRAIGHT into ten9's offscreen WASI-job
+      // lane (never preview-only). The envelope must be a real, executed
+      // result — the PNG signature in base64 — and SMALLER than the naive
+      // 32x32 input this run sent; a refusal code means it never dispatched.
+      assert(env?.ok === true, `oxipng in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(!out.includes("preview_only_tool") && !out.includes("not_a_stream_tool") && !out.includes("unknown_bundled_tool"),
+        `oxipng was refused, not executed: ${out.slice(0, 300)}`);
+      assert(out.includes("iVBORw0KGgo"), `oxipng output lacks the PNG signature (base64): ${out.slice(0, 300)}`);
+      const bytes = Number(out.match(/"stdoutBytes":(\d+)/)?.[1] ?? NaN);
+      assert(Number.isFinite(bytes) && bytes > 0 && bytes < OXIPNG_INPUT.length,
+        `oxipng output is not smaller than its ${OXIPNG_INPUT.length}-byte input (stdoutBytes=${bytes}): ${out.slice(0, 300)}`);
+    }],
   ];
 
   for (const [toolId, , verify] of pairs) {
@@ -279,6 +367,7 @@ try {
       dispatchPath: toolId === "gzip" || toolId === "sha256sum" || toolId === "uuid"
         ? "offscreen WASI job (ten9 ungate: formerly preview-only)"
         : toolId === "compressops" ? "offscreen WASI job (az4k: default tier carried by the job)"
+        : toolId === "oxipng" ? "offscreen WASI job (m3vb: admitted straight into the job lane)"
         : toolId === "hash_blake3" ? "call-export host" : "offscreen WASI stream",
       ok: env?.ok === true,
       result: env?.result ?? env,

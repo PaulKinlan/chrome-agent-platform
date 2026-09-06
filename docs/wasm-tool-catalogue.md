@@ -63,6 +63,7 @@ not captured during research it is marked *pin sha at admission time*.
 - Provenance: derived from GoogleChromeLabs/squoosh
 - Sources: https://deepwiki.com/GoogleChromeLabs/squoosh/3-codec-system ·
   https://web.dev/blog/squoosh-v2
+- PNG optimisation SHIPPED AS oxipng (2026-09-06, chrome-agent-platform-m3vb, option B — the y75s/compressops shape): jSquash/oxipng is the Emscripten/wasm-bindgen build and stays behind the Emscripten host (ltkj.3, d12t) with the other codecs (mozjpeg/avif/jxl/webp). The shipped tool is a CAP-authored WASI preview-1 driver over the oxipng 10.2.1 crate (libdeflate 1.26 compiled freestanding — no WASI sysroot), base64 PNG on stdin → optimised PNG on stdout, 284,734 bytes, 9 wasi_snapshot_preview1 imports, default tier (2048 pages), sha256 b93a6232119ec73eb82f2544a16e78f5eddfd36faa923cb6c99324bfe46de9eb, byte-reproducible (build-a == build-b). Measured against Chrome's own encoder (convertToBlob): native re-encoding is 174–218 % larger than oxipng on every fixture and EXPANDS a palette PNG — the gap is real. Evidence: packages/bundled/evidence/oxipng/, cap-evidence/cap-oxipng/.
 
 ### resvg — ADMIT-NOW (SVG rendering)
 - Repo: https://github.com/linebender/resvg · crates: https://crates.io/crates/resvg

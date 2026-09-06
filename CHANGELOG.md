@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.294] — 2026-09-06
+- The toolbox gains oxipng — shrink a PNG on-device without changing a single pixel
+
 ## [0.3.293] — 2026-09-06
 - Bundled tools that need more memory — the barcode tool and the zstd/brotli tool — no longer refuse to start inside an agent task
 

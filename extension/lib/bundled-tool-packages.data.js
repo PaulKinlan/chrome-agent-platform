@@ -1014,6 +1014,42 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.oxipng",
+  "version": "1.0.0",
+  "toolId": "oxipng",
+  "lane": "oxipng",
+  "displayName": "oxipng",
+  "category": "media",
+  "description": "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
+  "caveats": [
+   "PNG in, PNG out; stdin/stdout; lossless (pixels identical) but colour type or bit depth may be reduced; a 3.5 s internal deadline bounds the effort.",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+  ],
+  "capabilities": [
+   "compute"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "MIT AND Apache-2.0",
+   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "notices": "extension/wasm/licenses/oxipng-NOTICES.txt"
+  },
+  "binary": {
+   "sha256": "b93a6232119ec73eb82f2544a16e78f5eddfd36faa923cb6c99324bfe46de9eb",
+   "bytes": 284734,
+   "tier": "default",
+   "initialPages": 17,
+   "maxPages": 2048
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.oxipng-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.hash.blake3",
   "version": "1.0.0",
   "toolId": "hash_blake3",
