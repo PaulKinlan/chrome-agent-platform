@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.291] — 2026-09-06
+- All bundled WebAssembly tools are now directly executable in agent runs, removing the preview-only gate
+
 ## [0.3.290] — 2026-09-06
 - .3: User-uploaded WebAssembly modules now appear in tool search as soon as they are added in Settings
 

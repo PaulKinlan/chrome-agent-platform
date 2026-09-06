@@ -42,10 +42,8 @@ import {
   mintUntrustedToken,
 } from "./untrusted-fence.js";
 import {
-  PREVIEW_SETTINGS_ORIGIN,
   executeBundledWasiJob,
   isStreamBackedBundledTool,
-  previewOnlyToolEnvelope,
   previewSpecFor,
   validatePreviewInput,
 } from "./tool-exec-preview.js";
@@ -1546,9 +1544,12 @@ export function executableBundledToolRecords(rows, context = {}) {
           descriptorInput,
         });
       }
-      if (!isStreamBackedBundledTool(toolId) && runContext?.origin !== PREVIEW_SETTINGS_ORIGIN) {
-        return previewOnlyToolEnvelope(toolId);
-      }
+      // chrome-agent-platform-ten9 (owner directive: no tool may be preview-gated):
+      // EVERY admitted bundled tool executes through the real WASI job path in
+      // live agent tasks — the former stream-backed-only gate (which returned
+      // the preview-only refusal for the other 24 admitted tools) is removed. The
+      // executor itself fails closed per tool (unknown_bundled_tool) if a spec
+      // is absent, so admission and executability cannot drift apart silently.
       return await executeBundledWasiJob({
         toolId,
         args: validatedArgs.args,
