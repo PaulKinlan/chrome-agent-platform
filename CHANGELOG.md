@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.270] — 2026-09-06
+- The French Bistro browser compatibility check now completes automatically and reports cleanup failures instead of a false success
+- Export All and Import All now protect internal security keys and transient files, ensuring backups contain only your portable data
+
 ## [0.3.269] — 2026-09-06
 - the toolbox gains hash_blake3 — BLAKE3 hashing on-device, the first call-export Wasm tool
 
