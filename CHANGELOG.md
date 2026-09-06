@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.274] — 2026-09-06
+- A compatibility check that fails to save its result no longer leaves behind a log saying it passed
+
 ## [0.3.273] — 2026-09-06
 - Release notes written from a change that closes several tasks at once no longer begin with stray punctuation
 - The What's new list no longer shows an entry that begins with stray punctuation

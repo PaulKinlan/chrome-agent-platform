@@ -253,7 +253,8 @@ export async function finalizeKatExecution(
   // authoritative GREEN result.json. kat.log is written FIRST — a log-write
   // error folds into the final RED result; result.json is written LAST; if
   // the result write fails there is NO valid result (exit 1) and the
-  // misleading kat.log is removed best-effort. Teardown has ALWAYS completed
+  // misleading kat.log is removed best-effort (ln0e made this true: the catch
+  // below removes the staged temp AND kat.log). Teardown has ALWAYS completed
   // by this point.
   let reportError: string | null = null;
   let finalGreen = isGreen;
@@ -365,6 +366,17 @@ export async function finalizeKatExecution(
     // The unique temp is never authoritative — removal is best-effort hygiene,
     // never load-bearing (a removal failure changes nothing).
     try { await removeReportFile(tmpPath); } catch { /* best effort */ }
+    // kat.log IS load-bearing, in the other direction (ln0e; the report-order
+    // invariant above): it asserts a RESULT this run never published, so a
+    // surviving GREEN log beside no authoritative receipt is a dishonest
+    // artifact. Removed UNCONDITIONALLY on publication failure — the log is
+    // never authoritative (the returned receiptPath, the exit code and this
+    // FATAL line are), and a conditional "only when it claims GREEN" rule would
+    // add a branch that would itself need pinning. Accepted cost: an
+    // already-RED log goes too. Still best-effort — a read-only directory
+    // cannot be cleaned, and the honest answer there is a null receiptPath,
+    // never an exception escaping this catch.
+    try { await removeReportFile(`${report.outDir}/kat.log`); } catch { /* best effort */ }
     // ONE fail-closed exit path: exit, then RETURN the RED result immediately
     // (a returned exit seam in tests must not fall through to the RED exit
     // below and double-record).
