@@ -26,6 +26,7 @@
 
 import { crypto } from "jsr:@std/crypto@1";
 import { acquireChromeSlot } from "./chrome-slots.ts";
+import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -43,6 +44,10 @@ export interface LaunchedChrome {
    *  lock (`canonicalLock`), a fixture's own `lockPath`, or a bypass
    *  (`CAP_SECURITY_NONCE` / `CAP_CHROME_LOCK_HELD`). */
   chromeSlot: number;
+  /** How long this launch waited for a QUIET BOX before starting (0 when the
+   *  harness did not ask for one, or the box was already quiet).
+   *  chrome-agent-platform-mkax. */
+  quietWaitMs: number;
 }
 
 const TAIL_LIMIT = 8192;
@@ -325,7 +330,25 @@ export async function launchChrome(opts: {
    *  requires machine determinism — the security custody chain. Mutually
    *  exclusive with `lockPath`. */
   canonicalLock?: boolean;
+  /** Wait for a quiet box before starting (chrome-agent-platform-mkax), for a
+   *  gate whose failures under machine load are environmental rather than
+   *  product defects — the journey suite's `cdp timeout: Runtime.evaluate`
+   *  class (eo4d.1: 59/370 and 250/370 then a transport timeout at load >7;
+   *  370/370 only in a quiet window). `true` uses the documented thresholds; a
+   *  QuietSpec tunes them. On refusal this THROWS QuietWindowRefusedError and
+   *  the browser is NEVER started: the harness must turn that into its
+   *  environmental verdict (exit 75 + an `ENVIRONMENT:` line), which is a third
+   *  outcome — not green, and not a defect in the tree. The serialized-Chrome
+   *  lock is not a substitute for this: exclusivity excludes other CAP
+   *  browsers, never another lane's rustc or esbuild. */
+  requireQuiet?: boolean | QuietSpec;
 }): Promise<LaunchedChrome> {
+  let quietWaitMs = 0;
+  if (opts.requireQuiet) {
+    quietWaitMs = (await requireQuietWindow(
+      opts.requireQuiet === true ? {} : opts.requireQuiet,
+    )).waitedMs;
+  }
   if (Array.isArray(opts.grantPermissions) && opts.grantPermissions.length && opts.profile && opts.extension) {
     await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
   }
@@ -410,6 +433,7 @@ export async function launchChrome(opts: {
     stderrTail: () => tail,
     lockWaitMs: lock.waitedMs,
     chromeSlot: lock.slot,
+    quietWaitMs,
   };
 }
 

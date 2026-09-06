@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.277] — 2026-09-06
+- load-sensitive Chrome gates wait for a quiet box or refuse with exit 75
+
 ## [0.3.276] — 2026-09-06
 - the accessibility audit navigates to the Settings section it checks
 
