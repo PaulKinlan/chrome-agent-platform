@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.274] — 2026-09-06
+- Committing from a second checkout no longer leaves a stray modified task-list file in the main checkout
+
 ## [0.3.273] — 2026-09-06
 - Release notes written from a change that closes several tasks at once no longer begin with stray punctuation
 - The What's new list no longer shows an entry that begins with stray punctuation
