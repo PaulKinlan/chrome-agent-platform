@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.266] — 2026-09-06
+- Settings once again saves your WebAssembly files locally, native WebMCP tools again receive valid JSON arguments, and test-only browsers no longer block real Chrome checks.
+
 ## [0.3.265] — 2026-09-06
 - Internal cleanup: remove a folder of old screenshots that were stored in the wrong place
 

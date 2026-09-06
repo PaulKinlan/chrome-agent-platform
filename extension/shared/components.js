@@ -13447,6 +13447,145 @@ class PrivacyStatement extends Component {
 }
 customElements.define("privacy-statement", PrivacyStatement);
 
+/** Owner upload/list/remove UI. Backend-agnostic: emits File objects, never
+ * serializes file bytes, and renders owner text through textContent only.
+ */
+class UserWasmManager extends Component {
+  constructor() {
+    super();
+    this._records = [];
+    this._busy = false;
+  }
+  set records(value) {
+    this._records = Array.isArray(value) ? value : [];
+    if (this._rendered) this._renderList();
+  }
+  get records() { return this._records; }
+  set busy(value) {
+    this._busy = Boolean(value);
+    if (!this._rendered) return;
+    this._root.querySelector("fieldset").disabled = this._busy;
+    this._root.querySelectorAll("button").forEach((button) => { button.disabled = this._busy; });
+    this._root.querySelector("#files").setAttribute("aria-busy", String(this._busy));
+  }
+  get busy() { return this._busy; }
+  setStatus(message, error = false) {
+    const status = this._root.querySelector("#status");
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle("error", error);
+    status.setAttribute("role", error ? "alert" : "status");
+  }
+  clearForm() { this._root.querySelector("form")?.reset(); }
+  focusAfterRemove() {
+    (this._root.querySelector("[data-remove]") ?? this._root.querySelector("#file"))?.focus();
+  }
+  _render() {
+    mountTemplate(this, `${CONTROL_CSS}
+      :host { color:var(--text,#1d1b18); font:inherit; line-height:1.5; }
+      form, fieldset { margin:0; padding:0; border:0; min-width:0; }
+      fieldset { display:grid; gap:16px; }
+      legend { font-weight:650; font-size:var(--text-base,15px); margin-block-end:16px; }
+      .field-label { color:var(--text,#1d1b18); font-size:var(--text-sm,13px); font-weight:600; }
+      .hint, .meta, #empty { color:var(--muted,#635e56); font-size:var(--text-sm,13px); }
+      .hint { margin:0; max-width:70ch; }
+      input[type=file] { height:auto; padding:8px; }
+      input::file-selector-button, button { font:inherit; color:var(--text,#1d1b18); background:var(--panel,#fff); border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,7px); padding:7px 12px; min-height:36px; cursor:pointer; }
+      input::file-selector-button { margin-inline-end:12px; }
+      textarea.control { min-height:100px; padding:10px 12px; resize:vertical; }
+      button { width:fit-content; }
+      button.primary { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
+      button:hover:not(:disabled), input::file-selector-button:hover { border-color:var(--accent,#0e6e63); }
+      button:focus-visible, summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      button:disabled { opacity:.55; cursor:wait; }
+      #status { min-height:1.5em; overflow-wrap:anywhere; margin:16px 0 24px; font-size:var(--text-sm,13px); }
+      #status.error { color:var(--danger,#b91c1c); }
+      .list-head { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+      h3 { font-size:var(--text-base,15px); margin:0; }
+      ul { list-style:none; padding:0; margin:8px 0 0; }
+      li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:start; border-block-start:1px solid var(--border,#e3e0d9); padding:16px 0; }
+      .name, .description, code { overflow-wrap:anywhere; }
+      .description { white-space:pre-wrap; margin:6px 0; }
+      .meta { font-variant-numeric:tabular-nums; margin:6px 0; }
+      summary { cursor:pointer; font-size:var(--text-sm,13px); }
+      code { display:block; margin-block-start:6px; font-size:var(--text-xs,12px); user-select:all; }
+      @media(max-width:480px) { li { grid-template-columns:1fr; gap:8px; } }
+    `, `
+      <form aria-label="Add a WebAssembly file">
+        <fieldset>
+          <legend>Add a file</legend>
+          <label class="field" for="file"><span class="field-label">WebAssembly file</span>
+            <input class="control" id="file" name="file" type="file" accept=".wasm,application/wasm" required>
+          </label>
+          <label class="field" for="name"><span class="field-label">Name</span>
+            <input class="control" id="name" name="name" type="text" required placeholder="For example, Image converter">
+          </label>
+          <label class="field" for="description"><span class="field-label">Description for the agent</span>
+            <textarea class="control" id="description" name="description" rows="3" required aria-describedby="description-hint"></textarea>
+            <span class="hint" id="description-hint">Agents will read this description to decide when to call the tool. Explain what it does and what input it expects. Calling uploaded files is not connected yet.</span>
+          </label>
+          <p class="hint">Identical file contents update the existing name and description. Different files can share a name; their full digests identify them separately.</p>
+          <button type="submit" class="primary">Add file</button>
+        </fieldset>
+      </form>
+      <p id="status" role="status"></p>
+      <div class="list-head"><h3>Saved files</h3><button id="refresh" type="button">Refresh list</button></div>
+      <p id="empty">No files saved yet.</p>
+      <ul id="files" aria-label="Saved WebAssembly files"></ul>
+    `);
+    this._renderList();
+    this.busy = this._busy;
+  }
+  _renderList() {
+    const list = this._root.querySelector("#files");
+    list.replaceChildren();
+    this._root.querySelector("#empty").hidden = this._records.length > 0;
+    for (const record of this._records) {
+      const row = document.createElement("li");
+      row.dataset.digest = record.digest;
+      const content = document.createElement("div");
+      const name = document.createElement("strong");
+      name.className = "name";
+      name.textContent = record.name;
+      const description = document.createElement("p");
+      description.className = "description";
+      description.textContent = record.description;
+      const meta = document.createElement("p");
+      meta.className = "meta";
+      meta.textContent = `${Number(record.size).toLocaleString()} bytes · Added ${new Date(record.addedAt).toLocaleString()}`;
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "File digest (SHA-256)";
+      const digest = document.createElement("code");
+      digest.textContent = record.digest;
+      details.append(summary, digest);
+      content.append(name, description, meta, details);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.dataset.remove = record.digest;
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", `Remove ${record.name}`);
+      remove.disabled = this._busy;
+      remove.addEventListener("click", () => this._emit("user-wasm-remove", { digest: record.digest, name: record.name }));
+      row.append(content, remove);
+      list.append(row);
+    }
+  }
+  _wire() {
+    this._root.querySelector("form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (this._busy || !event.target.reportValidity()) return;
+      this._emit("user-wasm-upload", {
+        file: this._root.querySelector("#file").files[0],
+        name: this._root.querySelector("#name").value,
+        description: this._root.querySelector("#description").value,
+      });
+    });
+    this._root.querySelector("#refresh").addEventListener("click", () => this._emit("user-wasm-refresh"));
+  }
+}
+customElements.define("user-wasm-manager", UserWasmManager);
+
 /* ──────────────────────────────────────────────────────────────────────────
  * One call registers everything (idempotent). Extension pages + the docs
  * showcase both call this.

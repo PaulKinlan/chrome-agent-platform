@@ -167,6 +167,12 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       Ollama/LM Studio remain as local OpenAI-compatible endpoints.
 
 ### The Wasm tool platform — what actually ships vs what is proven
+Owner-uploaded files are a separate storage/UI increment from tool registration
+and execution: Settings keeps digest-keyed, streamed OPFS bytes and owner metadata,
+without upload-size, file-count, import, or parse admission gates. Uploading grants
+no execution authority. See [USER-WASM-STORAGE.md](docs/USER-WASM-STORAGE.md) for the
+storage contract; review and delivery state live in beads `9ux7.1` and `9ux7.2`.
+
 - [x] **28 bundled Wasm packages ship** and are verified at build time (exact manifest,
       CAS digests, bounded raw import/memory scan, SBOM + licence records):
       awk-filter-bounded, base64, csvtool, cut, date-formatter-bounded, diff, du, grep,

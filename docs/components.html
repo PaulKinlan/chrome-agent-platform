@@ -486,6 +486,15 @@
         <p class="caption">the SAME maintained catalogue the Providers section uses (modelsForVendor → llm-prices, newest-first). ARIA combobox: type to filter, arrows + Enter, Escape reverts; an unknown typed id commits as a custom value. Empty catalogue = free-text mode (Ollama / OpenAI-compatible).</p>
       </div>
 
+      <div class="specimen" id="user-wasm-specimen">
+        <h3 class="spec"><code class="tag">&lt;user-wasm-manager&gt;</code> — owner-uploaded WebAssembly files</h3>
+        <div class="stage column" style="max-width:720px">
+          <user-wasm-manager id="user-wasm-demo"></user-wasm-manager>
+          <user-wasm-manager id="user-wasm-empty"></user-wasm-manager>
+        </div>
+        <p class="caption">The same upload, metadata list, and Remove controls used in Settings. These are illustrative records, not installed tools. The gallery does not store files. File selection emits a native File object, not serialized bytes. The description explains its future use by agents; current storage does not run or register a tool.</p>
+      </div>
+
       <div class="specimen" id="tool-library-specimen">
         <h3 class="spec"><code class="tag">&lt;tool-library&gt;</code> — READ-ONLY tool catalog diagnostics (panel-1 slice)</h3>
         <div class="stage column" style="max-width:720px">
@@ -798,6 +807,15 @@
         { role: "tool", "tool-name": "verify_syntax", "tool-status": "error", "tool-args": "{\"lang\":\"python\"}", "tool-result": "python3 not installed on this machine" },
         { role: "system", content: "Here is the function:\n\n```python\ndef greet(name=\"world\"):\n    return f\"Hello, {name}!\"\n```\n\nUse it with `greet(\"Paul\")`. A few notes:\n- it defaults to \"world\"\n- it is an f-string\n- see [the docs](https://docs.python.org/3/tutorial/inputoutput.html)" },
       ]);
+
+      // Illustrative owner-file records. The gallery has no storage backend.
+      const userWasmDemo = document.getElementById('user-wasm-demo');
+      userWasmDemo.records = [{ version: 1, digest: 'a1'.repeat(32), name: 'Image converter', description: 'Convert image files to PNG. Accepts a path to the input image.', size: 73400320, addedAt: Date.UTC(2026, 8, 5) }];
+      for (const manager of document.querySelectorAll('user-wasm-manager')) {
+        for (const type of ['user-wasm-upload', 'user-wasm-remove', 'user-wasm-refresh']) {
+          manager.addEventListener(type, () => manager.setStatus('Gallery demonstration only — no file was saved or removed.'));
+        }
+      }
 
       // <tool-library> specimens — fixture-driven READ-ONLY states (no backend,
       // no network; the real surface calls the Settings-principal shadow route).
