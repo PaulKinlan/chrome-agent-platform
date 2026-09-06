@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.292] — 2026-09-06
+- Internal cleanup: the agent guidance file points at the live task list, names only paths that exist, and spells out every step of setting up a fresh checkout
+
 ## [0.3.291] — 2026-09-06
 - All bundled WebAssembly tools are now directly executable in agent runs, removing the preview-only gate
 

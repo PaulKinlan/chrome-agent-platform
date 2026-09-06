@@ -23,7 +23,10 @@ const RETIRED_TRACKERS = ["TASKS.md", "TASKS-DONE.md", "KNOWN-ISSUES.md", "docs/
 // The docs the audit found presenting a retired tracker as the live authority.
 // In these, a line that names a retired tracker says it is retired history ON
 // THAT LINE — the reader is never left holding a live pointer.
-const POINTER_DOCS = ["README.md", "PLAN.md", "docs/KNOWN-ISSUES.md", "docs/KNOWN-ISSUES-ARCHIVE.md", "docs/AGENT-MODEL.md", "docs/UI-FIXES-TRACKER.md"];
+// AGENTS.md joined the list under chrome-agent-platform-w56b: the constitution
+// declared the beads-only rule and then pointed readers at the retired files in
+// six places below it.
+const POINTER_DOCS = ["README.md", "PLAN.md", "AGENTS.md", "docs/KNOWN-ISSUES.md", "docs/KNOWN-ISSUES-ARCHIVE.md", "docs/AGENT-MODEL.md", "docs/UI-FIXES-TRACKER.md"];
 const TRACKER_NAME_RE = /\b(TASKS\.md|TASKS-DONE\.md|KNOWN-ISSUES\.md|KNOWN-ISSUES\b(?!-ARCHIVE)|UI-FIXES-TRACKER)/;
 const RETIREMENT_MARKER_RE = /\b(retired|history|legacy)\b/i;
 
@@ -113,4 +116,77 @@ Deno.test("6j8i: no tracked markdown names the owner's other project (AGENTS.md 
   // kind of file the exemption describes.
   for (const rel of BANNED_NAME_ALLOWLIST) assert(files.includes(rel), `${rel}: allowlisted file is tracked`);
   assert(/^# .*RETIRED/m.test(read("TASKS-DONE.md").split("\n").slice(0, 3).join("\n")), "TASKS-DONE.md is exempt only as retired history");
+});
+
+// ── w56b: the constitution itself ──────────────────────────────────────────
+// AGENTS.md is the first thing every agent reads. Besides the pointer rule
+// above (it is in POINTER_DOCS), three more things rot there: a path it cites
+// that is not on disk (two skills were named at paths that never existed), a
+// section header with nothing under it, and a worktree recipe missing a setup
+// step — chrome-agent-platform-63et made the store build need the deno store
+// (`deno install`), and a worktree set up with `npm ci` alone failed that build
+// and the whole serial test phase before anyone knew why.
+
+/** Paths the constitution cites as real: a repo-relative path under one of the
+ *  code/doc roots written in code font, parentheses, emphasis or a link (a bare
+ *  mention in prose is not a citation), or a root UPPERCASE.md file. Placeholders
+ *  (`<name>`, globs) are not paths. */
+function citedPaths(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/[`(*[]((?:\.agents\/skills|skills|docs|scripts|tests)\/[A-Za-z0-9_./-]+)/g)) out.add(m[1]!);
+  for (const m of text.matchAll(/(?:^|[^A-Za-z0-9_./-])([A-Z][A-Z0-9-]*\.md)\b/gm)) out.add(m[1]!);
+  return [...out].map((p) => p.replace(/[.,;:)\]]+$/, "")).filter((p) => !/[<*]/.test(p)).sort();
+}
+
+/** Headers with no content before the next header of the same or a shallower
+ *  depth (a subsection counts as content for the section above it). */
+function emptySections(text: string): string[] {
+  const out: string[] = [];
+  let open: { title: string; depth: number; body: boolean } | undefined;
+  for (const line of text.split("\n")) {
+    const h = line.match(/^(#{1,6}) \S/);
+    if (h) {
+      const depth = h[1]!.length;
+      if (open && !open.body && depth <= open.depth) out.push(open.title);
+      open = { title: line, depth, body: false };
+    } else if (open && line.trim()) open.body = true;
+  }
+  if (open && !open.body) out.push(open.title);
+  return out;
+}
+
+const exists = (rel: string) => { try { Deno.statSync(ROOT + rel); return true; } catch { return false; } };
+
+Deno.test("w56b detector honesty: the citation scanner sees cited paths and ignores prose, placeholders and globs", () => {
+  assertEquals(citedPaths("see `docs/a.md`, (scripts/b.mjs) and **tests/c.test.ts**, [docs/d.md](docs/d.md)."), ["docs/a.md", "docs/d.md", "scripts/b.mjs", "tests/c.test.ts"]);
+  assertEquals(citedPaths("the skills/agents registry and docs/x.md in prose"), [], "a bare mention in prose is not a citation");
+  assertEquals(citedPaths("run `npm run test:file -- tests/<name>.test.ts` or `deno test tests/*.test.ts`"), [], "placeholders and globs are not paths");
+  assertEquals(citedPaths("PLAN.md (the roadmap), docs/DESIGN.md, and PRODUCT.md."), ["PLAN.md", "PRODUCT.md"], "root UPPERCASE.md files are cited bare; a docs/ one is not a root file");
+  assertEquals(emptySections("# T\n\nbody\n\n## A\n\n## B\n\ntext\n\n## C\n\n### C1\n\ntext\n"), ["## A"], "an empty header is flagged; a header whose subsection has content is not");
+});
+
+Deno.test("w56b: every path AGENTS.md cites exists on disk", () => {
+  const paths = citedPaths(read("AGENTS.md"));
+  assert(paths.length >= 30, `the citation scanner still sees the constitution's paths (${paths.length})`);
+  const missing = paths.filter((p) => !exists(p));
+  assertEquals(missing, [], "AGENTS.md cites a path that is not there — cite the real path, or say plainly that it is not in this repo");
+});
+
+Deno.test("w56b: no AGENTS.md section is an empty header", () => {
+  assertEquals(emptySections(read("AGENTS.md")), [], "a header with nothing under it is a dead end for the reader — merge it or fill it");
+});
+
+Deno.test("w56b: the AGENTS.md worktree recipe names every setup step a fresh worktree needs, in order", () => {
+  const text = read("AGENTS.md");
+  const start = text.indexOf("## Concurrent work");
+  assert(start >= 0, "the concurrent-work section exists");
+  const end = text.indexOf("\n## ", start + 1);
+  const section = text.slice(start, end > 0 ? end : undefined);
+  let last = -1;
+  for (const step of ["git worktree add", "npm ci", "deno install", "npm run build"]) {
+    const at = section.indexOf(step);
+    assert(at >= 0, `the recipe names \`${step}\``);
+    assert(at > last, `\`${step}\` comes after the previous step (installs before the build)`);
+    last = at;
+  }
 });
