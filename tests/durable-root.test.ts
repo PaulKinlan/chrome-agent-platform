@@ -77,10 +77,16 @@ Deno.test("durableDir fails loudly when the durable location is unavailable", ()
 // to a /tmp literal. Allowlist (tiny + ephemeral by design):
 //   cap-serialized-chrome-acceptance.lock — cross-process LOCK file; tmpfs
 //     means a reboot clears a stale lock (a feature, and 1 inode).
-//   cap-chrome-slot-POISON — one-byte coordination marker, same argument.
+//   cap-chrome-slot-<N>.lock — the bounded-concurrency semaphore's slot files
+//     (chrome-agent-platform-uzik): one inode each, tiny, cross-process, and a
+//     reboot clearing a stale slot is the same feature as for the lock above.
+//   cap-chrome-slot-POISON — RETIRED by uzik (it closed yr6e). The literal is
+//     allowlisted only so the custody guard test can assert the marker never
+//     comes back; nothing writes it any more.
 //   hostile-runner / not-the-canonical-lock — negative test fixtures.
 const ALLOWED = new Set([
   "/tmp/cap-serialized-chrome-acceptance.lock",
+  "/tmp/cap-chrome-slot-0.lock",
   "/tmp/cap-chrome-slot-POISON",
   "/tmp/hostile-runner.mjs",
   "/tmp/not-the-canonical-lock",

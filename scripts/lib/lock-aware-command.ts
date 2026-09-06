@@ -1,6 +1,6 @@
 // lock-aware-command.ts — run a child whose time budget starts when IT starts,
-// not when it is queued behind the serialized-Chrome lock.
-// CAP-FB-20260830-SUITE-HONESTY-01
+// not when it is queued behind the machine's browser gate.
+// CAP-FB-20260830-SUITE-HONESTY-01; generalized by chrome-agent-platform-uzik.
 //
 // `tests/security-suite-custody.test.ts` wrapped the supervisor in
 // `/usr/bin/timeout 20`. The supervisor's first act is `flock -x` on the
@@ -9,12 +9,16 @@
 // reported "supervisor emitted no result marker" — a load-dependent red for
 // a supervisor that never got to run. Different subsets failed on each run.
 //
-// This helper watches the child's own output for a marker the supervisor
-// prints the moment it holds the lock and only then starts the budget. The
-// lock wait is bounded separately (a lane that never gets the lock is a real
-// finding, reported as such), and a supervisor that hangs after acquiring the
-// lock still fails after `budgetMs` of its OWN time: nothing here can turn a
-// real failure green — it only stops queueing from masquerading as one.
+// This helper watches the child's own output for a marker printed the moment
+// the child is through the gate, and only then starts the budget. Two gates
+// emit one: the security supervisor prints CAP_SECURITY_LOCK_ACQUIRED when it
+// holds the exclusive canonical lock, and `launchChrome()` prints
+// CAP_CHROME_GATE_ACQUIRED when it has a concurrency slot
+// (scripts/lib/chrome-slots.ts, opt in with CAP_CHROME_SLOT_MARKER=1). The
+// gate wait is bounded separately (a lane that never gets a browser is a real
+// finding, reported as such), and a child that hangs AFTER the gate still
+// fails after `budgetMs` of its OWN time: nothing here can turn a real failure
+// green — it only stops queueing from masquerading as one.
 
 export interface LockAwareResult {
   code: number;
@@ -99,9 +103,9 @@ export async function runLockAware(opts: {
   const lockWaitMsActual = opts.lockMarker ? ((budgetStartedAt || endedAt) - spawnedAt) : 0;
   const ranMs = budgetStartedAt ? endedAt - budgetStartedAt : 0;
   if (killedFor === "lock-wait-exceeded") {
-    text += `\n[lock-aware] killed: waited ${lockWaitMsActual} ms for the serialized-Chrome lock (another lane held it) — the child never ran\n`;
+    text += `\n[lock-aware] killed: waited ${lockWaitMsActual} ms for the browser gate (another lane held every slot) — the child never ran\n`;
   } else if (killedFor === "budget-exceeded") {
-    text += `\n[lock-aware] killed: exceeded its own ${opts.budgetMs} ms budget after the lock (queue wait ${lockWaitMsActual} ms excluded)\n`;
+    text += `\n[lock-aware] killed: exceeded its own ${opts.budgetMs} ms budget after the browser gate (queue wait ${lockWaitMsActual} ms excluded)\n`;
   }
   return { code: s.code, text, lockWaitMs: lockWaitMsActual, ranMs, killedFor };
 }

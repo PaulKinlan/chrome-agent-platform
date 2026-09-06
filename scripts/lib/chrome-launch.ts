@@ -25,6 +25,7 @@
 // be reached for by default.
 
 import { crypto } from "jsr:@std/crypto@1";
+import { acquireChromeSlot } from "./chrome-slots.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -35,8 +36,13 @@ export interface LaunchedChrome {
   port: number;
   /** The last few KB of Chrome's stderr — for honest failure messages. */
   stderrTail(): string;
-  /** How long this launch queued behind another lane's browser (0 when it did not). */
+  /** How long this launch queued for its browser slot (0 when one was free). */
   lockWaitMs: number;
+  /** Which concurrency slot this launch took (chrome-agent-platform-uzik), or
+   *  -1 when the launch was serialized some other way: the exclusive canonical
+   *  lock (`canonicalLock`), a fixture's own `lockPath`, or a bypass
+   *  (`CAP_SECURITY_NONCE` / `CAP_CHROME_LOCK_HELD`). */
+  chromeSlot: number;
 }
 
 const TAIL_LIMIT = 8192;
@@ -99,12 +105,21 @@ export async function seedGrantedPermissions(
 
 export const CHROMIUM = "/usr/bin/chromium";
 
-// ── the serialized-Chrome lock ──────────────────────────────────────────────
-// CAP-FB-20260830-SUITE-HONESTY-01. Two lanes driving headless Chromes at the
-// same time produce CDP timeouts (Runtime.evaluate / Target.attachToTarget)
-// in whichever suite loses the CPU — a red that says nothing about the tree.
-// The canonical lock the security supervisor already takes is now taken HERE,
-// for the lifetime of the browser, so every harness serializes by construction:
+// ── the exclusive canonical lock (OPT-IN since chrome-agent-platform-uzik) ──
+// CAP-FB-20260830-SUITE-HONESTY-01 took this lock for EVERY launch, on the
+// theory that two lanes driving headless Chromes at the same time produce CDP
+// timeouts that say nothing about the tree. That theory was wrong about the
+// mechanism: the timeouts came from machine LOAD (another lane's esbuild or
+// rustc), which the lock never excluded — it only excluded other CAP browsers.
+// What it cost was a 20-minute queue for 98 harnesses whose instances were
+// already fully isolated (kernel-assigned `--remote-debugging-port=0` + a
+// per-launch `--user-data-dir`).
+//
+// So the DEFAULT is now the bounded-concurrency semaphore in chrome-slots.ts,
+// and this exclusive lock survives for the suites that genuinely need machine
+// determinism — the security custody chain, whose evidence is about process
+// groups and descendant residue. Those opt in with `canonicalLock: true`.
+// Its properties are unchanged:
 //   - bounded: the wait is capped (CAP_CHROME_LOCK_WAIT_MS, default 20 min) and
 //     a lane that never gets the lock FAILS loudly — it is never turned green;
 //   - honest: the wait is printed when it happens, with its length;
@@ -113,7 +128,16 @@ export const CHROMIUM = "/usr/bin/chromium";
 //     (CAP_SECURITY_NONCE), or when a runner says it holds it (CAP_CHROME_LOCK_HELD);
 //   - released when the last browser this process launched exits, and by the
 //     holder itself within a second of this process dying (no orphaned lock).
-export const CHROME_LOCK_PATH = Deno.env.get("CAP_CHROME_LOCK_PATH") ?? "/tmp/cap-serialized-chrome-acceptance.lock";
+export const CHROME_LOCK_PATH_DEFAULT = "/tmp/cap-serialized-chrome-acceptance.lock";
+export const CHROME_LOCK_PATH = Deno.env.get("CAP_CHROME_LOCK_PATH") ?? CHROME_LOCK_PATH_DEFAULT;
+
+/** The canonical lock file, resolved PER CALL (chrome-agent-platform-uzik) so a
+ *  runner or a test can point a launch at its own canonical scope without the
+ *  module-load order trap that CHROME_LOCK_PATH has. The exported constant above
+ *  is the load-time default and stays the value every static guard pins. */
+function canonicalLockPath(): string {
+  return Deno.env.get("CAP_CHROME_LOCK_PATH") ?? CHROME_LOCK_PATH_DEFAULT;
+}
 
 // Lock state is PER PATH (chrome-agent-platform-51x4): the canonical lock
 // serializes real browsers; fake-browser unit fixtures take their own
@@ -121,7 +145,7 @@ export const CHROME_LOCK_PATH = Deno.env.get("CAP_CHROME_LOCK_PATH") ?? "/tmp/ca
 // a real lane's 20-minute gate — and never dilute the real serialization.
 const lockStates = new Map<string, { holder: Deno.ChildProcess | null; refs: number }>();
 
-async function acquireChromeLock(lockPath: string = CHROME_LOCK_PATH): Promise<{ waitedMs: number; release: () => void }> {
+async function acquireChromeLock(lockPath: string = canonicalLockPath()): Promise<{ waitedMs: number; release: () => void }> {
   const noop = () => {};
   if (Deno.env.get("CAP_SECURITY_NONCE") || Deno.env.get("CAP_CHROME_LOCK_HELD") === "1") {
     return { waitedMs: 0, release: noop };
@@ -195,6 +219,51 @@ async function acquireChromeLock(lockPath: string = CHROME_LOCK_PATH): Promise<{
 }
 
 /**
+ * A per-INSTANCE Chrome profile under an operator- or caller-supplied base
+ * directory (chrome-agent-platform-uzik).
+ *
+ * Concurrency made this necessary. A harness whose profile is
+ * `${EVIDENCE_DIR}/profile` is unique only as long as nobody else runs the same
+ * harness against the same evidence dir — and `HEADED_EVIDENCE_DIR` /
+ * `Deno.args[1]` are exactly the knobs an operator sets to a fixed path. Two
+ * runs sharing a profile do not merely race: Chrome's SingletonLock makes the
+ * second launch fail or attach to the first, and one run's cleanup sweep then
+ * deletes the other's LIVE profile. Under the old one-browser-at-a-time lock
+ * that could not happen; under a semaphore it can.
+ *
+ * The suffix is pid + wall clock + 8 random characters, so two runs started in
+ * the same millisecond by the same pid (impossible) or by two lanes (different
+ * pids) still differ.
+ */
+export function instanceProfile(base: string, name = "profile"): string {
+  const clean = base.replace(/\/+$/u, "");
+  return `${clean}/${name}-${Deno.pid}-${Date.now()}-${globalThis.crypto.randomUUID().slice(0, 8)}`;
+}
+
+/**
+ * Resolve exactly ONE launch scope (chrome-agent-platform-uzik):
+ *   - `lockPath`     → an exclusive lock on a caller-owned file (unit fixtures);
+ *   - `canonicalLock`→ the exclusive canonical machine lock (opt-in determinism);
+ *   - default        → one slot of the bounded-concurrency semaphore.
+ * Asking for two exclusive scopes at once is a caller bug, not a preference.
+ */
+async function acquireLaunchScope(opts: {
+  lockPath?: string;
+  canonicalLock?: boolean;
+}): Promise<{ waitedMs: number; release: () => void; slot: number }> {
+  if (opts.lockPath && opts.canonicalLock) {
+    throw new Error(
+      "launchChrome: lockPath and canonicalLock together are an ambiguous scope — pass exactly one",
+    );
+  }
+  if (opts.lockPath || opts.canonicalLock) {
+    const lock = await acquireChromeLock(opts.lockPath);
+    return { waitedMs: lock.waitedMs, release: lock.release, slot: -1 };
+  }
+  return acquireChromeSlot();
+}
+
+/**
  * The flags every headless harness passes. Exported so a harness that builds
  * its own argv (a custom window size, an extra page) still shares one source
  * for the boring part instead of a private copy that drifts.
@@ -245,11 +314,17 @@ export async function launchChrome(opts: {
   env?: Record<string, string>;
   /** Pre-seed Chrome's Preferences with granted permissions before launch. */
   grantPermissions?: string[];
-  /** Lock scope for this launch. Default: the canonical serialized-Chrome
-   *  lock every real harness shares. Fake-browser unit fixtures pass their own
-   *  path so they never queue behind (or block) the real browser queue
-   *  (chrome-agent-platform-51x4). Never set this in a real acceptance run. */
+  /** EXCLUSIVE lock scope for this launch, replacing the concurrency slot.
+   *  Fake-browser unit fixtures pass their own path so they never queue behind
+   *  (or block) the real browser queue (chrome-agent-platform-51x4), and never
+   *  spend the machine's browser budget on a shell script. Never set this in a
+   *  real acceptance run. */
   lockPath?: string;
+  /** Opt into the exclusive canonical serialized-Chrome lock instead of a
+   *  concurrency slot (chrome-agent-platform-uzik). For suites whose evidence
+   *  requires machine determinism — the security custody chain. Mutually
+   *  exclusive with `lockPath`. */
+  canonicalLock?: boolean;
 }): Promise<LaunchedChrome> {
   if (Array.isArray(opts.grantPermissions) && opts.grantPermissions.length && opts.profile && opts.extension) {
     await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
@@ -270,7 +345,7 @@ export async function launchChrome(opts: {
     ]
     : extras;
 
-  const lock = await acquireChromeLock(opts.lockPath);
+  const lock = await acquireLaunchScope(opts);
   const proc = new Deno.Command(opts.binary ?? CHROMIUM, {
     args: [...args, "--remote-debugging-port=0"],
     stdout: opts.stdout ?? "null",
@@ -278,7 +353,7 @@ export async function launchChrome(opts: {
     ...(opts.clearEnv ? { clearEnv: true } : {}),
     ...(opts.env ? { env: opts.env } : {}),
   }).spawn();
-  // The lock lives as long as this browser does.
+  // The slot (or exclusive lock) lives exactly as long as this browser does.
   proc.status.then(() => lock.release()).catch(() => lock.release());
 
   let tail = "";
@@ -328,7 +403,14 @@ export async function launchChrome(opts: {
     } catch { /* the process went away; nothing to drain */ }
   })();
 
-  return { proc, wsUrl, port: Number(new URL(wsUrl).port), stderrTail: () => tail, lockWaitMs: lock.waitedMs };
+  return {
+    proc,
+    wsUrl,
+    port: Number(new URL(wsUrl).port),
+    stderrTail: () => tail,
+    lockWaitMs: lock.waitedMs,
+    chromeSlot: lock.slot,
+  };
 }
 
 export type CdpSend = (method: string, params?: any, sessionId?: string) => Promise<any>;

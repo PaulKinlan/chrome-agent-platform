@@ -88,9 +88,21 @@ async function sha256Hex(bytes) {
 
 /** The browser: the shared launcher owns the spawn (kernel-assigned port, the
  * endpoint read from this child's own stderr, an honest error when none is
- * printed) — CAP-FB-20260830-SUITE-HONESTY-01 folded the private copy here. */
+ * printed) — CAP-FB-20260830-SUITE-HONESTY-01 folded the private copy here.
+ *
+ * This suite OPTS INTO the exclusive canonical lock
+ * (chrome-agent-platform-uzik). It is the one gate whose reds were genuinely
+ * environmental: the eo4d.1 runs reached 59/370 and 250/370 and then died on
+ * `cdp timeout: Runtime.evaluate` with machine load >7 from other lanes'
+ * esbuild/rustc, and only passed 370/370 in an uninterrupted quiet window.
+ * 370 sequential CDP round-trips over minutes is the most load-sensitive gate
+ * in the repo, so it keeps machine determinism while everything else moves to
+ * the bounded-concurrency semaphore. Honest caveat: exclusivity excludes other
+ * CAP browsers, NOT other lanes' compilers — a quiet box is still what this
+ * suite needs, and this opt-in only stops our own gates from eating it. */
 function launchJourneyChrome(profile: string) {
   return spawnChrome({
+    canonicalLock: true,
     binary: CHROMIUM,
     args: [
       "--headless=new",

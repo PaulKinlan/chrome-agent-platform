@@ -7,7 +7,6 @@ import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
   chmod,
-  lstat,
   mkdir,
   open,
   readFile,
@@ -31,7 +30,6 @@ import {
   readProcIdentity,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
-  SLOT_POISON,
   terminateAttestedGroup,
   verifyInheritedCanonicalLock,
   waitUntil,
@@ -58,12 +56,10 @@ function fail(message, code = 2) {
 
 const lockError = await verifyInheritedCanonicalLock(9);
 if (lockError) fail(lockError);
-try {
-  await lstat(SLOT_POISON);
-  fail(`canonical Chrome slot is poisoned at ${SLOT_POISON}`);
-} catch (error) {
-  if (error?.code !== "ENOENT") fail("cannot inspect canonical poison state");
-}
+// uzik: no poison-marker refusal. The machine no longer has ONE shared Chrome
+// slot to contaminate, and a stale marker from an unrelated lane used to make
+// every later run refuse (chrome-agent-platform-yr6e). Custody problems are
+// this run's own finding, reported below as `custodyReason` + exit 70/71/72.
 
 let config;
 try {
@@ -329,20 +325,15 @@ if (groupAlive(attestation.identity.pgid)) {
 }
 
 const residue = await liveObservedResidue(observed);
-let poisonReason = "";
-if (termination.survived) poisonReason = "owned-group-survived";
-if (residue.length > 0) poisonReason = "descendant-residue";
-if (poisonReason) {
-  await writeFile(SLOT_POISON, `${poisonReason}\n`, { mode: 0o600, flag: "wx" })
-    .catch(() => {});
-}
+// This run's own custody finding. It is NOT written to a shared marker any
+// more (uzik): the exit code and the receipt carry it, so a residue escape
+// fails THIS run loudly without poisoning the next lane's browser gate.
+let custodyReason = "";
+if (termination.survived) custodyReason = "owned-group-survived";
+if (residue.length > 0) custodyReason = "descendant-residue";
 
 const cleanup = await cleanupExactProfile({ profile, root: PROFILE_ROOT });
-if (!cleanup.ok) {
-  poisonReason ||= `cleanup-refused:${cleanup.reason}`;
-  await writeFile(SLOT_POISON, `${poisonReason}\n`, { mode: 0o600, flag: "wx" })
-    .catch(() => {});
-}
+if (!cleanup.ok) custodyReason ||= `cleanup-refused:${cleanup.reason}`;
 
 let exitCode;
 let runnerSignal = null;
@@ -386,7 +377,7 @@ const receipt = {
     pgid,
     sid,
   })),
-  poisonReason,
+  custodyReason,
   cleaned: cleanup.ok && cleanup.removed,
 };
 await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, {

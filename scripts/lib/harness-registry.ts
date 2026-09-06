@@ -10,7 +10,9 @@
 //   named   — an npm script run on demand; `reason` says why it is not a gate
 //             (and its tally at the 2026-09-02 re-inventory).
 //   kat     — run by scripts/kat-runner.ts (`npm run test:kat`), one at a time
-//             under the canonical serialized-Chrome lock. A KAT that was RED at
+//             in this runner; each takes a slot of the bounded-concurrency
+//             semaphore itself (chrome-agent-platform-uzik), so other lanes'
+//             gates run alongside. A KAT that was RED at
 //             the re-inventory carries `expectedRed` (its OWNER) and `redReason`
 //             (the failure mode): the runner still runs it, prints it as
 //             EXPECTED-RED with both, and fails the run the moment it passes so

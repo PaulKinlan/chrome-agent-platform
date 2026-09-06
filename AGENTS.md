@@ -70,12 +70,9 @@ automatically; run it manually after beads-only changes).
   the way becomes a bead IN THE SAME SESSION you find it, with an honest
   description (what was observed, how to reproduce, acceptance for done).
 - **Link as you go**: issues discovered during a task get
-  `bd link <new-id> <current-id> --type discovered-from`; hard ordering gets
-  `bd dep add <blocked-id> --blocked-by <blocker-id>`. The dependency graph — not
-  a human dispatcher — decides what is workable next. (Flags verified against the
-  installed CLI: `bd link` takes POSITIONAL ids and `--type`; `--blocked-by` is
-  a `bd dep add` flag — `bd link <id> --discovered-from <other>` fails with
-  "unknown flag".)
+  `bd link <new-id> --discovered-from <current-id>`; hard ordering gets
+  `bd link <blocked-id> --blocked-by <blocker-id>`. The dependency graph — not
+  a human dispatcher — decides what is workable next.
 - `.beads/issues.jsonl` is a passive export, not the tracker.
 
 ### Epics and breakdown (beads best practice)
@@ -286,15 +283,47 @@ read in run 2.
   registers its service worker a beat after the browser is reachable, so wait
   for it with `waitForServiceWorker()` rather than relying on how long a
   handshake happens to take.
-- **One browser at a time, by construction.** `launchChrome()` takes the
-  canonical serialized-Chrome lock (`/tmp/cap-serialized-chrome-acceptance.lock`)
-  for the browser's lifetime: two lanes driving headless Chromes together produce
-  CDP timeouts that say nothing about the tree. The wait is bounded
+- **Bounded concurrency, per-instance isolation (chrome-agent-platform-uzik).**
+  `launchChrome()` takes ONE SLOT of a bounded-concurrency semaphore
+  (`scripts/lib/chrome-slots.ts`; `CAP_CHROME_MAX_CONCURRENT`, default 4) for the
+  browser's lifetime. It used to take a single machine-wide exclusive lock, on
+  the theory that two lanes driving headless Chromes together produce CDP
+  timeouts that say nothing about the tree. That was wrong about the mechanism —
+  those timeouts came from machine LOAD (another lane's esbuild/rustc), which an
+  exclusive Chrome lock never excluded — and it cost a 20-minute queue for 98
+  harnesses whose instances were already isolated: every launch gets a
+  kernel-assigned debugging port (`--remote-debugging-port=0`, read back from
+  its own stderr) and its own `--user-data-dir`. The bound is a MEMORY bound,
+  not a correctness one: 32 parallel test workers each launching a Chromium is
+  how a box gets OOMed.
+  The properties that mattered are unchanged: the wait is bounded
   (`CAP_CHROME_LOCK_WAIT_MS`, 20 min default) and printed when it happens; a lane
-  that never gets the lock FAILS — it is never turned green. The security
-  supervisor already holds the lock, so inside it the launcher skips the take.
-  Never wrap a harness in an outer `flock` on that file (it deadlocks the
-  harness's own launch). A known failure owned by another entry is carried as
+  that never gets a slot FAILS — it is never turned green and never skipped; a
+  dead launcher leaves no held slot (the kernel drops the flock); and a process
+  that already holds the whole bound and asks for another slot fails
+  immediately instead of waiting for itself.
+  Two opt-outs, both explicit:
+  - `launchChrome({ canonicalLock: true })` takes the exclusive canonical lock
+    (`/tmp/cap-serialized-chrome-acceptance.lock`) for suites whose evidence
+    needs machine determinism — `scripts/chrome-journeys.ts` (370 sequential CDP
+    round-trips; the eo4d.1 environmental-red victim) and, via
+    `CAP_SECURITY_NONCE`, the security custody chain whose supervisor holds that
+    lock on fd 9. Honest caveat: exclusivity excludes other CAP browsers, NOT
+    other lanes' compilers — a load-sensitive suite still needs a quiet box.
+  - `launchChrome({ lockPath })` takes an exclusive lock on a caller-owned file:
+    fake-browser unit fixtures use it so they never queue behind a real gate and
+    never spend the machine's browser budget on a shell script
+    (chrome-agent-platform-51x4). Never set either in a normal acceptance run.
+  Profiles must be per-instance — `instanceProfile(base)` from
+  `scripts/lib/chrome-launch.ts` when the base is an operator/caller knob
+  (`HEADED_EVIDENCE_DIR`, `Deno.args[1]`), because two runs sharing a profile
+  hit Chrome's SingletonLock and one run's cleanup deletes the other's live
+  profile. `tests/chrome-profile-isolation.test.ts` checks every launch site.
+  Never wrap a harness in an outer `flock` on the canonical lock (it deadlocks
+  the harness's own launch); the retired `cap-chrome-slot-POISON` marker must
+  not come back (`tests/security-suite-custody.test.ts` guards it — it closed
+  chrome-agent-platform-yr6e, where one lane's transient marker reddened a whole
+  `npm test`). A known failure owned by another entry is carried as
   `EXPECTED-RED` with its owner (`scripts/lib/expected-red.ts`; the KAT
   registry's `expectedRed`), never skipped; the run fails the moment it turns
   green. Every `scripts/*.ts` has exactly one class in
