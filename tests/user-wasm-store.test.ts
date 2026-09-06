@@ -1,6 +1,12 @@
 // @ts-nocheck — injected OPFS handles model browser commit-on-close semantics.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { createOwnerBlobStore, OWNER_BLOB_KINDS, OWNER_BLOBS_ROOT } from "../extension/lib/user-wasm-store.js";
+import {
+  createOwnerBlobStore,
+  readOwnerBlobBytes,
+  verifyAndReadOwnerBlobBytes,
+  OWNER_BLOB_KINDS,
+  OWNER_BLOBS_ROOT,
+} from "../extension/lib/user-wasm-store.js";
 
 // Writes are invisible until close. Faults can happen at write, close, move,
 // or remove; re-opening the store must never publish incomplete uploads.
@@ -437,4 +443,23 @@ Deno.test("owner-blobs: list({ kind }) filters strictly by kind and excludes oth
   const all = await store.list();
   assertEquals(all.length, 2, "list() with no kind returns all blobs");
 });
+
+Deno.test("owner-blobs: readOwnerBlobBytes and verifyAndReadOwnerBlobBytes read exact bytes and enforce pre-instantiate re-hash", async () => {
+  const f = fixture();
+  const rawBytes = new Uint8Array([10, 20, 30, 40, 50]);
+  const saved = await f.store.put({ bytes: rawBytes, name: "test_bytes", kind: "wasm" });
+
+  const readBack = await readOwnerBlobBytes({ digest: saved.digest, storage: f.options.storage, locks: f.options.locks });
+  assertEquals(readBack, rawBytes);
+
+  const verified = await verifyAndReadOwnerBlobBytes({ digest: saved.digest, storage: f.options.storage, locks: f.options.locks });
+  assertEquals(verified, rawBytes);
+
+  // Falsification: mismatched digest fails closed
+  const wrongDigest = "e".repeat(64);
+  await assertRejects(
+    () => verifyAndReadOwnerBlobBytes({ digest: wrongDigest, storage: f.options.storage, locks: f.options.locks }),
+  );
+});
+
 

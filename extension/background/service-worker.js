@@ -407,7 +407,8 @@ import {
   userWasmLazyRecords,
   withOwnerSiteToolActivity,
 } from "../lib/lazy-tool-protocol.js";
-import { listOwnerBlobs } from "../lib/user-wasm-store.js";
+import { listOwnerBlobs, verifyAndReadOwnerBlobBytes } from "../lib/user-wasm-store.js";
+import { USER_WASM_RUN_TYPE } from "../lib/user-wasm-host.js";
 
 const notificationRegistry = new NotificationRegistry();
 
@@ -1855,6 +1856,55 @@ async function readUserWasmRows() {
   }
 }
 
+async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, context }) {
+  const digest = descriptorInput?.packageDigest;
+  if (!digest || typeof digest !== "string" || !/^[0-9a-f]{64}$/u.test(digest)) {
+    return { ok: false, error: "invalid_user_wasm_digest" };
+  }
+
+  // 1. Fetch bytes from owner store and re-hash pre-instantiate (Acceptance addition 1)
+  let wasmBytes;
+  try {
+    wasmBytes = await verifyAndReadOwnerBlobBytes({ digest });
+  } catch (err) {
+    pushDiagnostic(
+      "error",
+      `User Wasm execution fetch failed: ${String(err?.message ?? err).slice(0, 160)}`,
+      "user-wasm",
+      "execute",
+    );
+    return { ok: false, error: `user_wasm_blob_unavailable: ${err?.message || err}` };
+  }
+
+  // 2. Ensure offscreen host is available
+  const host = await ensureOffscreen();
+  if (!host.ok) return host;
+
+  // 3. Build authority with non-empty documentId ("task-run")
+  const origin = typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
+    ? new URL(context.origin).origin
+    : "https://agent.cap";
+  const documentId = String(context?.documentId || "task-run");
+  const authority = buildPreviewAuthority({ origin, documentId });
+
+  // 4. Send message to offscreen host to execute in a fresh Worker
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: USER_WASM_RUN_TYPE,
+      toolId: descriptorInput.toolId || descriptorInput.name,
+      digest,
+      args: Array.isArray(validatedArgs?.args) ? validatedArgs.args : [],
+      stdin: typeof validatedArgs?.stdin === "string" ? validatedArgs.stdin : "",
+      wasmBytes: Array.from(wasmBytes),
+      authority,
+      wallMs: 15000,
+    });
+    return result ?? { ok: false, error: "user_wasm_no_response" };
+  } catch (error) {
+    return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+  }
+}
+
 async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null, agentTools = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
@@ -1936,6 +1986,7 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
     ...userWasmLazyRecords(userWasmRows, {
       agentTools,
       scope,
+      dispatchUserWasmTool,
     }),
     // Provider-EXECUTED (server-side) tools — discovery through the same lazy
     // index; "execution" latches the provider-defined tool onto the run (the

@@ -7,6 +7,7 @@
 
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { createOffscreenWasmHost } from "../lib/wasm-offscreen-host.js";
+import { registerUserWasmHost } from "../lib/user-wasm-host.js";
 import { WasmExecutor } from "../lib/wasm-executor.js";
 import { registerWasmStreamHost } from "../lib/wasm-stream-host.js";
 import { registerCallexportHost } from "../lib/wasm-callexport-host.js";
@@ -50,3 +51,8 @@ registerWasmJobHost();
 // Bounded local table operations use a fresh module Worker here because MV3
 // service workers do not expose the Worker constructor.
 registerTableWorkerHost();
+
+// User-uploaded WebAssembly execution host (chrome-agent-platform-9ux7.4):
+// fresh Worker per call with pre-instantiate content re-hash and wall deadline.
+registerUserWasmHost();
+

@@ -398,7 +398,7 @@ Deno.test("user-wasm catalog: storage read failure pushes diagnostic instead of 
   assert(pushedDiagnostics[0].message.includes("OPFS quota exceeded"));
 });
 
-Deno.test("user-wasm catalog: service worker calls are active and not dead-coded (M1/M1' guard)", async () => {
+Deno.test("user-wasm catalog: service worker calls are present as active spreads and not constant-condition dead-coded (M1/M1' guard)", async () => {
   const swCode = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
 
   // Must not be dead-coded or conditionally bypassed (kills M1/M1' dead-code mutants)

@@ -12,7 +12,7 @@
 // record (never self-asserted), and run the bounded executor.
 
 import { WasmExecutor, TRANSPORT_MESSAGE_TYPES, validateAuthorityRecord, checkJobAgainstAuthority } from "./wasm-executor.js";
-import { createWasiJob } from "./wasm-host-types.js";
+import { createWasiJob, WASI_HOST_DEFAULT_QUOTA } from "./wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
 
 function failClosed(code, detail) {
@@ -98,3 +98,111 @@ export function createOffscreenWasmHost({ executor, authority }) {
     },
   });
 }
+
+/**
+ * Execute a user-uploaded WebAssembly WASI module job.
+ * Enforces pre-instantiate content re-hash against the claimed digest,
+ * validates authority fences (defaulting documentId to 'task-run'),
+ * and executes in a fresh Worker via WasmExecutor with wall deadline.
+ */
+export async function executeUserWasmRun({
+  toolId,
+  digest,
+  args = [],
+  stdin = "",
+  wasmBytes,
+  authority,
+  wallMs = 15000,
+  createWorker = null,
+  workerUrl = null,
+} = {}) {
+  if (!digest || typeof digest !== "string" || !/^[0-9a-f]{64}$/u.test(digest)) {
+    throw failClosed("invalid-digest");
+  }
+  if (!(wasmBytes instanceof Uint8Array) || wasmBytes.byteLength < 8) {
+    throw failClosed("request-wasm");
+  }
+  if (wasmBytes.byteLength > EXECUTOR_BOUNDS.maxWasmBytes) {
+    throw failClosed("request-wasm-over-budget");
+  }
+
+  // 1. Pre-instantiate content re-hash (Acceptance addition 1)
+  const hashBuffer = await crypto.subtle.digest("SHA-256", wasmBytes);
+  const computed = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  if (computed !== digest) {
+    throw failClosed("digest-mismatch", `expected ${digest}, computed ${computed}`);
+  }
+
+  // 2. Validate authority fences (ensuring documentId is non-empty)
+  const normalizedAuthority = {
+    ...authority,
+    documentId: String(authority?.documentId || "task-run"),
+  };
+  const fences = validateAuthorityRecord(normalizedAuthority);
+
+  // 3. Normalize argv and stdin
+  const argv = [String(toolId || "user_wasm"), ...(Array.isArray(args) ? args.map(String) : [])];
+  const stdinBytes = typeof stdin === "string"
+    ? new TextEncoder().encode(stdin)
+    : stdin instanceof Uint8Array
+      ? stdin
+      : new Uint8Array(0);
+
+  // 4. Build WasiJob
+  const job = createWasiJob({
+    tier: "default",
+    context: {
+      executionId: fences.executionId,
+      callId: fences.callId,
+      origin: fences.origin,
+      workspaceRoot: `tool-jobs/${fences.executionId}/${fences.callId}/`,
+    },
+    args: argv,
+    stdin: stdinBytes,
+    quota: WASI_HOST_DEFAULT_QUOTA,
+    acceptedExitCodes: [0],
+    stdoutEncoding: "utf8",
+    workspaceSeed: { files: [] },
+  });
+
+  // 5. Fresh dedicated worker per call via WasmExecutor
+  const defaultWorkerUrl = new URL("./wasm-execution-worker.js", import.meta.url).href;
+  const resolvedWorkerUrl = workerUrl || defaultWorkerUrl;
+
+  const executor = new WasmExecutor({
+    workerUrl: resolvedWorkerUrl,
+    createWorker: createWorker || undefined,
+    callMs: Number.isSafeInteger(wallMs) && wallMs > 0 ? wallMs : 15000,
+  });
+
+  const host = createOffscreenWasmHost({ executor, authority: fences });
+  const rawResult = await host.handleJob({
+    type: TRANSPORT_MESSAGE_TYPES.JOB,
+    job: { ...job, stdin: new Uint8Array(job.stdin) },
+    wasmBytes,
+  });
+
+  if (rawResult.ok === true) {
+    return Object.freeze({
+      ok: true,
+      phase: "completed",
+      stdout: rawResult.stdout ?? "",
+      stderr: rawResult.stderr ?? "",
+      exitCode: rawResult.exitCode ?? 0,
+      counters: rawResult.counters ?? null,
+    });
+  }
+
+  return Object.freeze({
+    ok: false,
+    phase: rawResult.phase ?? "failed",
+    error: rawResult.error ?? "execution_failed",
+    errno: rawResult.errno ?? null,
+    stderr: rawResult.stderr ?? "",
+    exitCode: rawResult.exitCode ?? null,
+  });
+}
+
+

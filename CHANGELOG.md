@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.294] — 2026-09-06
+- .4: [] S4 user-wasm call path: pre-instantiate re-hash and offscreen worker dispatch
+
+## [0.3.293] — 2026-09-06
+- Uploaded WebAssembly tools can now be called by agents with live execution and verified output
+
 ## [0.3.292] — 2026-09-06
 - Internal cleanup: the agent guidance file points at the live task list, names only paths that exist, and spells out every step of setting up a fresh checkout
 
@@ -7,7 +13,7 @@
 - All bundled WebAssembly tools are now directly executable in agent runs, removing the preview-only gate
 
 ## [0.3.290] — 2026-09-06
-- .3: User-uploaded WebAssembly modules now appear in tool search as soon as they are added in Settings
+- User-uploaded WebAssembly modules now appear in tool search as soon as they are added in Settings
 
 ## [0.3.289] — 2026-09-06
 - .1: Python code can no longer reach the network on its own
