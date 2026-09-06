@@ -24,8 +24,10 @@ git add package.json package-lock.json extension/manifest.json CHANGELOG.md exte
 # changed nothing — bookkeeping commits must not be rewritten)
 git diff --cached --quiet || git commit -q --amend --no-edit
 
-# Beads: auto-push Dolt data to remote after each commit
+# Beads: auto-push Dolt data to remote after each commit. Runs from the
+# committing checkout's root (where git runs every hook); bd resolves the shared
+# database from a linked worktree by itself. Never locate the repo via $0 — that
+# is the primary checkout's hook file from every worktree (chrome-agent-platform-ufrr).
 (
-  cd "$(dirname "$0")/../.." 2>/dev/null
   bd dolt push 2>/dev/null
 ) &

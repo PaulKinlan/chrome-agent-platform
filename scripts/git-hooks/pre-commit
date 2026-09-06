@@ -1,0 +1,31 @@
+#!/bin/sh
+# Reference pre-commit hook: refresh .beads/issues.jsonl (the passive tracker
+# export) so every commit carries the tracker state it was made against.
+# Install with (from the primary checkout — hooks live only in the common
+# .git/hooks, so one install serves every linked worktree):
+#   cp scripts/git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+# chrome-agent-platform-ufrr: git runs a hook with the working directory already
+# at the root of the checkout being committed, but $0 is ALWAYS the primary
+# checkout's hook file. The previous hook did `cd "$(dirname "$0")/../.."`,
+# landed in the primary, wrote the export there (dirtying the shared checkout
+# for every session) and, with GIT_INDEX_FILE still bound to the worktree,
+# staged the primary's on-disk file into the worktree's index while the
+# worktree's own copy stayed stale. Work from `.`; never locate the repo via $0.
+#
+# The export lands in a temp file first: `bd export > file` truncates the file
+# before bd starts, so a failing bd would have staged an EMPTY export. A failed
+# or empty export leaves the committed file alone and says so. The commit is
+# never blocked by this hook.
+[ -d .beads ] || exit 0
+tmp=".beads/.issues.jsonl.$$.tmp"
+err="$tmp.err"
+trap 'rm -f "$tmp" "$err"' EXIT
+if bd export --quiet > "$tmp" 2> "$err" && [ -s "$tmp" ]; then
+  mv -f "$tmp" .beads/issues.jsonl
+  git add .beads/issues.jsonl
+else
+  echo "[pre-commit] bd export failed or empty — committing without refreshing .beads/issues.jsonl" >&2
+  [ -s "$err" ] && cat "$err" >&2
+fi
+exit 0

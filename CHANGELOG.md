@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.275] — 2026-09-06
+- Committing from a second checkout no longer leaves a stray modified task-list file in the main checkout
+
 ## [0.3.274] — 2026-09-06
 - Chrome test gates run concurrently — bounded slots instead of one machine-wide lock
 

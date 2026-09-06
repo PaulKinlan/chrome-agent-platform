@@ -59,6 +59,18 @@ a markdown tracker entry is not a task. Everything lives in beads, synced to
 the GitHub remote via `bd dolt push` (a post-commit hook does this
 automatically; run it manually after beads-only changes).
 
+The reference hooks are tracked in `scripts/git-hooks/`: `pre-commit`
+refreshes `.beads/issues.jsonl` into the checkout being committed;
+`post-commit` bumps the version and pushes the Dolt data. Install both once,
+from the primary checkout — hooks live in the common `.git/hooks`, so one
+install serves every linked worktree:
+`cp scripts/git-hooks/pre-commit scripts/git-hooks/post-commit .git/hooks/ && chmod +x .git/hooks/pre-commit .git/hooks/post-commit`.
+A hook never locates the repo via `$0` — from every worktree that is the
+primary's hook file, and the old `cd "$(dirname "$0")/../.."` wrote the export
+into the shared checkout and staged the primary's file into the worktree's
+commit (chrome-agent-platform-ufrr). Git already runs hooks at the committing
+checkout's root; `tests/beads-precommit-hook.test.ts` pins this.
+
 - **Pick work**: `bd ready` (the claimable frontier — open beads with no open
   blockers). Claim atomically: `bd update <id> --claim`.
 - **Read work**: `bd show <id>` — the description alone must be enough for any
