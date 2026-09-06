@@ -38,7 +38,7 @@ git log origin/<prior-art-branch> --oneline   # if the bead names a branch
 - Found a NEW bug/blocker along the way? File it NOW, linked to what you were doing:
   ```
   bd -C <repo> create --title "..." --description "observed + repro + acceptance" --priority <n>
-  bd -C <repo> link <new-id> --discovered-from <current-id>
+  bd -C <repo> link <new-id> <current-id> --type discovered-from
   ```
   Then get back to your task. Never silently absorb or ignore a discovered defect.
 
