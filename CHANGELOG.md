@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.277] — 2026-09-06
+- the wasm store generalizes into the shared owner-blob store
+
 ## [0.3.276] — 2026-09-06
 - the accessibility audit navigates to the Settings section it checks
 

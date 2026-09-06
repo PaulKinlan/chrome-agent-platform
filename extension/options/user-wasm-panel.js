@@ -4,7 +4,7 @@ import { confirmActionDialog } from "../shared/components.js";
 // not duplicated inside the options bundle (same pattern as the runtime hosts).
 async function runUserWasmStore(...args) {
   const client = await import(chrome.runtime.getURL("lib/user-wasm-store-client.js"));
-  return await client.runUserWasmStore(...args);
+  return await client.runOwnerBlobStore(...args);
 }
 
 const mounted = new WeakMap();
@@ -35,7 +35,7 @@ export async function mountUserWasmPanel(panel) {
       });
       panel.records = await runUserWasmStore("list");
       panel.clearForm();
-      panel.setStatus(`Saved “${saved.name}” locally. Uploading does not run it.`);
+      panel.setStatus(`Saved “${saved.name}” locally${saved.replaced ? ` — replaced “${saved.previousName}”` : ""}. Saving does not run it.`);
     } catch (error) { failure(error); }
     finally { panel.busy = false; }
   });
