@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.270] — 2026-09-06
+- Release notes written from a change that closes several tasks at once no longer begin with stray punctuation
+
 ## [0.3.269] — 2026-09-06
 - the toolbox gains hash_blake3 — BLAKE3 hashing on-device, the first call-export Wasm tool
 
