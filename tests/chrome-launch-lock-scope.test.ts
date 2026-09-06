@@ -25,6 +25,15 @@ Deno.env.delete("CAP_SECURITY_NONCE");
 Deno.env.delete("CAP_CHROME_LOCK_HELD");
 Deno.env.set("CAP_CHROME_SLOT_DIR", SLOT_DIR);
 Deno.env.delete("CAP_CHROME_LOCK_PATH");
+// chrome-agent-platform-1qr3: the "another lane holds the canonical lock"
+// fixture is GATE, a scratch file — never the machine's real gate, which
+// belongs to real browsers. The launcher resolves the canonical path from
+// CAP_CHROME_LOCK_PATH PER CALL (canonicalLockPath()), so with the env pointed
+// at GATE it treats GATE exactly as it would the real file; that the redirect
+// itself works is pinned by chrome-launch-lock.test.ts, which queues and fails
+// honestly behind a held redirected path. CANONICAL stays only to ASSERT the
+// launcher's default below; nothing here holds it.
+const GATE = await Deno.makeTempFile({ prefix: "cap-lock-scope-gate-" });
 const { launchChrome } = await import("../scripts/lib/chrome-launch.ts");
 const { slotFile } = await import("../scripts/lib/chrome-slots.ts");
 
@@ -92,7 +101,8 @@ Deno.test("uzik: the DEFAULT scope is no longer the canonical lock", async () =>
 });
 
 Deno.test("uzik: a default launch proceeds while another lane holds the canonical lock", async () => {
-  const holder = await holdConfirmed(CANONICAL); // the holder owns the machine's exclusive gate
+  Deno.env.set("CAP_CHROME_LOCK_PATH", GATE);
+  const holder = await holdConfirmed(GATE); // the holder owns the exclusive gate (GATE is canonical for this call)
   const fake = await fakeBrowser();
   const t0 = Date.now();
   try {
@@ -102,6 +112,7 @@ Deno.test("uzik: a default launch proceeds while another lane holds the canonica
     assert(launched.chromeSlot >= 0, "it took a concurrency slot instead");
     await settled(launched.proc);
   } finally {
+    Deno.env.delete("CAP_CHROME_LOCK_PATH");
     await settled(holder);
     await Deno.remove(fake);
   }
@@ -110,7 +121,8 @@ Deno.test("uzik: a default launch proceeds while another lane holds the canonica
 Deno.test("51x4: a fake-browser fixture finishes while the whole machine is busy", async () => {
   // Canonical lock held AND every slot held: the fixture's own scope still runs.
   Deno.env.set("CAP_CHROME_MAX_CONCURRENT", "1");
-  const canonical = await holdConfirmed(CANONICAL);
+  Deno.env.set("CAP_CHROME_LOCK_PATH", GATE);
+  const canonical = await holdConfirmed(GATE);
   const slot = await holdConfirmed(slotFile(0));
   const fake = await fakeBrowser();
   const t0 = Date.now();
@@ -123,6 +135,7 @@ Deno.test("51x4: a fake-browser fixture finishes while the whole machine is busy
     await settled(proc);
   } finally {
     Deno.env.delete("CAP_CHROME_MAX_CONCURRENT");
+    Deno.env.delete("CAP_CHROME_LOCK_PATH");
     await settled(canonical);
     await settled(slot);
     await Deno.remove(fake);

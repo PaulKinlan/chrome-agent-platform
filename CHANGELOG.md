@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.286] — 2026-09-06
+- Internal verification: the browser-lock unit tests now rehearse on a scratch lock file instead of holding the real one that live browser checks use
+
 ## [0.3.285] — 2026-09-06
 - The project docs now point at the live task list rather than the retired markdown files, and describe the review rule that actually exists
 
