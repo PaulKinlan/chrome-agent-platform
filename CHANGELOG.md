@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.267] — 2026-09-06
+- The French Bistro browser test runs automatically with an internal time limit and cleans up reliably on completion
+
 ## [0.3.266] — 2026-09-06
 - Settings once again saves your WebAssembly files locally, native WebMCP tools again receive valid JSON arguments, and test-only browsers no longer block real Chrome checks.
 
