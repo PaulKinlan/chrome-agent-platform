@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.271] — 2026-09-06
+- The What's new list no longer shows an entry that begins with stray punctuation
+
 ## [0.3.270] — 2026-09-06
 - Release notes written from a change that closes several tasks at once no longer begin with stray punctuation
 

@@ -17,14 +17,22 @@
 //     worktrees, lanes, trackers, RED/GREEN gates, merge splices)
 //   - a workflow-status word (landed, in review, in progress, recorded as,
 //     claimed) — "what happened in the tracker" is not "what changed for me".
+//   - a leading run of joiner punctuation ("+ : the change", ": merge — …"):
+//     what is left of a multi-task commit subject once its ids are stripped
+//     (chrome-agent-platform-p7k4). Punctuation glued to a word is copy
+//     ("/folder work …", "(Beta) …", "…and") and stays.
 
 const ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
 const SHA_RE = /\b[0-9a-f]{7,40}\b/i;
 const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|\bRED\b|\bGREEN\b/i;
 const WORKFLOW_RE = /\blanded\b|in review|in progress|recorded as|\bclaimed\b/i;
+// The same joiner class scripts/bump-version.mjs strips from a subject (y6z6):
+// a bullet still starting with one, followed by whitespace or nothing, is a leak.
+const LEAKED_JOINER_RE = /^[+&:;,./|—–-]+(?:\s|$)/;
 
 export function isUserFacingEntry(text) {
   const line = String(text).trim();
+  if (LEAKED_JOINER_RE.test(line)) return false;
   if (ENGINEERING_PREFIX_RE.test(line)) return false;
   if (SHA_RE.test(line)) return false;
   if (JARGON_RE.test(line)) return false;
