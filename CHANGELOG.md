@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.309] — 2026-09-07
+- docs(changelog): plain language copy for 0.3.308 release notes
+
 ## [0.3.308] — 2026-09-07
-- test(changelog): auto-sync gitignored extension/CHANGELOG.md on test execution
+- Release notes now stay in sync even when opened in fresh project checkouts
 
 ## [0.3.307] — 2026-09-07
 - Release notes for recent updates now use plain language descriptions
