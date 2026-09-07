@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.310] — 2026-09-07
+- Release notes now stay in sync across checkouts and sanitize scoped commit subjects
+
 ## [0.3.309] — 2026-09-07
-- docs(changelog): plain language copy for 0.3.308 release notes
+- Release notes now stay in sync even when opened in fresh project checkouts
 
 ## [0.3.308] — 2026-09-07
 - Release notes now stay in sync even when opened in fresh project checkouts
