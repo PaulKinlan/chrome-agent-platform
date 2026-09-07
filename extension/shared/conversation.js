@@ -340,6 +340,13 @@ export function renderRunTranscript(container, executionId, { onStatus = null, c
       (threadId && ev.threadId === threadId);
     if (!matchesRun) return;
     switch (ev.type) {
+      case "approval-request": {
+        const req = ev.result?.permissionRequirement ?? ev.permissionRequirement;
+        if (req && typeof c.appendApproval === "function") {
+          c.appendApproval({ requirement: req, executionId: ev.executionId ?? executionId });
+        }
+        break;
+      }
       case "pipeline-step": {
         // A run_pipeline step (chrome-agent-platform-qsm4): a plan-strip row
         // per step, never a tool card — the pipeline wrapper is plumbing.

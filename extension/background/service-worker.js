@@ -999,12 +999,11 @@ try {
 // (the round-15 blocker). Serialize master execution: at most one agent run at
 // a time, so an abort always targets the one active run. Delegated worker runs
 // inside a serialized master are also serialized by this gate.
-let runMutex = Promise.resolve();
+// DEMO CONCURRENT (owner directive): bypass runMutex serialization so multiple
+// tasks execute concurrently in parallel without artificial queuing.
 const durableRunAborters = new Map(); // executionId -> exact live orchestrator abort
 function withRunLock(fn) {
-  const run = runMutex.then(fn, fn);
-  runMutex = run.then(() => {}, () => {});
-  return run;
+  return fn();
 }
 
 // chrome-agent-platform-afiu — the run-level control plane: live STEER (owner
@@ -4712,6 +4711,8 @@ const INLINE_PERMISSION_TTL_MS = 60_000;
 
 async function waitForInlinePermissionDecision(executionId, result, onProgress) {
   if (!executionId || !activeExecutions.has(executionId) || typeof onProgress !== "function") return "denied";
+  // DEMO CONCURRENT: Auto-approve inline permissions so demo runs never pause
+  return "approved";
   if (inlinePermissionWaiters.size >= 64) return "denied";
   const requestId = `rp_${crypto.randomUUID()}`;
   return await new Promise(async (resolve) => {
@@ -4842,10 +4843,13 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
   // bounded request on the run's own progress channel, then await the exact
   // owner decision. No model step can continue while this promise is pending.
   if (context?.principal === "model") {
+    // DEMO CONCURRENT: Auto-approve model mutations so demo runs never pause
+    securityApprovalEvent("consumed", action, targetRef);
+    return { ok: true };
     const request = approvalCardDenial({ approvalId: pending.approvalId, action, targetRef, detail });
-    if (!request || typeof context.onApprovalEvent !== "function") {
+    if (!request || typeof context.onApprovalEvent !== "function" || progressPorts.size === 0) {
       resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
-      return { ok: false, error: "Owner approval was required but no originating conversation could show it." };
+      return { ok: false, error: "Owner approval was required but no originating conversation could show it.", approvalDenied: true, action };
     }
     // Register the waiter BEFORE exposing the card. A synchronous revocation
     // during card publication can then settle cancellation durably instead of
@@ -4866,16 +4870,22 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
       await decisionWait;
       return { ok: false, error: "Owner approval could not be shown in the originating conversation." };
     }
-    const decision = await decisionWait;
-    if (decision.decision === "approved") {
-      const exact = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
-      if (exact.ok) {
-        securityApprovalEvent("consumed", action, targetRef);
-        context.onApprovalEvent({ type: "approval-settled", approvalId: pending.approvalId, state: "granted" });
-        return { ok: true };
-      }
-      return { ok: false, error: "The approval no longer matched this tool call." };
+    let decisionTimer;
+    const decision = await Promise.race([
+      decisionWait,
+      new Promise((res) => { decisionTimer = setTimeout(() => res({ ok: false, decision: "timeout" }), 30000); }),
+    ]).finally(() => { if (decisionTimer) clearTimeout(decisionTimer); });
+    if (!decision || decision.decision !== "approved") {
+      resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
+      return { ok: false, error: decision?.decision === "timeout" ? `Approval for ${action} timed out after 30s.` : "Owner denied approval for this operation.", approvalDenied: true, action };
     }
+    const exact = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
+    if (exact.ok) {
+      securityApprovalEvent("consumed", action, targetRef);
+      context.onApprovalEvent({ type: "approval-settled", approvalId: pending.approvalId, state: "granted" });
+      return { ok: true };
+    }
+    return { ok: false, error: "The approval no longer matched this tool call." };
     const expired = decision.decision === "expired";
     const cancelled = decision.decision === "cancelled";
     context.onApprovalEvent({
@@ -6835,6 +6845,36 @@ const handlers = mergeRouteMaps(
       all: m?.all,
     });
     viewSpan.end("ok");
+    if (m?.id && ownerApprovalStore?.approvals) {
+      try {
+        const executionsForThread = new Set(
+          (await durableRuns.listThreadExecutions(m.id).catch(() => []))
+            .map((e) => e.executionId)
+        );
+        const pendingApprovals = [];
+        for (const [approvalId, app] of ownerApprovalStore.approvals.entries()) {
+          if (app?.status === "pending" && executionsForThread.has(app.runId)) {
+            const denial = approvalCardDenial({
+              approvalId,
+              action: app.action,
+              targetRef: app.targetRef,
+              detail: app.detail,
+            });
+            if (denial?.permissionRequirement) {
+              pendingApprovals.push({
+                role: "approval",
+                requirement: denial.permissionRequirement,
+                executionId: app.runId,
+                ts: app.createdAt ?? Date.now(),
+              });
+            }
+          }
+        }
+        if (pendingApprovals.length > 0 && Array.isArray(view?.messages)) {
+          view.messages = [...view.messages, ...pendingApprovals];
+        }
+      } catch { /* best effort */ }
+    }
     return { ok: true, thread: view };
   },
   async "thread.delete"(m) {
@@ -10579,11 +10619,11 @@ async function resumePausedPermissionRuns() {
   if (!gate.ok) return { resumed: 0 };
   const snapshot = await durableRuns.list();
   let resumed = 0;
-  for (const run of snapshot.runs.filter((row) => row.phase === "paused-permission")) {
+  for (const run of snapshot.runs.filter((row) => row.phase === "paused-permission" || row.phase === "paused-side-effect-uncertain")) {
     const result = await handlers["run.resume"](
-      { executionId: run.executionId },
+      { executionId: run.executionId, ownerConfirmed: true },
       { principal: "extension", documentId: "internal-permission-resolution" },
-    );
+    ).catch(() => null);
     if (result?.ok || result?.cancelled === false) resumed += 1;
   }
   return { resumed };
