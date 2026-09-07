@@ -2,12 +2,17 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.317",
+ "release": "0.3.318",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
  },
  "manifests": [
+  {
+   "pkg": "cap.bundled.avif",
+   "version": "1.0.0",
+   "digest": "c2cfdd8808839d98c7d06814ca888a5e44d9eb156d88ac74a7c3004f13fdb3bc"
+  },
   {
    "pkg": "cap.bundled.awk",
    "version": "1.0.0",
@@ -376,6 +381,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "size": 36095
   },
   {
+   "rel": "extension/wasm/cas/efafe563c9aa683d8688d17f477584c04f17ba4cac5a52d0df027bcd76e1e294.wasm",
+   "sha256": "efafe563c9aa683d8688d17f477584c04f17ba4cac5a52d0df027bcd76e1e294",
+   "size": 1436513
+  },
+  {
    "rel": "extension/wasm/cas/f0e567aebad58ed30b0ca751918c59c2b81642e58a5df81d6dbdce3334c0f98f.wasm",
    "sha256": "f0e567aebad58ed30b0ca751918c59c2b81642e58a5df81d6dbdce3334c0f98f",
    "size": 1173493
@@ -389,6 +399,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/licenses/Apache-2.0.txt",
    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
    "size": 11357
+  },
+  {
+   "rel": "extension/wasm/licenses/avif-NOTICES.txt",
+   "sha256": "5277e0005c5b1d194f346f4fa9fdc048c7f92ac5f16f1cd485aa8aebb1329eec",
+   "size": 1226
   },
   {
    "rel": "extension/wasm/licenses/awk-NOTICES.txt",
@@ -454,6 +469,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/licenses/Zlib-1.3.1.txt",
    "sha256": "845efc77857d485d91fb3e0b884aaa929368c717ae8186b66fe1ed2495753243",
    "size": 1002
+  },
+  {
+   "rel": "extension/wasm/manifests/cap.bundled.avif-1.0.0.manifest.json",
+   "sha256": "c2cfdd8808839d98c7d06814ca888a5e44d9eb156d88ac74a7c3004f13fdb3bc",
+   "size": 1894
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.awk-1.0.0.manifest.json",
@@ -644,6 +664,11 @@ export const BUNDLED_INVENTORY = Object.freeze({
    "rel": "extension/wasm/sbom/a2.cdx.json",
    "sha256": "bf6b8c984395e126575cbef6adb0428db0c9b58dde84076e098f842f60a8ebd4",
    "size": 8534
+  },
+  {
+   "rel": "extension/wasm/sbom/avif.cdx.json",
+   "sha256": "d94c42f1f4888db9e14b8ff3cce2a91410649c0d800ba3f58ef836855831590c",
+   "size": 36611
   },
   {
    "rel": "extension/wasm/sbom/awk-posixutils-v1.cdx.json",

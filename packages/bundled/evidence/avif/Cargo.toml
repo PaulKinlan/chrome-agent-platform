@@ -1,0 +1,27 @@
+[package]
+name = "avif-tool"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "CAP-authored WASI AVIF encoder over ravif+rav1e: base64 PNG/JPEG/WebP on stdin -> AVIF on stdout (chrome-agent-platform-ou4x)"
+
+[[bin]]
+name = "avif"
+path = "src/main.rs"
+
+[dependencies]
+# default-features = false on BOTH (the bead): rav1e defaults pull nasm-rs/cc
+# asm + rayon threading — both impossible here (no SIMD asm → the software path).
+ravif = { version = "=0.13.0", default-features = false }
+rav1e = { version = "=0.8.1", default-features = false }
+image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+# Direct deps so main.rs can name the types ravif re-exports (Img, RGBA8).
+imgref = "=1.12.0"
+rgb = "=0.8.53"
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

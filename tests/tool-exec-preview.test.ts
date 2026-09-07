@@ -266,7 +266,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   // every allowlisted tool SURVIVES validation with its exact toolId intact
   // (the SW resolves the spec from the validated toolId — a dropped toolId
   // would make every tool unknown).
-  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "gzip" && id !== "sqlite3_query_bounded")) {
+  for (const toolId of PREVIEW_TOOL_IDS.filter((id) => id !== "gzip" && id !== "sqlite3_query_bounded" && id !== "avif")) {
     const validated = validatePreviewInput({ toolId, args: ["-n", "2"], stdin: "a\nb" });
     assertEquals(validated.toolId, toolId, `toolId survives validation for ${toolId}`);
     assertEquals(JSON.stringify(validated.args), JSON.stringify(["-n", "2"]), toolId);
@@ -275,7 +275,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   assertEquals(validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true }) }).toolId, "sqlite3_query_bounded");
   // gzip + truncate + touch + sqlite are the appended tools after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
+    ["avif", "awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -287,7 +287,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     // (8oil: its compression subcommands write frame bytes in both directions,
     // info is per-argv utf8); oxipng; jxl (agpu). base64 -d stays utf8 (a natural-language
     // arm — it fails on non-base64 bytes, the contract stays honest).
-    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" || spec.toolId === "zxing" || spec.toolId === "oxipng" || spec.toolId === "compressops" || spec.toolId === "jxl" ? "base64" : "utf8";
+    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" || spec.toolId === "zxing" || spec.toolId === "oxipng" || spec.toolId === "compressops" || spec.toolId === "jxl" || spec.toolId === "avif" ? "base64" : "utf8";
     assertEquals(spec.stdoutEncoding, expectedEncoding, `${spec.toolId}: immutable output encoding`);
   }
 });
@@ -379,7 +379,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 37 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 38 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
@@ -499,11 +499,11 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 37-tool static allowlist admits every shipped package", async () => {
+Deno.test("preview: the EXACT 38-tool static allowlist admits every shipped package", async () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   // uslb: hash_blake3 admits WITHOUT a settings preview (call-export host).
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_blake3", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
+    ["avif", "awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_blake3", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const row of admitted) {
     if (row.callexport === true) {
@@ -515,7 +515,7 @@ Deno.test("preview: the EXACT 37-tool static allowlist admits every shipped pack
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 0, "all 37 are enabled");
+  assertEquals(notAdmitted.length, 0, "all 38 are enabled");
   assertEquals(notAdmitted.map((row) => row.toolId).sort(), []);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);

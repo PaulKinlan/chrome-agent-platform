@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.318] — 2026-09-07
+- The toolbox gains AVIF encoding — convert an image to the smaller modern AVIF format on-device, no upload
+
 ## [0.3.317] — 2026-09-07
 - the preview route's inventory revalidation could be deleted unseen
 

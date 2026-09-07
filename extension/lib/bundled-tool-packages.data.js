@@ -1086,6 +1086,42 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.avif",
+  "version": "1.0.0",
+  "toolId": "avif",
+  "lane": "avif",
+  "displayName": "avif",
+  "category": "media",
+  "description": "avif - encode an image to AVIF on-device. Use to convert a PNG/JPEG/WebP to the smaller AVIF format. In/out: base64 image text on stdin to AVIF bytes on stdout (base64 at the boundary). Flags: --quality <1..100> (default 80); --speed <1..10> (default 10).",
+  "caveats": [
+   "PNG/JPEG/WebP in, AVIF out; stdin/stdout; lossy at the chosen quality; a high-entropy source can encode larger than the input.",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+  ],
+  "capabilities": [
+   "compute"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "BSD-3-Clause AND Apache-2.0",
+   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "notices": "extension/wasm/licenses/avif-NOTICES.txt"
+  },
+  "binary": {
+   "sha256": "efafe563c9aa683d8688d17f477584c04f17ba4cac5a52d0df027bcd76e1e294",
+   "bytes": 1436513,
+   "tier": "default",
+   "initialPages": 21,
+   "maxPages": 2048
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.avif-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.hash.blake3",
   "version": "1.0.0",
   "toolId": "hash_blake3",

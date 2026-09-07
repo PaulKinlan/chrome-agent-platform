@@ -102,7 +102,11 @@ export const PREVIEW_SPECS = Object.freeze(
           // its info subcommand is the per-argv utf8 exception (previewStdoutEncoding).
           // base64 -d is NOT re-armed (its resolved utf8 default fails on non-base64 bytes —
           // the contract stays honest).
-          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" || row.toolId === "oxipng" || row.toolId === "compressops" || row.toolId === "jxl" ? "base64" : "utf8",
+          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" || row.toolId === "oxipng" || row.toolId === "compressops" || row.toolId === "jxl" || row.toolId === "avif" ? "base64" : "utf8",
+          // avif (ou4x) ALWAYS reads base64 image text on stdin (its only mode
+          // encodes an image), whatever the flags — a spec-level stdinEncoding
+          // (checked before the conditional binaryStdinArgs below).
+          ...(row.toolId === "avif" ? { stdinEncoding: "base64" } : {}),
           // The BYTES-in modes take canonical base64 at the tool boundary
           // (previewStdinEncoding); every other mode takes strict UTF-8 text.
           // gzip -d / compressops's decompress+info / zxing read read bytes.
@@ -226,6 +230,8 @@ export function previewStdoutEncoding(toolId, inputArgs = []) {
 export function previewStdinEncoding(toolId, inputArgs = []) {
   const spec = previewSpecFor(toolId);
   if (!spec || !Array.isArray(inputArgs)) fail("preview_args");
+  // An unconditional base64 stdin (avif) wins over any argv shape.
+  if (spec.stdinEncoding === "base64") return "base64";
   if (Array.isArray(spec.binaryStdinArgs)) {
     const argv = JSON.stringify(inputArgs);
     if (spec.binaryStdinArgs.some((allowed) => JSON.stringify(allowed) === argv)) return "base64";

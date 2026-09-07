@@ -64,6 +64,12 @@ const JXL_INPUT_B64 = base64Of(JXL_INPUT_BYTES);
 // no text, no external refs: the assertion is the PNG signature + size.
 const SVG_RASTERISE_INPUT = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect x="8" y="8" width="240" height="240" rx="16" fill="#1e293b"/><circle cx="128" cy="96" r="56" fill="#38bdf8"/><path d="M40 216 L128 140 L216 216 Z" fill="#f59e0b"/></svg>`;
 const SVG_RASTERISE_INPUT_B64 = btoa(SVG_RASTERISE_INPUT);
+// avif input (ou4x): a COMPRESSIBLE flat-gradient 48x48 RGBA8 PNG (naive filter-0,
+// zlib default). A high-entropy/noise source would encode LARGER than the PNG
+// (honest lossy encoding of incompressible data — cap-evidence/cap-avif/fit-report.md),
+// so the smaller-than-input assertion uses a compressible fixture.
+const AVIF_INPUT = await naiveRgbaPngFlat(48, 48);
+const AVIF_INPUT_B64 = base64Of(AVIF_INPUT);
 const GREP_STDIN = "MATCH one\nnope\nMATCH two\n";
 const SORT_STDIN = "pear\napple\nfig\n";
 
@@ -118,6 +124,36 @@ async function naiveRgbaPng(width: number, height: number): Promise<Uint8Array> 
     new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr), chunk("IDAT", idat), chunk("IEND", new Uint8Array()),
   ]);
+}
+
+async function naiveRgbaPngFlat(width: number, height: number): Promise<Uint8Array> {
+  // Flat gradient: every pixel shares alpha 255; R varies by x, G by y, B fixed —
+  // highly compressible, so the AVIF encode is honestly smaller than the PNG.
+  const be32 = (n: number) => new Uint8Array([(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255]);
+  const cat = (parts: Uint8Array[]) => {
+    const out = new Uint8Array(parts.reduce((a, p) => a + p.length, 0));
+    let o = 0;
+    for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  };
+  const chunk = (type: string, data: Uint8Array) => {
+    const t = new TextEncoder().encode(type);
+    return cat([be32(data.length), t, data, be32(crc32(cat([t, data])))]);
+  };
+  const raw = new Uint8Array(height * (1 + width * 4));
+  for (let y = 0; y < height; y++) {
+    const row = y * (1 + width * 4);
+    raw[row] = 0;
+    for (let x = 0; x < width; x++) {
+      const p = row + 1 + x * 4;
+      raw[p] = (x / width * 255) & 255;
+      raw[p + 1] = (y / height * 255) & 255;
+      raw[p + 2] = 128;
+      raw[p + 3] = 255;
+    }
+  }
+  const { deflateSync } = await import("node:zlib");
+  return new Uint8Array(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", cat([be32(width), be32(height), new Uint8Array([8, 6, 0, 0, 0])])), chunk("IDAT", new Uint8Array(deflateSync(Buffer.from(raw), { level: 6 }))), chunk("IEND", new Uint8Array(0))]));
 }
 
 function base64Of(bytes: Uint8Array): string {
@@ -228,6 +264,12 @@ try {
         selectionRef: refFor(req, "svg_rasterise"),
         arguments: { args: ["--width", "256", "--background", "#ffffff"], stdin: SVG_RASTERISE_INPUT_B64 },
       }) },
+      // ou4x: "convert to avif" ranks avif #1 in the real catalog search (measured).
+      { tool: "search_tools", args: { query: "convert to avif", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "avif"),
+        arguments: { args: [], stdin: AVIF_INPUT_B64 },
+      }) },
       { text: "Bundled execute spot-check complete." },
     ],
   });
@@ -260,9 +302,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('#run-task')?.click()`);
 
-  // 11 searches + 11 executes + the final text = 23 model calls; the 23rd
+  // 12 searches + 12 executes + the final text = 25 model calls; the 25th
   // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 23;
+  const EXPECTED_CALLS = 25;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;
@@ -392,6 +434,21 @@ try {
       assert(Number.isFinite(bytes) && bytes > 100 && bytes < 200_000,
         `svg_rasterise PNG size is implausible (stdoutBytes=${bytes}): ${out.slice(0, 300)}`);
     }],
+    ["avif", "execute_tool", (env) => {
+      // ou4x: admitted straight into ten9's job lane like oxipng. The envelope
+      // must be a real, executed AVIF — the base64 output decodes to the
+      // ftyp/avif brand box — and SMALLER than the compressible gradient input.
+      assert(env?.ok === true, `avif in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(!out.includes("preview_only_tool") && !out.includes("not_a_stream_tool") && !out.includes("unknown_bundled_tool"),
+        `avif was refused, not executed: ${out.slice(0, 300)}`);
+      const b64m = out.match(/"stdoutBase64":"([^"]+)"/)?.[1] ?? "";
+      const decoded = b64m ? String.fromCharCode(...Uint8Array.from(atob(b64m), (c) => c.charCodeAt(0)).slice(4, 12)) : "";
+      assert(decoded.startsWith("ftyp") && /avif|avis/.test(decoded), `avif output lacks the ftyp/avif brand (got "${decoded}"): ${out.slice(0, 300)}`);
+      const bytes = Number(out.match(/"stdoutBytes":(\d+)/)?.[1] ?? NaN);
+      assert(Number.isFinite(bytes) && bytes > 0 && bytes < AVIF_INPUT.length,
+        `avif output is not smaller than its ${AVIF_INPUT.length}-byte input (stdoutBytes=${bytes}): ${out.slice(0, 300)}`);
+    }],
   ];
 
   for (const [toolId, , verify] of pairs) {
@@ -415,6 +472,7 @@ try {
         : toolId === "oxipng" ? "offscreen WASI job (m3vb: admitted straight into the job lane)"
         : toolId === "jxl" ? "offscreen WASI job (agpu: admitted straight into the job lane)"
         : toolId === "svg_rasterise" ? "native offscreen canvas (moim: browser rasteriser, no Wasm)"
+        : toolId === "avif" ? "offscreen WASI job (ou4x: admitted straight into the job lane)"
         : toolId === "hash_blake3" ? "call-export host" : "offscreen WASI stream",
       ok: env?.ok === true,
       result: env?.result ?? env,

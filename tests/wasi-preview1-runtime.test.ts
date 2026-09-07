@@ -1444,7 +1444,7 @@ Deno.test("WASI core stays browser-primitive-free and is reached only by canonic
   }
   assertEquals(
     SUPPORTED_WASI_PREVIEW1_IMPORTS,
-    ["args_get", "args_sizes_get", "clock_time_get", "environ_get", "environ_sizes_get", "fd_close", "fd_fdstat_get", "fd_fdstat_set_flags", "fd_filestat_get", "fd_filestat_set_size", "fd_prestat_dir_name", "fd_prestat_get", "fd_read", "fd_readdir", "fd_renumber", "fd_seek", "fd_tell", "fd_write", "path_filestat_get", "path_filestat_set_times", "path_open", "proc_exit", "random_get", "fd_sync", "path_create_directory", "path_remove_directory", "path_unlink_file", "path_readlink", "poll_oneoff"],
+    ["args_get", "args_sizes_get", "clock_time_get", "environ_get", "environ_sizes_get", "fd_close", "fd_fdstat_get", "fd_fdstat_set_flags", "fd_filestat_get", "fd_filestat_set_size", "fd_prestat_dir_name", "fd_prestat_get", "fd_read", "fd_readdir", "fd_renumber", "fd_seek", "fd_tell", "fd_write", "path_filestat_get", "path_filestat_set_times", "path_open", "proc_exit", "random_get", "fd_sync", "sched_yield", "path_create_directory", "path_remove_directory", "path_unlink_file", "path_readlink", "poll_oneoff"],
   );
   assert(Object.isFrozen(SUPPORTED_WASI_PREVIEW1_IMPORTS));
   assert(Object.isFrozen(REBUILT_WASI_IMPORTS));
@@ -1943,8 +1943,10 @@ Deno.test("R5 syscall mutants: kind/right/class/ceiling; rollback leaves bytes+a
 Deno.test("R5 census + boundary: SUPPORTED is exactly +1 (fd_filestat_set_size); planner referenced only by the syscall", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("fd_filestat_set_size"), true);
   // R6 added path_filestat_set_times (21→22), R11 added six SQLite
-  // imports (22→28), and sed admission adds fd_renumber (28→29).
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 29, "the deliberate import census is 29");
+  // imports (22→28), sed admission adds fd_renumber (28→29), and ou4x (AVIF)
+  // adds sched_yield (29→30) — rav1e's software path pulls it via parking_lot
+  // even with threading off; a pure scheduler hint, honestly a no-op.
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 30, "the deliberate import census is 30");
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planFdFilestatSetSize").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");
@@ -2020,7 +2022,7 @@ Deno.test("R6 syscall mutants: fd3/right/flags/NOW/missing/dir fail closed, no m
 
 Deno.test("R6 census + boundary: SUPPORTED +1 (path_filestat_set_times); planner referenced only by the syscall", async () => {
   assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.includes("path_filestat_set_times"), true);
-  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 29, "fd_renumber extends the deliberate import census to 29");
+  assertEquals(SUPPORTED_WASI_PREVIEW1_IMPORTS.length, 30, "sched_yield (ou4x) extends the deliberate import census to 30");
   const source = await Deno.readTextFile(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url));
   const references = source.split("planPathFilestatSetTimes").length - 1;
   assertEquals(references, 2, "planner referenced only at its definition + the syscall call site");

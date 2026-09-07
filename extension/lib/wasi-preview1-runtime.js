@@ -61,6 +61,7 @@ export const SUPPORTED_WASI_PREVIEW1_IMPORTS = Object.freeze([
   "proc_exit",
   "random_get",
   "fd_sync",
+  "sched_yield",
   "path_create_directory",
   "path_remove_directory",
   "path_unlink_file",
@@ -1872,6 +1873,12 @@ export function createWasiPreview1Runtime({
       writeBytes(bufferPtr, bytes);
       return WASI_ERRNO.SUCCESS;
     },
+
+    // sched_yield is a pure scheduler HINT: the WASI spec permits it to be a
+    // no-op, and a single-threaded executor has nothing to yield to. rav1e's
+    // software path pulls it in via parking_lot even with threading off
+    // (chrome-agent-platform-ou4x). Honest: SUCCESS, no state change.
+    sched_yield: () => WASI_ERRNO.SUCCESS,
 
     clock_time_get: (clockIdValue, precisionValue, timePtr) => {
       const id = asU32(clockIdValue);

@@ -62,6 +62,7 @@ const PATHS = {
   compressops: join(EVIDENCE, "compressops"),
   oxipng: join(EVIDENCE, "oxipng"),
   jxl: join(EVIDENCE, "jxl"),
+  avif: join(EVIDENCE, "avif"),
   hashwasmBlake3: join(EVIDENCE, "hashwasm-blake3"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
@@ -154,6 +155,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   jxl: "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
+  avif: "avif - encode an image to AVIF on-device. Use to convert a PNG/JPEG/WebP to the smaller AVIF format. In/out: base64 image text on stdin to AVIF bytes on stdout (base64 at the boundary). Flags: --quality <1..100> (default 80); --speed <1..10> (default 10).",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
@@ -280,6 +282,13 @@ for (const toolId of LANES.c2.tools) {
   const buildB = readFileSync(join(PATHS.jxl, "build-b/jxl.wasm"));
   if (sha256(buildB) !== sha256(wasm)) throw new Error("jxl reproducibility broken (build-a != build-b)");
   packages.push({ toolId: "jxl", lane: "jxl", bytes: wasm, row: null, tier: "default", spdx: "MIT AND Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: "extension/wasm/licenses/jxl-NOTICES.txt", sbom: { src: join(PATHS.jxl, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/jxl.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "jxl", displayName: "jxl", category: "media", description: AGENT_DESCRIPTIONS.jxl, caveats: ["JXL in, PNG out; stdin/stdout; decodes JPEG XL to raw PNG (base64 at the tool boundary)."], replayClass: "read-only", capabilities: ["compute"] });
+}
+{ // avif (CAP-authored WASI driver over ravif+rav1e; pure Rust, no C/asm/threading; ou4x option B): BSD-3 AND BSD-2 AND (MIT OR Apache-2.0)
+  const wasm = readFileSync(join(PATHS.avif, "build-a/avif.wasm"));
+  if (sha256(wasm) !== "efafe563c9aa683d8688d17f477584c04f17ba4cac5a52d0df027bcd76e1e294" || wasm.byteLength !== 1436513) throw new Error("avif hash/size mismatch");
+  const buildB = readFileSync(join(PATHS.avif, "build-b/avif.wasm"));
+  if (sha256(buildB) !== sha256(wasm)) throw new Error("avif reproducibility broken (build-a != build-b)");
+  packages.push({ toolId: "avif", lane: "avif", bytes: wasm, row: null, tier: "default", spdx: "BSD-3-Clause AND Apache-2.0", licenseFile: "extension/wasm/licenses/Apache-2.0.txt", notices: "extension/wasm/licenses/avif-NOTICES.txt", sbom: { src: join(PATHS.avif, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/avif.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "rustc/cargo 1.97.1; wasm32-wasip1", buildScriptLane: "avif", displayName: "avif", category: "media", description: AGENT_DESCRIPTIONS.avif, caveats: ["PNG/JPEG/WebP in, AVIF out; stdin/stdout; lossy at the chosen quality; a high-entropy source can encode larger than the input."], replayClass: "read-only", capabilities: ["compute"] });
 }
 { // hash_blake3 (uslb pilot — the call-export lane: hash-wasm 4.12.0's blake3,
   // a ZERO-IMPORT compute module byte-extracted from the pinned npm tarball;
@@ -425,6 +434,7 @@ const LICENSE_WRITES = {
   "extension/wasm/licenses/date-NOTICES.txt": readFileSync(join(PATHS.date, "NOTICES.md")),
   "extension/wasm/licenses/oxipng-NOTICES.txt": readFileSync(join(PATHS.oxipng, "NOTICES.md")),
   "extension/wasm/licenses/jxl-NOTICES.txt": readFileSync(join(PATHS.jxl, "NOTICES.md")),
+  "extension/wasm/licenses/avif-NOTICES.txt": readFileSync(join(PATHS.avif, "NOTICES.md")),
   "extension/wasm/licenses/minised-BSD-3-Clause.txt": readFileSync(join(PATHS.sed, "NOTICES.md")),
   "extension/wasm/licenses/posixutils-rs-MIT.txt": readFileSync(join(PATHS.awkFull, "source/LICENSE")),
   "extension/wasm/licenses/jq-MIT.txt": readFileSync(join(PATHS.jq, "COPYING-jq.txt")),
@@ -443,7 +453,7 @@ const SIGNER = { lane: "bundled", keyId: "cap-bundled-release" };
 // (explicit owner click). Every other lane stays admitted:false / disabled:true
 // — no catalog/provider selection authority. New semantic tranches append so
 // the predecessor order stays stable.
-const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "zxing", "compressops", "oxipng", "jxl", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
+const SETTINGS_PREVIEW_LANES = new Set(["csvtool", "imageops", "zxing", "compressops", "oxipng", "avif", "jxl", "uuid", "head", "tail", "cut", "base64", "md5sum", "sha256sum", "sha512sum", "wc", "xxd", "sort", "uniq", "tr", "grep", "toml2json", "markdown", "diff", "patch", "stat", "du", "tree", "gzip", "truncate", "touch", "sqlite3_query_bounded", "awk_filter_bounded", "date_formatter_bounded", "sed", "awk", "jq"]);
 // Per-package source anchors: the original 25 keep the bundle-landing anchor;
 // SQLite (package 26) anchors at the exact 0.2.166 tabular parent.
 const SOURCE = { repo: "https://github.com/PaulKinlan/chrome-agent-platform", commit: "5e086c1fb0847ddccf1a16ba3129a4cf900eac8f" };
