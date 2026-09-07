@@ -3687,16 +3687,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         // (bounded: the same shape normalizePermissionRequirement accepts) so
         // a reopened thread can render the grant card, not prose (§2b).
         const ownerSiteActivity = boundedOwnerSiteActivity(event.siteActivity);
-        const permissionReq = event.permissionRequirement && typeof event.permissionRequirement === "object" && !Array.isArray(event.permissionRequirement)
+        const pr = event.permissionRequirement;
+        const permissionReq = pr && typeof pr === "object" && !Array.isArray(pr)
           ? {
             permissionRequirement: {
-              reason: String(event.permissionRequirement.reason ?? "").slice(0, 240),
-              permissions: (Array.isArray(event.permissionRequirement.permissions) ? event.permissionRequirement.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
-              grantOrigins: (Array.isArray(event.permissionRequirement.grantOrigins) ? event.permissionRequirement.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
-              grantGlobal: event.permissionRequirement.grantGlobal === true,
+              reason: String(pr.reason ?? "").slice(0, 240),
+              permissions: (Array.isArray(pr.permissions) ? pr.permissions : []).filter((x) => typeof x === "string").slice(0, 8),
+              grantOrigins: (Array.isArray(pr.grantOrigins) ? pr.grantOrigins : []).filter((x) => typeof x === "string").slice(0, 50),
+              grantGlobal: pr.grantGlobal === true,
               // Site access asks survive the reload too (READ-PAGE-HOST-GRANT-01).
-              ...(Array.isArray(event.permissionRequirement.hostOrigins) && event.permissionRequirement.hostOrigins.length
-                ? { hostOrigins: event.permissionRequirement.hostOrigins.filter((x) => typeof x === "string").slice(0, 50) }
+              ...(Array.isArray(pr.hostOrigins) && pr.hostOrigins.length
+                ? { hostOrigins: pr.hostOrigins.filter((x) => typeof x === "string").slice(0, 50) }
                 : {}),
             },
             permissionDecision: typeof event.permissionDecision === "string" ? event.permissionDecision.slice(0, 16) : null,
@@ -4881,7 +4882,7 @@ function approvalExecutionId(context) {
   // UI initiation is bound to the browser-supplied document identity. It is
   // never read from the request body. Only the exact Settings document may
   // resolve; other extension pages can request but cannot approve.
-  if (context?.principal === "extension" || context?.principal === "owner-options") {
+  if (isOwnerPrincipal(context)) {
     return typeof context.documentId === "string" && context.documentId
       ? `ui:${context.documentId}`
       : "";
@@ -5439,7 +5440,7 @@ function namedBoundMutationPayload(request, existing) {
  *  fetches it on demand, and echoing it back is what pushed create results past
  *  the lazy protocol's result bound and erased them entirely. */
 function ownerPrincipal(context) {
-  return context?.principal === "extension" || context?.principal === "owner-options";
+  return isOwnerPrincipal(context);
 }
 
 function assetIdentity(asset, version = undefined) {
@@ -6166,6 +6167,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 boardDrainOnce().catch((e) => handleBoardDrainRejection(e, "startup drain"));
 
+function isOwnerPrincipal(ctx) {
+  const p = ctx?.principal;
+  return p === "extension" || p === "owner-options";
+}
+
 const handlers = mergeRouteMaps(
   activityRoutes,
   schedulerRoutes,
@@ -6368,9 +6374,7 @@ const handlers = mergeRouteMaps(
     return await capabilityStatus();
   },
   async "notifications.list"(m, context) {
-    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
-      return { ok: false, error: "unauthorized_principal" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "unauthorized_principal" };
     const list = await notificationRegistry.listNotifications({
       state: m?.state,
       agentId: m?.agentId,
@@ -6381,16 +6385,12 @@ const handlers = mergeRouteMaps(
     return { ok: true, notifications: list };
   },
   async "notification.get"(m, context) {
-    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
-      return { ok: false, error: "unauthorized_principal" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "unauthorized_principal" };
     const record = await notificationRegistry.getNotification(m?.id);
     return { ok: Boolean(record), notification: record };
   },
   async "notification.dismiss"(m, context) {
-    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
-      return { ok: false, error: "unauthorized_principal" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "unauthorized_principal" };
     const record = await notificationRegistry.updateState(m?.id, "dismissed");
     return { ok: Boolean(record), notification: record };
   },
@@ -6937,32 +6937,15 @@ const handlers = mergeRouteMaps(
     viewSpan.end("ok");
     if (m?.id && ownerApprovalStore?.approvals) {
       try {
-        const executionsForThread = new Set(
-          (await durableRuns.listThreadExecutions(m.id).catch(() => []))
-            .map((e) => e.executionId)
-        );
-        const pendingApprovals = [];
+        const execs = new Set((await durableRuns.listThreadExecutions(m.id).catch(() => [])).map((e) => e.executionId));
+        const pending = [];
         for (const [approvalId, app] of ownerApprovalStore.approvals.entries()) {
-          if (app?.status === "pending" && executionsForThread.has(app.runId)) {
-            const denial = approvalCardDenial({
-              approvalId,
-              action: app.action,
-              targetRef: app.targetRef,
-              detail: app.detail,
-            });
-            if (denial?.permissionRequirement) {
-              pendingApprovals.push({
-                role: "approval",
-                requirement: denial.permissionRequirement,
-                executionId: app.runId,
-                ts: app.createdAt ?? Date.now(),
-              });
-            }
+          if (app?.status === "pending" && execs.has(app.runId)) {
+            const req = approvalCardDenial({ approvalId, action: app.action, targetRef: app.targetRef, detail: app.detail })?.permissionRequirement;
+            if (req) pending.push({ role: "approval", requirement: req, executionId: app.runId, ts: app.createdAt ?? Date.now() });
           }
         }
-        if (pendingApprovals.length > 0 && Array.isArray(view?.messages)) {
-          view.messages = [...view.messages, ...pendingApprovals];
-        }
+        if (pending.length && Array.isArray(view?.messages)) view.messages = [...view.messages, ...pending];
       } catch { /* best effort */ }
     }
     return { ok: true, thread: view };
@@ -7698,7 +7681,7 @@ const handlers = mergeRouteMaps(
    * the run-log policy in force. Read-only, no secrets — any extension page
    * may ask. */
   async "privacy.statement"(_m, context) {
-    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+    if (!isOwnerPrincipal(context)) {
       return { ok: false, error: "unauthorized_principal" };
     }
     let retentionPolicy = null;
@@ -7880,7 +7863,7 @@ const handlers = mergeRouteMaps(
   // authorizationGuard) additionally gates on per-tool owner approval before
   // reaching invokeSiteTool.
   async "tools.invoke"({ origin, name, args }, context) {
-    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+    if (!isOwnerPrincipal(context)) {
       return { ok: false, error: "site tools can be invoked directly only by an owner extension surface" };
     }
     const canonical = canonicalOrigin(origin);
@@ -8997,7 +8980,7 @@ const handlers = mergeRouteMaps(
   // execution id — the row leaves the Tasks sidebar and never re-appears after
   // a service-worker restart. Tombstones carry ids only (no prompt text).
   async "run.dismissFailed"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
+    if (!isOwnerPrincipal(context)) {
       return { ok: false, error: "owner_extension_required" };
     }
     await durableRecoveryReady;
@@ -9009,9 +8992,7 @@ const handlers = mergeRouteMaps(
     return { ok: true, ids: await durableRuns.dismissedFailedRuns() };
   },
   async "run.cancel"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const executionId = String(m?.executionId ?? "");
     if (!executionId) return { ok: false, error: "executionId is required" };
     return await cancelExecutionTree(executionId, {
@@ -9020,9 +9001,7 @@ const handlers = mergeRouteMaps(
     });
   },
   async "run.resume"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const executionId = String(m?.executionId ?? "");
     if (!executionId) return { ok: false, error: "executionId is required" };
     const snapshot = await durableRuns.list();
@@ -9087,9 +9066,7 @@ const handlers = mergeRouteMaps(
     // a run that stopped on its step budget continues as a NEW TURN on the
     // SAME thread (the thread history is the context), never a silent finish
     // and never a replay of the finished execution. Same owner gate as resume.
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const executionId = String(m?.executionId ?? "");
     if (!executionId) return { ok: false, error: "executionId is required" };
     const snapshot = await durableRuns.list();
@@ -9114,9 +9091,7 @@ const handlers = mergeRouteMaps(
   // routes are extension/owner-options only — a model or page principal can
   // never steer or queue for the owner.
   async "run.control.steer"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const executionId = String(m?.executionId ?? "");
     if (!executionId) return { ok: false, error: "executionId is required" };
     const mode = String(m?.mode ?? "inject").slice(0, 16);
@@ -9151,9 +9126,7 @@ const handlers = mergeRouteMaps(
   },
 
   async "run.control.queue.list"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const threadId = String(m?.threadId ?? "");
     if (!threadId) return { ok: false, error: "threadId is required" };
     return { ok: true, threadId, items: await threadQueues.list(threadId) };
@@ -9171,18 +9144,14 @@ const handlers = mergeRouteMaps(
   },
 
   async "run.control.queue.remove"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const threadId = String(m?.threadId ?? "");
     if (!threadId) return { ok: false, error: "threadId is required" };
     return await threadQueues.remove(threadId, String(m?.id ?? ""));
   },
 
   async "run.control.queue.move"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const threadId = String(m?.threadId ?? "");
     if (!threadId) return { ok: false, error: "threadId is required" };
     const delta = Number(m?.delta);
@@ -9196,9 +9165,7 @@ const handlers = mergeRouteMaps(
     // durable resume-request is the retry authority; retry re-dispatches it as
     // a NEW execution through the original route (the failed record stays as
     // honest history — retention is retain-all). Same owner gate as resume.
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const executionId = String(m?.executionId ?? "");
     if (!executionId) return { ok: false, error: "executionId is required" };
     const retryable = await durableRuns.getRetryRequest(executionId);
@@ -9223,9 +9190,7 @@ const handlers = mergeRouteMaps(
     return { ...(result ?? { ok: false, error: "no result" }), retriedFrom: executionId, retryRoute: dispatch.route };
   },
   async "run.logs"(m, context) {
-    if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
     const executionId = String(m?.executionId ?? "");
     const logs = await durableRuns.listLogs(executionId, { limit: 200 });
     return { ok: true, executionId, logs, truncated: logs.exhausted === false };
@@ -10726,10 +10691,6 @@ chrome.permissions?.onAdded?.addListener(() => {
   resumePausedPermissionRuns().catch(() => {});
 });
 durableRecoveryReady.then(async () => {
-  ownerApprovalStore.approvals.clear();
-  ownerApprovalStore.byTuple.clear();
-  ownerApprovalStore.waiters.clear();
-  ownerApprovalStore.details?.clear();
   await resumeInterruptedRuns();
   await resumePausedPermissionRuns();
 }).catch(() => {});

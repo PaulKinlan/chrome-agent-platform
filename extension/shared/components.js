@@ -6580,6 +6580,7 @@ class AgentConversation extends Component {
         approve,
         requirement: req,
         executionId: m.executionId ?? null,
+        requestId: m.requestId ?? null,
         toolCallId: m.toolCallId ?? null,
         card,
         sourceEvent: ev?.detail?.sourceEvent ?? null,
@@ -6859,7 +6860,7 @@ class ScreenshotStrip extends Component {
       // user hears "Open image 2 of 3", not a bare "Open screenshot".
       const aria = `Open ${kind} ${i + 1} of ${total}${label ? `: ${label}` : ""}`;
       return `<button type="button" class="shot" data-index="${i}" aria-label="${escapeHtml(aria)}">
-        <img src="${escapeHtml(src || "")}" alt="" loading="lazy">
+        <img src="${escapeHtml(src || "")}" alt="" decoding="async">
         ${label ? `<span class="lbl">${escapeHtml(String(label))}</span>` : ""}</button>`;
     }).join("");
     const overflowBtn = overflow > 0

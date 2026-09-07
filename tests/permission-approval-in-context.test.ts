@@ -694,3 +694,19 @@ Deno.test("SW wiring pins: thread.get surfaces pending approvals and withRunLock
   assert(sw.includes("progressPorts.size === 0"), "requireOwnerApproval fails closed without an open UI port");
 });
 
+Deno.test("7spn pins: projectSurfaceRunTranscript avoids double-subscription; screenshot-strip uses async decoding; replay approvals forward requestId", async () => {
+  const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
+  assert(ntp.includes("liveClientRunId && run?.clientCorrelationId === liveClientRunId"), "projectSurfaceRunTranscript avoids double-subscribing live run");
+
+  const comp = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const stripSrc = comp.slice(comp.indexOf("class ScreenshotStrip"), comp.indexOf("customElements.define(\"screenshot-strip\""));
+  assert(stripSrc.includes("decoding=\"async\""), "screenshot-strip uses async decoding");
+  assert(!stripSrc.includes("loading=\"lazy\""), "screenshot-strip avoids lazy loading that defers dimensions in headless");
+  assert(comp.includes("requestId: m.requestId ?? null"), "appendApproval emits requestId for inline approval resolution");
+
+  const conv = await Deno.readTextFile(new URL("../extension/shared/conversation.js", import.meta.url));
+  assert(conv.includes("run.resolve-inline-approval"), "wireReplayApprovals resolves inline approval if requestId present");
+  assert(conv.includes("requestId: ev.requestId ?? null"), "renderRunTranscript passes requestId to appendApproval");
+});
+
+

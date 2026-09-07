@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.322] — 2026-09-07
+- Browser-control screenshot runs now render thumbnails on tool cards and in the generated image strip
+
 ## [0.3.321] — 2026-09-07
 - the five ways a green test asserts nothing, with detection drills
 

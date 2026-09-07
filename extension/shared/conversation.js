@@ -150,6 +150,9 @@ export function wireReplayApprovals(container) {
       card.setAttribute?.("detail", (outcome?.errors ?? []).join("; ") || "the approval could not be completed");
       return;
     }
+    if (typeof d.requestId === "string" && d.requestId) {
+      await send("run.resolve-inline-approval", { requestId: d.requestId, approve: true }).catch(() => null);
+    }
     let resumed = false;
     if (typeof d.executionId === "string" && d.executionId) {
       const res = await resumePermissionPausedRun(d.executionId, { ownerConfirmed: true }).catch(() => null);
@@ -308,6 +311,36 @@ export async function loadJournal() {
  * (tool-call / tool-result / text / done / error). Returns an unsubscribe
  * function. Read-only: never mutates the run, the provider, the grants or the
  * model. */
+function applyToolResultToCard(card, ev, c, { resEff, summary, raw, status, note }) {
+  const corrected = (typeof ev.selectedTool === "string" && ev.selectedTool) ||
+    (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
+  if (card) {
+    card.removeAttribute?.("hidden");
+    card.removeAttribute?.("aria-hidden");
+    card.style?.removeProperty?.("display");
+    if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
+      card.setAttribute?.("tool-name", corrected);
+    }
+    const siteActivity = boundSiteToolActivity(ev.siteActivity);
+    if (siteActivity && visibleSiteToolLabel(corrected, 128) === siteActivity.tool) {
+      card.setAttribute?.("site-activity", JSON.stringify(siteActivity));
+    }
+    if (resEff.args != null) {
+      try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep existing */ }
+    }
+    card.setAttribute?.("tool-status", status);
+    if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
+    if (summary) card.setAttribute?.("tool-result", summary);
+    if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
+    if (note) card.setAttribute?.("tool-detail-note", note);
+  } else if (typeof c.appendTool === "function") {
+    const siteActivity = boundSiteToolActivity(ev.siteActivity);
+    c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs, ...(siteActivity ? { siteActivity } : {}) });
+  } else {
+    appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
+  }
+}
+
 export function renderRunTranscript(container, executionId, { onStatus = null, clientCorrelationId = null, threadId = null } = {}) {
   const c = container;
   if (!c || !executionId) return () => {};
@@ -343,7 +376,7 @@ export function renderRunTranscript(container, executionId, { onStatus = null, c
       case "approval-request": {
         const req = ev.result?.permissionRequirement ?? ev.permissionRequirement;
         if (req && typeof c.appendApproval === "function") {
-          c.appendApproval({ requirement: req, executionId: ev.executionId ?? executionId });
+          c.appendApproval({ requirement: req, executionId: ev.executionId ?? executionId, requestId: ev.requestId ?? null });
         }
         break;
       }
@@ -407,42 +440,11 @@ export function renderRunTranscript(container, executionId, { onStatus = null, c
         // known from the result, as the corrected checklist label.
         const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
         c.planEvent?.({ type: "step-end", status: status === "error" ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
-        // Remember id → name from the untruncated live result BEFORE the card
-        // re-renders, so the card (and a later update card) can be titled
-        // with the artifact's name (CAP-FB-20260830-THREAD-VIEW-RUN-STATE-01).
         if (status === "success" && typeof c.rememberArtifact === "function") {
           const known = artifactIdentityFromPayloads([src]);
           if (known) c.rememberArtifact(known.id, known.name);
         }
-        if (card) {
-          card.removeAttribute?.("hidden");
-          card.removeAttribute?.("aria-hidden");
-          card.style?.removeProperty?.("display");
-          // The result names the tool that actually ran; correct the header
-          // from `execute_tool` to that name now it is known. The event's own
-          // `selectedTool` (emitted by the runtime) is authoritative — the
-          // summarized result text no longer carries the envelope.
-          const corrected = (typeof ev.selectedTool === "string" && ev.selectedTool) ||
-            (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
-          if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
-            card.setAttribute?.("tool-name", corrected);
-          }
-          const siteActivity = boundSiteToolActivity(ev.siteActivity);
-          if (siteActivity && visibleSiteToolLabel(corrected, 128) === siteActivity.tool) {
-            card.setAttribute?.("site-activity", JSON.stringify(siteActivity));
-          }
-          if (resEff.args != null) {
-            try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep what is there */ }
-          }
-          card.setAttribute?.("tool-status", status);
-          if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
-          if (summary) card.setAttribute?.("tool-result", summary);
-          if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
-          if (note) card.setAttribute?.("tool-detail-note", note);
-        } else if (typeof c.appendTool === "function") {
-          const siteActivity = boundSiteToolActivity(ev.siteActivity);
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs, ...(siteActivity ? { siteActivity } : {}) });
-        }
+        applyToolResultToCard(card, ev, c, { resEff, summary, raw, status, note });
         break;
       }
       case "thinking-delta":
@@ -1154,33 +1156,7 @@ function imageItemsFromToolCards(cards) {
  * artifact derivation — works on the tool that actually ran. Pure, and
  * tolerant: anything that is not an envelope passes straight through, so the
  * direct (non-lazy) dispatch path is unaffected. */
-export function unwrapLazyEnvelope(value) {
-  let v = value;
-  for (let hop = 0; hop < 4; hop++) { // bounded: envelopes nest at most 2 deep
-    if (typeof v === "string") {
-      const t = v.trim();
-      if (!t.startsWith("{") && !t.startsWith("[")) return v;
-      try { v = JSON.parse(t); } catch { return v; }
-      continue;
-    }
-    if (!v || typeof v !== "object" || Array.isArray(v)) return v;
-    // agent-do's {modelContent,userSummary} wrapper.
-    if (v.userSummary != null) { v = v.userSummary; continue; }
-    if (v.modelContent != null) { v = v.modelContent; continue; }
-    return v;
-  }
-  return v;
-}
-
-/** The SAME bounded unwrap as {@link unwrapLazyEnvelope}, but for agent-do's
- *  `{modelContent, userSummary}` wrapper it prefers the STRUCTURED
- *  `modelContent` over the prose `userSummary`. The default unwrap prefers
- *  `userSummary` (the human-facing summary), which for a real run is prose like
- *  "Created crumb.html" — so it walks PAST the structured `{selectedTool,
- *  result:{asset}}` payload and the artifact is never found. Callers try the
- *  default unwrap first and fall back to this one, so a plain (non-wrapped)
- *  result is unaffected. Pure. */
-export function unwrapLazyEnvelopeStructured(value) {
+function unwrapLazy(value, preferStructured = false) {
   let v = value;
   for (let hop = 0; hop < 4; hop++) {
     if (typeof v === "string") {
@@ -1190,12 +1166,16 @@ export function unwrapLazyEnvelopeStructured(value) {
       continue;
     }
     if (!v || typeof v !== "object" || Array.isArray(v)) return v;
-    if (v.modelContent != null) { v = v.modelContent; continue; }
-    if (v.userSummary != null) { v = v.userSummary; continue; }
+    const first = preferStructured ? v.modelContent : v.userSummary;
+    const second = preferStructured ? v.userSummary : v.modelContent;
+    if (first != null) { v = first; continue; }
+    if (second != null) { v = second; continue; }
     return v;
   }
   return v;
 }
+export function unwrapLazyEnvelope(value) { return unwrapLazy(value, false); }
+export function unwrapLazyEnvelopeStructured(value) { return unwrapLazy(value, true); }
 
 /** The tool that actually ran, and the arguments it actually received. */
 export function effectiveToolCall(toolName, args, result) {
@@ -2405,43 +2385,9 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const err = isToolErrorEvent(ev);
         const status = err ? "error" : "success";
         const note = liveToolResultNote(ev);
-        // Resolve this call's plan step, adopting the tool's REAL name (known
-        // now from the result) as the corrected checklist label.
-        {
-          const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
-          c.planEvent?.({ type: "step-end", status: err ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
-        }
-        if (card) {
-          card.removeAttribute?.("hidden");
-          card.removeAttribute?.("aria-hidden");
-          card.style?.removeProperty?.("display");
-          // The result names the tool that actually ran (the lazy envelope):
-          // correct the header + unwrap the arguments now the real tool is
-          // known (the event's selectedTool is authoritative; the result
-          // envelope's is the fallback).
-          const corrected = (typeof ev.selectedTool === "string" && ev.selectedTool) ||
-            (resEff.lazy && resEff.name !== ev.toolName ? resEff.name : "");
-          if ((ev.toolName === "execute_tool" || ev.toolName === "search_tools") && corrected && corrected !== ev.toolName) {
-            card.setAttribute?.("tool-name", corrected);
-          }
-          const siteActivity = boundSiteToolActivity(ev.siteActivity);
-          if (siteActivity && visibleSiteToolLabel(corrected, 128) === siteActivity.tool) {
-            card.setAttribute?.("site-activity", JSON.stringify(siteActivity));
-          }
-          if (resEff.lazy && resEff.args != null) {
-            try { card.setAttribute?.("tool-args", JSON.stringify(resEff.args)); } catch { /* keep the existing args */ }
-          }
-          card.setAttribute?.("tool-status", status);
-          if (ev.durationMs != null) card.setAttribute?.("tool-duration", String(ev.durationMs));
-          if (summary) card.setAttribute?.("tool-result", summary);
-          if (raw && raw !== summary) card.setAttribute?.("tool-detail", raw);
-          if (note) card.setAttribute?.("tool-detail-note", note);
-        } else if (typeof c.appendTool === "function") {
-          const siteActivity = boundSiteToolActivity(ev.siteActivity);
-          c.appendTool({ name: ev.toolName, status, result: summary, detail: raw !== summary ? raw : null, detailNote: note, durationMs: ev.durationMs, ...(siteActivity ? { siteActivity } : {}) });
-        } else {
-          appendBubble(c, "tool", `✓ ${ev.toolName}${summary ? ` — ${summary}` : ""}`);
-        }
+        const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
+        c.planEvent?.({ type: "step-end", status: err ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
+        applyToolResultToCard(card, ev, c, { resEff, summary, raw, status, note });
         // The artifact this call produced, rendered in the thread that made it
         // (the same derivation the durable-log replay uses, so the live view
         // and the reopened view cannot disagree).

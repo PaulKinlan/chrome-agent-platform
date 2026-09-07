@@ -1567,43 +1567,44 @@ export function executableBundledToolRecords(rows, context = {}) {
   });
 }
 
+function parseStandardStreamArgs(rawArgs) {
+  let normalizedArgs = [];
+  let normalizedStdin = "";
+  if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+    if (Object.hasOwn(rawArgs, "args")) {
+      if (!Array.isArray(rawArgs.args) || rawArgs.args.some((a) => typeof a !== "string" || a.includes("\0"))) {
+        return { ok: false, error: "invalid_arguments: args must be an array of strings without null bytes" };
+      }
+      normalizedArgs = [...rawArgs.args];
+    }
+    if (Object.hasOwn(rawArgs, "stdin")) {
+      if (typeof rawArgs.stdin !== "string") {
+        return { ok: false, error: "invalid_arguments: stdin must be a string" };
+      }
+      normalizedStdin = rawArgs.stdin;
+    } else if (Object.hasOwn(rawArgs, "input") && typeof rawArgs.input === "string") {
+      normalizedStdin = rawArgs.input;
+    } else if (Object.hasOwn(rawArgs, "text") && typeof rawArgs.text === "string") {
+      normalizedStdin = rawArgs.text;
+    }
+  } else if (typeof rawArgs === "string") {
+    normalizedStdin = rawArgs;
+  } else if (Array.isArray(rawArgs)) {
+    if (rawArgs.some((a) => typeof a !== "string" || a.includes("\0"))) {
+      return { ok: false, error: "invalid_arguments: args array must contain strings without null bytes" };
+    }
+    normalizedArgs = [...rawArgs];
+  } else if (rawArgs != null) {
+    return { ok: false, error: "invalid_arguments: unexpected argument shape" };
+  }
+  return { ok: true, data: Object.freeze({ args: Object.freeze(normalizedArgs), stdin: normalizedStdin }) };
+}
+
 export function executableUserWasmToolRecords(rows, context = {}) {
   return adaptUserWasmTools(rows, context).map((descriptorInput) => {
     const toolId = descriptorInput.toolId;
     const packageDigest = descriptorInput.packageDigest;
-
-    const validator = async (rawArgs) => {
-      let normalizedArgs = [];
-      let normalizedStdin = "";
-      if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-        if (Object.hasOwn(rawArgs, "args")) {
-          if (!Array.isArray(rawArgs.args) || rawArgs.args.some((a) => typeof a !== "string" || a.includes("\0"))) {
-            return { ok: false, error: "invalid_arguments: args must be an array of strings without null bytes" };
-          }
-          normalizedArgs = [...rawArgs.args];
-        }
-        if (Object.hasOwn(rawArgs, "stdin")) {
-          if (typeof rawArgs.stdin !== "string") {
-            return { ok: false, error: "invalid_arguments: stdin must be a string" };
-          }
-          normalizedStdin = rawArgs.stdin;
-        } else if (Object.hasOwn(rawArgs, "input") && typeof rawArgs.input === "string") {
-          normalizedStdin = rawArgs.input;
-        } else if (Object.hasOwn(rawArgs, "text") && typeof rawArgs.text === "string") {
-          normalizedStdin = rawArgs.text;
-        }
-      } else if (typeof rawArgs === "string") {
-        normalizedStdin = rawArgs;
-      } else if (Array.isArray(rawArgs)) {
-        if (rawArgs.some((a) => typeof a !== "string" || a.includes("\0"))) {
-          return { ok: false, error: "invalid_arguments: args array must contain strings without null bytes" };
-        }
-        normalizedArgs = [...rawArgs];
-      } else if (rawArgs != null) {
-        return { ok: false, error: "invalid_arguments: unexpected argument shape" };
-      }
-      return { ok: true, data: Object.freeze({ args: Object.freeze(normalizedArgs), stdin: normalizedStdin }) };
-    };
+    const validator = async (rawArgs) => parseStandardStreamArgs(rawArgs);
 
     const authorizer = async (_validatedArgs, _authorityContext) => {
       if (context.agentTools?.userWasm != null) {
@@ -1681,30 +1682,10 @@ export const NATIVE_OFFSCREEN_TOOL_ROWS = Object.freeze([
 /** Shared argument parsing for the native offscreen tools: the bundled
  * unix-stream shape (args array + base64 stdin), null-byte rejected. */
 export function validateNativeOffscreenArguments(rawArgs) {
-  let normalizedArgs = [];
-  let normalizedStdin = "";
-  if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
-    if (Object.hasOwn(rawArgs, "args")) {
-      if (!Array.isArray(rawArgs.args) || rawArgs.args.some((a) => typeof a !== "string" || a.includes("\0"))) {
-        return { ok: false, error: "invalid_arguments: args must be an array of strings without null bytes" };
-      }
-      normalizedArgs = [...rawArgs.args];
-    }
-    if (Object.hasOwn(rawArgs, "stdin")) {
-      if (typeof rawArgs.stdin !== "string") return { ok: false, error: "invalid_arguments: stdin must be a string" };
-      normalizedStdin = rawArgs.stdin;
-    } else if (Object.hasOwn(rawArgs, "input") && typeof rawArgs.input === "string") {
-      normalizedStdin = rawArgs.input;
-    } else if (Object.hasOwn(rawArgs, "text") && typeof rawArgs.text === "string") {
-      normalizedStdin = rawArgs.text;
-    }
-  } else if (typeof rawArgs === "string") {
-    normalizedStdin = rawArgs;
-  } else if (rawArgs != null) {
-    return { ok: false, error: "invalid_arguments: unexpected argument shape" };
-  }
-  if (!normalizedStdin) return { ok: false, error: "invalid_arguments: stdin (base64 SVG) is required" };
-  return { ok: true, data: Object.freeze({ args: Object.freeze(normalizedArgs), stdin: normalizedStdin }) };
+  const res = parseStandardStreamArgs(rawArgs);
+  if (!res.ok) return res;
+  if (!res.data.stdin) return { ok: false, error: "invalid_arguments: stdin (base64 SVG) is required" };
+  return res;
 }
 
 /** Parse --width/--height/--background out of the args array. */

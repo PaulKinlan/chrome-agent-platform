@@ -177,6 +177,12 @@ function projectSurfaceRunTranscript() {
   stopRunTranscript(); // teardown FIRST — it nulls the guard; assign AFTER so the guard actually holds
   runTranscriptExecutionId = nextId;
   if (!nextId || !threadConversation) return run;
+  // If this run is already actively driving threadConversation through
+  // runConversationTurn (liveClientRunId matches), do not double-attach
+  // a second streaming transcript subscriber on top of it.
+  if (liveClientRunId && run?.clientCorrelationId === liveClientRunId) {
+    return run;
+  }
   runTranscriptUnsub = renderRunTranscript(threadConversation, nextId, {
     clientCorrelationId: run?.clientCorrelationId ?? null,
     threadId: currentThreadId ?? null,
