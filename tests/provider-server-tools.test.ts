@@ -504,10 +504,31 @@ Deno.test("provider-server: source pins — usage records the labelled estimate"
   const src = await Deno.readTextFile(
     new URL("../extension/background/service-worker.js", import.meta.url),
   );
-  assertStringIncludes(src, "ESTIMATE");
+  // chrome-agent-platform-uodl: this was `assertStringIncludes(src, "ESTIMATE")`.
+  // ESTIMATE occurs in service-worker.js exactly ONCE — in the comment at :4077
+  // ("record the usage line as a labelled ESTIMATE"). Mutant U-E1 deleted
+  // `await recordServerToolUsage(billing);` and the FULL suite stayed green:
+  // 3977 passed / 0 failed. A comment about a guarantee satisfied the guarantee's
+  // pin and nothing else in the repo noticed. Anchored to the call site, to the
+  // billing that feeds it, and to the field that actually carries the estimate.
+  assert(
+    /await\s+recordServerToolUsage\(\s*billing\s*\)/.test(src),
+    "the settle path records its provider-server usage line (deleting this was invisible to the whole suite)",
+  );
+  assert(
+    /serverToolBillingFor\(\s*billingSpec\s*,\s*serverGrounding\.queryOccurrenceCount/.test(src),
+    "the recorded line is billed through the provider's catalogue spec, not a guessed rate",
+  );
   const usage = await Deno.readTextFile(
     new URL("../extension/lib/usage.js", import.meta.url),
   );
   assertStringIncludes(usage, "recordServerToolUsage");
   assertStringIncludes(usage, "getServerToolUsage");
+  // The label itself. Anchored on the declaration+read rather than the bare word:
+  // `estimatedUsd` also occurs in usage.js's header comment at :42, so a bare-word
+  // pin would be defeatable by that comment.
+  assert(
+    /const\s+estimatedUsd\s*=\s*Math\.max\(\s*0\s*,\s*Number\(\s*entry\?\.estimatedUsd\s*\)/.test(usage),
+    "the recorded usage number is carried in a field NAMED as an estimate, clamped at zero",
+  );
 });

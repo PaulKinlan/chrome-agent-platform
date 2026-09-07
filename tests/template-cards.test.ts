@@ -49,6 +49,21 @@ Deno.test("create-agent dialog composes the template SELECT; the gallery grid is
   // The create dialog offers the catalogue through the searchable grouped
   // native select (owner directive, CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01).
   assertStringIncludes(ntp, 'import { buildTemplateSelect } from "../lib/agent-template-select.js"');
+  // chrome-agent-platform-uodl: the import pin alone is satisfiable with a DEAD
+  // binding. Mutant U-I1 replaced the call with a bare object literal and left the
+  // import in place; this file stayed green AND the full suite stayed green
+  // (3977 passed / 0 failed) — the exact shape of the bead's U16, where a removed
+  // withTimeout(...) wrapper survived because the import line still carried the
+  // word. Pin the call site and the value it produces, so the binding cannot go
+  // unused while the import testifies that it is wired.
+  assert(
+    /const\s+templateSelect\s*=\s*buildTemplateSelect\(\s*\{/.test(ntp),
+    "the create dialog actually CALLS buildTemplateSelect — the import alone can go dead",
+  );
+  assert(
+    /templateGallery\s*=\s*templateSelect\.select/.test(ntp),
+    "the dialog's gallery is the select the builder returned, not a separately built element",
+  );
   assertStringIncludes(ntp, "blankLabel: \"Custom agent — start from a blank agent.\"");
   assertStringIncludes(ntp, "recipeAsTemplate");
   // The gallery grid is no longer composed in the CREATE dialog (Settings'

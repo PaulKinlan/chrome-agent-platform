@@ -35,7 +35,15 @@ Deno.test("kat-bistro: the KAT delegates the finalizer sequence to the productio
   // WIRING integrity pin: the script wires the extracted unit, and the unit
   // imports the production finalizer + allocator (never a simulated evaluator).
   const scriptText = await Deno.readTextFile(`${root}/scripts/kat-webmcp-bistro.ts`);
-  assert(scriptText.includes("?toolautosubmit"), "KAT must append ?toolautosubmit");
+  // chrome-agent-platform-uodl: this was `assert(scriptText.includes("?toolautosubmit"))`.
+  // The URL construction moved to lib/kat-bistro-caller.ts, so in THIS file the
+  // token occurs only in the header comment (:4) and a console.log (:124). Mutant
+  // U-U1p removed the flag from URL_BISTRO and this assertion still passed — 27/0.
+  // The flag is now pinned where it is built, by tests/kat-bistro-caller.test.ts
+  // ("the demo URL carries the toolautosubmit flag (U1)"), which DID kill U-U1p.
+  // So this file keeps the property it can actually prove about wiring: the demo
+  // URL has ONE source of truth and never grows a second copy here.
+  assert(!/french-bistro/.test(scriptText), "the demo URL has one source of truth — URL_BISTRO in lib/kat-bistro-caller.ts, pinned there");
   assert(scriptText.includes("openCdp"), "KAT must use canonical openCdp client");
   assert(
     /import\s*\{[^}]*\bsettleBistroRun\b[^}]*\}\s*from\s*["']\.\/lib\/kat-bistro-caller\.ts["']/.test(scriptText),
