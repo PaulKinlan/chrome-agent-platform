@@ -363,3 +363,19 @@ Deno.test("user-wasm S4: lazy-tool-protocol execute_tool dispatches user-wasm ca
   assertEquals(execRes.ok, true);
   assertEquals(execRes.result.stdout, "HELLO FROM AGENT");
 });
+
+Deno.test("user-wasm s4vi: wasm-execution-worker does not mutate global fetch on import in non-worker environment", async () => {
+  const originalFetch = globalThis.fetch;
+  assert(typeof originalFetch === "function", "global fetch should exist before import");
+
+  // Dynamically import the worker module
+  await import(`../extension/lib/wasm-execution-worker.js?t=${Date.now()}`);
+
+  assertEquals(globalThis.fetch, originalFetch, "global fetch should remain untouched when not in DedicatedWorkerGlobalScope");
+
+  // Verify that the worker source contains the scope guard and the in-function call
+  const workerSrc = await Deno.readTextFile(new URL("../extension/lib/wasm-execution-worker.js", import.meta.url));
+  assert(workerSrc.includes('if (typeof DedicatedWorkerGlobalScope !== "undefined" && self instanceof DedicatedWorkerGlobalScope) {'), "has dedicated worker guard");
+  assert(workerSrc.includes("stripAmbientNetwork(); // 4. Compile + instantiate (the ONLY execution path)."), "has in-function guard");
+});
+

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.313] — 2026-09-07
+- WebAssembly execution worker avoids mutating global network APIs in test environments
+
 ## [0.3.312] — 2026-09-07
 - JPEG XL images can now be decoded on-device using the jxl tool
 

@@ -392,5 +392,7 @@ function stripAmbientNetwork() {
   }
 }
 
-stripAmbientNetwork();
+if (typeof DedicatedWorkerGlobalScope !== "undefined" && self instanceof DedicatedWorkerGlobalScope) {
+  stripAmbientNetwork();
+}
 
