@@ -314,7 +314,32 @@ Deno.test("posture: Settings preview and run-bound model dispatch share immutabl
   assert(sw.includes("tool.preview.run"), "the legacy Settings preview route exists");
   assert(sw.includes("tool-stream.run"), "the Settings file-backed route exists");
   assert(sw.includes("dispatchBundledTool: dispatchBundledWasmStream"), "model execution receives the live file-backed dispatch closure");
-  assert(sw.includes("bundled-inventory-data"), "the preview route revalidates against the immutable inventory");
+  // chrome-agent-platform-ecke: this substring is satisfied by the IMPORT at
+  // service-worker.js:98 (`import { BUNDLED_INVENTORY } from
+  // "../lib/bundled-inventory-data.js"`), while the construct the message names uses
+  // the BINDING at :6667. Mutant W1 (census chrome-agent-platform-wzez) deleted the
+  // single line `inventory: BUNDLED_INVENTORY,` from the preview route's
+  // revalidation call and the FULL suite stayed green — 3999 passed / 0 failed,
+  // byte-identical to the pristine baseline. Third instance of the class uodl proved
+  // twice (U-E1 recordServerToolUsage, U-I1 buildTemplateSelect): a pin on a module
+  // specifier proves a module is IMPORTED, never that it is USED. The specifier pin
+  // is kept as module provenance — exactly as template-cards keeps its import pin —
+  // and the call site is pinned beside it. (If the committed substring-honesty guard
+  // ever learns to attribute this `root(...)` helper read, the provenance pin below
+  // needs an ALLOWED entry naming that reason; it is import-shadow-only by design.)
+  assert(sw.includes("bundled-inventory-data"), "the immutable inventory module is imported — provenance for the call-site pins that follow");
+  assert(
+    /revalidatePreviewExecution\(\s*\{[^}]*inventory:\s*BUNDLED_INVENTORY\s*,/.test(sw),
+    "the preview route revalidates AGAINST the immutable inventory: the binding is passed into the call, not merely imported (deleting it was invisible to the whole suite)",
+  );
+  // The run-bound dispatch half of the same authority claim. Both sites stamp the
+  // inventory release as their source generation; deleting either leaves the import
+  // and the specifier pin intact, so the sites are COUNTED rather than grepped once.
+  assertEquals(
+    (sw.match(/sourceGeneration:\s*`bundled-inventory:\$\{BUNDLED_INVENTORY\.release\}`/g) ?? []).length,
+    2,
+    "both run-bound dispatch sites stamp the immutable inventory release as their source generation",
+  );
   assert(sw.includes("previewSpecFor(input.toolId)"), "the toolId resolves through the immutable spec map");
   assert(!sw.includes("admitBundledToolPackages"), "service-worker.js must not reference the admission API");
   assert(!sw.includes("tool.preview.csvtool"), "the old single-tool route name is gone");

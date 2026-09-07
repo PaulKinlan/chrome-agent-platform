@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.317] — 2026-09-07
+- the preview route's inventory revalidation could be deleted unseen
+
 ## [0.3.316] — 2026-09-07
 - Standalone bump script validates changelog entries against user-facing filter without external module dependency
 
