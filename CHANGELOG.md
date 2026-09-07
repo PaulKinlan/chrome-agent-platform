@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.298] — 2026-09-07
+- -gc: Extension builds on macOS now clean up Finder .DS_Store files without stopping with an error
+
 ## [0.3.297] — 2026-09-07
 - Pinned no-eval Emscripten ABI fixtures verified in Chrome; runtime admission and host integration remain pending
 

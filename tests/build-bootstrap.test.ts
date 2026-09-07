@@ -65,6 +65,18 @@ Deno.test("GC: dangling v-boot symlink residue under dist-versions is removed by
   );
 });
 
+Deno.test("GC: macOS .DS_Store and ._* metadata files under dist-versions are removed without failing the build", async () => {
+  const { writeFile } = await import(fsMod);
+  const dsStore = path.join(VERSIONS, ".DS_Store");
+  const appleDouble = path.join(VERSIONS, "._v-test-metadata");
+  await writeFile(dsStore, "fake-ds-store");
+  await writeFile(appleDouble, "fake-apple-double");
+  build();
+  const after = await readdir(VERSIONS);
+  assertEquals(after.includes(".DS_Store"), false, ".DS_Store was cleaned by GC");
+  assertEquals(after.includes("._v-test-metadata"), false, "AppleDouble was cleaned by GC");
+});
+
 Deno.test("GC: exactly one live version remains after repeated builds", async () => {
   build();
   build();

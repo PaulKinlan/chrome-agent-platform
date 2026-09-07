@@ -710,6 +710,12 @@ try {
           await rm(path.join(VERSIONS, d.name), { force: true });
           continue;
         }
+        if (d.name === ".DS_Store" || d.name.startsWith("._")) {
+          // Benign OS metadata created by macOS Finder / AppleDouble:
+          // remove explicitly and continue rather than failing version GC.
+          await rm(path.join(VERSIONS, d.name), { force: true });
+          continue;
+        }
         if (!d.isDirectory()) {
           // An unexpected non-directory, non-symlink entry (socket/fifo/…):
           // fail closed rather than silently leaking it forever.
