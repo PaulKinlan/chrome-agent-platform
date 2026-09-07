@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.316] — 2026-09-07
+- Standalone bump script validates changelog entries against user-facing filter without external module dependency
+
 ## [0.3.315] — 2026-09-07
 - Release notes filter now distinguishes case-sensitive test states from plain color names and checks entries before bump
 
