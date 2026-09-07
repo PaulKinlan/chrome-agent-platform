@@ -1,16 +1,19 @@
 # Changelog
 
+## [0.3.307] — 2026-09-07
+- Release notes for recent updates now use plain language descriptions
+
 ## [0.3.306] — 2026-09-07
 - Semaphore slot accounting and queue reporting are now pinned against regression
 
 ## [0.3.305] — 2026-09-07
-- j6au: the tranche2 KAT cleans up its browser profile (9t1b copy-test hygiene)
+- Automated browser checks now clean up their temporary profile afterwards
 
 ## [0.3.304] — 2026-09-07
 - Settings tool previews execute — the preview host listener is registered whenever Settings is open
 
 ## [0.3.303] — 2026-09-07
-- Settings tool previews execute — the preview host listener is registered whenever Settings is open
+- French Bistro automated demo checks now verify real booking outcomes directly
 
 ## [0.3.302] — 2026-09-07
 - steering a running task no longer loses the owner's message
