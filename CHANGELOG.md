@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.325] — 2026-09-07
+- a test that asserted nothing off its author's machine now fails loudly
+
 ## [0.3.324] — 2026-09-07
 - Automated browser check now confirms that all attachments are kept without a count limit
 

@@ -502,22 +502,69 @@ Deno.test("regeneration preserves predecessor manifest digests except intentiona
   const identity26 = BUNDLED_INVENTORY.manifests.find((m) => m.pkg === "cap.bundled.sqlite3.query.bounded");
   assert(identity26, "sqlite identity present");
   assertEquals(BUNDLED_INVENTORY.manifests.length, 38);
-  // predecessor manifest files must match the previous release's digests
-  const prevText = await Deno.readTextFile("/home/paulkinlan/worktrees/cap-bundled-tool-packages-163/extension/lib/bundled-inventory-data.js").catch(() => null);
-  if (prevText) {
-    const prevDigests = [...prevText.matchAll(/"pkg": "(cap\.bundled\.[^"]+)",\s*"version": "1\.0\.0",\s*"digest": "([0-9a-f]{64})"/g)];
-    assertEquals(prevDigests.length, 25);
-    const now = new Map(BUNDLED_INVENTORY.manifests.map((m) => [m.pkg, m.digest]));
-    const TRANCH = new Set(["cap.bundled.csvtool", "cap.bundled.uuid", "cap.bundled.head", "cap.bundled.tail", "cap.bundled.cut", "cap.bundled.base64", "cap.bundled.md5sum", "cap.bundled.sha256sum", "cap.bundled.sha512sum", "cap.bundled.wc", "cap.bundled.xxd", "cap.bundled.sort", "cap.bundled.uniq", "cap.bundled.tr", "cap.bundled.grep", "cap.bundled.toml2json", "cap.bundled.markdown", "cap.bundled.diff", "cap.bundled.patch", "cap.bundled.stat", "cap.bundled.du", "cap.bundled.tree", "cap.bundled.gzip", "cap.bundled.touch", "cap.bundled.truncate"]);
-    for (const [, pkg, dg] of prevDigests) {
-      if (TRANCH.has(pkg)) {
-        assert(now.get(pkg) !== dg, `${pkg} manifest digest intentionally changed (settings-preview meta status)`);
-        continue;
-      }
-      assertEquals(now.get(pkg), dg, `${pkg} manifest digest must be preserved`);
-    }
-    const prevCas = [...prevText.matchAll(/"rel": "extension\/wasm\/cas\/([0-9a-f]{64})\.wasm"/g)].map((m) => m[1]);
-    const nowCas = new Set(BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/")).map((f) => f.rel));
-    for (const sha of prevCas) assert(nowCas.has(`extension/wasm/cas/${sha}.wasm`), `predecessor CAS ${sha} preserved`);
+  // chrome-agent-platform-ne8u: this comparison used to read its predecessor from an
+  // ABSOLUTE path under one author's worktree with `.catch(() => null)`, and every
+  // assertion below sat inside `if (prevText) { … }`. That path exists on no other
+  // machine, so a test named "regeneration preserves predecessor manifest digests
+  // except intentional admissions" asserted two things — the sqlite identity and the
+  // package count — and passed in 707 µs with six assertions unreachable and the suite
+  // green. A missing precondition is a broken test, not a skip, so the predecessor is
+  // now a COMMITTED baseline with git provenance and every path through it is loud:
+  //   * the baseline's `takenAt` commit must exist in history, so a hand-edited or
+  //     invented provenance fails instead of quietly weakening the comparison;
+  //   * a package in the baseline must still ship — a removal is an owner decision,
+  //     not a regeneration side effect;
+  //   * a digest may only change when declared in `intentionalReadmissions` with a
+  //     reason, and a declaration whose digest did NOT change also fails, so the
+  //     exception list cannot rot into a blanket waiver;
+  //   * every baseline CAS blob still ships (content-addressed, immutable).
+  // Re-take the baseline ONLY when a digest change is reviewed as intentional; adding a
+  // package does not require it. The fixture header records why a rolling git walk
+  // ("compare against the nearest differing ancestor") was measured and rejected: over
+  // the last 300 commits touching the inventory, 9 transitions changed a shared
+  // digest, 12 added packages and 4 showed packages removing and re-appearing through
+  // branch topology — 13 historical adjudications, several of them merge artifacts,
+  // and vacuous on a clean checkout.
+  const baseline = JSON.parse(
+    await Deno.readTextFile(new URL("./fixtures/bundled-inventory-baseline.json", import.meta.url)),
+  );
+  const provenance = await new Deno.Command("git", {
+    args: ["cat-file", "-e", `${baseline.takenAt}^{commit}`],
+    cwd: repoRoot, stdout: "null", stderr: "piped",
+  }).output();
+  assert(provenance.success,
+    `the baseline's provenance commit ${baseline.takenAt} does not exist in this history — re-take the baseline from a real commit instead of editing the fixture`);
+  const basePkgs = baseline.packages as Record<string, { version: string; digest: string }>;
+  assertEquals(Object.keys(basePkgs).length, baseline.packageCount,
+    "the baseline's own packageCount must match its packages");
+  assertEquals(baseline.casShas.length, baseline.casBlobCount,
+    "the baseline's own casBlobCount must match its casShas");
+
+  const now = new Map(BUNDLED_INVENTORY.manifests.map((m) => [m.pkg, m.digest]));
+  const declared = new Map<string, string>(
+    (baseline.intentionalReadmissions as { pkg: string; reason: string }[]).map((r) => [r.pkg, r.reason]),
+  );
+  for (const [pkg, reason] of declared) {
+    assert(typeof reason === "string" && reason.length > 20,
+      `${pkg}: an intentional re-admission must carry its reason`);
+  }
+
+  const gone = Object.keys(basePkgs).filter((pkg) => !now.has(pkg));
+  assertEquals(gone, [],
+    "a package in the baseline no longer ships — a removal is an owner decision, not a regeneration side effect");
+
+  const undeclared = Object.entries(basePkgs)
+    .filter(([pkg, b]) => now.has(pkg) && now.get(pkg) !== b.digest && !declared.has(pkg))
+    .map(([pkg]) => pkg);
+  assertEquals(undeclared, [],
+    "manifest digests changed without a declared intentional re-admission — declare it in the baseline's intentionalReadmissions with a reason, or re-take the baseline in review");
+
+  const staleDeclarations = [...declared.keys()].filter((pkg) => !basePkgs[pkg] || now.get(pkg) === basePkgs[pkg].digest);
+  assertEquals(staleDeclarations, [],
+    "an intentional re-admission is declared but its digest still matches the baseline — delete the stale declaration");
+
+  const nowCas = new Set(BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/")).map((f) => f.rel));
+  for (const sha of baseline.casShas as string[]) {
+    assert(nowCas.has(`extension/wasm/cas/${sha}.wasm`), `predecessor CAS ${sha} preserved`);
   }
 });

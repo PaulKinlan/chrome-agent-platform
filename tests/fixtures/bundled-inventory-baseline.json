@@ -1,0 +1,222 @@
+{
+  "_comment": [
+    "Baseline for tests/bundled-tool-packages.test.ts \u2014 the predecessor inventory that",
+    "regeneration must not silently change. Taken from git history at the commit named",
+    "in takenAt (the test verifies that commit exists, so a hand-edited provenance fails).",
+    "",
+    "WHEN TO RE-TAKE: only when a digest change is REVIEWED as intentional. Adding a",
+    "package does NOT require re-taking this file \u2014 additions are asserted elsewhere and",
+    "do not change an existing digest. A digest change must either be declared in",
+    "intentionalReadmissions with a reason, or this baseline must be re-taken, which is a",
+    "visible diff in review. That is the point: chrome-agent-platform-ne8u replaced a",
+    "predecessor read from one author's worktree path with .catch(() => null), which made",
+    "six assertions unreachable on every other machine.",
+    "",
+    "WHY NOT A ROLLING GIT WALK: measured over the last 300 commits touching the",
+    "inventory, 9 transitions changed a shared package's digest, 12 added packages, and",
+    "4 showed packages REMOVING and re-appearing (branch topology, not decisions). A",
+    "rolling 'compare to the nearest differing ancestor' rule would need 13 historical",
+    "adjudications, several of them merge artifacts, and would be vacuous on a clean",
+    "checkout. A committed baseline with provenance is portable, has teeth, and makes the",
+    "intentional-admission record a first-class artifact."
+  ],
+  "takenAt": "e72af3c371c5d3ff5e4ca21edd1f7b244cda5c98",
+  "takenAtSubject": "chrome-agent-platform-7spn: Browser-control screenshot runs now render thumbnails on tool cards and in the generated image strip",
+  "packageCount": 38,
+  "casBlobCount": 38,
+  "casShas": [
+    "04d32c115c9e3a979d59cfe27ea0e5ece616efd64ff958d4fcc96bb217191588",
+    "089510ba2c38685d487158d836ac2b08d41756356a66ac3c71860e2e15e1945d",
+    "195026a42b8ec87cde58f91b151d7cb657b41c0f4a725c0dde7b16825faa8a01",
+    "1bf758e866b5b2a6af74ece480f061ac45e5455cd6ac7bbdada2fb17acf4e250",
+    "20d6324f4925ee8263322bb74eb818861f13fbd0d4ce080b13c2140b213232cf",
+    "24793c383472ffcbf477488b293830fdc22bf368fd36df1cc0631c8e288b5705",
+    "3e553ca399ce02c6d796cf80e08057ae41730f32f507d9bc2561e75faa4c2438",
+    "3eb5e7391eefe588758169d012186064577c9e9060af8e027c33702e2aa207ce",
+    "4235e8273af38787b39997d0aaae5a9c56b8a4101ea9c887c1477f73595dfcb1",
+    "47d674035f83bf0de7b4a2ae5ee7d5e6bbe505713974ec6e5c83b2c379307c6f",
+    "5c8210c93d390893f961943093ccad314e87500b29eafe9f166b0b3327333d81",
+    "6119489ddf0cb9648a4ac87b943108f850be3e3b637cea6c478bf7ec1bf6432a",
+    "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb",
+    "973d78aa28f825019fbfb4aa9463dc6940a65d7da6de80590ba1a691443154df",
+    "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1",
+    "9c9cae983c3db00bdead5e7cf00bdb345d298dda194bd683915b4e7d083346ac",
+    "9ce43db995cc580551a3a061127ca0756043d2f55e2c925efbb43106c8438761",
+    "a762e1cdcbfa18f5497fd39a20a4158f74173737187e5bd85a67acebf6b737a8",
+    "a7838fc92dc1a63e57a257da1b89b721bbd5eb1c0cddac220d59c1bee63ee9b2",
+    "b86d327e1d17ddce9a07fb92a43fb151372bbaa662b5bf6ef8aba138fc3e2e32",
+    "b8d396f708ac70bf19dd94255119b13ab53450c7c5f4edff9646b9fa8e6f9335",
+    "b93a6232119ec73eb82f2544a16e78f5eddfd36faa923cb6c99324bfe46de9eb",
+    "ba468c6eec9c4743167c807b4781d2ca7b5e28b48850e394bf292d13f9c9559d",
+    "bec02b43bdeb1997f9616d95499ce91010e124aecb1cad6e6bd97102c0956f3f",
+    "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91",
+    "cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f",
+    "ce303be0226d2675019191dddbcded6d83de100922fcc10e5ee48a058c0d27d5",
+    "d03a2558682ea04653d34753eae8df1fcd5cc8d92fc53de43106c3db0e1c57dc",
+    "d268e1ced9db8192d986d2138b03dcec174a88865e10e9f9c7c8e53ab3c0010a",
+    "daa8ef830215b5e710dd529a4ed5d8c81591bdf92401241a94242b0b79857585",
+    "e0543d170ac9bd0cd55b274604b55add18c17c5d87169ebfdf25b4b7245a386a",
+    "e2d4687d1b04f3fdc009a089f68b3c1afc1ca19cb614dd7b32f43b9b4f0446d2",
+    "e415ab94548da2d14bef43457cb9a990e66c3d8a151ba16e067f61d685d32312",
+    "e48cd71ae08b03a62e06cf3e0c21acdf051bd9ecfd7e83812be4307502f1fb23",
+    "e884973be3742724a5bdf4637644dfd7f9630d54132835d3849b44da9e4e4234",
+    "ebc062481bf0ba2bf1dfdae6e7cf32ffe47d665702fbc8646ec29e134a480aad",
+    "efafe563c9aa683d8688d17f477584c04f17ba4cac5a52d0df027bcd76e1e294",
+    "f0e567aebad58ed30b0ca751918c59c2b81642e58a5df81d6dbdce3334c0f98f"
+  ],
+  "packages": {
+    "cap.bundled.avif": {
+      "version": "1.0.0",
+      "digest": "c2cfdd8808839d98c7d06814ca888a5e44d9eb156d88ac74a7c3004f13fdb3bc"
+    },
+    "cap.bundled.awk": {
+      "version": "1.0.0",
+      "digest": "fb71aadfe45784c874f871d7ea007efcb43e3a62d7da8d154cc1f9608813ab6c"
+    },
+    "cap.bundled.awk.filter.bounded": {
+      "version": "1.0.0",
+      "digest": "b3def7914274026940c13160b8d2447e11144a426ab096020705b69a75867345"
+    },
+    "cap.bundled.base64": {
+      "version": "2.0.0",
+      "digest": "383721407a8268454306cab7bec26cf659279cc0f1934ac712e754bff2e5e7df"
+    },
+    "cap.bundled.compressops": {
+      "version": "1.0.0",
+      "digest": "200f4c7a7732d551eb99ab251a8353ffac4b073a3daa49aae30ebe3e1e4ce412"
+    },
+    "cap.bundled.csvtool": {
+      "version": "1.0.0",
+      "digest": "4711cfcd4eb89849789f074f421e06a104effe59decd5eb893d1b9c38b1e73c2"
+    },
+    "cap.bundled.cut": {
+      "version": "1.0.0",
+      "digest": "394b4b97b4af356d27701f6e966faf900436513a0b51f0ab9ba04ab88b4dbb14"
+    },
+    "cap.bundled.date.formatter.bounded": {
+      "version": "1.0.0",
+      "digest": "06524455b0ee9358cc00ddde1d531508cc3ea68da5d0b2d9748248a8518877fe"
+    },
+    "cap.bundled.diff": {
+      "version": "1.0.0",
+      "digest": "0df40615b3a9a8d10e5ea3458a0eb1457c341fc04a46d740f1aad43872f58e4c"
+    },
+    "cap.bundled.du": {
+      "version": "1.0.0",
+      "digest": "e4323d6b8661d2323f3f60c1787cbd001910808f85d9a77d68b0bb86da70fcff"
+    },
+    "cap.bundled.grep": {
+      "version": "2.0.0",
+      "digest": "a0edafd35aed31e3b06fc9ad95fb06a568517bc2ed3d3397492113de2056c805"
+    },
+    "cap.bundled.gzip": {
+      "version": "1.0.0",
+      "digest": "486d8548f2d123cb5474645460ac854037c692c3d316d5386e6365b88d369f88"
+    },
+    "cap.bundled.hash.blake3": {
+      "version": "1.0.0",
+      "digest": "0c0430f5b0cb202923922655b250aea16af6dae2ef0e859d558c2057dd03b3e6"
+    },
+    "cap.bundled.head": {
+      "version": "1.0.0",
+      "digest": "6ae3c0371efc56a72e5e946e459d1cadfbfd4957e32c5965679c4ce05a113485"
+    },
+    "cap.bundled.imageops": {
+      "version": "1.0.0",
+      "digest": "b112b86bb865622ac8585fadf90d7208ae27088776158ae9fd6ade86ef592328"
+    },
+    "cap.bundled.jq": {
+      "version": "1.0.0",
+      "digest": "c2f44fcb33ccac70dbed85a30be25ace6e93f01168e8fdc4562104f1f57f8dfb"
+    },
+    "cap.bundled.jxl": {
+      "version": "1.0.0",
+      "digest": "fe7c156d73281a1211c6eee2dc3a81bac7606b4602997adebd234b96cccf721f"
+    },
+    "cap.bundled.markdown": {
+      "version": "1.0.0",
+      "digest": "c899510d964d2177216a834cbb498e4872526349dc464de76863f59ab878ec07"
+    },
+    "cap.bundled.md5sum": {
+      "version": "1.0.0",
+      "digest": "89fb270b8007f376b4aea312cca3ac14a23f530d50049f67f031757ff0ec7083"
+    },
+    "cap.bundled.oxipng": {
+      "version": "1.0.0",
+      "digest": "6c57e689a58306e8043f8577ce9c6c947b7eeba6b8b238242d2b7c16c75a7a0c"
+    },
+    "cap.bundled.patch": {
+      "version": "1.0.0",
+      "digest": "5e864edcdad1039a4e81141e254689e270a407c8c85ca66d3a80fb5c5ae062cd"
+    },
+    "cap.bundled.sed": {
+      "version": "1.0.0",
+      "digest": "0e1c211c8dee47c37831bbf4968b35dc03e3580dec7b5b3acb9c564e7fc5a2c7"
+    },
+    "cap.bundled.sha256sum": {
+      "version": "1.0.0",
+      "digest": "65688c83e75bca952d51250cdc28003fd3945e6f7ac5882346b87248d95c89ad"
+    },
+    "cap.bundled.sha512sum": {
+      "version": "1.0.0",
+      "digest": "46724754f72dcb1be48f192e359325e95bdf3fa9283aba8025406421cce68940"
+    },
+    "cap.bundled.sort": {
+      "version": "2.0.0",
+      "digest": "38620efb994082119ddcce4bc109c375c54e0ad2cc8aadb5d7199917601fb9b5"
+    },
+    "cap.bundled.sqlite3.query.bounded": {
+      "version": "1.0.0",
+      "digest": "6c0af23f3e81580217ccbea8efc71b077088c073729ef6a42725f3c04b843bfd"
+    },
+    "cap.bundled.stat": {
+      "version": "1.0.0",
+      "digest": "e2c274f2c69d0cd2a138789a092ecd405b6d49a6a0bc705ed150bdadf3a846db"
+    },
+    "cap.bundled.tail": {
+      "version": "1.0.0",
+      "digest": "0d0230c92e9152d9a2a3dd5cc65c6d0075d8b8712473cb9a86b954892af00911"
+    },
+    "cap.bundled.toml2json": {
+      "version": "1.0.0",
+      "digest": "06da00e5f9699cb22e1211a79acc5d87fe574ea4aca476c7ae9c63bccfa9f6c4"
+    },
+    "cap.bundled.touch": {
+      "version": "1.0.0",
+      "digest": "1e1c2c823d4ecf6e805f2d9660dc873b5e43072ad7041bc1646898649a6b48d3"
+    },
+    "cap.bundled.tr": {
+      "version": "2.0.0",
+      "digest": "18fea841fe0bc506242c8fdcdd87b49f073b9c688642740a27d0d72f5dafacf9"
+    },
+    "cap.bundled.tree": {
+      "version": "1.0.0",
+      "digest": "9bd2b5cd72660e6fd2e6d2c72db3b9990c890050cbc8ad19c1981515e74a78fa"
+    },
+    "cap.bundled.truncate": {
+      "version": "1.0.0",
+      "digest": "1a0a8bb2ba34135eaae0b79474f522f7ecbab4f7713e441ec143a3eb63aa1c41"
+    },
+    "cap.bundled.uniq": {
+      "version": "2.0.0",
+      "digest": "5420d92b7e3bd4574a2e18d84d51ae172c783011d051fb57fa2cbd0c5dff06da"
+    },
+    "cap.bundled.uuid": {
+      "version": "1.0.0",
+      "digest": "b846db4811b6ac0127299a65ccf241aeebd94610d03609afdee0085c90438cf9"
+    },
+    "cap.bundled.wc": {
+      "version": "2.0.0",
+      "digest": "c07a4b5ee6f1a15ba5da98095bafd13e1f05359c14b632ed53f42ee2f79c6765"
+    },
+    "cap.bundled.xxd": {
+      "version": "1.0.0",
+      "digest": "9e241cf7874d4b96f9c88a136f6b991637bf878974413f7d3eef2c4f974e9eae"
+    },
+    "cap.bundled.zxing": {
+      "version": "1.0.0",
+      "digest": "564e6f417e5a23f9ce85373df5ee6a8dc77814b98973a8bea81dc70e14c464b5"
+    }
+  },
+  "intentionalReadmissions": []
+}

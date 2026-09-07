@@ -219,7 +219,12 @@ Deno.test("jxl: runs through the REAL stream worker — decodes JXL to valid PNG
   }
 
   // 1. Small lossless fixture
-  const smallBytes = await Deno.readFile("/home/paulkinlan/cap-evidence/cap-jxl/fixtures/small8.jxl");
+  // chrome-agent-platform-ne8u: these two fixtures used to be read from an absolute
+  // path under the author's home (`/home/<user>/cap-evidence/cap-jxl/fixtures/...`)
+  // with no catch, so the whole admission test could only ever run on one machine and
+  // failed loudly on every other checkout. They are committed here (31 KB + 101 KB,
+  // well inside a repo that already tracks 298 binary artifacts) and read repo-relative.
+  const smallBytes = await Deno.readFile(new URL("./fixtures/jxl/small8.jxl", import.meta.url));
   const smallOut = await run([], b64(smallBytes));
   assert(smallOut.ok, `small lossless run failed: ${smallOut.error ?? smallOut.exitCode}`);
   const smallInfo = parsePngDimensions(smallOut.bytes);
@@ -228,7 +233,7 @@ Deno.test("jxl: runs through the REAL stream worker — decodes JXL to valid PNG
   assertEquals(smallInfo.bitDepth, 8);
 
   // 2. 1 MP lossy fixture
-  const lossyBytes = await Deno.readFile("/home/paulkinlan/cap-evidence/cap-jxl/fixtures/lossy-1mp.jxl");
+  const lossyBytes = await Deno.readFile(new URL("./fixtures/jxl/lossy-1mp.jxl", import.meta.url));
   const lossyOut = await run(["--to", "png"], b64(lossyBytes));
   assert(lossyOut.ok, `lossy 1MP run failed: ${lossyOut.error ?? lossyOut.exitCode}`);
   const lossyInfo = parsePngDimensions(lossyOut.bytes);
