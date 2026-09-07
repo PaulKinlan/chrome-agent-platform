@@ -6663,7 +6663,10 @@ const handlers = mergeRouteMaps(
       return {
         ok: true,
         result: boundPreviewResult(envelope.result, {
-          stdoutEncoding: spec.stdoutEncoding,
+          // 8oil: the JOB's per-argv output encoding, not the spec's static row —
+          // imageops info / zxing read / compressops info are utf8 while their
+          // spec rows are base64, so the spec would reject a completed run.
+          stdoutEncoding: job.stdoutEncoding,
         }),
       };
     } catch (error) {

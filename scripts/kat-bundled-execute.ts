@@ -192,13 +192,13 @@ try {
         arguments: { args: [], stdin: "" },
       }) },
       // az4k: "zstd compress" ranks compressops #1 in the real catalog search
-      // (measured). `info` is the utf8 subcommand — it proves the DEFAULT-TIER
-      // dispatch class without conflating the separate binary-stdout gap
-      // (chrome-agent-platform-8oil: zstd/brotli frames under a utf8 encoding).
+      // (measured). 8oil: the pair is the COMPRESSION subcommand now — zstd
+      // emits a frame (the y75s value), not just the info report. `zstd -l 3`
+      // proves the default-tier dispatch class AND the binary-stdout arm.
       { tool: "search_tools", args: { query: "zstd compress", limit: 5 } },
       { tool: "execute_tool", args: (req: any) => ({
         selectionRef: refFor(req, "compressops"),
-        arguments: { args: ["info"], stdin: "hello" },
+        arguments: { args: ["zstd", "-l", "3"], stdin: "hello" },
       }) },
       // m3vb: "optimise png" ranks oxipng #1 over all bundled descriptors in the
       // real catalog search (measured before this pair was added).
@@ -322,16 +322,17 @@ try {
         `uuid output lacks a UUID: ${out.slice(0, 300)}`);
     }],
     ["compressops", "execute_tool", (env) => {
-      // az4k: compressops declares the DEFAULT tier (2048 pages). Under the
-      // old hardcoded tiny job the worker refused it (memory-rejected) on
-      // every live run since ten9. It must now EXECUTE: `info` on 5 bytes
-      // reports {"bytes":5,"magic":"unknown"}.
+      // az4k: compressops declares the DEFAULT tier (2048 pages). 8oil: the
+      // pair is the COMPRESSION subcommand — `zstd -l 3` on "hello" emits a
+      // zstd frame (magic 28b52ffd → "KLUv/Q" in canonical base64), proving
+      // the binary-stdout arm the utf8 encoding used to refuse. It must EXECUTE.
       assert(env?.ok === true, `compressops in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
       const out = JSON.stringify(env?.result ?? "");
       assert(!out.includes("memory-rejected") && !out.includes("memory_exceeds_ceiling"),
         `compressops was memory-rejected — the job lane dropped the declared tier again: ${out.slice(0, 300)}`);
-      assert(out.includes("magic") && out.includes("bytes"),
-        `compressops info output lacks the frame report: ${out.slice(0, 300)}`);
+      assert(!out.includes("The encoded data is not valid") && !out.includes("runtime-error"),
+        `compressops zstd was utf8-rejected — the stdout encoding is not base64 (8oil): ${out.slice(0, 300)}`);
+      assert(out.includes("KLUv/Q"), `compressops zstd output lacks the frame magic (base64): ${out.slice(0, 300)}`);
     }],
     ["oxipng", "execute_tool", (env) => {
       // m3vb: the first tool admitted STRAIGHT into ten9's offscreen WASI-job
@@ -391,14 +392,29 @@ try {
   // routes carry the declared tier.
   for (const [toolId, args, stdin, verify] of [
     ["gzip", [], "hello gzip", (text: string) => {
-      assert(text.includes("1f8b") || text.includes("4X8") || text.includes("gB("),
-        `gzip preview output lacks the gzip magic: ${text.slice(0, 200)}`);
+      // gzip output is a base64 frame — the RFC1952 magic 1f8b is "H4sI" at a
+      // byte-aligned base64 start (any prior literal missed it: 4X8 / gB().
+      assert(text.includes("H4sI") || text.includes("1f8b"),
+        `gzip preview output lacks the gzip magic (base64 or hex): ${text.slice(0, 200)}`);
     }],
-    ["compressops", ["info"], "hello", (text: string) => {
+    // az4k: the DEFAULT-tier tool previews through the Settings route. 8oil:
+    // info takes a frame on stdin as canonical base64 (bytes-in) — the fixture
+    // is the "hello" zstd frame, so the utf8 report names the zstd magic.
+    ["compressops", ["info"], "KLUv/QBYKQAAaGVsbG8=", (text: string) => {
       assert(!text.includes("memory-rejected") && !text.includes("memory_exceeds_ceiling"),
         `compressops preview was memory-rejected — the Settings route dropped the declared tier: ${text.slice(0, 200)}`);
-      assert(text.includes("magic") && text.includes("bytes"),
-        `compressops preview output lacks the frame report: ${text.slice(0, 200)}`);
+      assert(!text.includes("preview_result_stdout"),
+        `compressops info preview was rejected by the route's encoding bound (8oil): ${text.slice(0, 200)}`);
+      assert(text.includes("zstd") && text.includes("magic"),
+        `compressops info preview output lacks the frame report: ${text.slice(0, 200)}`);
+    }],
+    // 8oil: a COMPRESSION preview — the Settings route must bound the envelope
+    // with the JOB's per-argv encoding (utf8 info above / base64 frame here),
+    // not the spec's static row. j6au landed (the preview host executes), so
+    // this now proves the route end-to-end.
+    ["compressops", ["zstd", "-l", "3"], "hello", (text: string) => {
+      assert(!text.includes("preview_result_stdout"), `compressops zstd preview was rejected by the route's encoding bound (8oil): ${text.slice(0, 200)}`);
+      assert(text.includes("KLUv/Q"), `compressops zstd preview output lacks the zstd frame magic (base64): ${text.slice(0, 200)}`);
     }],
   ] as Array<[string, string[], string, (text: string) => void]>) {
     const t0 = Date.now();

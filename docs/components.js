@@ -12702,7 +12702,7 @@ class ToolLibrary extends Component {
     if (value && typeof value === "object") {
       out.classList.toggle("error", value.ok !== true);
       const text = value.ok === true && value.stdoutEncoding === "base64"
-        ? `gzip output · ${Number.isSafeInteger(value.stdoutBytes) ? value.stdoutBytes : 0} bytes · canonical base64\n${String(value.stdoutBase64 ?? "")}`
+        ? `binary output · ${Number.isSafeInteger(value.stdoutBytes) ? value.stdoutBytes : 0} bytes · canonical base64\n${String(value.stdoutBase64 ?? "")}`
         : value.ok === true
         ? String(value.stdout ?? "")
         : String(value.error ?? "preview failed");

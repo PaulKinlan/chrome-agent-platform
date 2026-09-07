@@ -150,7 +150,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   zxing: "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
   imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
   hash_blake3: "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
-  compressops: "compressops - compress or decompress data with zstd or brotli. Use to compress and decompress data streams or check frame formats. In/out: bytes stdin to bytes stdout. Subcommands: zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
+  compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
   sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
@@ -628,6 +628,10 @@ for (const pkg of packages) {
     "Settings preview requires an explicit owner click and model execution requires live run ownership; both enumerate only the immutable nested /job/inputs seed.";
   const GZIP_ADMITTED_CAVEAT =
     "Settings preview represents lossless binary output as canonical base64; file-backed model execution keeps binary stdout as an owner-bound OPFS reference.";
+  const COMPRESSOPS_ADMITTED_CAVEAT =
+    "Decompress and info take a base64 frame on stdin; compressed and decompressed output is canonical base64 (gzip's lossless binary arm). Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation.";
+  const ZXING_ADMITTED_CAVEAT =
+    "zxing read takes an image on stdin as canonical base64; write emits the PNG as canonical base64. Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation.";
   const TRUNCATE_ADMITTED_CAVEAT =
     "Execution is confined to the spec-owned scratch/touched fixture; the observable mutation is the post-run stat readback. Settings requires an owner click and model execution requires live run ownership.";
   const TOUCH_ADMITTED_CAVEAT = TRUNCATE_ADMITTED_CAVEAT;
@@ -661,6 +665,8 @@ for (const pkg of packages) {
       : pkg.toolId === "du" ? DU_ADMITTED_CAVEAT
       : pkg.toolId === "tree" ? TREE_ADMITTED_CAVEAT
       : pkg.toolId === "gzip" ? GZIP_ADMITTED_CAVEAT
+      : pkg.toolId === "compressops" ? COMPRESSOPS_ADMITTED_CAVEAT
+      : pkg.toolId === "zxing" ? ZXING_ADMITTED_CAVEAT
       : pkg.toolId === "truncate" ? TRUNCATE_ADMITTED_CAVEAT
       : pkg.toolId === "touch" ? TOUCH_ADMITTED_CAVEAT
       : pkg.toolId === "sqlite3_query_bounded" ? SQLITE_ADMITTED_CAVEAT

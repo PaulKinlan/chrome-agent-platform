@@ -915,7 +915,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
   "caveats": [
    "reads png/jpeg (anything stb_image decodes); writes png only; stdin/stdout; text is UTF-8.",
-   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+   "zxing read takes an image on stdin as canonical base64; write emits the PNG as canonical base64. Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute"
@@ -984,10 +984,10 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "lane": "compressops",
   "displayName": "compressops",
   "category": "data",
-  "description": "compressops - compress or decompress data with zstd or brotli. Use to compress and decompress data streams or check frame formats. In/out: bytes stdin to bytes stdout. Subcommands: zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
+  "description": "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   "caveats": [
    "zstd and brotli only; stdin/stdout; no in-place archive manipulation.",
-   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+   "Decompress and info take a base64 frame on stdin; compressed and decompressed output is canonical base64 (gzip's lossless binary arm). Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
   ],
   "capabilities": [
    "compute"

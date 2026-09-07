@@ -86,7 +86,7 @@ Deno.test("gzip spec/request: immutable exact modes, UTF-8 scalar checks and str
     expectReject({ toolId: "gzip", args, stdin: "" }, "preview_args");
   }
   for (const stdin of ["\ufeffhello", "a\0b", "\ud800", "x\udfff"]) {
-    expectReject({ toolId: "gzip", args: [], stdin }, "preview_gzip_text");
+    expectReject({ toolId: "gzip", args: [], stdin }, "preview_stdin_text");
   }
   // dptw: text past the removed 2048-byte cap is accepted whole.
   assertEquals(validatePreviewInput({ toolId: "gzip", args: [], stdin: "a".repeat(2049) }).stdin.length, 2049, "long UTF-8 text accepted");
@@ -96,7 +96,7 @@ Deno.test("gzip spec/request: immutable exact modes, UTF-8 scalar checks and str
   for (const stdin of [
     ` ${HELLO_GZIP_BASE64}`, `${HELLO_GZIP_BASE64}\n`, "____",
     HELLO_GZIP_BASE64.slice(0, -1), "Zh==", "A===", "AA=A", "é===",
-  ]) expectReject({ toolId: "gzip", args: ["-d"], stdin }, "preview_gzip_base64");
+  ]) expectReject({ toolId: "gzip", args: ["-d"], stdin }, "preview_stdin_base64");
   // dptw: canonical base64 of any decoded size is accepted (shape, not size).
   const longCanonical = encodeCanonicalBase64(new Uint8Array(4097));
   assertEquals(validatePreviewInput({ toolId: "gzip", args: ["-d"], stdin: longCanonical }).stdin, longCanonical, "long canonical base64 accepted");

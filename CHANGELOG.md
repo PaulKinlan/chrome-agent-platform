@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.311] — 2026-09-07
+- The barcode reader and the compression tool now accept and return raw bytes in an agent task — compress to a base64 frame, decompress a base64 frame, read a barcode from an image
+
 ## [0.3.310] — 2026-09-07
 - Release notes now stay in sync across checkouts and sanitize scoped commit subjects
 
