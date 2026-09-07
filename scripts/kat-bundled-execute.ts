@@ -60,6 +60,10 @@ const OXIPNG_INPUT = await naiveRgbaPng(32, 32);
 const OXIPNG_INPUT_B64 = base64Of(OXIPNG_INPUT);
 const JXL_INPUT_BYTES = await Deno.readFile(new URL("../packages/bundled/evidence/jxl/fixtures/small8.jxl", import.meta.url).pathname);
 const JXL_INPUT_B64 = base64Of(JXL_INPUT_BYTES);
+// moim: a pinned shapes/paths SVG (the native probe's fixture (a)) —
+// no text, no external refs: the assertion is the PNG signature + size.
+const SVG_RASTERISE_INPUT = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect x="8" y="8" width="240" height="240" rx="16" fill="#1e293b"/><circle cx="128" cy="96" r="56" fill="#38bdf8"/><path d="M40 216 L128 140 L216 216 Z" fill="#f59e0b"/></svg>`;
+const SVG_RASTERISE_INPUT_B64 = btoa(SVG_RASTERISE_INPUT);
 const GREP_STDIN = "MATCH one\nnope\nMATCH two\n";
 const SORT_STDIN = "pear\napple\nfig\n";
 
@@ -216,6 +220,14 @@ try {
         selectionRef: refFor(req, "jxl"),
         arguments: { args: [], stdin: JXL_INPUT_B64 },
       }) },
+      // moim: the NATIVE svg rasteriser — "render svg to png" must surface it
+      // over the (not-built) resvg candidates, and execution must return a real
+      // PNG through the offscreen canvas (no Wasm, external hrefs never fetched).
+      { tool: "search_tools", args: { query: "render svg to png", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "svg_rasterise"),
+        arguments: { args: ["--width", "256", "--background", "#ffffff"], stdin: SVG_RASTERISE_INPUT_B64 },
+      }) },
       { text: "Bundled execute spot-check complete." },
     ],
   });
@@ -248,9 +260,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('#run-task')?.click()`);
 
-  // 10 searches + 10 executes + the final text = 21 model calls; the 21st
+  // 11 searches + 11 executes + the final text = 23 model calls; the 23rd
   // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 21;
+  const EXPECTED_CALLS = 23;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;
@@ -367,6 +379,19 @@ try {
       const bytes = Number(out.match(/"stdoutBytes":(\d+)/)?.[1] ?? NaN);
       assert(Number.isFinite(bytes) && bytes > 0, `jxl output has invalid stdoutBytes: ${out.slice(0, 300)}`);
     }],
+    ["svg_rasterise", "execute_tool", (env) => {
+      // moim: the NATIVE offscreen rasteriser — must be findable by
+      // "render svg to png" and return a REAL PNG (signature + plausible size)
+      // through the offscreen canvas. No Wasm anywhere in this path.
+      assert(env?.ok === true, `svg_rasterise in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(!out.includes("native_offscreen_dispatcher_unavailable") && !out.includes("no host response"),
+        `svg_rasterise was not dispatched to the offscreen host: ${out.slice(0, 300)}`);
+      assert(out.includes("iVBORw0KGgo"), `svg_rasterise output lacks the PNG signature (base64): ${out.slice(0, 300)}`);
+      const bytes = Number(out.match(/"stdoutBytes":(\d+)/)?.[1] ?? NaN);
+      assert(Number.isFinite(bytes) && bytes > 100 && bytes < 200_000,
+        `svg_rasterise PNG size is implausible (stdoutBytes=${bytes}): ${out.slice(0, 300)}`);
+    }],
   ];
 
   for (const [toolId, , verify] of pairs) {
@@ -389,6 +414,7 @@ try {
         : toolId === "compressops" ? "offscreen WASI job (az4k: default tier carried by the job)"
         : toolId === "oxipng" ? "offscreen WASI job (m3vb: admitted straight into the job lane)"
         : toolId === "jxl" ? "offscreen WASI job (agpu: admitted straight into the job lane)"
+        : toolId === "svg_rasterise" ? "native offscreen canvas (moim: browser rasteriser, no Wasm)"
         : toolId === "hash_blake3" ? "call-export host" : "offscreen WASI stream",
       ok: env?.ok === true,
       result: env?.result ?? env,

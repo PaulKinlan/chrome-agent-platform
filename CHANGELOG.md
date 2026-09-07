@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.314] — 2026-09-07
+- svg_rasterise — on-device SVG rasterisation through the browser's own renderer (native suffices; resvg not needed)
+
 ## [0.3.313] — 2026-09-07
 - WebAssembly execution worker avoids mutating global network APIs in test environments
 
