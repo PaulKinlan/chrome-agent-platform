@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.324] — 2026-09-07
+- Automated browser check now confirms that all attachments are kept without a count limit
+
 ## [0.3.323] — 2026-09-07
 - the quiet-window refusal pins are anchored in the handler, not on its imports
 

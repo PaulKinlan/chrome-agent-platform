@@ -500,9 +500,10 @@ const ran = new Set();
 // name → owning CAP-FB id. Such a check still runs and is printed as
 // EXPECTED-RED with its owner on every run; it is not counted as a failure,
 // and the run FAILS the moment it passes so the entry is pruned. Never a skip.
-const EXPECTED_RED = new Map<string, string>([
-  ["attachment count cap (12 → 4 over-count dropped, journal records 8)", "dptw"],
-]);
+// chrome-agent-platform-t69f: dptw's entry is PRUNED — the journey-6
+// assertion was re-pinned to the post-dptw truth (unlimited retention) and
+// PASSES live. The mechanism stays for future honest ownership.
+const EXPECTED_RED = new Map<string, string>([]);
 function check(name, cond) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   ran.add(name);
@@ -760,7 +761,7 @@ const EXPECTED = [
   "Generated-image strip: the run's screenshot renders in a strip resolved from the store",
   "per-origin clear leaves B intact",
   "memory: version tokens are monotonic + never reused (round-27 CAS)",
-  "attachment count cap (12 → 4 over-count dropped, journal records 8)",
+  "attachment retention is unlimited: all 12 kept, none dropped, journal records 12 (dptw)",
   "attachment: declared/image vs text/plain MIME mismatch is dropped",
   "alarm scheduled (name returned)",
   "one-shot alarm fired + journaled task AND result",
@@ -6451,13 +6452,17 @@ async function main() {
       attachments: twelve,
     });
     const dropped = runRes?.droppedAttachments ?? [];
-    const droppedOver = dropped.filter((d) => d.reason === "over count limit");
     const journal = await msgValue({ type: "memory.get", origin: "master", key: "journal" }) ?? [];
     const attachTask = (Array.isArray(journal) ? journal : [])
       .find((e) => e?.type === "task" && e?.task === "attach");
+    // chrome-agent-platform-t69f: dptw removed the attachment COUNT cap (the
+    // old 8-attachment limit with "over count limit" drops no longer exists in
+    // the product — validateRunAttachments enforces only the dataURL SHAPE).
+    // The journey pins the POST-dptw truth: unlimited retention, nothing
+    // dropped, the journal recording every attachment.
     check(
-      "attachment count cap (12 → 4 over-count dropped, journal records 8)",
-      droppedOver.length === 4 && attachTask?.attachmentCount === 8,
+      "attachment retention is unlimited: all 12 kept, none dropped, journal records 12 (dptw)",
+      dropped.length === 0 && attachTask?.attachmentCount === 12,
     );
     const mimeMismatch = await msgValue({
       type: "agent.run",
