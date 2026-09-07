@@ -39,6 +39,13 @@ export const SERIAL_REASONS = {
   "tests/chrome-launch-lock.test.ts": "tests process-global Chrome canonical lock and mutates CAP_CHROME_LOCK_PATH (races with other lock tests)",
   "tests/chrome-launch-lock-scope.test.ts": "tests Chrome lock scopes and mutates CAP_CHROME_SLOT_DIR (races with other lock tests)",
   "tests/chrome-slot-semaphore.test.ts": "tests Chrome bounded concurrency semaphore and mutates CAP_CHROME_SLOT_DIR (races with other lock tests)",
+  // mee3: pins the four adjudicated survivors (S15 dead-holder accounting, S9
+  // blocking probe, S16/S17 the unreported wait). Each test owns a unique
+  // temporary slot dir so it cannot touch another lane's slots, but it still
+  // mutates process-global CAP_CHROME_SLOT_DIR and asserts on wall-clock
+  // queueing thresholds (a 1500 ms skip bound against a 2000 ms marker window),
+  // which is exactly what the 32-worker parallel phase makes flaky.
+  "tests/chrome-slot-semaphore-honesty.test.ts": "mutates CAP_CHROME_SLOT_DIR and makes wall-clock queueing assertions (races/flakes with other lock tests under the parallel phase)",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
