@@ -1566,3 +1566,45 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 .board-deny-add { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: end; }
 .board-deny-add provider-select { flex: 1 1 160px; min-width: 0; }
 .board-deny-add .btn { flex: 0 0 auto; }
+
+/* Python network access — the per-origin grants that Python's cap.fetch reads
+   (bead chrome-agent-platform-4p7j.2). Deliberately plain: a list the owner
+   scans for what is allowed, and one Remove per row. */
+.python-net-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 12px;
+  flex-wrap: wrap;
+}
+.python-net-add input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: inherit;
+  font: inherit;
+}
+.python-net-list {
+  display: grid;
+  gap: 6px;
+}
+.python-net-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+.python-net-origin {
+  font-family: var(--mono, ui-monospace, monospace);
+  overflow-wrap: anywhere;
+}
+.python-net-meta {
+  margin-left: auto;
+  text-align: right;
+}

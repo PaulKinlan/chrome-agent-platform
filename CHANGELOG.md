@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.311] — 2026-09-07
+- Python can reach the web again, but only origins you allow — and you see every request
+
 ## [0.3.310] — 2026-09-07
 - Release notes now stay in sync across checkouts and sanitize scoped commit subjects
 

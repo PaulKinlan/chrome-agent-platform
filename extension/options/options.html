@@ -263,6 +263,16 @@
         <p
           class="muted">Capability permissions are optional and requested just-in-time from your click (the chat offers the same Enable inline). Host access and the permissions the extension needs to run are granted at install. This is the live, verified state of each grant.</p>
         <div id="permission-list" class="permission-list"></div>
+
+        <h3 data-i18n="options_python_network_access">Python network access</h3>
+        <p class="muted" data-i18n="options_python_network_access_help">Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies, and every request and refusal is shown to you in the run. Remove an origin to stop it immediately.</p>
+        <div class="python-net-add">
+          <label for="python-net-origin" data-i18n="options_origin">Origin</label>
+          <input id="python-net-origin" type="text" placeholder="https://api.example.com" autocomplete="off" spellcheck="false">
+          <button id="python-net-add" class="btn small" type="button" data-i18n="options_allow">Allow</button>
+          <span id="python-net-status" class="muted" role="status"></span>
+        </div>
+        <div id="python-net-list" class="python-net-list"></div>
       </section>
 
       <section id="skills" class="panel">

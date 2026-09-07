@@ -402,5 +402,17 @@
   },
   "options_write_a": {
     "message": "Write a "
+  },
+  "options_python_network_access": {
+    "message": "Python network access"
+  },
+  "options_python_network_access_help": {
+    "message": "Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies, and every request and refusal is shown to you in the run. Remove an origin to stop it immediately."
+  },
+  "options_allow": {
+    "message": "Allow"
+  },
+  "options_origin": {
+    "message": "Origin"
   }
 }

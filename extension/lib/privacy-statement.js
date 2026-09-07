@@ -5,7 +5,9 @@
 //   sent    — the hosted provider hosts come from OUTBOUND_HOSTS
 //             (lib/provider.js, derived from the presets); the skill-import
 //             hosts are pinned to lib/skill-import.js by the unit test; the
-//             script-fetch line describes the cap:fetch gate
+//             script-fetch line describes the cap:fetch gate; the python-fetch
+//             line describes Python's per-origin grants (lib/python-network.js,
+//             background/service-worker.js "python.fetch")
 //             (background/service-worker.js "cap:fetch", lib/fetch-policy.js).
 //   stored  — one row per FACTORY_RESET_STORAGE_CLASSES entry
 //             (lib/factory-reset.js), each with its own reader-language copy;
@@ -124,6 +126,10 @@ export function buildPrivacyStatement({ outboundHosts = [], retentionPolicy = nu
     {
       id: "script-fetch",
       description: "A script an agent writes can fetch only the web addresses you approved on its card, and sends no cookies or logins with them.",
+    },
+    {
+      id: "python-fetch",
+      description: "Python an agent writes can reach only the origins you allowed in Settings, sends no cookies or logins, and every request it makes or is refused is shown to you in the run.",
     },
     {
       id: "nothing-else",

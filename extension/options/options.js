@@ -2387,6 +2387,120 @@ async function renderPermissions() {
     }
     list.appendChild(details);
   }
+  await renderPythonNetworkGrants();
+}
+
+// ── Python network access (bead chrome-agent-platform-4p7j.2) ──
+//
+// Python written by a model runs with NO ambient network: stage S0 removed
+// fetch/XHR/WebSocket/… from the Pyodide worker outright. What it has instead is
+// `await cap.fetch(url)`, which reaches ONLY the origins listed here. This panel
+// is that list, and it is the whole authority: the service worker checks it on
+// every request and removing a row revokes access immediately — there is no
+// disabled state that could disagree with what the owner is reading.
+//
+// Untrusted text discipline: an origin is owner-typed, but it is still rendered
+// with textContent (never innerHTML), like everything else here.
+let pythonNetWired = false;
+
+function pythonNetStatus(message, isError = false) {
+  const el = $("#python-net-status");
+  if (!el) return;
+  el.textContent = message ?? "";
+  el.classList.toggle("error", Boolean(isError));
+}
+
+async function renderPythonNetworkGrants() {
+  const list = $("#python-net-list");
+  if (!list) return;
+  if (!pythonNetWired) {
+    pythonNetWired = true;
+    const input = $("#python-net-origin");
+    const add = async () => {
+      const origin = String(input?.value ?? "").trim();
+      if (!origin) {
+        pythonNetStatus("Type an origin first, for example https://api.example.com.", true);
+        return;
+      }
+      pythonNetStatus("Adding…");
+      const res = await chrome.runtime
+        .sendMessage({ type: "python.network.grant", origin })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (!res?.ok) {
+        pythonNetStatus(res?.error ?? "That origin could not be added.", true);
+        return;
+      }
+      if (input) input.value = "";
+      pythonNetStatus(res.added ? `${res.origin} can now be reached.` : `${res.origin} was already on the list.`);
+      await renderPythonNetworkGrants();
+    };
+    $("#python-net-add")?.addEventListener("click", add);
+    input?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); add(); }
+    });
+  }
+
+  const res = await chrome.runtime
+    .sendMessage({ type: "python.network.grants" })
+    .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  list.replaceChildren();
+  if (!res?.ok) {
+    const err = document.createElement("p");
+    err.className = "muted error";
+    err.textContent = res?.error ?? "The list could not be read.";
+    list.appendChild(err);
+    return;
+  }
+  const grants = Array.isArray(res.grants) ? res.grants : [];
+  if (grants.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "muted";
+    empty.textContent = "No origins allowed. Python cannot reach anything on the network.";
+    list.appendChild(empty);
+    return;
+  }
+  for (const grant of grants) {
+    const row = document.createElement("div");
+    row.className = "python-net-row";
+    row.dataset.origin = grant.origin;
+
+    const origin = document.createElement("span");
+    origin.className = "python-net-origin";
+    origin.textContent = grant.origin;
+    row.appendChild(origin);
+
+    const meta = document.createElement("span");
+    meta.className = "muted python-net-meta";
+    const when = Number.isFinite(grant.grantedAt) && grant.grantedAt > 0
+      ? new Date(grant.grantedAt).toLocaleString()
+      : "an earlier session";
+    meta.textContent = grant.gesture === "first-use-prompt"
+      ? `Allowed when a task asked, ${when}`
+      : `Allowed here, ${when}`;
+    row.appendChild(meta);
+
+    const remove = document.createElement("button");
+    remove.className = "btn small ghost";
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.setAttribute("aria-label", `Remove ${grant.origin}`);
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      pythonNetStatus(`Removing ${grant.origin}…`);
+      const out = await chrome.runtime
+        .sendMessage({ type: "python.network.revoke", origin: grant.origin })
+        .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      if (!out?.ok) {
+        remove.disabled = false;
+        pythonNetStatus(out?.error ?? "That origin could not be removed.", true);
+        return;
+      }
+      pythonNetStatus(`${grant.origin} can no longer be reached.`);
+      await renderPythonNetworkGrants();
+    });
+    row.appendChild(remove);
+    list.appendChild(row);
+  }
 }
 
 // ── System hooks (the chrome.* event surface + the deny-list) ──
