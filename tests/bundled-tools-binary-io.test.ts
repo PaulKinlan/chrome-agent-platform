@@ -84,7 +84,7 @@ Deno.test("8oil: the spec census names the compression tool as base64-stdout (ba
   // arm is text-out.
   assertEquals(previewSpecFor("base64").stdoutEncoding, "utf8");
   for (const [toolId, s] of Object.entries(PREVIEW_SPECS)) {
-    const expect = ["gzip", "imageops", "zxing", "oxipng", "compressops"].includes(toolId) ? "base64" : "utf8";
+    const expect = ["gzip", "imageops", "zxing", "oxipng", "compressops", "jxl"].includes(toolId) ? "base64" : "utf8";
     assertEquals(s.stdoutEncoding, expect, `${toolId}: spec stdoutEncoding`);
   }
   // The spec is frozen, and only tiny/default tiers appear (az4k).

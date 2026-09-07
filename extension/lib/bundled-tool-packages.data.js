@@ -1050,6 +1050,42 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "disabledReason": null
  },
  {
+  "packageId": "cap.bundled.jxl",
+  "version": "1.0.0",
+  "toolId": "jxl",
+  "lane": "jxl",
+  "displayName": "jxl",
+  "category": "media",
+  "description": "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
+  "caveats": [
+   "JXL in, PNG out; stdin/stdout; decodes JPEG XL to raw PNG (base64 at the tool boundary).",
+   "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation."
+  ],
+  "capabilities": [
+   "compute"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "MIT AND Apache-2.0",
+   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "notices": "extension/wasm/licenses/jxl-NOTICES.txt"
+  },
+  "binary": {
+   "sha256": "d268e1ced9db8192d986d2138b03dcec174a88865e10e9f9c7c8e53ab3c0010a",
+   "bytes": 1376194,
+   "tier": "default",
+   "initialPages": 20,
+   "maxPages": 2048
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.jxl-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": true,
+  "disabled": false,
+  "disabledReason": null
+ },
+ {
   "packageId": "cap.bundled.hash.blake3",
   "version": "1.0.0",
   "toolId": "hash_blake3",

@@ -58,6 +58,8 @@ const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8B
 // binary fixture; the same encoder shape is pinned in oxipng-admission.test.ts.
 const OXIPNG_INPUT = await naiveRgbaPng(32, 32);
 const OXIPNG_INPUT_B64 = base64Of(OXIPNG_INPUT);
+const JXL_INPUT_BYTES = await Deno.readFile(new URL("../packages/bundled/evidence/jxl/fixtures/small8.jxl", import.meta.url).pathname);
+const JXL_INPUT_B64 = base64Of(JXL_INPUT_BYTES);
 const GREP_STDIN = "MATCH one\nnope\nMATCH two\n";
 const SORT_STDIN = "pear\napple\nfig\n";
 
@@ -207,6 +209,13 @@ try {
         selectionRef: refFor(req, "oxipng"),
         arguments: { args: [], stdin: OXIPNG_INPUT_B64 },
       }) },
+      // agpu: "decode jpeg xl" ranks jxl #1 over all bundled descriptors in the
+      // real catalog search.
+      { tool: "search_tools", args: { query: "decode jpeg xl", limit: 5 } },
+      { tool: "execute_tool", args: (req: any) => ({
+        selectionRef: refFor(req, "jxl"),
+        arguments: { args: [], stdin: JXL_INPUT_B64 },
+      }) },
       { text: "Bundled execute spot-check complete." },
     ],
   });
@@ -239,9 +248,9 @@ try {
   assert(typed === true, "composer input not found");
   await cdp.eval(ntp.sessionId, `document.querySelector('#run-task')?.click()`);
 
-  // 9 searches + 9 executes + the final text = 19 model calls; the 19th
+  // 10 searches + 10 executes + the final text = 21 model calls; the 21st
   // carries the last execute's result. Wait well past that.
-  const EXPECTED_CALLS = 19;
+  const EXPECTED_CALLS = 21;
   let calls = 0;
   for (let i = 0; i < 240; i++) {
     calls = provider.requests.length;
@@ -348,6 +357,16 @@ try {
       assert(Number.isFinite(bytes) && bytes > 0 && bytes < OXIPNG_INPUT.length,
         `oxipng output is not smaller than its ${OXIPNG_INPUT.length}-byte input (stdoutBytes=${bytes}): ${out.slice(0, 300)}`);
     }],
+    ["jxl", "execute_tool", (env) => {
+      // agpu: the JPEG XL decode tool admitted straight into the job lane
+      assert(env?.ok === true, `jxl in-run execution failed: ${JSON.stringify(env)?.slice(0, 300)}`);
+      const out = JSON.stringify(env?.result ?? "");
+      assert(!out.includes("preview_only_tool") && !out.includes("not_a_stream_tool") && !out.includes("unknown_bundled_tool"),
+        `jxl was refused, not executed: ${out.slice(0, 300)}`);
+      assert(out.includes("iVBORw0KGgo"), `jxl output lacks the PNG signature (base64): ${out.slice(0, 300)}`);
+      const bytes = Number(out.match(/"stdoutBytes":(\d+)/)?.[1] ?? NaN);
+      assert(Number.isFinite(bytes) && bytes > 0, `jxl output has invalid stdoutBytes: ${out.slice(0, 300)}`);
+    }],
   ];
 
   for (const [toolId, , verify] of pairs) {
@@ -369,6 +388,7 @@ try {
         ? "offscreen WASI job (ten9 ungate: formerly preview-only)"
         : toolId === "compressops" ? "offscreen WASI job (az4k: default tier carried by the job)"
         : toolId === "oxipng" ? "offscreen WASI job (m3vb: admitted straight into the job lane)"
+        : toolId === "jxl" ? "offscreen WASI job (agpu: admitted straight into the job lane)"
         : toolId === "hash_blake3" ? "call-export host" : "offscreen WASI stream",
       ok: env?.ok === true,
       result: env?.result ?? env,
@@ -415,6 +435,10 @@ try {
     ["compressops", ["zstd", "-l", "3"], "hello", (text: string) => {
       assert(!text.includes("preview_result_stdout"), `compressops zstd preview was rejected by the route's encoding bound (8oil): ${text.slice(0, 200)}`);
       assert(text.includes("KLUv/Q"), `compressops zstd preview output lacks the zstd frame magic (base64): ${text.slice(0, 200)}`);
+    }],
+    ["jxl", [], JXL_INPUT_B64, (text: string) => {
+      assert(text.includes("iVBORw0KGgo"),
+        `jxl preview output lacks the PNG signature (base64): ${text.slice(0, 200)}`);
     }],
   ] as Array<[string, string[], string, (text: string) => void]>) {
     const t0 = Date.now();

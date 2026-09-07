@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.312] — 2026-09-07
+- JPEG XL images can now be decoded on-device using the jxl tool
+
 ## [0.3.311] — 2026-09-07
 - The barcode reader and the compression tool now accept and return raw bytes in an agent task — compress to a base64 frame, decompress a base64 frame, read a barcode from an image
 

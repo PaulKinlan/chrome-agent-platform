@@ -275,7 +275,7 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
   assertEquals(validatePreviewInput({ toolId: "sqlite3_query_bounded", args: [], stdin: JSON.stringify({ sql: "SELECT 1", params: [], database: "test.db", readOnly: true }) }).toolId, "sqlite3_query_bounded");
   // gzip + truncate + touch + sqlite are the appended tools after tree in the UI.
   assertEquals(JSON.stringify(PREVIEW_TOOL_IDS), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
+    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const spec of Object.values(PREVIEW_SPECS)) {
     assert(typeof spec.packageId === "string" && spec.packageId.startsWith("cap.bundled."), spec.toolId);
@@ -285,9 +285,9 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     // Binary-at-the-pipe tools emit base64: gzip always; imageops/zxing except
     // their utf8 subcommands (per-argv, previewStdoutEncoding); compressops
     // (8oil: its compression subcommands write frame bytes in both directions,
-    // info is per-argv utf8); oxipng. base64 -d stays utf8 (a natural-language
+    // info is per-argv utf8); oxipng; jxl (agpu). base64 -d stays utf8 (a natural-language
     // arm — it fails on non-base64 bytes, the contract stays honest).
-    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" || spec.toolId === "zxing" || spec.toolId === "oxipng" || spec.toolId === "compressops" ? "base64" : "utf8";
+    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" || spec.toolId === "zxing" || spec.toolId === "oxipng" || spec.toolId === "compressops" || spec.toolId === "jxl" ? "base64" : "utf8";
     assertEquals(spec.stdoutEncoding, expectedEncoding, `${spec.toolId}: immutable output encoding`);
   }
 });
@@ -379,7 +379,7 @@ Deno.test("preview: the bounded job binds the authority fences", () => {
   assert(threw === "preview_authority", "extra authority key fails closed");
 });
 
-Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 36 allowlisted tools", async () => {
+Deno.test("preview: immutable revalidation passes on the REAL shipped bytes for ALL 37 allowlisted tools", async () => {
   for (const toolId of PREVIEW_TOOL_IDS) {
     const spec = previewSpecFor(toolId);
     const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === toolId);
@@ -499,11 +499,11 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 36-tool static allowlist admits every shipped package", async () => {
+Deno.test("preview: the EXACT 37-tool static allowlist admits every shipped package", async () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
   // uslb: hash_blake3 admits WITHOUT a settings preview (call-export host).
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_blake3", "head", "imageops", "jq", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
+    ["awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_blake3", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const row of admitted) {
     if (row.callexport === true) {
@@ -515,7 +515,7 @@ Deno.test("preview: the EXACT 36-tool static allowlist admits every shipped pack
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 0, "all 36 are enabled");
+  assertEquals(notAdmitted.length, 0, "all 37 are enabled");
   assertEquals(notAdmitted.map((row) => row.toolId).sort(), []);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);
