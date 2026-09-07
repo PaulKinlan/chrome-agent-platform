@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.297] — 2026-09-07
-- Initial foundation for Emscripten-compiled WebAssembly tools with verified sandboxed ABI
+- Pinned no-eval Emscripten ABI fixtures verified in Chrome; runtime admission and host integration remain pending
 
 ## [0.3.296] — 2026-09-07
 - align version_name in manifest with package.json
