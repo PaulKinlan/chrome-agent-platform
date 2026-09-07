@@ -1,0 +1,1932 @@
+{
+  "format": "cap-emscripten-abi-evidence-v1",
+  "method": "WebAssembly.Module compile-only plus typed section decode; JavaScript token count; no glue import or Wasm instantiation",
+  "compilerProfile": {
+    "emscripten": "6.0.0",
+    "modularize": true,
+    "exportEs6": true,
+    "environment": "worker",
+    "dynamicExecution": false,
+    "filesystem": false,
+    "initialMemoryBytes": 16777216,
+    "memoryGrowth": false
+  },
+  "reproducibility": {
+    "compared": [
+      "build-a",
+      "build-b"
+    ],
+    "byteIdentical": true,
+    "mismatches": []
+  },
+  "builds": {
+    "build-a": [
+      {
+        "file": "image-resize.mjs",
+        "bytes": 7804,
+        "sha256": "3c1c0e4381fe914b33dd554905d28e8dc777f1bda4bd42dcf05edd1380d7bea0",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "image-resize.wasm",
+        "bytes": 102166,
+        "sha256": "2a3fd8992dec90f0308d6d8e1776c13f6fa991a38a571542db85c929e1ddb817",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "__assert_fail",
+              "kind": "function",
+              "type": {
+                "typeIndex": 3,
+                "params": [
+                  "i32",
+                  "i32",
+                  "i32",
+                  "i32"
+                ],
+                "results": []
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 7,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "free",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "malloc",
+              "kind": "function"
+            },
+            {
+              "name": "cap_resize_rgba",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 216,
+                "max": 216
+              }
+            ],
+            "globalCount": 1,
+            "tags": []
+          },
+          "customSections": []
+        }
+      },
+      {
+        "file": "link-main.mjs",
+        "bytes": 24464,
+        "sha256": "bcddb43afe69fc2fb90102bf3ab0fcf83395177098ce647659bf1ee707292d76",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "link-main.wasm",
+        "bytes": 6139,
+        "sha256": "03f92aec27b6f91a0a5aec0ed5d3a2e4ab6fa83517b79413eacaa9859654ae3f",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_increment",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "__stack_pointer",
+              "kind": "global"
+            },
+            {
+              "name": "cap_linked_compute",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "calloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_get_sbrk_ptr",
+              "kind": "function"
+            },
+            {
+              "name": "setThrew",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            },
+            {
+              "name": "__heap_base",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": null
+              }
+            ],
+            "globalCount": 2,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 24,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 2,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                },
+                {
+                  "type": 2,
+                  "bytes": 16,
+                  "needed": [
+                    "link-side.wasm"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "link-side.wasm",
+        "bytes": 95,
+        "sha256": "2fa7665a097af7bb3d456e2846f9f0edd5c7f110e924c57b4befe2a65e2dffee",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [],
+          "exports": [
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "side_increment",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [],
+            "tables": [],
+            "globalCount": 0,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 6,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 0,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-global.mjs",
+        "bytes": 6357,
+        "sha256": "85c44fb447553955b66a8cbf4e94483aa483cc63ff43b289167427b69568e934",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 2
+        }
+      },
+      {
+        "file": "negative-global.wasm",
+        "bytes": 307,
+        "sha256": "89b12fdc463a9f1aad4115d81ec10c8e842ee2743cd1a06df279f7b910069ec7",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "cap_ambient_global_probe",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "cap_probe_ambient_global",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "globalCount": 1,
+            "tags": []
+          },
+          "customSections": []
+        }
+      },
+      {
+        "file": "negative-main-em-asm.mjs",
+        "bytes": 25172,
+        "sha256": "ebfe54139ad7d8197d54dd7cc6d215c2975e6200d9731666682b8582d20462cc",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "negative-main-em-asm.wasm",
+        "bytes": 6168,
+        "sha256": "6d3b7f9a70e6fed564831b2e3c4e6378ba90542d38026f9694e4f86026f92564",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_em_asm",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "__stack_pointer",
+              "kind": "global"
+            },
+            {
+              "name": "cap_linked_compute",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "calloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_get_sbrk_ptr",
+              "kind": "function"
+            },
+            {
+              "name": "setThrew",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            },
+            {
+              "name": "__memory_base",
+              "kind": "global"
+            },
+            {
+              "name": "__heap_base",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": null
+              }
+            ],
+            "globalCount": 3,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 35,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 2,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                },
+                {
+                  "type": 2,
+                  "bytes": 27,
+                  "needed": [
+                    "negative-side-em-asm.wasm"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-main-em-js.mjs",
+        "bytes": 24681,
+        "sha256": "2567f33017fc0573d099b69c2fcd60ab65330b7c2e16c0abd4a88712a25a0852",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "negative-main-em-js.wasm",
+        "bytes": 6166,
+        "sha256": "23b752eeeb2f817a80442fb51955759d31ae08dd8af76040b19771a887eafc90",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_em_js",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "__stack_pointer",
+              "kind": "global"
+            },
+            {
+              "name": "cap_linked_compute",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "calloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_get_sbrk_ptr",
+              "kind": "function"
+            },
+            {
+              "name": "setThrew",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            },
+            {
+              "name": "__memory_base",
+              "kind": "global"
+            },
+            {
+              "name": "__heap_base",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": null
+              }
+            ],
+            "globalCount": 3,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 34,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 2,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                },
+                {
+                  "type": 2,
+                  "bytes": 26,
+                  "needed": [
+                    "negative-side-em-js.wasm"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-side-em-asm.wasm",
+        "bytes": 300,
+        "sha256": "2d7e22bd70dc7306797084beefe9178059db5ed8f95aa41209b149a063265504",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "emscripten_asm_const_int",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32",
+                  "i32",
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "__stack_pointer",
+              "kind": "global",
+              "type": {
+                "value": "i32",
+                "mutable": true
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "__memory_base",
+              "kind": "global",
+              "type": {
+                "value": "i32",
+                "mutable": false
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "memory",
+              "kind": "memory",
+              "type": {
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "side_em_asm",
+              "kind": "function"
+            },
+            {
+              "name": "__start_em_asm",
+              "kind": "global"
+            },
+            {
+              "name": "__stop_em_asm",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": true,
+                "module": "env",
+                "symbol": "memory",
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [],
+            "globalCount": 4,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 6,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 14,
+                    "memoryAlignment": 0,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-side-em-js.wasm",
+        "bytes": 237,
+        "sha256": "0b56cd361c65387a453c42553b99378f92775fc1d4ca4fc724e761e12a29f77b",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_js_increment",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "__memory_base",
+              "kind": "global",
+              "type": {
+                "value": "i32",
+                "mutable": false
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "memory",
+              "kind": "memory",
+              "type": {
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "side_em_js",
+              "kind": "function"
+            },
+            {
+              "name": "__em_js__side_js_increment",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": true,
+                "module": "env",
+                "symbol": "memory",
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [],
+            "globalCount": 2,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 6,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 37,
+                    "memoryAlignment": 0,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "numeric.mjs",
+        "bytes": 6155,
+        "sha256": "921175ec0ad89d8af17dbdffc49e58033c8717a246fe80b458f32e4a5a8584a9",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 0
+        }
+      },
+      {
+        "file": "numeric.wasm",
+        "bytes": 278,
+        "sha256": "fea83472b7e56292785f132d0c5f564048cf34ae047627334f504b28dd405503",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "cap_weighted_sum",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "globalCount": 1,
+            "tags": []
+          },
+          "customSections": []
+        }
+      }
+    ],
+    "build-b": [
+      {
+        "file": "image-resize.mjs",
+        "bytes": 7804,
+        "sha256": "3c1c0e4381fe914b33dd554905d28e8dc777f1bda4bd42dcf05edd1380d7bea0",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "image-resize.wasm",
+        "bytes": 102166,
+        "sha256": "2a3fd8992dec90f0308d6d8e1776c13f6fa991a38a571542db85c929e1ddb817",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "__assert_fail",
+              "kind": "function",
+              "type": {
+                "typeIndex": 3,
+                "params": [
+                  "i32",
+                  "i32",
+                  "i32",
+                  "i32"
+                ],
+                "results": []
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 7,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "free",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "malloc",
+              "kind": "function"
+            },
+            {
+              "name": "cap_resize_rgba",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 216,
+                "max": 216
+              }
+            ],
+            "globalCount": 1,
+            "tags": []
+          },
+          "customSections": []
+        }
+      },
+      {
+        "file": "link-main.mjs",
+        "bytes": 24464,
+        "sha256": "bcddb43afe69fc2fb90102bf3ab0fcf83395177098ce647659bf1ee707292d76",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "link-main.wasm",
+        "bytes": 6139,
+        "sha256": "03f92aec27b6f91a0a5aec0ed5d3a2e4ab6fa83517b79413eacaa9859654ae3f",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_increment",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "__stack_pointer",
+              "kind": "global"
+            },
+            {
+              "name": "cap_linked_compute",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "calloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_get_sbrk_ptr",
+              "kind": "function"
+            },
+            {
+              "name": "setThrew",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            },
+            {
+              "name": "__heap_base",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": null
+              }
+            ],
+            "globalCount": 2,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 24,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 2,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                },
+                {
+                  "type": 2,
+                  "bytes": 16,
+                  "needed": [
+                    "link-side.wasm"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "link-side.wasm",
+        "bytes": 95,
+        "sha256": "2fa7665a097af7bb3d456e2846f9f0edd5c7f110e924c57b4befe2a65e2dffee",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [],
+          "exports": [
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "side_increment",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [],
+            "tables": [],
+            "globalCount": 0,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 6,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 0,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-global.mjs",
+        "bytes": 6357,
+        "sha256": "85c44fb447553955b66a8cbf4e94483aa483cc63ff43b289167427b69568e934",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 2
+        }
+      },
+      {
+        "file": "negative-global.wasm",
+        "bytes": 307,
+        "sha256": "89b12fdc463a9f1aad4115d81ec10c8e842ee2743cd1a06df279f7b910069ec7",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "cap_ambient_global_probe",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "cap_probe_ambient_global",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "globalCount": 1,
+            "tags": []
+          },
+          "customSections": []
+        }
+      },
+      {
+        "file": "negative-main-em-asm.mjs",
+        "bytes": 25172,
+        "sha256": "ebfe54139ad7d8197d54dd7cc6d215c2975e6200d9731666682b8582d20462cc",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "negative-main-em-asm.wasm",
+        "bytes": 6168,
+        "sha256": "6d3b7f9a70e6fed564831b2e3c4e6378ba90542d38026f9694e4f86026f92564",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_em_asm",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "__stack_pointer",
+              "kind": "global"
+            },
+            {
+              "name": "cap_linked_compute",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "calloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_get_sbrk_ptr",
+              "kind": "function"
+            },
+            {
+              "name": "setThrew",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            },
+            {
+              "name": "__memory_base",
+              "kind": "global"
+            },
+            {
+              "name": "__heap_base",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": null
+              }
+            ],
+            "globalCount": 3,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 35,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 2,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                },
+                {
+                  "type": 2,
+                  "bytes": 27,
+                  "needed": [
+                    "negative-side-em-asm.wasm"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-main-em-js.mjs",
+        "bytes": 24681,
+        "sha256": "2567f33017fc0573d099b69c2fcd60ab65330b7c2e16c0abd4a88712a25a0852",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 1
+        }
+      },
+      {
+        "file": "negative-main-em-js.wasm",
+        "bytes": 6166,
+        "sha256": "23b752eeeb2f817a80442fb51955759d31ae08dd8af76040b19771a887eafc90",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_em_js",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "emscripten_resize_heap",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "__stack_pointer",
+              "kind": "global"
+            },
+            {
+              "name": "cap_linked_compute",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "calloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_get_sbrk_ptr",
+              "kind": "function"
+            },
+            {
+              "name": "setThrew",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            },
+            {
+              "name": "__memory_base",
+              "kind": "global"
+            },
+            {
+              "name": "__heap_base",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": null
+              }
+            ],
+            "globalCount": 3,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 34,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 0,
+                    "memoryAlignment": 2,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                },
+                {
+                  "type": 2,
+                  "bytes": 26,
+                  "needed": [
+                    "negative-side-em-js.wasm"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-side-em-asm.wasm",
+        "bytes": 300,
+        "sha256": "2d7e22bd70dc7306797084beefe9178059db5ed8f95aa41209b149a063265504",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "emscripten_asm_const_int",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32",
+                  "i32",
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "__stack_pointer",
+              "kind": "global",
+              "type": {
+                "value": "i32",
+                "mutable": true
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "__memory_base",
+              "kind": "global",
+              "type": {
+                "value": "i32",
+                "mutable": false
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "memory",
+              "kind": "memory",
+              "type": {
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "side_em_asm",
+              "kind": "function"
+            },
+            {
+              "name": "__start_em_asm",
+              "kind": "global"
+            },
+            {
+              "name": "__stop_em_asm",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": true,
+                "module": "env",
+                "symbol": "memory",
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [],
+            "globalCount": 4,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 6,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 14,
+                    "memoryAlignment": 0,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "negative-side-em-js.wasm",
+        "bytes": 237,
+        "sha256": "0b56cd361c65387a453c42553b99378f92775fc1d4ca4fc724e761e12a29f77b",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [
+            {
+              "module": "env",
+              "symbol": "side_js_increment",
+              "kind": "function",
+              "type": {
+                "typeIndex": 0,
+                "params": [
+                  "i32"
+                ],
+                "results": [
+                  "i32"
+                ]
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "__memory_base",
+              "kind": "global",
+              "type": {
+                "value": "i32",
+                "mutable": false
+              }
+            },
+            {
+              "module": "env",
+              "symbol": "memory",
+              "kind": "memory",
+              "type": {
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            }
+          ],
+          "exports": [
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "side_em_js",
+              "kind": "function"
+            },
+            {
+              "name": "__em_js__side_js_increment",
+              "kind": "global"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": true,
+                "module": "env",
+                "symbol": "memory",
+                "min": 1,
+                "max": null,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [],
+            "globalCount": 2,
+            "tags": []
+          },
+          "customSections": [
+            {
+              "name": "dylink.0",
+              "bytes": 6,
+              "subsections": [
+                {
+                  "type": 1,
+                  "bytes": 4,
+                  "memoryInfo": {
+                    "memorySize": 37,
+                    "memoryAlignment": 0,
+                    "tableSize": 0,
+                    "tableAlignment": 0
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "file": "numeric.mjs",
+        "bytes": 6155,
+        "sha256": "921175ec0ad89d8af17dbdffc49e58033c8717a246fe80b458f32e4a5a8584a9",
+        "kind": "javascript",
+        "javascript": {
+          "evalCalls": 0,
+          "functionConstructors": 0,
+          "globalThisReferences": 0
+        }
+      },
+      {
+        "file": "numeric.wasm",
+        "bytes": 278,
+        "sha256": "fea83472b7e56292785f132d0c5f564048cf34ae047627334f504b28dd405503",
+        "kind": "wasm",
+        "wasm": {
+          "imports": [],
+          "exports": [
+            {
+              "name": "memory",
+              "kind": "memory"
+            },
+            {
+              "name": "__wasm_call_ctors",
+              "kind": "function"
+            },
+            {
+              "name": "cap_weighted_sum",
+              "kind": "function"
+            },
+            {
+              "name": "__indirect_function_table",
+              "kind": "table"
+            },
+            {
+              "name": "_emscripten_stack_restore",
+              "kind": "function"
+            },
+            {
+              "name": "_emscripten_stack_alloc",
+              "kind": "function"
+            },
+            {
+              "name": "emscripten_stack_get_current",
+              "kind": "function"
+            }
+          ],
+          "features": {
+            "memories": [
+              {
+                "imported": false,
+                "min": 256,
+                "max": 256,
+                "shared": false,
+                "memory64": false
+              }
+            ],
+            "tables": [
+              {
+                "imported": false,
+                "element": "funcref",
+                "min": 1,
+                "max": 1
+              }
+            ],
+            "globalCount": 1,
+            "tags": []
+          },
+          "customSections": []
+        }
+      }
+    ]
+  }
+}

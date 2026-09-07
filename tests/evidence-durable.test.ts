@@ -29,6 +29,9 @@ function* walk(dir: string): Generator<string> {
 const WASM_EXEMPTIONS = new Set([
   "6119489ddf0cb9648a4ac87b943108f850be3e3b637cea6c478bf7ec1bf6432a", // cas toml2json
   "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91", // cas markdown
+  // A0 stb assert filename: env.__assert_fail decodes it into an abort diagnostic,
+  // not a file lookup. It can be printed; preserve both immutable build copies.
+  "2a3fd8992dec90f0308d6d8e1776c13f6fa991a38a571542db85c929e1ddb817",
 ]);
 const EVIDENCE_WASM_EXEMPTIONS = new Set([
   "packages/bundled/evidence/b2/binaries/toml2json.wasm",

@@ -34,6 +34,7 @@ export const SERIAL_REASONS = {
   // 76hu: the guard's reads-extension/dist class pins these two (previously
   // parallel; both consume the built diff-core bundle, a shared artifact).
   "tests/diff-core.test.ts": "imports/reads the built extension/dist diff-core bundle (shared build artifact)",
+  "tests/emscripten-abi-loaded-harness.test.ts": "requires current Store dist artifacts and prepares the live extension, briefly creating/removing its reserved probe directory",
   "tests/owner-approval-security.test.ts": "imports the built extension/dist diff-core bundle (shared build artifact)",
   "tests/chrome-launch-lock.test.ts": "tests process-global Chrome canonical lock and mutates CAP_CHROME_LOCK_PATH (races with other lock tests)",
   "tests/chrome-launch-lock-scope.test.ts": "tests Chrome lock scopes and mutates CAP_CHROME_SLOT_DIR (races with other lock tests)",

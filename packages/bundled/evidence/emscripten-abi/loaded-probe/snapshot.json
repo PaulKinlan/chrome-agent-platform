@@ -1,0 +1,182 @@
+{
+  "format": "cap-emscripten-abi-loaded-probe-v1",
+  "baselineCommit": "77c3b19556693f86f647ebb346f19d6d49b83e17",
+  "compiler": {
+    "emscripten": "6.0.0",
+    "emsdkCommit": "d223ae73c6998296e3ab27cf81dc2c2c9fd383de",
+    "emscriptenCommit": "afa15e0c56d1292e073c2c91bafc1d5e0cdf0dd3"
+  },
+  "manifest": {
+    "source": "extension/manifest.json",
+    "bytes": 3174,
+    "sha256": "70bd0c50f6a9158083f23f228a993300c23b54a85be14121ad38721e03623e7a",
+    "historicalVersion": "0.3.256",
+    "historicalVersionName": "0.3.256",
+    "releaseFieldsAllowedToDiffer": [
+      "version",
+      "version_name"
+    ],
+    "nonReleaseContractSha256": "2c865a5783d1d063055f5595b93c69e3762dc47ebf78446f4c1fc5d334bb2288",
+    "extensionPagesCsp": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:"
+  },
+  "sourcePins": [
+    {
+      "path": "loaded-probe/source/native_authority_attempt.c",
+      "bytes": 1697,
+      "sha256": "56b68e3f10abf85940772c9eefdf2ab6774138926e6294e3e89968e6ed6b5312"
+    },
+    {
+      "path": "loaded-probe/build.sh",
+      "bytes": 842,
+      "sha256": "166e2cdb784751c6ca25f0ffa8f921dcc5c8b1a583585e12310b31caa26047fb"
+    },
+    {
+      "path": "loaded-probe/local-import-refusal.mjs",
+      "bytes": 1920,
+      "sha256": "74abadc1ff23aeebc77f140d77f1ec48e9d1279a4d2897b9a8faff04db04ee0c"
+    }
+  ],
+  "assets": [
+    {
+      "source": "loaded-probe/probe.html",
+      "destination": "probe.html",
+      "role": "probe",
+      "bytes": 794,
+      "sha256": "d4415deadf4b05c0bcb09f7426fed958ef770a097281990dec6484550000d9d7"
+    },
+    {
+      "source": "loaded-probe/probe-page.mjs",
+      "destination": "probe-page.mjs",
+      "role": "probe",
+      "bytes": 5072,
+      "sha256": "de386afdbd4ffba02219eaba129a81e49c6a04af6283297426ae4ff1f94c717b"
+    },
+    {
+      "source": "loaded-probe/probe-worker.mjs",
+      "destination": "probe-worker.mjs",
+      "role": "probe",
+      "bytes": 6198,
+      "sha256": "352a6b11ab06589e1a5b9c5cde1cfc2fbece4de3f53d0d481064ef1ec6e0ebd8"
+    },
+    {
+      "source": "loaded-probe/authority-child.mjs",
+      "destination": "authority-child.mjs",
+      "role": "probe",
+      "bytes": 38,
+      "sha256": "7230a6559a8b10838db4db8e63b660c82e16c94344c092d117bb19665d071d48"
+    },
+    {
+      "source": "build-a/numeric.mjs",
+      "destination": "assets/numeric.mjs",
+      "role": "positive",
+      "bytes": 6155,
+      "sha256": "921175ec0ad89d8af17dbdffc49e58033c8717a246fe80b458f32e4a5a8584a9"
+    },
+    {
+      "source": "build-a/numeric.wasm",
+      "destination": "assets/numeric.wasm",
+      "role": "positive",
+      "bytes": 278,
+      "sha256": "fea83472b7e56292785f132d0c5f564048cf34ae047627334f504b28dd405503"
+    },
+    {
+      "source": "build-a/image-resize.mjs",
+      "destination": "assets/image-resize.mjs",
+      "role": "positive",
+      "bytes": 7804,
+      "sha256": "3c1c0e4381fe914b33dd554905d28e8dc777f1bda4bd42dcf05edd1380d7bea0"
+    },
+    {
+      "source": "build-a/image-resize.wasm",
+      "destination": "assets/image-resize.wasm",
+      "role": "positive",
+      "bytes": 102166,
+      "sha256": "2a3fd8992dec90f0308d6d8e1776c13f6fa991a38a571542db85c929e1ddb817"
+    },
+    {
+      "source": "build-a/link-main.mjs",
+      "destination": "assets/link-main.mjs",
+      "role": "positive",
+      "bytes": 24464,
+      "sha256": "bcddb43afe69fc2fb90102bf3ab0fcf83395177098ce647659bf1ee707292d76"
+    },
+    {
+      "source": "build-a/link-main.wasm",
+      "destination": "assets/link-main.wasm",
+      "role": "positive",
+      "bytes": 6139,
+      "sha256": "03f92aec27b6f91a0a5aec0ed5d3a2e4ab6fa83517b79413eacaa9859654ae3f"
+    },
+    {
+      "source": "build-a/link-side.wasm",
+      "destination": "assets/link-side.wasm",
+      "role": "positive",
+      "bytes": 95,
+      "sha256": "2fa7665a097af7bb3d456e2846f9f0edd5c7f110e924c57b4befe2a65e2dffee"
+    },
+    {
+      "source": "build-a/negative-main-em-asm.mjs",
+      "destination": "assets/negative-main-em-asm.mjs",
+      "role": "negative",
+      "bytes": 25172,
+      "sha256": "ebfe54139ad7d8197d54dd7cc6d215c2975e6200d9731666682b8582d20462cc"
+    },
+    {
+      "source": "build-a/negative-main-em-asm.wasm",
+      "destination": "assets/negative-main-em-asm.wasm",
+      "role": "negative",
+      "bytes": 6168,
+      "sha256": "6d3b7f9a70e6fed564831b2e3c4e6378ba90542d38026f9694e4f86026f92564"
+    },
+    {
+      "source": "build-a/negative-side-em-asm.wasm",
+      "destination": "assets/negative-side-em-asm.wasm",
+      "role": "negative",
+      "bytes": 300,
+      "sha256": "2d7e22bd70dc7306797084beefe9178059db5ed8f95aa41209b149a063265504"
+    },
+    {
+      "source": "build-a/negative-main-em-js.mjs",
+      "destination": "assets/negative-main-em-js.mjs",
+      "role": "negative",
+      "bytes": 24681,
+      "sha256": "2567f33017fc0573d099b69c2fcd60ab65330b7c2e16c0abd4a88712a25a0852"
+    },
+    {
+      "source": "build-a/negative-main-em-js.wasm",
+      "destination": "assets/negative-main-em-js.wasm",
+      "role": "negative",
+      "bytes": 6166,
+      "sha256": "23b752eeeb2f817a80442fb51955759d31ae08dd8af76040b19771a887eafc90"
+    },
+    {
+      "source": "build-a/negative-side-em-js.wasm",
+      "destination": "assets/negative-side-em-js.wasm",
+      "role": "negative",
+      "bytes": 237,
+      "sha256": "0b56cd361c65387a453c42553b99378f92775fc1d4ca4fc724e761e12a29f77b"
+    },
+    {
+      "source": "build-a/negative-global.wasm",
+      "destination": "assets/negative-global.wasm",
+      "role": "negative",
+      "bytes": 307,
+      "sha256": "89b12fdc463a9f1aad4115d81ec10c8e842ee2743cd1a06df279f7b910069ec7"
+    },
+    {
+      "source": "loaded-probe/assets/unsafe-authority.mjs",
+      "destination": "assets/unsafe-authority.mjs",
+      "role": "unsafe-control",
+      "bytes": 7269,
+      "sha256": "1ea9976dfd2604fa4440e4ce90ad3f73d9155341657f523e034e280db243beae"
+    },
+    {
+      "source": "loaded-probe/assets/unsafe-authority.wasm",
+      "destination": "assets/unsafe-authority.wasm",
+      "role": "unsafe-control",
+      "bytes": 313,
+      "sha256": "322eab5aa0a8530d853da58ac450b29ace62aa48cde3cb16fab4bed111dc1353"
+    }
+  ],
+  "expectedExternalControlAttempt": "https://cap-native-authority.invalid/escape"
+}

@@ -1,0 +1,99 @@
+{
+  "format": "cap-emscripten-abi-provenance-v1",
+  "task": "chrome-agent-platform-ltkj.1",
+  "baselineCommit": "77c3b19556693f86f647ebb346f19d6d49b83e17",
+  "toolchain": {
+    "emsdk": {
+      "version": "6.0.0",
+      "managerCommit": "d223ae73c6998296e3ab27cf81dc2c2c9fd383de",
+      "sdkReleaseCommit": "772bb4648be4a897ca062d6adc65bc70223d2703",
+      "emscriptenCommit": "afa15e0c56d1292e073c2c91bafc1d5e0cdf0dd3",
+      "installCommand": "emsdk install 6.0.0 && emsdk activate 6.0.0",
+      "archives": [
+        {
+          "url": "https://storage.googleapis.com/webassembly/emscripten-releases-builds/linux/772bb4648be4a897ca062d6adc65bc70223d2703/wasm-binaries.tar.xz",
+          "bytes": 269920796,
+          "sha256": "b5ed0963521f1d35b8967f20b1776327980bcfd5133166b40e018f27f2380e89"
+        },
+        {
+          "url": "https://storage.googleapis.com/webassembly/emscripten-releases-builds/deps/node-v22.16.0-linux-x64.tar.xz",
+          "bytes": 30425588,
+          "sha256": "f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e"
+        }
+      ]
+    },
+    "llvm": {
+      "version": "23.0.0git",
+      "commit": "c6c2ad52586c28e74a724570985a48dc0022d250"
+    },
+    "binaryen": {
+      "wasmOptVersion": "130",
+      "revisionDescription": "version_130-4-gb9c72894f"
+    },
+    "emccNode": "22.16.0",
+    "evidenceNode": "26.2.0"
+  },
+  "dependencies": [
+    {
+      "name": "stb_image_resize2",
+      "upstream": "https://github.com/nothings/stb",
+      "commit": "2c980bb59875b0d32144a71867fbdebb2f77cd20",
+      "source": {
+        "path": "source/third_party/stb_image_resize2.h",
+        "bytes": 457839,
+        "sha256": "173e654634f6ccaad98f603e686ea212eec1fe8ea6d2a5e5e8056efa10ae3880"
+      },
+      "license": {
+        "path": "source/third_party/STB-LICENSE.txt",
+        "bytes": 2510,
+        "sha256": "bebfe904b14301657e4e5d655c811d51fd31b97c455b9cc2d8600d6bac6cff63"
+      }
+    }
+  ],
+  "sources": [
+    {
+      "path": "source/image_resize.c",
+      "sha256": "5094bc2a9ad9e852a49dece39e58624f26b213f7f713f0aaea8ad840c656f308"
+    },
+    {
+      "path": "source/link_main.c",
+      "sha256": "2f5a08195d764757997c7a8291573f7033f7e8c82dc565c18d92826ee8fc29d7"
+    },
+    {
+      "path": "source/link_side.c",
+      "sha256": "d10489afa1613963cf3e73a915e71691adf52e1c434941ffb7783a9f4b470753"
+    },
+    {
+      "path": "source/link_side_em_asm.c",
+      "sha256": "b572f4d910b5a940a318e6d27a220a56d7ce7ecdb3c910cc53d244a8e04d6e3a"
+    },
+    {
+      "path": "source/link_side_em_js.c",
+      "sha256": "c55b74f702f73cb0e6d463c520bbd641a4201e73a9dd2cf140eca87a21573633"
+    },
+    {
+      "path": "source/native_global_access.c",
+      "sha256": "1dc23aa1b58e002dc6d8fe07248ee9778212f5a1b8f0c44a7b7f3580877c5bec"
+    },
+    {
+      "path": "source/numeric.c",
+      "sha256": "b6c082e792370685e4ece7cc96e4a8d19b0cb571ded54ffe5259899dd6f46617"
+    }
+  ],
+  "patches": [],
+  "build": {
+    "script": "build.sh",
+    "profile": "-O2 --no-entry -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=worker -sDYNAMIC_EXECUTION=0 -sFILESYSTEM=0 -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=16777216 with per-fixture explicit EXPORTED_FUNCTIONS; MAIN_MODULE=2/SIDE_MODULE=2 for link fixtures",
+    "sourceDateEpoch": 1788566400,
+    "artifactRecord": "artifact-report.json",
+    "runtimeRecord": "runtime-report.json",
+    "reproducibility": "build-a and build-b are byte-identical for all 15 emitted assets"
+  },
+  "rejectedReference": {
+    "name": "wasm-vips",
+    "version": "0.0.18",
+    "evidencePath": "astra/wasm-vips-0.0.18",
+    "tarballSha256": "6c5bebc60ea897678d9df319ced29b6ac6ea20f4f2d42bb6031e8f3f02faac36",
+    "note": "evidencePath is relative to the external durable evidence root (CAP_DURABLE_ROOT, default $HOME/cap-evidence), not the repository. Historical static evidence is referenced unchanged; its JavaScript was not executed by this build."
+  }
+}

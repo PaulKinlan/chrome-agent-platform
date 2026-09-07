@@ -1,0 +1,1 @@
+postMessage("authority-child-ready");

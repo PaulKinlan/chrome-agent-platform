@@ -108,6 +108,13 @@ Deno.test("partition guard: the split is total, disjoint, and new safe files def
   assert(!s2.includes(probe), "a new hazard-free test never lands serial by default");
 });
 
+Deno.test("partition guard: Emscripten live preparation runs serially", () => {
+  // Real preparation requires current Store artifacts and briefly mutates the
+  // live extension; the indirect helper call escapes the textual detector.
+  const file = "tests/emscripten-abi-loaded-harness.test.ts";
+  assertEquals(partition([file]), { serial: [file], parallel: [] });
+});
+
 Deno.test("partition guard: the detectors classify the known hazards", () => {
   // Self-test of the classifier on synthetic content — pins the detector
   // semantics independently of whichever real files happen to match. Every
