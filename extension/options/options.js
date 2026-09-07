@@ -3,6 +3,7 @@
 const IS_EMBEDDED_SETTINGS = new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top;
 if (IS_EMBEDDED_SETTINGS) document.documentElement.dataset.embedded = "1";
 
+import { registerWasmPreviewHost } from "../lib/wasm-preview-host.js";
 import {
   RECIPES,
 } from "../lib/recipes.js";
@@ -360,56 +361,6 @@ async function renderToolLibrary() {
     }
   }
 
-  // The Settings-only Gate-2 wasm preview host (CAP-FB-20260822-TOOL-PREVIEW-
-  // EXEC-01): the OPTIONS document is Worker-capable + COI, so the bounded job
-  // runs HERE — no offscreen document, no NTP/content fallback, and NO new
-  // manifest permission (required permissions stay []). The ONLY accepted
-  // sender is the same-extension SERVICE WORKER (sender.id exact, no tab); the
-  // authority + job arrive from the trusted SW (never request-borne).
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type !== "wasm.preview.options") return undefined;
-    if (sender?.id !== chrome.runtime.id || sender?.tab != null) {
-      sendResponse({ ok: false, error: "wasm preview host denied: sender is not the service worker" });
-      return undefined;
-    }
-    (async () => {
-      // The executor + offscreen host stay SEPARATE shipped files (runtime-URL
-      // dynamic import — esbuild cannot inline a non-static specifier), so the
-      // options bundle carries NO inlined `new Worker` and the Store scan keeps
-      // governing the canonical source files (whose worker-host exemption is
-      // scanner-owned). No blanket scanner/Worker exemption is added.
-      const { WasmExecutor } = await import(chrome.runtime.getURL("lib/wasm-executor.js"));
-      const { createOffscreenWasmHost } = await import(chrome.runtime.getURL("lib/wasm-offscreen-host.js"));
-      const executor = new WasmExecutor({
-        workerUrl: chrome.runtime.getURL("lib/wasm-execution-worker.js"),
-        callMs: Number.isSafeInteger(message.wallMs) ? message.wallMs : 5000,
-      });
-      const host = createOffscreenWasmHost({
-        executor,
-        authority: message.authority,
-      });
-      const { rehydratePreviewStdin, rehydratePreviewWasmBytes } = await import("../lib/tool-exec-preview.js");
-      const wasmBytes = rehydratePreviewWasmBytes(message.wasmBytes);
-      // createWasiJob on the SW side emitted a FROZEN PLAIN byte array for
-      // stdin; the generic host contract requires a genuine Uint8Array — the
-      // local rehydration clones the job with the dense validated bytes.
-      const job = { ...message.job, stdin: rehydratePreviewStdin(message.job?.stdin) };
-      const result = await host.handleJob({
-        type: "wasm.job",
-        job,
-        wasmBytes,
-      });
-      sendResponse({ ok: true, result });
-    })().catch((error) => {
-      sendResponse({
-        ok: false,
-        error: String(error?.message ?? error),
-        executorCode: error?.executorCode ?? null,
-      });
-    });
-    return true; // async response
-  });
-
   // The Settings preview: an EXPLICIT owner click on the component's
   // Run button emits tool-preview-request; this surface sends the bounded
   // request to the SW route (the only executor path) and renders the bounded
@@ -453,6 +404,13 @@ async function renderToolLibrary() {
     }
   });
 }
+
+// The Settings-only Gate-2 wasm preview host (chrome-agent-platform-j6au):
+// registered at MODULE SCOPE — the preview must answer whenever Settings is
+// open, never only when the developer tool-library section renders (the root
+// cause of the 'no offscreen response' RED class). The listener itself lives
+// in lib/wasm-preview-host.js and is executed by committed tests.
+registerWasmPreviewHost();
 
 // ── local folders (CAP-FB-20260823-PERSISTENT-FS-ACCESS-01) ────────────────
 export async function renderLocalFolders() {

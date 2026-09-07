@@ -304,6 +304,32 @@ export function rehydratePreviewStdin(value) {
   return out;
 }
 
+/**
+ * chrome-agent-platform-j6au: the SW ships the PRE-BUILT job to the Settings
+ * host through chrome.runtime.sendMessage, which JSON-serializes — and
+ * `Infinity` becomes `null` on the wire. The dptw policy makes the byte
+ * quotas UNBOUNDED (Infinity); after transport they must come back as
+ * Infinity, not null (a null quota fails closed as quota_fileBytes). The
+ * bounded count guards (hostCalls/pathCalls/dynamicFds) pass through as-is.
+ */
+const UNBOUNDED_TRANSPORT_QUOTA_KEYS = Object.freeze([
+  "stdinBytes",
+  "stdoutBytes",
+  "stderrBytes",
+  "fileBytes",
+  "fileSize",
+]);
+
+export function rehydratePreviewQuota(quota) {
+  if (quota === null || quota === undefined) return quota;
+  if (typeof quota !== "object" || Array.isArray(quota)) return quota;
+  const out = { ...quota };
+  for (const key of UNBOUNDED_TRANSPORT_QUOTA_KEYS) {
+    if (out[key] === null) out[key] = Number.POSITIVE_INFINITY;
+  }
+  return out;
+}
+
 /** The route's LOCAL extraction from the runtime message. The global
  * dispatcher passes the message body (which carries `type`) straight to the
  * handler, so the strict validator would reject it; this extracts ONLY

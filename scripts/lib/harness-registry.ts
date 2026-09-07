@@ -147,7 +147,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-webmcp-honest-errors.ts": { class: "kat" },
   "kat-webmcp-bistro.ts": { class: "kat" },
   "kat-ux-lows.ts": { class: "kat", ...RED("9/1", "UX-010: the wide form-factor two-column grid is not active") },
-  "kat-wasi-tranche2.ts": { class: "kat", ...RED("1/9", "tool.preview.run answers 'offscreen unavailable: Could not establish connection'") },
+  "kat-wasi-tranche2.ts": { class: "kat" },
 
   // ── manual (evidence / repro / bisect tools; not gates) ─────────────────
   "dump-tool-corpus-tokens.ts": { class: "manual", reason: "4kl tablegen input generator: prints the built-in tool corpus tokens (or --mode=texts) for scripts/build-tool-vector-table.mjs; runs by hand only when regenerating the committed vector table", noVerdict: "pure generator — it prints the corpus; there is nothing to assert" },
