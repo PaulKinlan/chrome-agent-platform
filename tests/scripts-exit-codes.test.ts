@@ -23,6 +23,18 @@ export function hasFailureDerivedExit(src: string): boolean {
   return false;
 }
 
+/**
+ * chrome-agent-platform-cvlf: a harness may hand its WHOLE settle sequence
+ * (finalize -> announce -> decision-derived exit) to the extracted settle unit
+ * (`settleBistroRun`, lib/kat-bistro-caller.ts), whose exit is the finalizer's
+ * decision and is BEHAVIOURALLY pinned by tests/kat-bistro-caller.test.ts
+ * (RED -> 1, GREEN -> 0, exactly one exit). Wiring that unit satisfies the
+ * guard's intent even though the script text carries no literal Deno.exit.
+ */
+export function wiresDecisionDerivedSettle(src: string): boolean {
+  return /\bsettleBistroRun\s*\(/.test(src);
+}
+
 Deno.test("every harness exits with a code derived from its own failures", () => {
   const offenders: string[] = [];
   const unexplained: string[] = [];
@@ -35,7 +47,7 @@ Deno.test("every harness exits with a code derived from its own failures", () =>
       continue;
     }
     const src = Deno.readTextFileSync(`${SCRIPTS}${file}`);
-    if (!hasFailureDerivedExit(src)) offenders.push(file);
+    if (!hasFailureDerivedExit(src) && !wiresDecisionDerivedSettle(src)) offenders.push(file);
   }
   assertEquals(
     offenders,
@@ -51,4 +63,12 @@ Deno.test("the scan recognises a derived exit and rejects a constant one", () =>
   assertEquals(hasFailureDerivedExit("Deno.exit(fail === 0 ? 0 : 1);"), true);
   assertEquals(hasFailureDerivedExit("Deno.exit(\n  failed > 0 ? 1 : 0,\n);"), true);
   assertEquals(hasFailureDerivedExit("Deno.exit(1);"), true);
+});
+
+Deno.test("the scan recognises the extracted settle wiring as decision-derived (cvlf)", () => {
+  // A script that wires the settle unit is covered even without a literal exit...
+  assertEquals(wiresDecisionDerivedSettle("await settleBistroRun({ runError, checks });"), true);
+  // ...but ONLY that unit counts: other helper calls still fail the guard.
+  assertEquals(wiresDecisionDerivedSettle("await finalizeEverything({});"), false);
+  assertEquals(hasFailureDerivedExit("await settleBistroRun({});"), false, "the wiring alone is not a literal exit");
 });

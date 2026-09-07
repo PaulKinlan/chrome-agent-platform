@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.302] — 2026-09-07
+- the French Bistro KAT's caller guards are pinned by executing them, not by grepping the caller
+
 ## [0.3.301] — 2026-09-07
 - Independent tasks now run concurrently and in-progress approvals render upon opening a task
 
