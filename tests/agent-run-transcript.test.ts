@@ -166,3 +166,32 @@ Deno.test("nudge reply: a text-only step right after a text-ending tool step is 
   assertEquals(a.hidden, false);
   assertEquals(t3.finalText("The tabs are A and B."), "The tabs are A and B.");
 });
+
+Deno.test("renderRunTranscript matches progress events by clientCorrelationId, executionId, or threadId when reopening in-progress task", async () => {
+  const { renderRunTranscript } = await freshConv();
+  const chromeMock = installChromeMock();
+  const c = fakeContainer();
+  let status = null;
+  // Subscribed using executionId "exec:100", with clientCorrelationId "run_client_100" and threadId "t_100"
+  const unsub = renderRunTranscript(c, "exec:100", {
+    clientCorrelationId: "run_client_100",
+    threadId: "t_100",
+    onStatus: (s) => { status = s; },
+  });
+
+  // SW broadcasts using clientCorrelationId as runId
+  chromeMock.emit({ type: "tool-call", runId: "run_client_100", toolName: "read_page", toolArgs: { url: "https://x" } });
+  assertEquals(c.calls.length, 1, "matches via clientCorrelationId");
+  assertEquals(c.calls[0].kind, "tool");
+  assertEquals(c.calls[0].status, "running");
+
+  // SW broadcasts using executionId
+  chromeMock.emit({ type: "tool-result", executionId: "exec:100", runId: "ui_tag", toolName: "read_page", result: "ok", ok: true });
+  assertEquals(c.calls[0].attrs["tool-status"], "success", "matches via executionId property");
+
+  // SW broadcasts using threadId
+  chromeMock.emit({ type: "done", threadId: "t_100", runId: "other_tag", text: "done text" });
+  assertEquals(c.calls.some((x) => x.kind === "agent" && x.text === "done text"), true, "matches via threadId");
+  unsub();
+});
+

@@ -308,7 +308,7 @@ export async function loadJournal() {
  * (tool-call / tool-result / text / done / error). Returns an unsubscribe
  * function. Read-only: never mutates the run, the provider, the grants or the
  * model. */
-export function renderRunTranscript(container, executionId, { onStatus = null } = {}) {
+export function renderRunTranscript(container, executionId, { onStatus = null, clientCorrelationId = null, threadId = null } = {}) {
   const c = container;
   if (!c || !executionId) return () => {};
   const toolCards = createToolCardQueue();
@@ -334,7 +334,11 @@ export function renderRunTranscript(container, executionId, { onStatus = null } 
   unsub = subscribeProgress((ev) => {
     if (!ev || typeof ev !== "object") return;
     if (ev.type === "disconnect") { terminal.onPortError(); return; }
-    if (ev.runId !== executionId) return;
+    const matchesRun = ev.runId === executionId ||
+      ev.executionId === executionId ||
+      (clientCorrelationId && ev.runId === clientCorrelationId) ||
+      (threadId && ev.threadId === threadId);
+    if (!matchesRun) return;
     switch (ev.type) {
       case "pipeline-step": {
         // A run_pipeline step (chrome-agent-platform-qsm4): a plan-strip row

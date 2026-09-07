@@ -178,6 +178,8 @@ function projectSurfaceRunTranscript() {
   runTranscriptExecutionId = nextId;
   if (!nextId || !threadConversation) return run;
   runTranscriptUnsub = renderRunTranscript(threadConversation, nextId, {
+    clientCorrelationId: run?.clientCorrelationId ?? null,
+    threadId: currentThreadId ?? null,
     onStatus: (s) => renderRunStatus(s),
   });
   return run;

@@ -1841,9 +1841,23 @@ async function lazyPermissionDigest() {
   }
 }
 
+let userWasmRowsCache = null;
+let userWasmRowsCacheAt = 0;
+const USER_WASM_CACHE_TTL_MS = 5000;
+
 async function readUserWasmRows() {
+  const now = Date.now();
+  if (userWasmRowsCache !== null && now - userWasmRowsCacheAt < USER_WASM_CACHE_TTL_MS) {
+    return userWasmRowsCache;
+  }
   try {
-    return await listOwnerBlobs({ kind: "wasm" });
+    const rows = await Promise.race([
+      listOwnerBlobs({ kind: "wasm" }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("user-wasm list timeout")), 1500)),
+    ]);
+    userWasmRowsCache = rows;
+    userWasmRowsCacheAt = Date.now();
+    return rows;
   } catch (err) {
     pushDiagnostic(
       "error",
@@ -1851,7 +1865,7 @@ async function readUserWasmRows() {
       "user-wasm",
       "catalog",
     );
-    return [];
+    return userWasmRowsCache ?? [];
   }
 }
 
@@ -3486,9 +3500,10 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         delegationState.step = Math.max(delegationState.step, event.step + 1);
       }
       try {
-        if (typeof onProgress === "function") onProgress(event);
+        const enriched = event && typeof event === "object" ? { ...event, executionId } : event;
+        if (typeof onProgress === "function") onProgress(enriched);
         else if (typeof uiRunId === "string" && uiRunId) {
-          broadcastProgress({ ...event, runId: uiRunId, threadId: threadId ?? null });
+          broadcastProgress({ ...enriched, runId: uiRunId, threadId: threadId ?? null });
         }
       } catch { /* broadcast must not break telemetry */ }
       const type = event?.type;

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.299] — 2026-09-07
+- Switching tasks now keeps running task activity and preserves conversation history
+
 ## [0.3.298] — 2026-09-07
 - -gc: Extension builds on macOS now clean up Finder .DS_Store files without stopping with an error
 
