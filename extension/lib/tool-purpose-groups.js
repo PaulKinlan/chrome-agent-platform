@@ -264,6 +264,7 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "imageops": "media-images",
   "zxing": "media-images",
   "oxipng": "media-images",
+  "jxl": "media-images",
   // Built-in core tools.
   "memory_get": "memory-usage",
   "memory_set": "memory-usage",

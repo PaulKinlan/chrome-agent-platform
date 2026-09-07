@@ -97,12 +97,12 @@ export const PREVIEW_SPECS = Object.freeze(
           // its validated trusted argv through previewStdoutEncoding().
           // Binary-at-the-pipe tools emit base64 (gzip always; imageops except
           // its info subcommand, resolved per-argv in previewStdoutEncoding).
-          // oxipng (m3vb) always emits PNG bytes. compressops (8oil) emits frame
-          // bytes for its compression subcommands; its info subcommand is the
-          // per-argv utf8 exception (previewStdoutEncoding). base64 -d is NOT
-          // re-armed (its resolved utf8 default fails on non-base64 bytes —
+          // oxipng (m3vb) always emits PNG bytes; jxl (agpu) always emits PNG bytes.
+          // compressops (8oil) emits frame bytes for its compression subcommands;
+          // its info subcommand is the per-argv utf8 exception (previewStdoutEncoding).
+          // base64 -d is NOT re-armed (its resolved utf8 default fails on non-base64 bytes —
           // the contract stays honest).
-          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" || row.toolId === "oxipng" || row.toolId === "compressops" ? "base64" : "utf8",
+          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" || row.toolId === "oxipng" || row.toolId === "compressops" || row.toolId === "jxl" ? "base64" : "utf8",
           // The BYTES-in modes take canonical base64 at the tool boundary
           // (previewStdinEncoding); every other mode takes strict UTF-8 text.
           // gzip -d / compressops's decompress+info / zxing read read bytes.
