@@ -1641,6 +1641,122 @@ export function executableUserWasmToolRecords(rows, context = {}) {
   });
 }
 
+// ── native offscreen tools (chrome-agent-platform-moim) ─────────────────────
+// Tools the PLATFORM executes natively in the offscreen document (browser
+// canvas/DOM) — no Wasm package, no CAS: the row is static and the dispatch
+// closure is supplied by the service worker. The input contract matches the
+// bundled unix-stream shape (args + base64 stdin) so the model sees one shape.
+
+export const NATIVE_OFFSCREEN_TOOL_ROWS = Object.freeze([
+  Object.freeze({
+    sourceKind: "native-offscreen",
+    packageId: "cap.native.svg_rasterise",
+    sourceGeneration: "native-offscreen:v1",
+    dispatcherKind: "native-offscreen-task",
+    version: "1.0.0",
+    toolId: "svg_rasterise",
+    name: "svg_rasterise",
+    aliases: [],
+    displayName: "svg_rasterise",
+    category: "media-images",
+    description:
+      "svg_rasterise - rasterise an SVG document to PNG on-device with the browser's own renderer. " +
+      "In: base64 SVG on stdin. Args: --width <px>, --height <px> (1..8192), optional --background <css colour> (default transparent). " +
+      "Out: base64 PNG on stdout. External references inside the SVG are never fetched.",
+    capabilities: ["compute", "media-images"],
+    replayClass: "read-only",
+    kind: "native-offscreen",
+    inputSchema: {
+      type: "object",
+      properties: {
+        args: { type: "array", items: { type: "string" }, description: "flags: --width <px>, --height <px>, --background <css colour>" },
+        stdin: { type: "string", description: "base64-encoded SVG document" },
+      },
+      required: ["stdin"],
+      additionalProperties: false,
+    },
+  }),
+]);
+
+/** Shared argument parsing for the native offscreen tools: the bundled
+ * unix-stream shape (args array + base64 stdin), null-byte rejected. */
+export function validateNativeOffscreenArguments(rawArgs) {
+  let normalizedArgs = [];
+  let normalizedStdin = "";
+  if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+    if (Object.hasOwn(rawArgs, "args")) {
+      if (!Array.isArray(rawArgs.args) || rawArgs.args.some((a) => typeof a !== "string" || a.includes("\0"))) {
+        return { ok: false, error: "invalid_arguments: args must be an array of strings without null bytes" };
+      }
+      normalizedArgs = [...rawArgs.args];
+    }
+    if (Object.hasOwn(rawArgs, "stdin")) {
+      if (typeof rawArgs.stdin !== "string") return { ok: false, error: "invalid_arguments: stdin must be a string" };
+      normalizedStdin = rawArgs.stdin;
+    } else if (Object.hasOwn(rawArgs, "input") && typeof rawArgs.input === "string") {
+      normalizedStdin = rawArgs.input;
+    } else if (Object.hasOwn(rawArgs, "text") && typeof rawArgs.text === "string") {
+      normalizedStdin = rawArgs.text;
+    }
+  } else if (typeof rawArgs === "string") {
+    normalizedStdin = rawArgs;
+  } else if (rawArgs != null) {
+    return { ok: false, error: "invalid_arguments: unexpected argument shape" };
+  }
+  if (!normalizedStdin) return { ok: false, error: "invalid_arguments: stdin (base64 SVG) is required" };
+  return { ok: true, data: Object.freeze({ args: Object.freeze(normalizedArgs), stdin: normalizedStdin }) };
+}
+
+/** Parse --width/--height/--background out of the args array. */
+export function parseSvgRasteriseArgs(args) {
+  let width = 256;
+  let height = 256;
+  let background = "";
+  const list = Array.isArray(args) ? args.map(String) : [];
+  const value = (flag) => {
+    const at = list.indexOf(flag);
+    return at >= 0 && at + 1 < list.length ? list[at + 1] : undefined;
+  };
+  const w = Number(value("--width") ?? 256);
+  const h = Number(value("--height") ?? w);
+  const bg = value("--background");
+  if (Number.isSafeInteger(w) && w >= 1 && w <= 8192) width = w;
+  else if (value("--width") !== undefined) return { ok: false, error: "invalid_arguments: --width must be an integer in [1, 8192]" };
+  if (Number.isSafeInteger(h) && h >= 1 && h <= 8192) height = h;
+  else if (value("--height") !== undefined) return { ok: false, error: "invalid_arguments: --height must be an integer in [1, 8192]" };
+  if (typeof bg === "string") background = bg.slice(0, 64);
+  return { ok: true, width, height, background };
+}
+
+export function executableNativeOffscreenToolRecords(rows, context = {}) {
+  return (Array.isArray(rows) ? rows : []).map((row) => {
+    const toolId = String(ownData(row, "toolId") ?? "");
+    const validator = async (rawArgs) => validateNativeOffscreenArguments(rawArgs);
+    const authorizer = async () => Object.freeze({
+      ok: true,
+      // Mirror the descriptor's digests exactly (authorizeRecord compares both).
+      permissionDigest: ownData(row, "permissionDigest") ?? "none",
+      grantDigest: ownData(row, "grantDigest") ?? "none",
+    });
+    const dispatcher = async (validatedArgs, runContext) => {
+      if (typeof context?.dispatchNativeOffscreenTool === "function") {
+        return await context.dispatchNativeOffscreenTool({ toolId, args: validatedArgs, context: runContext, descriptorInput: row });
+      }
+      return { ok: false, error: "native_offscreen_dispatcher_unavailable" };
+    };
+    return Object.freeze({
+      descriptorInput: row,
+      validateArguments: validator,
+      authorize: authorizer,
+      dispatch: dispatcher,
+    });
+  });
+}
+
+export function nativeOffscreenLazyRecords(rows, { dispatchNativeOffscreenTool } = {}) {
+  return executableNativeOffscreenToolRecords(rows, { dispatchNativeOffscreenTool });
+}
+
 export function userWasmLazyRecords(rows, { agentTools, scope, dispatchUserWasmTool } = {}) {
   const allowed = agentTools?.userWasm ? new Set(agentTools.userWasm) : null;
   const filtered = allowed

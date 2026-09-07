@@ -97,6 +97,8 @@ import { WASI_JOB_RUN_TYPE } from "../lib/wasm-job-host.js";
 import { decodeCanonicalBase64 } from "../lib/wasm-base64.js";
 import { BUNDLED_INVENTORY } from "../lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../lib/bundled-tool-packages.data.js";
+import { NATIVE_OFFSCREEN_TOOL_ROWS, nativeOffscreenLazyRecords, parseSvgRasteriseArgs } from "../lib/lazy-tool-protocol.js";
+import { SVG_RASTERISE_RUN_TYPE } from "../lib/svg-rasterise-host.js";
 import { executeFactoryReset, enumerateStorageTargets } from "../lib/factory-reset.js";
 import {
   collectExportData,
@@ -381,6 +383,7 @@ import {
   adaptBundledTools,
   adaptBuiltinTools,
   adaptManagementTools,
+  adaptNativeOffscreenTools,
   adaptUserWasmTools,
   adaptWebMcpTools,
   userWasmCatalogInputs,
@@ -1881,6 +1884,43 @@ async function readUserWasmRows() {
   }
 }
 
+// chrome-agent-platform-moim: the NATIVE offscreen dispatch — rasterise the
+// base64 SVG stdin through the offscreen document's own renderer (no Wasm).
+async function dispatchSvgRasteriseTool({ args: validatedArgs, context }) {
+  const parsed = parseSvgRasteriseArgs(validatedArgs?.args ?? []);
+  if (!parsed.ok) return { ok: false, error: parsed.error };
+  const host = await ensureOffscreen();
+  if (!host?.ok) return { ok: false, error: host?.error ?? "svg_rasterise: offscreen unavailable" };
+  const origin = typeof context?.origin === "string" && /^https?:\/\//u.test(context.origin)
+    ? new URL(context.origin).origin
+    : "https://agent.cap";
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: SVG_RASTERISE_RUN_TYPE,
+      stdinBase64: validatedArgs.stdin,
+      width: parsed.width,
+      height: parsed.height,
+      background: parsed.background,
+      wallMs: 8000,
+      runContext: { origin, documentId: String(context?.documentId || "task-run") },
+    });
+    if (result?.ok !== true) {
+      return { ok: false, error: String(result?.error ?? "svg_rasterise: no host response") };
+    }
+    return {
+      ok: true,
+      stdout: null,
+      stdoutBase64: result.stdoutBase64,
+      stdoutBytes: result.stdoutBytes,
+      stdoutEncoding: "base64",
+      stderr: "",
+      phase: "completed",
+    };
+  } catch (error) {
+    return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+  }
+}
+
 async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, context }) {
   const digest = descriptorInput?.packageDigest;
   if (!digest || typeof digest !== "string" || !/^[0-9a-f]{64}$/u.test(digest)) {
@@ -2012,6 +2052,10 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
       agentTools,
       scope,
       dispatchUserWasmTool,
+    }),
+    // Native offscreen tools (moim): platform-executed, no Wasm package.
+    ...nativeOffscreenLazyRecords(NATIVE_OFFSCREEN_TOOL_ROWS, {
+      dispatchNativeOffscreenTool: dispatchSvgRasteriseTool,
     }),
     // Provider-EXECUTED (server-side) tools — discovery through the same lazy
     // index; "execution" latches the provider-defined tool onto the run (the
@@ -4529,7 +4573,10 @@ async function readShadowCatalogInputs() {
     // slice lists them per source with their name/version/availability/
     // description. They remain disabled-for-dispatch (the only executor is the
     // owner-click Settings preview route).
-    ...adaptBundledTools(BUNDLED_TOOL_PACKAGE_ROWS, {
+    ...adaptNativeOffscreenTools(NATIVE_OFFSCREEN_TOOL_ROWS, {
+      sourceGeneration: "native-offscreen:v1",
+    }),
+...adaptBundledTools(BUNDLED_TOOL_PACKAGE_ROWS, {
       version,
       sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
       scope: hubScope,

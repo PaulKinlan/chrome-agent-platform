@@ -40,6 +40,9 @@ export const TOOL_SOURCE_KINDS = Object.freeze([
   "webmcp-inferred",
   "bundled-package",
   "user-wasm",
+  // chrome-agent-platform-moim: platform-executed native offscreen tools
+  // (svg_rasterise) — no Wasm package; the offscreen document IS the engine.
+  "native-offscreen",
   // Remote MCP servers the agent connects OUT to (Streamable HTTP / SSE). Their
   // tools are namespaced `mcp__<server>__<tool>` and their output is untrusted
   // external content (extension/lib/mcp-run-tools.js, MCP-TOOL-INJECTION-01).
@@ -646,6 +649,41 @@ export function adaptWebMcpTools(tools, context) {
       grantDigest: context?.grantDigestByTool?.[name] ?? context?.grantDigest,
       availability: context?.availabilityByTool?.[name] ?? context?.availability ?? "ready",
       dispatcherKind: "webmcp",
+    });
+  }
+  return inputs;
+}
+
+/** chrome-agent-platform-moim: the NATIVE offscreen tools' catalog projection.
+ * No package/binary — availability is "ready" by construction (the platform
+ * executes them itself); the dispatcherKind routes provider-run dispatch to
+ * the native offscreen closure. */
+export function adaptNativeOffscreenTools(rows, context = {}) {
+  const inputs = [];
+  for (const row of (Array.isArray(rows) ? rows : [])) {
+    const toolId = ownData(row, "toolId");
+    inputs.push({
+      sourceKind: "native-offscreen",
+      packageId: `cap.native.${toolId}`,
+      toolId,
+      version: "1.0.0",
+      name: toolId,
+      aliases: [],
+      description: ownData(row, "description") ?? ownData(row, "displayName") ?? "",
+      inputSchema: {
+        type: "object",
+        properties: {
+          args: { type: "array", items: { type: "string" }, description: "flags: --width <px>, --height <px>, --background <css colour>" },
+          stdin: { type: "string", description: "base64-encoded SVG document" },
+        },
+        required: ["stdin"],
+        additionalProperties: false,
+      },
+      dispatcherKind: "native-offscreen-task",
+      availability: "ready",
+      capabilities: ownData(row, "capabilities") ?? ["compute"],
+      replayClass: ownData(row, "replayClass") ?? "read-only",
+      sourceGeneration: context.sourceGeneration ?? "native-offscreen:v1",
     });
   }
   return inputs;

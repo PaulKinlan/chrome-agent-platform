@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.312] — 2026-09-07
+- svg_rasterise — on-device SVG rasterisation through the browser's own renderer (native suffices; resvg not needed)
+
 ## [0.3.311] — 2026-09-07
 - The barcode reader and the compression tool now accept and return raw bytes in an agent task — compress to a base64 frame, decompress a base64 frame, read a barcode from an image
 

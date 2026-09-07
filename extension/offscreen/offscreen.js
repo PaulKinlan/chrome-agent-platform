@@ -56,3 +56,8 @@ registerTableWorkerHost();
 // fresh Worker per call with pre-instantiate content re-hash and wall deadline.
 registerUserWasmHost();
 
+// Native SVG rasteriser (chrome-agent-platform-moim): the browser's own
+// renderer — no Wasm, no fonts problem, external hrefs never fetched.
+import { registerSvgRasteriseHost } from "../lib/svg-rasterise-host.js";
+registerSvgRasteriseHost();
+
