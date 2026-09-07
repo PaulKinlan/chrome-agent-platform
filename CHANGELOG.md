@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.302] — 2026-09-07
+- steering a running task no longer loses the owner's message
+
 ## [0.3.301] — 2026-09-07
 - Independent tasks now run concurrently and in-progress approvals render upon opening a task
 

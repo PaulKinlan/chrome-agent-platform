@@ -1215,7 +1215,16 @@ export function createAgent({
         // hooks to end the loop at the next step boundary.
         if (steerSourceCb) {
           try {
-            const src = steerSourceCb();
+            // chrome-agent-platform-ugj9: the RUNNING run's id MUST name the
+            // steer lookup. jj7e made different-thread runs concurrent against
+            // the ONE cached orchestrator, whose steer-source cell holds the
+            // LAST binder; the binder is stateless (key -> pending/ack), so
+            // passing this run's identity resolves the right registry key no
+            // matter which binder instance is in the cell. The argument-less
+            // call resolved the LAST binder's fallback executionId — steers
+            // recorded for a running run were accepted and then carried by NO
+            // model call (the owner's text vanished mid-run).
+            const src = steerSourceCb(ownData(activeRun?.identity, "runId"));
             const pending = Array.isArray(src?.pending) ? src.pending : [];
             const steerTexts = steerTextsToInject(pending);
             if (steerTexts.length && Array.isArray(options?.prompt)) {
