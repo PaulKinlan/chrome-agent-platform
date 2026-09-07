@@ -3,11 +3,36 @@
 // accepts JSON-formatted string arguments for native WebMCP WebIDL compatibility.
 // Bounded execution with ?toolautosubmit, CDP interception, and clean process lifecycle.
 // Usage: deno run -A scripts/kat-webmcp-bistro.ts [extension-dir] [evidence-dir]
+//
+// chrome-agent-platform-cvlf: every decision unit (predicates, error capture,
+// report/teardown assembly, launch config, the finally block) lives in
+// lib/kat-bistro-caller.ts and is EXECUTED by tests/kat-bistro-caller.test.ts —
+// this script is the wiring only.
 
-import { createHash } from "node:crypto";
 import { launchChrome, openCdp, withTimeout } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
-import { allocateRunEvidenceDir, finalizeKatExecution, sanitizeKatLogError } from "./lib/kat-finalizer.ts";
+import {
+  announceRunError,
+  assembleBistroReport,
+  URL_BISTRO,
+  assembleBistroTeardown,
+  BISTRO_READY_EXPRESSION,
+  bistroDomBookingHolds,
+  bistroFalsificationHolds,
+  bistroJsonStringProbe,
+  bistroJsonStringSuccessHolds,
+  bistroProfileDir,
+  bistroRunReport,
+  buildBistroLaunchConfig,
+  captureRunError,
+  hasGitChanges,
+  mainWorldSha256Of,
+  persistBistroScreenshot,
+  runBistroEvidenceDir,
+  screenshotCapturedHolds,
+  serviceWorkerRegisteredHolds,
+  settleBistroRun,
+} from "./lib/kat-bistro-caller.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -17,15 +42,14 @@ const EXT = Deno.args[0] ?? `${ROOT}extension`;
 // alias this run's receipt). The exact receipt path prints at the end.
 const head = await git("rev-parse", "HEAD").catch(() => "unknown");
 const tree = await git("rev-parse", "HEAD^{tree}").catch(() => "unknown");
-const dirty = (await git("status", "--porcelain").catch(() => "")).length > 0;
+const dirty = hasGitChanges(await git("status", "--porcelain").catch(() => ""));
 
 const OUT_PARENT = Deno.args[1] ?? durableDir("kat-webmcp-bistro");
 // A FULL-UUID child per invocation, created EXCLUSIVELY — a collision fails
 // CLOSED, never aliases another run's evidence (the allocator is the real,
 // imported, test-executed seam).
-const OUT = await allocateRunEvidenceDir(OUT_PARENT);
-const PROFILE = durableDir(`kat-webmcp-bistro-profile-${Date.now()}`);
-const URL_BISTRO = "https://googlechromelabs.github.io/webmcp-tools/demos/french-bistro/?toolautosubmit";
+const OUT = await runBistroEvidenceDir({ parent: OUT_PARENT });
+const PROFILE = bistroProfileDir(Date.now());
 
 
 await Deno.mkdir(PROFILE, { recursive: true });
@@ -79,7 +103,7 @@ let mainWorldSha256: string = "";
 
 try {
   const mwBytes = await Deno.readFile(`${EXT}/content/main-world.js`).catch(() => new Uint8Array());
-  mainWorldSha256 = createHash("sha256").update(mwBytes).digest("hex");
+  mainWorldSha256 = mainWorldSha256Of(mwBytes);
 } catch {
   mainWorldSha256 = "unknown";
 }
@@ -88,25 +112,19 @@ console.log(`Launching Chromium with WebMCP feature (profile: ${PROFILE})...`);
 
 try {
   chrome = await launchChrome({
-    binary: "/usr/bin/chromium",
-    extension: EXT,
-    profile: PROFILE,
-    timeoutMs: 30_000,
-    args: [
-      "--enable-features=WebMCP",
-    ],
+    ...buildBistroLaunchConfig({ extensionDir: EXT, profileDir: PROFILE }),
   });
 
   cdp = await openCdp(chrome.wsUrl, { timeoutMs: 30_000 });
   browserVersion = await cdp.send("Browser.getVersion");
 
   const worker = await cdp.serviceWorker({ timeoutMs: 20_000 });
-  check("this fresh-profile extension registered its service worker", !!worker?.url?.startsWith("chrome-extension://"), worker?.url);
+  check("this fresh-profile extension registered its service worker", serviceWorkerRegisteredHolds(worker), worker?.url);
 
   console.log("Navigating to French Bistro demo with ?toolautosubmit...");
   page = await cdp.open(URL_BISTRO);
 
-  await waitFor(cdp, page.sessionId, `document.readyState === "complete" && typeof document.modelContext?.getTools === "function"`, 30_000);
+  await waitFor(cdp, page.sessionId, BISTRO_READY_EXPRESSION, 30_000);
   const mcInfo = await cdp.eval(page.sessionId, `({
     hasModelContext: !!document.modelContext,
     hasExecuteTool: typeof document.modelContext?.executeTool === "function",
@@ -137,23 +155,15 @@ try {
     }
   })()`);
   check("falsification: unstringified object args fail with JSON parse error in native WebMCP",
-    objRes?.ok === false && /Failed to parse input string as JSON/i.test(objRes?.error ?? ""),
+    bistroFalsificationHolds(objRes),
     objRes,
   );
 
   // 2. SUCCESS: JSON-formatted string args pass WebIDL DOMString check, parse cleanly, and execute the booking
   const payload = JSON.stringify(validBooking);
-  const strRes = await withTimeout(cdp.eval(page.sessionId, `(async () => {
-    const tool = (await document.modelContext.getTools()).find(t => t.name === "book_table_le_petit_bistro");
-    try {
-      const res = await document.modelContext.executeTool(tool, ${JSON.stringify(payload)});
-      return { ok: true, res };
-    } catch (err) {
-      return { ok: false, error: String(err?.name) + ": " + String(err?.message) };
-    }
-  })()`), 30_000);
+  const strRes = await bistroJsonStringProbe(cdp, page.sessionId, payload);
   check("JSON-string arguments settle successfully through native WebMCP",
-    strRes?.ok === true && typeof strRes?.res === "string" && strRes.res.includes("We look forward to welcoming you"),
+    bistroJsonStringSuccessHolds(strRes),
     strRes,
   );
 
@@ -169,45 +179,31 @@ try {
     seating: document.getElementById("seating")?.value ?? "",
   })`);
   check("the real page visibly reflects the exact booking and opens its result dialog",
-    visible?.dialogOpen === true &&
-    visible?.name === validBooking.name &&
-    visible?.phone === validBooking.phone &&
-    visible?.date === validBooking.date &&
-    visible?.time === validBooking.time &&
-    visible?.guests === validBooking.guests &&
-    visible?.seating === validBooking.seating &&
-    visible?.modalText.includes("We look forward to welcoming you"),
+    bistroDomBookingHolds(visible, validBooking),
     visible,
   );
 
   // 4. SCREENSHOT CAPTURE: capture the open dialog
   const shot = await cdp.screenshot(page.sessionId, { captureBeyondViewport: true, fromSurface: false });
-  check("post-invocation screenshot captured", !!shot?.length, shot?.length ?? 0);
-  if (shot) {
-    await Deno.writeFile(`${OUT}/bistro-json-string-success.png`, shot);
-  }
+  check("post-invocation screenshot captured", screenshotCapturedHolds(shot), shot?.length ?? 0);
+  await persistBistroScreenshot({ shot, outDir: OUT });
 
 } catch (err) {
   // ll7q: the stack carries run paths — the CONSOLE gets the sanitized class,
   // never raw paths, before the exact locator line. The receipt keeps the
   // bounded message (the receipt is the authoritative artifact, post-locator).
-  runError = err instanceof Error ? (err.stack ?? err.message) : String(err);
-  console.error("KAT Execution Error:", sanitizeKatLogError(err));
+  runError = captureRunError(err);
+  announceRunError(err);
 } finally {
   // GUARANTEED TEARDOWN + decision + reports + fail-closed exit: ONE call into
-  // the production finalizer (lib/kat-finalizer.ts) — the committed tests
-  // execute THAT function, never a simulation of it.
-  const outcome = await finalizeKatExecution({
+  // the production finalizer via the extracted settle unit — the committed
+  // tests execute THAT function, never a simulation of it.
+  await settleBistroRun({
     runError,
     checks,
-    teardown: {
-      cdp,
-      chrome,
-      profilePath: PROFILE,
-      withTimeout,
-    },
-    report: {
-      expected: head,
+    teardown: assembleBistroTeardown({ cdp, chrome, profilePath: PROFILE, withTimeout }),
+    report: bistroRunReport({
+      evidence: OUT,
       head,
       tree,
       dirty,
@@ -215,11 +211,6 @@ try {
       url: URL_BISTRO,
       browserVersion,
       lockWaitMs: chrome?.lockWaitMs ?? null,
-      outDir: OUT,
-    },
+    }),
   });
-  // The harness's REAL failure-derived exit: the code comes from the
-  // finalizer's decision (0 on GREEN, 1 on RED) — never a constant.
-  if (outcome.receiptPath) console.log(`KAT receipt: ${outcome.receiptPath}`);
-  Deno.exit(outcome.exitCode);
 }

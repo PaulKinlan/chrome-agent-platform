@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.303] — 2026-09-07
+- the French Bistro KAT's caller guards are pinned by executing them, not by grepping the caller
+
 ## [0.3.302] — 2026-09-07
 - steering a running task no longer loses the owner's message
 
@@ -15,6 +18,11 @@
 ## [0.3.298] — 2026-09-07
 - Extension builds on macOS now clean up Finder .DS_Store files without stopping with an error
 
+## [0.3.297] — 2026-09-07
+- Pinned no-eval Emscripten ABI fixtures verified in Chrome; runtime admission and host integration remain pending
+
+## [0.3.296] — 2026-09-07
+- align version_name in manifest with package.json
 ## [0.3.297] — 2026-09-07
 - Pinned no-eval Emscripten ABI fixtures verified in Chrome; runtime admission and host integration remain pending
 

@@ -28,37 +28,41 @@ const REPORT = {
 const PASSING_CHECKS = [{ name: "c1", passed: true }];
 
 Deno.test("kat-bistro: the KAT delegates the finalizer sequence to the production function, exactly once", async () => {
+  // chrome-agent-platform-cvlf: the caller's decision units live in
+  // lib/kat-bistro-caller.ts and are EXECUTED by tests/kat-bistro-caller.test.ts
+  // (settleBistroRun runs the production finalizer exactly once, ordered, with
+  // the failure-derived exit — behavioural pins). This check stays as the
+  // WIRING integrity pin: the script wires the extracted unit, and the unit
+  // imports the production finalizer + allocator (never a simulated evaluator).
   const scriptText = await Deno.readTextFile(`${root}/scripts/kat-webmcp-bistro.ts`);
   assert(scriptText.includes("?toolautosubmit"), "KAT must append ?toolautosubmit");
   assert(scriptText.includes("openCdp"), "KAT must use canonical openCdp client");
-  assert(scriptText.includes("withTimeout"), "KAT must bound execution with withTimeout");
   assert(
-    /import\s*\{[^}]*\bfinalizeKatExecution\b[^}]*\}\s*from\s*["']\.\/lib\/kat-finalizer\.ts["']/.test(scriptText),
-    "KAT must import finalizeKatExecution from ./lib/kat-finalizer.ts (any formatting)",
+    /import\s*\{[^}]*\bsettleBistroRun\b[^}]*\}\s*from\s*["']\.\/lib\/kat-bistro-caller\.ts["']/.test(scriptText),
+    "KAT must wire the extracted settle unit from ./lib/kat-bistro-caller.ts (any formatting)",
+  );
+  assert(/\bsettleBistroRun\(\{/.test(scriptText), "the finally block delegates to the extracted settle unit");
+  assert(!/\bDeno\.exit\(/.test(scriptText), "the script owns NO inline exit — the settle unit derives it from the finalizer decision");
+
+  const libText = await Deno.readTextFile(`${root}/scripts/lib/kat-bistro-caller.ts`);
+  assert(
+    /import\s*\{[^}]*\bfinalizeKatExecution\b[^}]*\}\s*from\s*["']\.\/kat-finalizer\.ts["']/.test(libText),
+    "the settle unit imports the PRODUCTION finalizer (any formatting)",
   );
   assert(
-    /import\s*\{[^}]*\ballocateRunEvidenceDir\b[^}]*\}\s*from\s*["']\.\/lib\/kat-finalizer\.ts["']/.test(scriptText),
-    "KAT must import allocateRunEvidenceDir from ./lib/kat-finalizer.ts (any formatting)",
+    /import\s*\{[^}]*\ballocateRunEvidenceDir\b[^}]*\}\s*from\s*["']\.\/kat-finalizer\.ts["']/.test(libText),
+    "the evidence-dir unit defaults to the PRODUCTION allocator (any formatting)",
   );
-  assert(/\ballocateRunEvidenceDir\(OUT_PARENT\)/.test(scriptText), "the KAT mints OUT via the real allocator");
-  const finallyIdx = scriptText.indexOf("finally {");
-  assert(finallyIdx > 0, "KAT must contain finally block");
-  const finallyBody = scriptText.slice(finallyIdx);
-  assert(finallyBody.includes("await finalizeKatExecution("), "the finally block calls the production finalizer");
   assertEquals(
-    (scriptText.match(/await finalizeKatExecution\(/g) ?? []).length,
+    (libText.match(/await finalize\(/g) ?? []).length,
     1,
-    "the KAT calls the finalizer EXACTLY once (no duplicate inline teardown/report)",
+    "the settle unit calls the finalizer EXACTLY once (no duplicate inline teardown/report)",
   );
-  assert(!finallyBody.includes("Deno.writeTextFile"), "no report writes inline in the KAT");
-  // The ONE inline exit is the failure-derived outcome exit (the suite-honesty
-  // scanner's pattern) — never a constant, never a second exit.
   assertEquals(
-    (finallyBody.match(/Deno\.exit\(/g) ?? []).length,
+    (libText.match(/exit\(outcome\.exitCode\)/g) ?? []).length,
     1,
-    "exactly one inline exit in the KAT: Deno.exit(outcome.exitCode)",
+    "exactly one decision-derived exit in the settle unit: exit(outcome.exitCode)",
   );
-  assert(finallyBody.includes("Deno.exit(outcome.exitCode)"), "the exit code comes from the finalizer's decision");
 });
 
 Deno.test("kat-bistro finalizer: teardownChromeAndProfile executes clean and failure-injected paths correctly", async () => {
