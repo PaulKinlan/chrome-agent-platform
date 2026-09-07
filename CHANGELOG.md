@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.315] — 2026-09-07
+- Release notes filter now distinguishes case-sensitive test states from plain color names and checks entries before bump
+
 ## [0.3.314] — 2026-09-07
 - svg_rasterise — on-device SVG rasterisation through the browser's own renderer (native suffices; resvg not needed)
 

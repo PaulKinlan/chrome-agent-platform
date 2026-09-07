@@ -83,6 +83,26 @@ const sanitizeEntry = (note) => String(note)
   .trim();
 const cleanNote = finalNote ? sanitizeEntry(finalNote) : null;
 
+// Validate that the note satisfies user-facing entry standards before writing.
+const { isUserFacingEntry } = await import("../extension/options/changelog-filter.js");
+if (cleanNote && !isUserFacingEntry(cleanNote)) {
+  if (skipIfNoNote) {
+    console.error(
+      `[bump-version] commit note "${cleanNote.slice(0, 72)}" does not pass user-facing filter — ` +
+      `NOT bumping version (treating as non-user-facing bookkeeping). ` +
+      `If this commit lands user-visible work, rephrase or bump explicitly: ` +
+      `node scripts/bump-version.mjs patch --user-note "<what the user gets>"`
+    );
+    process.exit(0);
+  } else {
+    console.error(
+      `[bump-version] ERROR: changelog note "${cleanNote}" fails user-facing check ` +
+      `(contains engineering jargon, unhandled prefix, or internal state words).`
+    );
+    process.exit(1);
+  }
+}
+
 // Hook mode (xk2u): sanitize FIRST and bail BEFORE touching any file when
 // nothing user-sayable survives (merge/bookkeeping commits). Never invent
 // placeholder text — that is how 93 fake entries landed on 2026-09-05.

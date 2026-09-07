@@ -82,6 +82,8 @@ Deno.test("changelog filter: isUserFacingEntry rejects engineering and workflow 
     "tracker: the diff view component is recorded as landed.",
     "merge splice had folded the check names",
     "the run was RED then GREEN",
+    "GREEN suite passed all checks",
+    "RED test failure investigated",
     "Landed: a reusable diff view is ready",
     "the change is now in review",
     "two more fixes are in progress",
@@ -117,6 +119,8 @@ Deno.test("changelog filter: isUserFacingEntry accepts plain user copy", () => {
     "/files now accepts a dropped folder.",
     "\"Show all\" lists every earlier change once.",
     "(Beta) The composer remembers your last provider.",
+    "Click the green button to proceed with the run.",
+    "A red highlight indicates removed text in the diff view.",
     "...and the composer remembers your last provider.",
   ];
   for (const s of accept) {

@@ -24,7 +24,8 @@
 
 const ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
 const SHA_RE = /\b[0-9a-f]{7,40}\b/i;
-const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|\bRED\b|\bGREEN\b/i;
+const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice/i;
+const GATE_STATE_RE = /\b(RED|GREEN)\b/;
 const WORKFLOW_RE = /\blanded\b|in review|in progress|recorded as|\bclaimed\b/i;
 // The same joiner class scripts/bump-version.mjs strips from a subject (y6z6):
 // a bullet still starting with one, followed by whitespace or nothing, is a leak.
@@ -36,6 +37,7 @@ export function isUserFacingEntry(text) {
   if (ENGINEERING_PREFIX_RE.test(line)) return false;
   if (SHA_RE.test(line)) return false;
   if (JARGON_RE.test(line)) return false;
+  if (GATE_STATE_RE.test(line)) return false;
   if (WORKFLOW_RE.test(line)) return false;
   return true;
 }
