@@ -85,6 +85,12 @@ Deno.test("preview: the host lives ONLY in the options page — SW-only sender, 
   // NO additional runtime grant.)
   assert(sw.includes('type: "wasm.preview.options"'), "the SW route sends to the options host");
   assert((manifest.host_permissions ?? []).includes("<all_urls>"), "host access is install-granted (<all_urls>)");
+  // 8oil: the route bounds the preview envelope with the JOB's per-argv output
+  // encoding (previewStdoutEncoding over the built job), not the spec's
+  // static row — imageops info / zxing read / compressops info are utf8 while
+  // their spec rows are base64, so the spec would reject a completed run.
+  assert(!routeBody.includes("stdoutEncoding: spec.stdoutEncoding"), "the route must not bound a per-argv job with the spec's static encoding");
+  assert(routeBody.includes("stdoutEncoding: job.stdoutEncoding"), "the route bounds the envelope with the built job's output encoding");
 });
 
 Deno.test("preview: the route fetches runtime-RELATIVE wasm paths (no extension/ prefix)", async () => {
@@ -276,9 +282,12 @@ Deno.test("preview: an UNKNOWN toolId fails closed (the static allowlist is exac
     assert(typeof spec.casSha === "string" && /^[0-9a-f]{64}$/.test(spec.casSha), `${spec.toolId} casSha`);
     assert(Number.isSafeInteger(spec.size) && spec.size > 0, `${spec.toolId} size`);
     assertEquals(spec.argv0, spec.toolId, "argv0 == the exact toolId");
-    // Binary-at-the-pipe tools emit base64: gzip always; imageops except its
-    // info subcommand (per-argv, previewStdoutEncoding).
-    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" || spec.toolId === "zxing" || spec.toolId === "oxipng" ? "base64" : "utf8";
+    // Binary-at-the-pipe tools emit base64: gzip always; imageops/zxing except
+    // their utf8 subcommands (per-argv, previewStdoutEncoding); compressops
+    // (8oil: its compression subcommands write frame bytes in both directions,
+    // info is per-argv utf8); oxipng. base64 -d stays utf8 (a natural-language
+    // arm — it fails on non-base64 bytes, the contract stays honest).
+    const expectedEncoding = spec.toolId === "gzip" || spec.toolId === "imageops" || spec.toolId === "zxing" || spec.toolId === "oxipng" || spec.toolId === "compressops" ? "base64" : "utf8";
     assertEquals(spec.stdoutEncoding, expectedEncoding, `${spec.toolId}: immutable output encoding`);
   }
 });

@@ -97,8 +97,24 @@ export const PREVIEW_SPECS = Object.freeze(
           // its validated trusted argv through previewStdoutEncoding().
           // Binary-at-the-pipe tools emit base64 (gzip always; imageops except
           // its info subcommand, resolved per-argv in previewStdoutEncoding).
-          // oxipng (m3vb) always emits PNG bytes.
-          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" || row.toolId === "oxipng" ? "base64" : "utf8",
+          // oxipng (m3vb) always emits PNG bytes. compressops (8oil) emits frame
+          // bytes for its compression subcommands; its info subcommand is the
+          // per-argv utf8 exception (previewStdoutEncoding). base64 -d is NOT
+          // re-armed (its resolved utf8 default fails on non-base64 bytes —
+          // the contract stays honest).
+          stdoutEncoding: row.toolId === "gzip" || row.toolId === "imageops" || row.toolId === "zxing" || row.toolId === "oxipng" || row.toolId === "compressops" ? "base64" : "utf8",
+          // The BYTES-in modes take canonical base64 at the tool boundary
+          // (previewStdinEncoding); every other mode takes strict UTF-8 text.
+          // gzip -d / compressops's decompress+info / zxing read read bytes.
+          ...(row.toolId === "gzip" || row.toolId === "compressops" || row.toolId === "zxing" ? {
+            binaryStdinArgs: Object.freeze(
+              row.toolId === "gzip"
+                ? [Object.freeze(["-d"])]
+                : row.toolId === "zxing"
+                ? [Object.freeze(["read"])]
+                : [Object.freeze(["zstd", "-d"]), Object.freeze(["brotli", "-d"]), Object.freeze(["info"])],
+            ),
+          } : {}),
           ...(row.toolId === "gzip" ? {
             allowedArgs: Object.freeze([
               Object.freeze([]),
@@ -188,10 +204,33 @@ export function previewStdoutEncoding(toolId, inputArgs = []) {
     // tool boundary).
     return inputArgs[0] === "read" ? "utf8" : "base64";
   }
+  if (toolId === "compressops") {
+    // 8oil: info emits the JSON report (utf8); zstd/brotli emit frame bytes
+    // (base64 at the tool boundary) in BOTH directions — a decompress emits
+    // the original bytes, binary stays lossless (gzip -d's arm).
+    return inputArgs[0] === "info" ? "utf8" : "base64";
+  }
   return toolId === "base64" && inputArgs.length === 1 &&
       (inputArgs[0] === "-d" || inputArgs[0] === "--decode")
     ? "base64"
     : spec.stdoutEncoding;
+}
+
+/** The stdin byte contract for a (tool, argv) pair — the mirror of
+ * previewStdoutEncoding, and the GENERALISATION of gzip's lone binary-stdin
+ * path (8oil). "base64" = the tool reads BYTES from stdin, so the model sends
+ * canonical base64 at the tool boundary and buildPreviewJob decodes it to raw
+ * bytes; "utf8" = strict UTF-8 text. Driven by the spec's frozen
+ * binaryStdinArgs list (exact argv), never request-borne. Compress modes stay
+ * UTF-8 (gzip's precedent); base64 -d stays UTF-8 (a natural-language arm). */
+export function previewStdinEncoding(toolId, inputArgs = []) {
+  const spec = previewSpecFor(toolId);
+  if (!spec || !Array.isArray(inputArgs)) fail("preview_args");
+  if (Array.isArray(spec.binaryStdinArgs)) {
+    const argv = JSON.stringify(inputArgs);
+    if (spec.binaryStdinArgs.some((allowed) => JSON.stringify(allowed) === argv)) return "base64";
+  }
+  return "utf8";
 }
 
 export function wasmStreamOutputDescriptor(toolId, inputArgs = []) {
@@ -401,18 +440,10 @@ export function validatePreviewInput(raw) {
   });
   if (typeof raw.stdin !== "string") fail("preview_stdin");
   let sqliteInput = null;
-  if (raw.toolId === "gzip") {
-    if (args.length === 0) {
-      // TextEncoder replaces malformed scalar values, so reject those values
-      // first. A BOM or NUL is outside this intentionally narrow text mode.
-      if (raw.stdin.charCodeAt(0) === 0xfeff || raw.stdin.includes("\0") ||
-          hasLoneSurrogate(raw.stdin)) {
-        fail("preview_gzip_text");
-      }
-    } else {
-      try { decodeCanonicalBase64(raw.stdin); }
-      catch { fail("preview_gzip_base64"); }
-    }
+  if (raw.toolId === "gzip" && args.length === 1) {
+    // gzip -d: gzip's arm reads BYTES — the stdin contract is canonical base64.
+    try { decodeCanonicalBase64(raw.stdin); }
+    catch { fail("preview_stdin_base64"); }
   } else if (raw.toolId === "sqlite3_query_bounded") {
     // The sqlite stdin is the canonical JSON string (the shape/readOnly/
     // fixture/bounds validated inside).
@@ -420,6 +451,18 @@ export function validatePreviewInput(raw) {
   } else {
     const stdinBytes = utf8Bytes(raw.stdin);
     if (stdinBytes > PREVIEW_LIMITS.maxStdinBytes) fail("preview_stdin");
+    // 8oil: the SHARED stdin byte contract (gzip's lone arm generalised).
+    // Bytes-in modes (the spec's binaryStdinArgs) take canonical base64;
+    // TextEncoder replaces malformed scalar values, so text modes reject a BOM
+    // / NUL / lone surrogate first (gzip's strict checks, now every text tool).
+    const enc = previewStdinEncoding(raw.toolId, args);
+    if (enc === "base64") {
+      try { decodeCanonicalBase64(raw.stdin); }
+      catch { fail("preview_stdin_base64"); }
+    } else if (raw.stdin.charCodeAt(0) === 0xfeff || raw.stdin.includes("\0") ||
+        hasLoneSurrogate(raw.stdin)) {
+      fail("preview_stdin_text");
+    }
   }
   // The validated toolId MUST survive (the SW resolves the spec from it — a
   // dropped toolId would make every allowlisted tool appear unknown).
@@ -466,10 +509,13 @@ export function buildPreviewJob({ input, authority, quota = null }) {
   if (!spec) fail("preview_unknown_tool");
   const args = previewWasiArgs(input.toolId, input.args);
   let stdinBytes;
-  if (input.toolId === "gzip" && input.args.length === 1) {
+  // Bytes-in modes (previewStdinEncoding) decode canonical base64 to raw
+  // bytes; every other mode is UTF-8 text. The dead post-dptw decoded-byte
+  // ceiling (PREVIEW_LIMITS.maxStdinBytes is Infinity) is gone — the UTF-8
+  // text path never carried it.
+  if (previewStdinEncoding(input.toolId, input.args) === "base64") {
     try { stdinBytes = decodeCanonicalBase64(input.stdin); }
-    catch { fail("preview_gzip_base64"); }
-    if (stdinBytes.byteLength > spec.maxDecodedInputBytes) fail("preview_gzip_base64");
+    catch { fail("preview_stdin_base64"); }
   } else {
     stdinBytes = encoder.encode(input.stdin);
   }

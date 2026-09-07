@@ -2,7 +2,7 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
- "release": "0.3.307",
+ "release": "0.3.308",
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"
@@ -26,7 +26,7 @@ export const BUNDLED_INVENTORY = Object.freeze({
   {
    "pkg": "cap.bundled.compressops",
    "version": "1.0.0",
-   "digest": "536a10aeff857c0746f9510ddb621ad9ff8987a006de7d3da07e1bccab4a3eb4"
+   "digest": "200f4c7a7732d551eb99ab251a8353ffac4b073a3daa49aae30ebe3e1e4ce412"
   },
   {
    "pkg": "cap.bundled.csvtool",
@@ -457,8 +457,8 @@ export const BUNDLED_INVENTORY = Object.freeze({
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.compressops-1.0.0.manifest.json",
-   "sha256": "536a10aeff857c0746f9510ddb621ad9ff8987a006de7d3da07e1bccab4a3eb4",
-   "size": 1856
+   "sha256": "200f4c7a7732d551eb99ab251a8353ffac4b073a3daa49aae30ebe3e1e4ce412",
+   "size": 1869
   },
   {
    "rel": "extension/wasm/manifests/cap.bundled.csvtool-1.0.0.manifest.json",
