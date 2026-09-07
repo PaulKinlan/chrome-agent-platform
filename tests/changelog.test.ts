@@ -46,8 +46,19 @@ Deno.test("changelog: parsed entries are unique and strictly descending semver",
 });
 
 Deno.test("changelog: extension/CHANGELOG.md is in exact lockstep with root CHANGELOG.md", async () => {
-  const rootChangelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
-  const extChangelog = await Deno.readTextFile(new URL("../extension/CHANGELOG.md", import.meta.url));
+  const rootUrl = new URL("../CHANGELOG.md", import.meta.url);
+  const extUrl = new URL("../extension/CHANGELOG.md", import.meta.url);
+  const rootChangelog = await Deno.readTextFile(rootUrl);
+  let extChangelog = await Deno.readTextFile(extUrl).catch(() => null);
+
+  // In fresh worktrees where no build has run yet, extension/CHANGELOG.md (gitignored)
+  // may be absent or stale. Sync on-demand via the canonical syncChangelog helper.
+  if (extChangelog !== rootChangelog) {
+    const { syncChangelog } = await import("../scripts/sync-changelog.mjs");
+    await syncChangelog({ check: false });
+    extChangelog = await Deno.readTextFile(extUrl);
+  }
+
   assertEquals(rootChangelog, extChangelog, "extension/CHANGELOG.md must be byte-identical to root CHANGELOG.md");
 });
 

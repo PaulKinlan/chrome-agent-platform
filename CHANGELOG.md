@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.308] — 2026-09-07
+- test(changelog): auto-sync gitignored extension/CHANGELOG.md on test execution
+
 ## [0.3.307] — 2026-09-07
 - Release notes for recent updates now use plain language descriptions
 
