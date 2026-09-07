@@ -325,9 +325,33 @@ Deno.test("mkax: load-sensitive harnesses DECLARE themselves, and the declaratio
     const src = Deno.readTextFileSync(`${ROOT}scripts/${file}`);
     // The refusal must reach a THIRD exit code with the greppable marker, or an
     // aggregator cannot tell an environmental refusal from a product red.
-    assert(src.includes("QuietWindowRefusedError"), `${file} must handle the refusal`);
-    assert(src.includes("ENVIRONMENTAL_REFUSAL_EXIT"), `${file} must exit with the environmental code`);
-    assert(src.includes("ENVIRONMENTAL_REFUSAL_MARKER"), `${file} must print the marker line`);
+    //
+    // chrome-agent-platform-lrok: these three pins asserted the BARE WORDS, and each
+    // word occurs in the target twice — once in the import block (chrome-journeys.ts
+    // :34-36) and once in the handler (:136-139). Mutant W2 (census wzez) deleted the
+    // whole five-line handler and left `throw e;` plus the imports: every token dropped
+    // to a single occurrence, all three pins PASSED, and this test stayed green. The
+    // kill came only from the executing gate below ("the REAL journey gate refuses with
+    // exit 75 under artificial load") — the pins that named the property were the ones
+    // that could not see it disappear. An import binding is not a handler, so each
+    // property is now anchored INSIDE the handler: the typed catch, then the marker and
+    // the exit code reached from it. Bounded so a marker printed in some unrelated
+    // statement cannot satisfy it. The imports stay unpinned on purpose — provenance is
+    // the module's job, and these three prove USE. Kept generic: the assertion runs once
+    // per harness that declares itself load-sensitive, so it pins the declaration rule
+    // and not today's single member (proven by mutant W4 on the bead).
+    assert(
+      /instanceof\s+QuietWindowRefusedError\s*\)/.test(src),
+      `${file} must catch the refusal BY TYPE — an import binding is not a handler`,
+    );
+    assert(
+      /instanceof\s+QuietWindowRefusedError\s*\)[\s\S]{0,400}?ENVIRONMENTAL_REFUSAL_MARKER/.test(src),
+      `${file} must print the greppable marker from inside the refusal handler`,
+    );
+    assert(
+      /instanceof\s+QuietWindowRefusedError\s*\)[\s\S]{0,400}?Deno\.exit\(\s*ENVIRONMENTAL_REFUSAL_EXIT\s*\)/.test(src),
+      `${file} must exit with the environmental code from inside the refusal handler`,
+    );
   }
 });
 

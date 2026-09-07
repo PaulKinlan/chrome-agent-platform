@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.323] — 2026-09-07
+- the quiet-window refusal pins are anchored in the handler, not on its imports
+
 ## [0.3.322] — 2026-09-07
 - Browser-control screenshot runs now render thumbnails on tool cards and in the generated image strip
 
