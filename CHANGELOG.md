@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.319] — 2026-09-07
+- the pin-honesty guard now reads a target through helpers, loops and derived views
+
 ## [0.3.318] — 2026-09-07
 - The toolbox gains AVIF encoding — convert an image to the smaller modern AVIF format on-device, no upload
 
