@@ -681,3 +681,16 @@ Deno.test("script approval: the requirement keeps a bounded source + hosts detai
   assertEquals(boundScriptApprovalDetail({ hosts: ["a"] }), undefined);
   assertEquals(boundScriptApprovalDetail("return 1"), undefined);
 });
+
+Deno.test("SW wiring pins: thread.get surfaces pending approvals and withRunLock is thread-scoped", async () => {
+  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  // withRunLock must support concurrency across different threads
+  assert(sw.includes("threadRunLocks = new Map()"), "threadRunLocks map present for per-thread concurrency");
+  assert(sw.includes("currentRunLockTarget = threadId || id || \"global\""), "runTask targets lock by threadId || id");
+  // thread.get must surface in-flight approvals for the thread
+  assert(sw.includes("ownerApprovalStore.approvals.entries()"), "thread.get inspects ownerApprovalStore");
+  assert(sw.includes("role: \"approval\""), "thread.get injects role approval messages for pending approvals");
+  // requireOwnerApproval fails closed when no UI port is open
+  assert(sw.includes("progressPorts.size === 0"), "requireOwnerApproval fails closed without an open UI port");
+});
+

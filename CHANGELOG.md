@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.301] — 2026-09-07
+- Independent tasks now run concurrently and in-progress approvals render upon opening a task
+
 ## [0.3.300] — 2026-09-07
 - Uploaded WebAssembly tools can now be called by agents with live execution and verified output
 
