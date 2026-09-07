@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.296] — 2026-09-07
+- align version_name in manifest with package.json
+
 ## [0.3.295] — 2026-09-07
 - The toolbox gains oxipng — shrink a PNG on-device without changing a single pixel
 
