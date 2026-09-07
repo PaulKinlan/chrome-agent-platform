@@ -1074,6 +1074,47 @@ type Attribution = { targets: string[]; stripComments: boolean; via: string } | 
  *  comment ending in a full stop — "...TEMPLATE-CUSTOM-SELECT-01)." — was filed as a
  *  property receiver and silently dropped: that is how the guard lost uodl's own
  *  template-cards allowlist entry and the stale check caught it. */
+/** The innermost enclosing function whose parameter list binds `v`, when `pos` is
+ *  inside that function's body — else null.
+ *
+ *  A parameter SHADOWS an outer read binding, so a pin on it says nothing about the
+ *  outer file. Callback parameters were already refused (`shape === "callback-param"`);
+ *  function-DECLARATION parameters were not, so
+ *      const src = await Deno.readTextFile("extension/lib/pure.js");
+ *      function helper(src: string) { if (src.includes("X")) throw ... }
+ *  inherited the outer attribution and was judged against pure.js. That is a false RED
+ *  (cry wolf) at best and a false GREEN when the outer file happens to contain the
+ *  token while the helper's own argument is what the pin is about. Found by
+ *  glm-flash-1's boundary attack on this extension; the probe is pinned verbatim below.
+ *  Refusing is symmetric with the callback-parameter ruling: a parameter's value is
+ *  supplied by the caller, so it is not a repo path this guard can prove. */
+function enclosingParamBinder(src: Src, v: string, pos: number): string | null {
+  const text = src.text;
+  let best: { name: string; span: number } | null = null;
+  const pats = [
+    /(?:^|[^.\w$])(?:export\s+)?(?:async\s+)?function\s*([\w$]*)\s*\(([^)]*)\)\s*\{/g,
+    /(?:const|let|var)\s+([\w$]+)\s*=\s*(?:async\s*)?function\s*[\w$]*\s*\(([^)]*)\)\s*\{/g,
+    /(?:const|let|var)\s+([\w$]+)\s*=\s*(?:async\s*)?\(([^)]*)\)\s*(?::[^={]{0,60})?=>\s*\{/g,
+  ];
+  for (const re of pats) {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (src.inProse(m.index!)) continue;
+      const params = m[2].split(",")
+        .map((x) => x.replace(/^\s*\{[^}]*\}/, "").replace(/^\.\.\./, "").replace(/[=?:].*$/, "").trim());
+      if (!params.includes(v)) continue;
+      const open = m.index! + m[0].length - 1;      // the `{` that opens the body
+      const end = balanced(text, open);
+      if (pos > open && pos < end) {
+        const span = end - open;
+        if (!best || span < best.span) best = { name: m[1] || "(anonymous)", span };
+      }
+    }
+  }
+  return best ? best.name : null;
+}
+
 function isPropertyReceiver(text: string, varStart: number): boolean {
   let i = varStart - 1;
   while (i >= 0 && /\s/.test(text[i])) i--;
@@ -1151,6 +1192,10 @@ function attribute(src: Src, v: string, varStart: number, depth = 0): Attributio
   // receiver because the comment above it ends with a full stop, and silently lost
   // all eight comment-stripped pins.
   if (depth === 0 && isPropertyReceiver(src.text, varStart)) return null;
+  // A parameter of an enclosing function scope shadows any outer read binding, at
+  // every depth: the R5 recursion passes a BINDING offset, and a base variable that is
+  // really a parameter must be refused there too rather than inherit an outer file.
+  if (enclosingParamBinder(src, v, pos)) return null;
   const bind = nearestBinding(src, v, pos);
   if (!bind) return null;
 
@@ -1270,6 +1315,8 @@ type Stats = {
   attributedPins: number;         // pins with at least one judgeable target
   unattributed: number;           // no file read resolves: the NOT_SOURCE classes
   propertyReceivers: number;      // a subset of the above: `x.text.includes(...)`
+  shadowedParameters: number;     // a subset of the above: a parameter of an enclosing
+                                  // function scope shadows an outer read binding
   skippedAbsence: number;
   skippedDisjunction: number;
   skippedInterpolated: number;    // a BACKTICK token containing ${...}
@@ -1297,7 +1344,7 @@ function collectPinsUncached(): { pins: Pin[]; stats: Stats } {
   const stats: Stats = {
     testFiles: 0, pinSites: 0, attributedPins: 0, unattributed: 0, propertyReceivers: 0,
     skippedAbsence: 0, skippedDisjunction: 0, skippedInterpolated: 0, skippedBuildArtifact: 0,
-    judged: 0, targets: 0, missing: [], judgedTargets: [],
+    judged: 0, targets: 0, missing: [], judgedTargets: [], shadowedParameters: 0,
   };
   const missing = stats.missing;
   const seenTargets = new Set<string>();
@@ -1360,7 +1407,9 @@ function collectPinsUncached(): { pins: Pin[]; stats: Stats } {
         const attr = attribute(testSrc, v, varPos < 0 ? pos : varPos);
         if (!attr) {
           stats.unattributed++;
-          if (isPropertyReceiver(text, varPos < 0 ? pos : varPos)) stats.propertyReceivers++;
+          const vp = varPos < 0 ? pos : varPos;
+          if (isPropertyReceiver(text, vp)) stats.propertyReceivers++;
+          else if (enclosingParamBinder(testSrc, v, vp)) stats.shadowedParameters++;
           continue;
         }
 
@@ -1931,6 +1980,67 @@ Deno.test("guard: the attributed population and its documented exclusions", () =
   assert(stats.skippedAbsence >= 100, `absence pins dropped to ${stats.skippedAbsence}`);
   assert(stats.skippedDisjunction >= 9, `disjunction pins dropped to ${stats.skippedDisjunction}`);
   assert(stats.targets >= 73, `distinct target files dropped to ${stats.targets}`);
+  // shadowedParameters is deliberately NOT asserted: 0 measured at 37c71f14 (which
+  // matches the review's finding that no live pin in tests/ has the shape), but a lane
+  // may legitimately add a helper that takes source text as a parameter, and an exact
+  // 0 would red that innocent change. The refusal itself is pinned by the
+  // function-declaration-parameter test; this counter is the observability half.
+  assert(stats.shadowedParameters >= 0, "unreachable, kept so the field is read");
   assertEquals(stats.testFiles, [...Deno.readDirSync(TESTS)].filter((e) => e.isFile && e.name.endsWith(".test.ts")).length,
     "every test file in tests/ is scanned");
+});
+
+Deno.test("guard: a function-declaration parameter shadows an outer read and is refused", () => {
+  // glm-flash-1's boundary attack on this extension, verbatim from its review record
+  // (cap-evidence/uodl/review-glm/REVIEW-c9y8-glm.md). Callback parameters were already
+  // refused; function-DECLARATION parameters were not, so this pin inherited the OUTER
+  // attribution and was judged against extension/lib/pure.js — a false RED (cry wolf)
+  // at best, and a false GREEN when the outer file happens to contain the token while
+  // the helper's own argument is what the pin is about. The refusal is symmetric with
+  // the callback ruling: a parameter's value is supplied by the caller, so it is not a
+  // repo path this guard can prove.
+  //
+  // Note the probe's assertion is also absence-shaped (`if (...) throw`), which a real
+  // scan would skip before judging; this sentinel calls attribute() directly so it pins
+  // the REFUSAL rather than the skip.
+  const body = `const src = await Deno.readTextFile("extension/lib/pure.js");
+function helper(src: string) {
+  if (src.includes("TARGET_TOKEN_XYZ")) throw new Error("no");
+}
+helper("x");
+`;
+  const probe = synth(body);
+  const inside = body.indexOf('src.includes("TARGET_TOKEN_XYZ")');
+  assertEquals(attribute(probe, "src", inside), null,
+    "a declaration parameter shadows the outer read: refuse rather than inherit its target");
+  assertEquals(enclosingParamBinder(probe, "src", inside), "helper",
+    "the refusal names the shadowing scope, so the skip can be counted with a reason");
+
+  // The refusal must be SCOPED to the shadowed pin, not a blanket refusal of the name:
+  // the same variable outside the helper body is still the outer read.
+  const body2 = `const src = await Deno.readTextFile("extension/lib/pure.js");
+function helper(other: string) {
+  return other.length;
+}
+src.includes("TARGET_TOKEN_XYZ");
+`;
+  const probe2 = synth(body2);
+  const outside = body2.lastIndexOf('src.includes("TARGET_TOKEN_XYZ")');
+  const a = attribute(probe2, "src", outside);
+  assert(a !== null && a.targets.length === 1 && a.targets[0] === "extension/lib/pure.js",
+    `outside the helper the outer read still attributes, got ${JSON.stringify(a)}`);
+
+  // Arrow and function-expression parameters are refused too, and a pin inside a
+  // Deno.test arrow (no parameters) is untouched — that is every real pin in tests/.
+  const body3 = `const src = await Deno.readTextFile("extension/lib/pure.js");
+const h = async (src) => { src.includes("A"); };
+const g = function (src) { src.includes("B"); };
+Deno.test("x", () => { src.includes("C"); });
+`;
+  const probe3 = synth(body3);
+  assertEquals(attribute(probe3, "src", body3.indexOf('src.includes("A")')), null, "arrow parameter");
+  assertEquals(attribute(probe3, "src", body3.indexOf('src.includes("B")')), null, "function-expression parameter");
+  const inTest = attribute(probe3, "src", body3.indexOf('src.includes("C")'));
+  assert(inTest !== null && inTest.targets[0] === "extension/lib/pure.js",
+    "a parameterless Deno.test callback does not shadow the module-scope read");
 });

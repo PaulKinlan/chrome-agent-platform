@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.320] — 2026-09-07
+- a function parameter shadows an outer read, so the guard refuses it
+
 ## [0.3.319] — 2026-09-07
 - the pin-honesty guard now reads a target through helpers, loops and derived views
 
