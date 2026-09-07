@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.305] — 2026-09-07
+- j6au: the tranche2 KAT cleans up its browser profile (9t1b copy-test hygiene)
+
 ## [0.3.304] — 2026-09-07
 - Settings tool previews execute — the preview host listener is registered whenever Settings is open
 

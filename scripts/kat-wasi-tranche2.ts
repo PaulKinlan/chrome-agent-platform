@@ -16,11 +16,19 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   ok ? pass++ : fail++;
 };
 
+const PROFILE_DIR = `${OUT}/profile-${Date.now()}`;
+// Self-healing: a prior run's browser children can outlive its cleanup window.
+// Sweep the stale profiles BEFORE launching (evidence files are never touched).
+for (const entry of Deno.readDirSync(OUT)) {
+  if (entry.isDirectory && entry.name.startsWith("profile-")) {
+    try { await Deno.remove(`${OUT}/${entry.name}`, { recursive: true }); } catch { /* a still-live holder wins; the next run sweeps again */ }
+  }
+}
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--remote-allow-origins=*", `--user-data-dir=${OUT}/profile-${Date.now()}`, "about:blank"],
+    "--remote-allow-origins=*", `--user-data-dir=${PROFILE_DIR}`, "about:blank"],
 });
 const ws = new WebSocket(wsUrl);
 await new Promise<void>((resolve) => { ws.onopen = () => resolve(); });
@@ -83,6 +91,23 @@ try {
 } finally {
   try { ws.close(); } catch {}
   try { proc.kill("SIGKILL"); } catch {}
+  // chrome-agent-platform-j6au: /usr/bin/chromium is a wrapper script —
+  // SIGKILL kills the wrapper while the REAL browser orphans and keeps
+  // mutating its profile (Default/, SingletonLock, Local State) inside the
+  // working tree, which fails the suite-honesty copy test (9t1b) on the next
+  // npm test. Kill every process that holds THIS run's profile path, then the
+  // removal succeeds. Evidence (result.json + screenshot) is never touched.
+  try {
+    await new Deno.Command("pkill", { args: ["-9", "-f", PROFILE_DIR] }).output();
+  } catch { /* best effort */ }
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      await Deno.remove(PROFILE_DIR, { recursive: true });
+      break;
+    } catch {
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
 }
 console.log(`SUMMARY: ${pass} passed, ${fail} failed; harnessSha=${sha}; extensionSha=${extensionSha}; evidence=${OUT}`);
 Deno.exit(fail ? 1 : 0);

@@ -53,14 +53,23 @@ Deno.test("preview: the host lives ONLY in the options page — SW-only sender, 
     new URL("../extension/manifest.json", import.meta.url),
   );
   const manifest = JSON.parse(manifestText);
-  // 1. The host listener lives in the options page with the unique type.
-  assert(options.includes('"wasm.preview.options"'), "the options page hosts the preview listener");
-  assert(options.includes('chrome.runtime.onMessage.addListener'), "the listener is a runtime listener");
+  // 1. The host listener lives in the OPTIONS page's module scope. j6au
+  // extracted it verbatim into lib/wasm-preview-host.js (executed by
+  // tests/wasm-preview-host.test.ts) after its registration was found buried
+  // inside renderToolLibrary() — the root cause of the owned "no offscreen
+  // response" RED class. The pin now traces wiring + extracted guards.
+  assert(options.includes('registerWasmPreviewHost()'), "the options page registers the preview host at module scope (j6au)");
+  assert(options.includes('lib/wasm-preview-host.js'), "the options page wires the extracted host unit");
+  const hostLib = await Deno.readTextFile(
+    new URL("../extension/lib/wasm-preview-host.js", import.meta.url),
+  );
+  assert(hostLib.includes('"wasm.preview.options"'), "the preview listener handles the unique type");
+  assert(hostLib.includes("runtime.onMessage.addListener"), "the listener is a runtime listener");
   // 2. The ONLY accepted sender is the same-extension SW: id exact + no tab.
-  assert(options.includes("sender?.id !== chrome.runtime.id || sender?.tab != null"), "the SW-only sender gate is present");
+  assert(hostLib.includes("sender?.id !== runtime.id || sender?.tab != null"), "the SW-only sender gate is present");
   // 3. It uses the canonical Gate-2 executor + worker (no new Worker literal).
-  assert(options.includes('createOffscreenWasmHost'), "the options host uses the reviewed offscreen host contract");
-  assert(options.includes('chrome.runtime.getURL("lib/wasm-execution-worker.js")'), "the fresh canonical worker URL");
+  assert(hostLib.includes("createOffscreenWasmHost"), "the options host uses the reviewed offscreen host contract");
+  assert(hostLib.includes('runtime.getURL("lib/wasm-execution-worker.js")'), "the fresh canonical worker URL");
   // 4. NO offscreen document, NTP or content-script fallback for the preview.
   assert(!offscreen.includes("wasm.preview"), "the offscreen document has no preview listener");
   const routeStart = sw.indexOf('async "tool.preview.run"');
