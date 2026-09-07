@@ -141,6 +141,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-tool-call-clarity.ts": { class: "kat" },
   "kat-ui-repair.ts": { class: "kat", ...RED("crash", "'Settings restores one compact background-agent add section' fails and the KAT then throws on a null select") },
   "kat-usage-viz.ts": { class: "kat" },
+  "kat-user-wasm-call.ts": { class: "kat" },
   "kat-user-wasm-store.ts": { class: "kat" },
   "kat-bundled-execute.ts": { class: "kat" },
   "kat-webmcp-honest-errors.ts": { class: "kat" },

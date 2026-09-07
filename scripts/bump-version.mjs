@@ -62,8 +62,8 @@ const finalNote = userNote ? userNote.trim() : (message ? message.replace(/^\[[^
 // matter what the commit subject said (CAP-FB-20260830-SETTINGS-WHATS-NEW-COPY-01 follow-through).
 const sanitizeEntry = (note) => String(note)
   .replace(/^(merge|chore|fix(?:\([^)]*\))?|test|ci|docs|tasks|feat|refactor)\s*:\s*/i, "")
-  .replace(/^chrome-agent-platform-[a-z0-9]+:\s*/i, "")
-  .replace(/\bchrome-agent-platform-[a-z0-9]+\b/gi, "")
+  .replace(/^chrome-agent-platform-[a-z0-9.]+:?\s*/i, "")
+  .replace(/\bchrome-agent-platform-[a-z0-9.]+\b/gi, "")
   .replace(/\(\s*[0-9a-f]{7,40}\s*\)/gi, "")
   .replace(/\bCAP-FB-\d{8}-[A-Z0-9-]+\b/g, "")
   .replace(/\b\w+ lane\b/gi, "work")

@@ -1569,21 +1569,84 @@ export function executableBundledToolRecords(rows, context = {}) {
 
 export function executableUserWasmToolRecords(rows, context = {}) {
   return adaptUserWasmTools(rows, context).map((descriptorInput) => {
+    const toolId = descriptorInput.toolId;
+    const packageDigest = descriptorInput.packageDigest;
+
+    const validator = async (rawArgs) => {
+      let normalizedArgs = [];
+      let normalizedStdin = "";
+      if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+        if (Object.hasOwn(rawArgs, "args")) {
+          if (!Array.isArray(rawArgs.args) || rawArgs.args.some((a) => typeof a !== "string" || a.includes("\0"))) {
+            return { ok: false, error: "invalid_arguments: args must be an array of strings without null bytes" };
+          }
+          normalizedArgs = [...rawArgs.args];
+        }
+        if (Object.hasOwn(rawArgs, "stdin")) {
+          if (typeof rawArgs.stdin !== "string") {
+            return { ok: false, error: "invalid_arguments: stdin must be a string" };
+          }
+          normalizedStdin = rawArgs.stdin;
+        } else if (Object.hasOwn(rawArgs, "input") && typeof rawArgs.input === "string") {
+          normalizedStdin = rawArgs.input;
+        } else if (Object.hasOwn(rawArgs, "text") && typeof rawArgs.text === "string") {
+          normalizedStdin = rawArgs.text;
+        }
+      } else if (typeof rawArgs === "string") {
+        normalizedStdin = rawArgs;
+      } else if (Array.isArray(rawArgs)) {
+        if (rawArgs.some((a) => typeof a !== "string" || a.includes("\0"))) {
+          return { ok: false, error: "invalid_arguments: args array must contain strings without null bytes" };
+        }
+        normalizedArgs = [...rawArgs];
+      } else if (rawArgs != null) {
+        return { ok: false, error: "invalid_arguments: unexpected argument shape" };
+      }
+      return { ok: true, data: Object.freeze({ args: Object.freeze(normalizedArgs), stdin: normalizedStdin }) };
+    };
+
+    const authorizer = async (_validatedArgs, _authorityContext) => {
+      if (context.agentTools?.userWasm != null) {
+        const allowed = new Set(context.agentTools.userWasm);
+        if (!allowed.has(packageDigest)) {
+          return { ok: false, error: `authorization_failed: user wasm module ${packageDigest} not permitted for this agent` };
+        }
+      }
+      return Object.freeze({
+        ok: true,
+        permissionDigest: ownData(descriptorInput, "permissionDigest") ?? "none",
+        grantDigest: ownData(descriptorInput, "grantDigest") ?? "none",
+      });
+    };
+
+    const dispatcher = async (validatedArgs, runContext) => {
+      if (typeof context.dispatchUserWasmTool === "function") {
+        return await context.dispatchUserWasmTool({
+          toolId,
+          packageDigest,
+          args: validatedArgs,
+          context: runContext,
+          descriptorInput,
+        });
+      }
+      return { ok: false, error: "user_wasm_dispatcher_unavailable" };
+    };
+
     return Object.freeze({
       descriptorInput,
-      validateArguments: null,
-      authorize: null,
-      dispatch: null,
+      validateArguments: validator,
+      authorize: authorizer,
+      dispatch: dispatcher,
     });
   });
 }
 
-export function userWasmLazyRecords(rows, { agentTools, scope } = {}) {
+export function userWasmLazyRecords(rows, { agentTools, scope, dispatchUserWasmTool } = {}) {
   const allowed = agentTools?.userWasm ? new Set(agentTools.userWasm) : null;
   const filtered = allowed
     ? (rows || []).filter((row) => allowed.has(row.digest))
     : (rows || []);
-  return executableUserWasmToolRecords(filtered, { scope });
+  return executableUserWasmToolRecords(filtered, { scope, agentTools, dispatchUserWasmTool });
 }
 
 /**

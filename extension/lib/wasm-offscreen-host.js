@@ -12,8 +12,10 @@
 // record (never self-asserted), and run the bounded executor.
 
 import { WasmExecutor, TRANSPORT_MESSAGE_TYPES, validateAuthorityRecord, checkJobAgainstAuthority } from "./wasm-executor.js";
-import { createWasiJob } from "./wasm-host-types.js";
+import { createWasiJob, WASI_HOST_DEFAULT_QUOTA } from "./wasm-host-types.js";
 import { EXECUTOR_BOUNDS } from "./wasm-executor-bounds.js";
+
+export const DEFAULT_USER_WASM_WALL_MS = 15000;
 
 function failClosed(code, detail) {
   const error = new Error(`offscreen-host fail-closed: ${code}`);
@@ -98,3 +100,112 @@ export function createOffscreenWasmHost({ executor, authority }) {
     },
   });
 }
+
+/**
+ * Execute a user-uploaded WebAssembly WASI module job.
+ * Enforces pre-instantiate content re-hash against the claimed digest before
+ * instantiating any module or spawning any worker, binds authority fences,
+ * and executes in a fresh Worker via WasmExecutor with wall deadline.
+ */
+export async function executeUserWasmRun({
+  toolId,
+  digest,
+  args = [],
+  stdin = "",
+  wasmBytes,
+  authority,
+  wallMs = DEFAULT_USER_WASM_WALL_MS,
+  createWorker = null,
+  workerUrl = null,
+} = {}) {
+  if (!digest || typeof digest !== "string" || !/^[0-9a-f]{64}$/u.test(digest)) {
+    throw failClosed("invalid-digest");
+  }
+  if (!(wasmBytes instanceof Uint8Array) || wasmBytes.byteLength < 8) {
+    throw failClosed("request-wasm");
+  }
+
+  // 1. Pre-instantiate content re-hash (Acceptance addition 1).
+  // Must run and verify BEFORE creating workers or compiling the module.
+  const hashBuffer = await crypto.subtle.digest("SHA-256", wasmBytes);
+  const computed = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  if (computed !== digest) {
+    throw failClosed("digest-mismatch", `expected ${digest}, computed ${computed}`);
+  }
+
+  // 2. Validate authority fences (ensuring documentId is non-empty)
+  const normalizedAuthority = {
+    ...authority,
+    documentId: String(authority?.documentId || "task-run"),
+  };
+  const fences = validateAuthorityRecord(normalizedAuthority);
+
+  // 3. Normalize argv and stdin
+  const argv = [String(toolId || "user_wasm"), ...(Array.isArray(args) ? args.map(String) : [])];
+  const stdinBytes = typeof stdin === "string"
+    ? new TextEncoder().encode(stdin)
+    : stdin instanceof Uint8Array
+      ? stdin
+      : new Uint8Array(0);
+
+  // 4. Build WasiJob. Binary bytes and stdio lengths are unbounded by repo
+  // policy (CAP-FB-20260903-DPTW); execution safety is governed by wall-time
+  // deadlines and host-call quota.
+  const job = createWasiJob({
+    tier: "default",
+    context: {
+      executionId: fences.executionId,
+      callId: fences.callId,
+      origin: fences.origin,
+      workspaceRoot: `tool-jobs/${fences.executionId}/${fences.callId}/`,
+    },
+    args: argv,
+    stdin: stdinBytes,
+    quota: WASI_HOST_DEFAULT_QUOTA,
+    acceptedExitCodes: [0],
+    stdoutEncoding: "utf8",
+    workspaceSeed: { files: [] },
+  });
+
+  // 5. Fresh dedicated worker per call via WasmExecutor
+  const defaultWorkerUrl = new URL("./wasm-execution-worker.js", import.meta.url).href;
+  const resolvedWorkerUrl = workerUrl || defaultWorkerUrl;
+  const resolvedWallMs = Number.isSafeInteger(wallMs) && wallMs > 0 ? wallMs : DEFAULT_USER_WASM_WALL_MS;
+
+  const executor = new WasmExecutor({
+    workerUrl: resolvedWorkerUrl,
+    createWorker: createWorker || undefined,
+    callMs: resolvedWallMs,
+  });
+
+  const host = createOffscreenWasmHost({ executor, authority: fences });
+  const rawResult = await host.handleJob({
+    type: TRANSPORT_MESSAGE_TYPES.JOB,
+    job: { ...job, stdin: new Uint8Array(job.stdin) },
+    wasmBytes,
+  });
+
+  if (rawResult.ok === true) {
+    return Object.freeze({
+      ok: true,
+      phase: "completed",
+      stdout: rawResult.stdout ?? "",
+      stderr: rawResult.stderr ?? "",
+      exitCode: rawResult.exitCode ?? 0,
+      counters: rawResult.counters ?? null,
+    });
+  }
+
+  return Object.freeze({
+    ok: false,
+    phase: rawResult.phase ?? "failed",
+    error: rawResult.error ?? "execution_failed",
+    errno: rawResult.errno ?? null,
+    stderr: rawResult.stderr ?? "",
+    exitCode: rawResult.exitCode ?? null,
+  });
+}
+
+

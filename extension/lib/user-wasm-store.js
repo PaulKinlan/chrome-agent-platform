@@ -316,3 +316,32 @@ export const listUserWasmStore = ({ storage, locks } = {}) =>
 
 export const createUserWasmStore = createOwnerBlobStore;
 
+export async function readOwnerBlobBytes({
+  digest,
+  storage = globalThis.navigator?.storage,
+  locks = globalThis.navigator?.locks,
+} = {}) {
+  const store = createOwnerBlobStore({ storage, locks });
+  const file = await store.getFile(digest);
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+export async function verifyAndReadOwnerBlobBytes({
+  digest,
+  storage = globalThis.navigator?.storage,
+  locks = globalThis.navigator?.locks,
+} = {}) {
+  const bytes = await readOwnerBlobBytes({ digest, storage, locks });
+  const hashBuffer = await crypto.subtle.digest("SHA-256", bytes);
+  const computed = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  if (computed !== digest) {
+    const error = new Error(`blob_digest_mismatch: expected ${digest}, computed ${computed}`);
+    error.code = "digest_mismatch";
+    throw error;
+  }
+  return bytes;
+}
+
+

@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.3.300] — 2026-09-07
+- Uploaded WebAssembly tools can now be called by agents with live execution and verified output
+
 ## [0.3.299] — 2026-09-07
 - Switching tasks now keeps running task activity and preserves conversation history
 
 ## [0.3.298] — 2026-09-07
-- -gc: Extension builds on macOS now clean up Finder .DS_Store files without stopping with an error
+- Extension builds on macOS now clean up Finder .DS_Store files without stopping with an error
 
 ## [0.3.297] — 2026-09-07
 - Pinned no-eval Emscripten ABI fixtures verified in Chrome; runtime admission and host integration remain pending
@@ -28,7 +31,7 @@
 - All bundled WebAssembly tools are now directly executable in agent runs, removing the preview-only gate
 
 ## [0.3.290] — 2026-09-06
-- .3: User-uploaded WebAssembly modules now appear in tool search as soon as they are added in Settings
+- User-uploaded WebAssembly modules now appear in tool search as soon as they are added in Settings
 
 ## [0.3.289] — 2026-09-06
 - .1: Python code can no longer reach the network on its own

@@ -79,6 +79,8 @@ Deno.test("bump-version y6z6: every joiner shape, id-colon-id, and a three-way s
 Deno.test("bump-version y6z6: a single-id subject and a leading slash command are untouched", async () => {
   const single = await bump(`chrome-agent-platform-3yfs: ${WORDS}`);
   assertEquals(single.bullet, WORDS);
+  const dotted = await bump(`chrome-agent-platform-9ux7.4: ${WORDS}`);
+  assertEquals(dotted.bullet, WORDS);
   // A slash glued to a word is copy (the /folder command), not a joiner: only
   // punctuation FOLLOWED BY WHITESPACE is a leaked joiner.
   const copy = "/folder work — attach a granted local folder as a task reference";

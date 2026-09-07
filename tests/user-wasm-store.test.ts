@@ -1,6 +1,12 @@
 // @ts-nocheck — injected OPFS handles model browser commit-on-close semantics.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { createOwnerBlobStore, OWNER_BLOB_KINDS, OWNER_BLOBS_ROOT } from "../extension/lib/user-wasm-store.js";
+import {
+  createOwnerBlobStore,
+  readOwnerBlobBytes,
+  verifyAndReadOwnerBlobBytes,
+  OWNER_BLOB_KINDS,
+  OWNER_BLOBS_ROOT,
+} from "../extension/lib/user-wasm-store.js";
 
 // Writes are invisible until close. Faults can happen at write, close, move,
 // or remove; re-opening the store must never publish incomplete uploads.
@@ -437,4 +443,48 @@ Deno.test("owner-blobs: list({ kind }) filters strictly by kind and excludes oth
   const all = await store.list();
   assertEquals(all.length, 2, "list() with no kind returns all blobs");
 });
+
+Deno.test("owner-blobs: readOwnerBlobBytes and verifyAndReadOwnerBlobBytes read exact bytes and enforce pre-instantiate re-hash", async () => {
+  const f = fixture();
+  const rawBytes = new Uint8Array([10, 20, 30, 40, 50]);
+  const saved = await f.store.put({ bytes: rawBytes, name: "test_bytes", kind: "wasm" });
+
+  const readBack = await readOwnerBlobBytes({ digest: saved.digest, storage: f.options.storage, locks: f.options.locks });
+  assertEquals(readBack, rawBytes);
+
+  const verified = await verifyAndReadOwnerBlobBytes({ digest: saved.digest, storage: f.options.storage, locks: f.options.locks });
+  assertEquals(verified, rawBytes);
+
+  // Falsification: mismatched digest fails closed
+  const wrongDigest = "e".repeat(64);
+  await assertRejects(
+    () => verifyAndReadOwnerBlobBytes({ digest: wrongDigest, storage: f.options.storage, locks: f.options.locks }),
+  );
+});
+
+Deno.test("owner-blobs: corrupted bytes on disk fail closed on pre-instantiate re-hash (B1)", async () => {
+  const f = fixture();
+  const legitimateBytes = new Uint8Array([1, 2, 3, 4, 5]);
+  const saved = await f.store.put({ bytes: legitimateBytes, name: "legit", kind: "wasm" });
+  const d = saved.digest;
+
+  // Corrupt the stored bytes directly on disk AFTER write so file size matches but content hash mismatches
+  const root = await (await f.options.storage.getDirectory()).getDirectoryHandle("cap-owner-blobs-v1");
+  const writer = await (await root.getFileHandle(`${d}.bin`)).createWritable();
+  await writer.write(new Uint8Array([1, 2, 99, 4, 5]));
+  await writer.close();
+
+  // getFile still succeeds on disk, but verifyAndReadOwnerBlobBytes must catch the hash corruption
+  let caughtError = null;
+  try {
+    await verifyAndReadOwnerBlobBytes({ digest: d, storage: f.options.storage, locks: f.options.locks });
+  } catch (err) {
+    caughtError = err;
+  }
+  assert(caughtError !== null, "corrupted bytes must reject");
+  assertEquals(caughtError.code, "digest_mismatch");
+  assert(caughtError.message.includes("blob_digest_mismatch"));
+});
+
+
 
