@@ -173,6 +173,12 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
 - **beads (bd) is the ONLY task/bug/next-work tracker** (owner directive 2026-09-02). TASKS.md, TASKS-DONE.md, KNOWN-ISSUES.md and every other markdown tracker are RETIRED — never create, update, or consult them for state. Pick work with `bd ready`, claim with `bd update <id> --claim`, close only when the complete fix is on the pushed branch. See "Task tracking: beads only" below.
 - Never accept "it serves" as "it works" — drive the real behavior in a browser
   (CDP) with screenshots as evidence.
+- **A green suite is not proof of a property.** This repo has shipped a green test
+  that asserted nothing in five distinct ways, each proven by a mutant surviving a
+  full `npm test` or by a claim that had to be retracted. They are catalogued with
+  their detection drills and the observer rules for reading a result in **"Test
+  honesty"** under Testing below — read it before offering a gate as evidence, and
+  before re-anchoring any pin.
 - Real libraries, not patterns (agent-do is imported, not reimplemented).
 - Origin-keyed OPFS memory; never cross-origin access.
 - No emoji icons (inline SVG, currentColor).
@@ -403,6 +409,119 @@ read in run 2.
   green. Every `scripts/*.ts` has exactly one class in
   `scripts/lib/harness-registry.ts` (`tests/harness-registry.test.ts`), and
   every harness exits on its own failures (`tests/scripts-exit-codes.test.ts`).
+
+### Test honesty: five ways a green test asserts nothing (canon, 2026-09-07)
+
+Two days of mutation testing — the substring-pin audit (uodl, landed 4c89bd9d), the
+re-anchor of a hole it could not see (ecke, 816aae8e), the census of the pins the
+audit could not attribute (wzez), and the guard extension that folded the census back
+in (c9y8) — produced five distinct failure modes and four observer rules. A mode is
+in this list only because a mutant survived a full `npm test`, or because a confident
+claim had to be retracted. Detection drills come first because three of the five do
+not need a mutant at all.
+
+1. **A test NAME is not coverage.** A name that promises execution can wrap an
+   assertion that only reads text. *Detect:* read the assertions, not the name;
+   count what can actually execute; if the name says "executes" or "wires", find the
+   call. *Proven:* mutant M1' on 9ux7.3 wrapped the service-worker call sites in
+   `false ? … : []` and the suite stayed at 692 passed / 0 failed, because the new
+   test named "service worker wiring executes and imports correctly" was a text-only
+   substring assertion on `extension/background/service-worker.js` that executed
+   nothing.
+2. **A SUBSTRING is not a pin.** `src.includes(X)` is satisfied by ANY occurrence of
+   X: a comment describing the behaviour, an import specifier, a `console.log`
+   narrating a step that stopped happening. When every occurrence is one of those, the
+   pin passes with the guarded construct wholly absent. *Detect:* grep every
+   occurrence in the target and label each one — would it survive deleting the
+   construct? `tests/substring-pin-honesty.test.ts` runs that ladder over the whole
+   repo on every `npm test` and carries an allowlist keyed by intent, so a NEW
+   vacuous pin fails the build. *Proven:* uodl's U-E1 pinned the word `ESTIMATE`,
+   which occurred in the service worker exactly once — in a comment — so deleting
+   `await recordServerToolUsage(billing);` left the full suite at 3977 passed /
+   0 failed. The provider-server usage record could be removed entirely and nothing
+   noticed.
+3. **An IMPORT is not a CALL SITE — called is not used.** A pin on a module
+   specifier, or on a bound name, proves the name arrived; it never proves the
+   construct ran. *Detect:* delete the use and leave the import; the pin must fail.
+   *Proven:* ecke's W1 deleted the single line `inventory: BUNDLED_INVENTORY,` from
+   the preview route's revalidation call in
+   `extension/background/service-worker.js`. The pin asserted
+   `sw.includes("bundled-inventory-data")`, whose only occurrence in that file is the
+   import specifier, while the construct used the BINDING — so the pin passed and
+   `npm test` returned 3999 passed / 0 failed, byte-identical to the pristine
+   baseline. Same shape as uodl's U-I1, where a dead `buildTemplateSelect` binding
+   survived because the import line still carried the word.
+4. **Green (or red) by the WRONG MECHANISM.** The verdict moved for a reason other
+   than the property under test, so it proves nothing either way. *Detect:* when a
+   mutant dies, read WHICH assertion killed it and its message; when a gate is red,
+   read the mechanism before accepting it as a kill; and never use a tool that is
+   already red at baseline as a pass/fail gate — only as a count differential.
+   *Proven:* deleting a line from the service worker after a production build reddens
+   two `store map` tests in `tests/bundled-tool-packages.test.ts` with
+   `dist.complete validation failed: marker indexed source authority is stale` — an
+   artifact of the build being older than the source, NOT a kill, and a full
+   `npm test` rebuilds and re-indexes first so it never appears there. Related:
+   `deno check scripts/chrome-journeys.ts` reports 625 errors at baseline, so it can
+   only ever be a differential; and the fixed-debugging-port rule above exists
+   because green against the wrong tree reads as evidence, which is worse than red.
+5. **CONDITIONAL DEATH — a test that asserts nothing off its author's machine.** The
+   precondition is read from somewhere that only exists in one environment, the
+   assertions sit inside `if (precondition)`, and a `.catch(() => null)` makes the
+   missing precondition silent instead of loud. Remove any one of the three and the
+   mode disappears. *Detect, no mutant needed:* time the test, count the assertions
+   that can actually execute, and ask what the `.catch` is swallowing. *Proven:*
+   `tests/bundled-tool-packages.test.ts` reads its predecessor inventory from an
+   absolute path under a long-gone worktree, catches to null, and puts six
+   digest-preservation assertions inside `if (prevText)`. The test named
+   "regeneration preserves predecessor manifest digests except intentional
+   admissions" passes in 707 µs having asserted two things. Tracked as bead ne8u,
+   with the static guard that would have caught all six absolute paths in `tests/`.
+
+**Observer rules** — for the lane reading a result, which is where most of the
+damage in this canon was done:
+
+- **DEFEATABLE is not DELETABLE.** A pin with a live occurrence AND a shadow can be
+  satisfied by the shadow, which says the pin is weak; it does not say the feature
+  can be removed. Only a whole-suite mutant separates those. *Proven:* the three
+  quiet-window pins on `scripts/chrome-journeys.ts` were satisfied by their own import
+  bindings with the five-line refusal handler deleted — the test holding them PASSED —
+  yet the mutant died at stage 1 to the executing exit-75 gate in the same file. The
+  work is therefore hygiene (bead lrok, P3), not a live hole.
+- **A verified observation does not license an unverified cause.** "This test fails on
+  this tree" is a fact. "They staged only one path" is a mechanism. Check the
+  mechanism — `git ls-files`, `git check-ignore`, `git show --stat` are one second
+  each — or label it a hypothesis in the same sentence. *Proven:* a lane reported
+  that another's hotfix was "half-applied", that only one path had been staged, and
+  that retired jargon was still user-visible; all three were false (the file in
+  question is gitignored, so no commit could have forgotten to stage it) and were
+  retracted to the author and to the coordinator.
+- **MUTATE BEFORE YOU RE-ANCHOR.** A shadow-only occurrence count is an observation,
+  not a verdict: the pin may be about the prose on purpose, or a sibling may already
+  pin the use. *Proven:* the audit's own priority list named a secret-redaction pin as
+  the highest-value target; it was SOUND — the token occurs inside the regex literal
+  it guards — and going straight to re-anchoring would have rewritten three sound
+  pins while the two real holes stayed open.
+- **A net that is not itself proven is the same sin.** Every replacement pin ships
+  with the mutant the old pin missed, now killed by the new one, and the kill is
+  reported by assertion and message. A pin that covers a RULE rather than one file
+  also needs a second mutant that adds a fresh instance of the rule — otherwise it is
+  a pin on today's instance. *Proven:* ecke's W3 deletes one of two
+  `sourceGeneration` sites to prove the new count pin has teeth; lrok's acceptance
+  requires a fake `loadSensitive` member in `scripts/lib/harness-registry.ts` to prove
+  the re-anchor covers the declaration rule.
+- **ENVIRONMENTAL REDS ARE NOT KILLS, AND INCONCLUSIVE IS A VERDICT.** The canonical
+  Chrome lock is machine-global and self-timed, so a concurrent lane can red
+  `tests/security-suite-custody.test.ts` for everyone; measured 5/5 green at rest and
+  2/2 green under each mutant in isolation, i.e. load-induced. The same applies to a
+  build failure, a type-check-only failure, an errored suite and a timeout: report
+  INCONCLUSIVE. Never green, never a kill.
+
+Evidence for every instance above lives with the bead that found it (beads are the
+only task authority — see "Task tracking") and in the mutation logs under
+`cap-evidence/uodl/` on the coordinator's machine, including
+`cap-evidence/uodl/census-4c89bd9d/CENSUS.md` (the census, its adjudications and both
+mutant runs) and `cap-evidence/uodl/lrok-staging/CANDIDATE.md` (a staged re-anchor
+with its mutant runbook).
 
 ## The current review (2026-08-30) — read before picking up work
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.321] — 2026-09-07
+- the five ways a green test asserts nothing, with detection drills
+
 ## [0.3.320] — 2026-09-07
 - a function parameter shadows an outer read, so the guard refuses it
 
