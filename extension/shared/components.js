@@ -7855,6 +7855,21 @@ class AgentComposer extends Component {
         this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "folder", arg: "" });
         return;
       }
+      // `/command` or `/cmd` opens the imported commands picker directly.
+      if (!slash.hasColon && (ns === "command" || ns === "cmd")) {
+        let items;
+        try { items = await commandItems("command", ""); }
+        catch (error) {
+          this._hidePopup();
+          this.setStatus(`couldn't list commands: ${error?.message ?? error}`, false);
+          return;
+        }
+        if (input.value !== text || (input.selectionStart ?? input.value.length) !== caret) return;
+        this._showPopup(items.map((item) => ({ ...item, ns: "command" })), {
+          type: "command", start: slashPos, end: caret, ns: "command", arg: "",
+        });
+        return;
+      }
       if (!slash.hasColon) {
         // Chrome-deep commands open their picker as soon as their full name is
         // typed (/tabs); adding a colon turns the remainder into the search.
@@ -7877,7 +7892,7 @@ class AgentComposer extends Component {
         // No colon typed yet — FILTER the namespace list by the typed prefix
         // (/ → all, /s → schedule + skill, /sk → skill).
         const items = COMMAND_NAMESPACES
-          .filter((n) => !ns || n.id.startsWith(ns) || n.label.startsWith(ns))
+          .filter((n) => !ns || n.id.startsWith(ns) || n.label.startsWith(ns) || (n.id === "command" && "cmd".startsWith(ns)))
           .map((n) => ({ id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id }));
         this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
         return;
@@ -8038,6 +8053,15 @@ class AgentComposer extends Component {
         input.setRangeText(`/${item.ns} `, token.start, token.end, "end");
         this._hidePopup();
         this._emit("command", { namespace: item.ns, item });
+        input.focus();
+        return;
+      }
+      if (item.kind === "command") {
+        const textToInsert = item.insertText || item.prompt || `/${item.id}`;
+        input.setRangeText(textToInsert, token.start, token.end, "end");
+        this._hidePopup();
+        this._recordResolvedSpan(token.start, token.start + textToInsert.length, textToInsert);
+        this._autoGrow();
         input.focus();
         return;
       }

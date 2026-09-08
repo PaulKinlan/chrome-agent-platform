@@ -9,6 +9,7 @@ import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
 Deno.test("composer command audit removes obsolete commands and exposes the useful registry", () => {
   assertEquals(COMMAND_NAMESPACES.map((item) => item.id), [
     "skill",
+    "command",
     "agent",
     "tabs",
     "artifacts",
@@ -267,4 +268,114 @@ Deno.test("the live composer opens exact Chrome-deep commands and attaches picke
   assertMatch(source, /slash\?\.ns === "agent"/);
   assertMatch(source, /item\.kind === "capability"/);
   assertMatch(source, /openOptionsPage/);
+});
+
+Deno.test("/command and /cmd list imported commands, format descriptions with argument hints, and filter by query", async () => {
+  const sampleCommands = [
+    {
+      id: "pm-ai-shipping-ship-check",
+      name: "ship-check",
+      description: "Turn a vibe-coded repo into a reviewer-ready shipping packet",
+      argumentHint: "<repo path>",
+      prompt: "Review $ARGUMENTS for safety and shipping readiness",
+      plugin: "pm-ai-shipping",
+    },
+    {
+      id: "pm-execution-write-prd",
+      name: "write-prd",
+      description: "Draft a comprehensive PRD",
+      argumentHint: "<feature description>",
+      prompt: "Create PRD for $ARGUMENTS",
+      plugin: "pm-execution",
+    },
+    {
+      id: "pm-toolkit-review-resume",
+      name: "review-resume",
+      description: "Review a candidate resume",
+      argumentHint: "",
+      prompt: "Review this resume against target role",
+      plugin: "pm-toolkit",
+    },
+  ];
+  const runtimeSend = async (type: string) => {
+    if (type === "command.list") {
+      return { ok: true, commands: sampleCommands };
+    }
+    return { ok: false, error: `unexpected ${type}` };
+  };
+
+  // Both "command" and "cmd" namespaces resolve to imported commands
+  const allCmd = await loadComposerCommandItems("command", "", { runtimeSend });
+  assertEquals(allCmd.length, 3);
+  assertEquals(allCmd[0], {
+    id: "command:pm-ai-shipping-ship-check",
+    commandId: "pm-ai-shipping-ship-check",
+    label: "/ship-check",
+    description: "Turn a vibe-coded repo into a reviewer-ready shipping packet [<repo path>] (pm-ai-shipping)",
+    kind: "command",
+    argumentHint: "<repo path>",
+    prompt: "Review $ARGUMENTS for safety and shipping readiness",
+    plugin: "pm-ai-shipping",
+    insertText: "Review $ARGUMENTS for safety and shipping readiness",
+  });
+
+  const allAlias = await loadComposerCommandItems("cmd", "", { runtimeSend });
+  assertEquals(allAlias.length, 3);
+
+  // Filter by name
+  const filteredByName = await loadComposerCommandItems("command", "ship", { runtimeSend });
+  assertEquals(filteredByName.length, 1);
+  assertEquals(filteredByName[0].label, "/ship-check");
+
+  // Filter by argumentHint
+  const filteredByHint = await loadComposerCommandItems("command", "feature", { runtimeSend });
+  assertEquals(filteredByHint.length, 1);
+  assertEquals(filteredByHint[0].label, "/write-prd");
+
+  // Filter by plugin
+  const filteredByPlugin = await loadComposerCommandItems("command", "pm-toolkit", { runtimeSend });
+  assertEquals(filteredByPlugin.length, 1);
+  assertEquals(filteredByPlugin[0].label, "/review-resume");
+
+  // Filter with no match
+  const filteredEmpty = await loadComposerCommandItems("command", "nonexistent-query", { runtimeSend });
+  assertEquals(filteredEmpty.length, 0);
+
+  // Fallback label when no prompt is given uses /${name} 
+  const noPromptItem = (await loadComposerCommandItems("command", "", {
+    runtimeSend: async () => ({ ok: true, commands: [{ id: "c1", name: "ping", description: "ping" }] }),
+  }))[0];
+  assertEquals(noPromptItem.insertText, "/ping ");
+});
+
+Deno.test("resolveComposerCommandSelection returns the template prompt text for command kind", async () => {
+  const item = {
+    id: "command:test-cmd",
+    commandId: "test-cmd",
+    kind: "command",
+    insertText: "Run template task for $ARGUMENTS",
+    prompt: "Run template task for $ARGUMENTS",
+  };
+  const resolved = await resolveComposerCommandSelection(item);
+  assertEquals(resolved, {
+    text: "Run template task for $ARGUMENTS",
+    attachment: null,
+  });
+
+  // Fallback when neither insertText nor prompt is defined
+  const fallbackItem = { id: "command:fallback-id", kind: "command" };
+  const fallbackResolved = await resolveComposerCommandSelection(fallbackItem);
+  assertEquals(fallbackResolved, {
+    text: "/command:fallback-id",
+    attachment: null,
+  });
+});
+
+Deno.test("components.js wires /command and /cmd to imported command picker and inserts cleanly", async () => {
+  const source = await Deno.readTextFile(
+    new URL("../extension/shared/components.js", import.meta.url),
+  );
+  assertMatch(source, /ns === "command" \|\| ns === "cmd"/);
+  assertMatch(source, /item\.kind === "command"/);
+  assertMatch(source, /textToInsert/);
 });

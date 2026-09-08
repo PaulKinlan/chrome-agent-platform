@@ -563,9 +563,21 @@ firstRunGuide?.addEventListener("open-settings", (event) => {
 });
 // Example chips (CAP-FB-20260827-HUB-FIRST-RUN-01): a chip puts its text in
 // the composer and focuses it for review — it NEVER runs the task.
-exampleChips?.addEventListener("pick", (event) => {
+exampleChips?.addEventListener("pick", async (event) => {
   const text = String(event.detail?.text ?? "");
   if (!text) return;
+  if (text.startsWith("/")) {
+    const cmdName = text.slice(1).trim();
+    try {
+      const res = await send("command.list").catch(() => ({}));
+      const cmd = (res?.commands || []).find((c) => c.name === cmdName || c.id === cmdName);
+      if (cmd) {
+        composer.value = cmd.prompt ? cmd.prompt : `/${cmd.name} `;
+        composer.focus();
+        return;
+      }
+    } catch { /* best effort */ }
+  }
   composer.value = text;
   composer.focus();
 });
@@ -3994,6 +4006,20 @@ renderActionLedger();
 renderJobsBoard();
 renderHubUsage();
 renderProviderStatus();
+refreshCommandStarters();
+
+async function refreshCommandStarters() {
+  if (!exampleChips) return;
+  try {
+    const res = await send("command.list").catch(() => ({}));
+    const commands = Array.isArray(res?.commands) ? res.commands : [];
+    if (commands.length > 0) {
+      const commandChips = commands.slice(0, 3).map((c) => `/${c.name}`);
+      const defaultChips = ["Group my tabs by topic", "Summarise this page", "Watch this price"];
+      exampleChips.setAttribute("chips", [...commandChips, ...defaultChips].slice(0, 6).join("|"));
+    }
+  } catch { /* best effort */ }
+}
 
 // The provider-status strip: the user must know BEFORE running a task whether a
 // model is connected. A green keyed provider reads "Ready — <Provider> ·
@@ -4069,6 +4095,10 @@ subscribeProgress((ev) => {
     composer.revalidateSelectedAgent?.();
     threadComposer.revalidateSelectedAgent?.();
     revalidateOpenAgent();
+    refreshCommandStarters();
+  }
+  if (ev?.type === "commands-changed") {
+    refreshCommandStarters();
   }
 });
 

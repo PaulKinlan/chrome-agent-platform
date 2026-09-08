@@ -6,6 +6,12 @@ import { skillMatchesUrl } from "./match-patterns.js";
 export const COMMAND_NAMESPACES = Object.freeze([
   { id: "skill", label: "skill", description: "invoke a skill", kind: "skill" },
   {
+    id: "command",
+    label: "command",
+    description: "invoke an imported command",
+    kind: "command",
+  },
+  {
     id: "agent",
     label: "agent",
     description: "direct the message to an agent",
@@ -125,6 +131,41 @@ export async function loadComposerCommandItems(
           description: clean(item.description, 512),
           kind: "skill",
         }));
+    }
+    case "cmd":
+    case "command": {
+      const res = runtimeSend
+        ? await runtimeSend("command.list").catch(() => ({}))
+        : {};
+      const commands = Array.isArray(res?.commands) ? res.commands : [];
+      return commands
+        .filter((item) =>
+          hit(
+            query,
+            item.name,
+            item.id,
+            item.description,
+            item.argumentHint,
+            item.plugin,
+          )
+        )
+        .map((item) => {
+          const hint = item.argumentHint ? ` [${item.argumentHint}]` : "";
+          const plugin = item.plugin ? ` (${item.plugin})` : "";
+          const description = `${item.description || "Imported command"}${hint}${plugin}`;
+          const insertText = item.prompt ? item.prompt : `/${item.name} `;
+          return {
+            id: `command:${item.id}`,
+            commandId: item.id,
+            label: `/${item.name}`,
+            description,
+            kind: "command",
+            argumentHint: item.argumentHint || "",
+            prompt: item.prompt || "",
+            plugin: item.plugin || null,
+            insertText,
+          };
+        });
     }
     case "agent":
       return [];
@@ -329,6 +370,12 @@ export async function resolveComposerCommandSelection(
   { runtimeSend = null } = {},
 ) {
   if (!item) return null;
+  if (item.kind === "command") {
+    return {
+      text: item.insertText || item.prompt || `/${item.id}`,
+      attachment: null,
+    };
+  }
   if (item.kind !== "artifact") {
     return {
       text: item.insertText || `/${item.id}`,
