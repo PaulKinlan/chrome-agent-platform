@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.326] — 2026-09-08
+- main-repair: the substring-honesty R4 sentinel follows lrok's re-anchor
+
 ## [0.3.325] — 2026-09-07
 - a test that asserted nothing off its author's machine now fails loudly
 

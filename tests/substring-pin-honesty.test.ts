@@ -1866,7 +1866,7 @@ function attributesNothing(testFile: string, token: string): boolean {
   return all.length > 0 && all.every((a) => a.targets === null);
 }
 
-Deno.test("guard: the census shapes are live in the real repo, not only in the probes", () => {
+Deno.test("guard: the census shapes are live in the real repo, not only in the probes", async () => {
   // R2/R3 — a local path-composer helper (`root(rel)`) and a local reader helper.
   assert(attributesTo(tp("bundled-tool-packages.test.ts"), "bundled-inventory-data",
     ["extension/background/service-worker.js"]),
@@ -1880,11 +1880,24 @@ Deno.test("guard: the census shapes are live in the real repo, not only in the p
     ["extension/lib/usage-store.js"]),
     'R4n: the pin is inside `if (rel.endsWith("usage-store.js"))`, so only that member is its target');
 
-  // R4 — Object.entries(X).filter(([, e]) => e.loadSensitive !== undefined) over an
-  // object literal IMPORTED through a dynamic import: one member declares itself.
-  assert(attributesTo(tp("quiet-window.test.ts"), "QuietWindowRefusedError",
-    ["scripts/chrome-journeys.ts"]),
-    "R4: a filtered Object.entries chain over an imported literal object");
+  // R4 — chrome-agent-platform-lrok RE-ANCHORED the last real-repo instance of
+  // this shape: the three bare-word pins in quiet-window.test.ts's filtered
+  // Object.entries loop are now anchored inside the refusal handler
+  // (/instanceof QuietWindowRefusedError … ENVIRONMENTAL_REFUSAL_MARKER/), so
+  // the substring-pin instance this sentinel watched no longer exists. The
+  // truth that remains checkable: the retired instance stays retired, and the
+  // re-anchored handler pins exist.
+  assertEquals(
+    attributionsAt(tp("quiet-window.test.ts"), "QuietWindowRefusedError"),
+    [],
+    "the bare-word QuietWindowRefusedError pin was re-anchored by lrok — if this attribution reappears, a substring pin returned and this entry must be re-audited",
+  );
+  assert(
+    /QuietWindowRefusedError[\s\S]{0,400}?ENVIRONMENTAL_REFUSAL_MARKER/.test(
+      await Deno.readTextFile(new URL("./quiet-window.test.ts", import.meta.url)),
+    ),
+    "lrok's anchored handler pins remain in place (the refusal is pinned inside the handler, not on its imports)",
+  );
 
   // R5 — a comment-stripped derived view keeps its target and records the transform.
   assert(attributesTo(tp("chrome-slot-semaphore.test.ts"), "CAP_CHROME_GATE_ACQUIRED",
