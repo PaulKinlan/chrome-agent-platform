@@ -275,9 +275,20 @@
         </p>
         <div class="skills-import">
           <input class="import-url" type="url" placeholder="Import a skill — a GitHub repo or a SKILL.md URL" aria-label="Skill URL">
+          <button class="discover-btn btn" type="button">Discover</button>
           <button class="import-btn btn" type="button" data-i18n="options_import">Import</button>
           <span class="import-status" role="status"></span>
         </div>
+        <div class="discovery-card" hidden>
+          <div class="discovery-summary"></div>
+          <div class="discovery-list"></div>
+          <div class="discovery-actions">
+            <button class="import-all-btn btn small" type="button">Import all</button>
+            <button class="import-selected-btn btn small" type="button">Import selected</button>
+          </div>
+        </div>
+        <div class="batch-progress muted" role="status" hidden></div>
+        <div class="commands-list"></div>
         <div class="skills-list"></div>
       </section>
 

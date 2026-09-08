@@ -1566,3 +1566,23 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 .board-deny-add { display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap; align-items: end; }
 .board-deny-add provider-select { flex: 1 1 160px; min-width: 0; }
 .board-deny-add .btn { flex: 0 0 auto; }
+
+/* kozg.4 — multi-skill discovery preview + batch import + installed commands */
+.discovery-card {
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+.discovery-summary { font-weight: 600; margin-bottom: 6px; }
+.discovery-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 0;
+}
+.discovery-kind { color: var(--muted, #9aa); min-width: 90px; }
+.discovery-desc { color: var(--muted, #9aa); min-width: 0; overflow-wrap: anywhere; }
+.discovery-actions { display: flex; gap: 8px; margin-top: 8px; }
+.batch-progress { margin: 6px 0; }
