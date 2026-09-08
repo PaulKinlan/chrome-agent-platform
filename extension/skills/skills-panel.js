@@ -13,7 +13,7 @@ import { SKILL_ICON } from "../shared/skill-icons.js";
 /** A skill = the shared capability-row (consistent layout) + a collapsed
  * "how it works" details for the documentation. The action is "Use in a task"
  * (a skill is included in a task, not run in isolation). */
-function recipeCard(r, onUse) {
+function recipeCard(r, onUse, onDelete, sendFn = send) {
   const wrap = document.createElement("div");
   wrap.className = "recipe";
 
@@ -31,8 +31,11 @@ function recipeCard(r, onUse) {
   row.addEventListener("use", () => onUse?.(r));
   if (isImported) {
     row.addEventListener("delete", async () => {
-      const res = await send("skill.delete", { id: r.id }).catch(() => ({ ok: false }));
-      if (res?.ok) refresh();
+      const res = await sendFn("skill.delete", { id: r.id }).catch(() => ({ ok: false }));
+      if (res?.ok) {
+        if (onDelete) onDelete();
+        else wrap.remove();
+      }
     });
   }
 
@@ -67,10 +70,10 @@ function recipeCard(r, onUse) {
  * private `mode === "on-demand"` copy is what let Settings and /skill drift;
  * background recipes are excluded by the catalog, not by this panel). Skills
  * that failed to load surface in the broken-errors line, never silently. */
-export async function renderSkillList(listEl, { onUse } = {}) {
+export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = send } = {}) {
   const [res, brokenRes] = await Promise.all([
-    send("recipe.list").catch(() => ({ recipes: [] })),
-    send("skill.list").catch(() => ({ skills: [], broken: [] })),
+    sendFn("recipe.list").catch(() => ({ recipes: [] })),
+    sendFn("skill.list").catch(() => ({ skills: [], broken: [] })),
   ]);
   const recipes = Array.isArray(res.recipes) ? res.recipes : [];
   const broken = Array.isArray(brokenRes?.broken) ? brokenRes.broken : [];
@@ -92,6 +95,7 @@ export async function renderSkillList(listEl, { onUse } = {}) {
     listEl.append(empty);
     return recipes;
   }
+  const handleDelete = onDelete || (() => renderSkillList(listEl, { onUse, onDelete, send: sendFn }));
   const byIntent = {};
   for (const r of recipes) (byIntent[r.intent] ??= []).push(r);
   for (const [intent, list] of Object.entries(byIntent)) {
@@ -101,7 +105,7 @@ export async function renderSkillList(listEl, { onUse } = {}) {
     head.className = "intent-head";
     head.textContent = intent;
     group.append(head);
-    for (const r of list) group.append(recipeCard(r, onUse));
+    for (const r of list) group.append(recipeCard(r, onUse, handleDelete, sendFn));
     listEl.append(group);
   }
   return recipes;
@@ -146,6 +150,8 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
 
   const refresh = () => renderSkillList(list, {
     onUse: (r) => useSkill(r, { statusEl: status }),
+    onDelete: () => refresh(),
+    send: sendFn,
   });
   sectionEl._refreshSkills = refresh;
 

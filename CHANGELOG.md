@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.338] — 2026-09-08
+- fix CapabilityRow run listener collision and thread onDelete into recipeCard
+
 ## [0.3.337] — 2026-09-08
 - integrate Delete action on imported skills and commands in capability-row
 

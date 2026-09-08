@@ -2915,7 +2915,7 @@ class CapabilityRow extends Component {
     </div>`);
   }
   _wire() {
-    const run = this._root.querySelector(".run");
+    const run = this._root.querySelector("[part=run]");
     run?.addEventListener("click", () => this._emit("run"));
     // The switch manages its own checked attribute; the row re-emits so a page
     // listens on the row it built, never inside the shadow tree.

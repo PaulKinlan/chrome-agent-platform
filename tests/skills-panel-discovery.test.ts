@@ -165,7 +165,13 @@ Deno.test("kozg.4: mount — Discover renders the preview card; Import all batch
       ] };
     }
     if (type === "command.delete") return { ok: true };
-    if (type === "recipe.list") return { recipes: [{ id: "r1", name: "existing", intent: "general", description: "d", refId: "r1" }] };
+    if (type === "skill.delete") return { ok: true };
+    if (type === "recipe.list") {
+      return { recipes: [
+        { id: "r1", name: "existing", intent: "general", description: "d", refId: "r1" },
+        { id: "imp1", name: "custom-imported", intent: "general", description: "imp", refId: "imp1", source: "imported" },
+      ] };
+    }
     if (type === "skill.list") return { skills: [], broken: [] };
     return { ok: true };
   };
@@ -206,10 +212,21 @@ Deno.test("kozg.4: mount — Discover renders the preview card; Import all batch
   const commandRow = (ui.commandsList.children as any[]).flatMap((c: any) => c.children).find((k: any) => k.tag === "capability-row");
   assert(commandRow, "each installed command row carries a capability-row");
   assertEquals(commandRow.getAttribute("action"), "use-delete", "command row uses use-delete action");
-  const before = calls.filter((c) => c.type === "command.delete").length;
+  const beforeCmd = calls.filter((c) => c.type === "command.delete").length;
   await commandRow.dispatch("delete");
   await new Promise((r) => setTimeout(r, 10));
-  assertEquals(calls.filter((c) => c.type === "command.delete").length, before + 1, "command.delete was sent");
+  assertEquals(calls.filter((c) => c.type === "command.delete").length, beforeCmd + 1, "command.delete was sent");
+
+  // 5. Imported skills also expose use-delete and call skill.delete without ReferenceError.
+  const skillRows = (ui.list.children as any[]).flatMap((g: any) => g.children).filter((c: any) => c.tag === "div" && c.className === "recipe").map((r: any) => r.children[0]);
+  const builtinRow = skillRows.find((r: any) => r.getAttribute("name") === "existing");
+  const importedRow = skillRows.find((r: any) => r.getAttribute("name") === "custom-imported");
+  assertEquals(builtinRow?.getAttribute("action"), "use", "built-in skill uses action=use");
+  assertEquals(importedRow?.getAttribute("action"), "use-delete", "imported skill uses action=use-delete");
+  const beforeSkill = calls.filter((c) => c.type === "skill.delete").length;
+  await importedRow.dispatch("delete");
+  await new Promise((r) => setTimeout(r, 10));
+  assertEquals(calls.filter((c) => c.type === "skill.delete").length, beforeSkill + 1, "skill.delete was sent");
 });
 
 Deno.test("kozg.4: import selected sends ONLY the checked entries", async () => {
