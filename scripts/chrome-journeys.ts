@@ -29,6 +29,7 @@ const GIT = "/usr/bin/git";
 
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
+import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
 import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -1021,6 +1022,7 @@ async function main() {
   let port;
   let ws;
   let cdp;
+  let environmentalAbort = false; // qk7p: a CDP evaluate timeout under fleet load is environmental, not a product red
 
   // A local HTTP fixture server (red page + wrong-origin page) for a REAL
   // screenshot target that isn't a chrome-extension:// page.
@@ -8183,6 +8185,12 @@ async function main() {
       console.error("fixture.shutdown failed:", String(e?.message ?? e));
     });
   } catch (e) {
+    // chrome-agent-platform-qk7p: a CDP evaluate that exceeds the budget under
+    // concurrent-lane load is an ENVIRONMENTAL verdict (measured: healthy calls
+    // <1 s; abort runs show one >30 s call at a varying position), not a
+    // product red. Flag it here; the owner-clean shutdown below runs first and
+    // the run then exits 75 with the refusal marker.
+    if (isCdpEvaluateTimeout(String(e?.message ?? e))) environmentalAbort = true;
     console.error("journey failure:", String(e?.message ?? e));
     try {
       await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
@@ -8350,6 +8358,16 @@ async function main() {
       }
     }
 
+    // chrome-agent-platform-qk7p: an environmental abort (a CDP evaluate that
+    // exceeded the budget under concurrent-lane load) is the THIRD verdict —
+    // never a product red. The owner-clean shutdown above has run; exit 75
+    // with the refusal marker so the aggregate reads "re-run", not "defect".
+    if (environmentalAbort) {
+      console.error(
+        `${ENVIRONMENTAL_REFUSAL_MARKER} {"reason":"cdp evaluate exceeded the budget under fleet load"}`,
+      );
+      Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+    }
     Deno.exit(
       failed > 0 || !removed || !clean || !tempEvidenceGone || !manifestOk ||
           fixtureShutdownFailed || demoPathLeak || factoryResetLeak

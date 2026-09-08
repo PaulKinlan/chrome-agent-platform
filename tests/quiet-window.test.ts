@@ -21,6 +21,7 @@ import {
   ENVIRONMENTAL_REFUSAL_MARKER,
   environmentLine,
   HEAVY_PROCESS_NAMES,
+  isCdpEvaluateTimeout,
   isQuiet,
   QuietWindowRefusedError,
   quietReasons,
@@ -420,4 +421,15 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 under artificial loa
     }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+Deno.test("qk7p: the journeys' CDP evaluate timeout is classified environmental", () => {
+  // The abort signature from five real journeys runs at fleet density
+  // (positions 278/229/229/195/159 of 370) — an evaluate that outlives the
+  // budget is the machine, never the tree.
+  assertEquals(isCdpEvaluateTimeout("journey failure: cdp timeout: Runtime.evaluate"), true);
+  // Product failures must NOT take the environmental verdict.
+  assertEquals(isCdpEvaluateTimeout("assertion failed: expected alice"), false);
+  assertEquals(isCdpEvaluateTimeout("tool.preview.run returned no offscreen response"), false);
+  assertEquals(isCdpEvaluateTimeout(""), false);
 });

@@ -355,5 +355,19 @@ export async function requireQuietWindow(
  *  (green) and 1 (a product red) so no aggregator can confuse them. */
 export const ENVIRONMENTAL_REFUSAL_EXIT = 75;
 
+/**
+ * chrome-agent-platform-qk7p: a journeys `Runtime.evaluate` that exceeds the
+ * CDP budget is an ENVIRONMENTAL verdict, not a product red. Measured
+ * (cap-beads-qk7p): in a full 370/370 instrumented run at fleet density every
+ * CDP call completed in under 1 s, while the abort runs each showed a single
+ * >30 s evaluate at a varying position (278/229/229/195/159 of 370) — the tail
+ * is a cliff under concurrent-lane load, not a distribution a larger budget
+ * can be sized from. The harness maps this error class to the environmental
+ * refusal verdict (exit 75 + marker) AFTER owner-clean shutdown.
+ */
+export function isCdpEvaluateTimeout(message: string): boolean {
+  return /cdp timeout: Runtime\.evaluate/.test(String(message ?? ""));
+}
+
 /** The marker line an aggregator can grep to classify a refusal. */
 export const ENVIRONMENTAL_REFUSAL_MARKER = "CAP_ENVIRONMENTAL_REFUSAL";
