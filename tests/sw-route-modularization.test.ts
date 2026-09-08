@@ -235,6 +235,10 @@ const BASELINE_ROUTES = [
   "skill.list",
   "skill.import",
   "skill.delete",
+  "skill.discover",
+  "skill.importBatch",
+  "command.list",
+  "command.delete",
   // CAP-FB-20260830-SITE-PLAYBOOKS-01: the owner's per-origin site note
   // (set is Settings-sender-only; get is read-back for surfaces).
   "site-skills.set",

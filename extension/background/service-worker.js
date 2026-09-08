@@ -372,7 +372,16 @@ import {
 import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
 import { skillMatchesUrl } from "../shared/match-patterns.js";
 import { resolveSkillRef } from "../lib/skill-resolve.js";
-import { fetchSkillFromUrl, installImportedSkill, removeImportedSkill, loadAllImportedSkills } from "../lib/skill-import.js";
+import {
+  fetchSkillFromUrl,
+  installImportedSkill,
+  removeImportedSkill,
+  loadAllImportedSkills,
+  discoverRepoSkillsAndCommands,
+  installBatchSkillsAndCommands,
+  loadAllImportedCommands,
+  removeImportedCommand,
+} from "../lib/skill-import.js";
 import { readSkillFile, writeSkillFiles, removeSkillFiles } from "../lib/skill-files.js";
 import { attachedSkillRefs, JOURNALED_SKILLS_CAP } from "../lib/skill-promotion.js";
 import { durableRuns, sweepOrphanAgentData } from "../lib/durable-runs.js";
@@ -415,6 +424,38 @@ import { buildUserWasmAuthority, USER_WASM_RUN_TYPE } from "../lib/user-wasm-hos
 import { DEFAULT_USER_WASM_WALL_MS } from "../lib/wasm-offscreen-host.js";
 
 const notificationRegistry = new NotificationRegistry();
+
+const makeOwnerCancelledResult = (executionId) => ({
+  ok: false,
+  cancelled: true,
+  aborted: true, error: "run cancelled by owner", errorCategory: "aborted",
+  errorReason: "explicit owner cancellation",
+  errorAction: "Start a new run to execute this request again.",
+  executionId,
+});
+const ERR_OWNER_EXT_REQUIRED = Object.freeze({ ok: false, error: "owner_extension_required" });
+const ERR_EXECUTION_ID_REQUIRED = Object.freeze({ ok: false, error: "executionId is required" });
+const ERR_ASSET_ID_UPDATE = Object.freeze({ ok: false, error: "update_asset needs an existing id (use list_assets)" });
+const ERR_ASSET_ID_PATCH = Object.freeze({ ok: false, error: "patch_asset needs an existing id (use list_assets)" });
+const ERR_ASSET_ID_APPEND = Object.freeze({ ok: false, error: "append_asset needs an existing id (use list_assets)" });
+const ERR_INVALID_ORIGIN = Object.freeze({ ok: false, error: "invalid origin" });
+const ERR_ORIGIN_NOT_ENROLLED = Object.freeze({ ok: false, error: "origin not enrolled" });
+const ERR_SITE_TOOL_AUDIT_UNAVAIL = Object.freeze({ ok: false, error: "site_tool_audit_unavailable" });
+const ERR_UNAUTHORIZED_PRINCIPAL = Object.freeze({ ok: false, error: "unauthorized_principal" });
+const ERR_THREAD_ID_REQUIRED = Object.freeze({ ok: false, error: "threadId is required" });
+const ERR_ACTION_NOT_APPROVABLE = Object.freeze({ ok: false, error: "this browser action is not approvable" });
+const ERR_RESET_IN_PROGRESS = Object.freeze({ ok: false, error: "site tool profile reset in progress" });
+const ERR_CONSENT_UNAVAILABLE = Object.freeze({ ok: false, error: "site tool consent is unavailable" });
+const ERR_INVALID_DETECTION_DOC = Object.freeze({ ok: false, error: "invalid detection document" });
+const ERR_SENDER_TAB_MISMATCH = Object.freeze({ ok: false, error: "sender tab origin mismatch" });
+const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
+const getSnapshotGateMap = async () => ({ ...((await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {}) });
+const setSnapshotGateMap = async (map) => await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+const canonicalScope = (s) => (s === "master" ? "master" : canonicalOrigin(s));
+const assetOpTarget = (origin, id) => canonicalOperationTarget("asset", { origin, id });
+const failPhaseResult = (err) => ({ ok: false, phase: "failed", error: String(err?.message ?? err).slice(0, 1024) });
+const errCodeOrMessage = (err) => ({ ok: false, error: String(err?.code ?? err?.message ?? err) });
+const broadcastNamedAgentChanged = () => broadcastProgress({ type: "named-agent-changed" });
 
 // ── agent-generated script execution (Paul 2026-08-17) ───────────────────
 // A script runs SANDBOXED in the offscreen document (the SW has no DOM). The
@@ -555,7 +596,7 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
       });
       return result ?? { ok: false, error: "callexport_no_response" };
     } catch (error) {
-      return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+      return failPhaseResult(error);
     }
   }
   if (!STREAM_BACKED_BUNDLED_TOOL_IDS.includes(toolId)) {
@@ -580,7 +621,7 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
       });
       return result ?? { ok: false, phase: "failed", error: "wasi_job_no_response" };
     } catch (error) {
-      return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+      return failPhaseResult(error);
     }
   }
   const runId = typeof context?.runId === "string" && context.runId ? context.runId : null;
@@ -1917,7 +1958,7 @@ async function dispatchSvgRasteriseTool({ args: validatedArgs, context }) {
       phase: "completed",
     };
   } catch (error) {
-    return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+    return failPhaseResult(error);
   }
 }
 
@@ -1966,7 +2007,7 @@ async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, cont
     });
     return result ?? { ok: false, error: "user_wasm_no_response" };
   } catch (error) {
-    return { ok: false, phase: "failed", error: String(error?.message ?? error).slice(0, 1024) };
+    return failPhaseResult(error);
   }
 }
 
@@ -2097,7 +2138,7 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
 
 async function readSiteLazyScope(origin) {
   const enrollment = await enrollmentSnapshot(origin);
-  const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+  const gateMap = await getSnapshotGateMap();
   const gate = gateMap[origin] ?? {};
   return {
     origin,
@@ -2115,7 +2156,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
   // The site stays enrolled (its agent record/memory/discovery remain); only
   // its tools are excluded from every agent.
   if (enrollment.policy === "deny") return [];
-  const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+  const gateMap = await getSnapshotGateMap();
   const gate = gateMap[origin] ?? {};
   const documentId = typeof gate.documentId === "string" ? gate.documentId : "";
   // Snapshot `seq` authenticates and orders bridge reports, but an identical
@@ -2226,7 +2267,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
     const live = await enrollmentSnapshot(origin);
     let consent;
     try { consent = await toolConsentSnapshot(origin, name); }
-    catch { return { ok: false, error: "site tool consent is unavailable" }; }
+    catch { return ERR_CONSENT_UNAVAILABLE; }
     const startedInAsk = consent.state === "ask";
     const gate = await gateWebmcpToolDispatch({
       enrolled: live.enrolled,
@@ -2257,7 +2298,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
           argDigest,
         }));
       } catch {
-        return { ok: false, error: "site_tool_audit_unavailable" };
+        return ERR_SITE_TOOL_AUDIT_UNAVAIL;
       }
       return {
         ok: false,
@@ -2269,7 +2310,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
     // The card may have persisted Allow, or Settings may have changed state
     // while it was visible. Re-read and mint an internal-only revision token.
     try { consent = await toolConsentSnapshot(origin, name); }
-    catch { return { ok: false, error: "site tool consent is unavailable" }; }
+    catch { return ERR_CONSENT_UNAVAILABLE; }
     if (consent.state !== "allowed") {
       return { ok: false, error: "site tool consent changed before dispatch" };
     }
@@ -2286,7 +2327,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
         argDigest,
       }));
     } catch {
-      return { ok: false, error: "site_tool_audit_unavailable" };
+      return ERR_SITE_TOOL_AUDIT_UNAVAIL;
     }
     let res;
     try {
@@ -2788,10 +2829,9 @@ async function notifyOriginBridge(canonical, message) {
  * (same order as tools.upsert). */
 async function bindSnapshotGate(canonical, pickedTabId) {
   await withEnrollmentLock(async () => {
-    const gate = await kvGet(SNAPSHOT_GATE_KEY);
-    const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+    const map = await getSnapshotGateMap();
     map[canonical] = seedSnapshotGate(map[canonical], pickedTabId);
-    await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+    await setSnapshotGateMap(map);
   });
 }
 
@@ -2915,7 +2955,7 @@ async function invokeSiteToolCore(
   // accepted snapshots). Invocation NEVER falls back to a first same-origin
   // tabs.query match — with several tabs on one origin the approved directory
   // could come from one document while the invocation silently drove another.
-  const gateMap = (await kvGet(SNAPSHOT_GATE_KEY))[SNAPSHOT_GATE_KEY] ?? {};
+  const gateMap = await getSnapshotGateMap();
   const binding = gateMap[canonical] ?? null;
 
   let resolvedBinding = binding;
@@ -2958,8 +2998,7 @@ async function invokeSiteToolCore(
       // Deliberate gate re-bind under the enrollment lock so the resolved tab's
       // bridge re-binds via the existing enrollment.status → tools.upsert flow.
       await withEnrollmentLock(async () => {
-        const gate = await kvGet(SNAPSHOT_GATE_KEY);
-        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const map = await getSnapshotGateMap();
         const cur = map[canonical] ?? null;
         // NEVER displace a live binding (the round-30 fence): only a dead/
         // missing, off-origin, or incomplete binding is replaced. A gap-born
@@ -2983,7 +3022,7 @@ async function invokeSiteToolCore(
           targetTabId = cur.tabId;
         } else {
           map[canonical] = rebindSnapshotGate(cur, plan.tabId);
-          await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+          await setSnapshotGateMap(map);
         }
       });
       // The resolved tab's bridge may already be running — poke it to re-sync.
@@ -3021,10 +3060,9 @@ async function invokeSiteToolCore(
       }
       // Rebind the snapshot gate to the newly created tab under the enrollment lock
       await withEnrollmentLock(async () => {
-        const gate = await kvGet(SNAPSHOT_GATE_KEY);
-        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const map = await getSnapshotGateMap();
         map[canonical] = rebindSnapshotGate(map[canonical] ?? null, created.id);
-        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+        await setSnapshotGateMap(map);
       });
       resolvedBinding = await waitForSnapshotBinding(canonical, created.id);
       if (!resolvedBinding) {
@@ -3160,10 +3198,9 @@ async function invokeSiteToolCore(
     if (plan.kind === "reuse") {
       recoverTabId = plan.tabId;
       await withEnrollmentLock(async () => {
-        const gate = await kvGet(SNAPSHOT_GATE_KEY);
-        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const map = await getSnapshotGateMap();
         map[canonical] = rebindSnapshotGate(map[canonical] ?? null, recoverTabId);
-        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+        await setSnapshotGateMap(map);
       });
       try { await chrome.tabs.sendMessage(recoverTabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
       try { await chrome.tabs.update(recoverTabId, { active: true }).catch(() => {}); } catch {}
@@ -3180,10 +3217,9 @@ async function invokeSiteToolCore(
       }
       recoverTabId = created.id;
       await withEnrollmentLock(async () => {
-        const gate = await kvGet(SNAPSHOT_GATE_KEY);
-        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const map = await getSnapshotGateMap();
         map[canonical] = rebindSnapshotGate(map[canonical] ?? null, recoverTabId);
-        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+        await setSnapshotGateMap(map);
       });
     }
     const freshBinding = await waitForSnapshotBinding(canonical, recoverTabId);
@@ -4060,7 +4096,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           const aborted = { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted", executionId };
           const terminal = await durableRuns.settle(executionId, { ...aborted, logicalId: taskId });
           return terminal?.phase === "cancelled"
-            ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
+            ? makeOwnerCancelledResult(executionId)
             : aborted;
         }
         throw e;
@@ -4074,7 +4110,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         const aborted = { ok: false, aborted: true, error: "run aborted", errorReason: "the run was aborted", errorAction: "the run stopped before completing", errorCategory: "aborted", executionId };
         const terminal = await durableRuns.settle(executionId, { ...aborted, logicalId: taskId });
         return terminal?.phase === "cancelled"
-          ? { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId }
+          ? makeOwnerCancelledResult(executionId)
           : aborted;
       }
       await fence?.assertOwned?.();
@@ -4107,7 +4143,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           ...(runPromptHash ? { promptHash: runPromptHash } : {}),
         });
         if (terminal?.phase === "cancelled") {
-          return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+          return makeOwnerCancelledResult(executionId);
         }
         return { ...budgetStop, executionId, result: typeof result === "string" ? result : "" };
       }
@@ -4199,7 +4235,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         ...(runSkillIds.length > 0 ? { skills: runSkillIds } : {}),
         ...(runPromptHash ? { promptHash: runPromptHash } : {}),
       });      if (terminal?.phase === "cancelled") {
-        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+        return makeOwnerCancelledResult(executionId);
       }
       await fence?.assertOwned?.();
       if (scheduled) {
@@ -4331,7 +4367,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         ...(runPromptHash ? { promptHash: runPromptHash } : {}),
       }).catch(() => null);
       if (terminal?.phase === "cancelled") {
-        return { ok: false, cancelled: true, aborted: true, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again.", executionId };
+        return makeOwnerCancelledResult(executionId);
       }
       try { error.executionId = executionId; } catch { /* immutable error */ }
       throw error;
@@ -4483,12 +4519,7 @@ async function agentInfo(origin) {
 // script). The status is a single latest entry (never an unbounded log).
 const WEBMCP_DIAG_KEY = "cap:webmcpDiagnostics";
 const WEBMCP_STATUS_KEY = "cap:webmcpStatus";
-// Per-origin discovery-snapshot ordering gate: { [origin]: { tabId,
-// documentId, epoch, maxEpoch, seq } }. Ordered by SENDER-DERIVED tab/document
-// identity + a SW-assigned monotonic navigation epoch (lib/pure.js
-// acceptToolSnapshot/syncSnapshotDocument) — a second same-origin tab or a
-// stale document can never replace the bound tab's current snapshot.
-const SNAPSHOT_GATE_KEY = "cap:webmcpSnapshotGate";
+// (SNAPSHOT_GATE_KEY declared above)
 // Provider server tools (slice 1: Gemini google_search): the owner's GLOBAL
 // toggle + per-agent opt-in map. Both default OFF — a provider-side search
 // spends real money without a Chrome permission, so nothing latches without
@@ -6374,7 +6405,7 @@ const handlers = mergeRouteMaps(
     return await capabilityStatus();
   },
   async "notifications.list"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "unauthorized_principal" };
+    if (!isOwnerPrincipal(context)) return ERR_UNAUTHORIZED_PRINCIPAL;
     const list = await notificationRegistry.listNotifications({
       state: m?.state,
       agentId: m?.agentId,
@@ -6385,12 +6416,12 @@ const handlers = mergeRouteMaps(
     return { ok: true, notifications: list };
   },
   async "notification.get"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "unauthorized_principal" };
+    if (!isOwnerPrincipal(context)) return ERR_UNAUTHORIZED_PRINCIPAL;
     const record = await notificationRegistry.getNotification(m?.id);
     return { ok: Boolean(record), notification: record };
   },
   async "notification.dismiss"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "unauthorized_principal" };
+    if (!isOwnerPrincipal(context)) return ERR_UNAUTHORIZED_PRINCIPAL;
     const record = await notificationRegistry.updateState(m?.id, "dismissed");
     return { ok: Boolean(record), notification: record };
   },
@@ -7205,7 +7236,7 @@ const handlers = mergeRouteMaps(
       // ownership. Best-effort: the sidebar's read-time filter is the second
       // line of defense. Best-effort + awaited (bounded, ids only).
       await durableRuns.purgeFailedForAgent([`named:${slug}`, `background:${slug}`]).catch(() => null);
-      broadcastProgress({ type: "named-agent-changed" });
+      broadcastNamedAgentChanged();
     }
     broadcastRegistryChanged();
     return r;
@@ -7682,7 +7713,7 @@ const handlers = mergeRouteMaps(
    * may ask. */
   async "privacy.statement"(_m, context) {
     if (!isOwnerPrincipal(context)) {
-      return { ok: false, error: "unauthorized_principal" };
+      return ERR_UNAUTHORIZED_PRINCIPAL;
     }
     let retentionPolicy = null;
     try {
@@ -7817,13 +7848,13 @@ const handlers = mergeRouteMaps(
   },
   async "agent.get"({ origin }) {
     if (!(await isEnrolled(origin))) {
-      return { ok: false, error: "origin not enrolled" };
+      return ERR_ORIGIN_NOT_ENROLLED;
     }
     return { ok: true, agent: await agentInfo(origin) };
   },
   async "agent.update"({ origin, name }, context) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     const normalizedName = name === undefined ? undefined : String(name);
     const gate = await requireOwnerApproval(
       context,
@@ -7834,7 +7865,7 @@ const handlers = mergeRouteMaps(
     if (!gate.ok) return gate;
     return await withOriginLock(canonical, async () => {
       if (!(await isEnrolled(canonical))) {
-        return { ok: false, error: "origin not enrolled" };
+        return ERR_ORIGIN_NOT_ENROLLED;
       }
       // The Site Agent name is a reserved site authority key (never model-
       // writable via memory_set) — written through the TRUSTED path here.
@@ -7848,7 +7879,7 @@ const handlers = mergeRouteMaps(
   },
 
   async "tools.list"({ origin }) {
-    if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
+    if (!(await isEnrolled(origin))) return ERR_ORIGIN_NOT_ENROLLED;
     return await listTools(origin);
   },
   // `tools.invoke` — the OWNER/extension-surface invocation of a site tool
@@ -7887,7 +7918,7 @@ const handlers = mergeRouteMaps(
           event: "invocation-blocked", direction: "agent-to-site", actor: "owner",
           outcome: "blocked", reason: "site-policy-deny", context, argDigest,
         }));
-      } catch { return { ok: false, error: "site_tool_audit_unavailable" }; }
+      } catch { return ERR_SITE_TOOL_AUDIT_UNAVAIL; }
       return { ok: false, error: `site tools on ${canonical} are turned off` };
     }
     const authorization = mintSiteToolAuthorization(consent, "owner-direct", context);
@@ -7896,7 +7927,7 @@ const handlers = mergeRouteMaps(
         event: "invocation-started", direction: "agent-to-site", actor: "owner",
         outcome: "pending", reason: "owner-direct", context, argDigest,
       }));
-    } catch { return { ok: false, error: "site_tool_audit_unavailable" }; }
+    } catch { return ERR_SITE_TOOL_AUDIT_UNAVAIL; }
     let res;
     try {
       res = await invokeSiteTool(
@@ -7970,7 +8001,7 @@ const handlers = mergeRouteMaps(
       }
       return { ok: true, origin: canonical, policy: applied, gen: snap.gen };
     } catch (error) {
-      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
+      return errCodeOrMessage(error);
     }
   },
 
@@ -8033,7 +8064,7 @@ const handlers = mergeRouteMaps(
       await invalidateSiteToolWork(canonical);
       return { ok: true, consent: applied };
     } catch (error) {
-      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
+      return errCodeOrMessage(error);
     }
   },
 
@@ -8069,7 +8100,7 @@ const handlers = mergeRouteMaps(
       await invalidateSiteToolWork(canonical);
       return { ok: true, reset: applied };
     } catch (error) {
-      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
+      return errCodeOrMessage(error);
     }
   },
 
@@ -8078,7 +8109,7 @@ const handlers = mergeRouteMaps(
     try {
       return await listSiteToolAudit({ cursor, limit });
     } catch (error) {
-      return { ok: false, error: String(error?.code ?? error?.message ?? error) };
+      return errCodeOrMessage(error);
     }
   },
   // The first-use consent leg for the exact model-selected site tool. It
@@ -8092,7 +8123,7 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: "invalid site tool" };
     }
     const snap = await enrollmentSnapshot(canonical);
-    if (!snap.enrolled) return { ok: false, error: "origin not enrolled" };
+    if (!snap.enrolled) return ERR_ORIGIN_NOT_ENROLLED;
     if (snap.policy === "deny") return { ok: false, reason: "site-policy-denied", error: "site tools are turned off" };
     const tool = (await listTools(canonical)).find((candidate) =>
       candidate?.name === toolName && candidate?.source === source
@@ -8100,7 +8131,7 @@ const handlers = mergeRouteMaps(
     if (!tool) return { ok: false, error: `no such tool on ${canonical}: ${toolName}` };
     let consent;
     try { consent = await toolConsentSnapshot(canonical, toolName); }
-    catch { return { ok: false, error: "site tool consent is unavailable" }; }
+    catch { return ERR_CONSENT_UNAVAILABLE; }
     if (consent.state === "allowed") return { ok: true };
     if (consent.state === "denied") {
       return {
@@ -8122,10 +8153,10 @@ const handlers = mergeRouteMaps(
       __sender?.tabId == null ||
       typeof __sender.documentId !== "string" ||
       __sender.documentLifecycle !== "active"
-    ) return { ok: false, error: "invalid detection document" };
+    ) return ERR_INVALID_DETECTION_DOC;
     const senderTab = await chrome.tabs.get(__sender.tabId).catch(() => null);
     if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
-      return { ok: false, error: "sender tab origin mismatch" };
+      return ERR_SENDER_TAB_MISMATCH;
     }
     return { ok: true, nonce: issueDetectionNonce(__sender.documentId) };
   },
@@ -8136,17 +8167,17 @@ const handlers = mergeRouteMaps(
       __sender?.tabId == null ||
       typeof __sender.documentId !== "string" ||
       __sender.documentLifecycle !== "active"
-    ) return { ok: false, error: "invalid detection document" };
+    ) return ERR_INVALID_DETECTION_DOC;
     const senderTab = await chrome.tabs.get(__sender.tabId).catch(() => null);
     if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
-      return { ok: false, error: "sender tab origin mismatch" };
+      return ERR_SENDER_TAB_MISMATCH;
     }
     const armed = await armDetectionProbe(__sender.tabId, __sender.documentId, hook);
     return armed ? { ok: true } : { ok: false, error: "detection probe not armed" };
   },
   async "webmcp.detected"({ origin, url, toolCount, __sender }) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical || !/^https?:/.test(canonical)) return { ok: false, error: "invalid origin" };
+    if (!canonical || !/^https?:/.test(canonical)) return ERR_INVALID_ORIGIN;
     let reportedUrl;
     try { reportedUrl = new URL(url); } catch { return { ok: false, error: "invalid URL" }; }
     if (canonicalOrigin(reportedUrl.origin) !== canonical) return { ok: false, error: "URL origin mismatch" };
@@ -8156,13 +8187,13 @@ const handlers = mergeRouteMaps(
     // persisting. A payload can never register another origin.
     const senderTab = __sender?.tabId != null ? await chrome.tabs.get(__sender.tabId).catch(() => null) : null;
     if (!senderTab?.url || canonicalOrigin(senderTab.url) !== canonical) {
-      return { ok: false, error: "sender tab origin mismatch" };
+      return ERR_SENDER_TAB_MISMATCH;
     }
     if (
       __sender?.documentLifecycle !== "active" ||
       typeof __sender.documentId !== "string" ||
       typeof __sender.url !== "string"
-    ) return { ok: false, error: "invalid detection document" };
+    ) return ERR_INVALID_DETECTION_DOC;
     const report = await reportWebmcpDetection(canonical, __sender.url, toolCount, {
       tabId: __sender.tabId,
       documentId: __sender.documentId,
@@ -8175,7 +8206,7 @@ const handlers = mergeRouteMaps(
   },
   async "tools.upsert"({ origin, tools, seq, epoch, pageUrl, title, __sender }) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     // Serialize the isEnrolled check + the OPFS write under the SAME origin
     // lifecycle lock as create/delete. A running content-script bridge must NOT
     // re-enroll a deleted origin: the upsert is rejected unless the origin is
@@ -8198,8 +8229,7 @@ const handlers = mergeRouteMaps(
       // cross-origin registry, so its read-modify-write runs under the GLOBAL
       // enrollment lock (lock order origin → enrollment, same as enroll/delete).
       return await withEnrollmentLock(async () => {
-        const gate = await kvGet(SNAPSHOT_GATE_KEY);
-        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const map = await getSnapshotGateMap();
         const decision = acceptToolSnapshot(map[canonical], {
           tabId: __sender?.tabId ?? null,
           documentId: __sender?.documentId ?? null,
@@ -8238,7 +8268,7 @@ const handlers = mergeRouteMaps(
         });
         const accepted = replaced.tools;
         map[canonical] = decision.gate;
-        await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+        await setSnapshotGateMap(map);
         // Page-reported status from the SANITIZED accepted descriptors,
         // explicitly labeled page data (never an attested lifecycle state).
         await recordWebmcpPageReport(canonical, accepted);
@@ -8260,7 +8290,7 @@ const handlers = mergeRouteMaps(
   // response through its monotonic lifecycle fence.
   async "enrollment.status"({ origin, __sender }) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     const snap = await enrollmentSnapshot(canonical);
     // Assign/confirm the navigation epoch for the sender's (tab, document).
     // Only the gate-BOUND tab's documents advance the gate; a second
@@ -8273,8 +8303,7 @@ const handlers = mergeRouteMaps(
       __sender.documentLifecycle === "active"
     ) {
       epoch = await withEnrollmentLock(async () => {
-        const gate = await kvGet(SNAPSHOT_GATE_KEY);
-        const map = { ...(gate[SNAPSHOT_GATE_KEY] ?? {}) };
+        const map = await getSnapshotGateMap();
         const { gate: next, bound } = syncSnapshotDocument(
           map[canonical],
           __sender.tabId,
@@ -8283,7 +8312,7 @@ const handlers = mergeRouteMaps(
         if (!bound) return null;
         if (!map[canonical] || next !== map[canonical]) {
           map[canonical] = next;
-          await kvSet({ [SNAPSHOT_GATE_KEY]: map });
+          await setSnapshotGateMap(map);
         }
         return next.epoch;
       });
@@ -8312,11 +8341,11 @@ const handlers = mergeRouteMaps(
     return await handlers["webmcp.consent.tool.set"]({ origin, name, state }, context);
   },
   async "tools.pending"({ origin }) {
-    if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
+    if (!(await isEnrolled(origin))) return ERR_ORIGIN_NOT_ENROLLED;
     return await pendingApprovals(origin);
   },
   async "tools.consent.states"({ origin }) {
-    if (!(await isEnrolled(origin))) return { ok: false, error: "origin not enrolled" };
+    if (!(await isEnrolled(origin))) return ERR_ORIGIN_NOT_ENROLLED;
     return { ok: true, states: await toolConsentStates(origin) };
   },
   async "tools.allOrigins"() {
@@ -8348,7 +8377,7 @@ const handlers = mergeRouteMaps(
   },
   async "sidepanel.getTools"({ origin }) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     const enrolled = await isEnrolled(canonical);
     const info = await agentInfo(canonical);
     return {
@@ -8517,17 +8546,17 @@ const handlers = mergeRouteMaps(
     // sentence; after the gate, map the store's "asset not found" (a
     // delete-race) to the same sentence.
     if (typeof id !== "string" || !id) {
-      return { ok: false, error: "update_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_UPDATE;
     }
     const exists = await getAsset(scope, id);
     if (!exists.ok) {
-      return { ok: false, error: "update_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_UPDATE;
     }
-    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    const target = assetOpTarget(scope, id);
     let payload;
     try {
       payload = payloadFields([
-        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["origin", canonicalScope(scope)],
         ["id", id], ["type", assetType], ["name", name], ["content", content],
       ]);
     } catch { return { ok: false, error: "asset update payload is not approvable" }; }
@@ -8555,7 +8584,7 @@ const handlers = mergeRouteMaps(
     // (the hand edit in the viewer), else the model (behind the card above).
     const res = await updateAsset(scope, id, patch, { by: ownerPrincipal(context) ? "owner" : "model" });
     if (!res.ok && res.error === "asset not found") {
-      return { ok: false, error: "update_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_UPDATE;
     }
     return res;
   },
@@ -8568,11 +8597,11 @@ const handlers = mergeRouteMaps(
   async "asset.patch"({ origin, id, edits, expectVersion }, context) {
     const scope = origin ?? "master";
     if (typeof id !== "string" || !id) {
-      return { ok: false, error: "patch_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_PATCH;
     }
     const exists = await getAsset(scope, id);
     if (!exists.ok) {
-      return { ok: false, error: "patch_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_PATCH;
     }
     // expectVersion is a stale-edit guard the model can set: refuse (no card,
     // no mutation) if the head has moved since it last saw the body.
@@ -8587,11 +8616,11 @@ const handlers = mergeRouteMaps(
     const resolved = resolveAssetPatch(oldBody, edits);
     if (!resolved.ok) return resolved;
     if (resolved.content === oldBody) return { ok: false, error: "the edits made no change" };
-    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    const target = assetOpTarget(scope, id);
     let payload;
     try {
       payload = payloadFields([
-        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["origin", canonicalScope(scope)],
         ["id", id], ["content", resolved.content],
       ]);
     } catch { return { ok: false, error: "asset patch payload is not approvable" }; }
@@ -8604,7 +8633,7 @@ const handlers = mergeRouteMaps(
       expectVersion, by: ownerPrincipal(context) ? "owner" : "model",
     });
     if (!res.ok && res.error === "asset not found") {
-      return { ok: false, error: "patch_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_PATCH;
     }
     return res.ok
       ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, added: res.added, removed: res.removed }
@@ -8620,25 +8649,25 @@ const handlers = mergeRouteMaps(
   async "asset.append"({ origin, id, content, expectVersion }, context) {
     const scope = origin ?? "master";
     if (typeof id !== "string" || !id) {
-      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_APPEND;
     }
     if (typeof content !== "string" || content.length === 0) {
       return { ok: false, error: "append_asset needs the text to append" };
     }
     const exists = await getAsset(scope, id);
     if (!exists.ok) {
-      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_APPEND;
     }
     if (expectVersion !== undefined && expectVersion !== null) {
       const versions = await listAssetVersions(scope, id);
       const head = versions.ok ? versions.head : 0;
       if (expectVersion !== head) return { ok: false, error: "version_conflict", version: head };
     }
-    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    const target = assetOpTarget(scope, id);
     let payload;
     try {
       payload = payloadFields([
-        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["origin", canonicalScope(scope)],
         ["id", id], ["content", content],
       ]);
     } catch { return { ok: false, error: "asset append payload is not approvable" }; }
@@ -8648,7 +8677,7 @@ const handlers = mergeRouteMaps(
       expectVersion, by: ownerPrincipal(context) ? "owner" : "model",
     });
     if (!res.ok && res.error === "asset not found") {
-      return { ok: false, error: "append_asset needs an existing id (use list_assets)" };
+      return ERR_ASSET_ID_APPEND;
     }
     return res.ok
       ? { ok: true, id, asset: assetIdentity(res.asset, res.version), version: res.version, appendedBytes: res.appendedBytes, totalBytes: res.totalBytes }
@@ -8669,11 +8698,11 @@ const handlers = mergeRouteMaps(
     const scope = origin ?? "master";
     const version = Number(n);
     if (!Number.isSafeInteger(version) || version < 1) return { ok: false, error: "asset.restore needs a version number" };
-    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    const target = assetOpTarget(scope, id);
     let payload;
     try {
       payload = payloadFields([
-        ["origin", scope === "master" ? "master" : canonicalOrigin(scope)],
+        ["origin", canonicalScope(scope)],
         ["id", id], ["n", version],
       ]);
     } catch { return { ok: false, error: "asset restore payload is not approvable" }; }
@@ -8686,9 +8715,9 @@ const handlers = mergeRouteMaps(
   },
   async "asset.delete"({ origin, id }, context) {
     const scope = origin ?? "master";
-    const target = canonicalOperationTarget("asset", { origin: scope, id });
+    const target = assetOpTarget(scope, id);
     let payload;
-    try { payload = payloadFields([["origin", scope === "master" ? "master" : canonicalOrigin(scope)], ["id", id]]); }
+    try { payload = payloadFields([["origin", canonicalScope(scope)], ["id", id]]); }
     catch { return { ok: false, error: "asset delete payload is not approvable" }; }
     const gate = await requireOwnerApproval(context, "asset.delete", target, payload);
     if (!gate.ok) return gate;
@@ -8751,7 +8780,7 @@ const handlers = mergeRouteMaps(
   async "browser.destructive-action"({ action, ref }, context) {
     const act = typeof action === "string" ? action : "";
     if (!DESTRUCTIVE_BROWSER_ACTIONS.has(act)) {
-      return { ok: false, error: "this browser action is not approvable" };
+      return ERR_ACTION_NOT_APPROVABLE;
     }
     const policy = await destructiveActionPolicy();
     if (policy === "never") {
@@ -8759,11 +8788,11 @@ const handlers = mergeRouteMaps(
     }
     const refStr = typeof ref === "string" ? ref : "";
     const target = canonicalOperationTarget("browser-action", { action: act, ref: refStr });
-    if (!target) return { ok: false, error: "this browser action is not approvable" };
+    if (!target) return ERR_ACTION_NOT_APPROVABLE;
     let payload;
     try {
       payload = payloadFields([["action", act], ["ref", refStr]]);
-    } catch { return { ok: false, error: "this browser action is not approvable" }; }
+    } catch { return ERR_ACTION_NOT_APPROVABLE; }
     return await requireOwnerApproval(context, act, target, payload);
   },
   async "task.schedule-script"({ scriptId }, context) {
@@ -8980,9 +9009,7 @@ const handlers = mergeRouteMaps(
   // execution id — the row leaves the Tasks sidebar and never re-appears after
   // a service-worker restart. Tombstones carry ids only (no prompt text).
   async "run.dismissFailed"(m, context) {
-    if (!isOwnerPrincipal(context)) {
-      return { ok: false, error: "owner_extension_required" };
-    }
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     await durableRecoveryReady;
     const ids = Array.isArray(m?.executionIds) ? m.executionIds : (m?.executionId ? [m.executionId] : []);
     return await durableRuns.dismissFailedRuns(ids);
@@ -8992,18 +9019,18 @@ const handlers = mergeRouteMaps(
     return { ok: true, ids: await durableRuns.dismissedFailedRuns() };
   },
   async "run.cancel"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     const executionId = String(m?.executionId ?? "");
-    if (!executionId) return { ok: false, error: "executionId is required" };
+    if (!executionId) return ERR_EXECUTION_ID_REQUIRED;
     return await cancelExecutionTree(executionId, {
       reason: m?.reason ?? "explicit owner cancellation",
       requestId: m?.requestId ?? null,
     });
   },
   async "run.resume"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     const executionId = String(m?.executionId ?? "");
-    if (!executionId) return { ok: false, error: "executionId is required" };
+    if (!executionId) return ERR_EXECUTION_ID_REQUIRED;
     const snapshot = await durableRuns.list();
     const run = snapshot.runs.find((row) => row.executionId === executionId);
     if (!run) return { ok: false, error: "run_not_found", executionId };
@@ -9066,9 +9093,9 @@ const handlers = mergeRouteMaps(
     // a run that stopped on its step budget continues as a NEW TURN on the
     // SAME thread (the thread history is the context), never a silent finish
     // and never a replay of the finished execution. Same owner gate as resume.
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     const executionId = String(m?.executionId ?? "");
-    if (!executionId) return { ok: false, error: "executionId is required" };
+    if (!executionId) return ERR_EXECUTION_ID_REQUIRED;
     const snapshot = await durableRuns.list();
     const run = snapshot.runs.find((row) => row.executionId === executionId);
     if (!run) return { ok: false, error: "run_not_found", executionId };
@@ -9091,9 +9118,9 @@ const handlers = mergeRouteMaps(
   // routes are extension/owner-options only — a model or page principal can
   // never steer or queue for the owner.
   async "run.control.steer"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     const executionId = String(m?.executionId ?? "");
-    if (!executionId) return { ok: false, error: "executionId is required" };
+    if (!executionId) return ERR_EXECUTION_ID_REQUIRED;
     const mode = String(m?.mode ?? "inject").slice(0, 16);
     if (!["inject", "stop-step", "stop-run"].includes(mode)) return { ok: false, error: "invalid_steer_mode" };
     const text = String(m?.text ?? "").slice(0, 1500);
@@ -9126,34 +9153,34 @@ const handlers = mergeRouteMaps(
   },
 
   async "run.control.queue.list"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     const threadId = String(m?.threadId ?? "");
-    if (!threadId) return { ok: false, error: "threadId is required" };
+    if (!threadId) return ERR_THREAD_ID_REQUIRED;
     return { ok: true, threadId, items: await threadQueues.list(threadId) };
   },
 
   async "run.control.queue.enqueue"(m, context) {
     if (!["extension", "owner-options"].includes(context?.principal)) {
-      return { ok: false, error: "owner_extension_required" };
+      return ERR_OWNER_EXT_REQUIRED;
     }
     const threadId = String(m?.threadId ?? "");
-    if (!threadId) return { ok: false, error: "threadId is required" };
+    if (!threadId) return ERR_THREAD_ID_REQUIRED;
     return await threadQueues.enqueue(threadId, String(m?.text ?? ""), {
       resolverDocumentId: approvalResolverDocument(context),
     });
   },
 
   async "run.control.queue.remove"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     const threadId = String(m?.threadId ?? "");
-    if (!threadId) return { ok: false, error: "threadId is required" };
+    if (!threadId) return ERR_THREAD_ID_REQUIRED;
     return await threadQueues.remove(threadId, String(m?.id ?? ""));
   },
 
   async "run.control.queue.move"(m, context) {
-    if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+    if (!isOwnerPrincipal(context)) return ERR_OWNER_EXT_REQUIRED;
     const threadId = String(m?.threadId ?? "");
-    if (!threadId) return { ok: false, error: "threadId is required" };
+    if (!threadId) return ERR_THREAD_ID_REQUIRED;
     const delta = Number(m?.delta);
     if (!Number.isFinite(delta) || delta === 0) return { ok: false, error: "invalid delta" };
     return await threadQueues.move(threadId, String(m?.id ?? ""), delta);
@@ -9328,6 +9355,37 @@ const handlers = mergeRouteMaps(
       writeSkillFiles,
       removeSkillFiles,
     });
+    if (out?.ok) broadcastRegistryChanged();
+    return out;
+  },
+  async "skill.discover"(m) {
+    const url = String(m?.url ?? "").trim();
+    if (!url) return { ok: false, error: "no skill URL provided" };
+    try {
+      return await discoverRepoSkillsAndCommands(url, m?.options);
+    } catch (e) {
+      return { ok: false, error: e?.message ?? String(e) };
+    }
+  },
+  async "skill.importBatch"(m) {
+    try {
+      const res = await installBatchSkillsAndCommands(masterMemory(), m, {
+        writeSkillFiles,
+        removeSkillFiles,
+      });
+      broadcastRegistryChanged();
+      return res;
+    } catch (e) {
+      return { ok: false, error: e?.message ?? String(e) };
+    }
+  },
+  async "command.list"() {
+    return { commands: await loadAllImportedCommands(masterMemory()) };
+  },
+  async "command.delete"({ id }) {
+    const rid = String(id ?? "").trim();
+    if (!rid) return { ok: false, error: "no command id provided" };
+    const out = await removeImportedCommand(masterMemory(), rid);
     if (out?.ok) broadcastRegistryChanged();
     return out;
   },
@@ -9810,7 +9868,7 @@ const handlers = mergeRouteMaps(
   // Management tools — the agent can manage its own site-agents.
   async "agent.create"({ origin, name }) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     // Serialized per origin: create/delete/registration never interleave.
     return await withOriginLock(canonical, async () => {
       // Enroll creates the site's OPFS store directory (so listOrigins()
@@ -9841,7 +9899,7 @@ const handlers = mergeRouteMaps(
     // host permission via chrome.permissions.request (a real user gesture); this
     // route registers the discovery scripts for the now-granted origin.
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     // The hub's tab picker threads the EXACT tab the owner chose (the
     // exact-tab-identity finding: the flow must never silently act on a
     // different page than the one picked). Validate it matches the origin.
@@ -10008,7 +10066,7 @@ const handlers = mergeRouteMaps(
   },
   async "agent.delete"({ origin }, context) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     const gate = await requireOwnerApproval(
       context,
       "agent.delete",
@@ -10102,7 +10160,7 @@ const handlers = mergeRouteMaps(
   },
   async "agent.retry-cleanup"({ origin }) {
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     // Serialize the retry under the SAME per-origin lifecycle lock as create/
     // delete/enroll, and REVALIDATE that the origin is still TOMBSTONED + still
     // in the pending registry before removing anything (the round-18 finding:
@@ -10168,7 +10226,7 @@ const handlers = mergeRouteMaps(
     const uiRunId = callerUiRunId ?? runId ?? null;
     const approvalResolverDocumentId = approvalResolverDocument(routeContext);
     const canonical = canonicalOrigin(origin);
-    if (!canonical) return { ok: false, error: "invalid origin" };
+    if (!canonical) return ERR_INVALID_ORIGIN;
     const snap = await enrollmentSnapshot(canonical);
     if (!snap.enrolled) {
       return { ok: false, error: `origin ${canonical} is not enrolled` };
@@ -10392,7 +10450,7 @@ const handlers = mergeRouteMaps(
       logicalId,
     });
     if (terminal?.phase === "cancelled") {
-      return { ok: false, cancelled: true, aborted: true, executionId: execId, error: "run cancelled by owner", errorCategory: "aborted", errorReason: "explicit owner cancellation", errorAction: "Start a new run to execute this request again." };
+      return makeOwnerCancelledResult(execId);
     }
     // Atomically revalidate + COMMIT under the origin lifecycle lock, so a delete
     // (which tombstones + clears OPFS under the same lock) can never race the

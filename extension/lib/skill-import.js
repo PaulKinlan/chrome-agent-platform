@@ -281,8 +281,8 @@ async function fetchGitHubSkill(url) {
  *   defaults to lib/skill-files.js (OPFS). Tests inject an in-memory fake.
  */
 export async function installImportedSkill(memory, fetched, fileStore = null) {
-  const name = fetched.meta.name || "imported-skill";
-  const id = slugifySkillId(name);
+  const name = fetched.meta?.name || fetched.name || "imported-skill";
+  const id = fetched.id || slugifySkillId(name);
   const files =
     typeof fetched.files === "object" && fetched.files ? fetched.files : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
   const promptBytes = new TextEncoder().encode(String(files["SKILL.md"] ?? "")).byteLength;
@@ -291,11 +291,11 @@ export async function installImportedSkill(memory, fetched, fileStore = null) {
   const skill = {
     id,
     name,
-    description: fetched.meta.description || "",
-    author: fetched.meta.author,
+    description: fetched.meta?.description || fetched.description || "",
+    author: fetched.meta?.author || fetched.author,
     source: "imported",
     mode: "on-demand",
-    category: "imported",
+    category: fetched.category || "imported",
     // Metadata only — the body lives in OPFS (small skills read it back via
     // resolveRecipe; large skills compose a skill_read marker instead).
     prompt: "",
@@ -303,7 +303,7 @@ export async function installImportedSkill(memory, fetched, fileStore = null) {
     fileCount,
     totalBytes,
     requiredCapabilities: [],
-    importedAt: Date.now(),
+    importedAt: fetched.importedAt || Date.now(),
   };
   const list = (await memory.get("importedSkills")) ?? [];
   const idx = list.findIndex((s) => s.id === id);
@@ -516,12 +516,15 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
       if (!resp?.ok) return;
       try {
         const text = await readSkillText(resp, item.name);
-        const { meta } = parseFrontmatter(text);
+        const { body, meta } = parseFrontmatter(text);
         item.frontmatter = meta;
         if (meta.name) item.name = meta.name;
         if (meta.description) item.description = meta.description;
         if (!isCmd && meta.author) item.author = meta.author;
-        if (isCmd) item.argumentHint = meta.argumentHint ?? meta["argument-hint"] ?? "";
+        if (isCmd) {
+          item.argumentHint = meta.argumentHint ?? meta["argument-hint"] ?? "";
+          item.prompt = body;
+        }
       } catch (e) {
         if (String(e?.message ?? "").includes("rate-limited") || String(e?.message ?? "").includes("budget")) throw e;
       }
@@ -542,4 +545,91 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
     ok: true, owner, repo, branch, path: normalizedSubpath, marketplace, plugins, skills, commands,
     stats: { skillCount: skills.length, commandCount: commands.length, pluginCount: plugins.length, treeCount: scoped.length, usedTreesApi },
   };
+}
+
+/** Install an imported command into memory. */
+export async function installImportedCommand(memory, cmd) {
+  if (!cmd || typeof cmd !== "object") throw new Error("invalid command object");
+  const name = cmd.name || cmd.meta?.name || "command";
+  const id = cmd.id || slugifySkillId(name);
+  const prompt = typeof cmd.prompt === "string" ? cmd.prompt : (cmd.body || cmd.template || "");
+  const record = {
+    id,
+    name,
+    description: cmd.description || cmd.meta?.description || "",
+    argumentHint: cmd.argumentHint || cmd.meta?.argumentHint || cmd.meta?.["argument-hint"] || "",
+    prompt,
+    source: cmd.source || "imported",
+    plugin: cmd.plugin || null,
+    category: cmd.category || "imported",
+    path: cmd.path || "",
+    repo: cmd.repo || null,
+    importedAt: cmd.importedAt || Date.now(),
+  };
+  const list = (await memory.get("importedCommands")) ?? [];
+  const idx = list.findIndex((c) => c.id === id);
+  if (idx >= 0) list[idx] = record;
+  else list.push(record);
+  await memory.set("importedCommands", list);
+  return record;
+}
+
+/** Remove an imported command from memory by id. */
+export async function removeImportedCommand(memory, id) {
+  const rid = String(id ?? "").trim();
+  if (!rid) return { ok: false, error: "command id required" };
+  const list = (await memory.get("importedCommands")) ?? [];
+  const next = list.filter((c) => c.id !== rid);
+  if (next.length === list.length) return { ok: false, error: "no imported command with that id" };
+  await memory.set("importedCommands", next);
+  return { ok: true };
+}
+
+/** Load all imported commands from memory. */
+export async function loadAllImportedCommands(memory) {
+  return (await memory.get("importedCommands")) ?? [];
+}
+
+/** Install multiple skills and commands in batch. */
+export async function installBatchSkillsAndCommands(memory, batch = {}, fileStore = null) {
+  const fetcher = typeof batch?.fetch === "function" ? batch.fetch : globalThis.fetch;
+  const skills = Array.isArray(batch?.skills) ? batch.skills : [];
+  const commands = Array.isArray(batch?.commands) ? batch.commands : [];
+  const installedSkills = [];
+  const installedCommands = [];
+  const errors = [];
+
+  const fetchBody = async (item) => {
+    const resp = await fetcher(item.downloadUrl);
+    if (!resp.ok) throw new Error(`failed to fetch ${item.name} (${resp.status})`);
+    return parseFrontmatter(await readSkillText(resp, item.name));
+  };
+
+  for (const s of skills) {
+    try {
+      let fetched = s;
+      if ((!s.files || typeof s.files !== "object") && s.downloadUrl) {
+        const { meta, body } = await fetchBody(s);
+        fetched = { id: s.id, files: { "SKILL.md": body }, meta: { name: s.name || meta.name, description: s.description || meta.description, author: s.author || meta.author } };
+      }
+      installedSkills.push(await installImportedSkill(memory, fetched, fileStore));
+    } catch (e) {
+      errors.push({ id: s?.id ?? s?.name ?? "unknown-skill", error: e?.message ?? String(e) });
+    }
+  }
+
+  for (const c of commands) {
+    try {
+      let cmd = c;
+      if (!cmd.prompt && cmd.downloadUrl) {
+        const { body, meta } = await fetchBody(c);
+        cmd = { ...cmd, prompt: body, meta: { ...meta, ...cmd.meta } };
+      }
+      installedCommands.push(await installImportedCommand(memory, cmd));
+    } catch (e) {
+      errors.push({ id: c?.id ?? c?.name ?? "unknown-command", error: e?.message ?? String(e) });
+    }
+  }
+
+  return { ok: errors.length === 0, skills: installedSkills, commands: installedCommands, errors };
 }
