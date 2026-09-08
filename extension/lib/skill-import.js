@@ -21,6 +21,9 @@ export function parseFrontmatter(md) {
       value = value.slice(1, -1);
     }
     meta[key] = value;
+    if (key === "argument-hint" || key === "argument_hint" || key === "argumenthint") {
+      meta.argumentHint = value;
+    }
   }
   return { body: text.slice(m[0].length), meta };
 }
@@ -48,18 +51,11 @@ const MAX_DIR_WALK = 64; // max subdirectories walked on a GitHub repo
 /** Read a response body, capped at the per-file budget (reject, not truncate).
  * @param {string} label what is being read (for the error message) */
 async function readSkillText(resp, label = "skill") {
+  const err = (n) => new Error(`${label} is too large (${n} bytes > ${MAX_SKILL_FILE_BYTES} per-file budget; split it or shrink it)`);
   const declared = Number(resp.headers.get("content-length") ?? 0);
-  if (declared > MAX_SKILL_FILE_BYTES) {
-    throw new Error(
-      `${label} is too large (${declared} bytes > ${MAX_SKILL_FILE_BYTES} per-file budget; split it or shrink it)`,
-    );
-  }
+  if (declared > MAX_SKILL_FILE_BYTES) throw err(declared);
   const buf = await resp.arrayBuffer();
-  if (buf.byteLength > MAX_SKILL_FILE_BYTES) {
-    throw new Error(
-      `${label} is too large (${buf.byteLength} bytes > ${MAX_SKILL_FILE_BYTES} per-file budget; split it or shrink it)`,
-    );
-  }
+  if (buf.byteLength > MAX_SKILL_FILE_BYTES) throw err(buf.byteLength);
   return new TextDecoder().decode(buf);
 }
 
@@ -97,8 +93,16 @@ export async function fetchSkillFromUrl(url) {
     throw new Error("skill URL must be http(s)");
   }
 
-  // Direct markdown URL first (raw.githubusercontent.com / a .md file).
-  if (/\.md(?:\?.*)?$/.test(u) || u.includes("raw.githubusercontent.com")) {
+  // Direct markdown URL first — but NEVER a github.com blob/tree PAGE. A
+  // github.com blob/tree URL is an HTML page even when the path ends in .md;
+  // fetching it directly would install the page itself as a skill body. Those
+  // URLs MUST resolve through the Contents API below (never the page).
+  // github.com/.../raw/... URLs DO serve the file content and stay direct.
+  const isGithubPage = /github\.com\/[^/]+\/[^/]+\/(blob|tree)\//.test(u);
+  const isGithubRaw =
+    u.includes("raw.githubusercontent.com") || /github\.com\/[^/]+\/[^/]+\/raw\//.test(u);
+  if (isGithubRaw) return fetchDirectSkill(u);
+  if (!isGithubPage && /\.md(?:\?.*)?$/.test(u)) {
     return fetchDirectSkill(u);
   }
 
@@ -106,6 +110,9 @@ export async function fetchSkillFromUrl(url) {
   if (/github\.com\//.test(u)) {
     const gh = await fetchGitHubSkill(u);
     if (gh) return gh;
+    throw new Error(
+      `no SKILL.md found at ${u} — point at a GitHub directory or repo that contains SKILL.md, or a raw markdown URL`,
+    );
   }
 
   return fetchDirectSkill(u);
@@ -128,12 +135,12 @@ async function fetchDirectSkill(url) {
 }
 
 // Parse https://github.com/owner/repo[/tree|blob/branch[/path]]
-function parseGitHubUrl(url) {
-  const m = String(url).match(
+export function parseGitHubUrl(url) {
+  const m = String(url ?? "").trim().replace(/\/+$/, "").match(
     /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/(tree|blob)\/([^/]+)(?:\/(.+))?)?$/,
   );
   if (!m) return null;
-  return { owner: m[1], repo: m[2], branch: m[4] || "main", path: m[5] || "" };
+  return { owner: m[1], repo: m[2], type: m[3] || null, branch: m[4] || "main", path: m[5] ? m[5].replace(/^\/+|\/+$/g, "") : "" };
 }
 
 async function fetchGitHubSkill(url) {
@@ -168,7 +175,9 @@ async function fetchGitHubSkill(url) {
     }
     if (!resp.ok) return null;
     const data = await resp.json();
-    return Array.isArray(data) ? data : [];
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === "object" && data.type === "file" && data.download_url) return [data];
+    return [];
   };
 
   const fetchFileBody = async (file) => {
@@ -181,7 +190,7 @@ async function fetchGitHubSkill(url) {
 
   try {
     const items = (await contents(path)) ?? [];
-    skillParent = path ? String(path).replace(/\/$/, "") : "";
+    skillParent = path ? String(path).replace(/\/?SKILL\.md$/i, "").replace(/\/$/, "") : "";
     const skillFile = items.find((i) => i.type === "file" && i.name === "SKILL.md");
     if (skillFile?.download_url) {
       const body = await fetchFileBody(skillFile);
@@ -377,4 +386,148 @@ export async function loadAllImportedSkills(memory, fileStore = null) {
   const out = [];
   for (const r of imported) out.push(await loadImportedSkill(memory, r, fileStore));
   return out;
+}
+
+async function crawlContents(owner, repo, branch, dir, fetcher, maxWalk = MAX_DIR_WALK) {
+  const tree = [], q = [dir || ""];
+  while (q.length && q.length + tree.length < maxWalk) {
+    const cur = q.shift();
+    const res = await fetcher(`https://api.github.com/repos/${owner}/${repo}/contents${cur ? `/${cur}` : ""}?ref=${branch}`, { headers: { Accept: "application/vnd.github.v3+json" } });
+    if (res.status === 403 || res.status === 429) throw new Error(`GitHub API rate-limited (HTTP ${res.status}) while walking ${owner}/${repo}`);
+    if (!res.ok) continue;
+    const items = await res.json();
+    for (const it of Array.isArray(items) ? items : [items]) {
+      if (it.type === "dir") q.push(it.path);
+      else if (it.type === "file") tree.push({ path: it.path, type: "blob", size: it.size, download_url: it.download_url });
+    }
+  }
+  return tree;
+}
+
+export async function discoverRepoSkillsAndCommands(url, options = {}) {
+  const u = String(url ?? "").trim();
+  if (!u) throw new Error("no skill URL provided");
+  let parsedUrl;
+  try { parsedUrl = new URL(u); } catch { throw new Error("invalid skill URL"); }
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") throw new Error("skill URL must be http(s)");
+
+  const gh = parseGitHubUrl(u);
+  if (!gh) throw new Error(`not a valid GitHub repository URL: ${u}`);
+  const { owner, repo, branch, path: rawPath, type } = gh;
+  const fetcher = typeof options.fetch === "function" ? options.fetch : globalThis.fetch;
+  const maxDirWalk = typeof options.maxDirWalk === "number" ? options.maxDirWalk : MAX_DIR_WALK;
+  const fetchContent = options.fetchContent !== false;
+
+  let subpath = rawPath;
+  if (type === "blob" && rawPath.endsWith("/SKILL.md")) subpath = rawPath.slice(0, -"/SKILL.md".length);
+  else if (type === "blob" && rawPath === "SKILL.md") subpath = "";
+  const normalizedSubpath = subpath ? subpath.replace(/^\/+|\/+$/g, "") : "";
+
+  let tree = null, usedTreesApi = false;
+  try {
+    const resp = await fetcher(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`, {
+      headers: { Accept: "application/vnd.github.v3+json", ...(options.headers ?? {}) },
+    });
+    if (resp.status === 403 || resp.status === 429) {
+      throw new Error(`GitHub API rate-limited (HTTP ${resp.status}) while discovering skills in ${owner}/${repo}; wait and retry, or use a raw.githubusercontent.com URL`);
+    }
+    if (resp.ok) {
+      const data = await resp.json();
+      if (Array.isArray(data?.tree) && !data.truncated) {
+        tree = data.tree;
+        usedTreesApi = true;
+      }
+    }
+  } catch (e) {
+    if (String(e?.message ?? "").includes("rate-limited")) throw e;
+  }
+
+  if (tree === null) {
+    tree = await crawlContents(owner, repo, branch, normalizedSubpath, fetcher, maxDirWalk);
+  }
+
+  const scoped = normalizedSubpath
+    ? tree.filter((it) => it?.path === normalizedSubpath || String(it?.path ?? "").startsWith(normalizedSubpath + "/"))
+    : tree;
+
+  const rawBase = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/`;
+  const marketplaceItem = tree.find((it) => it?.path === ".claude-plugin/marketplace.json" || it?.path === "marketplace.json");
+  let marketplace = null, plugins = [];
+  if (marketplaceItem && fetchContent) {
+    try {
+      const mUrl = marketplaceItem.download_url || `${rawBase}${marketplaceItem.path}`;
+      const resp = await fetcher(mUrl);
+      if (resp.ok) {
+        marketplace = JSON.parse(await readSkillText(resp, "marketplace.json"));
+        if (Array.isArray(marketplace?.plugins)) plugins = marketplace.plugins;
+      }
+    } catch { /* best effort */ }
+  }
+
+  if (plugins.length === 0) {
+    const cats = new Set();
+    for (const it of tree) {
+      const m = String(it?.path ?? "").match(/^([^/]+)\/(skills|commands)\//);
+      if (m && m[1] !== ".claude-plugin" && m[1] !== ".github") cats.add(m[1]);
+    }
+    plugins = Array.from(cats).map((c) => ({ name: c, description: `${c} skills and workflows`, source: `./${c}`, category: "general" }));
+  }
+
+  const findPlugin = (p) => {
+    for (const pl of plugins) {
+      const src = (pl.source ?? "").replace(/^\.\//, "").replace(/\/$/, "");
+      if (src && (p === src || p.startsWith(src + "/"))) return pl;
+    }
+    return null;
+  };
+
+  const makeEntry = (sf, isCmd) => {
+    const filePath = sf.path;
+    const m = isCmd ? filePath.match(/(?:^|\/)commands\/([^/]+)\.md$/i) : null;
+    const dir = isCmd ? "" : (filePath === "SKILL.md" ? "" : filePath.slice(0, -"/SKILL.md".length));
+    const base = isCmd ? (m ? m[1] : filePath.split("/").pop().replace(/\.md$/i, "")) : (dir ? dir.split("/").pop() : repo);
+    const pl = findPlugin(isCmd ? filePath : dir);
+    const plugin = pl?.name || (filePath.includes("/") ? filePath.split("/")[0] : null);
+    const downloadUrl = sf.download_url || `${rawBase}${filePath}`;
+    const entry = {
+      id: slugifySkillId(plugin ? `${plugin}-${base}` : `${repo}-${base}`),
+      name: base, description: `${isCmd ? "Command" : "Skill"} ${base}`,
+      path: filePath, plugin, category: pl?.category || "general", downloadUrl, frontmatter: {},
+    };
+    if (isCmd) entry.argumentHint = "";
+    else {
+      entry.author = owner;
+      entry.dir = dir;
+      entry.files = tree.filter((it) => it?.type === "blob" && (dir === "" ? true : String(it.path).startsWith(dir + "/"))).map((it) => (dir ? it.path.slice(dir.length + 1) : it.path));
+    }
+    return entry;
+  };
+
+  const skillFiles = scoped.filter((it) => it?.type === "blob" && (it.path === "SKILL.md" || String(it.path).endsWith("/SKILL.md")));
+  const skills = skillFiles.map((sf) => makeEntry(sf, false));
+
+  const cmdFiles = scoped.filter((it) => it?.type === "blob" && /(?:^|\/)commands\/([^/]+)\.md$/i.test(String(it.path)));
+  const commands = cmdFiles.map((cf) => makeEntry(cf, true));
+
+  if (fetchContent) {
+    const enrich = async (item, isCmd) => {
+      try {
+        const resp = await fetcher(item.downloadUrl);
+        if (resp.ok) {
+          const { meta } = parseFrontmatter(await readSkillText(resp, item.name));
+          item.frontmatter = meta;
+          if (meta.name) item.name = meta.name;
+          if (meta.description) item.description = meta.description;
+          if (!isCmd && meta.author) item.author = meta.author;
+          if (isCmd) item.argumentHint = meta.argumentHint ?? meta["argument-hint"] ?? "";
+        }
+      } catch { /* best effort */ }
+    };
+    await Promise.all([...skills.map((s) => enrich(s, false)), ...commands.map((c) => enrich(c, true))]);
+  }
+
+  return {
+    ok: true, owner, repo, branch, path: normalizedSubpath, marketplace, plugins, skills, commands,
+    stats: { skillCount: skills.length, commandCount: commands.length, pluginCount: plugins.length, treeCount: scoped.length, usedTreesApi },
+  };
 }
