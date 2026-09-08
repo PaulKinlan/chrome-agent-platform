@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.331] — 2026-09-08
-- fix review findings for batch skill and command storage []
+- fix review findings for batch skill and command storage
 
 ## [0.3.330] — 2026-09-08
 - Batch skill and command storage and indexing in OPFS/memory
