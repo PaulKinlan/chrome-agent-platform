@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.328] — 2026-09-08
+- fix review findings for skill discovery engine
+
 ## [0.3.327] — 2026-09-08
 - Recursive GitHub skill and command discovery engine (Git Trees API + tree crawler)
 

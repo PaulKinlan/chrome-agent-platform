@@ -5,14 +5,25 @@
 // is installed as a reusable skill the owner can then /skill:<id> into any task
 // or attach to any agent. Skills are DATA (a prompt + files), never eval'd.
 
+const rateLimitErr = (status, action) =>
+  new Error(`GitHub API rate-limited (HTTP ${status}) while ${action}; wait and retry, or use a raw.githubusercontent.com URL`);
+
+function validateHttpUrl(url) {
+  const u = String(url ?? "").trim();
+  if (!u) throw new Error("no skill URL provided");
+  let p;
+  try { p = new URL(u); } catch { throw new Error("invalid skill URL"); }
+  if (p.protocol !== "http:" && p.protocol !== "https:") throw new Error("skill URL must be http(s)");
+  return u;
+}
+
 /** Parse minimal YAML frontmatter (name/description/author/version). */
 export function parseFrontmatter(md) {
   const text = String(md ?? "");
   const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
   const meta = {};
   if (!m) return { body: text, meta };
-  const fm = m[1] ?? "";
-  for (const line of fm.split("\n")) {
+  for (const line of (m[1] ?? "").split("\n")) {
     const kv = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
     if (!kv) continue;
     const key = kv[1].toLowerCase();
@@ -21,9 +32,7 @@ export function parseFrontmatter(md) {
       value = value.slice(1, -1);
     }
     meta[key] = value;
-    if (key === "argument-hint" || key === "argument_hint" || key === "argumenthint") {
-      meta.argumentHint = value;
-    }
+    if (key.replace(/[-_]/g, "") === "argumenthint") meta.argumentHint = value;
   }
   return { body: text.slice(m[0].length), meta };
 }
@@ -82,16 +91,7 @@ function makeTotalBudget(label) {
  * Mirrors ~/chaos's skill-fetcher: GitHub Contents API → raw fallback → direct URL.
  */
 export async function fetchSkillFromUrl(url) {
-  const u = String(url ?? "").trim();
-  if (!u) throw new Error("no skill URL provided");
-
-  // Only http(s) — reject file:/data:/anything else (no scheme restriction
-  // would let an untrusted URL reach a local/privileged fetch).
-  let parsedUrl;
-  try { parsedUrl = new URL(u); } catch { throw new Error("invalid skill URL"); }
-  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-    throw new Error("skill URL must be http(s)");
-  }
+  const u = validateHttpUrl(url);
 
   // Direct markdown URL first — but NEVER a github.com blob/tree PAGE. A
   // github.com blob/tree URL is an HTML page even when the path ends in .md;
@@ -111,7 +111,7 @@ export async function fetchSkillFromUrl(url) {
     const gh = await fetchGitHubSkill(u);
     if (gh) return gh;
     throw new Error(
-      `no SKILL.md found at ${u} — point at a GitHub directory or repo that contains SKILL.md, or a raw markdown URL`,
+      `no SKILL.md found at ${u} — point at a GitHub directory or repo with SKILL.md, or raw markdown URL`,
     );
   }
 
@@ -140,7 +140,7 @@ export function parseGitHubUrl(url) {
     /^https?:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?(?:\/(tree|blob)\/([^/]+)(?:\/(.+))?)?$/,
   );
   if (!m) return null;
-  return { owner: m[1], repo: m[2], type: m[3] || null, branch: m[4] || "main", path: m[5] ? m[5].replace(/^\/+|\/+$/g, "") : "" };
+  return { owner: m[1], repo: m[2], type: m[3] || null, branch: m[4] || "main", path: m[5]?.replace(/^\/+|\/+$/g, "") || "" };
 }
 
 async function fetchGitHubSkill(url) {
@@ -148,9 +148,7 @@ async function fetchGitHubSkill(url) {
   if (!parsed) return null;
   const { owner, repo, branch, path } = parsed;
 
-  const apiUrl = path
-    ? `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`
-    : `https://api.github.com/repos/${owner}/${repo}/contents?ref=${branch}`;
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents${path ? `/${path}` : ""}?ref=${branch}`;
   let skillContent = null;
   let author = owner;
   // The directory containing SKILL.md (repo-relative) — files are keyed
@@ -169,9 +167,7 @@ async function fetchGitHubSkill(url) {
       { headers: { Accept: "application/vnd.github.v3+json" } },
     );
     if (resp.status === 403 || resp.status === 429) {
-      throw new Error(
-        `GitHub API rate-limited (HTTP ${resp.status}) while walking ${owner}/${repo}; wait and retry, or use a raw.githubusercontent.com URL`,
-      );
+      throw rateLimitErr(resp.status, `walking ${owner}/${repo}`);
     }
     if (!resp.ok) return null;
     const data = await resp.json();
@@ -288,9 +284,8 @@ export async function installImportedSkill(memory, fetched, fileStore = null) {
   const name = fetched.meta.name || "imported-skill";
   const id = slugifySkillId(name);
   const files =
-    fetched.files && typeof fetched.files === "object" ? fetched.files : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
-  const prompt = files["SKILL.md"] ?? "";
-  const promptBytes = new TextEncoder().encode(String(prompt ?? "")).byteLength;
+    typeof fetched.files === "object" && fetched.files ? fetched.files : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
+  const promptBytes = new TextEncoder().encode(String(files["SKILL.md"] ?? "")).byteLength;
   const store = fileStore ?? (await import("./skill-files.js"));
   const { fileCount, totalBytes } = await store.writeSkillFiles(id, files);
   const skill = {
@@ -390,10 +385,12 @@ export async function loadAllImportedSkills(memory, fileStore = null) {
 
 async function crawlContents(owner, repo, branch, dir, fetcher, maxWalk = MAX_DIR_WALK) {
   const tree = [], q = [dir || ""];
-  while (q.length && q.length + tree.length < maxWalk) {
+  let walked = 0;
+  while (q.length && walked < maxWalk) {
     const cur = q.shift();
+    walked++;
     const res = await fetcher(`https://api.github.com/repos/${owner}/${repo}/contents${cur ? `/${cur}` : ""}?ref=${branch}`, { headers: { Accept: "application/vnd.github.v3+json" } });
-    if (res.status === 403 || res.status === 429) throw new Error(`GitHub API rate-limited (HTTP ${res.status}) while walking ${owner}/${repo}`);
+    if (res.status === 403 || res.status === 429) throw rateLimitErr(res.status, `walking ${owner}/${repo}`);
     if (!res.ok) continue;
     const items = await res.json();
     for (const it of Array.isArray(items) ? items : [items]) {
@@ -405,12 +402,7 @@ async function crawlContents(owner, repo, branch, dir, fetcher, maxWalk = MAX_DI
 }
 
 export async function discoverRepoSkillsAndCommands(url, options = {}) {
-  const u = String(url ?? "").trim();
-  if (!u) throw new Error("no skill URL provided");
-  let parsedUrl;
-  try { parsedUrl = new URL(u); } catch { throw new Error("invalid skill URL"); }
-  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") throw new Error("skill URL must be http(s)");
-
+  const u = validateHttpUrl(url);
   const gh = parseGitHubUrl(u);
   if (!gh) throw new Error(`not a valid GitHub repository URL: ${u}`);
   const { owner, repo, branch, path: rawPath, type } = gh;
@@ -418,10 +410,7 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
   const maxDirWalk = typeof options.maxDirWalk === "number" ? options.maxDirWalk : MAX_DIR_WALK;
   const fetchContent = options.fetchContent !== false;
 
-  let subpath = rawPath;
-  if (type === "blob" && rawPath.endsWith("/SKILL.md")) subpath = rawPath.slice(0, -"/SKILL.md".length);
-  else if (type === "blob" && rawPath === "SKILL.md") subpath = "";
-  const normalizedSubpath = subpath ? subpath.replace(/^\/+|\/+$/g, "") : "";
+  const normalizedSubpath = (type === "blob" ? rawPath.replace(/\/?SKILL\.md$/i, "") : rawPath).replace(/^\/+|\/+$/g, "");
 
   let tree = null, usedTreesApi = false;
   try {
@@ -429,7 +418,7 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
       headers: { Accept: "application/vnd.github.v3+json", ...(options.headers ?? {}) },
     });
     if (resp.status === 403 || resp.status === 429) {
-      throw new Error(`GitHub API rate-limited (HTTP ${resp.status}) while discovering skills in ${owner}/${repo}; wait and retry, or use a raw.githubusercontent.com URL`);
+      throw rateLimitErr(resp.status, `discovering skills in ${owner}/${repo}`);
     }
     if (resp.ok) {
       const data = await resp.json();
@@ -470,7 +459,7 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
       const m = String(it?.path ?? "").match(/^([^/]+)\/(skills|commands)\//);
       if (m && m[1] !== ".claude-plugin" && m[1] !== ".github") cats.add(m[1]);
     }
-    plugins = Array.from(cats).map((c) => ({ name: c, description: `${c} skills and workflows`, source: `./${c}`, category: "general" }));
+    plugins = [...cats].map((name) => ({ name, description: `${name} workflows`, source: `./${name}`, category: "general" }));
   }
 
   const findPlugin = (p) => {
@@ -481,49 +470,72 @@ export async function discoverRepoSkillsAndCommands(url, options = {}) {
     return null;
   };
 
+  const skillFiles = scoped.filter((it) => it?.type === "blob" && (it.path === "SKILL.md" || String(it.path).endsWith("/SKILL.md")));
+  const otherSkillDirs = skillFiles.map((sf) => sf.path === "SKILL.md" ? "" : sf.path.slice(0, -9)).filter(Boolean);
+  const cmdFiles = scoped.filter((it) => it?.type === "blob" && /(?:^|\/)commands\/[^/]+\.md$/i.test(String(it.path)));
+
   const makeEntry = (sf, isCmd) => {
-    const filePath = sf.path;
-    const m = isCmd ? filePath.match(/(?:^|\/)commands\/([^/]+)\.md$/i) : null;
-    const dir = isCmd ? "" : (filePath === "SKILL.md" ? "" : filePath.slice(0, -"/SKILL.md".length));
-    const base = isCmd ? (m ? m[1] : filePath.split("/").pop().replace(/\.md$/i, "")) : (dir ? dir.split("/").pop() : repo);
-    const pl = findPlugin(isCmd ? filePath : dir);
-    const plugin = pl?.name || (filePath.includes("/") ? filePath.split("/")[0] : null);
-    const downloadUrl = sf.download_url || `${rawBase}${filePath}`;
+    const p = sf.path;
+    const m = isCmd ? p.match(/(?:^|\/)commands\/([^/]+)\.md$/i) : null;
+    const dir = isCmd ? "" : (p === "SKILL.md" ? "" : p.slice(0, -9));
+    const base = isCmd ? m[1] : (dir ? dir.split("/").pop() : repo);
+    const pl = findPlugin(isCmd ? p : dir);
+    const plugin = pl?.name || null;
+    const idSeed = plugin ? (plugin === base ? base : `${plugin}-${base}`) : (base === repo ? base : `${repo}-${base}`);
     const entry = {
-      id: slugifySkillId(plugin ? `${plugin}-${base}` : `${repo}-${base}`),
+      id: slugifySkillId(idSeed),
       name: base, description: `${isCmd ? "Command" : "Skill"} ${base}`,
-      path: filePath, plugin, category: pl?.category || "general", downloadUrl, frontmatter: {},
+      path: p, plugin, category: pl?.category || "general", downloadUrl: sf.download_url || `${rawBase}${p}`, frontmatter: {},
     };
     if (isCmd) entry.argumentHint = "";
     else {
       entry.author = owner;
       entry.dir = dir;
-      entry.files = tree.filter((it) => it?.type === "blob" && (dir === "" ? true : String(it.path).startsWith(dir + "/"))).map((it) => (dir ? it.path.slice(dir.length + 1) : it.path));
+      entry.files = tree
+        .filter((it) => it?.type === "blob" && (dir ? it.path.startsWith(dir + "/") && !otherSkillDirs.some((d) => d.startsWith(dir + "/") && it.path.startsWith(d + "/")) : !otherSkillDirs.some((d) => it.path.startsWith(d + "/"))))
+        .map((it) => (dir ? it.path.slice(dir.length + 1) : it.path));
     }
     return entry;
   };
 
-  const skillFiles = scoped.filter((it) => it?.type === "blob" && (it.path === "SKILL.md" || String(it.path).endsWith("/SKILL.md")));
   const skills = skillFiles.map((sf) => makeEntry(sf, false));
-
-  const cmdFiles = scoped.filter((it) => it?.type === "blob" && /(?:^|\/)commands\/([^/]+)\.md$/i.test(String(it.path)));
   const commands = cmdFiles.map((cf) => makeEntry(cf, true));
 
   if (fetchContent) {
     const enrich = async (item, isCmd) => {
+      let resp;
       try {
-        const resp = await fetcher(item.downloadUrl);
-        if (resp.ok) {
-          const { meta } = parseFrontmatter(await readSkillText(resp, item.name));
-          item.frontmatter = meta;
-          if (meta.name) item.name = meta.name;
-          if (meta.description) item.description = meta.description;
-          if (!isCmd && meta.author) item.author = meta.author;
-          if (isCmd) item.argumentHint = meta.argumentHint ?? meta["argument-hint"] ?? "";
-        }
-      } catch { /* best effort */ }
+        resp = await fetcher(item.downloadUrl);
+      } catch (e) {
+        if (String(e?.message ?? "").includes("rate-limited")) throw e;
+        return;
+      }
+      if (resp?.status === 403 || resp?.status === 429) {
+        throw rateLimitErr(resp.status, `reading ${item.path}`);
+      }
+      if (!resp?.ok) return;
+      try {
+        const text = await readSkillText(resp, item.name);
+        const { meta } = parseFrontmatter(text);
+        item.frontmatter = meta;
+        if (meta.name) item.name = meta.name;
+        if (meta.description) item.description = meta.description;
+        if (!isCmd && meta.author) item.author = meta.author;
+        if (isCmd) item.argumentHint = meta.argumentHint ?? meta["argument-hint"] ?? "";
+      } catch (e) {
+        if (String(e?.message ?? "").includes("rate-limited") || String(e?.message ?? "").includes("budget")) throw e;
+      }
     };
-    await Promise.all([...skills.map((s) => enrich(s, false)), ...commands.map((c) => enrich(c, true))]);
+
+    const queue = [...skills.map((s) => [s, false]), ...commands.map((c) => [c, true])];
+    let qIdx = 0;
+    const pool = Array.from({ length: Math.min(6, queue.length) }, async () => {
+      while (qIdx < queue.length) {
+        const [it, isCmd] = queue[qIdx++];
+        await enrich(it, isCmd);
+      }
+    });
+    await Promise.all(pool);
   }
 
   return {

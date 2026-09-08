@@ -1,0 +1,1181 @@
+{
+  "sha": "pm-skills-fixture-sha",
+  "truncated": false,
+  "tree": [
+    {
+      "path": ".claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "type": "blob",
+      "size": 3208
+    },
+    {
+      "path": ".docs",
+      "type": "tree"
+    },
+    {
+      "path": ".docs/images",
+      "type": "tree"
+    },
+    {
+      "path": ".docs/images/add-marketplace.webp",
+      "type": "blob",
+      "size": 39640
+    },
+    {
+      "path": ".docs/images/examples.png",
+      "type": "blob",
+      "size": 145664
+    },
+    {
+      "path": ".docs/images/plugins.png",
+      "type": "blob",
+      "size": 487774
+    },
+    {
+      "path": ".docs/images/pm-brain-pm-skills.webp",
+      "type": "blob",
+      "size": 27914
+    },
+    {
+      "path": ".docs/images/pm-skills-install.gif",
+      "type": "blob",
+      "size": 4958538
+    },
+    {
+      "path": ".gitattributes",
+      "type": "blob",
+      "size": 98
+    },
+    {
+      "path": ".github",
+      "type": "tree"
+    },
+    {
+      "path": ".github/workflows",
+      "type": "tree"
+    },
+    {
+      "path": ".github/workflows/tag-on-merge.yml",
+      "type": "blob",
+      "size": 7136
+    },
+    {
+      "path": ".github/workflows/tests.yml",
+      "type": "blob",
+      "size": 570
+    },
+    {
+      "path": ".gitignore",
+      "type": "blob",
+      "size": 125
+    },
+    {
+      "path": "AGENTS.md",
+      "type": "blob",
+      "size": 326
+    },
+    {
+      "path": "CHANGELOG.md",
+      "type": "blob",
+      "size": 2906
+    },
+    {
+      "path": "CLAUDE.md",
+      "type": "blob",
+      "size": 8112
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "type": "blob",
+      "size": 2212
+    },
+    {
+      "path": "LICENSE",
+      "type": "blob",
+      "size": 1068
+    },
+    {
+      "path": "README.md",
+      "type": "blob",
+      "size": 27708
+    },
+    {
+      "path": "pm-ai-shipping",
+      "type": "tree"
+    },
+    {
+      "path": "pm-ai-shipping/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-ai-shipping/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 690
+    },
+    {
+      "path": "pm-ai-shipping/README.md",
+      "type": "blob",
+      "size": 2892
+    },
+    {
+      "path": "pm-ai-shipping/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-ai-shipping/commands/derive-tests.md",
+      "type": "blob",
+      "size": 7715
+    },
+    {
+      "path": "pm-ai-shipping/commands/document-app.md",
+      "type": "blob",
+      "size": 3571
+    },
+    {
+      "path": "pm-ai-shipping/commands/performance-audit-static.md",
+      "type": "blob",
+      "size": 4703
+    },
+    {
+      "path": "pm-ai-shipping/commands/security-audit-static.md",
+      "type": "blob",
+      "size": 9085
+    },
+    {
+      "path": "pm-ai-shipping/commands/ship-check.md",
+      "type": "blob",
+      "size": 4553
+    },
+    {
+      "path": "pm-ai-shipping/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-ai-shipping/skills/intended-vs-implemented",
+      "type": "tree"
+    },
+    {
+      "path": "pm-ai-shipping/skills/intended-vs-implemented/SKILL.md",
+      "type": "blob",
+      "size": 3815
+    },
+    {
+      "path": "pm-ai-shipping/skills/shipping-artifacts",
+      "type": "tree"
+    },
+    {
+      "path": "pm-ai-shipping/skills/shipping-artifacts/SKILL.md",
+      "type": "blob",
+      "size": 8836
+    },
+    {
+      "path": "pm-data-analytics",
+      "type": "tree"
+    },
+    {
+      "path": "pm-data-analytics/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-data-analytics/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 535
+    },
+    {
+      "path": "pm-data-analytics/README.md",
+      "type": "blob",
+      "size": 1057
+    },
+    {
+      "path": "pm-data-analytics/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-data-analytics/commands/analyze-cohorts.md",
+      "type": "blob",
+      "size": 3415
+    },
+    {
+      "path": "pm-data-analytics/commands/analyze-test.md",
+      "type": "blob",
+      "size": 3942
+    },
+    {
+      "path": "pm-data-analytics/commands/write-query.md",
+      "type": "blob",
+      "size": 2817
+    },
+    {
+      "path": "pm-data-analytics/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-data-analytics/skills/ab-test-analysis",
+      "type": "tree"
+    },
+    {
+      "path": "pm-data-analytics/skills/ab-test-analysis/SKILL.md",
+      "type": "blob",
+      "size": 3587
+    },
+    {
+      "path": "pm-data-analytics/skills/cohort-analysis",
+      "type": "tree"
+    },
+    {
+      "path": "pm-data-analytics/skills/cohort-analysis/SKILL.md",
+      "type": "blob",
+      "size": 5026
+    },
+    {
+      "path": "pm-data-analytics/skills/sql-queries",
+      "type": "tree"
+    },
+    {
+      "path": "pm-data-analytics/skills/sql-queries/SKILL.md",
+      "type": "blob",
+      "size": 3628
+    },
+    {
+      "path": "pm-execution",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 625
+    },
+    {
+      "path": "pm-execution/README.md",
+      "type": "blob",
+      "size": 3964
+    },
+    {
+      "path": "pm-execution/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/commands/generate-data.md",
+      "type": "blob",
+      "size": 2810
+    },
+    {
+      "path": "pm-execution/commands/meeting-notes.md",
+      "type": "blob",
+      "size": 2882
+    },
+    {
+      "path": "pm-execution/commands/plan-okrs.md",
+      "type": "blob",
+      "size": 3629
+    },
+    {
+      "path": "pm-execution/commands/pre-mortem.md",
+      "type": "blob",
+      "size": 3733
+    },
+    {
+      "path": "pm-execution/commands/red-team-prd.md",
+      "type": "blob",
+      "size": 2748
+    },
+    {
+      "path": "pm-execution/commands/sprint.md",
+      "type": "blob",
+      "size": 5164
+    },
+    {
+      "path": "pm-execution/commands/stakeholder-map.md",
+      "type": "blob",
+      "size": 3854
+    },
+    {
+      "path": "pm-execution/commands/test-scenarios.md",
+      "type": "blob",
+      "size": 2868
+    },
+    {
+      "path": "pm-execution/commands/transform-roadmap.md",
+      "type": "blob",
+      "size": 3433
+    },
+    {
+      "path": "pm-execution/commands/write-prd.md",
+      "type": "blob",
+      "size": 3971
+    },
+    {
+      "path": "pm-execution/commands/write-stories.md",
+      "type": "blob",
+      "size": 3916
+    },
+    {
+      "path": "pm-execution/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/brainstorm-okrs",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/brainstorm-okrs/SKILL.md",
+      "type": "blob",
+      "size": 4341
+    },
+    {
+      "path": "pm-execution/skills/create-prd",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/create-prd/SKILL.md",
+      "type": "blob",
+      "size": 3551
+    },
+    {
+      "path": "pm-execution/skills/dummy-dataset",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/dummy-dataset/SKILL.md",
+      "type": "blob",
+      "size": 3930
+    },
+    {
+      "path": "pm-execution/skills/job-stories",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/job-stories/SKILL.md",
+      "type": "blob",
+      "size": 2969
+    },
+    {
+      "path": "pm-execution/skills/outcome-roadmap",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/outcome-roadmap/SKILL.md",
+      "type": "blob",
+      "size": 3601
+    },
+    {
+      "path": "pm-execution/skills/pre-mortem",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/pre-mortem/SKILL.md",
+      "type": "blob",
+      "size": 4082
+    },
+    {
+      "path": "pm-execution/skills/prioritization-frameworks",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/prioritization-frameworks/SKILL.md",
+      "type": "blob",
+      "size": 4235
+    },
+    {
+      "path": "pm-execution/skills/release-notes",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/release-notes/SKILL.md",
+      "type": "blob",
+      "size": 2569
+    },
+    {
+      "path": "pm-execution/skills/retro",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/retro/SKILL.md",
+      "type": "blob",
+      "size": 2809
+    },
+    {
+      "path": "pm-execution/skills/sprint-plan",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/sprint-plan/SKILL.md",
+      "type": "blob",
+      "size": 2365
+    },
+    {
+      "path": "pm-execution/skills/stakeholder-map",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/stakeholder-map/SKILL.md",
+      "type": "blob",
+      "size": 2510
+    },
+    {
+      "path": "pm-execution/skills/strategy-red-team",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/strategy-red-team/SKILL.md",
+      "type": "blob",
+      "size": 4515
+    },
+    {
+      "path": "pm-execution/skills/summarize-meeting",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/summarize-meeting/SKILL.md",
+      "type": "blob",
+      "size": 2997
+    },
+    {
+      "path": "pm-execution/skills/test-scenarios",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/test-scenarios/SKILL.md",
+      "type": "blob",
+      "size": 3472
+    },
+    {
+      "path": "pm-execution/skills/user-stories",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/user-stories/SKILL.md",
+      "type": "blob",
+      "size": 2991
+    },
+    {
+      "path": "pm-execution/skills/wwas",
+      "type": "tree"
+    },
+    {
+      "path": "pm-execution/skills/wwas/SKILL.md",
+      "type": "blob",
+      "size": 3086
+    },
+    {
+      "path": "pm-go-to-market",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 512
+    },
+    {
+      "path": "pm-go-to-market/README.md",
+      "type": "blob",
+      "size": 1391
+    },
+    {
+      "path": "pm-go-to-market/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/commands/battlecard.md",
+      "type": "blob",
+      "size": 3797
+    },
+    {
+      "path": "pm-go-to-market/commands/growth-strategy.md",
+      "type": "blob",
+      "size": 4110
+    },
+    {
+      "path": "pm-go-to-market/commands/plan-launch.md",
+      "type": "blob",
+      "size": 4542
+    },
+    {
+      "path": "pm-go-to-market/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/skills/beachhead-segment",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/skills/beachhead-segment/SKILL.md",
+      "type": "blob",
+      "size": 5876
+    },
+    {
+      "path": "pm-go-to-market/skills/competitive-battlecard",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/skills/competitive-battlecard/SKILL.md",
+      "type": "blob",
+      "size": 2886
+    },
+    {
+      "path": "pm-go-to-market/skills/growth-loops",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/skills/growth-loops/SKILL.md",
+      "type": "blob",
+      "size": 5788
+    },
+    {
+      "path": "pm-go-to-market/skills/gtm-motions",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/skills/gtm-motions/SKILL.md",
+      "type": "blob",
+      "size": 7556
+    },
+    {
+      "path": "pm-go-to-market/skills/gtm-strategy",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/skills/gtm-strategy/SKILL.md",
+      "type": "blob",
+      "size": 4047
+    },
+    {
+      "path": "pm-go-to-market/skills/ideal-customer-profile",
+      "type": "tree"
+    },
+    {
+      "path": "pm-go-to-market/skills/ideal-customer-profile/SKILL.md",
+      "type": "blob",
+      "size": 6002
+    },
+    {
+      "path": "pm-market-research",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 574
+    },
+    {
+      "path": "pm-market-research/README.md",
+      "type": "blob",
+      "size": 1559
+    },
+    {
+      "path": "pm-market-research/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/commands/analyze-feedback.md",
+      "type": "blob",
+      "size": 3640
+    },
+    {
+      "path": "pm-market-research/commands/competitive-analysis.md",
+      "type": "blob",
+      "size": 3537
+    },
+    {
+      "path": "pm-market-research/commands/research-users.md",
+      "type": "blob",
+      "size": 4282
+    },
+    {
+      "path": "pm-market-research/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/competitor-analysis",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/competitor-analysis/SKILL.md",
+      "type": "blob",
+      "size": 4814
+    },
+    {
+      "path": "pm-market-research/skills/customer-journey-map",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/customer-journey-map/SKILL.md",
+      "type": "blob",
+      "size": 3268
+    },
+    {
+      "path": "pm-market-research/skills/market-segments",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/market-segments/SKILL.md",
+      "type": "blob",
+      "size": 3623
+    },
+    {
+      "path": "pm-market-research/skills/market-sizing",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/market-sizing/SKILL.md",
+      "type": "blob",
+      "size": 4424
+    },
+    {
+      "path": "pm-market-research/skills/sentiment-analysis",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/sentiment-analysis/SKILL.md",
+      "type": "blob",
+      "size": 3500
+    },
+    {
+      "path": "pm-market-research/skills/user-personas",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/user-personas/SKILL.md",
+      "type": "blob",
+      "size": 3047
+    },
+    {
+      "path": "pm-market-research/skills/user-segmentation",
+      "type": "tree"
+    },
+    {
+      "path": "pm-market-research/skills/user-segmentation/SKILL.md",
+      "type": "blob",
+      "size": 4102
+    },
+    {
+      "path": "pm-marketing-growth",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 542
+    },
+    {
+      "path": "pm-marketing-growth/README.md",
+      "type": "blob",
+      "size": 1206
+    },
+    {
+      "path": "pm-marketing-growth/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/commands/market-product.md",
+      "type": "blob",
+      "size": 3459
+    },
+    {
+      "path": "pm-marketing-growth/commands/north-star.md",
+      "type": "blob",
+      "size": 4017
+    },
+    {
+      "path": "pm-marketing-growth/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/skills/marketing-ideas",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/skills/marketing-ideas/SKILL.md",
+      "type": "blob",
+      "size": 2178
+    },
+    {
+      "path": "pm-marketing-growth/skills/north-star-metric",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/skills/north-star-metric/SKILL.md",
+      "type": "blob",
+      "size": 4152
+    },
+    {
+      "path": "pm-marketing-growth/skills/positioning-ideas",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/skills/positioning-ideas/SKILL.md",
+      "type": "blob",
+      "size": 3002
+    },
+    {
+      "path": "pm-marketing-growth/skills/product-name",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/skills/product-name/SKILL.md",
+      "type": "blob",
+      "size": 2196
+    },
+    {
+      "path": "pm-marketing-growth/skills/value-prop-statements",
+      "type": "tree"
+    },
+    {
+      "path": "pm-marketing-growth/skills/value-prop-statements/SKILL.md",
+      "type": "blob",
+      "size": 3032
+    },
+    {
+      "path": "pm-product-discovery",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 528
+    },
+    {
+      "path": "pm-product-discovery/README.md",
+      "type": "blob",
+      "size": 2822
+    },
+    {
+      "path": "pm-product-discovery/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/commands/brainstorm.md",
+      "type": "blob",
+      "size": 4971
+    },
+    {
+      "path": "pm-product-discovery/commands/discover.md",
+      "type": "blob",
+      "size": 4921
+    },
+    {
+      "path": "pm-product-discovery/commands/interview.md",
+      "type": "blob",
+      "size": 5301
+    },
+    {
+      "path": "pm-product-discovery/commands/setup-metrics.md",
+      "type": "blob",
+      "size": 4448
+    },
+    {
+      "path": "pm-product-discovery/commands/triage-requests.md",
+      "type": "blob",
+      "size": 4483
+    },
+    {
+      "path": "pm-product-discovery/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/analyze-feature-requests",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/analyze-feature-requests/SKILL.md",
+      "type": "blob",
+      "size": 2274
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-experiments-existing",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-experiments-existing/SKILL.md",
+      "type": "blob",
+      "size": 2408
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-experiments-new",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-experiments-new/SKILL.md",
+      "type": "blob",
+      "size": 2538
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-ideas-existing",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-ideas-existing/SKILL.md",
+      "type": "blob",
+      "size": 2951
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-ideas-new",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/brainstorm-ideas-new/SKILL.md",
+      "type": "blob",
+      "size": 2437
+    },
+    {
+      "path": "pm-product-discovery/skills/identify-assumptions-existing",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/identify-assumptions-existing/SKILL.md",
+      "type": "blob",
+      "size": 2102
+    },
+    {
+      "path": "pm-product-discovery/skills/identify-assumptions-new",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/identify-assumptions-new/SKILL.md",
+      "type": "blob",
+      "size": 3227
+    },
+    {
+      "path": "pm-product-discovery/skills/interview-script",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/interview-script/SKILL.md",
+      "type": "blob",
+      "size": 4817
+    },
+    {
+      "path": "pm-product-discovery/skills/metrics-dashboard",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/metrics-dashboard/SKILL.md",
+      "type": "blob",
+      "size": 5754
+    },
+    {
+      "path": "pm-product-discovery/skills/opportunity-solution-tree",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/opportunity-solution-tree/SKILL.md",
+      "type": "blob",
+      "size": 4281
+    },
+    {
+      "path": "pm-product-discovery/skills/prioritize-assumptions",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/prioritize-assumptions/SKILL.md",
+      "type": "blob",
+      "size": 2311
+    },
+    {
+      "path": "pm-product-discovery/skills/prioritize-features",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/prioritize-features/SKILL.md",
+      "type": "blob",
+      "size": 2497
+    },
+    {
+      "path": "pm-product-discovery/skills/summarize-interview",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-discovery/skills/summarize-interview/SKILL.md",
+      "type": "blob",
+      "size": 2036
+    },
+    {
+      "path": "pm-product-strategy",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 596
+    },
+    {
+      "path": "pm-product-strategy/README.md",
+      "type": "blob",
+      "size": 3133
+    },
+    {
+      "path": "pm-product-strategy/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/commands/business-model.md",
+      "type": "blob",
+      "size": 6001
+    },
+    {
+      "path": "pm-product-strategy/commands/market-scan.md",
+      "type": "blob",
+      "size": 4583
+    },
+    {
+      "path": "pm-product-strategy/commands/pricing.md",
+      "type": "blob",
+      "size": 4577
+    },
+    {
+      "path": "pm-product-strategy/commands/strategy.md",
+      "type": "blob",
+      "size": 4214
+    },
+    {
+      "path": "pm-product-strategy/commands/value-proposition.md",
+      "type": "blob",
+      "size": 2836
+    },
+    {
+      "path": "pm-product-strategy/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/ansoff-matrix",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/ansoff-matrix/SKILL.md",
+      "type": "blob",
+      "size": 5684
+    },
+    {
+      "path": "pm-product-strategy/skills/business-model",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/business-model/SKILL.md",
+      "type": "blob",
+      "size": 5784
+    },
+    {
+      "path": "pm-product-strategy/skills/lean-canvas",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/lean-canvas/SKILL.md",
+      "type": "blob",
+      "size": 4860
+    },
+    {
+      "path": "pm-product-strategy/skills/monetization-strategy",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/monetization-strategy/SKILL.md",
+      "type": "blob",
+      "size": 6660
+    },
+    {
+      "path": "pm-product-strategy/skills/pestle-analysis",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/pestle-analysis/SKILL.md",
+      "type": "blob",
+      "size": 4647
+    },
+    {
+      "path": "pm-product-strategy/skills/porters-five-forces",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/porters-five-forces/SKILL.md",
+      "type": "blob",
+      "size": 8185
+    },
+    {
+      "path": "pm-product-strategy/skills/pricing-strategy",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/pricing-strategy/SKILL.md",
+      "type": "blob",
+      "size": 3666
+    },
+    {
+      "path": "pm-product-strategy/skills/product-strategy",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/product-strategy/SKILL.md",
+      "type": "blob",
+      "size": 4833
+    },
+    {
+      "path": "pm-product-strategy/skills/product-vision",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/product-vision/SKILL.md",
+      "type": "blob",
+      "size": 2518
+    },
+    {
+      "path": "pm-product-strategy/skills/startup-canvas",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/startup-canvas/SKILL.md",
+      "type": "blob",
+      "size": 6346
+    },
+    {
+      "path": "pm-product-strategy/skills/swot-analysis",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/swot-analysis/SKILL.md",
+      "type": "blob",
+      "size": 3813
+    },
+    {
+      "path": "pm-product-strategy/skills/value-proposition",
+      "type": "tree"
+    },
+    {
+      "path": "pm-product-strategy/skills/value-proposition/SKILL.md",
+      "type": "blob",
+      "size": 5836
+    },
+    {
+      "path": "pm-toolkit",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/.claude-plugin",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/.claude-plugin/plugin.json",
+      "type": "blob",
+      "size": 556
+    },
+    {
+      "path": "pm-toolkit/README.md",
+      "type": "blob",
+      "size": 1566
+    },
+    {
+      "path": "pm-toolkit/commands",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/commands/draft-nda.md",
+      "type": "blob",
+      "size": 2058
+    },
+    {
+      "path": "pm-toolkit/commands/privacy-policy.md",
+      "type": "blob",
+      "size": 2178
+    },
+    {
+      "path": "pm-toolkit/commands/proofread.md",
+      "type": "blob",
+      "size": 1806
+    },
+    {
+      "path": "pm-toolkit/commands/review-resume.md",
+      "type": "blob",
+      "size": 3157
+    },
+    {
+      "path": "pm-toolkit/commands/tailor-resume.md",
+      "type": "blob",
+      "size": 2514
+    },
+    {
+      "path": "pm-toolkit/skills",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/skills/draft-nda",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/skills/draft-nda/SKILL.md",
+      "type": "blob",
+      "size": 7484
+    },
+    {
+      "path": "pm-toolkit/skills/grammar-check",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/skills/grammar-check/SKILL.md",
+      "type": "blob",
+      "size": 9673
+    },
+    {
+      "path": "pm-toolkit/skills/privacy-policy",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/skills/privacy-policy/SKILL.md",
+      "type": "blob",
+      "size": 10699
+    },
+    {
+      "path": "pm-toolkit/skills/review-resume",
+      "type": "tree"
+    },
+    {
+      "path": "pm-toolkit/skills/review-resume/SKILL.md",
+      "type": "blob",
+      "size": 11301
+    },
+    {
+      "path": "tests",
+      "type": "tree"
+    },
+    {
+      "path": "tests/test_consistency.py",
+      "type": "blob",
+      "size": 7926
+    },
+    {
+      "path": "tests/test_validator.py",
+      "type": "blob",
+      "size": 2066
+    },
+    {
+      "path": "validate_plugins.py",
+      "type": "blob",
+      "size": 17908
+    }
+  ]
+}
