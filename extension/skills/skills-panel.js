@@ -129,7 +129,7 @@ export function useSkill(skill, { statusEl } = {}) {
 
 /** Wire the import form + list inside a container. Idempotent per container:
  * the section re-renders in place (re-imports refresh the list). */
-export function mountSkillsSection(sectionEl) {
+export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
   if (!sectionEl || sectionEl.dataset.skillsMounted === "1") return;
   sectionEl.dataset.skillsMounted = "1";
   const list = sectionEl.querySelector(".skills-list");
@@ -147,7 +147,7 @@ export function mountSkillsSection(sectionEl) {
     if (!url) { status.textContent = "Enter a URL first"; return; }
     importBtn.disabled = true;
     status.textContent = "Importing…";
-    const out = await send("skill.import", { url }).catch(() => ({ ok: false, error: "import failed" }));
+    const out = await sendFn("skill.import", { url }).catch(() => ({ ok: false, error: "import failed" }));
     importBtn.disabled = false;
     if (out?.ok) {
       const fileNote = (out.skill?.fileCount ?? 0) > 1 ? ` (${out.skill.fileCount} files)` : "";
@@ -161,7 +161,263 @@ export function mountSkillsSection(sectionEl) {
     }
   };
   importBtn?.addEventListener("click", doImport);
+
+  // ── Multi-skill discovery + batch import (chrome-agent-platform-kozg.4) ──
+  const discoverBtn = sectionEl.querySelector(".discover-btn");
+  const discoveryCard = sectionEl.querySelector(".discovery-card");
+  const discoverySummary = sectionEl.querySelector(".discovery-summary");
+  const discoveryList = sectionEl.querySelector(".discovery-list");
+  const discoveryActions = sectionEl.querySelector(".discovery-actions");
+  const batchProgress = sectionEl.querySelector(".batch-progress");
+  const commandsList = sectionEl.querySelector(".commands-list");
+  let discovery = null; // the live skill.discover result for this section
+
+  const setProgress = (text) => { if (batchProgress) { batchProgress.hidden = false; batchProgress.textContent = text; } };
+
+  /** Render the discovery preview card: the summary line + one checkbox row
+   * per discovered skill/command (checked by default = import all). */
+  const renderDiscovery = (d) => {
+    if (!discoveryCard) return;
+    discovery = d;
+    discoveryCard.hidden = false;
+    if (discoverySummary) discoverySummary.textContent = discoveryLine(d);
+    if (discoveryList) {
+      discoveryList.replaceChildren();
+      const addRow = (entry, kind) => {
+        const label = document.createElement("label");
+        label.className = "discovery-row";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.checked = true;
+        box.dataset.kind = kind;
+        box.dataset.id = String(entry?.id ?? "");
+        label.append(box);
+        const name = document.createElement("span");
+        name.textContent = entry?.name ?? entry?.id ?? "(unnamed)";
+        const kindTag = document.createElement("span");
+        kindTag.className = "discovery-kind";
+        kindTag.textContent = kind === "command" ? "command" : (entry?.plugin ? `plugin: ${entry.plugin}` : "skill");
+        const desc = document.createElement("span");
+        desc.className = "discovery-desc";
+        desc.textContent = String(entry?.description ?? "").slice(0, 160);
+        label.append(name, kindTag, desc);
+        discoveryList.append(label);
+      };
+      for (const s of (Array.isArray(d?.skills) ? d.skills : [])) addRow(s, "skill");
+      for (const c of (Array.isArray(d?.commands) ? d.commands : [])) addRow(c, "command");
+    }
+    if (discoveryActions) discoveryActions.hidden = false;
+  };
+
+  const collectSelection = () => {
+    const ids = [];
+    discoveryList?.querySelectorAll('input[type="checkbox"]:checked').forEach((box) => ids.push(box.dataset.id));
+    return selectEntriesByIds(discovery, ids);
+  };
+
+  const doDiscover = async () => {
+    const url = urlInput?.value?.trim();
+    if (!url) { if (status) status.textContent = "Enter a GitHub URL first"; return; }
+    if (discoverBtn) discoverBtn.disabled = true;
+    if (discoveryCard) discoveryCard.hidden = true;
+    if (status) status.textContent = "Discovering skills and commands…";
+    try {
+      const d = await sendFn("skill.discover", { url });
+      if (d?.ok === false) throw new Error(d?.error ?? "discovery failed");
+      if (discoveryCard) renderDiscovery(d);
+      if (status) status.textContent = "";
+    } catch (e) {
+      if (status) status.textContent = `Could not discover skills in that repository - check the URL is a GitHub repo, then try again. (${String(e?.message ?? e)})`;
+    } finally {
+      if (discoverBtn) discoverBtn.disabled = false;
+    }
+  };
+  discoverBtn?.addEventListener("click", doDiscover);
+
+  const renderBatchProgress = (p) => {
+    const pct = p.total > 0 ? Math.round((p.done / p.total) * 100) : 0;
+    setProgress(`Imported ${p.done} of ${p.total} (${pct}%)${p.errors ? ` — ${p.errors} failed` : ""}…`);
+  };
+
+  const doBatchImport = async (selection) => {
+    const total = (selection.skills?.length ?? 0) + (selection.commands?.length ?? 0);
+    if (total === 0) { setProgress("Nothing selected to import"); return; }
+    if (importBtn) importBtn.disabled = true;
+    if (discoverBtn) discoverBtn.disabled = true;
+    renderBatchProgress({ done: 0, total, errors: 0 });
+    const res = await runBatchImport(selection, {
+      send: sendFn,
+      chunkSize: 4,
+      onProgress: renderBatchProgress,
+    });
+    if (importBtn) importBtn.disabled = false;
+    if (discoverBtn) discoverBtn.disabled = false;
+    const note = res.errors.length
+      ? ` — ${res.errors.length} failed: ${res.errors.map((e) => `${e.id} (${String(e.error).slice(0, 60)})`).join("; ")}`
+      : "";
+    setProgress(`Imported ${res.imported.skills.length} skills and ${res.imported.commands.length} commands${note}`);
+    if (!res.errors.length) {
+      urlInput.value = "";
+      if (discoveryCard) discoveryCard.hidden = true;
+    }
+    await refresh();
+    await renderCommands();
+  };
+
+  const importAllBtn = sectionEl.querySelector(".import-all-btn");
+  const importSelectedBtn = sectionEl.querySelector(".import-selected-btn");
+  importAllBtn?.addEventListener("click", () => doBatchImport(selectAllEntries(discovery)));
+  importSelectedBtn?.addEventListener("click", () => doBatchImport(collectSelection()));
+
+  // ── Installed commands (command.list / command.delete) ──────────────────
+  const renderCommands = async () => {
+    if (!commandsList) return;
+    const res = await sendFn("command.list").catch(() => ({ commands: [] }));
+    const commands = Array.isArray(res?.commands) ? res.commands : [];
+    commandsList.replaceChildren();
+    if (commands.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No commands imported yet.";
+      commandsList.append(empty);
+      return;
+    }
+    const head = document.createElement("div");
+    head.className = "intent-head";
+    head.textContent = "commands";
+    commandsList.append(head);
+    for (const cmd of commands) {
+      const view = commandView(cmd);
+      const wrap = document.createElement("div");
+      wrap.className = "recipe";
+      const row = document.createElement("capability-row");
+      row.setAttribute("name", view.name);
+      row.setAttribute("description", view.description || "imported command");
+      row.setAttribute("action", "none");
+      const details = document.createElement("details");
+      details.className = "how";
+      const summary = document.createElement("summary");
+      summary.textContent = "How it works";
+      const how = document.createElement("p");
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = view.ref;
+      how.textContent = view.description || `Imported command ${view.name}.`;
+      details.append(summary, how, hint);
+      const del = document.createElement("button");
+      del.className = "command-delete";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        del.disabled = true;
+        const res2 = await sendFn("command.delete", { id: view.id }).catch(() => ({ ok: false }));
+        if (res2?.ok) await renderCommands();
+        else del.disabled = false;
+      });
+      wrap.append(row, details, del);
+      commandsList.append(wrap);
+    }
+  };
+
+  const refreshAll = () => { refresh(); renderCommands(); };
+  sectionEl._refreshSkills = refreshAll;
+
   urlInput?.addEventListener("keydown", (e) => { if (e.key === "Enter") doImport(); });
 
   refresh();
+  renderCommands();
+}
+
+// ── Multi-skill discovery + batch import + installed commands
+// (chrome-agent-platform-kozg.4). The SW routes (skill.discover /
+// skill.importBatch / command.list / command.delete) landed with kozg.1/.2;
+// this is the panel surface. The decision logic is pure and exported so the
+// committed tests execute it (the uodl rule: a pin on the source text proves
+// nothing).
+
+/** The preview-card summary line for a skill.discover result. */
+export function summarizeDiscovery(d) {
+  const stats = d?.stats ?? {};
+  const n = (v, fallback) => {
+    const x = Number(v);
+    return Number.isFinite(x) && x >= 0 ? x : fallback;
+  };
+  const pluginCount = n(stats.pluginCount, (d?.plugins ?? []).length);
+  const skillCount = n(stats.skillCount, (d?.skills ?? []).length);
+  const commandCount = n(stats.commandCount, (d?.commands ?? []).length);
+  const repo = d?.owner && d?.repo ? `${d.owner}/${d.repo}` : String(d?.repo ?? "repository");
+  return { pluginCount, skillCount, commandCount, repo };
+}
+
+export function discoveryLine(d) {
+  const s = summarizeDiscovery(d);
+  return `Found ${s.pluginCount} plugin${s.pluginCount === 1 ? "" : "s"}, ${s.skillCount} skill${s.skillCount === 1 ? "" : "s"}, ${s.commandCount} command${s.commandCount === 1 ? "" : "s"} in ${s.repo}`;
+}
+
+/** The batch selection for "import all": every discovered entry. */
+export function selectAllEntries(d) {
+  return { skills: [...(d?.skills ?? [])], commands: [...(d?.commands ?? [])] };
+}
+
+/** The batch selection narrowed to the checked ids (a skill/command id set). */
+export function selectEntriesByIds(d, ids) {
+  const set = new Set((Array.isArray(ids) ? ids : []).map(String));
+  const pick = (list) => (Array.isArray(list) ? list : []).filter((e) => set.has(String(e?.id ?? "")));
+  return { skills: pick(d?.skills), commands: pick(d?.commands) };
+}
+
+/** Split a batch selection into bounded chunks so the panel can report real
+ * progress between network round trips (each chunk is one skill.importBatch
+ * call; the SW installs its items sequentially inside the call). */
+export function chunkBatchSelection(sel, size = 4) {
+  const sizeN = Number.isSafeInteger(size) && size > 0 ? size : 4;
+  const skills = Array.isArray(sel?.skills) ? sel.skills : [];
+  const commands = Array.isArray(sel?.commands) ? sel.commands : [];
+  // A flat typed list sliced across the skill/command boundary keeps every
+  // chunk a valid skill.importBatch payload.
+  const flat = [
+    ...skills.map((s) => ({ kind: "skill", entry: s })),
+    ...commands.map((c) => ({ kind: "command", entry: c })),
+  ];
+  const chunks = [];
+  for (let i = 0; i < flat.length; i += sizeN) {
+    const part = flat.slice(i, i + sizeN);
+    chunks.push({
+      skills: part.filter((x) => x.kind === "skill").map((x) => x.entry),
+      commands: part.filter((x) => x.kind === "command").map((x) => x.entry),
+    });
+  }
+  return { chunks, total: flat.length };
+}
+
+/** The batch import driver: bounded chunks, real progress between them,
+ * per-item error accumulation (the SW reports per-item errors in its result). */
+export async function runBatchImport(sel, { send: sendFn = send, chunkSize = 4, onProgress = null } = {}) {
+  const { chunks, total } = chunkBatchSelection(sel, chunkSize);
+  let done = 0;
+  const imported = { skills: [], commands: [] };
+  const errors = [];
+  for (const chunk of chunks) {
+    const res = await sendFn("skill.importBatch", { skills: chunk.skills, commands: chunk.commands })
+      .catch((e) => ({ ok: false, error: String(e?.message ?? e), skills: [], commands: [], errors: [{ error: String(e?.message ?? e) }] }));
+    for (const s of (Array.isArray(res?.skills) ? res.skills : [])) imported.skills.push(s);
+    for (const c of (Array.isArray(res?.commands) ? res.commands : [])) imported.commands.push(c);
+    for (const e of (Array.isArray(res?.errors) ? res.errors : [])) errors.push(e);
+    done += chunk.skills.length + chunk.commands.length;
+    if (total > 0) onProgress?.({ done, total, errors: errors.length });
+  }
+  return { ok: errors.length === 0 && done === total, imported, errors, done, total };
+}
+
+/** The view model for one installed command row (command.list entry). */
+export function commandView(cmd) {
+  const name = String(cmd?.name ?? cmd?.id ?? "command");
+  const hint = String(cmd?.argumentHint ?? "").trim();
+  const description = String(cmd?.description ?? "").trim();
+  return {
+    id: String(cmd?.id ?? name),
+    name,
+    hint,
+    description,
+    ref: `/${name}${hint ? " " + hint : ""}`,
+  };
 }

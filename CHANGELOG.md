@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.334] — 2026-09-08
+- multi-skill discovery preview, batch import with progress, and an installed-commands section in the Skills panel
+
 ## [0.3.333] — 2026-09-08
 - fix review findings for command autocomplete and task starters
 
