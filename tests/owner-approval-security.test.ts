@@ -101,7 +101,7 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // the full pending-approval flow (isOwnerDirectApproval requires an
   // extension/owner-options principal on a real UI document). FLAGGED for the
   // independent permission-model review.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "named-agent.update", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {

@@ -29,6 +29,7 @@ The hub orchestrator. Creates + manages the agents (the management tool suite).
 - `/agent:<name> <task>` — delegate a task to the agent (it runs with its context/memory/skills).
 - Assign a task to an agent, or turn a task into an agent (a one-shot task becomes a persistent teammate).
 - The sidebar shows the agents (avatars + names); clicking one opens its conversation/capabilities/run-log.
+- Edit → Save (`named-agent.update`) is owner-direct from an extension UI or Settings document with browser-supplied document identity. A model-initiated edit retains its separate run principal and waits for the in-context approval card; message-body identity fields grant nothing.
 
 ## Unified agent access (LANDED 2026-08-18 — CAP-FB-20260818-AGENT-ACCESS-01)
 One coherent system — not three one-offs — gives the user a view of the agents

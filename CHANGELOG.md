@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.339] — 2026-09-08
+- apply owner edits directly to named agents while preserving model approval
+
 ## [0.3.338] — 2026-09-08
 - fix CapabilityRow run listener collision and thread onDelete into recipeCard
 

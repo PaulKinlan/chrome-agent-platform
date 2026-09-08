@@ -2849,9 +2849,8 @@ async function openAgentConfig() {
     initialMcpServers: agent.mcpServers ?? [],
     initialTools: agent.tools ?? null,
     onSave: async (v) => {
-      // Schedule FIRST: the owner's schedule change applies through the
-      // owner-direct schedule path even when the persona edit pends an
-      // approval (named-agent.update is not owner-direct — pre-existing).
+      // Schedule FIRST: report its failure before attempting the persona edit.
+      // Both saves are owner-direct for this extension UI document.
       const prev = agent.schedule?.periodInMinutes ?? null;
       const next = v.schedule?.periodInMinutes ?? null;
       let scheduleNote = "";

@@ -129,6 +129,9 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "asset.restore",
   "agent.delete",
   "named-agent.delete",
+  // The owner's own Edit dialog Save IS the approval; model edits still pay
+  // the pending approval card through their separate model principal.
+  "named-agent.update",
   // The owner's own schedule edit in the agent dialog IS the approval (same
   // owner-direct principle as task.pause/resume/update below).
   "named-agent.set-schedule",
