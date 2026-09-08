@@ -245,6 +245,55 @@ Deno.test("installBatchSkillsAndCommands handles partial failures with granular 
   assertStringIncludes(result.errors[0].error, "500");
 });
 
+Deno.test("installBatchSkillsAndCommands fetches body for discovered skill with files array and stores in OPFS", async () => {
+  const mem = fakeMemory();
+  const fs = fakeSkillFiles();
+
+  const mockFetcher = async (url) => {
+    if (url === "https://raw.githubusercontent.com/test/repo/main/pm-ai-shipping/skills/shipping-artifacts/SKILL.md") {
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ "content-length": "60" }),
+        arrayBuffer: async () => new TextEncoder().encode("---\nname: shipping-artifacts\n---\n# Shipping Artifacts Body").buffer,
+      };
+    }
+    return { ok: false, status: 404 };
+  };
+
+  // Discovered skill structure from discoverRepoSkillsAndCommands:
+  // files is an Array of filenames (e.g. ["SKILL.md", "scripts/run.py"]), NOT an object map.
+  const batch = {
+    fetch: mockFetcher,
+    skills: [
+      {
+        id: "pm-ai-shipping-shipping-artifacts",
+        name: "shipping-artifacts",
+        description: "The durable documentation set",
+        dir: "pm-ai-shipping/skills/shipping-artifacts",
+        downloadUrl: "https://raw.githubusercontent.com/test/repo/main/pm-ai-shipping/skills/shipping-artifacts/SKILL.md",
+        files: ["SKILL.md", "scripts/run.py"],
+      },
+    ],
+  };
+
+  const result = await installBatchSkillsAndCommands(mem, batch, fs);
+  assertEquals(result.ok, true);
+  assertEquals(result.skills.length, 1);
+  assertEquals(result.errors.length, 0);
+
+  // Verify memory index has positive promptBytes and name
+  const installed = result.skills[0];
+  assertEquals(installed.id, "pm-ai-shipping-shipping-artifacts");
+  assert(installed.promptBytes > 0, `promptBytes should be > 0, got ${installed.promptBytes}`);
+
+  // Verify OPFS files map has SKILL.md with actual body (NOT written as index "0" or "1")
+  const opfsMap = fs._files.get("pm-ai-shipping-shipping-artifacts");
+  assert(opfsMap, "OPFS files must exist for the installed skill");
+  assertStringIncludes(opfsMap["SKILL.md"], "# Shipping Artifacts Body");
+  assertEquals(opfsMap["0"], undefined, "OPFS files must not treat array indices as file names");
+});
+
 Deno.test("service-worker source declares skill.discover, skill.importBatch, command.list, command.delete", async () => {
   const sw = await Deno.readTextFile("extension/background/service-worker.js");
   assert(sw.includes('async "skill.discover"('), "sw declares skill.discover");

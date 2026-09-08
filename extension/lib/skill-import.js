@@ -284,7 +284,9 @@ export async function installImportedSkill(memory, fetched, fileStore = null) {
   const name = fetched.meta?.name || fetched.name || "imported-skill";
   const id = fetched.id || slugifySkillId(name);
   const files =
-    typeof fetched.files === "object" && fetched.files ? fetched.files : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
+    fetched.files && typeof fetched.files === "object" && !Array.isArray(fetched.files)
+      ? fetched.files
+      : { "SKILL.md": fetched.files?.["SKILL.md"] ?? "" };
   const promptBytes = new TextEncoder().encode(String(files["SKILL.md"] ?? "")).byteLength;
   const store = fileStore ?? (await import("./skill-files.js"));
   const { fileCount, totalBytes } = await store.writeSkillFiles(id, files);
@@ -608,7 +610,8 @@ export async function installBatchSkillsAndCommands(memory, batch = {}, fileStor
   for (const s of skills) {
     try {
       let fetched = s;
-      if ((!s.files || typeof s.files !== "object") && s.downloadUrl) {
+      const noMap = !s.files || Array.isArray(s.files) || typeof s.files !== "object" || !s.files["SKILL.md"];
+      if (noMap && s.downloadUrl) {
         const { meta, body } = await fetchBody(s);
         fetched = { id: s.id, files: { "SKILL.md": body }, meta: { name: s.name || meta.name, description: s.description || meta.description, author: s.author || meta.author } };
       }

@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.331] — 2026-09-08
+- fix review findings for batch skill and command storage []
+
 ## [0.3.330] — 2026-09-08
-- Batch skill and command storage and indexing in OPFS/memory []
+- Batch skill and command storage and indexing in OPFS/memory
 
 ## [0.3.329] — 2026-09-08
 - Installed skills and prompt commands can now be imported together in batch with full offline storage
