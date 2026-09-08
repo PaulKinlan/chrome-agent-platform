@@ -8056,20 +8056,21 @@ class AgentComposer extends Component {
         input.focus();
         return;
       }
-      if (item.kind === "command") {
-        const textToInsert = item.insertText || item.prompt || `/${item.id}`;
-        input.setRangeText(textToInsert, token.start, token.end, "end");
-        this._hidePopup();
-        this._recordResolvedSpan(token.start, token.start + textToInsert.length, textToInsert);
-        this._autoGrow();
-        input.focus();
-        return;
-      }
       if (!token.ns) {
         // A namespace was picked → insert the prefix + reopen with its sub-items.
         input.setRangeText(`/${item.ns}:`, token.start, token.end, "end");
         this._hidePopup();
         this._onComposerInput();
+        input.focus();
+        return;
+      }
+      if (item.kind === "command") {
+        const textToInsert = item.insertText || item.prompt || `/${item.id}`;
+        input.setRangeText(textToInsert, token.start, token.end, "end");
+        this._hidePopup();
+        this._recordResolvedSpan(token.start, token.start + textToInsert.length, textToInsert);
+        this._emit("command", { namespace: item.ns || "command", item });
+        this._autoGrow();
         input.focus();
         return;
       }

@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.333] — 2026-09-08
-- Surface imported commands in composer slash-autocomplete and task-starter UI
+- fix review findings for command autocomplete and task starters
 
 ## [0.3.332] — 2026-09-08
 - Surface imported commands in composer slash-autocomplete and task-starter UI

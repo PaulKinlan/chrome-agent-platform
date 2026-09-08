@@ -1,4 +1,51 @@
 // Composer slash-command audit + Chrome-backed picker contracts.
+// @ts-nocheck
+class FakeNode {
+  constructor(tag) { this.tagName = tag; this.children = []; this.parent = null; this.listeners = {}; this.attributes = {}; this.dataset = {}; this.textContent = ""; this.className = ""; this.id = ""; this.hidden = false; this.type = ""; }
+  setAttribute(n, v) { this.attributes[n] = String(v); }
+  getAttribute(n) { return this.attributes[n] ?? null; }
+  removeAttribute(n) { delete this.attributes[n]; }
+  append(...kids) { for (const k of kids) { k.parent = this; this.children.push(k); } }
+  appendChild(k) { k.parent = this; this.children.push(k); return k; }
+  replaceChildren(...kids) { this.children = []; for (const k of kids) { k.parent = this; this.children.push(k); } }
+  addEventListener(t, f) { (this.listeners[t] ??= []).push(f); }
+  dispatch(t, e = {}) { e.target ??= this; e.preventDefault ??= () => {}; for (const f of this.listeners[t] ?? []) f(e); }
+  getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0, right: 0, bottom: 0 }; }
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+  scrollIntoView() {}
+}
+const registry = new Map();
+globalThis.HTMLElement = class {
+  attachShadow() { return { innerHTML: "", querySelector: () => null, querySelectorAll: () => [], appendChild() {} }; }
+  getAttribute() { return null; }
+  hasAttribute() { return false; }
+  setAttribute() {}
+  removeAttribute() {}
+  dispatchEvent() { return true; }
+  addEventListener() {}
+  querySelector() { return null; }
+  querySelectorAll() { return []; }
+};
+globalThis.customElements = {
+  define(name, cls) { registry.set(name, cls); },
+  get(name) { return registry.get(name); },
+};
+globalThis.window = globalThis;
+globalThis.CustomEvent = class { constructor(type, init = {}) { this.type = type; this.detail = init.detail ?? {}; } };
+globalThis.matchMedia = () => ({ matches: false });
+globalThis.MutationObserver = class { observe() {} disconnect() {} takeRecords() { return []; } };
+globalThis.chrome = { runtime: { lastError: null, sendMessage: () => {} }, tabs: { query: async () => [] } };
+globalThis.document = {
+  head: new FakeNode("head"), body: new FakeNode("body"), documentElement: new FakeNode("html"),
+  createElement: (tag) => new FakeNode(tag),
+  getElementById: () => null,
+  addEventListener: () => {}, removeEventListener: () => {},
+};
+
+await import("../extension/shared/components.js");
+const AgentComposer = registry.get("agent-composer");
+
 import {
   COMMAND_NAMESPACES,
   loadComposerCommandItems,
@@ -371,11 +418,73 @@ Deno.test("resolveComposerCommandSelection returns the template prompt text for 
   });
 });
 
-Deno.test("components.js wires /command and /cmd to imported command picker and inserts cleanly", async () => {
-  const source = await Deno.readTextFile(
-    new URL("../extension/shared/components.js", import.meta.url),
-  );
-  assertMatch(source, /ns === "command" \|\| ns === "cmd"/);
-  assertMatch(source, /item\.kind === "command"/);
-  assertMatch(source, /textToInsert/);
+Deno.test("AgentComposer._select correctly handles /command namespace selection and command template insertion", async () => {
+  const composer = new AgentComposer();
+
+  function makeInput(initialValue = "") {
+    const input = new FakeNode("textarea");
+    input.value = initialValue;
+    input.selectionStart = initialValue.length;
+    input.selectionEnd = initialValue.length;
+    input.focus = () => {};
+    input.setRangeText = function (replacement, start, end, mode = "preserve") {
+      const cur = this.value;
+      const before = cur.slice(0, start);
+      const after = cur.slice(end);
+      this.value = before + replacement + after;
+      if (mode === "end") this.selectionStart = this.selectionEnd = before.length + replacement.length;
+      else this.selectionStart = this.selectionEnd = before.length + (this.selectionStart - start);
+    };
+    return input;
+  }
+
+  // 1. Picking the /command namespace when token.ns is empty ("/")
+  // Must insert "/command:", close popup, and trigger _onComposerInput()
+  let onInputCalled = false;
+  let emitted = null;
+  const input1 = makeInput("/");
+  composer._input = input1;
+  composer._popup = new FakeNode("div");
+  composer._popupItems = [{ id: "cmd:command", label: "/command", kind: "command", ns: "command" }];
+  composer._popupToken = { type: "command", start: 0, end: 1, ns: "", arg: "" };
+  composer._onComposerInput = () => { onInputCalled = true; };
+  composer._autoGrow = () => {};
+  composer._recordResolvedSpan = () => {};
+  composer._emit = (ev, d) => { emitted = { ev, d }; };
+
+  composer._select(0);
+  assertEquals(input1.value, "/command:", "picking namespace from / must set /command: (not /cmd:command)");
+  assertEquals(onInputCalled, true, "_onComposerInput() must be triggered to load command sub-items");
+  assertEquals(composer._popup.hidden, true, "popup must be hidden after picking namespace");
+
+  // 2. Picking a command leaf item when token.ns is "command"
+  // Must insert prompt template, emit "command", and record span
+  let spanRecorded = null;
+  composer._recordResolvedSpan = (start, end, text) => { spanRecorded = { start, end, text }; };
+  const input2 = makeInput("/command:ship");
+  composer._input = input2;
+  const commandItem = {
+    id: "command:pm-ai-shipping-ship-check",
+    kind: "command",
+    ns: "command",
+    insertText: "Review $ARGUMENTS for safety and shipping readiness",
+    prompt: "Review $ARGUMENTS for safety and shipping readiness",
+  };
+  composer._popupItems = [commandItem];
+  composer._popupToken = { type: "command", start: 0, end: 13, ns: "command", arg: "ship" };
+
+  composer._select(0);
+  assertEquals(input2.value, "Review $ARGUMENTS for safety and shipping readiness", "command template must be inserted");
+  assertEquals(emitted, {
+    ev: "command",
+    d: {
+      namespace: "command",
+      item: commandItem,
+    },
+  }, "command event must be emitted with namespace and item");
+  assertEquals(spanRecorded, {
+    start: 0,
+    end: "Review $ARGUMENTS for safety and shipping readiness".length,
+    text: "Review $ARGUMENTS for safety and shipping readiness",
+  });
 });

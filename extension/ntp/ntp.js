@@ -4013,10 +4013,12 @@ async function refreshCommandStarters() {
   try {
     const res = await send("command.list").catch(() => ({}));
     const commands = Array.isArray(res?.commands) ? res.commands : [];
+    const defaultChips = ["Group my tabs by topic", "Summarise this page", "Watch this price"];
     if (commands.length > 0) {
       const commandChips = commands.slice(0, 3).map((c) => `/${c.name}`);
-      const defaultChips = ["Group my tabs by topic", "Summarise this page", "Watch this price"];
       exampleChips.setAttribute("chips", [...commandChips, ...defaultChips].slice(0, 6).join("|"));
+    } else {
+      exampleChips.setAttribute("chips", defaultChips.join("|"));
     }
   } catch { /* best effort */ }
 }
