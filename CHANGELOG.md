@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.327] — 2026-09-08
+- the background-agent delete check now finds its browser on any machine, and says so plainly when there is none
+
 ## [0.3.326] — 2026-09-08
 - main-repair: the substring-honesty R4 sentinel follows lrok's re-anchor
 

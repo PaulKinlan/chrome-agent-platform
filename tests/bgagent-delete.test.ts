@@ -7,6 +7,7 @@
 // enabled state derives from the task store), never the raw recipe id.
 
 import { assert, assertMatch, assertNotMatch, assertEquals } from "jsr:@std/assert@1";
+import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
 
 const registry = new Map();
 
@@ -186,19 +187,49 @@ Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", 
   );
 });
 
-Deno.test("bgagent delete: the real-browser delete journey (loaded extension, real clicks)", async () => {
-  // Skips cleanly where Chrome for Testing is absent (hermetic CI); runs for
-  // real in this environment (the dispatch gate builds dist first).
-  const CHROME = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
-  let chrome = false;
-  try { await Deno.stat(CHROME); chrome = true; } catch { /* absent */ }
-  if (!chrome) return;
-  const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["run", "-A", new URL("../scripts/kat-bgagent-delete.ts", import.meta.url).pathname],
-    stdout: "piped", stderr: "piped",
-  });
-  const out = await cmd.output();
-  const log = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
-  assert(out.success, `the delete journey must pass:\n${log}`);
-  assert(/FAIL:/.test(log) === false, `no journey check may fail:\n${log}`);
+// The real-browser journey needs Chrome for Testing, resolved at MODULE LOAD from the
+// puppeteer cache glob (scripts/lib/chrome-for-testing.ts) — never an absolute,
+// version-pinned path. The pin this replaced existed on exactly one machine, so on every
+// other checkout the `if (!chrome) return;` below it made this gate report PASS having
+// asserted nothing: AGENTS.md "Test honesty" mode 5, CONDITIONAL DEATH. Resolving during
+// load rather than inside the body is what lets a box with no browser report the test as
+// IGNORED — a visible line in the runner's tally — instead of a green that ran nothing.
+const CHROME_FOR_TESTING = resolveChromeForTesting();
+
+// The journey's own check count (11 `check()` calls in the harness at the time of
+// writing). A FLOOR, not an equality: adding checks is fine, losing them is a coverage
+// regression that `out.success` cannot catch, because a harness that stopped issuing
+// checks after the third one still exits 0 when nothing it did issue failed.
+const JOURNEY_CHECK_FLOOR = 11;
+
+Deno.test({
+  name: "bgagent delete: the real-browser delete journey (loaded extension, real clicks)",
+  ignore: CHROME_FOR_TESTING === null,
+  fn: async () => {
+    assert(
+      CHROME_FOR_TESTING !== null,
+      "no Chrome for Testing resolved — this journey must be reported ignored, never run against a missing browser",
+    );
+    // The harness resolves the same glob itself, so the gate and the browser it drives
+    // cannot disagree about which Chrome for Testing exists on this box.
+    const cmd = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", new URL("../scripts/kat-bgagent-delete.ts", import.meta.url).pathname],
+      stdout: "piped", stderr: "piped",
+    });
+    const out = await cmd.output();
+    const log = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
+    assert(out.success, `the delete journey must pass (Chrome for Testing: ${CHROME_FOR_TESTING}):\n${log}`);
+    assert(/FAIL:/.test(log) === false, `no journey check may fail:\n${log}`);
+    // The tally is the proof the journey RAN. A browser that never loaded the extension
+    // fails above, but a harness that quietly stopped checking would otherwise still
+    // print "0 failed" and exit 0 — a skip that looks like a pass.
+    const tally = /(\d+) passed, (\d+) failed/.exec(log);
+    assert(tally !== null, `the journey must print its tally:\n${log}`);
+    assertEquals(Number(tally[2]), 0, `the journey reported failures:\n${log}`);
+    assert(
+      Number(tally[1]) >= JOURNEY_CHECK_FLOOR,
+      `the journey ran ${tally[1]} checks, below the ${JOURNEY_CHECK_FLOOR} it owns — a check went missing ` +
+      `(Chrome for Testing: ${CHROME_FOR_TESTING}):\n${log}`,
+    );
+  },
 });
