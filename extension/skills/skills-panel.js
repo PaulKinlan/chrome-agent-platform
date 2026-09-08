@@ -193,6 +193,7 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
         box.dataset.id = String(entry?.id ?? "");
         label.append(box);
         const name = document.createElement("span");
+        name.className = "discovery-name";
         name.textContent = entry?.name ?? entry?.id ?? "(unnamed)";
         const kindTag = document.createElement("span");
         kindTag.className = "discovery-kind";

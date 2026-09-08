@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.336] — 2026-09-08
+- align discovery preview checkbox and label vertically
+
+## [0.3.335] — 2026-09-08
+- The skills discovery preview now aligns checkboxes and labels cleanly
+
 ## [0.3.334] — 2026-09-08
 - multi-skill discovery preview, batch import with progress, and an installed-commands section in the Skills panel
 

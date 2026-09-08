@@ -1577,12 +1577,35 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 .discovery-summary { font-weight: 600; margin-bottom: 6px; }
 .discovery-row {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
-  align-items: baseline;
-  padding: 2px 0;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: var(--text-sm, 13px);
+  line-height: 1.4;
 }
-.discovery-kind { color: var(--muted, #9aa); min-width: 90px; }
-.discovery-desc { color: var(--muted, #9aa); min-width: 0; overflow-wrap: anywhere; }
+.discovery-row input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  inline-size: 16px;
+  block-size: 16px;
+  accent-color: var(--accent, #0e6e63);
+}
+.discovery-name {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.discovery-kind {
+  color: var(--muted, #9aa);
+  font-size: var(--text-xs, 11px);
+  min-width: 70px;
+  flex-shrink: 0;
+}
+.discovery-desc {
+  color: var(--muted, #9aa);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .discovery-actions { display: flex; gap: 8px; margin-top: 8px; }
 .batch-progress { margin: 6px 0; }

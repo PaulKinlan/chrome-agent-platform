@@ -183,6 +183,11 @@ Deno.test("kozg.4: mount — Discover renders the preview card; Import all batch
   assertEquals(ui.discoverySummary.textContent, "Found 2 plugins, 3 skills, 1 command in phuryn/pm-skills");
   const boxes = ui.discoveryList.querySelectorAll('input[type="checkbox"]');
   assertEquals(boxes.length, 4, "one checkbox per discovered skill+command");
+  // The rows attach .discovery-name with the entry name
+  const names = (ui.discoveryList.children as any[])
+    .map((lbl: any) => lbl.children.find((c: any) => c.className === "discovery-name")?.textContent)
+    .filter(Boolean);
+  assertEquals(names.sort(), ["review", "standup", "standup", "triage"]);
 
   // 2. Import all: chunked batches, progress text, commands rendered after.
   await ui.importAllBtn.dispatch("click");
