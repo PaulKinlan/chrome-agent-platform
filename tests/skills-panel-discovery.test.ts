@@ -203,10 +203,11 @@ Deno.test("kozg.4: mount — Discover renders the preview card; Import all batch
   assert(text.includes("standup"), `the installed command renders in the commands section: ${text.slice(0, 200)}`);
 
   // 4. Delete removes via command.delete and refreshes the list.
-  const delBtn = (ui.commandsList.children as any[]).flatMap((c: any) => c.children).find((k: any) => k.textContent === "Delete");
-  assert(delBtn, "each installed command row carries a Delete control");
+  const commandRow = (ui.commandsList.children as any[]).flatMap((c: any) => c.children).find((k: any) => k.tag === "capability-row");
+  assert(commandRow, "each installed command row carries a capability-row");
+  assertEquals(commandRow.getAttribute("action"), "use-delete", "command row uses use-delete action");
   const before = calls.filter((c) => c.type === "command.delete").length;
-  await delBtn.dispatch("click");
+  await commandRow.dispatch("delete");
   await new Promise((r) => setTimeout(r, 10));
   assertEquals(calls.filter((c) => c.type === "command.delete").length, before + 1, "command.delete was sent");
 });

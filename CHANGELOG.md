@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.337] — 2026-09-08
+- integrate Delete action on imported skills and commands in capability-row
+
 ## [0.3.336] — 2026-09-08
-- align discovery preview checkbox and label vertically
+- Align discovery preview checkboxes vertically and integrate Delete action next to Use on imported items
 
 ## [0.3.335] — 2026-09-08
 - The skills discovery preview now aligns checkboxes and labels cleanly

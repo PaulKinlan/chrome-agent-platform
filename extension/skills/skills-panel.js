@@ -22,12 +22,19 @@ function recipeCard(r, onUse) {
     : "no extra permissions";
   const baseDesc = `${r.description ?? ""} · ${needs}`;
 
+  const isImported = r.source === "imported" || r.category === "imported";
   const row = document.createElement("capability-row");
   row.setAttribute("name", r.name);
   row.setAttribute("description", baseDesc);
   row.setAttribute("icon", SKILL_ICON[r.icon] ?? "");
-  row.setAttribute("action", "use");
+  row.setAttribute("action", isImported ? "use-delete" : "use");
   row.addEventListener("use", () => onUse?.(r));
+  if (isImported) {
+    row.addEventListener("delete", async () => {
+      const res = await send("skill.delete", { id: r.id }).catch(() => ({ ok: false }));
+      if (res?.ok) refresh();
+    });
+  }
 
   const details = document.createElement("details");
   details.className = "how";
@@ -294,7 +301,12 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
       const row = document.createElement("capability-row");
       row.setAttribute("name", view.name);
       row.setAttribute("description", view.description || "imported command");
-      row.setAttribute("action", "none");
+      row.setAttribute("action", "use-delete");
+      row.addEventListener("use", () => onUse?.(view));
+      row.addEventListener("delete", async () => {
+        const res2 = await sendFn("command.delete", { id: view.id }).catch(() => ({ ok: false }));
+        if (res2?.ok) await renderCommands();
+      });
       const details = document.createElement("details");
       details.className = "how";
       const summary = document.createElement("summary");
@@ -305,16 +317,7 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
       hint.textContent = view.ref;
       how.textContent = view.description || `Imported command ${view.name}.`;
       details.append(summary, how, hint);
-      const del = document.createElement("button");
-      del.className = "command-delete";
-      del.textContent = "Delete";
-      del.addEventListener("click", async () => {
-        del.disabled = true;
-        const res2 = await sendFn("command.delete", { id: view.id }).catch(() => ({ ok: false }));
-        if (res2?.ok) await renderCommands();
-        else del.disabled = false;
-      });
-      wrap.append(row, details, del);
+      wrap.append(row, details);
       commandsList.append(wrap);
     }
   };

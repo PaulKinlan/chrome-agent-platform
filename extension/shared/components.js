@@ -2835,6 +2835,12 @@ class CapabilityRow extends Component {
         : action === "open-delete"
       ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>
          <button part="delete" class="delete" type="button" aria-label="Delete ${escapeHtml(name)}">Delete</button>`
+        : action === "use-delete"
+      ? `<button part="use" class="run" type="button">Use</button>
+         <button part="delete" class="delete" type="button" aria-label="Delete ${escapeHtml(name)}">Delete</button>`
+        : action === "run-delete"
+      ? `<button part="run" class="run" type="button" aria-label="${escapeHtml(actionLabel)} ${escapeHtml(name)}">${escapeHtml(actionLabel)}</button>
+         <button part="delete" class="delete" type="button" aria-label="Delete ${escapeHtml(name)}">Delete</button>`
       : action === "open"
         ? `<button part="open" class="open" type="button" aria-label="Open ${escapeHtml(name)}">${ICONS.chevron}</button>`
         : action === "use"
