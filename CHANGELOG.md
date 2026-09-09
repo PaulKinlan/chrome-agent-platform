@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.328] — 2026-09-09
+- the browser-finding check is harder to fool — symlinks, half-built installs and hijacked homes are refused, and a run records which browser it used
+
 ## [0.3.327] — 2026-09-08
 - the background-agent delete check now finds its browser on any machine, and says so plainly when there is none
 

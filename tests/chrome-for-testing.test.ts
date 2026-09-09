@@ -15,14 +15,23 @@
 // Nothing here writes a literal absolute path to a filesystem call, so the machine-path
 // guard scans this file clean with an empty allowlist.
 import { assert, assertEquals, assertMatch } from "jsr:@std/assert@1";
-import { chromeForTestingCacheRoot, resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
+import { cacheRootForHome, chromeForTestingCacheRoot, resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
 
-/** Build a fixture puppeteer cache. `incomplete` creates the version directory without
- *  a runnable binary (what an interrupted install leaves); `notExecutable` creates the
- *  binary without the executable bit. */
+/** Build a fixture puppeteer cache. Failure shapes an interrupted install really leaves
+ *  behind, each one pinned by a test: `incomplete` — the version directory with no
+ *  binary at all; `notExecutable` — the binary written but never chmodded;
+ *  `dirAtBinaryPath` — a DIRECTORY at the binary path (what a partial `mkdir -p` leaves);
+ *  `symlinked` — the version directory is a symlink (a shared cache's space-saving
+ *  shape). */
 function fakeCache(
   versions: string[],
-  opts: { incomplete?: string[]; notExecutable?: string[]; extraDirs?: string[] } = {},
+  opts: {
+    incomplete?: string[];
+    notExecutable?: string[];
+    dirAtBinaryPath?: string[];
+    symlinked?: string[];
+    extraDirs?: string[];
+  } = {},
 ): { root: string; done: () => void } {
   const root = Deno.makeTempDirSync({ prefix: "cft-cache-" });
   const mk = (name: string): string => {
@@ -31,6 +40,19 @@ function fakeCache(
     return `${dir}/chrome`;
   };
   for (const v of versions) {
+    if ((opts.symlinked ?? []).includes(v)) {
+      // The real tree lives under a dot-prefixed sibling; the cache entry is a link.
+      const real = `${root}/.real-${v}`;
+      Deno.mkdirSync(`${real}/chrome-linux64`, { recursive: true });
+      Deno.writeTextFileSync(`${real}/chrome-linux64/chrome`, "#!/bin/sh\nexit 0\n");
+      Deno.chmodSync(`${real}/chrome-linux64/chrome`, 0o755);
+      Deno.symlinkSync(real, `${root}/${v}`);
+      continue;
+    }
+    if ((opts.dirAtBinaryPath ?? []).includes(v)) {
+      Deno.mkdirSync(`${root}/${v}/chrome-linux64/chrome`, { recursive: true });
+      continue;
+    }
     if ((opts.incomplete ?? []).includes(v)) {
       Deno.mkdirSync(`${root}/${v}/chrome-linux64`, { recursive: true });
       continue;
@@ -86,28 +108,26 @@ Deno.test("chrome-for-testing: versions rank NUMERICALLY, so 100 beats 99", () =
 
 Deno.test("chrome-for-testing: nothing usable resolves to null, never a guess and never a throw", () => {
   // No cache directory at all — the hermetic-CI case the callers must report honestly.
-  const missing = `${Deno.makeTempDirSync({ prefix: "cft-absent-" })}/no-such-cache`;
-  assertEquals(resolveChromeForTesting({ cacheRoot: missing }), null, "an absent cache root is null");
-
-  // Present but empty.
-  const empty = fakeCache([]);
+  const emptyRoot = fakeCache([]);
+  const missing = `${emptyRoot.root}/no-such-cache`;
   try {
-    assertEquals(resolveChromeForTesting({ cacheRoot: empty.root }), null, "an empty cache root is null");
-  } finally { empty.done(); }
+    assertEquals(resolveChromeForTesting({ cacheRoot: missing }), null, "an absent cache root is null");
 
-  // Present but only directories that are not version dirs (another channel's tree, a
-  // partial download): guessing one of these would hand a harness a binary that is not
-  // Chrome for Testing at all.
-  const junk = fakeCache([], { extraDirs: ["linux-stable", "tmp-install-9931", "chrome-headless-shell"] });
-  try {
-    assertEquals(resolveChromeForTesting({ cacheRoot: junk.root }), null, "a non-version directory is never resolved");
-  } finally { junk.done(); }
+    // Present but empty.
+    assertEquals(resolveChromeForTesting({ cacheRoot: emptyRoot.root }), null, "an empty cache root is null");
 
-  // No HOME (a stripped environment) must be null rather than "/.cache/…".
-  assertEquals(
-    chromeForTestingCacheRoot().endsWith("/.cache/puppeteer/chrome"), true,
-    "the default root is the puppeteer cache under $HOME",
-  );
+    // Present but only directories that are not version dirs (another channel's tree, a
+    // partial download): guessing one of these would hand a harness a binary that is not
+    // Chrome for Testing at all.
+    const junk = fakeCache([], { extraDirs: ["linux-stable", "tmp-install-9931", "chrome-headless-shell"] });
+    try {
+      assertEquals(resolveChromeForTesting({ cacheRoot: junk.root }), null, "a non-version directory is never resolved");
+    } finally { junk.done(); }
+
+    // An empty root STRING (what a missing $HOME produces) is null — the guard branch in
+    // the resolver, not a read of a relative path that happens to exist.
+    assertEquals(resolveChromeForTesting({ cacheRoot: "" }), null, "an empty root string is null, never a cwd-relative scan");
+  } finally { emptyRoot.done(); }
 });
 
 Deno.test("chrome-for-testing: an incomplete newest build falls back to the next usable one", () => {
@@ -134,6 +154,70 @@ Deno.test("chrome-for-testing: an incomplete newest build falls back to the next
   try {
     assertEquals(resolveChromeForTesting({ cacheRoot: allBad.root }), null, "no usable binary anywhere is null");
   } finally { allBad.done(); }
+
+  // A DIRECTORY at the binary path is not a browser either — precisely what an
+  // interrupted `mkdir -p` install leaves, and the shape the resolver's own comment says
+  // the isFile guard exists to refuse. It must fall through to the next usable build.
+  const dirAtBinary = fakeCache(["linux-149.0.0.0", "linux-148.0.7778.97"], { dirAtBinaryPath: ["linux-149.0.0.0"] });
+  try {
+    assertEquals(
+      rel(dirAtBinary.root, resolveChromeForTesting({ cacheRoot: dirAtBinary.root })),
+      "linux-148.0.7778.97/chrome-linux64/chrome",
+      "a directory at the binary path falls through to the next newest",
+    );
+  } finally { dirAtBinary.done(); }
+
+  const onlyDir = fakeCache(["linux-149.0.0.0"], { dirAtBinaryPath: ["linux-149.0.0.0"] });
+  try {
+    assertEquals(resolveChromeForTesting({ cacheRoot: onlyDir.root }), null, "a directory at the binary path is never handed back as the browser");
+  } finally { onlyDir.done(); }
+});
+
+Deno.test("chrome-for-testing: a symlinked version directory resolves to the binary it points at", () => {
+  // Deno reports a symlink-to-directory as isDirectory:false, so a filter on isDirectory
+  // alone drops a shared/managed cache's entries and every journey on that box becomes an
+  // unexplained skip. The link must be followed — and what it points at is still
+  // validated by the stat + exec-bit check.
+  const cache = fakeCache(["linux-150.0.7871.24", "linux-140.0.7339.82"], { symlinked: ["linux-150.0.7871.24"] });
+  try {
+    assertEquals(
+      rel(cache.root, resolveChromeForTesting({ cacheRoot: cache.root })),
+      "linux-150.0.7871.24/chrome-linux64/chrome",
+      "the newest entry must resolve through a symlink, not be filtered out",
+    );
+  } finally { cache.done(); }
+
+  // And a symlinked-only cache resolves, rather than degrading to an unexplained null.
+  const onlyLink = fakeCache(["linux-150.0.7871.24"], { symlinked: ["linux-150.0.7871.24"] });
+  try {
+    assert(resolveChromeForTesting({ cacheRoot: onlyLink.root }) !== null, "a symlink-only cache must still resolve");
+  } finally { onlyLink.done(); }
+});
+
+Deno.test("chrome-for-testing: equal versions break ties by name, so the pick does not depend on readdir order", () => {
+  // Two zero-padded spellings of one version parse to the same tuple; the winner must be
+  // deterministic (raw name descending) rather than whichever the kernel read first.
+  const cache = fakeCache(["linux-140.0.7339.082", "linux-140.0.7339.82"]);
+  try {
+    assertEquals(
+      rel(cache.root, resolveChromeForTesting({ cacheRoot: cache.root })),
+      "linux-140.0.7339.82/chrome-linux64/chrome",
+      "an equal-version tie is broken by name, descending",
+    );
+  } finally { cache.done(); }
+});
+
+Deno.test("chrome-for-testing: the cache root is $HOME-derived, absolute-only, and empty without a usable home", () => {
+  // The joiner takes a REQUIRED home, so these branches are asserted directly instead of
+  // by mutating the process environment (a parallel-phase hazard). A relative home is
+  // REFUSED: `HOME=.` would otherwise make the root follow the process cwd, and this repo
+  // has a `.cache/` of its own.
+  assertEquals(cacheRootForHome(undefined), "", "no home at all is an empty root, never `/.cache/…` and never `undefined/…`");
+  assertEquals(cacheRootForHome(""), "", "an empty home is an empty root");
+  assertEquals(cacheRootForHome("."), "", "a relative home is refused, so the root cannot follow the cwd");
+  assertEquals(cacheRootForHome("home/paul"), "", "a relative path that merely contains `home` is refused");
+  assertEquals(cacheRootForHome("/home/x"), "/home/x/.cache/puppeteer/chrome", "an absolute home joins into the puppeteer cache root");
+  assertEquals(chromeForTestingCacheRoot(), cacheRootForHome(Deno.env.get("HOME")), "the default root is the joiner over the live $HOME");
 });
 
 Deno.test("chrome-for-testing: the resolved path stays inside the cache root it was given", () => {
@@ -164,6 +248,10 @@ Deno.test("chrome-for-testing: the resolver's own source names no machine, no us
     [code.match(/linux-\d+\.\d+/), "a version directory may not be named in source — rank what the cache holds"],
     [code.match(/\bpaulkinlan\b|\bkinlan\b/), "no user name in source"],
   ].filter(([m]) => m !== null).map(([m, why]) => `${JSON.stringify(m![0])} — ${why}`);
+  // Rule 3 is assembled here too, so THIS file never carries the name it forbids
+  // (and so the probe really does exercise the rule — it must produce a string the
+  // rule matches, or the assertion below would pass vacuously).
+  const userName = ["kin", "lan"].join("");
 
   const src = await Deno.readTextFile(new URL("../scripts/lib/chrome-for-testing.ts", import.meta.url));
   const code = codeOnly(src);
@@ -177,8 +265,8 @@ Deno.test("chrome-for-testing: the resolver's own source names no machine, no us
   const pinned = [
     `// a comment naming ${home("x")} and linux-140.0.7339.82 is legal prose`,
     `const CHROMIUM = "${home(".cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome")}";`,
-    `export const b = CHROMIUM;`,
+    `export const b = CHROMIUM; // worked on by ${userName}`,
   ].join("\n");
-  assertEquals(offences(codeOnly(pinned)).length, 2, "a re-introduced machine path AND its version pin must both be caught");
+  assertEquals(offences(codeOnly(pinned)).length, 3, "a re-introduced machine path, its version pin AND a user name must all be caught");
   assertEquals(offences(codeOnly(pinned.split("\n")[0])), [], "the comment line on its own is legal");
 });

@@ -29,13 +29,15 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-bgagent-delete`;
 // Resolved from the puppeteer cache glob, never a pinned version directory: a pin names
 // one machine's cache, so the journey is undrivable anywhere else, and it rots the day
 // that cache is refreshed (chrome-agent-platform-icf1). The gate that runs this harness
-// (bgagent-delete) resolves the same glob, so the two cannot disagree about which
-// browser exists here.
+// (bgagent-delete) resolves the same glob — at a DIFFERENT time, so a concurrent cache
+// refresh could in principle make the two disagree; the NOTE line below records the pick
+// on every run, and the gate asserts it, so a disagreement is loud rather than invisible.
 const CHROMIUM = resolveChromeForTesting();
 if (!CHROMIUM) {
   console.log("FAIL: no Chrome for Testing binary in the puppeteer cache — expected $HOME/.cache/puppeteer/chrome/*/chrome-linux64/chrome (install one with: npx @puppeteer/browsers install chrome@stable). The Arch chromium wrapper ignores --load-extension, so this journey cannot run against it.");
   Deno.exit(1);
 }
+console.log(`NOTE: Chrome for Testing: ${CHROMIUM}`);
 const STAMP = Date.now();
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
