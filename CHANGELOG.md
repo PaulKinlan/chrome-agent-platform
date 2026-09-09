@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.340] — 2026-09-09
+- the browser-finding check is harder to fool — symlinks, half-built installs and hijacked homes are refused, and a run records which browser it used
+
 ## [0.3.339] — 2026-09-08
 - apply owner edits directly to named agents while preserving model approval
 

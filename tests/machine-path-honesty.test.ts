@@ -140,29 +140,23 @@ export function detect(text: string, file: string): Hit[] {
 
 // ------------------------------------------------------------------- allowlist
 //
-// Reviewed exceptions, each with the reason it is NOT a portability defect. Adding an
-// entry here needs a reason; an entry that stops matching fails the guard.
-// Every path this file NAMES is assembled at runtime. test-partition-guard.test.ts
-// classifies a test file by scanning its content and INHERITS the hazard class of every
-// `tests/` path the file merely mentions (DRIVER_REF_RE reads and concatenates that
-// file), so naming a serial-phase file — even inside an allowlist key or a comment —
-// reddens the partition. This is the convention the partition guard uses for its own
-// detector probes, and the one c9y8 landed under. No exemption is taken, so the
-// partition stays strict for every other file.
-const tp = (name: string): string => `tests/${name}`;
-
-const ALLOWED = new Map<string, string>([
-  // A documented, intentional environment probe: the test says outright that it
-  // "Skips cleanly where Chrome for Testing is absent (hermetic CI); runs for real in
-  // this environment". The path is never read for content — it is `Deno.stat`ed to
-  // decide whether a real browser exists — and the real-browser journey is covered by
-  // the dispatch gate, which resolves Chrome through scripts/lib/chrome-launch.ts.
-  // FOLLOW-UP worth taking: resolve the binary from the puppeteer cache glob
-  // (~/.cache/puppeteer/chrome/*/chrome-linux64/chrome) instead of pinning a version
-  // directory, then delete this entry.
-  [`${tp("bgagent-delete.test.ts")}::/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome`,
-    "documented clean skip where Chrome for Testing is absent; stat-only probe, never read for content; the real journey is covered by the dispatch gate. Follow-up: resolve from the puppeteer cache glob and delete this entry."],
-]);
+// EMPTY — and empty is the state to defend. The one entry this list carried (the pinned
+// Chrome for Testing probe in the bgagent-delete journey) was retired by resolving the
+// binary from the puppeteer cache glob instead (chrome-agent-platform-icf1 →
+// scripts/lib/chrome-for-testing.ts), so no test in this repo now passes an absolute path
+// under a home directory to a filesystem call. The mechanism is unchanged and still has
+// teeth: an entry needs a reason, and an entry that stops matching FAILS, so a fix can
+// never leave a stale exception hiding behind it.
+//
+// IF YOU ADD ONE: assemble every sibling path this file names at RUNTIME. The partition
+// guard classifies a test file by scanning its content and INHERITS the hazard class of
+// every sibling test path the file merely mentions (its driver regex reads and
+// concatenates that file), so naming a serial-phase file — even inside an allowlist key or
+// a comment — reddens the partition. Build the key with a helper of the shape
+// `const tp = (n: string) => "tests/" + n;` instead of writing a path out: the convention
+// the partition guard uses for its own detector probes, and the one c9y8 landed under.
+// Take no exemption, so the partition stays strict for every other file.
+const ALLOWED = new Map<string, string>([]);
 
 function scanAll(): { hits: Hit[]; files: number } {
   const files = testFiles();
