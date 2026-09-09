@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.341] — 2026-09-09
+- every cross-file watcher the test suite runs is now inventoried in one document
+
 ## [0.3.340] — 2026-09-09
 - the browser-finding check is harder to fool — symlinks, half-built installs and hijacked homes are refused, and a run records which browser it used
 
