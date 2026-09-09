@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.343] — 2026-09-09
+- the three coupling rules are canon — read the inventory before touching a watcher
+
 ## [0.3.342] — 2026-09-09
 - the skills list still renders from the live record — the pin follows the contract, not the binding's name
 

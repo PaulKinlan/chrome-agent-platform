@@ -523,6 +523,33 @@ only task authority — see "Task tracking") and in the mutation logs under
 mutant runs) and `cap-evidence/uodl/lrok-staging/CANDIDATE.md` (a staged re-anchor
 with its mutant runbook).
 
+### The coupling rules — three book rules for touching any cross-file watcher (canon, 2026-09-09)
+
+This repo is dense with watchers whose SUBJECT lives in a different file: the
+substring-honesty counters, the partition guard's hazard inheritance, docs-process-truth's
+cited paths, the harness registry's class counts and expected-red tallies, the
+dist-complete marker, the machine-path allowlist, and the rest. `docs/TEST-COUPLING-INVENTORY.md`
+inventories all of them — what each watches, the literal grep a re-anchor owes it, and
+whether it fails loud or silent when its subject moves. Read it before re-anchoring,
+retiring, moving, or satisfying any pin, allowlist entry, sentinel, count or file list.
+
+1. **File-disjointness is not suite-greenness.** Two lanes whose diffs touch disjoint
+   files can still break each other through a watcher — a count floor, an inherited
+   hazard class, a cited path, a pinned tally. Neither lane alone can see the break; only
+   the union gated together can. A green run on your own branch says nothing about the
+   union.
+2. **The union check runs in a scratch worktree at the origin/main tip, both sides
+   applied, gates run there** — never in a lane's own dirty tree, and never on a stale
+   base. Set the worktree up completely (`npm ci`, `deno install`, `npm run build`); each
+   missing step fails somewhere that does not name it.
+3. **Grep the token before retiring it.** Before retiring or moving any pin, token, count
+   or path: `git grep -n "<token>"`, `git log -S"<token>" --oneline` (who pinned it, and
+   what for), and `bd list --desc-contains "<token>"`. Every hit is a watcher you owe; if
+   a hit is a COUNT, assume your change moves it until the owning guard has been re-run.
+   Provenance: c9y8's R4 sentinel watched a bare-word pin, lrok re-anchored that pin away
+   in an otherwise-clean lane, and main went red at 1fd1a980 until d7af497f — one grep
+   would have caught it before push.
+
 ## The current review (2026-08-30) — read before picking up work
 
 [`REVIEW-2026-08-30.md`](REVIEW-2026-08-30.md) is the full-project reanalysis of exact
