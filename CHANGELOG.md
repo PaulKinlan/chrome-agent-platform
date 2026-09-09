@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.327] — 2026-09-09
+- every cross-file watcher the test suite runs is now inventoried in one document
+
 ## [0.3.326] — 2026-09-08
 - main-repair: the substring-honesty R4 sentinel follows lrok's re-anchor
 
