@@ -2,7 +2,7 @@
 // (owner directive: the standalone Skills view/button is gone; the manager is
 // a Settings panel section). Source pins + pure-function coverage.
 
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertMatch } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { SETTINGS_SECTIONS, normalizeSettingsSectionId, OPTIONS_PRODUCT_HASHES } from "../extension/lib/pure.js";
 
 Deno.test("skills-in-settings: the NTP sidebar has NO Skills button (nav inventory pin)", async () => {
@@ -65,7 +65,15 @@ Deno.test("skills-in-settings: renderSkillList groups by intent and hands use to
   // against the real module and verify the grouping logic through the source
   // contract (the integration is covered by the browser KAT).
   const panel = await Deno.readTextFile("extension/skills/skills-panel.js");
-  assert(panel.includes('send("recipe.list")'), "the list renders from the live recipe.list record");
+  // chrome-agent-platform-8lxu: the pin watches the CONTRACT (the list renders from the
+  // live recipe.list record), not the spelling of the send binding — b9uh renamed it to
+  // sendFn and the old literal pin went red on a behaviourally-unchanged tree. A regex
+  // over the call survives any binding name and still fails if the fetch is removed.
+  assertMatch(
+    panel,
+    /\bsend\w*\(\s*["'`]recipe\.list["'`]/,
+    "the list renders from the live recipe.list record",
+  );
   // The only remaining occurrence of the old private filter is in a doc comment
   // (CAP-FB-20260831-SKILL-LIST-SYNC-01): executable code must not re-filter.
   const executable = panel.split(/\n/).filter((l) => {

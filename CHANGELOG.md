@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.342] — 2026-09-09
+- the skills list still renders from the live record — the pin follows the contract, not the binding's name
+
 ## [0.3.341] — 2026-09-09
 - every cross-file watcher the test suite runs is now inventoried in one document
 
