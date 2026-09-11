@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.394] — 2026-09-11
+- calibrate import map scope and ambient network status (ovfm.3 prose)
+
 ## [0.3.393] — 2026-09-11
 - tighten late import-map prose and pin measured properties (ovfm.3)
 

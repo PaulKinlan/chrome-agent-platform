@@ -17,7 +17,7 @@ Before designing the module resolution layer, the underlying sandbox execution p
 | **Manifest Sandbox Key** | `extension/manifest.json:99-103` | `sandbox/script-sandbox.html` is declared under `sandbox.pages`. In Chromium MV3, sandbox pages are assigned a unique, opaque origin (`null`). |
 | **Opaque Origin Confinement** | `extension/sandbox/script-sandbox.js:1-10` | The sandbox page has **no access to `chrome.*` APIs** (`chrome.runtime`, `chrome.storage`, etc. are undefined). It has no same-origin access to extension documents or OPFS storage. |
 | **Storage Teaching Guards** | `extension/sandbox/script-sandbox.js:28-64` | `installScriptSandboxTeachGuards()` intercepts `window.localStorage`, `window.sessionStorage`, `window.indexedDB` (`open`, `deleteDatabase`), `window.caches` (`open`, `keys`, `delete`, `match`, `has`), `document.cookie`, and `navigator.storage.getDirectory`. Any access throws a descriptive, instructive error rather than failing mutely. |
-| **Host-Bridged Fetch** | `extension/sandbox/script-sandbox.js:79` | `window.fetch` is shadowed by an async RPC over `postMessage` (`type: "cap:script-call"`, `kind: "fetch"`). The sandbox has no direct network capability. |
+| **Host-Bridged Fetch** | `extension/sandbox/script-sandbox.js:79` | `window.fetch` is shadowed by an async RPC over `postMessage` (`type: "cap:script-call"`, `kind: "fetch"`); ambient network containment of other APIs unverified pending ovfm.4. |
 | **Host URL & Protocol Gate** | `extension/lib/script-host.js:13-39` | `runFetch` validates that requests are strictly `http:` or `https:`, contain no embedded credentials (`user:pass`), and use only `GET` or `HEAD` methods. |
 | **SSRF Denial & Host Allowlist** | `extension/lib/fetch-policy.js:92-132` | The Service Worker executes `checkFetchPolicy` via `isPrivateOrLoopbackHost`, refusing loopback (`127.0.0.0/8`, `localhost`), private LAN (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local/cloud metadata (`169.254.0.0/16`), and IPv6 unique-local (`fc00::/7`). Requests are restricted to the per-run host allowlist extracted statically from script source (`extractFetchHosts`). |
 | **Anonymity & Laundering Protection** | `extension/background/service-worker.js:790` | The Service Worker executes requests with `credentials: "omit"` and `redirect: "manual"` (refusing 3xx redirects to prevent allowlist laundering). |
@@ -34,12 +34,11 @@ While the Python execution environment (Pyodide in a dedicated Worker) faced a *
 3. **The Bare Specifier Wall:** In standard JavaScript, executing `import { chunk } from "lodash-es"` or `const d3 = await import("d3-array")` requires resolving a **bare specifier** (`"lodash-es"`). Browsers only resolve bare specifiers if an **Import Map** (`<script type="importmap">`) is present in the document.
 4. **Syntax Conflict with `new Function`:** Static import statements (`import ... from ...`) are **illegal syntax** inside function bodies. The current `new Function(...)` execution model rejects any script containing static `import` declarations with a `SyntaxError`.
 5. **Import Map Browser Behavior & The Real Security Spine:**
-   - While the initial HTML specification envisioned `<script type="importmap">` as immutable after module evaluation, actual Chromium behavior (measured on Chrome 152.0.7977.82) accepts subsequent import map insertions and resolves late unapproved specifiers. "Immutable after first load" is therefore **not** a platform security boundary the architecture can rely on, and the system will not engage in a fragile DOM `MutationObserver` arms race to simulate it.
+   - On tested Chrome 152.0.7977.82, a NEW import map was inserted after module evaluation and its new specifier imported successfully. "Immutable after first load" is therefore **not** a platform security boundary the architecture can rely on, and the system will not engage in a fragile DOM `MutationObserver` arms race to simulate it.
    - **The Checked Security Properties:** The sandbox boundary that holds in practice rests on:
      1. **The Opaque Origin (`null`)**: Zero same-origin access to extension documents, credentials, or OPFS.
-     2. **Host-Bridged `fetch` with SSRF Denial**: The shadowed `window.fetch` routes through the Service Worker with strict allowlists and loopback/private IP blocking. (Note: ambient network reachability via raw XHR, WebSockets, or un-shadowed APIs in the absence of explicit `connect-src`/`default-src` in the sandbox CSP is unmeasured and queued for verification in Stage 4 / `ovfm.4`).
-     3. **Cryptographic Digest Verification of Host-Supplied Modules**: The host and sandbox only ever mint Blob URLs for host modules whose bytes match the owner-approved SHA-256 digest.
-   - While a late import map injected by script code can resolve new specifiers, it does not bypass the cryptographic digest check for host-supplied modules: the host only ever exposes and mints modules that pass SHA-256 verification. The contract must state what the browser actually provides rather than claiming nonexistent browser immutability guarantees.
+     2. **Host-Bridged `fetch`**: `window.fetch` calls use the existing host bridge/policy. Other network APIs (e.g. XMLHttpRequest) were not audited here; absent `connect-src`/`default-src` means ambient-network containment remains an ovfm.4 verification question.
+     3. **Cryptographic Digest Verification of Host-Supplied Modules**: Host-supplied dependency bytes are digest-verified before any dependency Blob URL is minted. This does not establish restrictions on URLs script code puts into later maps.
 6. **Module Identity & Anti-Impersonation:**
    - What defines a module's identity?
    - How are namespace collisions resolved (e.g. two modules named `utils`)?
@@ -90,7 +89,7 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
     await import(scriptBlob);
     ```
 - **Cost / Complexity:** Moderate. Requires transitioning `script-sandbox.js` from `new Function` to native dynamic `import()`, managing object URL revocation (`URL.revokeObjectURL`) on teardown, and reloading the iframe per run for clean execution state isolation.
-- **Security:** Total origin and network isolation. Resolves 100% offline via local in-memory blob references.
+- **Security:** Total origin isolation; offline module resolution via local in-memory blob references; ambient network containment pending ovfm.4 audit.
 - **CSP Prerequisite & Risk Envelope:** Requires adding `blob:` to the sandbox CSP in `manifest.json`:
   ```json
   "content_security_policy": {
@@ -98,7 +97,7 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
     "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self';"
   }
   ```
-  *Security containment analysis:* Permitting `blob:` in a sandboxed page's `script-src` widens what can load as script, but the threat is strictly contained: the sandbox is an opaque origin (`null`) with zero `chrome.*` APIs, no storage access, and no ambient network. Its only network reach is host-bridged `fetch` with SSRF denial and host allowlists enforced by the Service Worker in `extension/lib/fetch-policy.js`. A `blob:`-URL script is therefore fully contained by the sandbox isolation boundary rather than by CSP script-source restrictions.
+  *Security containment analysis:* Permitting `blob:` in a sandboxed page's `script-src` widens what can load as script, but the threat is contained: the sandbox is an opaque origin (`null`) with zero `chrome.*` APIs, no storage access, and shadowed `window.fetch` with SSRF denial and host allowlists enforced by the Service Worker in `extension/lib/fetch-policy.js` (ambient network containment via un-shadowed APIs remains an ovfm.4 verification question). A `blob:`-URL script is therefore contained by the sandbox isolation boundary rather than by CSP script-source restrictions.
 
 ### Option C: `data:` URLs + Import Map
 - **Mechanism:** Same as Option B, but converting modules to `data:text/javascript;base64,...` strings instead of `blob:` URLs.
@@ -159,16 +158,16 @@ To remain honest and avoid architectural over-promising, this design explicitly 
 3. **No Storage Bypass:**
    - Installed modules cannot persist state. They are subject to the same storage teaching guards as the script itself.
 4. **Network Access Inheritance:**
-   - If an installed module calls `fetch()`, that call is routed through the sandbox's host-bridged `fetch`. It is governed by the exact same per-run host allowlist and SSRF restrictions as user-written script code. An installed module **cannot widen** the network reach of the script.
-5. **Late Dynamic Import Map Behavior:**
-   - On tested Chrome 152.0.7977.82, a running script can insert an additional import map after module evaluation to map newly created in-memory specifiers. This does not allow minting or tampering with host-supplied modules (which are strictly digest-gated at dispatch and sandbox entry), but the design makes no claim of platform-level map lockdown.
+   - If an installed module calls `fetch()`, that call is routed through the sandbox's host-bridged `fetch`. It is governed by the exact same per-run host allowlist and SSRF restrictions as user-written script code (ambient network containment via other APIs remains an ovfm.4 verification question).
+5. **Late Import Maps — Tested Scope:**
+   - On tested Chrome 152.0.7977.82, a running script can insert an additional import map after module evaluation to map newly created specifiers. Host-supplied dependency bytes are digest-verified before any dependency Blob URL is minted, but this does not establish restrictions on URLs script code puts into later maps, nor does it make categorical claims about ambient network containment (which remains an open question for ovfm.4).
 
 ---
 
 ## 6. Implementation Staging Plan
 
 1. **Stage 1 (Store Binding & Anti-Impersonation Pin):** Connect JS module storage to the shared owner-blob store (`cap-owner-blobs-v1/`) with Settings UI for upload, digest inspection, and removal. Add an executing unit test asserting that byte-corrupted modules fail closed with `digest-mismatch` before Blob URL creation.
-2. **Stage 2 (Manifest CSP & Containment Proof):** Declare `content_security_policy.sandbox` in `extension/manifest.json` permitting `blob:` in `script-src`, with the documented containment rationale (opaque null origin, no ambient network, host-bridged fetch).
+2. **Stage 2 (Manifest CSP & Containment Proof):** Declare `content_security_policy.sandbox` in `extension/manifest.json` permitting `blob:` in `script-src`, with the documented containment rationale (opaque null origin, host-bridged fetch policy, ambient-network audit pending ovfm.4).
 3. **Stage 3 (Host Dispatch & Import Map Injection):** Update `script-host.js` and `script-sandbox.js` to mint Blob URLs and inject `<script type="importmap">` prior to module execution.
 4. **Stage 4 (Verification & Falsification KAT):** Add test suite verifying:
    - Bare specifier import resolves to correct module.
