@@ -250,12 +250,20 @@ class Cdp {
       }
     };
   }
+  // j95l: only Chrome's opaque IDs belong in timeout diagnostics. Unknown
+  // formats are unavailable, never a coerced/truncated URL, token or payload.
+  static diagnosticId(value) {
+    return typeof value === "string" && /^[a-f0-9]{32}$/i.test(value) ? value : "unavailable";
+  }
   send(method, params = {}, sessionId?) {
     return new Promise((resolve, reject) => {
       const id = ++this.id;
+      // Snapshot before the caller can mutate params; retain no payload for logging.
+      const targetId = Cdp.diagnosticId(params?.targetId);
+      const timeoutSessionId = Cdp.diagnosticId(sessionId);
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`cdp timeout: ${method}`));
+        reject(new Error(`cdp timeout: ${method} (requestId=${id}, targetId=${targetId}, sessionId=${timeoutSessionId})`));
       }, 15000);
       this.pending.set(id, { resolve, reject, timer });
       this.ws.send(JSON.stringify({ id, method, params, sessionId }));

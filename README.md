@@ -141,6 +141,13 @@ npm run package        # fresh exact-inventory Store production ZIP
 npm run package:store  # same exact Store boundary (explicit alias)
 ```
 
+Chrome journey CDP timeouts retain their 15-second deadline and method prefix.
+The error also identifies the request number and available target/session IDs;
+only Chrome's 32-hex-character ID format is printed, otherwise `unavailable`.
+Target IDs are reported when supplied on the request, not inferred from a session.
+URLs, expressions and request payloads are not included. This aids diagnosis;
+it does not change the gate's verdict classification.
+
 Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked**
 → select the `extension/` directory. The new-tab page becomes the hub.
 

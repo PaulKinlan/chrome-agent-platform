@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.348] — 2026-09-11
+- Browser check timeouts identify the stalled request
+
 ## [0.3.347] — 2026-09-11
 - remove per-agent workspace quota ()
 
