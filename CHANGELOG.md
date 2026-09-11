@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.359] — 2026-09-11
+- Audit shared sender classifier assumptions and internal message contract
+
 ## [0.3.358] — 2026-09-11
 - Reconcile MCP mutation approval contract with owner-only store policy
 
