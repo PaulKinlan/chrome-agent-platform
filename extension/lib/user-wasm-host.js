@@ -49,13 +49,8 @@ export function registerUserWasmHost({ runtime = globalThis.chrome?.runtime } = 
       return false;
     }
     (async () => {
-      let wasmBytes;
-      if (message.wasmBytes && (message.wasmBytes instanceof Uint8Array || Array.isArray(message.wasmBytes))) {
-        wasmBytes = new Uint8Array(message.wasmBytes);
-      } else {
-        // Zero-copy transport: fetch bytes directly from local OPFS by digest
-        wasmBytes = await verifyAndReadOwnerBlobBytes({ digest: message.digest });
-      }
+      // Zero-copy transport: fetch bytes directly from local OPFS by digest
+      const wasmBytes = await verifyAndReadOwnerBlobBytes({ digest: message.digest });
 
       const workerUrl = typeof runtime.getURL === "function"
         ? runtime.getURL("lib/wasm-execution-worker.js")

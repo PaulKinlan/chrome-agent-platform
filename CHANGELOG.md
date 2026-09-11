@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.378] — 2026-09-11
+- address 9ux7.4 review follow-ups: docstring honesty, dead wasmBytes branch, and network-strip pin (xn2q)
+
 ## [0.3.377] — 2026-09-11
 - legacy provider records carry their own verbatim id as the archive match key
 
