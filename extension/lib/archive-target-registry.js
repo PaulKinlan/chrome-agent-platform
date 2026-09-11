@@ -479,6 +479,15 @@ export function sanitizeMcpServer(server) {
   }
   if (!Object.hasOwn(server, "transport") || !Object.hasOwn(server, "url") ||
       (server.transport !== "http" && server.transport !== "sse")) return null;
+  // The 64 KiB URL bound is a DELIBERATE ARCHIVE-SIDE legacy-compatibility
+  // restriction (chrome-agent-platform-115p, r3 wording): the owning
+  // mcp-config schema admits ANY length, so this number is inherited from
+  // historical archive practice — not derived from the MCP schema, and not a
+  // CAPX metadata bound. The two refusals are deliberately different facts:
+  // a MALFORMED URL returns null (that server record is omitted; valid
+  // neighbours survive), while an OVER-BOUND otherwise-valid URL THROWS
+  // (a typed whole-conversion refusal — archive_target_url_bound — with no
+  // partial result to seal). Callers must be able to tell them apart.
   requireUtf8Bound(server.url, 64 * 1024);
   let url;
   try { url = new URL(server.url); } catch { return null; }

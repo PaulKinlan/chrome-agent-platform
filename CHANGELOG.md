@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.383] — 2026-09-11
+- a malformed MCP server is omitted while an over-bound endpoint refuses the whole archive
+
+## [0.3.382] — 2026-09-11
+- an archive with an oversized MCP endpoint is refused up front; a single malformed server is omitted without a placeholder
+
 ## [0.3.381] — 2026-09-11
 - strip ambient storage from the python worker to enforce fresh execution
 

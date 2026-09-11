@@ -211,6 +211,35 @@ test("legacy records carry their match key: own untrimmed id + full canonical en
   }
 });
 
+// 115p — the two refusals are DIFFERENT FACTS a caller must tell apart:
+// a malformed URL omits that one server record; an over-bound otherwise-valid
+// URL refuses the entire conversion. The 64 KiB number is the archive-side
+// deliberate legacy-compatibility restriction — the owning mcp-config schema
+// admits any length, so it is inherited practice, not a chosen schema bound.
+test("MCP list: good/bad/good omits only the malformed record, never a placeholder", () => {
+  const bad = { ...S(), id: "beta", name: "Beta", url: "not a url" };
+  const out = named(withServers([S(), bad, T()]));
+  eq(out.writer.mcpServers.map((s) => s.id), ["alpha", "beta"]);
+  for (const s of out.writer.mcpServers) {
+    same(s.url.includes("undefined"), false, "no placeholder row for the dropped server");
+  }
+});
+
+test("MCP bounds: 0, bound-1 and bound are exact owner parity; bound+1 refuses the whole conversion", () => {
+  const urlOf = (n) => "https://mcp.example.test/" + "a".repeat(n);
+  const prefixBytes = "https://mcp.example.test/".length;
+  // The bound counts the WHOLE URL's UTF-8 bytes: exact parity at the bound.
+  for (const n of [0, 64 * 1024 - 1 - prefixBytes, 64 * 1024 - prefixBytes]) {
+    const server = { ...S(), url: urlOf(n) };
+    eq(mcp(server), { ...server, url: `https://mcp.example.test/${"a".repeat(n)}` });
+  }
+  throws(() => mcp({ ...S(), url: urlOf(64 * 1024 - prefixBytes + 1) }), TypeError);
+  // Through the named-agent wrapper: the refusal is the WHOLE conversion —
+  // no partial record, no locator, nothing to seal.
+  const oversized = { id: "big", name: "Big", transport: "http", url: urlOf(64 * 1024) };
+  throws(() => named(withServers([S(), oversized])), TypeError, "archive_target_url_bound");
+});
+
 test("MCP: native normalization, auth removal, rest parity and identity", () => {
   eq(mcp({ ...S(), auth: auth(), url: "https://u:p@mcp.example.test/mcp?tenant=a#frag" }), S());
   eq(mcp({ ...T(), auth: auth() }), T());
