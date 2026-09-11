@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.380] — 2026-09-11
+- design specification for installable JS modules in script sandbox (ovfm)
+
 ## [0.3.379] — 2026-09-11
 - address 9ux7.4 review follow-ups: docstring honesty, dead wasmBytes branch, and network-strip pin (xn2q)
 
