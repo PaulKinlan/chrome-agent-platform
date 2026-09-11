@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.351] — 2026-09-11
+- tests: reword tally pin test to honestly describe declarative registry check
+
 ## [0.3.350] — 2026-09-11
 - queue in-flight permission waiters and render subsequent cards after grant/deny
 

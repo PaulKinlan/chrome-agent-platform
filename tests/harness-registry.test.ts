@@ -126,21 +126,24 @@ function isKatEntry(file: string, e: { class: string }) {
 }
 
 // CAP-FB-20260911-TALLY-DRIFT-01 (chrome-agent-platform-idb5 / r740) —
-// Expected-red KATs pin their exact failure tally (passed/failed) in redReason.
-// A browser change, feature landing, or layout drift that moves the tally owes
-// re-adjudication of the registry entry before landing (docs/TEST-COUPLING-INVENTORY.md §8).
-Deno.test("kat expected-red tallies match their adjudicated registry pins", () => {
-  const TALLY_PINS: Record<string, string> = {
+// Declarative registry pin: the tally declared in redReason must match the
+// adjudicated value. This is a static/declarative pin over the registry, not a
+// runtime execution: runtime tallies are produced by the KAT's own execution
+// (its terminal `n passed, m failed` RESULT line) and captured in evidence runs
+// (e.g. cap-evidence/3khn/kat-*.log). Re-adjudicating an expected-red failure mode
+// owes updating both the registry declaration and this pin.
+Deno.test("registry: expected-red redReason declared tallies match adjudicated pins", () => {
+  const ADJUDICATED_PINS: Record<string, string> = {
     "kat-genui-error-state.ts": "15/3",
     "kat-ux-lows.ts": "8/2",
   };
-  for (const [file, expectedTally] of Object.entries(TALLY_PINS)) {
+  for (const [file, expectedTally] of Object.entries(ADJUDICATED_PINS)) {
     const entry = HARNESSES[file];
     assert(entry, `${file} must be in HARNESSES`);
     assert(entry.expectedRed, `${file} must be expectedRed`);
     const m = /\((\d+\/\d+)\)/.exec(entry.redReason ?? "");
     assert(m, `${file} redReason must declare its tally in parentheses: ${entry.redReason}`);
-    assertEquals(m[1], expectedTally, `${file} tally in redReason must match the adjudicated pin`);
+    assertEquals(m[1], expectedTally, `${file} declared tally in redReason must match the adjudicated pin`);
   }
 });
 
