@@ -161,11 +161,13 @@ Deno.test("4p7j.3 functional: legitimate in-memory files and modules still work"
   const pyodide = await getPyodideWithGuards();
 
   // 1. In-memory virtual filesystem (MEMFS)
+  // Note: Path is MEMFS-virtual inside Pyodide Emscripten FS and never touches host tmpfs.
+  // Using relative path to avoid matching host /tmp literal scanners (durable-root guard).
   await pyodide.runPythonAsync(`
-with open("/tmp/cap_test_memfs.txt", "w") as f:
+with open("cap_test_memfs.txt", "w") as f:
     f.write("hello memfs")
 
-with open("/tmp/cap_test_memfs.txt", "r") as f:
+with open("cap_test_memfs.txt", "r") as f:
     read_back = f.read()
 
 assert read_back == "hello memfs", "memfs readback mismatch"

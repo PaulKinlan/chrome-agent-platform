@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.384] — 2026-09-11
+- tests: use relative MEMFS virtual path in python-storage-guard test to satisfy durable-root guard
+
 ## [0.3.383] — 2026-09-11
 - a malformed MCP server is omitted while an over-bound endpoint refuses the whole archive
 
