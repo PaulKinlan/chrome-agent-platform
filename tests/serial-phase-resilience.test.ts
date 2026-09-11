@@ -75,6 +75,66 @@ Deno.test("6yrq: lock tests clean up temporary lock files and leave /tmp clean",
   assertEquals(leaked, [], `lock tests must not leak temporary lock files in /tmp: ${leaked.join(", ")}`);
 });
 
+Deno.test("pozs: timed-out serial file leaves no descendant processes behind (process group kill)", async () => {
+  // Spawn a real test script that launches a long-lived background grandchild process
+  // and then hangs. runSerialFile must enforce timeoutMs, kill the entire process group
+  // (PGID = r.pid), and ensure the grandchild does not survive as an orphan holding fds/locks.
+  const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-grandchild-probe-" });
+  const pidFile = `${tempDir}/grandchild.pid`;
+  const tempTest = `${tempDir}/grandchild-hang.test.ts`;
+  await Deno.writeTextFile(
+    tempTest,
+    `import { assert } from "jsr:@std/assert@1";
+Deno.test("spawns grandchild and hangs", async () => {
+  const p = new Deno.Command("sleep", { args: ["300"], stdout: "null", stderr: "null" }).spawn();
+  await Deno.writeTextFile("${pidFile}", String(p.pid));
+  await new Promise(() => {});
+});
+`,
+  );
+
+  let grandchildPid = 0;
+  try {
+    const res = runSerialFile(tempTest, {
+      timeoutMs: 1500,
+      stdio: "pipe",
+      cwd: ROOT,
+    });
+    assertEquals(res.code, 124, `timed out child must return exit 124; got ${res.code}`);
+    assertEquals(res.timedOut, true, "runner must report timedOut: true");
+
+    const pidText = await Deno.readTextFile(pidFile).catch(() => "");
+    grandchildPid = Number(pidText.trim());
+    assert(grandchildPid > 0, "grandchild pid must have been recorded");
+
+    // Wait briefly and assert the grandchild was reaped with the process group
+    let alive = true;
+    try {
+      Deno.kill(grandchildPid, "SIGCONT");
+    } catch {
+      alive = false;
+    }
+    assertEquals(alive, false, `grandchild PID ${grandchildPid} must not survive runner timeout`);
+  } finally {
+    if (grandchildPid > 0) {
+      try { Deno.kill(grandchildPid, "SIGKILL"); } catch { /* gone */ }
+    }
+    await Deno.remove(tempDir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("source pin: serial-phase spawns detached and kills process group on timeout", async () => {
+  const src = await Deno.readTextFile(`${ROOT}scripts/lib/serial-phase.mjs`);
+  assert(
+    src.includes("detached: true"),
+    "scripts/lib/serial-phase.mjs must spawn tests detached to establish a process group",
+  );
+  assert(
+    src.includes("process.kill(-r.pid, \"SIGKILL\")"),
+    "scripts/lib/serial-phase.mjs must kill the process group (-r.pid) on timeout",
+  );
+});
+
 Deno.test("source pin: chrome-launch cancels stderr reader on proc exit", async () => {
   const src = await Deno.readTextFile(`${ROOT}scripts/lib/chrome-launch.ts`);
   assert(

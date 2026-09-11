@@ -381,10 +381,14 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
       "the retired poison marker must not be recreated",
     );
   } finally {
+    if (escapedPid === 0 && Array.isArray(result?.state)) {
+      const row = result.state.find((r) => r.event === "escape-child-spawned");
+      if (typeof row?.childPid === "number") escapedPid = row.childPid;
+    }
     if (escapedPid > 0) {
       try {
         const live = await readProcIdentity(escapedPid);
-        if (live.starttime === escapedStart && live.uid === Deno.uid()) {
+        if (escapedStart === "" || (live.starttime === escapedStart && live.uid === Deno.uid())) {
           Deno.kill(escapedPid, "SIGKILL");
         }
       } catch {

@@ -10,6 +10,11 @@
 // CAP_SERIAL_TEST_TIMEOUT_MS) with SIGKILL; a timed-out test logs an explicit
 // TIMED OUT notice and returns exit code 124 rather than wedging the suite.
 //
+// Process group isolation (chrome-agent-platform-pozs): tests spawn detached so
+// they run as their own process group leader. On timeout, SIGKILL is sent to the
+// whole process group (-r.pid) so no background grandchildren or subprocesses
+// survive as orphans holding file locks or descriptors.
+//
 // To preserve diagnostic visibility, the runner does NOT fail-fast: it runs
 // every file in the list and reports all failures.
 import { spawnSync } from "node:child_process";
@@ -33,10 +38,28 @@ export function runSerialFile(file, {
     env: { ...env, CAP_TEST_RUNNER: "1" },
     timeout: timeoutMs,
     killSignal: "SIGKILL",
+    detached: true,
   });
   if (r.error && r.error.code === "ETIMEDOUT") {
+    // Kill the entire process group so no grandchild survives as an orphan.
+    if (r.pid) {
+      try {
+        process.kill(-r.pid, "SIGKILL");
+      } catch {
+        // Group already gone or reaped.
+      }
+    }
     console.error(`\nrun-tests: serial file ${file} TIMED OUT after ${timeoutMs / 1000}s`);
     return { code: 124, timedOut: true, error: r.error };
+  }
+  // Safety: kill any remaining process group descendants so orphaned background processes
+  // cannot linger even if the direct child exited or crashed.
+  if (r.pid) {
+    try {
+      process.kill(-r.pid, "SIGKILL");
+    } catch {
+      // Clean.
+    }
   }
   return { code: r.status ?? 1, timedOut: false, error: r.error };
 }

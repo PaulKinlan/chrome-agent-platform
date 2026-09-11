@@ -15,7 +15,14 @@ const record = (event, extra = {}) => {
     }\n`,
   );
 };
-const stayAlive = () => setInterval(() => {}, 60_000);
+// Bound fixture lifetime (chrome-agent-platform-pozs): unref'd safety exit
+// ensures a leaked descendant (e.g. --escape-child or --stubborn-child) can
+// never survive as an orphan past 30 seconds if a test crashes or times out.
+const stayAlive = (maxMs = 30_000) => {
+  const timer = setTimeout(() => process.exit(0), maxMs);
+  timer.unref();
+  return setInterval(() => {}, 60_000);
+};
 
 if (process.argv[2] === "--stubborn-child") {
   process.on("SIGTERM", () => record("stubborn-child-term"));

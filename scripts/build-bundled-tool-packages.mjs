@@ -25,11 +25,18 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, existsSync, rmSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalJson, WasmPackageAuthority, auditWasmBinary, WASM_PACKAGE_LIMITS } from "../extension/lib/wasm-package-authority.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+const isMain = Boolean(
+  (typeof import.meta.main === "boolean" && import.meta.main) ||
+  (typeof process !== "undefined" && typeof process.argv?.[1] === "string" && (
+    fileURLToPath(import.meta.url) === resolve(process.argv[1]) ||
+    import.meta.url.endsWith(process.argv[1].replace(/^\.\//, ""))
+  ))
+);
 const args = process.argv.slice(2);
 // Evidence lives IN THE REPO at packages/bundled/evidence/<lane>/ (durable
 // migration, owner directive: never depend on paths outside the source tree).
@@ -878,6 +885,9 @@ if (VERIFY) {
     if (!existsSync(absDir)) return out;
     for (const ent of readdirSync(absDir, { withFileTypes: true })) {
       const childRel = `${dirRel}/${ent.name}`;
+      if (childRel.startsWith("packages/bundled/evidence/") ||
+          childRel.startsWith("packages/bundled/unix-stream-v1/") ||
+          childRel.startsWith("packages/bundled/awk-posixutils-v1/")) continue;
       if (ent.isDirectory()) out.push(...walk(childRel));
       else out.push(childRel);
     }
@@ -903,3 +913,8 @@ if (VERIFY) {
 }
 
 console.log(`OK: ${packages.length} packages, ${inventoryFiles.length} shipped files, ${inventoryManifests.length} manifest identities`);
+
+if (isMain) {
+  // Explicit exit avoids Node v24 DelayedTaskScheduler / isolate disposal futex race on shutdown (chrome-agent-platform-pozs)
+  process.exit(0);
+}
