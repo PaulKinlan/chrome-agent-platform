@@ -17,7 +17,14 @@ const DIGEST = /^[0-9a-f]{64}$/u;
 const META = /^([0-9a-f]{64})\.json$/u;
 const DATA = /^([0-9a-f]{64})\.bin$/u;
 const DELETING = /^delete-([0-9a-f]{64})\.json$/u;
-const PENDING = /^upload-[0-9a-f-]+\.bin$/u;
+/** In-flight temporaries carry their creation stamp in the name so a recovery
+ *  pass can tell a live upload from a crashed one: `upload-<ms>-<uuid>.bin`.
+ *  Legacy stamp-less names predate the two-phase put and are pruned on sight. */
+const PENDING = /^upload-(?:([0-9]+)-)?[0-9a-f-]+\.bin$/u;
+/** A temporary younger than this belongs to a put streaming OUTSIDE the lock
+ *  right now (h2ge); pruning it would kill a live upload. Crashed temporaries
+ *  age past the grace and are pruned by the next recovery pass. */
+const PENDING_GRACE_MS = 60_000;
 const V1_PENDING = /^upload-[0-9a-f-]+\.wasm$/u;
 
 function requireDigest(digest) {
@@ -153,7 +160,12 @@ async function migrateV1(parent, root) {
 // All callers hold the same origin-wide Web Lock. A crashed writer cannot leave
 // an incomplete upload visible. A durable delete intent is completed on reopen.
 // Only directory entries + JSON are read here, never blob contents.
-async function recover(root) {
+//
+// h2ge: recovery is a LIST-time pass, no longer per operation — get/remove read
+// the single record they need and put streams outside the lock entirely. The
+// PENDING prune respects the streaming grace so a live upload on another store
+// instance is never killed.
+async function recover(root, now) {
   const names = new Set();
   for await (const [name, handle] of root.entries()) {
     if (handle.kind === "file") names.add(name);
@@ -172,6 +184,8 @@ async function recover(root) {
       names.delete(`${deleting[1]}.json`);
       names.delete(`${deleting[1]}.bin`);
     } else if (PENDING.test(name)) {
+      const stamp = Number(PENDING.exec(name)[1]);
+      if (Number.isFinite(stamp) && now() - stamp < PENDING_GRACE_MS) continue; // a live upload
       await removeIfPresent(root, name);
     }
   }
@@ -213,16 +227,48 @@ export function createOwnerBlobStore({
   locks = globalThis.navigator?.locks,
   now = Date.now,
 } = {}) {
-  async function run(operation) {
+  /** The one record a get/remove/put needs, read directly — h2ge's O(1) read
+   *  path. No directory enumeration: the record is the `.json`, the bytes are
+   *  the `.bin`. Returns null for absent/empty (an unpublished upload). A
+   *  corrupt record still fails CLOSED, exactly as the recovery pass did. */
+  async function readRecord(root, digest) {
+    let text;
+    try {
+      text = await (await (await root.getFileHandle(`${digest}.json`)).getFile()).text();
+    } catch (error) {
+      if (error?.name === "NotFoundError") return null;
+      throw error;
+    }
+    if (!text) return null; // getFileHandle(create:true) trap: unpublished upload
+    return metadata(JSON.parse(text), digest);
+  }
+
+  /** list() is THE recovery site (h2ge): the full migrate + crash-cleanup pass
+   *  runs here, under the lock, and nowhere else. Every other operation reads
+   *  only the record it names. */
+  async function recoveryPass(parent, root) {
+    await migrateV1(parent, root);
+    return await recover(root, now);
+  }
+
+  /** The environment check + the store root, once per operation. `create:false`
+   *  (reads) refuses a missing root as NotFound instead of materializing one. */
+  async function acquire(create = true) {
     if (!storage?.getDirectory) throw new Error("OPFS storage is unavailable");
     if (!locks?.request) throw new Error("Web Locks are unavailable");
-    return await locks.request(LOCK, async () => {
-      const parent = await storage.getDirectory();
-      const root = await parent.getDirectoryHandle(OWNER_BLOBS_ROOT, { create: true });
-      await migrateV1(parent, root);
-      return await operation(root, await recover(root));
-    });
+    const parent = await storage.getDirectory();
+    let root;
+    try {
+      root = await parent.getDirectoryHandle(OWNER_BLOBS_ROOT, { create });
+    } catch (error) {
+      if (!create && error?.name === "NotFoundError") {
+        throw new DOMException("Stored file not found", "NotFoundError");
+      }
+      throw error;
+    }
+    return { parent, root };
   }
+
   return {
     async put({ file, bytes, name, description = "", kind = "wasm" }, { onProgress } = {}) {
       if (!(file instanceof Blob) && (bytes instanceof Uint8Array || bytes instanceof ArrayBuffer)) {
@@ -232,26 +278,48 @@ export function createOwnerBlobStore({
       if (!KINDS.has(kind)) throw new TypeError(`Unknown blob kind: ${JSON.stringify(kind)}`);
       if (typeof name !== "string" || !name.trim()) throw new Error("Enter a name for this file");
       if (typeof description !== "string") throw new TypeError("Description must be text");
-      return await run(async (root, records) => {
-        const temporary = `upload-${crypto.randomUUID()}.bin`;
-        const handle = await root.getFileHandle(temporary, { create: true });
-        let writer, digest, existing, committed = false;
-        try {
-          writer = await handle.createWritable();
-          const hash = createSha256();
-          let size = 0;
-          for await (const chunk of file.stream()) {
-            hash.update(chunk);
-            await writer.write(chunk);
-            size += chunk.byteLength;
-            onProgress?.(size, file.size);
+      // ── Phase A: stream to the temporary with NO lock held (h2ge). ──
+      // A concurrent list() on another instance must complete while a large
+      // upload is still streaming; the stamp in the temporary's name tells the
+      // recovery pass this upload is live.
+      const { parent, root } = await acquire();
+      const temporary = `upload-${now()}-${crypto.randomUUID()}.bin`;
+      const handle = await root.getFileHandle(temporary, { create: true });
+      let writer, digest = null, existing = null, corrupt = false, size = 0, committed = false;
+      try {
+        writer = await handle.createWritable();
+        const hash = createSha256();
+        for await (const chunk of file.stream()) {
+          hash.update(chunk);
+          await writer.write(chunk);
+          size += chunk.byteLength;
+          onProgress?.(size, file.size);
+        }
+        if (size !== file.size) throw new Error("The selected file changed while uploading; choose it again");
+        await writer.close();
+        writer = null;
+        digest = hash.hex();
+        // ── Phase B: publish under the lock — metadata LAST, as always. ──
+        return await locks.request(LOCK, async () => {
+          // A crashed remove of THESE bytes leaves a durable intent; publishing
+          // the same digest rescinds it, or the next recovery pass would delete
+          // what this put just published.
+          await removeIfPresent(root, `delete-${digest}.json`);
+          // Existence and readability are different facts (h2ge finding 2): an
+          // existing readable record is a REPLACEMENT; a present but CORRUPT
+          // record is preserved and fails this put closed — a re-upload never
+          // destroys owner bytes its own write could not validate.
+          let present = true;
+          try { await root.getFileHandle(`${digest}.json`); }
+          catch (error) {
+            if (error?.name !== "NotFoundError") throw error;
+            present = false;
           }
-          if (size !== file.size) throw new Error("The selected file changed while uploading; choose it again");
-          await writer.close();
-          writer = null;
-          digest = hash.hex();
-          existing = records.get(digest);
-          if (!existing) await handle.move(`${digest}.bin`);
+          if (present) {
+            try { existing = await readRecord(root, digest); }
+            catch (error) { corrupt = true; throw error; }
+          }
+          if (!existing && !corrupt) await handle.move(`${digest}.bin`);
           const record = {
             version: RECORD_VERSION, digest, kind, name, description, size,
             addedAt: existing?.addedAt ?? now(),
@@ -262,38 +330,61 @@ export function createOwnerBlobStore({
           // Explicit replacement signal (9ux7.1 R3): the caller never infers
           // it. Not part of the stored metadata — a property of THIS put.
           return { ...record, replaced: Boolean(existing), previousName: existing?.name ?? null };
-        } finally {
-          if (writer) await writer.abort().catch(() => {});
-          await removeIfPresent(root, temporary).catch(() => {});
-          if (!committed && digest && !existing) {
-            await removeIfPresent(root, `${digest}.json`).catch(() => {});
-            await removeIfPresent(root, `${digest}.bin`).catch(() => {});
-          }
+        });
+      } finally {
+        if (writer) await writer.abort().catch(() => {});
+        await removeIfPresent(root, temporary).catch(() => {});
+        // A failed FIRST publication cleans its orphan bytes at once (the
+        // never-publish-partial contract); a failed RE-placement leaves the
+        // existing bytes and labels untouched; a CORRUPT record is preserved
+        // untouched and the put fails closed (h2ge finding 2).
+        if (!committed && digest && !existing && !corrupt) {
+          await removeIfPresent(root, `${digest}.json`).catch(() => {});
+          await removeIfPresent(root, `${digest}.bin`).catch(() => {});
         }
-      });
+      }
     },
     async list({ kind = null } = {}) {
       if (kind !== null && !KINDS.has(kind)) throw new TypeError(`Unknown blob kind: ${JSON.stringify(kind)}`);
-      return await run((_root, records) => [...records.values()]
-        .filter((r) => kind === null || r.kind === kind)
-        .sort((a, b) => b.addedAt - a.addedAt || a.digest.localeCompare(b.digest)),
-      );
+      return await locks.request(LOCK, async () => {
+        const { parent, root } = await acquire();
+        const records = await recoveryPass(parent, root);
+        return [...records.values()]
+          .filter((r) => kind === null || r.kind === kind)
+          .sort((a, b) => b.addedAt - a.addedAt || a.digest.localeCompare(b.digest));
+      });
     },
     // Named getFile for the File reference it returns (9ux7.1 asked for
     // "get"; the bead-vs-code naming difference is deliberate — bytes never
     // ride messaging JSON, only a File handle does).
     async getFile(digest) {
       requireDigest(digest);
-      return await run(async (root, records) => {
-        if (!records.has(digest)) throw new DOMException("Stored file not found", "NotFoundError");
+      return await locks.request(LOCK, async () => {
+        const { root } = await acquire(false);
+        // A crashed remove leaves the durable intent; completing it for the
+        // digest being read is O(1) and keeps reopen semantics without a scan:
+        // the owner asked for this deletion, so finish it and answer NotFound.
+        let hasIntent = true;
+        try { await root.getFileHandle(`delete-${digest}.json`); }
+        catch (error) {
+          if (error?.name !== "NotFoundError") throw error;
+          hasIntent = false;
+        }
+        if (hasIntent) {
+          await finishDelete(root, digest);
+          throw new DOMException("Stored file not found", "NotFoundError");
+        }
+        const record = await readRecord(root, digest);
+        if (!record) throw new DOMException("Stored file not found", "NotFoundError");
         const file = await (await root.getFileHandle(`${digest}.bin`)).getFile();
-        if (file.size !== records.get(digest).size) throw new Error("Stored blob size changed");
+        if (file.size !== record.size) throw new Error("Stored blob size changed");
         return file; // File reference, not an arrayBuffer or JSON payload.
       });
     },
     async remove(digest) {
       requireDigest(digest);
-      return await run(async (root) => {
+      return await locks.request(LOCK, async () => {
+        const { root } = await acquire();
         // Commit intent before deleting either half, so retries/restarts finish.
         await writeJson(root, `delete-${digest}.json`, { digest });
         await finishDelete(root, digest);

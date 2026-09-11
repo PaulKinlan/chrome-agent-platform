@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.361] — 2026-09-11
+- the owner-blob store reads one record instead of scanning, and uploads stream outside the lock
+
+## [0.3.360] — 2026-09-11
+- uploads to the extension's file store no longer block the settings list while they stream
+
 ## [0.3.359] — 2026-09-11
 - Audit shared sender classifier assumptions and internal message contract
 
