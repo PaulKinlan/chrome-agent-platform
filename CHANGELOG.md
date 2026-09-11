@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.393] — 2026-09-11
+- tighten late import-map prose and pin measured properties (ovfm.3)
+
 ## [0.3.392] — 2026-09-11
 - execute real script-sandbox in teardown test and calibrate design prose (ovfm.3 revision 2)
 

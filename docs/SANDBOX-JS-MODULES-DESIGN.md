@@ -35,11 +35,11 @@ While the Python execution environment (Pyodide in a dedicated Worker) faced a *
 4. **Syntax Conflict with `new Function`:** Static import statements (`import ... from ...`) are **illegal syntax** inside function bodies. The current `new Function(...)` execution model rejects any script containing static `import` declarations with a `SyntaxError`.
 5. **Import Map Browser Behavior & The Real Security Spine:**
    - While the initial HTML specification envisioned `<script type="importmap">` as immutable after module evaluation, actual Chromium behavior (measured on Chrome 152.0.7977.82) accepts subsequent import map insertions and resolves late unapproved specifiers. "Immutable after first load" is therefore **not** a platform security boundary the architecture can rely on, and the system will not engage in a fragile DOM `MutationObserver` arms race to simulate it.
-   - **The Real Security Properties:** The sandbox security spine rests entirely on three robust, checkable invariants:
+   - **The Checked Security Properties:** The sandbox boundary that holds in practice rests on:
      1. **The Opaque Origin (`null`)**: Zero same-origin access to extension documents, credentials, or OPFS.
-     2. **Host-Bridged Fetch with SSRF Denial**: Zero ambient network capability; every network call is routed through the Service Worker with strict allowlists and loopback/private IP blocking.
-     3. **Cryptographic Digest Verification of Host-Supplied Modules**: The host and sandbox only ever mint Blob URLs for modules whose bytes match the owner-approved SHA-256 digest.
-   - A late import map injected by script code can only point at bytes the script itself could already execute (the sandbox permits `eval` and dynamic script execution by design); it introduces no privilege escalation, but the contract must state what the browser actually provides rather than claiming nonexistent browser immutability guarantees.
+     2. **Host-Bridged `fetch` with SSRF Denial**: The shadowed `window.fetch` routes through the Service Worker with strict allowlists and loopback/private IP blocking. (Note: ambient network reachability via raw XHR, WebSockets, or un-shadowed APIs in the absence of explicit `connect-src`/`default-src` in the sandbox CSP is unmeasured and queued for verification in Stage 4 / `ovfm.4`).
+     3. **Cryptographic Digest Verification of Host-Supplied Modules**: The host and sandbox only ever mint Blob URLs for host modules whose bytes match the owner-approved SHA-256 digest.
+   - While a late import map injected by script code can resolve new specifiers, it does not bypass the cryptographic digest check for host-supplied modules: the host only ever exposes and mints modules that pass SHA-256 verification. The contract must state what the browser actually provides rather than claiming nonexistent browser immutability guarantees.
 6. **Module Identity & Anti-Impersonation:**
    - What defines a module's identity?
    - How are namespace collisions resolved (e.g. two modules named `utils`)?
@@ -160,8 +160,8 @@ To remain honest and avoid architectural over-promising, this design explicitly 
    - Installed modules cannot persist state. They are subject to the same storage teaching guards as the script itself.
 4. **Network Access Inheritance:**
    - If an installed module calls `fetch()`, that call is routed through the sandbox's host-bridged `fetch`. It is governed by the exact same per-run host allowlist and SSRF restrictions as user-written script code. An installed module **cannot widen** the network reach of the script.
-5. **No Privilege Escalation via Late Dynamic Import Maps:**
-   - While a running script may dynamically insert an import map in modern Chromium engines, it cannot bypass the sandbox boundary: any late-mapped URL can only point to bytes the script itself created in-memory, and cannot widen network reach, access storage, or mint unapproved host-module digests.
+5. **Late Dynamic Import Map Behavior:**
+   - On tested Chrome 152.0.7977.82, a running script can insert an additional import map after module evaluation to map newly created in-memory specifiers. This does not allow minting or tampering with host-supplied modules (which are strictly digest-gated at dispatch and sandbox entry), but the design makes no claim of platform-level map lockdown.
 
 ---
 
