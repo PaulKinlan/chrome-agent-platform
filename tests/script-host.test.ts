@@ -55,3 +55,41 @@ Deno.test("script host: a run addressed to THIS host is accepted (not dropped)",
   // the sandbox bootstrap — but it must NOT have returned false (dropped).
   assertEquals(ret !== false || threw, true, "a matching-host run is accepted, not dropped");
 });
+
+Deno.test("script host: handleScriptRunMessage accepts modules array and dispatches", () => {
+  let ret = handleScriptRunMessage(
+    {
+      type: "cap:script-run",
+      source: "return 1;",
+      runId: "run_abcdefgh",
+      for: "offscreen",
+      modules: [{ name: "my-math", digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", source: "" }],
+    },
+    (_r) => {},
+    { createElement: () => ({ style: {}, setAttribute: () => {}, addEventListener: () => {} }), body: { appendChild: () => {} } },
+    "offscreen",
+  );
+  assertEquals(ret, true, "host accepts run with modules");
+});
+
+Deno.test("script host: handleScriptRunMessage fails closed on invalid module name", async () => {
+  let response = null;
+  const ret = handleScriptRunMessage(
+    {
+      type: "cap:script-run",
+      source: "return 1;",
+      runId: "run_abcdefgh",
+      for: "offscreen",
+      modules: [{ name: "../escape", digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", source: "" }],
+    },
+    (r) => { response = r; },
+    { createElement: () => ({ style: {}, setAttribute: () => {}, addEventListener: () => {} }), body: { appendChild: () => {} } },
+    "offscreen",
+  );
+  assertEquals(ret, true);
+  // Wait for async resolution
+  await new Promise((r) => setTimeout(r, 10));
+  assertEquals(response?.ok, false);
+  assertEquals(response?.error?.includes("Invalid module name"), true);
+});
+

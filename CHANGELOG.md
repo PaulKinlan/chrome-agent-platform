@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.390] — 2026-09-11
+- host dispatch and import map injection for installable JS modules (ovfm.3)
+
 ## [0.3.389] — 2026-09-11
 - position plan for native agent support on Web and Chrome (cdld)
 

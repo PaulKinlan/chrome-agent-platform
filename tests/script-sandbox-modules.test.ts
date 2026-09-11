@@ -16,6 +16,8 @@ import {
   computeModuleDigest,
   verifyAndPrepareJsModule,
   readAndVerifyJsModule,
+  prepareScriptModuleSource,
+  resolveScriptModules,
 } from "../extension/lib/script-sandbox-modules.js";
 import {
   OWNER_BLOB_KINDS,
@@ -180,3 +182,75 @@ Deno.test("ovfm.1: store integration — put and read/verify JS module in shared
   assertEquals(res2.name, "@cap/greet");
   assertEquals(mintCalls, 2);
 });
+
+Deno.test("ovfm.3: prepareScriptModuleSource wraps static imports and return into async default export", () => {
+  const sourceWithReturn = `import { add, multiply } from "math-utils";
+const x = add(1, 2);
+return multiply(x, 3);`;
+
+  const prep = prepareScriptModuleSource(sourceWithReturn);
+  assertEquals(prep.isExplicitModule, true);
+  assertEquals(prep.hasImports, true);
+  assert(prep.source.includes('import { add, multiply } from "math-utils";'));
+  assert(prep.source.includes("export default async function()"));
+  assert(prep.source.includes("return multiply(x, 3);"));
+});
+
+Deno.test("ovfm.3: prepareScriptModuleSource preserves explicit export default and export const", () => {
+  const explicitDefault = `import { format } from "date-fns";
+export default format(new Date(), "yyyy-MM-dd");`;
+
+  const prep1 = prepareScriptModuleSource(explicitDefault);
+  assertEquals(prep1.isExplicitModule, true);
+  assertEquals(prep1.source, explicitDefault);
+
+  const explicitConst = `import { format } from "date-fns";
+export const result = format(new Date(), "yyyy-MM-dd");`;
+
+  const prep2 = prepareScriptModuleSource(explicitConst);
+  assertEquals(prep2.isExplicitModule, true);
+  assertEquals(prep2.source, explicitConst);
+});
+
+Deno.test("ovfm.3: prepareScriptModuleSource identifies classic script without static imports", () => {
+  const classic = `const { add } = await import("math-utils");
+return add(1, 2);`;
+
+  const prep = prepareScriptModuleSource(classic);
+  assertEquals(prep.isExplicitModule, false);
+  assertEquals(prep.hasImports, false);
+  assertEquals(prep.source, classic);
+});
+
+Deno.test("ovfm.3: resolveScriptModules resolves inline modules and verifies digests", async () => {
+  const mod1Src = "export function inc(x) { return x + 1; }";
+  const mod1Bytes = encoder.encode(mod1Src);
+  const mod1Digest = computeModuleDigest(mod1Bytes);
+
+  const resolved = await resolveScriptModules([
+    { name: "counter", digest: mod1Digest, source: mod1Src },
+  ]);
+
+  assertEquals(resolved.length, 1);
+  assertEquals(resolved[0].name, "counter");
+  assertEquals(resolved[0].digest, mod1Digest);
+  assertEquals(resolved[0].bytes, mod1Bytes);
+});
+
+Deno.test("ovfm.3: resolveScriptModules fails closed on corrupted module bytes before dispatch", async () => {
+  const modSrc = "export function dec(x) { return x - 1; }";
+  const modBytes = encoder.encode(modSrc);
+  const legitimateDigest = computeModuleDigest(modBytes);
+
+  // Alter the source so the hash mismatches
+  await assertRejects(
+    async () => {
+      await resolveScriptModules([
+        { name: "counter", digest: legitimateDigest, source: modSrc + " // corrupted" },
+      ]);
+    },
+    Error,
+    "module_digest_mismatch",
+  );
+});
+

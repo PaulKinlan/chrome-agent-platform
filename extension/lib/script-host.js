@@ -8,6 +8,13 @@
 // bridges the controlled fetch (URL-validated + size-bounded), and resolves with
 // the result.
 
+import {
+  validateJsModuleName,
+  verifyAndPrepareJsModule,
+  readAndVerifyJsModule,
+  resolveScriptModules,
+} from "./script-sandbox-modules.js";
+
 
 /** Validate a fetch URL: http/https only, no credentials. */
 function validateUrl(url) {
@@ -73,7 +80,7 @@ export async function runFetch(payload, runId = null) {
  * Run one script source to completion in the sandboxed page. Resolves
  * `{ ok, result, logs }` or `{ ok:false, error, logs }`. Bounded by `timeoutMs`.
  */
-export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000 } = {}) {
+export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000, modules = [] } = {}) {
   return new Promise((resolve) => {
     const nonce = (typeof crypto !== "undefined" && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -139,7 +146,13 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000 } = {
     // Send the source once the sandbox page has loaded (its listener is ready).
     const sendSource = () => {
       if (settled) return;
-      iframe.contentWindow?.postMessage({ type: "cap:script-source", source, runId, nonce }, "*");
+      iframe.contentWindow?.postMessage({
+        type: "cap:script-source",
+        source,
+        runId,
+        nonce,
+        modules: Array.isArray(modules) ? modules : [],
+      }, "*");
     };
     iframe.addEventListener("load", sendSource);
     // The sandbox page may load very fast; also attempt immediately in case the
@@ -158,7 +171,7 @@ export function runScriptInIframe(doc, source, runId, { timeoutMs = 30_000 } = {
  * `hostId` identifies the caller ("offscreen" or "ntp").
  *
  * Returns `true` to hold the channel for the async response. */
-export function handleScriptRunMessage(message, sendResponse, doc = document, hostId = "host") {
+export function handleScriptRunMessage(message, sendResponse, doc = document, hostId = "host", options = {}) {
   if (message?.type === "cap:script-run-announce") {
     // Claim phase: the FIRST host to respond wins (Chrome resolves the SW's
     // sendMessage with the first sendResponse). Identify ourselves so the SW
@@ -168,7 +181,7 @@ export function handleScriptRunMessage(message, sendResponse, doc = document, ho
     return false;
   }
   if (message?.type !== "cap:script-run") return false;
-  const { source, runId, for: forHost } = message;
+  const { source, runId, for: forHost, modules } = message;
   // Only the claimed host executes — a script addressed to another host is
   // dropped (prevents every fetch/side-effect firing twice).
   if (forHost && forHost !== hostId) return false;
@@ -176,6 +189,21 @@ export function handleScriptRunMessage(message, sendResponse, doc = document, ho
     sendResponse({ ok: false, error: "invalid script-run request" });
     return false;
   }
-  runScriptInIframe(doc, source, runId).then((outcome) => sendResponse(outcome));
+
+  (async () => {
+    try {
+      const resolvedModules = Array.isArray(modules) && modules.length > 0
+        ? await resolveScriptModules(modules, options)
+        : [];
+      const outcome = await runScriptInIframe(doc, source, runId, {
+        timeoutMs: options.timeoutMs ?? 30_000,
+        modules: resolvedModules,
+      });
+      sendResponse(outcome);
+    } catch (err) {
+      sendResponse({ ok: false, error: err?.message ?? String(err) });
+    }
+  })();
+
   return true;
 }

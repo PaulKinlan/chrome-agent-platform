@@ -36,6 +36,41 @@ export function computeModuleDigest(bytes) {
 }
 
 /**
+ * Prepare a script source for execution as an ES module in the sandbox.
+ * If the source already has explicit export declarations (export default, export const, etc.),
+ * it is returned as an explicit module.
+ * If the source has static imports and statements (with return), the imports are
+ * hoisted to module top-level and the remaining body is wrapped in an async default export.
+ * If the source has no static imports or exports, returns isExplicitModule: false.
+ */
+export function prepareScriptModuleSource(source) {
+  if (typeof source !== "string") {
+    return { isExplicitModule: false, hasImports: false, source: "" };
+  }
+  if (/^\s*export\s+(default|const|let|var|function|class|\{)/m.test(source)) {
+    return { isExplicitModule: true, hasImports: true, source };
+  }
+  const importRegex = /^\s*import\s+(?:[\s\S]*?from\s+)?["\x27][^"\x27]+["\x27]\s*;?/gm;
+  const imports = [];
+  let hasImports = false;
+  const body = source.replace(importRegex, (match) => {
+    hasImports = true;
+    imports.push(match.trim());
+    return "";
+  });
+
+  if (!hasImports) {
+    return { isExplicitModule: false, hasImports: false, source };
+  }
+
+  const moduleText = imports.join("\n") +
+    "\nexport default async function() {\n" +
+    body +
+    "\n};\n";
+  return { isExplicitModule: true, hasImports: true, source: moduleText };
+}
+
+/**
  * Verify module content against claimed SHA-256 digest and prepare it for
  * resolution.
  *
@@ -47,10 +82,10 @@ export function computeModuleDigest(bytes) {
  * @param {{
  *   name: string,
  *   digest: string,
- *   bytes: Uint8Array | ArrayBuffer,
- *   createBlobUrl?: (bytes: Uint8Array) => string,
+ *   bytes: string | Uint8Array | ArrayBuffer,
+ *   createBlobUrl?: ((bytes: Uint8Array) => string) | null,
  * }} options
- * @returns {{ name: string, digest: string, blobUrl: string }}
+ * @returns {{ name: string, digest: string, blobUrl: string | null, bytes: Uint8Array }}
  */
 export function verifyAndPrepareJsModule({
   name,
@@ -65,10 +100,17 @@ export function verifyAndPrepareJsModule({
     throw err;
   }
   const cleanDigest = digest.toLowerCase();
-  if (!(bytes instanceof Uint8Array) && !(bytes instanceof ArrayBuffer)) {
-    throw new TypeError("Module bytes must be a Uint8Array or ArrayBuffer");
+
+  let uint8;
+  if (typeof bytes === "string") {
+    uint8 = new TextEncoder().encode(bytes);
+  } else if (bytes instanceof Uint8Array) {
+    uint8 = bytes;
+  } else if (bytes instanceof ArrayBuffer) {
+    uint8 = new Uint8Array(bytes);
+  } else {
+    throw new TypeError("Module bytes must be a string, Uint8Array, or ArrayBuffer");
   }
-  const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 
   // Pre-execution cryptographic re-hash
   const computed = computeModuleDigest(uint8);
@@ -82,11 +124,12 @@ export function verifyAndPrepareJsModule({
   }
 
   // Mint Blob URL only AFTER digest verification succeeds
-  const blobUrl = createBlobUrl(uint8);
+  const blobUrl = createBlobUrl ? createBlobUrl(uint8) : null;
   return Object.freeze({
     name: validName,
     digest: cleanDigest,
     blobUrl,
+    bytes: uint8,
   });
 }
 
@@ -103,3 +146,39 @@ export async function readAndVerifyJsModule({
   const bytes = await verifyAndReadOwnerBlobBytes({ digest, storage, locks });
   return verifyAndPrepareJsModule({ name, digest, bytes, createBlobUrl });
 }
+
+/**
+ * Resolve an array of module references (either with inline source/bytes or
+ * stored in OPFS) and verify their digests.
+ */
+export async function resolveScriptModules(modules = [], { storage, locks } = {}) {
+  if (!Array.isArray(modules) || modules.length === 0) return [];
+  const resolved = [];
+  for (const mod of modules) {
+    if (!mod || typeof mod !== "object") continue;
+    const name = validateJsModuleName(mod.name);
+    const digest = String(mod.digest || "").toLowerCase();
+    if (typeof mod.source === "string" || mod.bytes instanceof Uint8Array || mod.bytes instanceof ArrayBuffer) {
+      const verified = verifyAndPrepareJsModule({
+        name,
+        digest,
+        bytes: typeof mod.source === "string" ? mod.source : mod.bytes,
+        createBlobUrl: null,
+      });
+      resolved.push({
+        name: verified.name,
+        digest: verified.digest,
+        bytes: verified.bytes,
+      });
+    } else {
+      const record = await readAndVerifyJsModule({ name, digest, storage, locks, createBlobUrl: null });
+      resolved.push({
+        name: record.name,
+        digest: record.digest,
+        bytes: record.bytes,
+      });
+    }
+  }
+  return resolved;
+}
+
