@@ -4,9 +4,10 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { textToDataUrl } from "../extension/lib/attachments.js";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const EXT = new URL("../extension", import.meta.url).pathname;
-const profile = await Deno.makeTempDir({ prefix: "site-delegate-evidence-" });
+const profile = chromeProfileDir("kat-site-delegate");
 
 const { proc, wsUrl } = await launchChrome({
   binary: "/usr/bin/chromium",

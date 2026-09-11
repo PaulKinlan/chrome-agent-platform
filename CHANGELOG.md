@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.344] — 2026-09-11
+- widen durable-root guard and migrate tempdir call sites to durable paths
+
 ## [0.3.343] — 2026-09-09
 - the three coupling rules are canon — read the inventory before touching a watcher
 
