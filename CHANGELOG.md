@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.374] — 2026-09-11
+- retain board deny policy engine fixture and census acceptance
+
 ## [0.3.373] — 2026-09-11
 - terminate background test process groups on timeout and bound fixture lifetimes
 

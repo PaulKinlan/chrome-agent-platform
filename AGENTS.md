@@ -14,7 +14,9 @@ Worker dispatch authority surface and route classifications are mapped in
 streamed backup and restore architecture is mapped in
 [docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md](docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md). The
 architectural risk register is maintained in
-[docs/RISK-REGISTER.md](docs/RISK-REGISTER.md).
+[docs/RISK-REGISTER.md](docs/RISK-REGISTER.md). Board deny-policy engine fixture
+and census acceptance are documented in
+[docs/BOARD-DENY-ENGINE-ACCEPTANCE.md](docs/BOARD-DENY-ENGINE-ACCEPTANCE.md).
 
 ## The constitution
 **docs/CONSTITUTION.md is non-negotiable.** Every change must satisfy the
