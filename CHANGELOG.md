@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.358] — 2026-09-11
+- Reconcile MCP mutation approval contract with owner-only store policy
+
 ## [0.3.357] — 2026-09-11
 - Agent Save reports persona failure honestly and retains dialog on partial schedule success
 
