@@ -97,7 +97,9 @@ The SW cannot construct DOM or workers, so one offscreen document
    `extension/lib/agent-worker-host.js:60` `new SharedWorker(workerUrl,
    {type:"module", name: id})`),
 3. the Pyodide Python host (`registerPythonHost` — fresh classic worker per
-   `python.execute`; busy loops die by `worker.terminate()`),
+   `python.execute`; busy loops die by `worker.terminate()`; fresh-per-run
+   isolation enforced across both memory and storage via ambient network and
+   storage strips in `wasm-tools/python/python-worker.js`),
 4. the Wasm stream host (`registerWasmStreamHost`,
    `extension/lib/wasm-stream-host.js`),
 5. the table worker host (`registerTableWorkerHost`,

@@ -49,7 +49,7 @@ export const PYTHON_RUNTIME_PIN = Object.freeze({
     "pyodide.asm.wasm": Object.freeze({ sha256: "b7e66a19427a55010ac3367c1b6c64b893f9826f783412945fdf0c3337f3bc94", bytes: 10088051 }),
     "python_stdlib.zip": Object.freeze({ sha256: "72894522b791858b9d613ac786b951d8b5094035dcf376313ea24a466810f336", bytes: 2341872 }),
     "pyodide-lock.json": Object.freeze({ sha256: "cd50b49de944c579045e122fe8628b31f9ce446379f032f36c05e273d38766e0", bytes: 106335 }),
-    "python-worker.js": Object.freeze({ sha256: "a03a5837bf2a7a6ad1100ee5dad7cbc81546d24710928ee44b5b3798d2786e2c", bytes: 8572 }),
+    "python-worker.js": Object.freeze({ sha256: "957bb4f73e04caf0a19c37e49652138e745247109665962b68d582d540e33df1", bytes: 11122 }),
   }),
 });
 

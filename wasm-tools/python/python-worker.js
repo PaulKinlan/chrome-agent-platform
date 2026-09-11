@@ -61,9 +61,10 @@ function indexUrl() {
 // worker that would have its own untouched fetch; `navigator.sendBeacon` posts
 // a body with no response needed, which is all exfiltration requires;
 // WebSocket/EventSource/WebTransport are each a full channel.
-// `indexedDB`/`caches` are NOT stripped — they are storage, not network, and
-// removing them is a separate question about cross-run state
-// (chrome-agent-platform-4p7j.3), not this one.
+// `indexedDB`/`caches` are STRIPPED alongside network globals (bead
+// chrome-agent-platform-4p7j.3) — leaving them open creates an unmanaged
+// cross-run covert persistence channel across tasks and agents. Teaching
+// guards match script-sandbox.js.
 //
 // WHY IT RUNS AFTER loadPyodide RESOLVES: Pyodide's own loader needs fetch to
 // read pyodide.asm.wasm and python_stdlib.zip. Stripping first would break the
@@ -133,6 +134,67 @@ function stripAmbientNetwork() {
   }
 }
 
+// The ambient storage reach removed from this worker's scope before any Python
+// runs (bead chrome-agent-platform-4p7j.3, owner ruling 2026-09-11).
+//
+// WHY IT IS STRIPPED: This worker runs at the chrome-extension:// origin.
+// Leaving self.indexedDB and self.caches intact exposes the extension origin's
+// persistent browser storage, allowing Python code in one run to persist state
+// and read it back in another run. That turns an interpreter that is supposed to
+// be fresh per run into an unmanaged cross-run covert channel between tasks and
+// agents.
+//
+// In script-sandbox.js, agent-authored JavaScript is denied indexedDB and
+// caches with teaching guards. Stripping them here restores symmetry: the
+// fresh-per-run property holds across both memory and storage, and Python
+// learns the exact same platform storage model.
+//
+// Pyodide and the standard library do NOT use indexedDB or caches (installed
+// modules/wheels unpack from the platform owner-blob store into MEMFS; task
+// data uses memory_set / create_asset / OPFS workspace directories).
+function stripAmbientStorage() {
+  const reason = (name) =>
+    name + " is unavailable inside the Python worker — an execution keeps no state " +
+    "between runs: compute and return the value; store durable data with the platform " +
+    "(memory_set / create_asset / workspace files) from the agent side.";
+
+  function makeDenyApi(prop, methods) {
+    const fn = function denied() { throw new Error(reason(prop)); };
+    for (const m of methods) {
+      fn[m] = function deniedMethod() { throw new Error(reason(prop + "." + m)); };
+    }
+    return fn;
+  }
+
+  const STORAGE_APIS = {
+    indexedDB: ["open", "deleteDatabase", "databases", "cmp"],
+    caches: ["open", "keys", "delete", "match", "has"],
+  };
+
+  for (const [name, methods] of Object.entries(STORAGE_APIS)) {
+    try {
+      const deny = makeDenyApi(name, methods);
+      Object.defineProperty(self, name, {
+        value: deny,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      });
+    } catch {
+      try { self[name] = undefined; } catch { /* ignore */ }
+      try { delete self[name]; } catch { /* ignore */ }
+    }
+  }
+
+  if (self.navigator && self.navigator.storage) {
+    try {
+      self.navigator.storage.getDirectory = function denied() {
+        return Promise.reject(new Error(reason("navigator.storage.getDirectory (OPFS)")));
+      };
+    } catch { /* ignore */ }
+  }
+}
+
 function runtime() {
   if (!runtimePromise) {
     runtimePromise = loadPyodide({
@@ -145,6 +207,7 @@ function runtime() {
       // AFTER the interpreter exists, BEFORE any Python runs. See the boundary
       // note above for why this ordering is load-bearing.
       stripAmbientNetwork();
+      stripAmbientStorage();
       return pyodide;
     }).catch((error) => {
       runtimePromise = null; // a failed init can be retried by the next run

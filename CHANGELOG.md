@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.381] — 2026-09-11
+- strip ambient storage from the python worker to enforce fresh execution
+
 ## [0.3.380] — 2026-09-11
 - design specification for installable JS modules in script sandbox (ovfm)
 
