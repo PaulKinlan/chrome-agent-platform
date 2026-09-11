@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.347] — 2026-09-11
+- remove per-agent workspace quota ()
+
 ## [0.3.346] — 2026-09-11
 - Settings shows the site access Chrome actually grants with truthful scope copy
 

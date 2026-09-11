@@ -1,8 +1,9 @@
 // tests/agent-workspace.test.ts — CAP-FB-20260831-AGENT-PRIVATE-FS-01
 //
 // Every named/background agent gets a persistent PRIVATE OPFS workspace
-// (agent-workspaces/<key>/) — lazily created, isolated per agent, bounded by a
-// per-agent quota, reachable by the file tools as the default when no fs-grant
+// (agent-workspaces/<key>/) — lazily created, isolated per agent, with NO
+// artificial storage cap (bounded only by the browser's native OPFS
+// allocation), reachable by the file tools as the default when no fs-grant
 // is in scope, and clearable only by an owner gesture. @ts-nocheck — the OPFS
 // shim is intentionally dynamic.
 // @ts-nocheck
@@ -20,10 +21,7 @@ import {
   searchWorkspaceFiles,
   clearAgentWorkspace,
   getWorkspaceUsageByKey,
-  DEFAULT_WORKSPACE_BYTES,
-  DEFAULT_WORKSPACE_FILES,
 } from "../extension/lib/agent-workspace.js";
-import * as ws from "../extension/lib/agent-workspace.js";
 import { createAgentWorkspaceRoutes } from "../extension/background/routes/agent-workspace.js";
 import { slugifyAgentId } from "../extension/lib/named-agents.js";
 
@@ -154,7 +152,7 @@ Deno.test("isolation: agent B cannot read agent A's workspace files", async () =
   assert(names.includes("secret.txt"), "A sees its own file");
   const lb = await listWorkspaceEntries("", { currentRunContext: namedCtxB });
   assert(lb.ok === true);
-  assertEquals(lb.entries.filter((e) => e.name !== ".quota.json").length, 0, "B sees nothing of A's");
+  assertEquals(lb.entries.length, 0, "B sees nothing of A's");
 });
 
 Deno.test("hub/site runs have NO workspace (no_agent_workspace)", async () => {
@@ -176,36 +174,38 @@ Deno.test("background agents get their own workspace, separate from named", asyn
   // A named agent of a similar slug still has its own empty dir.
   const ln = await listWorkspaceEntries("", { currentRunContext: namedCtxA });
   assert(ln.ok === true);
-  assertEquals(ln.entries.filter((e) => e.name !== ".quota.json").length, 0);
+  assertEquals(ln.entries.length, 0);
 });
 
-// ── bounds ──────────────────────────────────────────────────────────────────
-Deno.test("quota: writes over the byte cap fail closed with an honest error", async () => {
+// ── storage (no artificial quota — owner directive 2026-09-04) ─────────────
+Deno.test("no byte quota: a write past the retired 20 MiB cap succeeds", async () => {
   resetStore();
-  // Pre-fill near the 20 MiB cap: write MAX bytes into a big file first? The
-  // cap is 20 MiB; writing 21 MiB in one shot trips MAX_FS_WRITE_BYTES (5 MiB)
-  // first. To exercise the workspace quota we pad with several 5 MiB files.
-  const big = "x".repeat(4 * 1024 * 1024);
-  for (let i = 0; i < 5; i++) {
-    const w = await writeWorkspaceFile(`big${i}.bin`, big, { currentRunContext: namedCtxA });
-    assert(w.ok === true, `seed ${i} failed: ${w.error ?? ""}`);
-  }
-  // 5 × 4 MiB = 20 MiB; one more 1-byte write must exceed the cap.
-  const over = await writeWorkspaceFile("tiny.txt", "y", { currentRunContext: namedCtxA });
-  assert(over.ok === false, "write past the quota must fail");
-  assertEquals(over.error, "workspace_quota_exceeded");
+  // Falsification anchor: 21 MiB in ONE file — past the retired 20 MiB
+  // per-agent cap. Must succeed (only the browser's OPFS allocation bounds it).
+  const big = "x".repeat(21 * 1024 * 1024);
+  const w = await writeWorkspaceFile("big.bin", big, { currentRunContext: namedCtxA });
+  assert(w.ok === true, `write past 20 MiB must succeed: ${w.error ?? ""}`);
+  assertEquals(w.bytes, 21 * 1024 * 1024);
+  // The file is really there, in full.
+  const r = await readWorkspaceFile("big.bin", { currentRunContext: namedCtxA });
+  assert(r.ok === true);
+  assertEquals(r.size, 21 * 1024 * 1024);
+  const u = await getWorkspaceUsageByKey("named-agent-a");
+  assert(u.ok === true);
+  assertEquals(u.bytesUsed, 21 * 1024 * 1024);
 });
 
-Deno.test("quota: file-count cap fails closed", async () => {
+Deno.test("no file-count quota: writes past the retired 200-file cap succeed", async () => {
   resetStore();
-  // DEFAULT_WORKSPACE_FILES = 200; writing 200 small files then one more fails.
-  for (let i = 0; i < DEFAULT_WORKSPACE_FILES; i++) {
+  for (let i = 0; i < 201; i++) {
     const w = await writeWorkspaceFile(`f${i}.txt`, "x", { currentRunContext: namedCtxA });
     assert(w.ok === true, `seed ${i} failed: ${w.error ?? ""}`);
   }
+  const u = await getWorkspaceUsageByKey("named-agent-a");
+  assert(u.ok === true);
+  assertEquals(u.filesUsed, 201);
   const over = await writeWorkspaceFile("one-more.txt", "x", { currentRunContext: namedCtxA });
-  assert(over.ok === false);
-  assertEquals(over.error, "workspace_quota_exceeded");
+  assert(over.ok === true, "a 202nd file must also succeed");
 });
 
 Deno.test("path grammar is bounded (traversal + depth refused)", async () => {
@@ -227,8 +227,6 @@ Deno.test("owner Clear empties the workspace and usage reports it", async () => 
   const before = await getWorkspaceUsageByKey("named-agent-a");
   assert(before.ok === true);
   assert(before.filesUsed >= 2, `expected ≥2 files, got ${before.filesUsed}`);
-  assertEquals(before.maxBytes, DEFAULT_WORKSPACE_BYTES);
-  assertEquals(before.maxFiles, DEFAULT_WORKSPACE_FILES);
 
   const c = await clearAgentWorkspace({ key: "named-agent-a" });
   assert(c.ok === true, `clear failed: ${c.error ?? ""}`);
@@ -238,7 +236,7 @@ Deno.test("owner Clear empties the workspace and usage reports it", async () => 
   assertEquals(after.bytesUsed, 0);
   const l = await listWorkspaceEntries("", { currentRunContext: namedCtxA });
   assert(l.ok === true);
-  assertEquals(l.entries.filter((e) => e.name !== ".quota.json").length, 0);
+  assertEquals(l.entries.length, 0);
 });
 
 // ── the Settings routes (review round-1 P1) ────────────────────────────────
@@ -265,7 +263,6 @@ Deno.test("agent-workspace routes: usage + clear address the run-context directo
   assertEquals(u.workspace, "named-settings-check");
   assertEquals(u.filesUsed, 1);
   assert(u.bytesUsed > 0);
-  assertEquals(u.maxBytes, DEFAULT_WORKSPACE_BYTES);
 
   const c = await routes["agent-workspace.clear"]({ id: "settings-check" }, { principal: "extension" });
   assert(c.ok === true, `clear failed: ${c.error ?? ""}`);
