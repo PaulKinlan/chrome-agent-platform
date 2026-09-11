@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.386] — 2026-09-11
+- recover native registry calibration checks
+
 ## [0.3.385] — 2026-09-11
 - bind JS modules to owner store and declare sandbox CSP permitting blob (ovfm.1-2)
 
