@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.388] — 2026-09-11
+- synchronize sandboxing, messaging, board deny, backup, and MCP filter sections (dzyx)
+
 ## [0.3.387] — 2026-09-11
 - correct compaction review measurements and scope
 
