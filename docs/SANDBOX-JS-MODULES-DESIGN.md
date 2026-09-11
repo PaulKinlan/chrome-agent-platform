@@ -85,13 +85,14 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
     ```
 - **Cost / Complexity:** Moderate. Requires transitioning `script-sandbox.js` from `new Function` to native dynamic `import()`, managing object URL revocation (`URL.revokeObjectURL`) on teardown, and reloading the iframe per run due to import map immutability.
 - **Security:** Total origin and network isolation. Resolves 100% offline via local in-memory blob references.
-- **CSP Prerequisite:** Requires adding `blob:` to the sandbox CSP in `manifest.json`:
+- **CSP Prerequisite & Risk Envelope:** Requires adding `blob:` to the sandbox CSP in `manifest.json`:
   ```json
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:",
     "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self';"
   }
   ```
+  *Security containment analysis:* Permitting `blob:` in a sandboxed page's `script-src` widens what can load as script, but the threat is strictly contained: the sandbox is an opaque origin (`null`) with zero `chrome.*` APIs, no storage access, and no ambient network. Its only network reach is host-bridged `fetch` with SSRF denial and host allowlists enforced by the Service Worker in `extension/lib/fetch-policy.js`. A `blob:`-URL script is therefore fully contained by the sandbox isolation boundary rather than by CSP script-source restrictions.
 
 ### Option C: `data:` URLs + Import Map
 - **Mechanism:** Same as Option B, but converting modules to `data:text/javascript;base64,...` strings instead of `blob:` URLs.
@@ -128,10 +129,14 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
      3. **The exact module names and their SHA-256 digests bound to the run.**
    - A model cannot substitute or hijack an installed module: module resolution binds the exact stored digest at dispatch time.
 
-3. **Fresh-Per-Run Iframe Instantiation:**
+3. **Anti-Impersonation & Pre-Execution Digest Verification:**
+   - Module resolution must enforce cryptographic re-hashing before minting any Blob URL. A module whose actual bytes deviate by even one bit from its registered SHA-256 digest must fail closed with a typed `digest-mismatch` refusal.
+   - *Test Requirement:* An executing unit test must prove that a corrupted or substituted module is rejected before any Blob URL is created or mounted, mirroring the pre-instantiate re-hash contract in `executeUserWasmRun`.
+
+4. **Fresh-Per-Run Iframe Instantiation:**
    - Because `<script type="importmap">` is immutable after the first module load, the host (`script-host.js`) must instantiate a fresh iframe for each script run that uses modules, tearing down the iframe upon completion. (This is already the pattern in `runScriptInIframe` lines 88–133).
 
-4. **Teardown & GC:**
+5. **Teardown & GC:**
    - Upon script resolution or timeout, `runScript` in `script-sandbox.js` revokes all created Blob URLs via `URL.revokeObjectURL(url)` to prevent memory leaks in long-running offscreen hosts.
 
 ---
@@ -156,8 +161,8 @@ To remain honest and avoid architectural over-promising, this design explicitly 
 
 ## 6. Implementation Staging Plan
 
-1. **Stage 1 (Store Binding):** Connect JS module storage to the shared owner-blob store (`cap-owner-blobs-v1/`) with Settings UI for upload, digest inspection, and removal.
-2. **Stage 2 (Manifest CSP):** Declare `content_security_policy.sandbox` in `extension/manifest.json` permitting `blob:` in `script-src`.
+1. **Stage 1 (Store Binding & Anti-Impersonation Pin):** Connect JS module storage to the shared owner-blob store (`cap-owner-blobs-v1/`) with Settings UI for upload, digest inspection, and removal. Add an executing unit test asserting that byte-corrupted modules fail closed with `digest-mismatch` before Blob URL creation.
+2. **Stage 2 (Manifest CSP & Containment Proof):** Declare `content_security_policy.sandbox` in `extension/manifest.json` permitting `blob:` in `script-src`, with the documented containment rationale (opaque null origin, no ambient network, host-bridged fetch).
 3. **Stage 3 (Host Dispatch & Import Map Injection):** Update `script-host.js` and `script-sandbox.js` to mint Blob URLs and inject `<script type="importmap">` prior to module execution.
 4. **Stage 4 (Verification & Falsification KAT):** Add test suite verifying:
    - Bare specifier import resolves to correct module.
