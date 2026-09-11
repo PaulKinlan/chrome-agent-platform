@@ -58,6 +58,8 @@ export const RETAINED = {
   "lib/bundled-inventory.js":
     "Owner directive 2026-08-30: part of the WASI bundled-package inventory (imported by lib/bundled-tool-packages.js); tests/bundled-tool-packages.test.ts pins it.",
   // ── surfaces or modules another OPEN entry owns ──
+  "lib/emscripten-module-audit.js":
+    "40an: inert structural auditor until ltkj.2's admission integration references it; remove this entry when reachable (the stale-retention gate enforces that).",
   "lib/archive-target-registry.js":
     "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): authority for classifying durable targets by exact store grammar; tests/archive-target-registry-successor.test.ts pins it.",
   "lib/tabular-diff-artifacts.js":

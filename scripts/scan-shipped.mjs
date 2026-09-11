@@ -223,6 +223,10 @@ const CALLEXPORT_HOST_MODULE_LOCATION = { line: 49, column: 19 };
 const CALLEXPORT_HOST_INSTANCE_LOCATION = { line: 50, column: 15 };
 const CALLEXPORT_HOST_MODULE_RE = /new\s+WebAssembly\.Module\(/g;
 const CALLEXPORT_HOST_INSTANCE_RE = /new\s+WebAssembly\.Instance\(/g;
+// The inert structural auditor validates bytes, never instantiates a module.
+// This exact validate-only site is not an execution-host exemption.
+const EMSCRIPTEN_AUDIT_PATH = "extension/lib/emscripten-module-audit.js";
+const EMSCRIPTEN_VALIDATE_LOCATION = { line: 274, column: 7 };
 
 // THE WORKER-HOST exemption — a second FIXED canonical constant owned by the
 // scanner (NOT caller-supplied): the exact source-only, unreachable executor
@@ -320,6 +324,10 @@ function isCanonicalScannedPath(file, canonicalRelative) {
   return normalized.endsWith("/" + canonicalRelative);
 }
 
+/**
+ * @param {string[]} files
+ * @param {{generatedBundles?:Set<string>,allowedWorkerLiterals?:Set<string>,allowedDynamicEvaluatorFiles?:Set<string>,readText?:(file:string)=>Promise<string>}} options
+ */
 export async function scanShippedJs(files, {
   generatedBundles = new Set(),
   allowedWorkerLiterals = new Set(),
@@ -632,7 +640,13 @@ export async function scanShippedJs(files, {
           (node.arguments?.length ?? 0) === 2 &&
           arg1?.type === "ObjectExpression" && (arg1.properties?.length ?? -1) === 0
         ));
-        const allowed = isCallexportAllowed || (isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
+        const isAdmissionValidation = isCanonicalScannedPath(file, EMSCRIPTEN_AUDIT_PATH) &&
+          isCall && memberName === "validate" && !node.callee.computed &&
+          argCount === 1 && arg0?.type === "Identifier" && arg0.name === "bytes" &&
+          node.loc?.start?.line === EMSCRIPTEN_VALIDATE_LOCATION.line &&
+          node.loc?.start?.column === EMSCRIPTEN_VALIDATE_LOCATION.column &&
+          (text.match(/WebAssembly\.validate\(/g) ?? []).length === 1;
+        const allowed = isAdmissionValidation || isCallexportAllowed || (isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
           (isCanonicalHost && sameLegacyLocation && legacyCount === 1) ||
           (isStreamHost && sameStreamLocation && streamCount === 1)
         ));

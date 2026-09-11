@@ -80,7 +80,7 @@ function fail(code, path = "", detail = null) {
   throw new WasmPackageAuthorityError(code, path, detail);
 }
 
-function exactKeys(value, required, optional = [], path = "$manifest") {
+export function exactKeys(value, required, optional = [], path = "$manifest") {
   if (!value || typeof value !== "object" || Array.isArray(value)) fail("manifest_type", path);
   const allowed = new Set([...required, ...optional]);
   for (const key of Object.keys(value)) {
@@ -98,7 +98,7 @@ function assertAscii(value, path, { min = 0, max = 256 } = {}) {
   return value;
 }
 
-function assertRelativePath(value, path) {
+export function assertRelativePath(value, path) {
   const text = assertAscii(value, path, { min: 1, max: 128 });
   let decoded;
   try { decoded = decodeURIComponent(text); } catch { fail("path_escape", path); }
