@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.385] — 2026-09-11
+- bind JS modules to owner store and declare sandbox CSP permitting blob (ovfm.1-2)
+
 ## [0.3.384] — 2026-09-11
 - tests: use relative MEMFS virtual path in python-storage-guard test to satisfy durable-root guard
 

@@ -18,7 +18,7 @@ const EXTENSION = join(ROOT, "extension");
 const PROBE_ROOT = join(ROOT, "packages/bundled/evidence/emscripten-abi");
 const SNAPSHOT_PATH = join(PROBE_ROOT, "loaded-probe/snapshot.json");
 export const SNAPSHOT_SHA256 =
-  "081ee1b8f6a70e93af8bf44ee0620def12103331325e5a59620cb41fede51f45";
+  "34b6d91a77fad1b7fd3fa2f5e60a5327df640fd8e385bb81a0e2013b9890ff78";
 const PROBE_DEST = "_emscripten_abi_probe";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

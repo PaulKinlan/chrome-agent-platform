@@ -9,9 +9,9 @@ export const OWNER_BLOBS_ROOT = "cap-owner-blobs-v1";
 const V1_ROOT = "cap-user-wasm-v1";
 const LOCK = "cap-owner-blob-store-v1";
 const RECORD_VERSION = 2;
-/** Closed set of blob kinds. ovfm (Python modules) extends this constant —
+/** Closed set of blob kinds. ovfm (JS/Python modules) extends this constant —
  * it is the only sanctioned way to add a kind. */
-export const OWNER_BLOB_KINDS = Object.freeze(["wasm", "wheel"]);
+export const OWNER_BLOB_KINDS = Object.freeze(["wasm", "wheel", "js-module"]);
 const KINDS = new Set(OWNER_BLOB_KINDS);
 const DIGEST = /^[0-9a-f]{64}$/u;
 const META = /^([0-9a-f]{64})\.json$/u;
