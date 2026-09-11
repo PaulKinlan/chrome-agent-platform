@@ -27,7 +27,10 @@
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const EXT = "/home/paulkinlan/chrome-agent-platform/extension";
+// The checkout this file runs FROM, never one machine's checkout path
+// (chrome-agent-platform-3khn): the harness drives the tree it ships with.
+const ROOT = new URL("..", import.meta.url).pathname;
+const EXT = `${ROOT}extension`;
 const SHOTS = Deno.env.get("CAP_EVIDENCE_DIR") ?? "./evidence/live-run";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

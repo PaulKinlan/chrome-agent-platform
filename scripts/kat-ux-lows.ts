@@ -14,6 +14,7 @@
 //   deno run -A scripts/kat-ux-lows.ts <path-to-extension> [<out-dir>]
 
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -22,7 +23,12 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-ux-lows`;
 // NOTE: the Arch chromium wrapper ignores --load-extension (no extension
 // targets at all); Chrome for Testing honors it. The extension also needs a
 // build first (manifest points the SW at dist/background/service-worker.js).
-const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
+const CHROMIUM = resolveChromeForTesting();
+if (!CHROMIUM) {
+  console.log("FAIL: no Chrome for Testing binary in the puppeteer cache — expected $HOME/.cache/puppeteer/chrome/*/chrome-linux64/chrome (install one with: npx @puppeteer/browsers install chrome@stable). The Arch chromium wrapper ignores --load-extension, so this journey cannot run against it.");
+  Deno.exit(1);
+}
+console.log(`NOTE: Chrome for Testing: ${CHROMIUM}`);
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {

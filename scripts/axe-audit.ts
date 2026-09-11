@@ -24,8 +24,34 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/axe-audit`;
 // Bypass /usr/bin/chromium: it is an omarchy wrapper that injects a second
 // --load-extension, which silently defeats --disable-extensions-except.
 const CHROMIUM = "/usr/lib/chromium/chromium";
-const AXE_SRC = Deno.env.get("AXE_SRC")
-  ?? "/home/paulkinlan/.npm/_npx/0f94ee7615faf582/node_modules/axe-core/axe.min.js";
+// The axe engine: an explicit AXE_SRC wins; else the newest axe-core copy in the
+// npx cache resolves at run time — never a pinned machine path, which exists on
+// exactly one box and dies on every other (chrome-agent-platform-3khn). Nothing
+// found: fail loudly with the way out, never a silent skip.
+function resolveAxeSrc(): string | null {
+  const env = Deno.env.get("AXE_SRC");
+  if (env) return env;
+  const home = Deno.env.get("HOME");
+  if (!home || !home.startsWith("/")) return null;
+  const npxRoot = `${home}/.npm/_npx`;
+  try {
+    const found: string[] = [];
+    for (const e of Deno.readDirSync(npxRoot)) {
+      const candidate = `${npxRoot}/${e.name}/node_modules/axe-core/axe.min.js`;
+      try {
+        if (Deno.statSync(candidate).isFile) found.push(candidate);
+      } catch { /* a different hash dir, or an incomplete install */ }
+    }
+    return found.sort().at(-1) ?? null;
+  } catch {
+    return null; // no npx cache on this box
+  }
+}
+const AXE_SRC = resolveAxeSrc();
+if (!AXE_SRC) {
+  console.log("FAIL: no axe-core engine found — set AXE_SRC to an axe.min.js, or populate the npx cache (npx axe-core).");
+  Deno.exit(1);
+}
 
 // The audited rule set. Empty = the full pass gate.
 const AUDITED_RULES = [

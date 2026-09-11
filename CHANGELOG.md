@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.353] — 2026-09-11
+- the browser checks run on the newest Chrome for Testing you have installed
+
+## [0.3.352] — 2026-09-11
+- the browser checks run on the newest Chrome for Testing you have installed
+
 ## [0.3.351] — 2026-09-11
 - tests: reword tally pin test to honestly describe declarative registry check
 

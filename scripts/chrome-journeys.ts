@@ -21,6 +21,19 @@ const EVIDENCE_DIR = RETAIN
   : durableDir(`cap-evidence-${Date.now()}`);
 const RUN_ID = `cap-${Date.now()}`;
 
+/** Journey profile roots resolve from the operator's environment at run time — never
+ *  a literal home path, which names exactly one machine's layout and dies on every
+ *  other checkout (chrome-agent-platform-3khn, the machine-path rule). A missing or
+ *  relative HOME is a broken environment: fail loudly, never guess. */
+function homeCacheProfile(name: string): string {
+  const home = Deno.env.get("HOME");
+  if (!home || !home.startsWith("/")) {
+    console.log(`FAIL: HOME must be an absolute path to build the journey profile root — got ${JSON.stringify(home)}`);
+    Deno.exit(1);
+  }
+  return `${home}/.cache/cap-review/${name}`;
+}
+
 const CHROMIUM = "/usr/bin/chromium";
 const PKILL = "/usr/bin/pkill";
 const PGREP = "/usr/bin/pgrep";
@@ -1024,7 +1037,7 @@ async function writeEvidence(name, bytes) {
 }
 
 async function main() {
-  const profile = `/home/paulkinlan/.cache/cap-review/j2-${Date.now()}`;
+  const profile = homeCacheProfile(`j2-${Date.now()}`);
   await Deno.mkdir(EVIDENCE_DIR, { recursive: true }).catch(() => {});
   let proc: Deno.ChildProcess | null = null;
   let port;
@@ -8442,7 +8455,7 @@ function demoFixture(label: string) {
 }
 
 async function demoPathJourney() {
-  const profile = `/home/paulkinlan/.cache/cap-review/j2-demo-${Date.now()}`;
+  const profile = homeCacheProfile(`j2-demo-${Date.now()}`);
   const extId = await unpackedExtensionId(EXT);
   const grant = { api: ["tabs", "tabGroups"], explicit_host: [], manifest_permissions: [], scriptable_host: [] };
   const prefs = { extensions: { settings: { [extId]: { granted_permissions: grant, active_permissions: grant } } } };
@@ -8806,7 +8819,7 @@ async function demoPathJourney() {
 let factoryResetLeak = false;
 
 async function factoryResetJourney() {
-  const profile = `/home/paulkinlan/.cache/cap-review/j3-reset-${Date.now()}`;
+  const profile = homeCacheProfile(`j3-reset-${Date.now()}`);
   const extId = await unpackedExtensionId(EXT);
   let proc: Deno.ChildProcess | null = null;
   let ws = null;

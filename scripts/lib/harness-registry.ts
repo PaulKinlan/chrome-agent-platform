@@ -113,7 +113,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-mcp-global-ui.ts": { class: "kat" },
   "kat-mcp-tool-injection.ts": { class: "kat" },
   "kat-mcp-transport.ts": { class: "kat" },
-  "kat-mic-state.ts": { class: "kat", ...RED("59/1", "axe: the device picker controls carry an aria attribute not allowed on their role") },
+  "kat-mic-state.ts": { class: "kat", ...RED("crash", "on the resolved Chrome for Testing 150 (3khn migration): the hub's mic button is absent on load ({missing:true}) and the journey throws at its second probe. Adjudicated 2026-09-11 with a verified differential: the pinned 59/1 (axe: the device picker aria) held on 140.0.7339.82 in the same tree (cap-evidence/3khn/kat-mic-state*.log) — the crash is a browser-bump effect, owner: unassigned (a fix or a retirement decision is the next action)") },
   "kat-narrow-toggle.ts": { class: "kat" },
   "kat-fingerprint-surface.ts": { class: "kat" },
   "kat-notify-icon.ts": { class: "kat" },

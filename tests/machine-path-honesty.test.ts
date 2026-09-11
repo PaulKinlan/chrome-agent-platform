@@ -38,6 +38,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const TESTS = `${ROOT}tests/`;
+const SCRIPTS = `${ROOT}scripts/`;
 
 /** Filesystem calls whose first argument is a path. `Deno.stat` counts: probing an
  *  absolute path to decide whether to run is exactly how a test becomes
@@ -87,6 +88,32 @@ function testFiles(): string[] {
   return out.sort();
 }
 
+/** The executable harness surface: every script the repo can run — the KAT
+ *  journeys, the gates, the libs they share. These feed paths to BROWSER ARGS and
+ *  spawns, not only to Deno fs calls, so the tests/ detector's "must reach a
+ *  filesystem call" narrowing does not apply here (chrome-agent-platform-3khn: the
+ *  pinned Chrome-for-Testing consts reached launchChrome and were invisible to a
+ *  call-site scan). */
+function scriptFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const e of Deno.readDirSync(dir)) {
+      const p = `${dir}${e.name}`;
+      if (e.isDirectory) walk(`${p}/`);
+      else if (e.name.endsWith(".ts") || e.name.endsWith(".mjs")) out.push(p.slice(ROOT.length));
+    }
+  };
+  walk(SCRIPTS);
+  return out.sort();
+}
+
+/** Block comments blanked (newlines kept so line numbers survive), because a doc
+ *  comment teaching the canon with an example path is exactly the prose the guard
+ *  must not shoot. */
+function stripBlockComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ""));
+}
+
 /** True when the match at `pos` sits after a `//` on its own line. */
 function inLineComment(text: string, pos: number): boolean {
   const start = text.lastIndexOf("\n", pos) + 1;
@@ -134,6 +161,30 @@ export function detect(text: string, file: string): Hit[] {
         evidence: `${m[1]} = "${held.value}" reaches ${m[0].trim()}`,
       });
     }
+  }
+  return hits;
+}
+
+/** THE SCRIPTS RULE, stricter than the tests rule on purpose. Harness code hands
+ *  paths to `launchChrome`, to `--load-extension`, to spawned processes — none of
+ *  which is a filesystem call the tests/ detector can key on. So in scripts/ ANY
+ *  absolute path under a user home, anywhere outside a comment, is the defect: there
+ *  is no fixture-value idiom in executable harness code that needs one. `$HOME`-style
+ *  env-built roots are the portable idiom and never match. */
+export function detectScriptHomeLiteral(text: string, file: string): Hit[] {
+  const code = stripBlockComments(text);
+  const hits: Hit[] = [];
+  const re = new RegExp(HOME_PREFIX, "g");
+  for (const m of code.matchAll(re)) {
+    const pos = m.index!;
+    if (inLineComment(code, pos)) continue;
+    const lineStart = code.lastIndexOf("\n", pos) + 1;
+    const lineEnd = code.indexOf("\n", pos);
+    hits.push({
+      file, line: code.slice(0, pos).split("\n").length, kind: "home-literal",
+      key: `${file}::${code.slice(pos, lineEnd < 0 ? undefined : lineEnd).trim().slice(0, 120)}`,
+      evidence: code.slice(Math.max(0, pos - 40), (lineEnd < 0 ? code.length : lineEnd)).replace(/\s+/g, " ").trim().slice(0, 120),
+    });
   }
   return hits;
 }
@@ -196,6 +247,36 @@ Deno.test("machine paths: no test reads or writes an absolute path outside the r
     `allowlist entries that no longer match any absolute path — the path was fixed or moved, so delete the entry:\n${stale.join("\n")}`);
 });
 
+Deno.test("machine paths: no harness names a home directory anywhere in scripts/ (3khn)", () => {
+  const files = scriptFiles();
+  assert(files.length > 40, `the walk must see the real harness surface, saw ${files.length}`);
+
+  const offenders: string[] = [];
+  const seen = new Set<string>();
+  for (const rel of files) {
+    let text: string;
+    try { text = Deno.readTextFileSync(`${ROOT}${rel}`); } catch { continue; }
+    for (const h of detectScriptHomeLiteral(text, rel)) {
+      seen.add(h.key);
+      if (ALLOWED.has(h.key)) continue;
+      offenders.push(
+        `${h.file}:${h.line} [${h.kind}] ${h.key.split("::")[1]}\n` +
+        `      ${h.evidence}\n` +
+        `      A harness path under a home directory exists on exactly one machine: on every\n` +
+        `      other checkout the journey dies at spawn (or skips) with no cause named. Resolve\n` +
+        `      it at run time — resolveChromeForTesting() for the browser, an env-built root,\n` +
+        `      or a \${ROOT} built from import.meta.url — and fail loudly when nothing resolves.\n` +
+        `      If this really is a reviewed environment probe, add it to ALLOWED with the reason.`,
+      );
+    }
+  }
+  assertEquals(offenders, [], `${offenders.length} harness path(s) depend on this machine:\n\n${offenders.join("\n\n")}`);
+
+  const stale = [...ALLOWED.keys()].filter((k) => !seen.has(k));
+  assertEquals(stale, [],
+    `allowlist entries that no longer match any harness path — delete the entry:\n${stale.join("\n")}`);
+});
+
 // ── probes: the detector's teeth and its boundary, over synthetic text so nothing
 //    here can be mistaken for a real pin or trip the scan above ──────────────────
 
@@ -245,4 +326,39 @@ Deno.test("machine paths: the boundary — fixture values, URLs, prose and relat
     "tests/probe.test.ts").length, 0, "a comment recording a past defect is not a live path");
   assertEquals(detect(`const CHROME = ${quoted(A(".cache/chrome"))};\nconst label = \`uses \${CHROME}\`;\n`,
     "tests/probe.test.ts").length, 0, "a const that never reaches a filesystem call is a value, not a path");
+});
+
+// ── scripts/ probes: the stricter harness rule and its boundary ─────────────────
+
+Deno.test("machine paths: the scripts detector fires on a harness literal however it is held", () => {
+  // The exact shape that hid from the tests/ rule: a const that feeds launchChrome,
+  // never a filesystem call.
+  const viaConst = detectScriptHomeLiteral(
+    `const CHROMIUM = ${quoted(A(".cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome"))};\n`,
+    "scripts/kat-probe.ts");
+  assertEquals(viaConst.length, 1, "a pinned binary const in a harness is flagged");
+  assertEquals(viaConst[0].kind, "home-literal");
+
+  assertEquals(detectScriptHomeLiteral(
+    `const profile = \`${A(".cache/cap-review/j2-")}\${Date.now()}\`;\n`, "scripts/probe.ts").length, 1,
+    "a template-literal home path is flagged too");
+
+  assertEquals(detectScriptHomeLiteral(
+    `const EXT = ${quoted(A("chrome-agent-platform/extension"))};\n`, "scripts/probe.ts").length, 1,
+    "a pinned checkout path is flagged");
+
+  // The boundary: env-built roots are the portable idiom; $HOME prose and comments
+  // (line and block) are not live paths.
+  assertEquals(detectScriptHomeLiteral(
+    'const root = `${Deno.env.get("HOME")}/.cache/puppeteer/chrome`;\n', "scripts/probe.ts").length, 0,
+    "an env-built root is the portable idiom, legal");
+  assertEquals(detectScriptHomeLiteral(
+    'console.log("FAIL: expected $HOME/.cache/puppeteer/chrome/*/chrome-linux64/chrome");\n', "scripts/probe.ts").length, 0,
+    "$HOME prose names no machine");
+  assertEquals(detectScriptHomeLiteral(
+    `// was: const CHROMIUM = ${quoted(A(".cache/chrome"))}; — migrated by 3khn\n`, "scripts/probe.ts").length, 0,
+    "a line comment recording the past defect is not a live path");
+  assertEquals(detectScriptHomeLiteral(
+    `/** Example: ${A("cache/chrome")} in a doc comment is prose. */\nconst x = 1;\n`, "scripts/probe.ts").length, 0,
+    "a block comment is prose too");
 });

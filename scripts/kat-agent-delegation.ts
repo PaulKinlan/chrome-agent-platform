@@ -20,6 +20,7 @@
 //
 //   deno run -A scripts/kat-agent-delegation.ts <path-to-extension> [<out-dir>]
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 // The pure delegation guard's own constants — the over-cap checks pin the
 // production floor and child cap, never a copied number.
 import { CHILD_ITERATION_CAP, MIN_REMAINING_ITERATIONS } from "../extension/lib/agent-delegation.js";
@@ -28,7 +29,12 @@ import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-agent-delegation`;
-const CHROMIUM = "/home/paulkinlan/.cache/puppeteer/chrome/linux-140.0.7339.82/chrome-linux64/chrome";
+const CHROMIUM = resolveChromeForTesting();
+if (!CHROMIUM) {
+  console.log("FAIL: no Chrome for Testing binary in the puppeteer cache — expected $HOME/.cache/puppeteer/chrome/*/chrome-linux64/chrome (install one with: npx @puppeteer/browsers install chrome@stable). The Arch chromium wrapper ignores --load-extension, so this journey cannot run against it.");
+  Deno.exit(1);
+}
+console.log(`NOTE: Chrome for Testing: ${CHROMIUM}`);
 const STAMP = Date.now();
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
