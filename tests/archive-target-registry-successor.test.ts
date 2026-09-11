@@ -177,7 +177,7 @@ test("legacy provider ID is nonempty, own, untrimmed and never a provider alias"
   eq(provider(L()), L());
   const spaces = L(); spaces.activeProvider = spaces.providers[0].id = " "; eq(provider(spaces), spaces);
   eq(provider(without(L(), "activeProvider")), without(L(), "activeProvider"));
-  for (const id of ["", undefined, null, [], {}, 17, true]) {
+  for (const id of ["", undefined, null, [], {}, 17, true, 0, false, 0n]) {
     const l = L(); l.providers[0].id = id; throws(() => provider(l), TypeError);
   }
   for (const record of [null, [], "bad", 17, without(L().providers[0], "id"),
@@ -188,6 +188,27 @@ test("legacy provider ID is nonempty, own, untrimmed and never a provider alias"
   for (const providers of [{}, null, "bad", undefined]) throws(() => provider({ ...L(), providers }), TypeError);
   throws(() => provider({ ...L(), provider: "openai" }), TypeError);
   for (const activeProvider of [null, undefined, 17, {}, [], true]) throws(() => provider({ ...L(), activeProvider }), TypeError);
+});
+
+// tofr — THE MATCH KEY, pinned on the sanitized output: a defensive legacy
+// record carries its own verbatim id plus the FULL CANONICAL endpoint, so a
+// converter matches destination legacy-id-to-legacy-id on the actual
+// endpoint — never by collapsing the record into an implicit flat
+// { provider, … } shape or by inventing/coercing an identity.
+test("legacy records carry their match key: own untrimmed id + full canonical endpoint, never a flat alias", () => {
+  const nonCanonical = { activeProvider: "legacy", providers: [{ id: "legacy", baseURL: "HTTPS://API.EXAMPLE.TEST:443/v1", model: "model-1" }] };
+  const matched = provider(nonCanonical).providers[0];
+  same(Object.hasOwn(matched, "id"), true);
+  same(matched.id, "legacy", "the id is the verbatim match key");
+  same(Object.hasOwn(matched, "provider"), false, "a legacy record never gains a provider alias");
+  same(matched.baseURL, "https://api.example.test/v1", "the endpoint is the FULL canonical href, not a origin-only or trimmed form");
+  same(Object.hasOwn(provider(L()), "provider"), false, "the legacy LAYOUT never collapses into a flat provider record");
+  // Coercible identities stay refusals (0/false/0n are the additions the
+  // pre-tofr suite did not execute — see the coercion-mutant falsification).
+  for (const id of [0, false, 0n]) {
+    const l = L(); l.providers[0].id = id;
+    throws(() => provider(l), TypeError, `coercible id ${String(id)} must refuse`);
+  }
 });
 
 test("MCP: native normalization, auth removal, rest parity and identity", () => {

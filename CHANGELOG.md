@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.377] — 2026-09-11
+- legacy provider records carry their own verbatim id as the archive match key
+
+## [0.3.376] — 2026-09-11
+- legacy provider records in an archive keep their own id and full endpoint as the match key
+
 ## [0.3.375] — 2026-09-11
 - record check-tasks gate retirement as resolved in cleanup analysis (9zw7.7)
 
