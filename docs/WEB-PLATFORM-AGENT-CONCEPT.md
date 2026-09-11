@@ -1,8 +1,8 @@
-# The agent as a web-platform principal — a position plan
+# The agent as a web-platform principal — standards advocacy
 
-**Bead:** chrome-agent-platform-jakw (umbrella 9zw7) · **Date:** 2026-09-05 ·
-**Audience:** web platform / Chrome engineers. **Evidence base:** everything
-cited as "we built" is shipping code in this repo at `origin/main@14e2a817`;
+**Beads:** chrome-agent-platform-jakw, chrome-agent-platform-cdld (umbrella 9zw7) · **Date:** 2026-09-05 (updated 2026-09-11) ·
+**Audience:** web platform / Chrome standards engineers. **Companion document:** `docs/NATIVE-AGENT-POSITION-PLAN.md` (internal engineering & strategic adoption plan).
+**Evidence base:** everything cited as "we built" is shipping code in this repo at `origin/main@326ebf37`;
 section references point at `ARCHITECTURE.md` (same folder) and code file:line.
 
 ## 1. The claim

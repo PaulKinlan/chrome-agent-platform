@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.389] — 2026-09-11
+- position plan for native agent support on Web and Chrome (cdld)
+
 ## [0.3.388] — 2026-09-11
 - synchronize sandboxing, messaging, board deny, backup, and MCP filter sections (dzyx)
 
