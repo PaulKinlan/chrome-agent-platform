@@ -104,8 +104,11 @@ export function createOffscreenWasmHost({ executor, authority }) {
 /**
  * Execute a user-uploaded WebAssembly WASI module job.
  * Enforces pre-instantiate content re-hash against the claimed digest before
- * instantiating any module or spawning any worker, binds authority fences,
- * and executes in a fresh Worker via WasmExecutor with wall deadline.
+ * instantiating any module or spawning any worker, verifies the authority
+ * record's shape via validateAuthorityRecord, and executes in a fresh Worker
+ * via WasmExecutor with wall deadline. (Note: authority verification here is
+ * record shape-validation; the anti-tamper fence is enforced upstream by
+ * service worker origin and document-generation scoping).
  */
 export async function executeUserWasmRun({
   toolId,

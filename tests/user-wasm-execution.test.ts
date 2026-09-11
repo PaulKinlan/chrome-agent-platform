@@ -377,5 +377,6 @@ Deno.test("user-wasm s4vi: wasm-execution-worker does not mutate global fetch on
   const workerSrc = await Deno.readTextFile(new URL("../extension/lib/wasm-execution-worker.js", import.meta.url));
   assert(workerSrc.includes('if (typeof DedicatedWorkerGlobalScope !== "undefined" && self instanceof DedicatedWorkerGlobalScope) {'), "has dedicated worker guard");
   assert(workerSrc.includes("stripAmbientNetwork(); // 4. Compile + instantiate (the ONLY execution path)."), "has in-function guard");
+  assert(workerSrc.includes('["fetch", "XMLHttpRequest", "WebSocket", "EventSource", "importScripts"]'), "worker strips denied network APIs");
 });
 
