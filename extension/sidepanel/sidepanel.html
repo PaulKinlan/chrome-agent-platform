@@ -73,6 +73,17 @@
   #agents-tasks { display:flex; flex-direction:column; gap:2px; }
   #agents-tasks .tasks-empty { font-size:12.5px; color:var(--muted); padding:4px 2px; }
   #agent-detail-pane { flex:1; display:flex; flex-direction:column; min-height:0; }
+  .ad-permissions { padding:8px 12px; border-bottom:1px solid var(--border,#e3e0d9); font-size:12px; }
+  .agent-permissions h4 { margin:0 0 6px; font-size:12px; text-transform:uppercase; letter-spacing:.04em; opacity:.7; }
+  .agent-permissions-row { display:flex; align-items:center; gap:8px; margin:4px 0; }
+  .agent-permissions-origin { overflow-wrap:anywhere; flex:1; }
+  .agent-permissions-status { font-size:11px; opacity:.75; }
+  .agent-permissions-status.granted { color:var(--ok,#1c7c33); }
+  .agent-permissions-status.missing { color:var(--warning,#9a6b00); }
+  .agent-permissions-action { font-size:11px; padding:2px 8px; border:1px solid var(--border,#cfc9c0); background:transparent; border-radius:6px; cursor:pointer; }
+  .agent-permissions-note, .agent-permissions-error { margin:6px 0 0; opacity:.75; }
+  .agent-permissions-error { color:var(--danger,#b3261e); opacity:1; }
+  .agent-permissions-list { margin:4px 0; padding-inline-start:18px; }
   #agent-detail-pane[hidden] { display:none; }
   .ad-head { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--border); }
   .ad-back { display:inline-flex; align-items:center; gap:4px; min-height:44px; border:0; background:transparent;
@@ -165,6 +176,7 @@
         </div>
         <button type="button" class="ad-delete" id="agent-delete" aria-label="Delete agent" title="Delete agent">Delete</button>
       </div>
+      <div id="agent-permissions-slot" class="ad-permissions"></div>
       <agent-conversation id="agent-history" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
       <div class="ad-composer">
         <agent-composer id="agent-composer" placeholder="Direct a task to this agent…" send-label="Send" label="Message the agent"></agent-composer>

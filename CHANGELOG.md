@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.345] — 2026-09-11
+- When a run fails on site access, the conversation offers the grant right there — and every agent view shows what it can reach, with a button to revoke it
+
 ## [0.3.344] — 2026-09-11
 - increment: provider host access pauses on one in-context grant card
 
