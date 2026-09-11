@@ -143,8 +143,9 @@ execution, never from a timer, and reads only the registry's own index rows and
 its in-memory record cache — never an OPFS walk. "Keep every run log"
 (`chrome.storage.local["cap:runRetention"] = {mode:"retain-all"}`, Settings →
 Data & memory) is the explicit opt-in that disables compaction. There is no
-arbitrary file-count ceiling: each store remains byte-bounded at 8 MiB, each value
-at 256 KiB, and the full OPFS tree at 64 MiB. Per-execution isolation prevents
+arbitrary file-count ceiling: under owner directive dptw (2026-09-03, `extension/lib/memory.js:691`),
+the legacy internal byte ceilings (formerly 8 MiB store, 256 KiB value, 64 MiB tree) were removed;
+the browser's native OPFS quota is the sole ceiling. Per-execution isolation prevents
 retained authority for unrelated runs from crowding owner memory
 (`extension/lib/durable-runs.js`; `extension/lib/memory.js`).
 

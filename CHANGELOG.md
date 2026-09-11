@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.369] — 2026-09-11
+- reconcile authority allowlists, permissions reality, and dptw storage limits (Phase 1, 9zw7.6)
+
 ## [0.3.368] — 2026-09-11
 - whole-repo documentation audit and prioritized fix plan ()
 

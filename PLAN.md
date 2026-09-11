@@ -45,8 +45,8 @@ is what is in flight (owner directive, 2026-09-02); this file is the roadmap vie
 Chrome as the agent platform: a new-tab agent hub that orchestrates the web with
 persistent named agents (each with its own OPFS sandbox), per-site sub-agents (WebMCP
 tool discovery), the generative-UI artifacts surface, a skills system, agent-generated
-repeatable scripts, and a system-hooks layer — all under an all-optional-permissions
-security model. The README is the overview; beads (`bd ready`) hold the task state; THIS file is
+repeatable scripts, and a system-hooks layer — all under a settled permissions
+model (install-granted host_permissions: ["<all_urls>"] and core storage/alarms/contextMenus/unlimitedStorage; all browser capabilities optional on demand). The README is the overview; beads (`bd ready`) hold the task state; THIS file is
 the roadmap: what's landed vs what's next.
 
 ## Principles (from the 2026-08-15 thread — NON-NEGOTIABLE)
@@ -101,7 +101,7 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 - [x] Visible one-click hard Stop on every live conversation and actively running
       scheduled-task row, bound to the rendered execution ID, gated on a trusted live
       user gesture, routed through durable cancellation, and settled as Stopped.
-- [x] All-optional permissions (`manifest.permissions: []`), origin-keyed OPFS,
+- [x] Settled permissions posture: install-granted host access (manifest.host_permissions: ["<all_urls>"]) and core system permissions (storage, alarms, contextMenus, unlimitedStorage), with all browser capability permissions optional on demand; origin-keyed OPFS,
       no `debugger` declared, the standing security suite (`npm run test:security`).
 - [x] The component design system — 20+ Web Components in the single-source
       `extension/shared/components.js`, mirrored in the gallery with a build-time drift guard.

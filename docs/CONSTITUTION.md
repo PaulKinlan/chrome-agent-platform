@@ -147,9 +147,12 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
 
 These are long-living agents. Memory + perf degrade over time if unchecked.
 
-- **Memory resilience**: no unbounded growth — the activity log, the OPFS
-  stores, the screenshots/MHTML, the event log are all bounded (rolling windows
-  or explicit retention) + the user can clear per-origin.
+- **Memory resilience**: no unbounded growth — the activity log, the screenshots/MHTML,
+  and the event log are bounded (rolling windows or explicit retention); under owner
+  directive dptw (2026-09-03, `extension/lib/memory.js:691`), self-imposed internal
+  byte/value quotas in OPFS were removed so the browser's native OPFS quota is the
+  sole ceiling, while compaction (50 executions/thread full logs) and per-origin clears
+  remain active.
 - **Memory checks**: run the leak probe (heap/DOM-counter deltas across loops)
   on the long-lived surfaces (the hub, the chat) regularly.
 - **Performance budgets**: the SW must register fast (<500ms); the NTP/chat
