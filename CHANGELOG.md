@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.346] — 2026-09-11
+- Settings shows the site access Chrome actually grants with truthful scope copy
+
 ## [0.3.345] — 2026-09-11
 - When a run fails on site access, the conversation offers the grant right there — and every agent view shows what it can reach, with a button to revoke it
 

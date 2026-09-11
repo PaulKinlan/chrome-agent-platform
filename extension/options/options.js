@@ -28,6 +28,7 @@ import {
   capabilityStatus,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
+import { revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../lib/site-access.js";
 import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";
 import {
   USAGE_RANGES,
@@ -2387,6 +2388,67 @@ async function renderPermissions() {
     }
     list.appendChild(details);
   }
+  // ── Chrome site access: what Chrome ACTUALLY holds ──
+  // Read live from chrome.permissions.getAll(), separate from the capability
+  // switches above (those are agent/task policy; this group is Chrome state).
+  // The install grant (<all_urls>) is state only — only chrome://extensions can
+  // revoke a manifest host permission. A runtime origin grant carries a real
+  // Revoke: chrome.permissions.remove with exactly that pattern, from this
+  // click (chrome-agent-platform-4dg).
+  const access = await siteAccessState(chrome, chrome.runtime.getManifest().host_permissions ?? []);
+  const accessCount = access.fixed.length + access.revocable.length;
+  const { details: accessDetails, rows: accessRows } = permissionGroupShell(
+    "site-access", "Chrome site access",
+    "What Chrome grants this extension — separate from the capability switches above.",
+    access.ok ? accessCount : 0, access.ok ? accessCount : 1,
+    openBefore.get("site-access") ?? true,
+  );
+  if (!access.ok) {
+    const failed = document.createElement("p");
+    failed.className = "muted";
+    failed.textContent = "Chrome's site access could not be read.";
+    accessRows.appendChild(failed);
+  } else if (accessCount === 0) {
+    const none = document.createElement("p");
+    none.className = "muted";
+    none.textContent = "No site access granted.";
+    accessRows.appendChild(none);
+  } else {
+    for (const pattern of access.fixed) {
+      const row = document.createElement("capability-row");
+      row.dataset.capability = "site-access";
+      row.dataset.state = "required";
+      row.setAttribute("icon", PERMISSION_STATE_ICONS.fixed);
+      row.setAttribute("name", siteAccessLabel(pattern));
+      row.setAttribute("description", "Granted when the extension was installed. Chrome only takes this back from chrome://extensions.");
+      row.setAttribute("action", "state");
+      row.setAttribute("action-label", "Granted at install");
+      accessRows.appendChild(row);
+    }
+    for (const pattern of access.revocable) {
+      const row = document.createElement("capability-row");
+      row.dataset.capability = "site-access";
+      row.dataset.state = "granted";
+      row.setAttribute("icon", PERMISSION_STATE_ICONS.on);
+      row.setAttribute("name", siteAccessLabel(pattern));
+      // Scope-true for wildcards and exact origins alike: says what the grant
+      // COVERS, never who granted it (Chrome does not attribute provenance)
+      // and never what removal will do (Revoke asks; Chrome answers).
+      // (chrome-agent-platform-4dg.1)
+      row.setAttribute("description", `Chrome grants access to ${siteAccessScope(pattern)}. Revoke asks Chrome to take it back.`);
+      row.setAttribute("action", "run");
+      row.setAttribute("action-label", "Revoke");
+      row.addEventListener("run", async () => {
+        const removed = await revokeSiteOrigin(chrome, pattern);
+        saveFlash(removed
+          ? `Site access to ${siteAccessLabel(pattern)} was removed.`
+          : `Could not revoke site access to ${siteAccessLabel(pattern)}.`);
+        renderPermissions();
+      });
+      accessRows.appendChild(row);
+    }
+  }
+  list.appendChild(accessDetails);
 }
 
 // ── System hooks (the chrome.* event surface + the deny-list) ──
