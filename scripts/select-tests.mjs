@@ -29,6 +29,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { partition } from "./test-partition.mjs";
+import { runSerialFiles } from "./lib/serial-phase.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -203,14 +204,22 @@ export function changedWithoutCoverage(changed, reverse) {
   return uncovered;
 }
 
-function runPhase(files, flags, label) {
+const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? 600_000);
+
+function runPhase(files, flags, label, timeoutMs = 300_000) {
   const t0 = Date.now();
   const r = spawnSync("deno", ["test", "-A", "--config", "deno.runner.jsonc", ...flags, ...files], {
     stdio: "inherit",
     cwd: ROOT,
     // The marker tests/00-use-npm-test_test.ts checks for.
     env: { ...process.env, CAP_TEST_RUNNER: "1" },
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
+  if (r.error && r.error.code === "ETIMEDOUT") {
+    console.error(`select-tests: ${label} TIMED OUT after ${timeoutMs / 1000}s`);
+    return 124;
+  }
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
   console.error(`select-tests: ${label} ${r.status === 0 ? "GREEN" : "FAILED"} in ${secs}s`);
   return r.status ?? 1;
@@ -225,8 +234,8 @@ export function runPartitioned(files) {
     `select-tests: ${files.length} file(s) — partition: ${serial.length} serial hazard(s)${serial.length ? ` [${serial.join(", ")}]` : ""}, ${parallel.length} parallel`,
   );
   let rc = 0;
-  if (serial.length) rc = runPhase(serial, [], "serial phase");
-  if (rc === 0 && parallel.length) rc = runPhase(parallel, ["--parallel"], "parallel phase");
+  if (serial.length) rc = runSerialFiles(serial, { cwd: ROOT });
+  if (rc === 0 && parallel.length) rc = runPhase(parallel, ["--parallel"], "parallel phase", PARALLEL_PHASE_TIMEOUT_MS);
   return rc;
 }
 

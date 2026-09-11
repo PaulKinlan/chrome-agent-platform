@@ -14,6 +14,7 @@
 // A stand-in "browser" prints Chrome's DevTools banner.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
+const origLockPath = Deno.env.get("CAP_CHROME_LOCK_PATH");
 const LOCK = await Deno.makeTempFile({ prefix: "cap-chrome-lock-test-" });
 Deno.env.set("CAP_CHROME_LOCK_PATH", LOCK);
 Deno.env.delete("CAP_SECURITY_NONCE");
@@ -148,4 +149,10 @@ Deno.test("uzik: a clean process still defaults CHROME_LOCK_PATH to the canonica
   const seen = JSON.parse(new TextDecoder().decode(out.stdout).trim());
   assertEquals(seen.CHROME_LOCK_PATH_DEFAULT, "/tmp/cap-serialized-chrome-acceptance.lock");
   assertEquals(seen.CHROME_LOCK_PATH, seen.CHROME_LOCK_PATH_DEFAULT, "no env → the canonical default");
+});
+
+Deno.test("cleanup: chrome-launch-lock restores env and removes temp lock", async () => {
+  if (origLockPath === undefined) Deno.env.delete("CAP_CHROME_LOCK_PATH");
+  else Deno.env.set("CAP_CHROME_LOCK_PATH", origLockPath);
+  await Deno.remove(LOCK).catch(() => {});
 });

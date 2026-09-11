@@ -28,6 +28,7 @@
 //   8. the slot wait is bounded by `CAP_CHROME_LOCK_WAIT_MS` and printed.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
+const origSlotDir = Deno.env.get("CAP_CHROME_SLOT_DIR");
 const SLOT_DIR = await Deno.makeTempDir({ prefix: "cap-slot-dir-" });
 const CUSTOM_SCOPE = await Deno.makeTempFile({ prefix: "cap-slot-scope-" });
 // chrome-agent-platform-1qr3: the "another lane owns the canonical lock"
@@ -66,6 +67,14 @@ function holdFile(path: string, seconds: number): Deno.ChildProcess {
     stdout: "null",
     stderr: "null",
   }).spawn();
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, guard]).finally(() => clearTimeout(timer)) as Promise<T>;
 }
 
 /** Hold `path` exclusively from OUTSIDE this process, and CONFIRM the hold
@@ -213,16 +222,22 @@ Deno.test("uzik: a launcher that DIES releases its slot (no orphaned semaphore)"
       stderr: "null",
     }).spawn();
     try {
-      // Wait until the victim reports its slot, then kill it outright.
+      // Wait until the victim reports its slot, then kill it outright (bounded wait).
       const reader = victim.stdout.getReader();
       const dec = new TextDecoder();
       let seen = "";
       const deadline = Date.now() + 15000;
       while (!seen.includes("SLOT") && Date.now() < deadline) {
-        const chunk = await reader.read();
+        let chunk: ReadableStreamReadResult<Uint8Array>;
+        try {
+          chunk = await withTimeout(reader.read(), Math.max(1, deadline - Date.now()));
+        } catch {
+          break;
+        }
         if (chunk.done) break;
         seen += dec.decode(chunk.value, { stream: true });
       }
+      try { reader.releaseLock(); } catch {}
       assert(seen.includes("SLOT 0"), `the victim took the only slot: ${seen}`);
       victim.kill("SIGKILL");
       await victim.status;
@@ -443,6 +458,7 @@ Deno.test("uzik: the launcher prints the gate marker only when a runner asks for
   const evalSrc = `
     Deno.env.set("CAP_CHROME_SLOT_DIR", ${JSON.stringify(SLOT_DIR)});
     Deno.env.set("CAP_CHROME_MAX_CONCURRENT", "4");
+    Deno.env.set("CAP_CHROME_LOCK_WAIT_MS", "3000");
     ${"" /* marker env set by the parent below */}
     const { launchChrome } = await import(${JSON.stringify(new URL("../scripts/lib/chrome-launch.ts", import.meta.url).href)});
     const c = await launchChrome({ binary: ${JSON.stringify(fake)}, args: [], timeoutMs: 5000 });
@@ -453,14 +469,15 @@ Deno.test("uzik: the launcher prints the gate marker only when a runner asks for
   // the imported module graph costs ~15 s per subprocess in the parallel phase.
   const withMarker = new Deno.Command(Deno.execPath(), {
     args: ["eval", "--no-check", evalSrc],
-    env: { CAP_CHROME_SLOT_MARKER: "1" },
+    env: { CAP_CHROME_SLOT_MARKER: "1", CAP_CHROME_LOCK_WAIT_MS: "3000" },
     stdout: "piped", stderr: "piped",
   }).output();
   const without = new Deno.Command(Deno.execPath(), {
     args: ["eval", "--no-check", evalSrc],
+    env: { CAP_CHROME_LOCK_WAIT_MS: "3000" },
     stdout: "piped", stderr: "piped",
   }).output();
-  const [a, b] = await Promise.all([withMarker, without]);
+  const [a, b] = await withTimeout(Promise.all([withMarker, without]), 15000);
   const dec = new TextDecoder();
   assertEquals(a.code, 0, `the marker run launched: ${dec.decode(a.stderr)}`);
   assert(
@@ -475,4 +492,12 @@ Deno.test("uzik: the launcher prints the gate marker only when a runner asks for
     "no marker without the opt-in (harness output stays clean)",
   );
   await Deno.remove(fake);
+});
+
+Deno.test("cleanup: chrome-slot-semaphore restores env and removes temp files", async () => {
+  if (origSlotDir === undefined) Deno.env.delete("CAP_CHROME_SLOT_DIR");
+  else Deno.env.set("CAP_CHROME_SLOT_DIR", origSlotDir);
+  await Deno.remove(SLOT_DIR, { recursive: true }).catch(() => {});
+  await Deno.remove(CUSTOM_SCOPE).catch(() => {});
+  await Deno.remove(GATE).catch(() => {});
 });

@@ -17,6 +17,8 @@
 //   - a released scope leaves no residue behind.
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
+const origSlotDir = Deno.env.get("CAP_CHROME_SLOT_DIR");
+const origLockPath = Deno.env.get("CAP_CHROME_LOCK_PATH");
 const CANONICAL = "/tmp/cap-serialized-chrome-acceptance.lock";
 const SCOPE_A = await Deno.makeTempFile({ prefix: "cap-lock-scope-a-" });
 const SCOPE_B = await Deno.makeTempFile({ prefix: "cap-lock-scope-b-" });
@@ -176,4 +178,15 @@ Deno.test("51x4: a released fixture scope leaves no lock residue behind", async 
   const probe = new Deno.Command("flock", { args: ["-w", "5", SCOPE_A, "true"] }).spawn();
   assertEquals((await probe.status).code, 0, "the fixture scope was released");
   await Deno.remove(fake);
+});
+
+Deno.test("cleanup: chrome-launch-lock-scope restores env and removes temp files", async () => {
+  if (origSlotDir === undefined) Deno.env.delete("CAP_CHROME_SLOT_DIR");
+  else Deno.env.set("CAP_CHROME_SLOT_DIR", origSlotDir);
+  if (origLockPath === undefined) Deno.env.delete("CAP_CHROME_LOCK_PATH");
+  else Deno.env.set("CAP_CHROME_LOCK_PATH", origLockPath);
+  await Deno.remove(SCOPE_A).catch(() => {});
+  await Deno.remove(SCOPE_B).catch(() => {});
+  await Deno.remove(GATE).catch(() => {});
+  await Deno.remove(SLOT_DIR, { recursive: true }).catch(() => {});
 });

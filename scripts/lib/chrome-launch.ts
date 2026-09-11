@@ -377,7 +377,15 @@ export async function launchChrome(opts: {
     ...(opts.env ? { env: opts.env } : {}),
   }).spawn();
   // The slot (or exclusive lock) lives exactly as long as this browser does.
-  proc.status.then(() => lock.release()).catch(() => lock.release());
+  // When Chrome exits, cancel the stderr drain reader so orphaned grandchild
+  // processes never keep the pipe open and hang the event loop in do_epoll_wait.
+  proc.status.then(() => {
+    lock.release();
+    try { reader.cancel().catch(() => {}); } catch { /* already closed */ }
+  }).catch(() => {
+    lock.release();
+    try { reader.cancel().catch(() => {}); } catch { /* already closed */ }
+  });
 
   let tail = "";
   const append = (chunk: string) => {

@@ -55,6 +55,7 @@ export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
   "tests/evidence-durable.test.ts": "spawns the bundled-tool generator ONLY inside a pristine makeTempDir checkout materialization; every write goes to the temp dir, never to repo extension/ or packages/",
+  "tests/durable-root.test.ts": "scans test file paths including serial build tests for tmpdir literals; executes no build or extension writes",
 };
 
 // A test that spawns one of these local drivers inherits the driver's hazard
