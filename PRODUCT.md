@@ -63,8 +63,10 @@ keys are a persisted approval/data boundary and get their own reviewed migration
 checker does not scan them, so it cannot be satisfied by weakening it.
 
 **2. Every capability got its own HTML document, and the hub embeds them in an
-iframe.** Twelve HTML surfaces ship; two of them — `chat/chat.html` and
-`memory/explorer.html` — are referenced by nothing at all and still ship to users.
+iframe.** (The surface subtraction completed: `chat/chat.html` and `memory/explorer.html`
+were permanently deleted; exactly ten HTML surfaces ship to users: `ntp.html`, `sidepanel.html`,
+`options.html`, `directory.html`, `artifacts/index.html`, `artifact/artifact.html`,
+`privacy.html`, `offscreen.html`, `artifact-preview.html`, and `script-sandbox.html`).
 Settings, Directory and Artifacts are separate documents loaded into
 `#view-frame` (Skills stopped being one of them — its manager is a Settings panel). Five tracked defects trace to that one decision: two back-stack fixes
 (`0.2.296`, `0.2.304`), the task-view transition ghost, the covered-nub overflow, the
@@ -193,9 +195,9 @@ approving its use rather than pre-registering the site. This is the biggest gap 
 what the product IS and how it presents itself, and it is not currently tracked as
 anything.
 
-**The two tool families are invisible.** The tool library is one flat list of 126.
+**The two tool families are invisible.** The tool library is one flat list of 138 browser tools (plus 50 management tools, 188 capability rows total in `tests/chrome-tool-capabilities.test.ts:71`).
 If "run the browser" and "do the work" are genuinely different halves, saying so helps a
-person predict what they can ask for — which is the actual problem a 126-item list
+person predict what they can ask for — which is the actual problem a long unpartitioned list
 creates. Right now the only grouping is by Chrome API.
 
 ## Design implications, restated as rules

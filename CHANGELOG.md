@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.370] — 2026-09-11
+- synchronize architecture, tool counts, and Wasm execution status (Phase 2, 9zw7.1-3)
+
 ## [0.3.369] — 2026-09-11
 - reconcile authority allowlists, permissions reality, and dptw storage limits (Phase 1, 9zw7.6)
 

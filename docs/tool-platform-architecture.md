@@ -1,6 +1,6 @@
 # Tool Platform Architecture
 
-Status: live bounded lazy-provider cutover is a 0.2.180 release candidate; the loaded-MV3 shadow capture remains public, bundled Wasm remains catalog-only, and fresh browser acceptance plus independent release review remain pending.
+Status: Active architecture reference (updated 2026-09-11, v0.3.x). Bundled Wasm tools are fully executable and stream-supported via dedicated workers (`wasm-execution-worker.js`, `wasm-stream-worker.js`, `packages/bundled/`); lazy tool protocol serves four fixed protocol tools (`search_tools`, `list_tools`, `execute_tool`, `run_pipeline`).
 
 ## Provenance and factual precedent
 
@@ -48,11 +48,11 @@ authorities:
 
 1. `extension/lib/tool-catalog.js`
    - canonical descriptors for current extension built-ins, Chrome/browser
-     tools, management tools, and declared/inferred WebMCP tools;
+     tools, management tools, declared/inferred WebMCP tools, and user-wasm tools;
    - stable identity binds source kind, package ID, tool ID, version, descriptor
      digest, capability digest, scope, and source generation;
-   - bounded names, aliases, descriptions, schema summaries, capabilities,
-     scopes, descriptor counts, and catalog bytes;
+   - names, aliases, descriptions, schema summaries, capabilities, and scopes;
+     (note: per-catalog byte, count, and schema-summary ceilings were removed by owner directive dptw on 2026-09-03, `tests/tool-catalog.test.ts`);
    - malformed Unicode and bidi controls fail closed; canonical same-namespace
      collisions exclude every collider;
    - page-controlled replay claims are ignored and WebMCP tools remain

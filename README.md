@@ -53,27 +53,26 @@ isolated OPFS memory, run history, skills, and avatar.
   live `MessagePort` with redacted progress; background agents run with zero visible
   pages. Destructive browser commands are authorised by the owner's browser-control
   grant (checked atomically in the service worker) and fenced to their run.
-- **125 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
-  schemas — tabs and tab groups, windows, downloads, history, cookies (names and
+- **138 Chrome tools**, every `chrome.*` call audited against the Chromium IDL/JSON
+  schemas (188 capability rows total, `tests/chrome-tool-capabilities.test.ts:71`) — tabs and tab groups, windows, downloads, history, cookies (names and
   metadata only — values are never returned to the model), bookmarks,
   reading list, content settings, MHTML capture, network rules, extension management,
   privacy/proxy/font/power settings, TTS, and user scripts. All grant-gated; the
   extension can never act on itself.
-- **Live bounded lazy tool provider** — every run receives exactly two definitions,
-  `search_tools` and `execute_tool`, regardless of how large the catalog is, so provider
+- **Live bounded lazy tool provider** — every run receives exactly four fixed protocol
+  tools: `search_tools`, `list_tools`, `execute_tool`, and `run_pipeline`
+  (`extension/lib/lazy-tool-wire.js:21`), regardless of how large the catalog is, so provider
   context stays constant. Search derives bounded metadata from the live built-in,
   browser, management and WebMCP sources and returns expiring single-use references
   bound to run/task/agent/origin/document/generation; it never grants, approves,
   installs or executes. Execute accepts only a returned reference and revalidates
   catalog, source, capability, permission, grant, enrollment, document, run, expiry and
   replay fences before validation, before dispatch, and after dispatch.
-- **28 bundled Wasm tools** — awk (bounded filter), base64, csvtool, cut, date
-  (bounded formatter), diff, du, grep, gzip, head, markdown, md5sum, patch, sha256sum,
-  sha512sum, sort, sqlite3 (bounded query), stat, tail, toml2json, touch, tr, tree,
-  truncate, uniq, uuid, wc, xxd. Each ships with an exact manifest, CAS digest, SBOM
-  and licence record, verified at build time by a bounded raw import/memory scan.
-  Separate Rust/C candidate lanes (htmlq, numbat, bttf, sed, jq, xan, tokei) are not
-  part of this shipped set; their own admission records remain authoritative.
+- **38 bundled Wasm tools** — 38 single-tool packages (including sed, jq, oxipng, jxl,
+  avif, zxing, compressops, imageops, hashwasm-blake3, sqlite3, gzip, csvtool, diff, patch,
+  awk, date, and core Unix utilities). Each ships with an exact manifest, CAS digest, SBOM
+  and licence record, verified at build time by a bounded raw import/memory scan
+  (`build.mjs:108`, `extension/wasm/manifests/`).
 - **Your WebAssembly files** — Settings → WebAssembly files stores owner-selected
   files locally with a name and description. Upload size and file count have no
   product-imposed caps. Files stream into digest-keyed OPFS storage; identical
@@ -110,7 +109,8 @@ isolated OPFS memory, run history, skills, and avatar.
 - **No `debugger`.** It was re-declared as an optional permission at `0.2.286` for the
   CDP power tools and **removed again on 2026-08-27** (owner decision): it carries
   Chrome's all-sites permission warning and a persistent "started debugging this
-  browser" bar. The four CDP tools went with it; the browser-tool count is 126.
+  browser" bar. The four CDP tools went with it; the browser-tool count is 138
+  (188 capability rows total).
   `tests/chrome-tools-t12.test.ts` guards the removal, so bringing it back has to be a
   deliberate act rather than a side effect of the next tool tranche.
 - **Origin-keyed OPFS** — one agent/origin can never read another's memory.
@@ -209,7 +209,6 @@ extension/
   background/service-worker.js  the router + agent core (bundled → dist/)
   ntp/                          the agent hub (new-tab page — the command center)
   sidepanel/                    the driven-page surface (chrome.sidePanel)
-  chat/                         the conversation surface
   options/                      the settings (providers, agents, permissions, hooks,
                                 advanced system prompts, usage, data & memory)
   artifacts/                    the artifact gallery
@@ -267,6 +266,7 @@ This README is the overview. The document map, in precedence order:
 | **[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md)** | History: the 2026-08-21 architectural review, superseded by the 2026-08-30 one. Its *delivery* diagnosis has since been acted on (`0.2.105 → 0.2.319`); read it for the method, not for current status. |
 | [TASKS.md](TASKS.md), [TASKS-DONE.md](TASKS-DONE.md), [KNOWN-ISSUES.md](KNOWN-ISSUES.md), [docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md) | **Retired** markdown trackers (2026-09-02) — kept as git history only, never consulted or updated for state. Each opens with a banner that says so and points at `bd`. |
 
-**Current gate status:** build clean · unit **1779/0** · Chrome journeys **127/127** ·
+**Current gate status:** build clean (store SW bundle budget ≤ 3.0 MB) · full test suite
+green (`npm test` per-file runner over 445+ test files, 4100+ tests) · Chrome journeys **127/127** ·
 security suite **PASS**. The journey suite had been red at 26/127 from `0.2.313` until
 `0.2.320`; the causes are at the top of [PLAN.md](PLAN.md).
