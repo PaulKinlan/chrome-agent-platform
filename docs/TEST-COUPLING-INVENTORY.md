@@ -140,7 +140,7 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   owner, counted apart from real failures — and the run FAILS the moment it turns green
   (prune the entry), the moment an owned name never runs (`stale()`), or on a hang.
 - **Owed by a re-anchor:** the registry's expected-red entries pin TALLIES
-  (`kat-genui-error-state` "16/2", `kat-mic-state` "59/1", `kat-ux-lows` "9/1"). Anything
+  (`kat-genui-error-state` "15/3", `kat-mic-state` "59/1", `kat-ux-lows` "8/2"). Anything
   that can move a tally — including a browser-version change (icf1's resolver resolves
   the NEWEST Chrome for Testing) — owes re-adjudication of the entry with a reason, in
   the registry, before landing.

@@ -124,3 +124,23 @@ Deno.test("staleExpectedReds: a green verdict for an expected-red KAT is stale; 
 function isKatEntry(file: string, e: { class: string }) {
   return file.startsWith("kat-") && file !== "kat-runner.ts" && e.class === "kat";
 }
+
+// CAP-FB-20260911-TALLY-DRIFT-01 (chrome-agent-platform-idb5 / r740) —
+// Expected-red KATs pin their exact failure tally (passed/failed) in redReason.
+// A browser change, feature landing, or layout drift that moves the tally owes
+// re-adjudication of the registry entry before landing (docs/TEST-COUPLING-INVENTORY.md §8).
+Deno.test("kat expected-red tallies match their adjudicated registry pins", () => {
+  const TALLY_PINS: Record<string, string> = {
+    "kat-genui-error-state.ts": "15/3",
+    "kat-ux-lows.ts": "8/2",
+  };
+  for (const [file, expectedTally] of Object.entries(TALLY_PINS)) {
+    const entry = HARNESSES[file];
+    assert(entry, `${file} must be in HARNESSES`);
+    assert(entry.expectedRed, `${file} must be expectedRed`);
+    const m = /\((\d+\/\d+)\)/.exec(entry.redReason ?? "");
+    assert(m, `${file} redReason must declare its tally in parentheses: ${entry.redReason}`);
+    assertEquals(m[1], expectedTally, `${file} tally in redReason must match the adjudicated pin`);
+  }
+});
+

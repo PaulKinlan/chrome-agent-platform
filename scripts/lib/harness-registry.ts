@@ -106,7 +106,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-exec-build-flag.ts": { class: "kat", ...RED("29/1", "'flag on: all thirteen nav items are visible' — the nav now has fourteen entries") },
   "kat-failed-runs.ts": { class: "kat" },
   "kat-generated-image-strip.ts": { class: "kat" },
-  "kat-genui-error-state.ts": { class: "kat", ...RED("16/2", "two generated-UI error-state checks red", "the generated-UI bootstrap syntax lane (in flight)") },
+  "kat-genui-error-state.ts": { class: "kat", ...RED("15/3", "three generated-UI error-state checks red: preview frame absent and retry status null", "the generated-UI bootstrap syntax lane (in flight)") },
   "kat-hub-timeline.ts": { class: "kat" },
   "kat-interactive-artifact-click.ts": { class: "kat", budgetMs: 240_000 },
   "kat-mcp-agent-ui.ts": { class: "kat" },
@@ -146,7 +146,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-bundled-execute.ts": { class: "kat" },
   "kat-webmcp-honest-errors.ts": { class: "kat" },
   "kat-webmcp-bistro.ts": { class: "kat" },
-  "kat-ux-lows.ts": { class: "kat", ...RED("9/1", "UX-010: the wide form-factor two-column grid is not active") },
+  "kat-ux-lows.ts": { class: "kat", ...RED("8/2", "UX-010: wide grid inactive and settings content does not fill wide viewport (theme content-max cap 720px)") },
   "kat-wasi-tranche2.ts": { class: "kat" },
 
   // ── manual (evidence / repro / bisect tools; not gates) ─────────────────
