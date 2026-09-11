@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.365] — 2026-09-11
+- [11rm] Architect streamed backup and restore for unbounded profiles
+
 ## [0.3.364] — 2026-09-11
 - restore pinned diagnostic strings in user-wasm and webmcp failure paths
 

@@ -10,7 +10,9 @@ Durable run authority is mapped in
 [docs/DURABLE-RUN-ARCHITECTURE.md](docs/DURABLE-RUN-ARCHITECTURE.md), including
 its exact accepted source/evidence boundary and integration status. The Service
 Worker dispatch authority surface and route classifications are mapped in
-[docs/SW-DISPATCH-AUTHORITY-CENSUS.md](docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
+[docs/SW-DISPATCH-AUTHORITY-CENSUS.md](docs/SW-DISPATCH-AUTHORITY-CENSUS.md). The
+streamed backup and restore architecture is mapped in
+[docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md](docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md).
 
 ## The constitution
 **docs/CONSTITUTION.md is non-negotiable.** Every change must satisfy the
