@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.356] — 2026-09-11
+- Make npm test real-browser requirements explicit
+
 ## [0.3.355] — 2026-09-11
 - Review probes recognize their owned Chrome across cmdline displays
 

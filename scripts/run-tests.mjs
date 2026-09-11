@@ -8,6 +8,8 @@
 //     against each other or against dist readers failed 9 tests (par1 run).
 //   Phase 2 (parallel): everything else, `deno test --parallel` (one worker
 //     per CPU). No file in this phase writes shared build artifacts.
+//     NOTE: Phase 2 includes REAL-BROWSER execution (tests/chrome-profile-location.test.ts
+//     unconditionally launches Chromium under a unit-scope lockPath; see docs/CHROME-TEST-CONTRACT.md).
 //
 // Coverage is complete by construction: every tests/*.test.ts runs exactly
 // once; the serial set is validated to exist, and NEW test files default to

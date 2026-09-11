@@ -267,7 +267,7 @@ the literal.
 
 ---
 
-## The three book rules
+## The four book rules
 
 **(a) File-disjointness is not suite-greenness.** Two lanes whose diffs touch disjoint
 files can still break each other through any watcher above — a count floor in
@@ -299,3 +299,11 @@ bd list --desc-contains "<token>" --status open,in_progress,blocked,closed
 Every hit is a watcher you owe. If a hit is a COUNT (a floor or an exact number), assume
 your change moves it until you have re-run the guard that owns it. If a hit is in this
 inventory, re-read its entry.
+
+**(d) Subset gates cannot see cross-cutting guards (canon, 2026-09-11; dqc1).**
+Subset gates (`npm run test:changed`) select tests via static reverse-dependency analysis.
+Cross-cutting guards inspect dynamic file trees without statically importing every target.
+If an un-imported guard is tripped, `test:changed` will not run it. Proven live on
+2026-09-11: `atve`'s `27ec8926` tripped `tests/test-partition-guard.test.ts`, and main
+stayed red across four subsequent subset-gated landings until `npm test` ran.
+Full contract and breakdown in `docs/CHROME-TEST-CONTRACT.md`.

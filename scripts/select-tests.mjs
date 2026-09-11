@@ -23,6 +23,11 @@
 // scripts/test-partition.mjs and pinned by tests/test-partition-guard.test.ts
 // — made parallel subsets safe: an 18-file provider-gate subset dropped from
 // 182s to ~40s.)
+//
+// MOTIVATING LESSON (canon, 2026-09-11; dqc1): subset gates CANNOT see cross-cutting
+// guards. A guard that dynamically scans file trees (like test-partition-guard.test.ts)
+// without statically importing touched files will not be selected by test:changed.
+// npm test is the mandatory pre-push gate. See docs/CHROME-TEST-CONTRACT.md.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";

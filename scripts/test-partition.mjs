@@ -8,6 +8,8 @@
 //   CAS, packages/bundled). They rewrite/verify the same paths; racing them
 //   against each other or against dist readers failed 9 tests (vj4s par1 run).
 // Phase 2 (parallel): everything else, `deno test --parallel`.
+//   NOTE: Phase 2 includes real-browser execution (tests/chrome-profile-location.test.ts
+//   unconditionally launches Chromium under a unit-scope lockPath; see docs/CHROME-TEST-CONTRACT.md).
 //
 // Coverage is complete by construction: every tests/*.test.ts runs exactly
 // once, and NEW test files default to the parallel set. The guard test

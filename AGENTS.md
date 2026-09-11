@@ -313,8 +313,8 @@ read in run 2.
   second instance.
 
 ## Testing
-- npm test — the full pure/unit suite (two-phase: build/artifact tests serial,
-  everything else parallel; vj4s, ~90 s). **A raw `deno test tests/` sweep is
+- npm test — the full suite (two-phase: build/artifact tests serial with process
+  isolation, everything else parallel; vj4s + 6yrq, ~90 s). **A raw `deno test tests/` sweep is
   refused** (Paul, 2026-09-04): `deno.jsonc` hides `tests/*.test.ts` from
   discovery, so the sweep loads only `tests/00-use-npm-test_test.ts`, which
   prints the runner commands and fails in under a second. The runners pass
@@ -322,6 +322,12 @@ read in run 2.
   `deno test tests/x.test.ts` reports "No test modules found" — use
   `npm run test:file -- tests/x.test.ts`. Do not add `--config deno.runner.jsonc`
   to a sweep by hand; that is the runner's job.
+  **Real browser requirement:** `npm test` is NOT a pure in-memory test run.
+  While all 15 serial files and 421+ parallel files are in-memory unit tests or use
+  fake-runner probes (`binary: fake`), `tests/chrome-profile-location.test.ts:115`
+  unconditionally launches a REAL Chromium instance to test live profile mutation
+  during whole-tree copies. It requires `/usr/bin/chromium` (or Chrome binary).
+  See `docs/CHROME-TEST-CONTRACT.md` for the full contract.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
 - **Never name a debugging port.** Every harness in `scripts/` launches its
@@ -391,9 +397,12 @@ read in run 2.
     lock on fd 9. Honest caveat: exclusivity excludes other CAP browsers, NOT
     other lanes' compilers — a load-sensitive suite still needs a quiet box.
   - `launchChrome({ lockPath })` takes an exclusive lock on a caller-owned file:
-    fake-browser unit fixtures use it so they never queue behind a real gate and
-    never spend the machine's browser budget on a shell script
-    (chrome-agent-platform-51x4). Never set either in a normal acceptance run.
+    unit tests and fixtures use it so they never queue behind a real gate and
+    never spend the machine's browser budget on a test (chrome-agent-platform-51x4).
+    **CRITICAL DISTINCTION:** `lockPath` isolates file locking; it is NOT "no browser".
+    If `opts.binary` is omitted, `launchChrome` spawns real Chromium (`/usr/bin/chromium`).
+    Unit fixtures that do not need real Chrome pass `binary: fake`.
+    Never set either in a normal acceptance run. Full contract in `docs/CHROME-TEST-CONTRACT.md`.
   Profiles must be per-instance — `instanceProfile(base)` from
   `scripts/lib/chrome-launch.ts` when the base is an operator/caller knob
   (`HEADED_EVIDENCE_DIR`, `Deno.args[1]`), because two runs sharing a profile
@@ -523,7 +532,7 @@ only task authority — see "Task tracking") and in the mutation logs under
 mutant runs) and `cap-evidence/uodl/lrok-staging/CANDIDATE.md` (a staged re-anchor
 with its mutant runbook).
 
-### The coupling rules — three book rules for touching any cross-file watcher (canon, 2026-09-09)
+### The coupling rules — four book rules for touching any cross-file watcher (canon, 2026-09-09; rule 4 added 2026-09-11)
 
 This repo is dense with watchers whose SUBJECT lives in a different file: the
 substring-honesty counters, the partition guard's hazard inheritance, docs-process-truth's
@@ -549,6 +558,19 @@ retiring, moving, or satisfying any pin, allowlist entry, sentinel, count or fil
    Provenance: c9y8's R4 sentinel watched a bare-word pin, lrok re-anchored that pin away
    in an otherwise-clean lane, and main went red at 1fd1a980 until d7af497f — one grep
    would have caught it before push.
+4. **Subset gates cannot see cross-cutting guards (canon, 2026-09-11; dqc1).**
+   Subset gates (`npm run test:changed`, `npm run test:file`) select tests by
+   reverse-import analysis from touched files. Cross-cutting guards (`tests/test-partition-guard.test.ts`,
+   `tests/substring-pin-honesty.test.ts`, `tests/machine-path-honesty.test.ts`,
+   `tests/harness-registry.test.ts`, `tests/durable-root.test.ts`, `tests/chrome-lock-fixture-scope.test.ts`)
+   inspect repository trees dynamically at runtime and do NOT statically import every
+   inspected file. If a change trips an un-imported guard (proven tonight: commit `27ec8926`
+   touched `tests/durable-root.test.ts`, causing `scripts/test-partition.mjs` to classify it
+   as a build hazard; `tests/test-partition-guard.test.ts` broke on main 4 passed / 1 failed,
+   but because neither the guard nor its imports were touched, `test:changed` never selected
+   it and main stayed red across four subsequent subset-gated landings), only `npm test` will
+   catch it. `npm run test:changed` is for inner-loop iteration; `npm test` is the mandatory
+   pre-push gate. See `docs/CHROME-TEST-CONTRACT.md` §5.
 
 ## The current review (2026-08-30) — read before picking up work
 
