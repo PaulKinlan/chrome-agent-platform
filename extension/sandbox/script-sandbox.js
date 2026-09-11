@@ -211,80 +211,74 @@ function runScript(source, runId, nonce, rawModules = []) {
     }
   };
 
-  // Phase 1: Module verification and Import Map injection
-  const verifiedModules = [];
-  if (Array.isArray(rawModules) && rawModules.length > 0) {
-    for (const mod of rawModules) {
-      if (!mod || typeof mod !== "object") continue;
-      let name;
-      try {
-        name = validateJsModuleName(mod.name);
-      } catch (err) {
-        post("cap:script-error", { error: `invalid_module_name: ${err.message}`, code: "invalid_module_name" });
-        return;
-      }
-      const claimedDigest = String(mod.digest ?? "").toLowerCase();
-      if (!/^[0-9a-f]{64}$/i.test(claimedDigest)) {
-        post("cap:script-error", { error: `invalid_module_digest: ${claimedDigest}`, code: "invalid_digest" });
-        return;
-      }
-      let uint8;
-      if (typeof mod.source === "string") {
-        uint8 = new TextEncoder().encode(mod.source);
-      } else if (mod.bytes instanceof Uint8Array) {
-        uint8 = mod.bytes;
-      } else if (mod.bytes instanceof ArrayBuffer) {
-        uint8 = new Uint8Array(mod.bytes);
-      } else if (Array.isArray(mod.bytes)) {
-        uint8 = new Uint8Array(mod.bytes);
-      } else {
-        post("cap:script-error", { error: `missing_module_content: module "${name}" has no source or bytes`, code: "missing_content" });
-        return;
+  (async () => {
+    try {
+      // Phase 1: Module verification and Import Map injection
+      if (Array.isArray(rawModules) && rawModules.length > 0) {
+        const verifiedModules = [];
+        for (const mod of rawModules) {
+          if (!mod || typeof mod !== "object") continue;
+          let name;
+          try {
+            name = validateJsModuleName(mod.name);
+          } catch (err) {
+            post("cap:script-error", { error: `invalid_module_name: ${err.message}`, code: "invalid_module_name" });
+            return;
+          }
+          const claimedDigest = String(mod.digest ?? "").toLowerCase();
+          if (!/^[0-9a-f]{64}$/i.test(claimedDigest)) {
+            post("cap:script-error", { error: `invalid_module_digest: ${claimedDigest}`, code: "invalid_digest" });
+            return;
+          }
+          let uint8;
+          if (typeof mod.source === "string") {
+            uint8 = new TextEncoder().encode(mod.source);
+          } else if (mod.bytes instanceof Uint8Array) {
+            uint8 = mod.bytes;
+          } else if (mod.bytes instanceof ArrayBuffer) {
+            uint8 = new Uint8Array(mod.bytes);
+          } else if (Array.isArray(mod.bytes)) {
+            uint8 = new Uint8Array(mod.bytes);
+          } else {
+            post("cap:script-error", { error: `missing_module_content: module "${name}" has no source or bytes`, code: "missing_content" });
+            return;
+          }
+
+          // Pre-execution cryptographic re-hash
+          const computed = computeModuleDigest(uint8);
+          if (computed !== claimedDigest) {
+            post("cap:script-error", {
+              error: `module_digest_mismatch for "${name}": expected ${claimedDigest}, computed ${computed}`,
+              code: "digest_mismatch",
+              moduleName: name,
+              expected: claimedDigest,
+              computed,
+            });
+            return; // createBlobUrl is NEVER called on mismatch
+          }
+          verifiedModules.push({ name, uint8 });
+        }
+
+        const imports = {};
+        for (const mod of verifiedModules) {
+          const blob = new Blob([mod.uint8], { type: "text/javascript" });
+          const blobUrl = URL.createObjectURL(blob);
+          createdBlobUrls.push(blobUrl);
+          imports[mod.name] = blobUrl;
+        }
+
+        if (Object.keys(imports).length > 0) {
+          const mapEl = document.createElement("script");
+          mapEl.type = "importmap";
+          mapEl.textContent = JSON.stringify({ imports });
+          document.head.appendChild(mapEl);
+        }
       }
 
-      // Pre-execution cryptographic re-hash
-      const computed = computeModuleDigest(uint8);
-      if (computed !== claimedDigest) {
-        post("cap:script-error", {
-          error: `module_digest_mismatch for "${name}": expected ${claimedDigest}, computed ${computed}`,
-          code: "digest_mismatch",
-          moduleName: name,
-          expected: claimedDigest,
-          computed,
-        });
-        return; // createBlobUrl is NEVER called on mismatch
-      }
-      verifiedModules.push({ name, uint8 });
-    }
-
-    const imports = {};
-    for (const mod of verifiedModules) {
-      const blob = new Blob([mod.uint8], { type: "text/javascript" });
-      const blobUrl = URL.createObjectURL(blob);
-      createdBlobUrls.push(blobUrl);
-      imports[mod.name] = blobUrl;
-    }
-
-    if (Object.keys(imports).length > 0) {
-      try {
-        const mapEl = document.createElement("script");
-        mapEl.type = "importmap";
-        mapEl.textContent = JSON.stringify({ imports });
-        document.head.appendChild(mapEl);
-      } catch (err) {
-        cleanup();
-        post("cap:script-error", { error: `import_map_injection_failed: ${err.message}` });
-        return;
-      }
-    }
-  }
-
-  // Phase 2: Script execution
-  const prep = prepareScriptModuleSource(source);
-  if (prep.isExplicitModule) {
-    // Execute as ES module via Blob URL
-    (async () => {
-      try {
+      // Phase 2: Script execution
+      const prep = prepareScriptModuleSource(source);
+      if (prep.isExplicitModule) {
+        // Execute as ES module via Blob URL
         const scriptBlob = new Blob([prep.source], { type: "text/javascript" });
         const scriptBlobUrl = URL.createObjectURL(scriptBlob);
         createdBlobUrls.push(scriptBlobUrl);
@@ -299,26 +293,16 @@ function runScript(source, runId, nonce, rawModules = []) {
           result = mod.result;
         }
         post("cap:script-result", { ok: true, result });
-      } catch (err) {
-        post("cap:script-error", { error: String(err && err.message ? err.message : err) });
-      } finally {
-        cleanup();
+      } else {
+        // Execute as classic async function body
+        const fn = new Function("return (async function(){\n" + source + "\n})();");
+        const result = await fn();
+        post("cap:script-result", { ok: true, result });
       }
-    })();
-  } else {
-    // Execute as classic async function body
-    let fn;
-    try {
-      fn = new Function("return (async function(){\n" + source + "\n})();");
-    } catch (e) {
+    } catch (err) {
+      post("cap:script-error", { error: String(err && err.message ? err.message : err) });
+    } finally {
       cleanup();
-      post("cap:script-error", { error: String(e && e.message ? e.message : e) });
-      return;
     }
-    Promise.resolve()
-      .then(fn)
-      .then((result) => post("cap:script-result", { ok: true, result }))
-      .catch((err) => post("cap:script-error", { error: String(err && err.message ? err.message : err) }))
-      .finally(() => cleanup());
-  }
+  })();
 }

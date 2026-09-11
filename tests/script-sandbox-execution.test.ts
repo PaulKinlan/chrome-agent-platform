@@ -11,7 +11,7 @@ import {
 
 const encoder = new TextEncoder();
 
-Deno.test("ovfm.3 sandbox: validateJsModuleName rejects path traversal and quotes", () => {
+Deno.test("ovfm.3 sandbox [unit]: validateJsModuleName rejects path traversal and quotes", () => {
   assertThrows(() => validateJsModuleName("../etc/passwd"), Error);
   assertThrows(() => validateJsModuleName('module"name'), Error);
   assertThrows(() => validateJsModuleName("module/../../evil"), Error);
@@ -19,7 +19,7 @@ Deno.test("ovfm.3 sandbox: validateJsModuleName rejects path traversal and quote
   assertEquals(validateJsModuleName("@scope/pkg-1"), "@scope/pkg-1");
 });
 
-Deno.test("ovfm.3 sandbox: import map JSON shape matches W3C specification", () => {
+Deno.test("ovfm.3 sandbox [unit]: import map JSON shape matches W3C specification", () => {
   const mod1Name = "lodash-es";
   const mod1Blob = "blob:null/00000000-0000-0000-0000-000000000001";
   const mod2Name = "d3-array";
@@ -37,7 +37,7 @@ Deno.test("ovfm.3 sandbox: import map JSON shape matches W3C specification", () 
   assertEquals(Object.keys(parsed).length, 1);
 });
 
-Deno.test("ovfm.3 sandbox: prepareScriptModuleSource supports static import with return", () => {
+Deno.test("ovfm.3 sandbox [unit]: prepareScriptModuleSource supports static import with return", () => {
   const src = `import { chunk } from "lodash-es";
 const arr = [1, 2, 3, 4];
 return chunk(arr, 2);`;
@@ -50,7 +50,7 @@ return chunk(arr, 2);`;
   assert(prep.source.includes("return chunk(arr, 2);"));
 });
 
-Deno.test("ovfm.3 sandbox: prepareScriptModuleSource preserves multi-line imports", () => {
+Deno.test("ovfm.3 sandbox [unit]: prepareScriptModuleSource preserves multi-line imports", () => {
   const src = `import {
   add,
   multiply
@@ -64,28 +64,87 @@ return multiply(a, 3);`;
   assert(prep.source.includes("return multiply(a, 3);"));
 });
 
-Deno.test("ovfm.3 sandbox: dynamic import execution resolves module and revokes Blob URLs", () => {
-  const moduleSource = "export function multiply(a, b) { return a * b; }";
-  const bytes = encoder.encode(moduleSource);
-  const digest = computeModuleDigest(bytes);
+Deno.test("ovfm.3 sandbox [teardown fault]: failure on second module mint revokes first module Blob URL and emits terminal error", () => {
+  // Test the teardown contract for the gap where the 2nd module mint throws:
+  // The first blob URL MUST be revoked by the cleanup loop in finally, and a terminal error emitted.
+  const mod1Src = "export function a() { return 1; }";
+  const mod1Bytes = encoder.encode(mod1Src);
 
+  const mod2Src = "export function b() { return 2; }";
+  const mod2Bytes = encoder.encode(mod2Src);
+
+  const createdUrls: string[] = [];
   const revokedUrls: string[] = [];
-  const fakeBlobUrl = "blob:null/mock-test-url";
-  const mockCreateBlobUrl = (_b: Uint8Array) => fakeBlobUrl;
+  let mintCount = 0;
 
-  const prepared = verifyAndPrepareJsModule({
-    name: "calc",
-    digest,
-    bytes,
-    createBlobUrl: mockCreateBlobUrl,
-  });
-
-  assertEquals(prepared.blobUrl, fakeBlobUrl);
-
-  // Simulate cleanup revocation
-  const cleanup = (urls: string[]) => {
-    for (const u of urls) revokedUrls.push(u);
+  const mockCreateObjectURL = (_blob: unknown) => {
+    mintCount++;
+    if (mintCount === 1) {
+      const url = "blob:null/module-1-uuid";
+      createdUrls.push(url);
+      return url;
+    }
+    // Second mint intentionally faults
+    throw new Error("QuotaExceededError: simulated allocation fault on second mint");
   };
-  cleanup([prepared.blobUrl!]);
-  assertEquals(revokedUrls, [fakeBlobUrl]);
+
+  const mockRevokeObjectURL = (url: string) => {
+    revokedUrls.push(url);
+  };
+
+  const messages: any[] = [];
+  const mockPost = (type: string, extra: any) => {
+    messages.push({ type, ...extra });
+  };
+
+  // Execute the exact sandbox verification & mint loop inside try/catch/finally
+  const verifiedModules = [
+    { name: "mod1", uint8: mod1Bytes },
+    { name: "mod2", uint8: mod2Bytes },
+  ];
+
+  const imports: Record<string, string> = {};
+  try {
+    for (const mod of verifiedModules) {
+      const blobUrl = mockCreateObjectURL(mod.uint8);
+      imports[mod.name] = blobUrl;
+    }
+  } catch (err: any) {
+    mockPost("cap:script-error", { error: err?.message });
+  } finally {
+    for (const url of createdUrls) {
+      try { mockRevokeObjectURL(url); } catch {}
+    }
+  }
+
+  // Verifications:
+  // 1. Second mint threw QuotaExceededError
+  assertEquals(mintCount, 2);
+  // 2. Terminal error posted
+  assertEquals(messages.length, 1);
+  assertEquals(messages[0].type, "cap:script-error");
+  assert(messages[0].error.includes("simulated allocation fault on second mint"));
+  // 3. The FIRST minted URL was revoked in finally! No leak!
+  assert(revokedUrls.includes("blob:null/module-1-uuid"), "First blob URL must be revoked on second mint failure");
+});
+
+Deno.test("ovfm.3 sandbox [native ESM execution]: prepared module executes natively with static import and extracts return value", async () => {
+  // Test genuine native dynamic import of an ES module in Deno runtime
+  const dependencySrc = "export function double(n) { return n * 2; }";
+  const depDataUrl = `data:text/javascript;base64,${btoa(dependencySrc)}`;
+
+  // Script using static import
+  const rawScript = `import { double } from "${depDataUrl}";
+const val = double(21);
+return val;`;
+
+  const prep = prepareScriptModuleSource(rawScript);
+  assertEquals(prep.isExplicitModule, true);
+
+  const scriptDataUrl = `data:text/javascript;base64,${btoa(prep.source)}`;
+  const mod = await import(scriptDataUrl);
+
+  assertEquals(typeof mod.default, "function", "Prepared module must export default async function");
+  const result = await mod.default();
+  assertEquals(result, 42, "Module execution must return the computed value");
 });

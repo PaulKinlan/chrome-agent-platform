@@ -33,7 +33,13 @@ While the Python execution environment (Pyodide in a dedicated Worker) faced a *
 2. **No Direct Storage Access:** The sandbox has an opaque origin (`null`). It cannot read `localStorage`, `IndexedDB`, or OPFS directly. Stored modules must be provided to the sandbox by the host.
 3. **The Bare Specifier Wall:** In standard JavaScript, executing `import { chunk } from "lodash-es"` or `const d3 = await import("d3-array")` requires resolving a **bare specifier** (`"lodash-es"`). Browsers only resolve bare specifiers if an **Import Map** (`<script type="importmap">`) is present in the document.
 4. **Syntax Conflict with `new Function`:** Static import statements (`import ... from ...`) are **illegal syntax** inside function bodies. The current `new Function(...)` execution model rejects any script containing static `import` declarations with a `SyntaxError`.
-5. **Import Map Immutability:** By web standard (HTML specification), `<script type="importmap">` must be injected and parsed **before** any module script is evaluated in the document. Once a module has begun loading or evaluating, the import map is locked and cannot be amended.
+5. **Import Map Browser Behavior & The Real Security Spine:**
+   - While the initial HTML specification envisioned `<script type="importmap">` as immutable after module evaluation, actual Chromium behavior (measured in Chrome 152+) accepts subsequent import map insertions and resolves late unapproved specifiers. "Immutable after first load" is therefore **not** a platform security boundary the architecture can rely on, and the system will not engage in a fragile DOM `MutationObserver` arms race to simulate it.
+   - **The Real Security Properties:** The sandbox security spine rests entirely on three robust, checkable invariants:
+     1. **The Opaque Origin (`null`)**: Zero same-origin access to extension documents, credentials, or OPFS.
+     2. **Host-Bridged Fetch with SSRF Denial**: Zero ambient network capability; every network call is routed through the Service Worker with strict allowlists and loopback/private IP blocking.
+     3. **Cryptographic Digest Verification of Host-Supplied Modules**: The host and sandbox only ever mint Blob URLs for modules whose bytes match the owner-approved SHA-256 digest.
+   - A late import map injected by script code can only point at bytes the script itself could already execute (the sandbox permits `eval` and dynamic script execution by design); it introduces no privilege escalation, but the contract must state what the browser actually provides rather than claiming nonexistent browser immutability guarantees.
 6. **Module Identity & Anti-Impersonation:**
    - What defines a module's identity?
    - How are namespace collisions resolved (e.g. two modules named `utils`)?
@@ -134,7 +140,7 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
    - *Test Requirement:* An executing unit test must prove that a corrupted or substituted module is rejected before any Blob URL is created or mounted, mirroring the pre-instantiate re-hash contract in `executeUserWasmRun`.
 
 4. **Fresh-Per-Run Iframe Instantiation:**
-   - Because `<script type="importmap">` is immutable after the first module load, the host (`script-host.js`) must instantiate a fresh iframe for each script run that uses modules, tearing down the iframe upon completion. (This is already the pattern in `runScriptInIframe` lines 88–133).
+   - The host (`script-host.js`) instantiates a fresh iframe for each script run that uses modules, tearing down the iframe upon completion (lines 88–133). This ensures clean, uncontaminated document state across runs, independent of browser import map mutability.
 
 5. **Teardown & GC:**
    - Upon script resolution or timeout, `runScript` in `script-sandbox.js` revokes all created Blob URLs via `URL.revokeObjectURL(url)` to prevent memory leaks in long-running offscreen hosts.
@@ -154,8 +160,8 @@ To remain honest and avoid architectural over-promising, this design explicitly 
    - Installed modules cannot persist state. They are subject to the same storage teaching guards as the script itself.
 4. **Network Access Inheritance:**
    - If an installed module calls `fetch()`, that call is routed through the sandbox's host-bridged `fetch`. It is governed by the exact same per-run host allowlist and SSRF restrictions as user-written script code. An installed module **cannot widen** the network reach of the script.
-5. **No Runtime Module Mutation:**
-   - A running script cannot "install" or "eval-import" a new module mid-flight that was not declared and approved before execution began.
+5. **No Privilege Escalation via Late Dynamic Import Maps:**
+   - While a running script may dynamically insert an import map in modern Chromium engines, it cannot bypass the sandbox boundary: any late-mapped URL can only point to bytes the script itself created in-memory, and cannot widen network reach, access storage, or mint unapproved host-module digests.
 
 ---
 

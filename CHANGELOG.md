@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.391] — 2026-09-11
+- enclose module minting in try/finally, correct design doc, and add teardown fault test (ovfm.3 revision)
+
 ## [0.3.390] — 2026-09-11
 - host dispatch and import map injection for installable JS modules (ovfm.3)
 
