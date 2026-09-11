@@ -15,7 +15,9 @@ import {
   resolveStepArgs,
   runPipeline,
   getPath,
+  PipelineBindingError,
   MAX_PIPELINE_STEPS,
+  MAX_BINDING_DEPTH,
 } from "../extension/lib/tool-pipeline.js";
 
 // A fake dispatcher: each tool just transforms its args deterministically, so
@@ -125,4 +127,77 @@ Deno.test("validatePipeline: duplicate ids, empty, over-limit, unknown tool", ()
   const unknown = validatePipeline({ steps: [{ id: "s1", tool: "nope", args: {} }] }, { knownTools: ["yes"] });
   assertEquals(unknown.ok, false);
   assert(/unknown tool/.test((unknown as any).error));
+});
+
+Deno.test("validatePipeline: depth 64 accepted; depth 65 rejected by structural guard without crash", () => {
+  let depth64: any = "val";
+  for (let i = 0; i < 64; i++) depth64 = { next: depth64 };
+  const valid = validatePipeline({
+    steps: [{ id: "s1", tool: "test", args: depth64 }],
+  });
+  assertEquals(valid.ok, true, "Depth 64 must be accepted by the structural recursion guard");
+
+  let depth65: any = "val";
+  for (let i = 0; i < 65; i++) depth65 = { next: depth65 };
+  const invalid = validatePipeline({
+    steps: [{ id: "s1", tool: "test", args: depth65 }],
+  });
+  assertEquals(invalid.ok, false);
+  assert((invalid as any).error.includes("nest too deeply"), "Depth 65 must fail closed gracefully via guard");
+});
+
+Deno.test("resolveStepArgs: depth 64 resolves; depth 65 throws PipelineBindingError", () => {
+  let depth64: any = "val";
+  for (let i = 0; i < 64; i++) depth64 = { next: depth64 };
+  const resolved = resolveStepArgs(depth64, {});
+  assertEquals(resolved, depth64);
+
+  let depth65: any = "val";
+  for (let i = 0; i < 65; i++) depth65 = { next: depth65 };
+  let threw = false;
+  try {
+    resolveStepArgs(depth65, {});
+  } catch (err: any) {
+    threw = true;
+    assert(err instanceof PipelineBindingError);
+    assert(err.message.includes("nest too deeply"));
+  }
+  assert(threw, "resolveStepArgs must throw PipelineBindingError at depth 65");
+});
+
+Deno.test("validatePipeline: descriptive step IDs (>40 chars) are accepted", () => {
+  const longId = "generate_weekly_sales_report_configuration_for_team_alpha";
+  assert(longId.length > 40);
+  const res = validatePipeline({
+    steps: [{ id: longId, tool: "test", args: {} }],
+  });
+  assertEquals(res.ok, true, "Descriptive step IDs >40 chars must be accepted");
+});
+
+Deno.test("validatePipeline: large shape-valid args (>32 KiB) plan and run whole (dptw)", async () => {
+  const largePayload = "x".repeat(64 * 1024);
+  const pipeline = {
+    steps: [
+      { id: "s1", tool: "write", args: { content: largePayload } },
+    ],
+  };
+  const valid = validatePipeline(pipeline);
+  assertEquals(valid.ok, true, "Args >32 KiB must NOT be rejected by artificial size caps");
+
+  const dispatch = fakeDispatch({
+    write: (a) => ({ written: a.content.length }),
+  });
+  const res: any = await runPipeline(pipeline, { dispatchTool: dispatch });
+  assertEquals(res.ok, true);
+  assertEquals(res.final, { written: 64 * 1024 });
+});
+
+Deno.test("validatePipeline: step count limit aligns with platform budget (200 accepted, 201 refused)", () => {
+  const atLimit = { steps: Array.from({ length: 200 }, (_, i) => ({ id: `s${i}`, tool: "t" })) };
+  assertEquals(validatePipeline(atLimit).ok, true, "200 steps must be accepted");
+
+  const overLimit = { steps: Array.from({ length: 201 }, (_, i) => ({ id: `s${i}`, tool: "t" })) };
+  const res: any = validatePipeline(overLimit);
+  assertEquals(res.ok, false, "201 steps must be refused");
+  assert(res.error.includes("too many steps (max 200)"));
 });

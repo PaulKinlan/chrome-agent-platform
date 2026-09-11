@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.366] — 2026-09-11
+- reconcile internal bounds with platform budget and structural guards ()
+
 ## [0.3.365] — 2026-09-11
 - [11rm] Architect streamed backup and restore for unbounded profiles
 

@@ -480,7 +480,9 @@ Three properties make it safe to compose tools this way:
 - **It fails closed.** `$ref` may reference only an EARLIER step (a linear pipe, no
   cycles by construction); a binding whose path does not resolve halts the
   pipeline with a structured error rather than running a step against a missing
-  input; step count and args size are bounded.
+  input; argument recursion is structurally bounded against call stack exhaustion
+  while shape and platform run budgets govern execution without artificial byte
+  or step ceilings (per dptw; step count aligns with the platform run iteration budget).
 
 A pipeline runs through `run_pipeline`, the fourth lazy-protocol meta-tool
 (slice 2, chrome-agent-platform-qsm4): its handler runs the core with the same

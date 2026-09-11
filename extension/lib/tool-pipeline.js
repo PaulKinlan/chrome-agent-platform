@@ -21,11 +21,13 @@
 // never choose the tool — and a destructive step still raises its own approval
 // card showing the resolved args.
 
-export const MAX_PIPELINE_STEPS = 8;
-export const MAX_STEP_ID_LEN = 40;
-export const MAX_ARGS_BYTES = 32 * 1024;
-export const MAX_BINDING_DEPTH = 8;
-const STEP_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
+// Step count aligns with the platform run budget limit (200), not an invented 8
+// (chrome-agent-platform-46rh, owner decision).
+export const MAX_PIPELINE_STEPS = 200;
+// Recursion depth structurally guards the recursive validators against V8 call
+// stack exhaustion (~10k frames) without artificially restricting nested JSON data.
+export const MAX_BINDING_DEPTH = 64;
+const STEP_ID_RE = /^[a-z0-9][a-z0-9_-]*$/i;
 
 /** A binding token is EXACTLY an object carrying a string `$ref` (optionally a
  * `path`). Any object shaped like one is treated as a binding — a real tool arg
@@ -81,17 +83,13 @@ export function validatePipeline(pipeline, { knownTools } = {}) {
     const step = steps[i];
     if (!step || typeof step !== "object") return { ok: false, error: `step ${i} is not an object` };
     const id = String(step.id ?? "");
-    if (!STEP_ID_RE.test(id)) return { ok: false, error: `step ${i} has an invalid id "${id}" (use letters/digits/-/_, ≤${MAX_STEP_ID_LEN})` };
+    if (!STEP_ID_RE.test(id)) return { ok: false, error: `step ${i} has an invalid id "${id}" (use letters/digits/-/_)"` };
     if (seen.has(id)) return { ok: false, error: `duplicate step id "${id}"` };
     const tool = String(step.tool ?? "");
     if (!tool) return { ok: false, error: `step "${id}" has no tool` };
     if (toolSet && !toolSet.has(tool)) return { ok: false, error: `step "${id}" names an unknown tool "${tool}"` };
     const args = step.args ?? {};
     if (typeof args !== "object" || Array.isArray(args)) return { ok: false, error: `step "${id}" args must be an object` };
-    let bytes;
-    try { bytes = new TextEncoder().encode(JSON.stringify(args)).length; }
-    catch { return { ok: false, error: `step "${id}" args are not serializable` }; }
-    if (bytes > MAX_ARGS_BYTES) return { ok: false, error: `step "${id}" args too large (${bytes} > ${MAX_ARGS_BYTES})` };
     // Every binding in this step must reference an ALREADY-seen (earlier) step.
     const refErr = validateBindingRefs(args, seen, id);
     if (refErr) return { ok: false, error: refErr };
