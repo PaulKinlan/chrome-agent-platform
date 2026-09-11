@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.368] — 2026-09-11
+- whole-repo documentation audit and prioritized fix plan ()
+
 ## [0.3.367] — 2026-09-11
 - [9zw7] Update architectural risk register with four-field contract and ceiling citations
 
