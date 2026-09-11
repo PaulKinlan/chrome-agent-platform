@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.387] — 2026-09-11
+- correct compaction review measurements and scope
+
 ## [0.3.386] — 2026-09-11
 - recover native registry calibration checks
 
