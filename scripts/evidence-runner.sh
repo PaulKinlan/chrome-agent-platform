@@ -6,7 +6,12 @@
 # is scanned for stray lock/owner/stage temps.
 set -euo pipefail
 ROOT=/home/paulkinlan/cap-provider-picker
-OUT=$(mktemp -d /tmp/cap-evidence-XXXXXX)
+# Durable evidence root — mirrors scripts/lib/durable-root.mjs: /tmp here is
+# RAM-backed tmpfs and evidence must survive a reboot. CAP_DURABLE_ROOT
+# overrides (empty = unset), else $HOME/cap-evidence.
+EVIDENCE_ROOT="${CAP_DURABLE_ROOT:-$HOME/cap-evidence}"
+mkdir -p "$EVIDENCE_ROOT"
+OUT=$(mktemp -d "$EVIDENCE_ROOT/cap-evidence-XXXXXX")
 cd "$ROOT"
 START_SHA=$(git rev-parse HEAD)
 STAMP() { date -u +%FT%TZ; }

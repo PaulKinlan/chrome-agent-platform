@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.349] — 2026-09-11
+- widen durable-root guard and migrate tempdir call sites to durable paths
+
 ## [0.3.348] — 2026-09-11
 - Browser check timeouts identify the stalled request
 

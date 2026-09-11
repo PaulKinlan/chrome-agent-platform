@@ -97,7 +97,8 @@ export function __make(WS, child) {
   };
 }
 `;
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cap-cdp-"));
+  const { durableDir } = await import("../scripts/lib/durable-root.mjs");
+  const dir = await fsp.mkdtemp(path.join(durableDir("scratch"), "cap-cdp-"));
   const f = path.join(dir, "c.mts");
   await fsp.writeFile(f, wrapper);
   const b = path.join(dir, "c.bundle.mjs");

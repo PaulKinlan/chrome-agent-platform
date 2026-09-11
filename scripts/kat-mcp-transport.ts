@@ -20,12 +20,12 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { startMcpTestServer } from "./mcp-test-server.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
-const EVIDENCE = Deno.env.get("CAP_EVIDENCE_DIR") ??
-  "/tmp/claude-1000/-home-paulkinlan-chrome-agent-platform/25bf9309-c874-4b40-85db-e95719f9eeb2/scratchpad/work/mcp-transport-spike";
+const EVIDENCE = Deno.env.get("CAP_EVIDENCE_DIR") ?? durableDir("cap-mcp-transport-kats");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
