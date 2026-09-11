@@ -23,6 +23,8 @@ export const PYTHON_RUNTIME_ARCHIVE_PREFIX = PYTHON_RUNTIME_DIR; // "dist/wasm-t
 export const STORE_TARGET = "store";
 export const STORE_EXTENSION_CSP =
   "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:";
+export const STORE_SANDBOX_CSP =
+  "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self';";
 export const STORE_WASM_LANE = "bundled-reviewed-only";
 export const STORE_ALLOWED_WORKER_LITERALS = Object.freeze([]);
 
@@ -90,12 +92,15 @@ export function parsePackageArguments(args) {
 }
 
 function assertExactStoreCsp(manifest) {
-  if (!plainExact(manifest?.content_security_policy, ["extension_pages"])) {
+  if (!plainExact(manifest?.content_security_policy, ["extension_pages", "sandbox"])) {
     throw policyError("content_security_policy object is not exact");
   }
   if (
     manifest.content_security_policy.extension_pages !== STORE_EXTENSION_CSP
   ) throw policyError("extension_pages CSP is not exact");
+  if (
+    manifest.content_security_policy.sandbox !== STORE_SANDBOX_CSP
+  ) throw policyError("sandbox CSP is not exact");
 }
 
 function remoteHtmlScriptViolations(text, archivePath) {

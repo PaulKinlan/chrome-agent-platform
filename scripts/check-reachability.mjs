@@ -58,6 +58,8 @@ export const RETAINED = {
   "lib/bundled-inventory.js":
     "Owner directive 2026-08-30: part of the WASI bundled-package inventory (imported by lib/bundled-tool-packages.js); tests/bundled-tool-packages.test.ts pins it.",
   // ── surfaces or modules another OPEN entry owns ──
+  "lib/script-sandbox-modules.js":
+    "chrome-agent-platform-ovfm.1: JS module pre-execution digest verification and store binding; wired into script-host in ovfm.3 (tests/script-sandbox-modules.test.ts).",
   "lib/logical-site-agent-config.js":
     "chrome-agent-platform-8wbb: the logicalsiteagentconfig schema/sanitizer/envelope authority is complete and falsified; its export-walk dispatch (+1.5KB SW bytes) is parked pending the 11rm streamed converter (2g90) that supersedes the legacy walk it would wire into.",
   "lib/emscripten-module-audit.js":

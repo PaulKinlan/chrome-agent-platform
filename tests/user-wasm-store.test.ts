@@ -119,7 +119,7 @@ Deno.test("owner-blobs: stores arbitrary bytes exactly, by their digest, and sur
 });
 
 Deno.test("owner-blobs: kinds come from the closed exported set and invalid kinds are refused", async () => {
-  assertEquals(OWNER_BLOB_KINDS, ["wasm", "wheel"]);
+  assertEquals(OWNER_BLOB_KINDS, ["wasm", "wheel", "js-module"]);
   assert(Object.isFrozen(OWNER_BLOB_KINDS));
   const f = fixture();
   const wheel = await f.store.put(upload(new Blob(["PK\u0003\u0004 wheel bytes"]), "A wheel", "desc", "wheel"));

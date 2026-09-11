@@ -17,6 +17,7 @@ import {
 import {
   assertStoreTargetBoundary,
   STORE_EXTENSION_CSP,
+  STORE_SANDBOX_CSP,
 } from "../scripts/store-target-policy.mjs";
 
 async function command(cwd, executable, args) {
@@ -65,7 +66,10 @@ async function fixture() {
       manifest_version: 3,
       version: "1.0.0",
       background: { service_worker: "dist/background/service-worker.js" },
-      content_security_policy: { extension_pages: STORE_EXTENSION_CSP },
+      content_security_policy: {
+        extension_pages: STORE_EXTENSION_CSP,
+        sandbox: STORE_SANDBOX_CSP,
+      },
     }),
   );
   await write(

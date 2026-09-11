@@ -5,6 +5,7 @@ import {
   parsePackageArguments,
   STORE_ALLOWED_WORKER_LITERALS,
   STORE_EXTENSION_CSP,
+  STORE_SANDBOX_CSP,
   STORE_TARGET,
   STORE_WASM_LANE,
 } from "../scripts/store-target-policy.mjs";
@@ -28,6 +29,7 @@ async function fixture({ manifestPatch, js, html, wasm } = {}) {
     version: "1.0.0",
     content_security_policy: {
       extension_pages: STORE_EXTENSION_CSP,
+      sandbox: STORE_SANDBOX_CSP,
     },
     ...(manifestPatch ?? {}),
   };
@@ -129,12 +131,14 @@ Deno.test("store target: CSP variants and extra policy keys fail exact equality"
     {
       content_security_policy: {
         extension_pages: `${STORE_EXTENSION_CSP} wasm-unsafe-eval`,
+        sandbox: STORE_SANDBOX_CSP,
       },
     },
     {
       content_security_policy: {
         extension_pages:
           "object-src 'self'; script-src 'self'; frame-src 'self' about: blob: data:",
+        sandbox: STORE_SANDBOX_CSP,
       },
     },
     {
@@ -260,7 +264,9 @@ Deno.test("store target (Pillar 4): CWS compliance and provenance authority inva
   const manifest = JSON.parse(await Deno.readTextFile(new URL(relPath, import.meta.url)));
   assertEquals(manifest.manifest_version, 3);
   assertEquals(manifest.content_security_policy.extension_pages, STORE_EXTENSION_CSP);
+  assertEquals(manifest.content_security_policy.sandbox, STORE_SANDBOX_CSP);
   assertEquals(STORE_EXTENSION_CSP, "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:");
+  assertEquals(STORE_SANDBOX_CSP, "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self';");
   assertEquals(STORE_WASM_LANE, "bundled-reviewed-only");
   assertEquals(STORE_ALLOWED_WORKER_LITERALS.length, 0);
   assertEquals(STORE_TARGET, "store");

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.381] — 2026-09-11
+- bind JS modules to owner store and declare sandbox CSP permitting blob (ovfm.1-2)
+
 ## [0.3.380] — 2026-09-11
 - design specification for installable JS modules in script sandbox (ovfm)
 

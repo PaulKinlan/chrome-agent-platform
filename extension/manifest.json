@@ -2,7 +2,7 @@
   "default_locale": "en",
   "manifest_version": 3,
   "name": "Chrome Agent Platform",
-  "version": "0.3.380",
+  "version": "0.3.381",
   "description": "Chrome as the agent platform: a multi-agent hub that orchestrates the web via WebMCP, with sites-as-sub-agents, origin-keyed OPFS memory, alarms, and usage accounting.",
   "permissions": [
     "alarms",
@@ -95,7 +95,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "version_name": "0.3.380",
+  "version_name": "0.3.381",
   "sandbox": {
     "pages": [
       "sandbox/script-sandbox.html",
@@ -103,7 +103,8 @@
     ]
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:",
+    "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self';"
   },
   "cross_origin_opener_policy": {
     "value": "same-origin"
