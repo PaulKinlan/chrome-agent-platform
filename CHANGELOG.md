@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.375] — 2026-09-11
+- record check-tasks gate retirement as resolved in cleanup analysis (9zw7.7)
+
 ## [0.3.374] — 2026-09-11
 - retain board deny policy engine fixture and census acceptance
 
