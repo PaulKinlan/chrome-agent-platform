@@ -1,0 +1,41 @@
+{
+  "note": "Sanitized actual Chromium 152 flattened cmdline observations, wrapper and direct launch. Only identity/path values changed; no executable identity was recorded in those historical snapshots.",
+  "cases": [
+    {
+      "name": "wrapped",
+      "owner": {
+        "pid": 101,
+        "ppid": 100,
+        "startTicks": "5001",
+        "profile": "/fixture/profiles/wrapped",
+        "extension": "/fixture/project/extension"
+      },
+      "observed": {
+        "pid": 101,
+        "ppid": 100,
+        "startTicks": "5001",
+        "argv": [
+          "/usr/lib/chromium/chromium --ozone-platform=wayland --ozone-platform-hint=wayland --password-store=gnome-libsecret --enable-features=TouchpadOverscrollHistoryNavigation --load-extension=/usr/share/omarchy/default/chromium/extensions/copy-url,/usr/share/omarchy/default/chromium/extensions/yt-dlp,/usr/share/omarchy/default/chromium/extensions/whatsapp-slim --headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --remote-allow-origins=* --window-size=1400,1200 --silent-debugger-extension-api --disable-extensions-except=/fixture/project/extension --load-extension=/fixture/project/extension --user-data-dir=/fixture/profiles/wrapped --remote-debugging-port=0 --noerrdialogs --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl about:blank"
+        ]
+      }
+    },
+    {
+      "name": "direct",
+      "owner": {
+        "pid": 102,
+        "ppid": 100,
+        "startTicks": "5002",
+        "profile": "/fixture/profiles/direct",
+        "extension": "/fixture/project/extension"
+      },
+      "observed": {
+        "pid": 102,
+        "ppid": 100,
+        "startTicks": "5002",
+        "argv": [
+          "/usr/lib/chromium/chromium --headless=new --no-sandbox --disable-dev-shm-usage --disable-gpu --remote-allow-origins=* --window-size=1400,1200 --silent-debugger-extension-api --disable-extensions-except=/fixture/project/extension --load-extension=/fixture/project/extension --user-data-dir=/fixture/profiles/direct --remote-debugging-port=0 --noerrdialogs --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl about:blank"
+        ]
+      }
+    }
+  ]
+}

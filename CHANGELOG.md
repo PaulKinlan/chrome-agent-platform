@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.355] — 2026-09-11
+- Review probes recognize their owned Chrome across cmdline displays
+
 ## [0.3.354] — 2026-09-11
 - isolate serial test phase and bound subprocess waits ()
 
