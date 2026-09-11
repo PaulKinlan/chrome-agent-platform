@@ -12,6 +12,7 @@ import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
 import { buildMcpServerEditor, mcpServerRow } from "../lib/mcp-server-editor.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
+import { resolveAgentSaveResult } from "../lib/agent-config-save.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
 import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool } from "../shared/conversation.js";
@@ -2861,16 +2862,15 @@ async function openAgentConfig() {
           task: v.schedule?.task ?? agent.schedule?.task ?? null,
         }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
         if (s?.ok !== true) return { ok: false, error: `the schedule failed: ${s?.error ?? "unknown"}` };
+        if (!agent.schedule) agent.schedule = {};
+        agent.schedule.periodInMinutes = next;
         scheduleNote = next == null ? "schedule removed" : `scheduled every ${next} min`;
       }
       const r = await send("named-agent.update", {
         id: currentAgentId, name: v.name, role: v.role, avatar: v.avatar, skills: v.skills, coreAssets: v.coreAssets, canDelegateTo: v.canDelegateTo, tools: v.tools,
-      }).catch(() => ({ ok: false }));
-      if (r?.ok === false) {
-        return scheduleNote
-          ? { ok: true, note: `${scheduleNote}; the persona edit needs approval in Settings` }
-          : { ok: false, error: r?.error ?? "unknown" };
-      }
+      }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+      const saveOutcome = resolveAgentSaveResult({ scheduleNote, updateResult: r });
+      if (!saveOutcome.ok) return saveOutcome;
       // Per-agent MCP servers: persist only when they actually changed — a
       // spurious owner-approval card on every unrelated edit would be noise. The
       // structural signature ignores tokens, so an added/changed credential is
@@ -2887,7 +2887,7 @@ async function openAgentConfig() {
           return { ok: true, note: `agent saved; MCP servers were not updated: ${m?.error ?? "unknown"}` };
         }
       }
-      return { ok: true };
+      return saveOutcome;
     },
     onSaved: async () => { renderNamedAgents(); await openAgentChat(currentAgentId); },
   });
@@ -3559,7 +3559,9 @@ async function buildAgentConfigDialog(opts) {
   const footer = document.createElement("div");
   footer.className = "agent-config-footer";
   footer.style.display = "flex";
+  footer.style.flexWrap = "wrap";
   footer.style.justifyContent = "flex-end";
+  footer.style.alignItems = "center";
   footer.style.gap = "8px";
   footer.style.paddingTop = "12px";
   footer.style.marginTop = "4px";
@@ -3569,6 +3571,12 @@ async function buildAgentConfigDialog(opts) {
   footer.style.position = "sticky";
   footer.style.bottom = "0";
   footer.style.zIndex = "10";
+
+  const errorEl = document.createElement("div");
+  errorEl.className = "agent-config-error";
+  errorEl.setAttribute("role", "alert");
+  errorEl.setAttribute("aria-live", "assertive");
+  errorEl.style.cssText = "width:100%;font-size:12px;color:var(--danger,#b3261e);line-height:1.4;margin-bottom:6px;display:none;";
 
   const regenBtn = opts.canRegenerateAvatar ? configButton("Regenerate avatar", "secondary") : null;
   const deleteBtn = opts.canDelete ? configButton("Delete agent", "secondary") : null;
@@ -3586,6 +3594,7 @@ async function buildAgentConfigDialog(opts) {
   if (deleteBtn) footer.append(deleteBtn);
   if (regenBtn) footer.append(regenBtn);
   footer.append(cancelBtn, saveBtn);
+  footer.prepend(errorEl);
 
   container.append(scrollBody, footer);
   dialog.append(container);
@@ -3618,9 +3627,17 @@ async function buildAgentConfigDialog(opts) {
   }
 
   saveBtn.addEventListener("click", async () => {
+    errorEl.textContent = "";
+    errorEl.style.display = "none";
     const name = nameField.el.value.trim();
     const role = roleField.el.value.trim();
-    if (!name) { setStatus("An agent needs a name.", false); nameField.el.focus(); return; }
+    if (!name) {
+      errorEl.textContent = "An agent needs a name.";
+      errorEl.style.display = "block";
+      setStatus("An agent needs a name.", false);
+      nameField.el.focus();
+      return;
+    }
     // RefId-keyed save (r4): collectChecked returns the source-qualified id
     // for every checked row, so a colliding imported skill saves as
     // `imported:<id>` and resolves to the imported row at run time.
@@ -3632,6 +3649,8 @@ async function buildAgentConfigDialog(opts) {
       selectedTemplate?.schedule?.prompt ?? null,
     );
     if (parsedSchedule.error) {
+      errorEl.textContent = parsedSchedule.error;
+      errorEl.style.display = "block";
       updateScheduleFeedback();
       scheduleField.el.focus();
       return;
@@ -3648,6 +3667,8 @@ async function buildAgentConfigDialog(opts) {
     });
     saveBtn.disabled = false;
     if (r?.ok) {
+      errorEl.textContent = "";
+      errorEl.style.display = "none";
       dialog.close();
       setStatus(
         r.scheduleError
@@ -3657,7 +3678,10 @@ async function buildAgentConfigDialog(opts) {
       );
       await opts.onSaved?.(r);
     } else {
-      setStatus(`Save failed: ${r?.error ?? "unknown"}`, false);
+      const errMsg = `Save failed: ${r?.error ?? "unknown"}`;
+      errorEl.textContent = errMsg;
+      errorEl.style.display = "block";
+      setStatus(errMsg, false);
     }
   });
 

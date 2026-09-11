@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.357] — 2026-09-11
+- Agent Save reports persona failure honestly and retains dialog on partial schedule success
+
 ## [0.3.356] — 2026-09-11
 - Make npm test real-browser requirements explicit
 
