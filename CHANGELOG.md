@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.344] — 2026-09-11
+- increment: provider host access pauses on one in-context grant card
+
 ## [0.3.343] — 2026-09-09
 - the three coupling rules are canon — read the inventory before touching a watcher
 

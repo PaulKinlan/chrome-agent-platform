@@ -127,15 +127,59 @@ Deno.test("run-terminal: an aborted run reports cancelled, never completed", asy
   assertEquals(statuses.some((s) => s.state === "completed"), false, "an aborted run never reports completed");
 });
 
-Deno.test("provider preflight is redacted and pauses before model execution when the exact origin is missing", async () => {
+Deno.test("provider preflight is redacted and pauses on ONE in-context card — Allow requests the exact origin, then the run executes (CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01)", async () => {
   const conv = await freshConv();
   const mock = installChromeMock({ provider: "custom", local: false, origin: "https://api.example/*" });
-  const container = makeContainer();
-  const result = await conv.runConversationTurn(container, { text: "must not run" });
-  assertEquals(result?.waitingForPermission, true);
-  assertEquals(mock.held.length, 0, "agent.run must not be sent");
-  assertEquals(mock.sent.map((message) => message.type), ["provider.permission-summary"]);
-  assert(!JSON.stringify(mock.sent).includes("apiKey"), "full provider configuration must not enter the conversation page");
+  // The owner's Allow is a real chrome.permissions.request for the exact
+  // origin; contains flips only after that request succeeds.
+  const requested = [];
+  let contains = false;
+  globalThis.chrome.permissions.contains = async () => contains;
+  globalThis.chrome.permissions.request = async (query) => {
+    requested.push(query);
+    contains = true;
+    return true;
+  };
+  const permCards = [];
+  const prevDoc = globalThis.document;
+  globalThis.document = {
+    createElement(tag) {
+      const el = {
+        tag,
+        attrs: new Map(),
+        listeners: {},
+        setAttribute(k, v) { this.attrs.set(k, String(v)); },
+        getAttribute(k) { return this.attrs.get(k) ?? null; },
+        addEventListener(t, fn) { (this.listeners[t] ??= []).push(fn); },
+        dispatchEvent(ev) { for (const fn of this.listeners[ev?.type] ?? []) fn(ev); return true; },
+      };
+      if (tag === "permission-approval-card") permCards.push(el);
+      return el;
+    },
+    activeElement: null,
+  };
+  try {
+    const container = Object.assign(makeContainer(), { append() {} });
+    const statuses = [];
+    const runP = conv.runConversationTurn(container, { text: "must not run", onStatus: (s) => statuses.push(s) });
+    await waitFor(() => statuses.some((s) => s.state === "waiting-for-permission"), "the provider card pause");
+    assertEquals(permCards.length, 1, "one in-context permission card renders");
+    assertEquals(mock.held.length, 0, "agent.run must not be sent while paused");
+    assertEquals(mock.sent.map((message) => message.type), ["provider.permission-summary"]);
+    assert(!JSON.stringify(mock.sent).includes("apiKey"), "full provider configuration must not enter the conversation page");
+    // The owner Allows from the card's genuine click: the exact origin is
+    // requested, and only then does the run execute.
+    permCards[0].dispatchEvent({ type: "approve", detail: { sourceEvent: { isTrusted: true } } });
+    await waitFor(() => mock.held.length > 0, "agent.run sent after the grant");
+    assertEquals(requested.length, 1, "one origin request from the Allow click");
+    assert((requested[0]?.origins ?? []).includes("https://api.example/*"), "the request is exactly the provider's origin pattern");
+    mock.resolveRun(true, "done");
+    await runP;
+    assertEquals(statuses.at(-1)?.state, "completed");
+  } finally {
+    if (prevDoc === undefined) delete globalThis.document;
+    else globalThis.document = prevDoc;
+  }
 });
 
 Deno.test("run replay: snapshot then updates reject stale per-run revisions", async () => {
