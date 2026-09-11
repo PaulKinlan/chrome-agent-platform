@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.350] — 2026-09-11
+- queue in-flight permission waiters and render subsequent cards after grant/deny
+
 ## [0.3.349] — 2026-09-11
 - widen durable-root guard and migrate tempdir call sites to durable paths
 

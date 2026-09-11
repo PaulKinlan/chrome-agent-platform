@@ -2177,27 +2177,31 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (!requirement) return;
     const existing = pendingApprovals.get(requirement.key);
     if (existing) {
-      // A SECOND paused call with the SAME requirement (a sibling issued in
-      // the same model step) shares the card: the owner's one click resolves
-      // every waiter behind it, so no sibling is left to expire
-      // (CAP-FB-20260901-APPROVAL-RESUME-REEXECUTES-01).
-      if (requestId) {
-        existing.requestIds = [...(existing.requestIds ?? []).filter((id) => id !== requestId), requestId];
-        existing.requestId = requestId;
-        approvalById.set(requestId, existing);
+      // 1. If already denied by owner in this run: fail subsequent requests fast
+      // and honestly without a 60s timeout hang (m6id).
+      if (existing.status === "denied") {
+        if (requestId) {
+          void send("run.resolve-inline-approval", {
+            requestId,
+            approve: false,
+          }).catch(() => null);
+        }
+        return;
       }
-      // A late pre-run waiter on the same key still wants the decision.
-      if (typeof settle === "function") existing.settle = settle;
-      // The SAME requirement denied AGAIN after a grant (the grant did not
-      // take effect — e.g. it was set session-only and the worker restarted,
-      // or a narrower scope than the tool needs) — re-open the SAME card for
-      // another owner decision instead of leaving a silent dead-end. A
-      // "denied" decision stays sticky (no nagging after an explicit decline).
-      if (existing.status === "granted") {
-        existing.status = "pending";
-        existing.card?.setAttribute("state", "pending");
+      // 2. If currently in-flight (pending or granting): queue the waiter behind
+      // the existing card; owner's decision will resolve both (no duplicate prompt).
+      if (existing.status === "pending" || existing.status === "granting") {
+        if (requestId) {
+          existing.requestIds = [...(existing.requestIds ?? []).filter((id) => id !== requestId), requestId];
+          existing.requestId = requestId;
+          approvalById.set(requestId, existing);
+        }
+        if (typeof settle === "function") existing.settle = settle;
+        return;
       }
-      return;
+      // 3. If settled earlier ("granted", "expired", "cancelled"):
+      // This is a subsequent request: render a fresh card at the current point
+      // in the transcript so the user/script can see and decide it (m6id).
     }
     let card = null;
     const actionApproval = requirement.approvals.length > 0;
