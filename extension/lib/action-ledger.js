@@ -21,20 +21,13 @@ import { chromeToolCapability } from "./chrome-tool-capabilities.js";
 export function digestArgs(args) {
   if (!args || typeof args !== "object") return "";
   try {
-    const keys = Object.keys(args).sort();
-    const parts = [];
-    for (const k of keys) {
+    return Object.keys(args).sort().map((k) => {
       let v = args[k];
       if (v && typeof v === "object") {
-        try {
-          v = JSON.stringify(v);
-        } catch {
-          v = "[object]";
-        }
+        try { v = JSON.stringify(v); } catch { v = "[object]"; }
       }
-      parts.push(`${k}=${String(v)}`);
-    }
-    return parts.join(" ").slice(0, 160);
+      return `${k}=${String(v)}`;
+    }).join(" ").slice(0, 160);
   } catch {
     return "";
   }
@@ -43,43 +36,20 @@ export function digestArgs(args) {
 // A failed tool call never becomes a ledger row — the agent did not change
 // anything, so there is nothing to record or reverse.
 function succeeded(result) {
-  if (result == null) return false;
-  if (typeof result !== "object") return true;
-  if (result.error) return false;
-  if (result.ok === false) return false;
-  return true;
+  return result != null && (typeof result !== "object" || (!result.error && result.ok !== false));
 }
 
 function hostOf(url) {
-  try {
-    return new URL(String(url)).host || String(url);
-  } catch {
-    return String(url ?? "");
-  }
+  try { return new URL(String(url)).host; } catch { return String(url || ""); }
 }
 
-function tabWord(n) {
-  return n === 1 ? "tab" : "tabs";
-}
-
-// A page-derived accessible name, bounded and stripped of control characters
-// for a one-line ledger sentence (rendered with textContent, never innerHTML).
 function boundedName(value) {
-  if (typeof value !== "string") return "";
-  // deno-lint-ignore no-control-regex
-  return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+  return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim().slice(0, 80) : "";
 }
 
-// `chromeToolCapability` THROWS on an unknown identity rather than returning
-// null, so wrap it — a tool with no capability record is simply not classified
-// (treated as non-ledgerable), never a thrown error on the tool hot path.
 function mutationClassOf(name) {
-  for (const source of ["chrome-api", "management"]) {
-    try {
-      return chromeToolCapability(name, source).mutationClass;
-    } catch {
-      /* not in this source's table — try the next */
-    }
+  for (const s of ["chrome-api", "management"]) {
+    try { return chromeToolCapability(name, s).mutationClass; } catch {}
   }
   return null;
 }
@@ -109,28 +79,14 @@ const INVERSE_BUILDERS = Object.freeze({
     };
   },
   group_tabs(args, result) {
-    const tabIds = Array.isArray(result?.tabIds)
-      ? result.tabIds
-      : Array.isArray(args?.tabIds)
-        ? args.tabIds
-        : [];
+    const tabIds = Array.isArray(result?.tabIds) ? result.tabIds : (Array.isArray(args?.tabIds) ? args.tabIds : []);
     const n = tabIds.length;
-    return {
-      sentence: `Grouped ${n} ${tabWord(n)}`,
-      inverse: n > 0 ? { tool: "ungroup_tabs", args: { tabIds } } : null,
-    };
+    return { sentence: `Grouped ${n} ${n === 1 ? "tab" : "tabs"}`, inverse: n > 0 ? { tool: "ungroup_tabs", args: { tabIds } } : null };
   },
   ungroup_tabs(args, result) {
-    const tabIds = Array.isArray(result?.tabIds)
-      ? result.tabIds
-      : Array.isArray(args?.tabIds)
-        ? args.tabIds
-        : [];
+    const tabIds = Array.isArray(result?.tabIds) ? result.tabIds : (Array.isArray(args?.tabIds) ? args.tabIds : []);
     const n = tabIds.length;
-    return {
-      sentence: `Ungrouped ${n} ${tabWord(n)}`,
-      inverse: n > 0 ? { tool: "group_tabs", args: { tabIds } } : null,
-    };
+    return { sentence: `Ungrouped ${n} ${n === 1 ? "tab" : "tabs"}`, inverse: n > 0 ? { tool: "group_tabs", args: { tabIds } } : null };
   },
   create_bookmark(args, result) {
     const title = result?.title || args?.title || "a page";
@@ -151,25 +107,13 @@ const INVERSE_BUILDERS = Object.freeze({
   // for a click or a keystroke), so `inverse` is always null. The accessible
   // name is page-derived (untrusted) — rendered with textContent by the ledger
   // UI — and bounded here.
-  click_element(_args, result) {
-    const name = boundedName(result?.name);
-    return { sentence: name ? `Clicked “${name}”` : "Clicked an element on the page", inverse: null };
-  },
-  type_text(_args, result) {
-    const name = boundedName(result?.name);
-    return { sentence: name ? `Typed into “${name}”` : "Typed into a field on the page", inverse: null };
-  },
-  select_option(_args, result) {
-    const name = boundedName(result?.name);
-    return { sentence: name ? `Chose an option in “${name}”` : "Chose an option on the page", inverse: null };
-  },
+  click_element: (_a, r) => ({ sentence: boundedName(r?.name) ? `Clicked “${boundedName(r.name)}”` : "Clicked an element on the page", inverse: null }),
+  type_text: (_a, r) => ({ sentence: boundedName(r?.name) ? `Typed into “${boundedName(r.name)}”` : "Typed into a field on the page", inverse: null }),
+  select_option: (_a, r) => ({ sentence: boundedName(r?.name) ? `Chose an option in “${boundedName(r.name)}”` : "Chose an option on the page", inverse: null }),
   create_named_agent(args, result) {
-    // Creating a teammate is reversible by deleting it (id from the created
-    // record). A management inverse in the same spirit as the browser pairs.
     const id = result?.agent?.id || result?.id || null;
-    const name = result?.agent?.name || args?.name || "an agent";
     return {
-      sentence: `Created the agent ${name}`,
+      sentence: `Created the agent ${result?.agent?.name || args?.name || "an agent"}`,
       inverse: id ? { tool: "delete_named_agent", args: { id } } : null,
     };
   },
@@ -180,12 +124,10 @@ const INVERSE_BUILDERS = Object.freeze({
 // A plain-language sentence for a remote MCP tool call: `mcp__<server>__<tool>`
 // reads as "Called <tool> on MCP server <server>".
 function mcpSentence(name) {
-  const rest = String(name).slice("mcp__".length);
+  const rest = String(name).slice(5);
   const sep = rest.indexOf("__");
   if (sep === -1) return `Called MCP tool ${boundedName(rest) || name}`;
-  const server = boundedName(rest.slice(0, sep));
-  const tool = boundedName(rest.slice(sep + 2));
-  return `Called ${tool || "a tool"} on MCP server ${server || "(unknown)"}`;
+  return `Called ${boundedName(rest.slice(sep + 2)) || "a tool"} on MCP server ${boundedName(rest.slice(0, sep)) || "(unknown)"}`;
 }
 
 function genericSentence(toolName) {
@@ -256,4 +198,24 @@ export function appendLedgerRow(rows, row, max = ACTION_LEDGER_MAX_ROWS) {
   const list = Array.isArray(rows) ? rows : [];
   const next = [...list, row];
   return next.length > max ? next.slice(next.length - max) : next;
+}
+
+export function withRunToolBookkeeping(toolMap, context, { recordCall = null, writeLedgerRow = null } = {}) {
+  if (!toolMap || typeof toolMap !== "object") return toolMap;
+  const out = {};
+  for (const [name, tool] of Object.entries(toolMap)) {
+    if (typeof tool?.execute !== "function") { out[name] = tool; continue; }
+    out[name] = {
+      ...tool,
+      execute: async (args) => {
+        try { recordCall?.(name)?.catch?.(() => {}); } catch {}
+        const result = await tool.execute(args);
+        if (isLedgerableTool(name) && context?.__ledgerReentrant !== true) {
+          try { writeLedgerRow?.(name, args, result, context)?.catch?.(() => {}); } catch {}
+        }
+        return result;
+      },
+    };
+  }
+  return out;
 }

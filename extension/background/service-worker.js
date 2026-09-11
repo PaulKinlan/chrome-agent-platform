@@ -408,6 +408,7 @@ import {
   isLedgerableTool,
   appendLedgerRow,
   ACTION_LEDGER_MAX_ROWS,
+  withRunToolBookkeeping,
 } from "../lib/action-ledger.js";
 import {
   executableBrowserToolRecords,
@@ -1915,12 +1916,7 @@ async function readUserWasmRows() {
     userWasmRowsCacheAt = Date.now();
     return rows;
   } catch (err) {
-    pushDiagnostic(
-      "error",
-      `User Wasm catalog listing failed: ${String(err?.message ?? err).slice(0, 160)}`,
-      "user-wasm",
-      "catalog",
-    );
+    pushDiagnostic("error", `user-wasm list: ${String(err?.message ?? err).slice(0, 60)}`, "user-wasm", "catalog");
     return userWasmRowsCache ?? [];
   }
 }
@@ -1972,12 +1968,7 @@ async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, cont
   try {
     await verifyAndReadOwnerBlobBytes({ digest });
   } catch (err) {
-    pushDiagnostic(
-      "error",
-      `User Wasm execution fetch failed for ${digest.slice(0, 8)}: ${String(err?.message ?? err).slice(0, 160)}`,
-      "user-wasm",
-      "execute",
-    );
+    pushDiagnostic("error", `user-wasm fetch ${digest.slice(0, 8)}: ${String(err?.message ?? err).slice(0, 60)}`, "user-wasm", "execute");
     return { ok: false, error: `user_wasm_blob_unavailable: ${err?.message || err}` };
   }
 
@@ -2202,12 +2193,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
     consentSnapshot: toolConsentSnapshot,
     runGenCell,
     onDeny: async (decision, target) => {
-      pushDiagnostic(
-        "warn",
-        `WebMCP tool authorization denied: ${decision.reason} (${target.name} on ${target.origin})`,
-        "webmcp",
-        "authorization",
-      );
+      pushDiagnostic("warn", `webmcp deny: ${decision.reason} (${target.name})`, "webmcp", "authorization");
       const consent = target.consent ?? initialConsentByTool.get(target.name);
       if (!consent) return;
       let argDigest = null;
@@ -2564,6 +2550,8 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // same boundary the provider-server tools use.
     let mcpMount = null;
     let mcpRunTools = {};
+    const bkCtx = { executionId: approvalExecutionId, runId: approvalExecutionId, agentId: providerServerAgentId || "hub", source: "agent" };
+    const bkDeps = { recordCall: recordToolCall, writeLedgerRow: writeActionLedgerRow };
     if (approvalExecutionId && !scoped) {
       try {
         const mcpAgentId = typeof providerServerAgentId === "string" &&
@@ -2574,32 +2562,21 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
         if (mcpConfigs.length) {
           mcpMount = await mountRemoteMcpServers(mcpConfigs.map(mcpClientConfig));
           for (const s of mcpMount.servers) {
-            if (!s.ok) {
-              pushDiagnostic(
-                "warn",
-                `MCP server "${s.name}" did not connect: ${s.error ?? "unknown error"}`,
-                "mcp",
-                "connect",
-              );
-            }
+            if (!s.ok) pushDiagnostic("warn", `MCP "${s.name}": ${s.error ?? "error"}`, "mcp", "connect");
           }
           mcpRunTools = buildMcpRunTools(mcpMount, {
-            // Per-server first-use owner approval — one Allow card (the model
-            // path of requireOwnerApproval); the grant holds for the run.
             approveServer: (serverId) =>
               requireMcpServerApproval(approvalExecutionId, onProgress, serverId),
-            // A successful MCP call is an external side effect — record it in the
-            // activity ledger (no inverse). Fire-and-forget; never fails the call.
-            ledger: ({ name, args, result }) => {
-              writeActionLedgerRow(name, args, result, { executionId: approvalExecutionId })
-                .catch(() => {});
-            },
+            ledger: ({ name, args, result }) => writeActionLedgerRow(name, args, result, bkCtx).catch(() => {}),
           });
         }
       } catch (e) {
-        pushDiagnostic("warn", `MCP mount failed: ${String(e?.message ?? e).slice(0, 160)}`, "mcp", "mount");
+        pushDiagnostic("warn", `MCP mount: ${String(e?.message ?? e).slice(0, 100)}`, "mcp", "mount");
       }
     }
+
+    const bookedBrowserTools = withRunToolBookkeeping(liveBrowserTools, bkCtx, bkDeps);
+    const bookedManagementTools = withRunToolBookkeeping(liveManagementTools, bkCtx, bkDeps);
 
     const orch = await createOrchestrator({
       model,
@@ -2634,10 +2611,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // SCOPED (hook) runs get NO route, so their workflow_run fails closed
       // (mirroring the management tools, which scoped runs also lack).
       workflowRunRoute: scoped ? null : (args) => modelManagementDispatch("workflow.run", args ?? {}),
-      extraTools: { ...liveBrowserTools, ...liveManagementTools },
+      extraTools: { ...bookedBrowserTools, ...bookedManagementTools },
       readMasterLazySources: () => liveChromeLazyRecords({
-        browserTools: liveBrowserTools,
-        managementTools: liveManagementTools,
+        browserTools: bookedBrowserTools,
+        managementTools: bookedManagementTools,
         mcpTools: mcpRunTools,
         executionId: approvalExecutionId,
         scoped,
@@ -5612,11 +5589,8 @@ const GATED_WORKER_TOOLS = new Set([
   "write_file",
 ]);
 async function executeWorkerTool(toolName, args, context) {
-  const name = String(toolName ?? "").slice(0, 128);
+  const name = String(toolName || "").slice(0, 128);
   const a = args && typeof args === "object" ? args : {};
-  const management = managementToolset({
-    callRoute: (type, body) => dispatchRoute(type, body, context),
-  });
   const developerFeatures = await developerFeaturesOn();
   const browser = GATED_WORKER_TOOLS.has(name)
     ? browserToolset(false, {
@@ -5627,27 +5601,15 @@ async function executeWorkerTool(toolName, args, context) {
       developerFeatures,
     })[name]
     : workerBrowserTools(developerFeatures)[name];
-  const tool = browser ?? management[name];
+  const tool = browser || managementToolset({ callRoute: (t, b) => dispatchRoute(t, b, context) })[name];
   if (!tool) return { ok: false, error: `unknown tool: ${name}` };
-  // Bounded per-tool call counter for the Usage panel (fire-and-forget — a
-  // telemetry write must never fail or slow a tool execution).
-  recordToolCall(name).catch(() => {});
-  return observeToolCall(name, a, () => tool.execute(a), {
+  const booked = withRunToolBookkeeping({ [name]: tool }, context, { recordCall: recordToolCall, writeLedgerRow: writeActionLedgerRow })[name];
+  return observeToolCall(name, a, () => booked.execute(a), {
     source: browser ? "chrome-api" : "management",
-    runId: context?.runId ?? context?.executionId ?? null,
+    runId: context?.runId || context?.executionId || null,
   })
-    .then((result) => {
-      // The "what I did" ledger (CAP-FB-20260830-ACTIVITY-LEDGER-UNDO-01): a
-      // SUCCESSFUL mutation writes one plain-language row with its inverse when
-      // one exists. Fire-and-forget and re-entrancy-guarded — an undo (which
-      // re-executes an inverse THROUGH this same path) must not itself ledger,
-      // and a ledger-write failure must never fail or slow the tool result.
-      if (isLedgerableTool(name) && context?.__ledgerReentrant !== true) {
-        writeActionLedgerRow(name, a, result, context).catch(() => {});
-      }
-      return redactSecrets(result ?? null);
-    })
-    .catch((e) => ({ ok: false, error: String(e?.message ?? e).slice(0, 200) }));
+    .then((result) => redactSecrets(result || null))
+    .catch((e) => ({ ok: false, error: String(e?.message || e).slice(0, 200) }));
 }
 
 // ── The action ledger ────────────────────────────────────────────────────────
@@ -5672,32 +5634,18 @@ async function readActionLedger() {
 }
 
 async function writeActionLedgerRow(name, args, result, context) {
-  // For a close, the sessionId + title that make the restore inverse live in the
-  // recently-closed list, not the close result — capture them right after the
-  // close (read-only, so it never itself ledgers) so the inverse is resolvable.
   let extra = {};
   if (name === "close_tab") {
     try {
-      const recent = await executeWorkerTool("list_recently_closed", { maxResults: 1 }, {
-        ...(context ?? {}),
-        __ledgerReentrant: true,
-      });
+      const recent = await executeWorkerTool("list_recently_closed", { maxResults: 1 }, { ...(context ?? {}), __ledgerReentrant: true });
       if (Array.isArray(recent?.closed)) extra = { recentlyClosed: recent.closed };
-    } catch { /* the inverse is simply unavailable — the row still records the close */ }
+    } catch {}
   }
   const row = ledgerRowFor(name, args, result, extra);
   if (!row) return;
-  const record = {
-    id: `act-${newId()}`,
-    ts: Date.now(),
-    source: context?.runId ?? context?.executionId ? "agent" : "hub",
-    runId: context?.runId ?? context?.executionId ?? null,
-    undone: false,
-    ...row,
-  };
+  const record = { id: `act-${newId()}`, ts: Date.now(), source: context?.runId || context?.executionId ? "agent" : "hub", runId: context?.runId || context?.executionId || null, undone: false, ...row };
   actionLedgerWriteQueue = actionLedgerWriteQueue.then(async () => {
-    const rows = await readActionLedger();
-    await masterMemory().set(ACTION_LEDGER_KEY, appendLedgerRow(rows, record, ACTION_LEDGER_MAX_ROWS));
+    await masterMemory().set(ACTION_LEDGER_KEY, appendLedgerRow(await readActionLedger(), record, ACTION_LEDGER_MAX_ROWS));
   }).catch(() => {});
   await actionLedgerWriteQueue;
 }
@@ -6329,20 +6277,17 @@ const handlers = mergeRouteMaps(
     // enforces its own browser-control grant + run fence as the original did.
     const undoContext = {
       principal: context?.principal === "owner-options" ? "owner-options" : "extension",
-      documentId: typeof context?.documentId === "string" ? context.documentId : "",
-      senderUrl: typeof context?.senderUrl === "string" ? context.senderUrl : "",
+      documentId: String(context?.documentId || ""),
+      senderUrl: String(context?.senderUrl || ""),
       __ledgerReentrant: true,
     };
-    const result = await executeWorkerTool(row.inverse.tool, row.inverse.args ?? {}, undoContext);
-    if (result && (result.error || result.ok === false)) {
-      return { ok: false, error: String(result.error ?? "undo failed").slice(0, 200) };
+    const result = await executeWorkerTool(row.inverse.tool, row.inverse.args || {}, undoContext);
+    if (result?.error || result?.ok === false) {
+      return { ok: false, error: String(result.error || "undo failed").slice(0, 200) };
     }
-    // Mark the row undone (compare-and-set on the freshest read so a concurrent
-    // append is not clobbered).
     actionLedgerWriteQueue = actionLedgerWriteQueue.then(async () => {
       const fresh = await readActionLedger();
-      const next = fresh.map((r) => (r && r.id === rowId ? { ...r, undone: true, undoneAt: Date.now() } : r));
-      await masterMemory().set(ACTION_LEDGER_KEY, next);
+      await masterMemory().set(ACTION_LEDGER_KEY, fresh.map((r) => (r?.id === rowId ? { ...r, undone: true, undoneAt: Date.now() } : r)));
     }).catch(() => {});
     await actionLedgerWriteQueue;
     return { ok: true, id: rowId, tool: row.inverse.tool };
@@ -11266,12 +11211,7 @@ async function openSidePanelForCommand() {
     granted = (await chrome.permissions?.contains?.({ permissions: ["sidePanel"] })) === true;
   } catch { granted = false; }
   if (!granted) {
-    pushDiagnostic(
-      "warn",
-      "Side panel shortcut: the sidePanel permission is a core boot permission — reload the extension to restore it.",
-      "commands",
-      "permission",
-    );
+    pushDiagnostic("warn", "sidePanel permission missing — reload extension", "commands", "permission");
     return { ok: false, error: "sidePanel permission not granted" };
   }
   const tabs = await chrome.tabs?.query?.({ active: true, currentWindow: true }).catch(() => []) ?? [];

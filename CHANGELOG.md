@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.363] — 2026-09-11
+- Unify action ledger and usage bookkeeping across run-driven tool executions
+
 ## [0.3.362] — 2026-09-11
 - Classify the full owner-facing SW dispatch authority surface
 
