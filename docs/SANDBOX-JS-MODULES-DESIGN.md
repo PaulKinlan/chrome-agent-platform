@@ -34,7 +34,7 @@ While the Python execution environment (Pyodide in a dedicated Worker) faced a *
 3. **The Bare Specifier Wall:** In standard JavaScript, executing `import { chunk } from "lodash-es"` or `const d3 = await import("d3-array")` requires resolving a **bare specifier** (`"lodash-es"`). Browsers only resolve bare specifiers if an **Import Map** (`<script type="importmap">`) is present in the document.
 4. **Syntax Conflict with `new Function`:** Static import statements (`import ... from ...`) are **illegal syntax** inside function bodies. The current `new Function(...)` execution model rejects any script containing static `import` declarations with a `SyntaxError`.
 5. **Import Map Browser Behavior & The Real Security Spine:**
-   - While the initial HTML specification envisioned `<script type="importmap">` as immutable after module evaluation, actual Chromium behavior (measured in Chrome 152+) accepts subsequent import map insertions and resolves late unapproved specifiers. "Immutable after first load" is therefore **not** a platform security boundary the architecture can rely on, and the system will not engage in a fragile DOM `MutationObserver` arms race to simulate it.
+   - While the initial HTML specification envisioned `<script type="importmap">` as immutable after module evaluation, actual Chromium behavior (measured on Chrome 152.0.7977.82) accepts subsequent import map insertions and resolves late unapproved specifiers. "Immutable after first load" is therefore **not** a platform security boundary the architecture can rely on, and the system will not engage in a fragile DOM `MutationObserver` arms race to simulate it.
    - **The Real Security Properties:** The sandbox security spine rests entirely on three robust, checkable invariants:
      1. **The Opaque Origin (`null`)**: Zero same-origin access to extension documents, credentials, or OPFS.
      2. **Host-Bridged Fetch with SSRF Denial**: Zero ambient network capability; every network call is routed through the Service Worker with strict allowlists and loopback/private IP blocking.
@@ -89,7 +89,7 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
     ], { type: "text/javascript" }));
     await import(scriptBlob);
     ```
-- **Cost / Complexity:** Moderate. Requires transitioning `script-sandbox.js` from `new Function` to native dynamic `import()`, managing object URL revocation (`URL.revokeObjectURL`) on teardown, and reloading the iframe per run due to import map immutability.
+- **Cost / Complexity:** Moderate. Requires transitioning `script-sandbox.js` from `new Function` to native dynamic `import()`, managing object URL revocation (`URL.revokeObjectURL`) on teardown, and reloading the iframe per run for clean execution state isolation.
 - **Security:** Total origin and network isolation. Resolves 100% offline via local in-memory blob references.
 - **CSP Prerequisite & Risk Envelope:** Requires adding `blob:` to the sandbox CSP in `manifest.json`:
   ```json

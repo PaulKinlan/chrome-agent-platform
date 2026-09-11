@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.392] — 2026-09-11
+- execute real script-sandbox in teardown test and calibrate design prose (ovfm.3 revision 2)
+
 ## [0.3.391] — 2026-09-11
 - enclose module minting in try/finally, correct design doc, and add teardown fault test (ovfm.3 revision)
 

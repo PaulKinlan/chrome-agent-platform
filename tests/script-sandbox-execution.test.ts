@@ -64,68 +64,111 @@ return multiply(a, 3);`;
   assert(prep.source.includes("return multiply(a, 3);"));
 });
 
-Deno.test("ovfm.3 sandbox [teardown fault]: failure on second module mint revokes first module Blob URL and emits terminal error", () => {
-  // Test the teardown contract for the gap where the 2nd module mint throws:
-  // The first blob URL MUST be revoked by the cleanup loop in finally, and a terminal error emitted.
+Deno.test("ovfm.3 sandbox [teardown fault]: failure on second module mint revokes first module Blob URL and emits terminal error (executes actual script-sandbox.js)", async () => {
+  // Read the actual production script-sandbox.js source code
+  const sandboxSource = await Deno.readTextFile(
+    new URL("../extension/sandbox/script-sandbox.js", import.meta.url)
+  );
+
   const mod1Src = "export function a() { return 1; }";
   const mod1Bytes = encoder.encode(mod1Src);
+  const mod1Digest = computeModuleDigest(mod1Bytes);
 
   const mod2Src = "export function b() { return 2; }";
   const mod2Bytes = encoder.encode(mod2Src);
+  const mod2Digest = computeModuleDigest(mod2Bytes);
 
+  const messages: any[] = [];
   const createdUrls: string[] = [];
   const revokedUrls: string[] = [];
   let mintCount = 0;
 
-  const mockCreateObjectURL = (_blob: unknown) => {
-    mintCount++;
-    if (mintCount === 1) {
-      const url = "blob:null/module-1-uuid";
-      createdUrls.push(url);
-      return url;
-    }
-    // Second mint intentionally faults
-    throw new Error("QuotaExceededError: simulated allocation fault on second mint");
+  const fakeParent = {
+    postMessage: (msg: any) => messages.push(msg),
+  };
+  const listeners: Record<string, Function[]> = {};
+  const fakeWindow: any = {
+    parent: fakeParent,
+    addEventListener: (t: string, fn: Function) => {
+      listeners[t] = listeners[t] || [];
+      listeners[t].push(fn);
+    },
+    removeEventListener: () => {},
+  };
+  const fakeDoc = {
+    createElement: () => ({}),
+    head: { appendChild: () => {} },
+  };
+  const fakeURL = {
+    createObjectURL: (_blob: unknown) => {
+      mintCount++;
+      if (mintCount === 1) {
+        const url = "blob:null/module-1-uuid";
+        createdUrls.push(url);
+        return url;
+      }
+      // Second mint deliberately throws to simulate an allocation/runtime fault
+      throw new Error("QuotaExceededError: simulated allocation fault on second mint");
+    },
+    revokeObjectURL: (u: string) => {
+      revokedUrls.push(u);
+    },
   };
 
-  const mockRevokeObjectURL = (url: string) => {
-    revokedUrls.push(url);
-  };
+  // Run the ACTUAL product source code in the sandbox context
+  const runner = new Function(
+    "window",
+    "document",
+    "URL",
+    "Blob",
+    "TextEncoder",
+    "Uint8Array",
+    "ArrayBuffer",
+    "DataView",
+    "BigInt",
+    sandboxSource
+  );
+  runner(fakeWindow, fakeDoc, fakeURL, Blob, TextEncoder, Uint8Array, ArrayBuffer, DataView, BigInt);
 
-  const messages: any[] = [];
-  const mockPost = (type: string, extra: any) => {
-    messages.push({ type, ...extra });
-  };
-
-  // Execute the exact sandbox verification & mint loop inside try/catch/finally
-  const verifiedModules = [
-    { name: "mod1", uint8: mod1Bytes },
-    { name: "mod2", uint8: mod2Bytes },
-  ];
-
-  const imports: Record<string, string> = {};
-  try {
-    for (const mod of verifiedModules) {
-      const blobUrl = mockCreateObjectURL(mod.uint8);
-      imports[mod.name] = blobUrl;
-    }
-  } catch (err: any) {
-    mockPost("cap:script-error", { error: err?.message });
-  } finally {
-    for (const url of createdUrls) {
-      try { mockRevokeObjectURL(url); } catch {}
-    }
+  // Dispatch message through actual script-sandbox.js message listener
+  for (const listener of listeners["message"] || []) {
+    listener({
+      source: fakeParent,
+      data: {
+        type: "cap:script-source",
+        runId: "run-teardown-fault",
+        nonce: "test-nonce",
+        source: "return 42;",
+        modules: [
+          { name: "mod1", source: mod1Src, digest: mod1Digest },
+          { name: "mod2", source: mod2Src, digest: mod2Digest },
+        ],
+      },
+    });
   }
 
-  // Verifications:
-  // 1. Second mint threw QuotaExceededError
-  assertEquals(mintCount, 2);
-  // 2. Terminal error posted
-  assertEquals(messages.length, 1);
+  // Await asynchronous completion of runScript
+  await new Promise((r) => setTimeout(r, 50));
+
+  // Assertions on actual execution:
+  // 1. Both mints were attempted
+  assertEquals(mintCount, 2, "Both module mints must be attempted");
+  // 2. Terminal error IPC was emitted
+  assertEquals(messages.length, 1, "Terminal error IPC must be posted");
   assertEquals(messages[0].type, "cap:script-error");
-  assert(messages[0].error.includes("simulated allocation fault on second mint"));
-  // 3. The FIRST minted URL was revoked in finally! No leak!
-  assert(revokedUrls.includes("blob:null/module-1-uuid"), "First blob URL must be revoked on second mint failure");
+  assert(
+    messages[0].error.includes("simulated allocation fault on second mint"),
+    "Terminal error message must carry the failure cause"
+  );
+  // 3. The first minted Blob URL was revoked by script-sandbox.js's finally block!
+  assertEquals(
+    revokedUrls,
+    ["blob:null/module-1-uuid"],
+    "First minted Blob URL must be revoked when second mint throws"
+  );
+  // 4. Zero leaked URLs
+  const leaked = createdUrls.filter((u) => !revokedUrls.includes(u));
+  assertEquals(leaked, [], "All created URLs must be revoked");
 });
 
 Deno.test("ovfm.3 sandbox [native ESM execution]: prepared module executes natively with static import and extracts return value", async () => {
