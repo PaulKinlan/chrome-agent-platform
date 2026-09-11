@@ -47,7 +47,6 @@ The deny-list is owner-only (changed from Settings, a user gesture) and authorit
 | `action.onClicked` | the extension action is clicked | (none) | The owner-invoked screenshot path |
 | `runtime.onStartup` | the extension starts | (none) | `recoverOnBoot` reconciles the scheduler |
 | `runtime.onInstalled` | installed/updated | (none) | First-run onboarding: seed memory + welcome |
-| `runtime.onSuspend` | the service worker is suspending | (none) | Flush in-memory state |
 
 ## Subscription model
 

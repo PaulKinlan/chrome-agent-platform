@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.373] — 2026-09-11
+- add implemented banners, mark 3khn resolved, prune dead hooks/themes (Phase 3, 9zw7.4-5)
+
 ## [0.3.372] — 2026-09-11
 - synchronize architecture, tool counts, and Wasm execution status (Phase 2, 9zw7.1-3)
 

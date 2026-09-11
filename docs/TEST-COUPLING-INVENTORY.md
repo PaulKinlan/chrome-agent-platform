@@ -35,10 +35,10 @@ whole-suite mutant run); **inspection** means read from the source, not executed
 - **Staleness:** self-tracking, verified — an allowlist entry that stops matching any hit
   FAILS (`staleEntries`, probed by its own test). Empty today, so the main stale
   assertion cannot fail; the probe is what keeps the mechanism honest.
-- **Gap (deliberate, chrome-agent-platform-3khn):** it walks `tests/` ONLY. The seven
-  `kat-*` harnesses still pin the same literal in `scripts/` and are invisible here.
-  Extending the walk to `scripts/` before 3khn migrates them would red the suite for
-  every lane — sequence it as that bead says.
+- **Harness coverage (resolved in chrome-agent-platform-3khn @ f75e6afb):** walks both `tests/`
+  and `scripts/` (`tests/machine-path-honesty.test.ts:250`). All seven `kat-*` harnesses were migrated to
+  `resolveChromeForTesting()` and `scripts/lib/chrome-process-ownership.ts`; the machine-path guard
+  asserts zero home-directory paths across both directories with an empty `ALLOWED` map.
 
 ## 2. tests/substring-pin-honesty.test.ts
 

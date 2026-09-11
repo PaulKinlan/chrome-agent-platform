@@ -24,8 +24,9 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   actions, current selection, and state indicators only — never decoration.
 - **Secondary (amber)**: `#b45309`. Positive/attention indicators.
 - **Semantic**: danger `#b3261e`, success `#1a7f37`, warning `#9a6700`.
-- **Themes**: Sunlit (default light), Midnight (dark), Neon, Terminal. All
-  restyle the same tokens (matching `extension/shared/theme.css`).
+- **Themes**: Sunlit (default light) and Midnight (dark), matching system preference
+  (`prefers-color-scheme`) or explicit `data-theme` attribute (matching `extension/shared/theme.css`).
+  Theme switcher UI was removed in `v0.2.301` to maintain a single quiet design system.
 
 ## Directory function cards
 - A function is one semantic unit in source order: name, truthful bounded registry description (or “No description provided”), site/schema metadata, then its own source and approval states.

@@ -1,6 +1,7 @@
 # DESIGN — Agent deletion lifecycle (research → product decision)
 
-Status: DESIGN RESEARCH ONLY (no implementation, no product-byte changes).
+> **Status: IMPLEMENTED & SUPERSEDED (2026-08-29).** The deletion lifecycle gaps analyzed here were fully resolved in `v0.2.365` (commit `c2170d6a`): atomic owner-approval gate → grant revocation (`revokeGrants`) → active run fencing (`fenceActiveRuns`) → worker teardown (`closeAgentWorker`) → registry deletion with instanceId tombstoning under the named-agents write lock (`extension/lib/named-agents.js:537-640` `deleteNamedAgent`; tested in `tests/agent-deletion.test.ts`). Task state lives in **beads (`bd ready`)**. This document is retained for historical gap analysis against base `5e5c81e`.
+
 Public-safe: no local paths, session/relay identifiers, credentials, or
 personal data. All references are repository-relative to public `origin/main`
 commit `5e5c81e` unless explicitly marked as belonging to the unshipped

@@ -1,6 +1,7 @@
 # Task loading — storage and view re-architecture
 
-**Status:** DESIGN, awaiting owner review. Nothing here is implemented.
+> **Status: IMPLEMENTED & SUPERSEDED (2026-08-28).** The WAL-backed thread storage and batched index architecture designed here was fully implemented and shipped in `v0.2.348` (2026-08-28; see `extension/lib/durable-runs.js` append-only WAL, batched `run-log-idx` updates, and cursor pagination). The live contract is documented in `docs/TASK-LIFECYCLE-CONTRACT.md` and `docs/DURABLE-RUN-ARCHITECTURE.md`. Task state lives in **beads (`bd ready`)**. This document is retained for historical performance measurements and design rationale.
+
 **Task:** `CAP-FB-20260827-THREAD-OPEN-SEQUENTIAL-READS-01`
 **Author:** claude-opus-5 session, 2026-08-28
 **Measurements:** `scripts/thread-open-trace.ts` (task-open timing) and
