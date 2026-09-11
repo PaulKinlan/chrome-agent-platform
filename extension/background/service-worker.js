@@ -1916,7 +1916,7 @@ async function readUserWasmRows() {
     userWasmRowsCacheAt = Date.now();
     return rows;
   } catch (err) {
-    pushDiagnostic("error", `user-wasm list: ${String(err?.message ?? err).slice(0, 60)}`, "user-wasm", "catalog");
+    pushDiagnostic("error", `User Wasm catalog listing failed: ${String(err?.message ?? err).slice(0, 60)}`, "user-wasm", "catalog");
     return userWasmRowsCache ?? [];
   }
 }
@@ -2193,7 +2193,7 @@ async function readSiteLazySources(origin, runGenCell, askGateGetter = null) {
     consentSnapshot: toolConsentSnapshot,
     runGenCell,
     onDeny: async (decision, target) => {
-      pushDiagnostic("warn", `webmcp deny: ${decision.reason} (${target.name})`, "webmcp", "authorization");
+      pushDiagnostic("warn", `WebMCP tool authorization denied: ${decision.reason} (${target.name} on ${target.origin})`, "webmcp", "authorization");
       const consent = target.consent ?? initialConsentByTool.get(target.name);
       if (!consent) return;
       let argDigest = null;

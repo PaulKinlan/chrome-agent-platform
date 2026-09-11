@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.364] — 2026-09-11
+- restore pinned diagnostic strings in user-wasm and webmcp failure paths
+
 ## [0.3.363] — 2026-09-11
 - Unify action ledger and usage bookkeeping across run-driven tool executions
 
