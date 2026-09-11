@@ -74,6 +74,12 @@ Storage APIs inside the sandbox are redefined to throw *teaching* errors
 ("a sandboxed script keeps no state between runs…") so an agent learns the
 contract instead of hitting a raw SecurityError
 (`extension/sandbox/script-sandbox.js:23-40`, chrome-agent-platform-np64).
+`extension/manifest.json` also explicitly configures `content_security_policy.sandbox`
+(`sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self';`),
+allowing blob-URL module imports for installable JavaScript modules while keeping the
+opaque origin sandboxed. Module resolution is governed by `extension/lib/script-sandbox-modules.js`,
+which cryptographically re-verifies raw bytes against registered SHA-256 digests before
+minting Blob URLs and fails closed on digest mismatch (`docs/SANDBOX-JS-MODULES-DESIGN.md`).
 
 ### 1.2 The sandboxed script host protocol
 The host page (offscreen document, or the hub as fallback) iframes
@@ -99,7 +105,10 @@ The SW cannot construct DOM or workers, so one offscreen document
 3. the Pyodide Python host (`registerPythonHost` — fresh classic worker per
    `python.execute`; busy loops die by `worker.terminate()`; fresh-per-run
    isolation enforced across both memory and storage via ambient network and
-   storage strips in `wasm-tools/python/python-worker.js`),
+   storage strips in `wasm-tools/python/python-worker.js`, where `indexedDB`,
+   `caches`, and `navigator.storage.getDirectory` throw teaching errors matching
+   the `script-sandbox.js` cadence to prevent cross-run covert persistence channels,
+   bead chrome-agent-platform-4p7j.3),
 4. the Wasm stream host (`registerWasmStreamHost`,
    `extension/lib/wasm-stream-host.js`),
 5. the table worker host (`registerTableWorkerHost`,
@@ -156,6 +165,12 @@ Path-class rights reduction in the WASI runtime (`inputs/` read-only,
   untrusted tool result reaches the model inside a per-assembly random boundary
   token named by a protected dynamic system-prompt layer
   (docs/SYSTEM-PROMPTS.md §5.6).
+- **Credential and prototype filter** (`extension/lib/archive-target-registry.js:371,440`,
+  `extension/lib/logical-site-agent-config.js:79`): recursive redacted contexts
+  (`providerConfig`, `namedAgents`, `logicalSiteAgentConfig`) apply a strict 4-key
+  omission rule stripping `apiKey`, `authToken`, `clientSecret`, and own `__proto__`
+  properties to prevent prototype tampering across serialized bounds
+  (`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`, bead chrome-agent-platform-66t3).
 - **Principal classes** at the message boundary (§2.1) and the run/`executionId`
   fences in §2.3.
 
@@ -243,7 +258,13 @@ jobs and claim others' (`delegate_to_agent`, guarded by
 `extension/lib/agent-delegation.js`), making agent→agent delegation a first-
 class management tool (`delegate_to_agent` is in the capability table,
 `extension/lib/chrome-tool-capabilities.js:205`). Board jobs reaching the model
-are fenced as untrusted (docs/CONSTITUTION.md §1).
+are fenced as untrusted (docs/CONSTITUTION.md §1). Board deny rules
+(`cap:board-deny-rules`) persist strictly via `masterMemory().setTrusted`
+in the OPFS master store (`memory/master/cap:board-deny-rules.json`), never in
+`storage.local` KV. Archive restoration computes an `archive ∪ live` union
+preserving live owner rules and fails closed without truncation on
+`BOARD_MAX_DENY_RULES = 200` overflow (`docs/BOARD-DENY-ENGINE-ACCEPTANCE.md`,
+bead chrome-agent-platform-5ihd).
 
 ## 3. Tool calling
 
@@ -429,6 +450,19 @@ stricter marker-before-removal GC in `opfs-tool-workspace.js` is the
 unwired successor — §1.5.) Run-log compaction runs from terminal commits,
 never timers (docs/DURABLE-RUN-ARCHITECTURE.md §"OPFS records").
 
+**Backup & restore (implemented vs designed):**
+- **Shipped implementation** (`extension/lib/data-archive.js:104-105`): uses a
+  monolithic in-memory JSON/Base64 archive bounded by legacy caps
+  `MAX_ARCHIVE_OPFS_FILES = 100_000` and `MAX_ARCHIVE_TOTAL_BYTES = 512 * 1024 * 1024`
+  (512 MiB), coordinated via SW IPC to the Options page.
+- **Designed successor** (`docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md`,
+  pinned by `tests/streamed-backup-contract.test.ts`, bead chrome-agent-platform-2g90):
+  specifies client-side streaming TAR backup/restore directly to user disk via
+  `showSaveFilePicker` / `FileSystemWritableFileStream`, eliminating in-memory
+  JSON/Base64 IPC serialization and lifting the 512 MiB / 100k file caps.
+  The streaming converter, maintenance barrier, and live wiring are pending
+  implementation under carrier bead `chrome-agent-platform-8fuc`.
+
 ## 6. Wasm
 
 ### 6.1 Admission
@@ -491,6 +525,11 @@ Servers are configured globally (Settings → MCP servers) and per named agent
 `mcp.servers.get`/`set` routes return REDACTED views
 (`extension/background/routes/mcp.js:34-70`; config model
 `extension/lib/mcp-config.js`: id regex rejects `__`, transports `http|sse`).
+In accordance with the 4-key redaction rule, recursive credential filtering strips
+`apiKey`, `authToken`, `clientSecret`, and nested `__proto__`
+(`extension/lib/archive-target-registry.js:371`), while global MCP servers preserve
+own `__proto__` as data until schema validation under rest/spread parity (:496-498;
+`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`, bead chrome-agent-platform-66t3).
 Discovery is per-run: at run start the SW resolves the effective set
 (global ∪ agent − disabled), connects each server independently (one
 unreachable server is a diagnostic, never fatal), lists its tools, namespaces
