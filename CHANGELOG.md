@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.362] — 2026-09-11
+- Classify the full owner-facing SW dispatch authority surface
+
 ## [0.3.361] — 2026-09-11
 - the owner-blob store reads one record instead of scanning, and uploads stream outside the lock
 

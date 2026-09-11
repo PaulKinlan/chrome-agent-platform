@@ -13,11 +13,13 @@ import {
   createMcpRoutes,
   createSchedulerRoutes,
   createFsGrantRoutes,
+  createAgentWorkerRoutes,
   kvRoutes,
   mergeRouteMaps,
   permLeaseRoutes,
   requireSettingsSender,
 } from "../extension/background/routes/index.js";
+import { createAgentBoardRoutes } from "../extension/lib/agent-board.js";
 import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
 import { ATTESTATION_KEY_STORE } from "../extension/lib/system-prompts.js";
 import { kvSet } from "../extension/lib/kv.js";
@@ -74,6 +76,29 @@ const BASELINE_ROUTES = [
   // (CAP-FB-20260831-AGENT-PRIVATE-FS-01, review round-1 P1).
   "agent-workspace.usage",
   "agent-workspace.clear",
+  "agent-worker.ensure",
+  "agent-worker.run",
+  "agent-worker.dispatch",
+  "agent-worker.tool",
+  "agent-worker.alive",
+  "agent-worker.close",
+  "agent-worker.steer",
+  "agent-worker.progress",
+  "agent-worker.result",
+  "agent-worker.journal-append",
+  "board.post",
+  "board.wake",
+  "board.claim",
+  "board.complete",
+  "board.fail",
+  "board.heartbeat",
+  "board.list",
+  "board.messages",
+  "board.read",
+  "board.message",
+  "board.deny.add",
+  "board.deny.remove",
+  "board.deny.list",
   "named-agent.list",
   "named-agent.get",
   "named-agent.create",
@@ -475,7 +500,11 @@ Deno.test("sw routes: AST verification of route registration across service-work
         registeredRouteKeys.push(...Object.keys(createMemoryRoutes()));
       } else if (arg.callee.name === "createAgentWorkspaceRoutes") {
         registeredRouteKeys.push(...Object.keys(createAgentWorkspaceRoutes()));
+      } else if (arg.callee.name === "createAgentWorkerRoutes") {
+        registeredRouteKeys.push(...Object.keys(createAgentWorkerRoutes({})));
       }
+    } else if (arg.type === "MemberExpression" && arg.object.name === "boardRoutes" && arg.property.name === "routes") {
+      registeredRouteKeys.push(...Object.keys(createAgentBoardRoutes({}).routes));
     }
   }
 
