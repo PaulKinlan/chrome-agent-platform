@@ -1,5 +1,7 @@
 # Permission remediation UX — research/design (public-safe)
 
+> **Status: HISTORICAL DESIGN RESEARCH (2026-08-19).** This document analyzed missing-permission UX at base `bbeff7b`. It was superseded by the in-conversation permission remediation cards (`docs/inline-approval-audit.md`), the settled install-granted host access decision (Q18, `host_permissions: ["<all_urls>"]`), and JIT capabilities via `<capability-row>` (`docs/PERMISSION-MATRIX.md`). Task state lives in **beads (`bd ready`)**.
+
 Task: `CAP-FB-20260819-PERMISSION-REMEDIATION-UX-01`. Read-only design. No
 implementation, no credentials, no local paths, no private IDs. Maps the state at
 public base `bbeff7b` (current main `5e5c81e` = `bbeff7b` + TASKS.md only) and

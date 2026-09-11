@@ -1,5 +1,7 @@
 # Agent Product Gaps — persona agents, role templates, and collaboration skills
 
+> **Status: HISTORICAL RESEARCH (2026-08-28).** The foundational gaps identified here have since been implemented: G1 persona prompt wiring (`extension/lib/system-prompts.js` layer 4), G2 agent templates (`extension/lib/agent-templates.js`), G4 per-agent MCP servers (`extension/lib/mcp-config.js`), G5 agent-to-agent delegation (`extension/lib/agent-delegation.js`), and G7 shareable agent cards (`docs/AGENT-CARDS.md`). Live task state lives in **beads (`bd ready`)**. This document is retained for product rationale.
+
 **Date:** 2026-08-28 · **Type:** research / product-gap analysis (no source changes)
 **Question:** how far is CAP's named-agent model from the persona-agent products the owner points at (grok.com/bots, his "business in a box"), and what is the smallest path to default agent templates + higher-level collaboration skills?
 
