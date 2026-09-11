@@ -1,5 +1,5 @@
 // lib/wasm-executor.js — the bounded fresh-Worker executor (WASM-EXECUTION-HOST
-// Gate 2, corrected successor). SOURCE ONLY AND UNREACHABLE.
+// Gate 2, corrected successor). Dedicated execution worker host.
 //
 // No route/provider binding, no package/binary admission, no Settings, no
 // OPFS/artifact authority mutation, no Chrome. Invariants:

@@ -179,23 +179,23 @@ storage contract; review and delivery state live in beads `9ux7.1` and `9ux7.2`.
       gzip, head, markdown, md5sum, patch, sha256sum, sha512sum, sort,
       sqlite3-query-bounded, stat, tail, toml2json, touch, tr, tree, truncate, uniq,
       uuid, wc, xxd.
-- [x] **Live bounded lazy tool provider** — every run gets exactly three fixed definitions,
-      `search_tools`, `list_tools`, and `execute_tool`, regardless of catalog size. Search
+- [x] **Live bounded lazy tool provider** — every run gets exactly four fixed protocol
+      definitions, `search_tools`, `list_tools`, `execute_tool`, and `run_pipeline`
+      (`extension/lib/lazy-tool-wire.js:21`), regardless of catalog size. Search
       authorizes nothing; list/search share each tool's real JSON Schema and exact
       transport limits; execute accepts only a single-use run-bound reference and
       revalidates identity, permission, grant, document and run authority before and
-      after dispatch. Complete artifact/script fields use only their documented backing-
-      store bounds while ordinary arguments retain the strict 16/32 KiB limits.
+      after dispatch. In-memory arguments have no artificial byte caps (dptw, 46rh).
 - [x] **Bounded awk/date are admitted** through the immutable Settings-only preview
       route with retained byte-identical rebuilds and lock-faithful licence records.
-- [ ] **The remaining candidate lanes are separate** — htmlq, numbat, bttf, sed, jq,
+- [ ] **The remaining candidate lanes are separate** — htmlq, numbat, bttf,
       xan, and tokei retain their own build/admission status under
-      `docs/plans/rust-lane/` and `docs/admissions/`; this tranche makes no completion
-      claim for them. Admission is `CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`.
-- [ ] **Python via Pyodide (`0.2.319`)** — the bounded non-eval tool is built and tested
-      (`runPythonAsync` + `setStdout`/`setStdin`, 2 KiB in / 64 KiB out, fail-closed) and
-      the wiring is ready. The remaining step is the Pyodide runtime **binary**, a
-      blocked Emscripten build. docs/PYODIDE-BOUNDED-BUILD.md.
+      `docs/plans/rust-lane/` and `docs/admissions/` (`sed` and `jq` were admitted into the 38 shipped packages); this tranche makes no completion
+      claim for the others. Admission is `CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`.
+- [x] **Python via Pyodide** — official Pyodide 0.26.4 core admitted under bead `4usu`
+      (hash-verified against MANIFEST.json), executed in dedicated classic-worker dispatcher
+      inside offscreen document for `python.execute` (`extension/lib/python-host.js`,
+      `docs/PYODIDE-BOUNDED-BUILD.md`).
 - [ ] **qsv is a documented STOP** — reqwest→tokio/socket2, memmap2/blake3-mmap and a
       dual-GPL `self_cell` sit in core files. The exact patch recipe is recorded; no
       fabricated binary.

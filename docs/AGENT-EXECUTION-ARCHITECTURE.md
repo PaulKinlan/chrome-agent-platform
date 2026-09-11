@@ -109,11 +109,11 @@ Reconciliation loop (all idempotent):
 - `lib/agent-worker-host.js` — the offscreen doc's worker host: creates/holds/closes shared workers (the SW can't), one authoritative `agentId -> {worker, port}` map.
 - `background/routes/agent-worker.js` — the SW authority: `agent-worker.ensure` (validate + ensure host + worker + record the durable alive-set), `agent-worker.close`, `agent-worker.alive`, and `reconcileAgentWorkers` (re-ensure on wake).
 
-### Phase 2 — move the agent-do run loop into the worker (NEXT)
+### Phase 2 — move the agent-do run loop into the worker (DONE)
 
-### Phase 3 — durability mapping (run progress/logs survive worker death via durable-runs/OPFS)
+### Phase 3 — durability mapping (run progress/logs survive worker death via durable-runs/OPFS) (DONE)
 
-### Phase 4 — UI ports everywhere + background agents fully on workers
+### Phase 4 — UI ports everywhere + background agents fully on workers (DONE)
 
 **Stays in the SW (forever, by design):** message routing + auth (`requireSettingsSender` et al.), the browser-control grant lock + permissions authority, alarm scheduling, durable-runs journal authority, provider/credential authority, the run fence, and the alive-set. The SW remains the *single message and authority chokepoint* — it just stops *executing* the loop.
 
@@ -124,7 +124,7 @@ Reconciliation loop (all idempotent):
 ## 7. Risks & open questions
 
 - **Offscreen doc is a single point of failure for all workers** (one doc hosts all agents). If Chrome closes it, every live agent dies together — mitigated by the SW reconcile-on-wake, but a *visible-page-less* long-running agent could be interrupted by offscreen reclamation mid-run. Need to verify the actual reclamation behaviour in a real build (the existing sandbox already depends on this doc, so the exposure is pre-existing and observable).
-- **The `chrome.offscreen` API requires no manifest permission** — confirmed by this codebase: `ensureOffscreen()` calls `chrome.offscreen.createDocument(...)` and works with `permissions: []` and no `offscreen` entry. The only requirement is that the offscreen document URL is inside the extension.
+- **The `chrome.offscreen` API is declared as an install permission** — declared in `extension/manifest.json:9` (`permissions: ["alarms", "offscreen", "sidePanel", "storage"]`) so the extension can create offscreen documents on demand with reasons `["WORKERS", "DOM_SCRAPING"]`.
 - **MessagePort fan-out latency:** routing a run's streaming progress through BroadcastChannel + the SW (vs. a raw port) adds a hop; acceptable for our UI, but confirm the transcript stays near-real-time.
 - **Provider credentials never cross into the worker** (same invariant as today: the worker gets a *binding* (resolved model) not the raw key; credentials stay SW-only). Must be preserved when moving the loop.
 - **Open:** whether Chrome's offscreen `WORKERS` reason tolerates long-lived workers or reaps them aggressively; whether a single offscreen doc can host N workers without throttle; whether `BroadcastChannel` fan-out to many surfaces scales.

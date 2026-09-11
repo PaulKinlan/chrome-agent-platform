@@ -1,8 +1,8 @@
 # Agent Delegation Contract (G5)
 
-**Status:** implemented (candidate on branch `cap-agent-delegation`). Any named
+**Status:** implemented and merged to main. Any named
 agent can be invoked BY another named agent as a tool — "agents invocable as
-skills".
+skills" (`delegate_to_agent` in `extension/lib/agent-delegation.js`).
 
 ## The model
 
