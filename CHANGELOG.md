@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.378] — 2026-09-11
+- document and pin streaming credential filter reserved member parity
+
 ## [0.3.377] — 2026-09-11
 - legacy provider records carry their own verbatim id as the archive match key
 

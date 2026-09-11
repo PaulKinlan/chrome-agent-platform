@@ -16,7 +16,10 @@ streamed backup and restore architecture is mapped in
 architectural risk register is maintained in
 [docs/RISK-REGISTER.md](docs/RISK-REGISTER.md). Board deny-policy engine fixture
 and census acceptance are documented in
-[docs/BOARD-DENY-ENGINE-ACCEPTANCE.md](docs/BOARD-DENY-ENGINE-ACCEPTANCE.md).
+[docs/BOARD-DENY-ENGINE-ACCEPTANCE.md](docs/BOARD-DENY-ENGINE-ACCEPTANCE.md). The
+streaming credential filter and reserved-member (__proto__) parity contract is
+documented in
+[docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md](docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md).
 
 ## The constitution
 **docs/CONSTITUTION.md is non-negotiable.** Every change must satisfy the
