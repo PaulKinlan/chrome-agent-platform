@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.371] — 2026-09-11
+- agentConfig archives carry an explicit schema, a fail-closed sanitizer dispatch, and an owning apply with exact rollback
+
+## [0.3.370] — 2026-09-11
+- agentConfig files in an archive are schema-checked and sanitized, never exported raw
+
 ## [0.3.369] — 2026-09-11
 - reconcile authority allowlists, permissions reality, and dptw storage limits (Phase 1, 9zw7.6)
 

@@ -58,10 +58,12 @@ export const RETAINED = {
   "lib/bundled-inventory.js":
     "Owner directive 2026-08-30: part of the WASI bundled-package inventory (imported by lib/bundled-tool-packages.js); tests/bundled-tool-packages.test.ts pins it.",
   // ── surfaces or modules another OPEN entry owns ──
+  "lib/logical-site-agent-config.js":
+    "chrome-agent-platform-8wbb: the logicalsiteagentconfig schema/sanitizer/envelope authority is complete and falsified; its export-walk dispatch (+1.5KB SW bytes) is parked pending the 11rm streamed converter (2g90) that supersedes the legacy walk it would wire into.",
   "lib/emscripten-module-audit.js":
     "40an: inert structural auditor until ltkj.2's admission integration references it; remove this entry when reachable (the stale-retention gate enforces that).",
   "lib/archive-target-registry.js":
-    "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): authority for classifying durable targets by exact store grammar; tests/archive-target-registry-successor.test.ts pins it.",
+    "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
   "lib/tabular-diff-artifacts.js":
     "CAP-FB-20260822-TABULAR-DIFF-ARTIFACTS-01 is OPEN, not ABANDONED; the adapter and lib/tabular-diff-artifacts-core.js stay until it lands or closes (tests/tabular-diff-artifacts.test.ts).",
   "lib/code-diff-artifacts.js":
