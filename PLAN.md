@@ -7,8 +7,8 @@ by building and running the gates — not by reading trackers.**
 
 | Gate | Result |
 |---|---|
-| `npm run build` | **clean** — 80 generated files byte-identical, 26 packages, 65 shipped files, no `eval`/`new Function` across 151 shipped JS files |
-| `npm test` | **1779 pass / 0 fail** |
+| `npm run build` | **clean** — 141 generated files byte-identical, 38 packages, 111 shipped files, no `eval`/`new Function` across shipped JS files |
+| `npm test` | **445 files green (4100+ tests passed)** via two-phase runner (Phase 1 serial, Phase 2 parallel with real Chromium) |
 | `npm run test:chrome` | **127/127** |
 | `npm run test:security` | **PASS** (production scenario, no survivor/residue/poison) |
 
@@ -28,9 +28,7 @@ changes that never updated the gate, all fixed 2026-08-27 under
 2. **`debugger` removed** (owner decision, Q17 resolved). `0.2.286` had re-declared it
    in `optional_permissions` for the CDP power tools, reversing its deliberate removal
    at `c5ccb2d0`. The permission, the four CDP tools, the capability row and the
-   Settings label are gone; the browser-tool count is **126** (was 130) and the
-   capability table dropped to **155** at the time (it has since regrown to
-   **160** with later tool work, incl. the delegation tool). `tests/chrome-tools-t12.test.ts` carries a
+   Settings label are gone; the browser-tool count is **138** (188 capability rows total in `tests/chrome-tool-capabilities.test.ts:71`). `tests/chrome-tools-t12.test.ts` carries a
    removal guard so it cannot come back by accident — re-adding it must be a
    deliberate act. The user-scripts half of T12 is untouched.
 3. **The capability count is now derived**, not hard-coded. The assertion read
@@ -84,7 +82,7 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 ## Where the product actually is (2026-08-27, `0.2.319`)
 
 ### Landed and shipping — the foundation
-- [x] MV3 extension: NTP hub, side panel, chat, directory, memory explorer, options.
+- [x] MV3 extension: NTP hub, side panel, directory, options, and artifact viewers (retired chat and memory explorer surfaces deleted).
 - [x] Real `agent-do` bundled (esbuild) + process/global shims.
 - [x] Provider layer (`lib/provider.js`) — OpenAI / Anthropic / Gemini / DeepSeek /
       Ollama / OpenAI-compatible, per-provider model dropdowns, **Test connection**,
@@ -174,8 +172,9 @@ without upload-size, file-count, import, or parse admission gates. Uploading gra
 no execution authority. See [USER-WASM-STORAGE.md](docs/USER-WASM-STORAGE.md) for the
 storage contract; review and delivery state live in beads `9ux7.1` and `9ux7.2`.
 
-- [x] **28 bundled Wasm packages ship** and are verified at build time (exact manifest,
+- [x] **38 bundled Wasm packages ship** and are verified at build time (`build.mjs:108`, exact manifest,
       CAS digests, bounded raw import/memory scan, SBOM + licence records):
+      sed, jq, imageops, oxipng, jxl, avif, zxing, compressops, hashwasm-blake3,
       awk-filter-bounded, base64, csvtool, cut, date-formatter-bounded, diff, du, grep,
       gzip, head, markdown, md5sum, patch, sha256sum, sha512sum, sort,
       sqlite3-query-bounded, stat, tail, toml2json, touch, tr, tree, truncate, uniq,

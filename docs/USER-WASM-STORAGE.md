@@ -1,9 +1,10 @@
 # User-uploaded WebAssembly storage
 
 Settings → **WebAssembly files** saves an owner-selected file, name and description
-in this browser. This increment stores files only. It does **not** compile, run,
-admit, approve, or register them as callable tools. The description explains its
-future use by agents without claiming that execution is already connected.
+in this browser. Storage streams files into digest-addressed OPFS storage (`cap-user-wasm-v1/`).
+Execution is connected under S4: modules are adapted into the catalog (`TOOL_SOURCE_KINDS` includes `'user-wasm'`)
+and execute through `wasm-execution-worker.js` under a 15-second deadline and per-agent digest
+allowlists (`tests/user-wasm-execution.test.ts`, `tests/tool-catalog-user-wasm.test.ts`).
 
 ## Large data is a normal workload
 

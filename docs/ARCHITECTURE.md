@@ -18,7 +18,7 @@ realms, in descending authority order:
 │ The single authority: message routing + sender classification,     │
 │ permissions/grants, the durable run registry, provider credentials,│
 │ the tool catalog + lazy protocol, the scheduler, the alive-set.    │
-│ Source: extension/background/service-worker.js (~9.6k lines) +     │
+│ Source: extension/background/service-worker.js (~11.3k lines) +    │
 │ extension/background/routes/*.js (13 modules).                     │
 └───────┬──────────────────┬───────────────────┬─────────────────────┘
         │ runtime messages │ chrome.offscreen  │ chrome.runtime ports
@@ -181,8 +181,8 @@ auth) merged with fail-closed duplicate detection
 (`mergeRouteMaps`, routes/index.js:24-38). The remainder — including
 `run-task`, `run.cancel` (service-worker.js:7791, owner/extension principals
 only), `run.resume` (:7802), `run.logs` (:7995), `agent.delegate` — are still
-inline in service-worker.js. routes/ROUTE_MAP.md documents a subset and is
-currently stale (see docs audit finding F-29).
+inline in service-worker.js. routes/ROUTE_MAP.md documents the complete
+258-route population (audited in docs/SW-DISPATCH-AUTHORITY-CENSUS.md).
 
 ### 2.2 The agent-worker protocol
 Per-agent SharedWorkers (hosted by the offscreen doc, §1.3) execute agent loops
@@ -246,9 +246,10 @@ are fenced as untrusted (docs/CONSTITUTION.md §1).
 ## 3. Tool calling
 
 ### 3.1 The catalog and the lazy protocol
-Regardless of catalog size, every run's provider map contains exactly three
-tools: `search_tools`, `list_tools`, `execute_tool`
-(`extension/lib/lazy-tool-protocol.js:1464/1478/1491`). The model searches a
+Regardless of catalog size, every run's provider map contains exactly four fixed
+protocol tools: `search_tools`, `list_tools`, `execute_tool`, and `run_pipeline`
+(`extension/lib/lazy-tool-wire.js:21`, `extension/lib/lazy-tool-protocol.js:1803-1891`).
+The model searches a
 bounded lexical index (`extension/lib/tool-search.js` over the canonical
 descriptors from `extension/lib/tool-catalog.js`), receives an expiring
 selection reference bound to run/task/agent/origin/document/generation
@@ -259,21 +260,23 @@ A reference permits up to `TOOL_SELECTION_BOUNDS.maxUsesPerSelection` = 64
 calls of the same tool within `defaultTtlMs` = 10 min; argument-validation
 failures hand the use back (retryable), dispatch failures do too; search
 authorizes nothing (docs/tool-platform-architecture.md §"Live bounded lazy
-protocol" — mechanism current; that doc's status line and "Wasm catalog-only"
-claims are stale, audit finding 17).
+protocol" — mechanism current).
 Catalog sources (lazy-tool-protocol.js:896-907 summary): builtin, browser,
 management, bundled-wasm, webmcp, provider-server, mcp. All 138 browser tools +
 50 management tools are rows in `CHROME_TOOL_CAPABILITY_TABLE` (188 rows;
 tests/chrome-tool-capabilities.test.ts:67-72).
 
 ### 3.2 Pipelines
-`run_pipeline` (`extension/lib/tool-pipeline.js`) chains ≤ 8 existing tools
-declaratively — `{id, tool, args}` steps, `$ref`+path bindings resolved by pure
-lookup, NO eval, tool names fixed at definition time (untrusted data can land
-in an arg but never choose the tool), each step dispatched through the run's
-normal executor (keeping its approvals, fencing, ledger); a failing step halts
-the pipeline fail-closed. Args ≤ 32 KiB. Per-step owner approval for saved
-workflows is in flight (bead chrome-agent-platform-3cb6).
+`run_pipeline` (`extension/lib/tool-pipeline.js`) chains up to 200 existing tools
+declaratively (aligned with the platform iteration budget, `MAX_PIPELINE_STEPS = 200`) —
+`{id, tool, args}` steps, `$ref`+path bindings resolved by pure lookup, NO eval,
+tool names fixed at definition time (untrusted data can land in an arg but never
+choose the tool), each step dispatched through the run's normal executor
+(keeping its approvals, fencing, ledger); a failing step halts the pipeline
+fail-closed. Argument size has no artificial byte cap (dptw); argument recursion
+is structurally bounded against V8 call stack exhaustion (`MAX_BINDING_DEPTH = 64`).
+Per-step owner approval for saved workflows executes in-route with Allow resuming
+the run (`tests/workflows-approval.test.ts`).
 
 ### 3.3 Approval machinery
 Model-initiated sensitive actions pause on an in-conversation owner card: the
@@ -349,12 +352,13 @@ Page-thrown errors keep full detail in the page-local console; only the
 redacted error name crosses into the extension/model path (README §"Sites as
 sub-agents").
 
-### 4.4 Consent gap (known, open)
-A site's tool call runs with NO per-call consent card today — enrollment is the
-only consent point. The decision and implementation are open: bead
-chrome-agent-platform-eo4d (CAP-FB-20260901-WEBMCP-CALL-CONSENT-01) with a
-recommended default in docs/OPEN-QUESTIONS.md Q23 (read tools covered by
-enrollment; one card per run for mutating tools).
+### 4.4 WebMCP invocation consent (closed per Q23)
+Enrollment creates the Site Agent and its discovery channel, but is not
+automatic-use consent. Every exact origin/tool asks once on its first genuine model
+use (owner decision Q23, 2026-09-05; `docs/OPEN-QUESTIONS.md` Q23).
+`extension/lib/webmcp-authority.js` (lines 20-30) actively enforces
+`tool-consent-denied`, `tool-consent-required`, and `tool-consent-generation-stale`.
+Allow persists for the browser profile; Deny is sticky until reset in Settings.
 
 ### 4.5 Fallback paths
 Pages without WebMCP: the six page-action tools (`find_elements`,
@@ -465,8 +469,8 @@ only). Owner-selected packages are an unpacked/developer lane, blocked on the
 policy decision (docs/tool-platform-architecture.md §"Distribution lanes";
 docs/OPEN-QUESTIONS.md Q13). The store build target statically rejects
 unmanifested `.wasm` and non-literal Worker constructors (README §"Load +
-run"). Today's shipped set: 31 admitted single-tool packages
-(packages/bundled/README.md).
+run"). Today's shipped set: 38 admitted single-tool packages
+(`build.mjs:108`, `packages/bundled/README.md`, `extension/wasm/manifests/`).
 
 ## 7. MCP discovery & capacity/messaging
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.372] — 2026-09-11
+- synchronize architecture, tool counts, and Wasm execution status (Phase 2, 9zw7.1-3)
+
 ## [0.3.371] — 2026-09-11
 - agentConfig archives carry an explicit schema, a fail-closed sanitizer dispatch, and an owning apply with exact rollback
 
