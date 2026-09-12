@@ -2,7 +2,20 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { runAcpTaskTurn } from "../extension/lib/acp-runner.js";
+import { acpSessionKey, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
+
+Deno.test("acpSessionKey: thread-scoped inside a persisted thread, per-harness otherwise", () => {
+  // Inside a persisted task thread the key is the threadId — two different
+  // threads are two conversations.
+  assertEquals(acpSessionKey("thread-1", "pi"), "thread-1");
+  assertEquals(acpSessionKey("thread-2", "pi"), "thread-2");
+  // Without a thread (the pi surface, hub @pi delegations) every turn of the
+  // same harness is ONE continuous conversation.
+  assertEquals(acpSessionKey(null, "pi"), "acp:pi");
+  assertEquals(acpSessionKey(undefined, "claude-code"), "acp:claude-code");
+  // No harness defaults to pi.
+  assertEquals(acpSessionKey(null, null), "acp:pi");
+});
 
 /** Mock conversation container simulating <agent-conversation> DOM element */
 class MockContainer {

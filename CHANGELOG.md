@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.395] — 2026-09-12
+- run tasks with the pi agent on your computer from the new tab page, and keep its conversation between turns
+
 ## [0.3.394] — 2026-09-11
 - calibrate import map scope and ambient network status (ovfm.3 prose)
 

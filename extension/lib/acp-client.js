@@ -146,7 +146,9 @@ export class AcpClient {
    * @returns {Promise<{sessionId: string, models?: any, availableCommands?: any[]}>}
    */
   async newSession(params = {}) {
-    const cwd = params.cwd || this.defaultCwd || "/";
+    // No invented "/" fallback: an empty cwd is passed through so a host-side
+    // bridge can supply its own default (session/new is its own protocol call).
+    const cwd = params.cwd ?? this.defaultCwd ?? "";
     const mcpServers = Array.isArray(params.mcpServers) ? params.mcpServers : [];
 
     const result = await this.request("session/new", { cwd, mcpServers });
@@ -169,7 +171,7 @@ export class AcpClient {
    */
   async loadSession(params) {
     if (!params?.sessionId) throw new Error("loadSession requires a sessionId");
-    const cwd = params.cwd || this.defaultCwd || "/";
+    const cwd = params.cwd ?? this.defaultCwd ?? "";
     const mcpServers = Array.isArray(params.mcpServers) ? params.mcpServers : [];
 
     await this.request("session/load", { sessionId: params.sessionId, cwd, mcpServers });

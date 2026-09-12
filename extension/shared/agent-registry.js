@@ -2,7 +2,8 @@
 // unified agent picker (CAP-FB-20260818-AGENT-ACCESS-01). Pure + DOM-free so
 // it is unit-testable in Deno (no DOM), like agent-candidates.js.
 //
-// THE CANONICAL AGENT REF: `named:<id>` / `background:<id>` / `site:<origin>`.
+// THE CANONICAL AGENT REF: `named:<id>` / `background:<id>` / `site:<origin>` /
+// `acp:<harness>` (e.g. `acp:pi` — an external harness reached over ACP).
 // One unambiguous ID flows from the picker → the composer chip → the run
 // request, so routing never depends on a (possibly duplicated) display name.
 // The registry itself is fetched from the service worker's `agent.registry`
@@ -73,7 +74,8 @@ export function shouldApplyRegistrySnapshot(
 }
 
 /** Is this agent currently callable? (A disabled background agent is visible
- * in browse views but is NOT callable — matching the /agent command rule.) */
+ * in browse views but is NOT callable — matching the /agent command rule.
+ * ACP harness agents are callable unless explicitly disabled.) */
 export function isCallable(agent) {
   if (!agent || typeof agent !== "object") return false;
   if (agent.kind === "background") return agent.enabled === true;

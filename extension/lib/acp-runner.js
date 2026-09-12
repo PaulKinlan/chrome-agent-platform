@@ -9,11 +9,25 @@ import { AcpClient } from "./acp-client.js";
 /** Default loopback WebSocket endpoint for the ACP bridge */
 export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
 
-/** Default working directory for summoned harness sessions */
-export const DEFAULT_ACP_CWD = "/home/paulkinlan/journal";
+/** Default working directory for summoned harness sessions. EMPTY by design:
+ * the working directory is machine-specific, so it resolves HOST-side — the
+ * bridge fills a session request that arrives without one ($HOME/journal, or
+ * its --cwd). A machine path literal here would be wrong on every other
+ * machine (3khn). */
+export const DEFAULT_ACP_CWD = "";
 
-/** In-memory cache of active ACP sessions by threadId */
+/** In-memory cache of active ACP sessions by conversation key. A key is the
+ * task threadId when the turn runs inside a persisted thread, else
+ * `acp:<harnessId>` — so the dedicated harness surface and hub @mention
+ * delegations keep ONE pi conversation across turns (pi-acp session/load
+ * restores it from pi's on-disk session store even after the adapter process
+ * is torn down between turns — proven live in cap-evidence/acp-resume-probe.ts). */
 const threadSessions = new Map();
+
+/** The conversation key a session is cached under (exported for unit tests). */
+export function acpSessionKey(threadId, harnessId) {
+  return threadId || `acp:${String(harnessId || "pi")}`;
+}
 
 /**
  * Execute an ACP task turn on a conversation container.
@@ -63,7 +77,7 @@ export async function runAcpTaskTurn(options) {
     await client.connect();
   } catch (err) {
     const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${endpoint}.`;
-    const actionMsg = "Start the local ACP bridge with: npm run acp:bridge (or node scripts/acp-bridge.ts)";
+    const actionMsg = "Start the local ACP bridge with: npm run acp:bridge (in the CAP repo)";
     if (!stale()) {
       if (typeof container.appendError === "function") {
         container.appendError(errorMsg, {
@@ -88,8 +102,11 @@ export async function runAcpTaskTurn(options) {
     status({ state: "running", activity: `Initializing ${harnessId}…` });
     await client.initialize();
 
-    // Session resolution: resume existing session if threadId has one, else create new
-    let sessionId = threadId ? threadSessions.get(threadId) : null;
+    // Session resolution: resume the conversation this surface/harness owns.
+    // Keyed by threadId inside a persisted thread, else by harness identity —
+    // the pi surface and hub @pi delegations are one continuous conversation.
+    const sessionKey = acpSessionKey(threadId, harnessId);
+    let sessionId = threadSessions.get(sessionKey);
     let resumed = false;
 
     if (sessionId) {
@@ -105,9 +122,7 @@ export async function runAcpTaskTurn(options) {
     if (!sessionId) {
       const sess = await client.newSession({ cwd });
       sessionId = sess.sessionId;
-      if (threadId) {
-        threadSessions.set(threadId, sessionId);
-      }
+      threadSessions.set(sessionKey, sessionId);
     }
 
     if (stale()) {

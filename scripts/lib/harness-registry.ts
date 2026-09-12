@@ -179,6 +179,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "verify-script-run.ts": { class: "manual", reason: "a verification probe for the script-run path; evidence only" },
 
   // ── helpers ─────────────────────────────────────────────────────────────
+  "acp-bridge.ts": { class: "helper", reason: "a loopback WebSocket→stdio bridge the ACP client connects to; a server, not a harness" },
   "mcp-test-server.ts": { class: "helper", reason: "a local MCP server the MCP KATs spawn; not a harness" },
 };
 

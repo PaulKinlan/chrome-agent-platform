@@ -78,7 +78,6 @@ import {
   installPageDiagnostics,
   startDiagnosticSubscription,
 } from "../shared/diagnostics-client.js";
-import { AcpClient } from "../lib/acp-client.js";
 import { runAcpTaskTurn } from "../lib/acp-runner.js";
 import { capLog } from "../lib/cap-log.js";
 import { perfSpan, perfSummary } from "../lib/cap-perf.js";

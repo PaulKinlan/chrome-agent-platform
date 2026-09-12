@@ -2,16 +2,23 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 //
 // Bridges Chrome Extension WebSocket connections to a locally spawned ACP adapter (e.g. pi-acp).
-// Usage: deno run -A scripts/acp-bridge.ts [--port 3210] [--adapter path/to/pi-acp]
+// Usage: npm run acp:bridge [--port 3210] [--adapter path/to/adapter] [--cwd /working/dir]
+//
+// Host defaults the extension cannot know live HERE, never as source literals:
+// the adapter path and the session working directory resolve from $HOME at run
+// time, and a `session/new`/`session/load` arriving without a cwd gets the
+// bridge's --cwd (default $HOME/journal). A machine-path literal in the
+// extension would be wrong on every other machine (3khn/evidence-durable).
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
 
 const args = parseArgs(Deno.args, {
-  string: ["port", "adapter", "harness"],
+  string: ["port", "adapter", "harness", "cwd"],
   default: {
     port: "3210",
-    adapter: "/home/paulkinlan/.pi/agent/npm/node_modules/pi-acp/dist/index.js",
+    adapter: "",
     harness: "pi",
+    cwd: "",
   },
 });
 
@@ -19,23 +26,64 @@ const PORT = parseInt(args.port, 10);
 const ADAPTER_PATH = args.adapter;
 const HARNESS = args.harness;
 
-console.log(`[acp-bridge] Starting bridge for harness "${HARNESS}" using adapter: ${ADAPTER_PATH}`);
+const HOME = Deno.env.get("HOME") ?? "";
 
-export function createAcpServer(port: number, adapterPath = ADAPTER_PATH) {
+/** The adapter a bare `npm run acp:bridge` runs: $HOME at run time, never a
+ * source literal. Fails loudly when HOME is unset and no --adapter was given. */
+function defaultAdapterPath() {
+  if (!HOME) throw new Error("HOME is not set — pass --adapter <path to the ACP adapter>");
+  return `${HOME}/.pi/agent/npm/node_modules/pi-acp/dist/index.js`;
+}
+
+/** The working directory a session request without one gets (host-side default). */
+function defaultCwd() {
+  return args.cwd || (HOME ? `${HOME}/journal` : "");
+}
+
+/** Give a client frame the host defaults only the bridge knows: a session/new
+ * or session/load with no working directory gets --cwd / $HOME/journal. */
+function applyHostDefaults(raw: string): string {
+  try {
+    const msg: any = JSON.parse(raw);
+    if (msg?.method === "session/new" || msg?.method === "session/load") {
+      const params = msg.params ?? (msg.params = {});
+      if (!params.cwd) {
+        const cwd = defaultCwd();
+        if (cwd) params.cwd = cwd;
+      }
+      return JSON.stringify(msg);
+    }
+  } catch { /* not JSON (should not happen) — pass through untouched */ }
+  return raw;
+}
+
+console.log(`[acp-bridge] Starting bridge for harness "${HARNESS}" using adapter: ${ADAPTER_PATH || "(default: $HOME pi-acp)"}`);
+
+export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH) {
   return Deno.serve({ port, hostname: "127.0.0.1" }, (req) => {
     const url = new URL(req.url);
 
     if (url.pathname === "/health") {
-      return new Response(JSON.stringify({ ok: true, harness: HARNESS, adapter: adapterPath }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      let defaultCwdValue = "";
+      try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
+      return new Response(
+        JSON.stringify({ ok: true, harness: HARNESS, adapter: ADAPTER_PATH || "(default)", defaultCwd: defaultCwdValue }),
+        { headers: { "Content-Type": "application/json" } },
+      );
     }
 
     if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("ACP Bridge: Connect via WebSocket at /acp", { status: 426 });
     }
 
-    const clientOrigin = req.headers.get("origin") || "extension";
+    // Origin guard: browsers ALWAYS send Origin on WebSocket upgrades. A web
+    // page (http/https) may not drive the local harness over loopback — that
+    // would let any site execute shell commands through the user's pi session.
+    // Extension pages and local scripts (no Origin header) are allowed.
+    const clientOrigin = req.headers.get("origin");
+    if (clientOrigin && !/^(chrome|moz)-extension:\/\//.test(clientOrigin)) {
+      return new Response("ACP Bridge: web origins are not allowed to drive the harness", { status: 403 });
+    }
     const { socket, response } = Deno.upgradeWebSocket(req);
 
     // Spawn the ACP adapter process
@@ -43,8 +91,9 @@ export function createAcpServer(port: number, adapterPath = ADAPTER_PATH) {
     let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
 
     socket.onopen = async () => {
-      console.log(`[acp-bridge] Client connected from ${clientOrigin}`);
+      console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"}`);
       try {
+        const adapterPath = adapterPathOverride || defaultAdapterPath();
         const cmd = new Deno.Command("node", {
           args: [adapterPath],
           stdin: "piped",
@@ -106,7 +155,7 @@ export function createAcpServer(port: number, adapterPath = ADAPTER_PATH) {
     socket.onmessage = async (event) => {
       if (!writer) return;
       try {
-        const data = String(event.data);
+        const data = applyHostDefaults(String(event.data));
         const encoder = new TextEncoder();
         await writer.write(encoder.encode(data + "\n"));
       } catch (err) {

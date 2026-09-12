@@ -120,8 +120,8 @@ A Chrome Manifest V3 extension runs inside isolated browser processes (Service W
 
 ### 4.3 Recommended Solution: Loopback WebSocket Architecture
 1. **The Client (in Extension)**: Connects to a configurable loopback endpoint (default `ws://127.0.0.1:3210/acp`). It speaks standard JSON-RPC 2.0 frames over the socket.
-2. **The Bridge (on Host)**: A tiny, robust 60-line script (`scripts/acp-bridge.ts` or `npx @isocan/acp-bridge`) that listens on loopback, spawns `pi-acp` (or the configured adapter from `~/.isocan/config.json`), and pipes WebSocket messages to stdin/stdout.
-3. **Automatic Fallback & Status Visibility**: If the bridge is not running, the extension reports an honest, actionable message in the composer: *"ACP harness at ws://127.0.0.1:3210 is not reachable. Start the bridge with: npm run acp:bridge"*.
+2. **The Bridge (on Host)**: A tiny, robust 60-line script (`scripts/acp-bridge.ts`, run with `npm run acp:bridge`) that listens on loopback, spawns `pi-acp` (or the configured adapter) and pipes WebSocket messages to stdin/stdout. It owns the host-side defaults the extension cannot know: the adapter path and the session working directory resolve from `$HOME` at run time (`--adapter`/`--cwd` override), and a `session/new` arriving without a working directory is filled in with `$HOME/journal`.
+3. **Automatic Fallback & Status Visibility**: If the bridge is not running, the extension reports an honest, actionable message in the composer: *"ACP harness at ws://127.0.0.1:3210 is not reachable. Start the local ACP bridge with: npm run acp:bridge (in the CAP repo)"*. The bridge rejects WebSocket upgrades carrying a web-page Origin (browsers always send Origin), so an arbitrary website cannot drive the local harness over loopback; extension pages and local scripts (no Origin header) connect freely.
 
 ---
 
@@ -238,3 +238,39 @@ A Chrome Manifest V3 extension runs inside isolated browser processes (Service W
 ### Stage 5: Verification & Driven Testing
 - Driven test suite connecting CAP's `AcpClient` to the live `pi-acp` process.
 - Verifies initialize, session creation, streaming thoughts, tool discovery, and prompt completion with evidence capture.
+
+## 7. Implementation Status (verified 2026-09-12)
+Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
+
+- **Core client** (`extension/lib/acp-client.js`) — initialize, session/new,
+  session/load, session/prompt with streamed thoughts/tools/chunks, cancel,
+  request_permission answering.
+- **Bridge** (`scripts/acp-bridge.ts`) — WebSocket→stdio, per-connection adapter
+  spawn + SIGTERM teardown, `/health` probe, Origin guard (web origins refused).
+- **Registry kind** `acp` + the `acp:pi` group — visible in the picker, @mention,
+  and /agent surfaces; routing in `extension/ntp/ntp.js` dispatches to the ACP
+  runner for mentions and for the pi agent surface.
+- **Session continuity** — `session/load` genuinely restores pi's on-disk
+  session across adapter restarts (proven live: a memory planted in turn 1 was
+  recalled in turn 2 after the bridge killed the adapter between turns —
+  `cap-evidence/acp-resume-probe.ts`). The runner caches the session per
+  thread, else per harness (`acp:<harnessId>`).
+- **Tests** — unit suites for client + runner, and an end-to-end fixture test
+  (bridge + deterministic fake adapter, part of `npm test`, no live pi, no
+  tokens). The LIVE pi journey is opt-in: `npm run test:acp:live`
+  (CAP_ACP_LIVE=1), because it needs pi-acp installed and spends real model
+  tokens — it is deliberately NOT part of the default suite.
+
+Deliberately NOT yet implemented (tracked as beads):
+
+- **Interactive permission cards** — only the auto-grant mode exists (matching
+  attended-harness behavior); §5.2's inline Allow/Deny card UI is planned, not built.
+- **Settings surface** — endpoint/cwd/permission-mode configuration (§5.4.2) is
+  not built; defaults are the loopback endpoint and the bridge's host-side
+  `$HOME/journal` working directory (`--cwd` overrides it).
+- **Task-thread persistence** — ACP turns render in the live surface but are
+  not journaled to the SW task/thread store; the conversation lives in the
+  page session and the harness's own session (survives reloads via session/load,
+  but the CAP task list does not yet show ACP turns).
+- **Additional harnesses** — only `acp:pi` is registered; the bridge accepts
+  `--adapter`/`--harness` for others, the registry entry does not yet exist.
