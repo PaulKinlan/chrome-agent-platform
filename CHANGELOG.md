@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.397] — 2026-09-12
+- never run two prompts on one pi conversation, show a tool call as settled when it is, and keep the user's message on every surface
+
 ## [0.3.396] — 2026-09-12
 - refuse web pages at the local agent bridge, keep pi conversations across a reload, and run a pi agent from the side panel
 

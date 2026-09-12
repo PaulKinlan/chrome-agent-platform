@@ -14,6 +14,13 @@ const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
 // inferring it from a rendered string.
 import { appendFileSync } from "node:fs";
 const LOG = process.env.CAP_ACP_FIXTURE_LOG ?? "";
+// Hold a prompt whose TEXT contains CAP_ACP_FIXTURE_HOLD_TEXT open until a
+// session/cancel arrives (so a test can prove a newer turn really cancels the
+// turn already running). Selected by CONTENT, not arrival order: the bridge
+// spawns a fresh adapter per connection, so "the first prompt" would hold the
+// superseding turn too.
+const HOLD_TEXT = process.env.CAP_ACP_FIXTURE_HOLD_TEXT ?? "";
+let heldPromptId = null;
 function log(dir, msg) {
   if (!LOG) return;
   try { appendFileSync(LOG, JSON.stringify({ dir, msg }) + "\n"); } catch { /* logging is best-effort */ }
@@ -85,6 +92,17 @@ function handle(msg) {
       break;
     case "session/prompt": {
       const sid = msg.params?.sessionId ?? "";
+      const promptText = (Array.isArray(msg.params?.prompt) ? msg.params.prompt : [])
+        .map((p) => (typeof p?.text === "string" ? p.text : "")).join(" ");
+      if (HOLD_TEXT && promptText.includes(HOLD_TEXT)) {
+        heldPromptId = msg.id;
+        sendAndLog({
+          jsonrpc: "2.0",
+          method: "session/update",
+          params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { text: "Holding the first prompt…" } } },
+        });
+        break;
+      }
       sendAndLog({
         jsonrpc: "2.0",
         method: "session/update",
@@ -109,7 +127,12 @@ function handle(msg) {
       break;
     }
     case "session/cancel":
-      send({ jsonrpc: "2.0", id: msg.id, result: {} });
+      // Settle the held prompt so the cancelled turn ends instead of hanging.
+      if (heldPromptId != null) {
+        sendAndLog({ jsonrpc: "2.0", id: heldPromptId, result: { stopReason: "cancelled" } });
+        heldPromptId = null;
+      }
+      sendAndLog({ jsonrpc: "2.0", id: msg.id, result: {} });
       break;
     default:
       // Unknown method (e.g. authenticate): report method-not-found so the

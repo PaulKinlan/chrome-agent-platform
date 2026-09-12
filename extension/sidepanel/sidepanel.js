@@ -747,6 +747,20 @@ agentComposer.addEventListener("send", async (ev) => {
   await runAgentTurn(target, text, attachments);
 });
 
+/** The durable ACP session-id store (kv) for THIS surface: after a reload the
+ * harness is asked to RESUME the conversation instead of forking a new one
+ * (the same store the NTP passes). */
+const acpSessionStore = {
+  async get(key) {
+    const r = await send("kv.get", { keys: key }).catch(() => null);
+    const v = r?.[key] ?? r?.values?.[key];
+    return typeof v === "string" && v ? v : null;
+  },
+  async set(key, sessionId) {
+    await send("kv.set", { values: { [key]: sessionId } }).catch(() => null);
+  },
+};
+
 /** One turn of the open agent's conversation (the composer's send, or the
  * budget Continue action). */
 async function runAgentTurn(target, text, attachments) {
@@ -757,6 +771,7 @@ async function runAgentTurn(target, text, attachments) {
     attachments,
     agentId: target.id,
     agentKind: target.kind,
+    sessionStore: acpSessionStore,
     // The conversation emits the authoritative terminal status before its
     // promise resolves. Do not overwrite that complete status afterwards with
     // a bare error string — doing so stripped "Fix in Settings" from the row.

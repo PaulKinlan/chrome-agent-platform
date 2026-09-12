@@ -1,14 +1,19 @@
-// cap-evidence/acp-runner-continuity-probe.ts — TEMPORARY live probe of the
-// exact acp-runner path the NTP uses (no cwd passed, no threadId):
-//   1. host-side cwd default — the bridge must fill session/new's cwd ($HOME/journal)
-//   2. per-harness session continuity — turn 2 must RESUME turn 1's pi session
+// cap-evidence/acp-runner-continuity-probe.ts — live probe of the exact
+// acp-runner path the surfaces use, against real pi-acp:
+//   1. session continuity — turn 2 must RESUME turn 1's pi session and recall
+//      a memory planted in turn 1 (the host session id is asserted, not the
+//      rendered text alone);
+//   2. no client cwd — the BRIDGE supplies the host working directory, and the
+//      probe asserts the turn only succeeds because it did.
+// Fails closed: a failed property exits non-zero.
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 
-const bridge = createAcpServer(3226);
+const bridge = createAcpServer(0);
+const port = (bridge as any).addr.port;
 
 class MockContainer {
-  agent = [];
+  agent: string[] = [];
   appendUser(t: string) { this.agent.push(`[user] ${t}`); }
   appendAgent(t: string) { this.agent.push(`[agent] ${t}`); return { setAttribute: (_n: string, v: string) => { this.agent[this.agent.length - 1] = `[agent] ${v}`; } }; }
   appendTool(t: any) { this.agent.push(`[tool] ${t?.detail ?? ""}`); }
@@ -18,7 +23,8 @@ class MockContainer {
 }
 
 const container = new MockContainer();
-const endpoint = "ws://127.0.0.1:3226/acp";
+const endpoint = `ws://127.0.0.1:${port}/acp`;
+const checks: Array<[string, boolean, string]> = [];
 
 try {
   const t1 = await runAcpTaskTurn({
@@ -38,12 +44,21 @@ try {
   });
   console.log(`[probe] turn2 ok=${t2.ok} resumed=${t2.resumed} session=${t2.sessionId} result="${t2.result}" error=${t2.error ?? "-"}`);
 
-  const cwdOk = t1.ok && t1.sessionId?.length > 0;
-  const resumeOk = t2.resumed === true;
-  const memoryOk = /kumquat-?7777/i.test(t2.result ?? "");
-  console.log(`[probe] HOST CWD DEFAULT: ${cwdOk ? "PASS — session created with no client cwd" : "FAIL"}`);
-  console.log(`[probe] SESSION CONTINUITY: ${resumeOk ? "PASS — turn 2 resumed the session" : "FAIL — turn 2 did not resume"}`);
-  console.log(`[probe] MEMORY ACROSS TURNS: ${memoryOk ? "PASS — recall verified" : "FAIL — memory lost"}`);
+  checks.push(["turns completed", t1.ok === true && t2.ok === true, `t1.ok=${t1.ok} t2.ok=${t2.ok}`]);
+  checks.push(["host cwd default (session created with no client cwd)", typeof t1.sessionId === "string" && t1.sessionId.length > 0, `session=${t1.sessionId}`]);
+  checks.push(["session continuity (turn 2 resumed the same session)", t2.resumed === true && t2.sessionId === t1.sessionId, `resumed=${t2.resumed} t1=${t1.sessionId} t2=${t2.sessionId}`]);
+  checks.push(["memory across turns (recall verified)", /kumquat-?7777/i.test(t2.result ?? ""), `result="${t2.result}"`]);
 } finally {
   await bridge.shutdown();
 }
+
+let failed = 0;
+for (const [name, ok, detail] of checks) {
+  console.log(`[probe] ${name}: ${ok ? "PASS" : `FAIL — ${detail}`}`);
+  if (!ok) failed++;
+}
+if (failed > 0) {
+  console.log(`[probe] ${failed} check(s) FAILED`);
+  Deno.exit(1);
+}
+console.log("[probe] all checks PASS");

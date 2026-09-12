@@ -31,8 +31,8 @@ const HARNESS = args.harness;
 
 const HOME = Deno.env.get("HOME") ?? "";
 
-/** Extra origin prefixes `--allow-origin` admitted (repeatable). */
-const ALLOWED_ORIGIN_PREFIXES = (Array.isArray(args["allow-origin"]) ? args["allow-origin"] : []).filter(Boolean);
+/** Extra exact origins `--allow-origin` admitted (repeatable). */
+const ALLOWED_ORIGINS = (Array.isArray(args["allow-origin"]) ? args["allow-origin"] : []).filter(Boolean);
 
 /** Shared-secret requirement (`--token`): when set, the upgrade URL must carry
  * `?token=…`, binding the bridge to one client even on a shared machine. */
@@ -40,14 +40,17 @@ const TOKEN = String(args.token ?? "");
 
 /** May this WebSocket Origin drive the harness? Browsers ALWAYS send Origin on
  * an upgrade, so an ABSENT one is a local script (deno/node test clients).
- * Default: extension pages only. `--allow-origin <prefix>` admits others
- * explicitly, and `--token` adds the shared-secret requirement on top. The
- * residual is documented: any INSTALLED extension matches the extension
- * scheme, so the token (or naming one extension in --allow-origin) is how an
- * operator binds the bridge to a single client. */
+ * Default: extension pages only. `--allow-origin <origin>` admits others
+ * explicitly by EXACT origin (a prefix would also admit
+ * `https://trusted.example.evil.test`), and `--token` adds the shared-secret
+ * requirement on top. The residual is documented: any INSTALLED extension
+ * matches the extension scheme, so the token (or naming one exact extension
+ * origin in --allow-origin) is how an operator binds the bridge to one
+ * client. */
 function originAllowed(origin: string | null): boolean {
   if (!origin) return true; // local script client
-  if (ALLOWED_ORIGIN_PREFIXES.some((p) => origin.startsWith(p))) return true;
+  const normalized = origin.replace(/\/$/, "");
+  if (ALLOWED_ORIGINS.some((p) => p.replace(/\/$/, "") === normalized)) return true;
   return /^(chrome|moz)-extension:\/\//.test(origin);
 }
 
@@ -92,20 +95,21 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
     if (url.pathname === "/health") {
       let defaultCwdValue = "";
       let adapterValue = "";
-      let adapterReady = false;
+      let adapterPresent = false;
       try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
       try {
         adapterValue = adapterPathOverride || defaultAdapterPath();
-        // Honest health: report whether the adapter this bridge would spawn is
-        // actually present, so a missing adapter is visible before a turn.
-        adapterReady = Deno.statSync(adapterValue).isFile;
-      } catch { adapterReady = false; }
+        adapterPresent = Deno.statSync(adapterValue).isFile;
+      } catch { adapterPresent = false; }
+      // `ok` is the BRIDGE being up. Whether the adapter can actually serve a
+      // turn is `adapterPresent` (a file on disk); a readiness probe would need
+      // a turn, so this endpoint never pretends to know more than it does.
       return new Response(
         JSON.stringify({
-          ok: adapterReady,
+          ok: true,
           harness: HARNESS,
           adapter: adapterValue || "(default)",
-          adapterReady,
+          adapterPresent,
           defaultCwd: defaultCwdValue,
         }),
         { headers: { "Content-Type": "application/json" } },

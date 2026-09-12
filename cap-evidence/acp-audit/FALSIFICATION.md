@@ -41,8 +41,11 @@ pi journey, `CAP_ACP_LIVE=1` / `npm run test:acp:live`).
 
 ## M4 — resume disabled (`extension/lib/acp-runner.js`)
 
-Mutant: `if (sessionId) {` → `if (false && sessionId) {` — every turn starts a
-new session.
+Mutant: `if (sessionId) {` → `if (false && sessionId) {` — the cached id is kept
+but never LOADED, so turn 2 prompts a session id the fresh adapter process has
+never been asked to restore. (Reviewer's correction: this is "no load", not
+"a new session" — the frame log shows no `session/load` and a prompt carrying a
+stale id.)
 
 ```
 runAcpTaskTurn: turn 2 RESUMES the session (session/new once, session/load after) ... FAILED
@@ -90,6 +93,42 @@ ACP bridge: --token requires the shared secret on the upgrade ... FAILED
 FAILED | 1 passed | 1 failed
 ```
 Restored → `2 passed | 0 failed`.
+
+## M9 — host cwd default removed at the CALL SITE (`scripts/acp-bridge.ts`)
+
+Mutant: `const data = applyHostDefaults(String(event.data));` → `const data = String(event.data);`
+(the pure rule still passes its own unit test; only the wiring dies).
+
+```
+FAILED | 5 passed | 1 failed
+```
+Restored → `6 passed | 0 failed`. The continuity test asserts the `session/new`
+frame the ADAPTER received carries `$HOME/journal`.
+
+## M10 — ACP tool statuses no longer mapped to the card vocabulary (`extension/lib/acp-runner.js`)
+
+Mutant: `return TOOL_STATUS_UI[key] ?? ...` → `return String(status ?? "running");`
+(the raw `completed` reaches a card that only renders done/success/error).
+
+```
+FAILED | 5 passed | 1 failed
+```
+Restored → `6 passed | 0 failed`.
+
+## M11 — the supersede claim never marked cancelled (`extension/lib/acp-runner.js`)
+
+Mutant: `prior.cancelled = true;` → `prior.cancelled = false;`
+
+```
+runAcpTaskTurn: two rapid sends for one conversation never prompt concurrently ... FAILED
+FAILED | 5 passed | 1 failed
+```
+Restored → `6 passed | 0 failed`. This is the second drilling of this property:
+the FIRST version of the test waited for turn 1's prompt and then started turn 2,
+which killed the mutant only via the client close — the test was rewritten to
+start both turns with no gap, which is the window `cancelled` exists for. (An
+equivalent mutant that moves `activeTurns.set(...)` after the awaits is killed by
+the same assertion: the second call would then read no prior owner.)
 
 ## Live probes (durable evidence, real pi-acp 0.0.33)
 

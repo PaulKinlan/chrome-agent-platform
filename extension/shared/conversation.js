@@ -1890,6 +1890,10 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // here — the NTP routes to it before this function for its own surface
   // lifecycle, and both paths must behave identically.
   if (agentKind === "acp") {
+    // 1. the user's turn appears immediately — this branch returns before the
+    //    shared the-surface-becomes-a-conversation step below, so it appends
+    //    the user bubble itself (the NTP branch does the same).
+    if (!stale()) appendBubble(c, "user", text, attachments);
     if (!stale()) c.resetPlan?.();
     status({ state: "queued" });
     const res = await runAcpTaskTurn({

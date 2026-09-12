@@ -255,8 +255,10 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   recalled in turn 2 after the bridge killed the adapter between turns —
   `cap-evidence/acp-resume-probe.ts`). The runner keys a session by
   `threadId:harness`, else `acp:<harness>`, and the NTP ALSO persists the id to
-  kv, so a page reload resumes the conversation instead of forking it
-  (`tests/acp-runner.test.ts` pins the behaviour from the fixture's frame log).
+  kv (both the NTP and the side panel pass the store), so a page reload resumes
+  the conversation instead of forking it (`tests/acp-runner.test.ts` pins the
+  store-backed resume and the continuity frames; the reload itself is not
+  browser-verified).
   A second turn for the same conversation cancels the first before prompting:
   `isStale()` only stops a superseded turn RENDERING, not running.
 - **Tests** — unit suites for client + runner, an end-to-end fixture test and a
@@ -270,15 +272,17 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   side panel (and any other `<agent-conversation>` surface) drives a harness
   agent instead of dispatching it as a named agent.
 - **Host-side failure behaviour** — a missing adapter fails the turn immediately
-  (the bridge closes the socket with the adapter's exit reason and `/health`
-  reports `adapterReady: false`), and the tool stream settles ONE card per call
-  (`tool_call` + `tool_call_update` share a card and a status) instead of
-  appending a permanently-running card per update.
+  (the bridge closes the socket with the adapter's exit reason; `/health` reports
+  the bridge as up plus `adapterPresent`, which is as much as a path probe can
+  honestly say), and the tool stream settles ONE card per call: `tool_call` +
+  `tool_call_update` share a card, and ACP's `in_progress`/`completed`/`failed`
+  are mapped to the `running`/`done`/`error` the card actually renders settled.
 - **Origin scope** — a web page cannot drive the bridge (browsers always send
   `Origin`; non-extension origins are refused). The residual is that the default
   allowlist is the extension SCHEME, so any installed extension could connect;
-  `--token <secret>` (required in the upgrade URL) and `--allow-origin <prefix>`
-  bind the bridge to one client when an operator needs that.
+  `--token <secret>` (required in the upgrade URL) and `--allow-origin <exact
+  origin>` bind the bridge to one client when an operator needs that, and an
+  operator can name the one extension origin they trust.
 
 Deliberately NOT yet implemented (tracked as beads):
 
@@ -294,8 +298,9 @@ Deliberately NOT yet implemented (tracked as beads):
 - **Additional harnesses** — only `acp:pi` is registered; the bridge accepts
   `--adapter`/`--harness` for others, the registry entry does not yet exist.
 - **Stop for ACP turns** — no durable run is registered, so the rendered Stop
-  has nothing to cancel (the supersede path cancels a replaced turn, but the
-  owner cannot stop one). Bead chrome-agent-platform-c6gq.
+  has nothing to cancel. Bead chrome-agent-platform-c6gq. (Supersede is handled:
+  the newer turn cancels the running one, and the runner claims the conversation
+  synchronously so two rapid sends cannot prompt the same session at once.)
 - **Bridge client binding** — the default extension-scheme allowlist admits any
   installed extension; `--token` exists but the extension has no setting to
   send one (Settings bead chrome-agent-platform-khkk).

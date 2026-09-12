@@ -4,11 +4,12 @@
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { AcpClient } from "../extension/lib/acp-client.js";
 
-const bridge = createAcpServer(3221);
+const bridge = createAcpServer(0);
+const port = (bridge as any).addr.port;
 const cwd = "/home/paulkinlan/journal";
 
 async function connectClient() {
-  const c = new AcpClient({ url: "ws://127.0.0.1:3221/acp", defaultCwd: cwd });
+  const c = new AcpClient({ url: `ws://127.0.0.1:${port}/acp`, defaultCwd: cwd });
   await c.connect();
   await c.initialize();
   return c;
@@ -35,9 +36,12 @@ try {
       "What was the word I asked you to remember? Reply with ONLY the word.",
     );
     console.log(`[probe] turn2: "${t2.text}"`);
-    console.log(`[probe] RESUME MEMORY: ${/kumquat-?4242/.test(t2.text) ? "PASS — session restored across adapter restart" : "FAIL — memory lost"}`);
+    const ok = /kumquat-?4242/.test(t2.text);
+    console.log(`[probe] RESUME MEMORY: ${ok ? "PASS — session restored across adapter restart" : "FAIL — memory lost"}`);
+    if (!ok) Deno.exit(1);
   } catch (e) {
     console.log(`[probe] loadSession FAILED: ${e?.message ?? e}`);
+    Deno.exitCode = 1;
   } finally {
     c2.close();
   }

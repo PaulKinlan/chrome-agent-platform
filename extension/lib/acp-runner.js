@@ -16,6 +16,25 @@ export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
  * machine (3khn). */
 export const DEFAULT_ACP_CWD = "";
 
+/** ACP tool-call statuses mapped to the vocabulary a tool card RENDERS as
+ * settled (`running` / `done` / `error`). pi-acp sends `in_progress` /
+ * `completed` / `failed`; a card that only knows done/success/error would show
+ * `completed` as still running forever. */
+const TOOL_STATUS_UI = {
+  pending: "running",
+  in_progress: "running",
+  running: "running",
+  completed: "done",
+  success: "done",
+  failed: "error",
+  cancelled: "error",
+  canceled: "error",
+};
+export function acpToolStatusUi(status) {
+  const key = String(status ?? "").trim().toLowerCase();
+  return TOOL_STATUS_UI[key] ?? (key ? "running" : "running");
+}
+
 /** In-memory cache of active ACP sessions by conversation key. A key is the
  * task threadId + harness when the turn runs inside a persisted thread, else
  * `acp:<harnessId>` — so the dedicated harness surface and hub @mention
@@ -86,11 +105,32 @@ export async function runAcpTaskTurn(options) {
   });
 
   /** The conversation key, owned by this turn (the finally clears it). */
-  let sessionKey = null;
+  const sessionKey = acpSessionKey(threadId, harnessId);
+
+  // CLAIM the conversation BEFORE any await. A second send while this turn is
+  // still connecting has to SEE this turn and supersede it — otherwise both
+  // turns read no prior owner, both connect, and two host prompts run
+  // concurrently on one session. `cancelled` makes the newer turn's intent
+  // visible even when the older one has not reached `session/prompt` yet.
+  const claim = { client: null, sessionId: null, cancelled: false };
+  const prior = activeTurns.get(sessionKey);
+  if (prior) {
+    prior.cancelled = true;
+    const priorClient = prior.client;
+    if (priorClient) {
+      try { await priorClient.cancel(prior.sessionId); } catch { /* best effort */ }
+      try { priorClient.close(); } catch { /* best effort */ }
+    }
+  }
+  activeTurns.set(sessionKey, claim);
+  const releaseClaim = () => { if (activeTurns.get(sessionKey) === claim) activeTurns.delete(sessionKey); };
+  /** This turn no longer owns the conversation (superseded, or its surface left). */
+  const superseded = () => claim.cancelled || stale();
 
   try {
     await client.connect();
   } catch (err) {
+    releaseClaim();
     const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${endpoint}.`;
     const actionMsg = "Start the local ACP bridge with: npm run acp:bridge (in the CAP repo)";
     if (!stale()) {
@@ -108,7 +148,8 @@ export async function runAcpTaskTurn(options) {
     return { ok: false, error: `${errorMsg} ${actionMsg}` };
   }
 
-  if (stale()) {
+  if (superseded()) {
+    releaseClaim();
     client.close();
     return { ok: false, error: "Task was superseded" };
   }
@@ -116,25 +157,15 @@ export async function runAcpTaskTurn(options) {
   try {
     status({ state: "running", activity: `Initializing ${harnessId}…` });
     await client.initialize();
+    if (superseded()) {
+      return { ok: false, error: "Task was superseded" };
+    }
 
     // Session resolution: resume the conversation this surface/harness owns.
     // Keyed by threadId+harness inside a persisted thread, else by harness
     // identity — the pi surface and hub @pi delegations are one continuous
     // conversation. A reload recovers the session id from the caller's
     // sessionStore (kv), so continuity survives the page.
-    const sessionKeyForTurn = acpSessionKey(threadId, harnessId);
-    sessionKey = sessionKeyForTurn;
-
-    // Supersede: a second turn for the same conversation cancels the first.
-    // isStale() only stops it RENDERING — without this the old prompt would
-    // keep running on the host (and interleave with the new one).
-    const prior = activeTurns.get(sessionKey);
-    if (prior) {
-      try { await prior.client.cancel(prior.sessionId); } catch { /* best effort */ }
-      try { prior.client.close(); } catch { /* best effort */ }
-      activeTurns.delete(sessionKey);
-    }
-
     let sessionId = threadSessions.get(sessionKey) ?? null;
     if (!sessionId && typeof sessionStore?.get === "function") {
       try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
@@ -156,13 +187,13 @@ export async function runAcpTaskTurn(options) {
       sessionId = sess.sessionId;
     }
     threadSessions.set(sessionKey, sessionId);
-    activeTurns.set(sessionKey, { client, sessionId });
+    claim.client = client;
+    claim.sessionId = sessionId;
     if (typeof sessionStore?.set === "function") {
       try { await sessionStore.set(sessionKey, sessionId); } catch { /* resume hint only */ }
     }
 
-    if (stale()) {
-      client.close();
+    if (superseded()) {
       return { ok: false, error: "Task was superseded" };
     }
 
@@ -179,7 +210,7 @@ export async function runAcpTaskTurn(options) {
       sessionId,
       task,
       (ev) => {
-        if (stale()) return;
+        if (superseded()) return;
 
         if (ev.kind === "thought" && ev.text) {
           if (typeof container.thinkingDelta === "function") {
@@ -188,7 +219,7 @@ export async function runAcpTaskTurn(options) {
           }
         } else if (ev.kind === "tool") {
           const cardId = ev.toolCallId || ev.detail || "tool";
-          const toolStatus = ev.status || "running";
+          const toolStatus = acpToolStatusUi(ev.status);
           if (typeof container.appendTool === "function") {
             const existing = toolCards.get(cardId);
             if (existing) {
@@ -231,9 +262,15 @@ export async function runAcpTaskTurn(options) {
       attachments,
     );
 
-    if (stale()) {
+    if (superseded()) {
       client.close();
       return { ok: false, error: "Task was superseded" };
+    }
+
+    // A cancelled turn is NOT a success: the harness reports stopReason
+    // "cancelled" when a newer turn (or a cancel request) stopped it.
+    if (String(turn.stopReason ?? "").toLowerCase().startsWith("cancel")) {
+      return { ok: false, error: "Task was cancelled", stopReason: turn.stopReason, sessionId, resumed };
     }
 
     // Ensure complete response rendered
@@ -266,7 +303,7 @@ export async function runAcpTaskTurn(options) {
   } finally {
     // This turn is no longer the active one for the key (a newer turn may own
     // it already — never clear a successor's registration).
-    if (activeTurns.get(sessionKey)?.client === client) activeTurns.delete(sessionKey);
+    releaseClaim();
     client.close();
   }
 }

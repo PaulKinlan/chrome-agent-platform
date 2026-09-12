@@ -129,6 +129,12 @@ Deno.test("runAcpTaskTurn: turn 2 RESUMES the session (session/new once, session
     assertEquals(methods.filter((m) => m === "session/load").length, 1, "the second turn loads the existing session");
     const load = frames.find((f) => f.dir === "in" && f.msg.method === "session/load");
     assertEquals(load.msg.params.sessionId, t1.sessionId, "the load names the session the first turn created");
+    // The bridge filled the working directory the client never sent: this is
+    // the WIRING of applyHostDefaults (a unit test on the pure rule would not
+    // notice the call site being removed).
+    const newSession = frames.find((f) => f.dir === "in" && f.msg.method === "session/new");
+    const home = Deno.env.get("HOME") ?? "";
+    assertEquals(newSession.msg.params.cwd, `${home}/journal`, "the adapter received the host-side default cwd");
   } finally {
     Deno.env.delete("CAP_ACP_FIXTURE_LOG");
     await bridge.shutdown();
@@ -169,6 +175,36 @@ Deno.test("runAcpTaskTurn: a sessionStore hint resumes a session from a previous
   }
 });
 
+Deno.test("runAcpTaskTurn: two rapid sends for one conversation never prompt concurrently", async () => {
+  const logPath = `${durableDir("acp-fixture-logs")}/frames-supersede-${Date.now()}.jsonl`;
+  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const container = new MockContainer();
+
+  try {
+    // Both turns start with no gap: the FIRST call claims the conversation
+    // SYNCHRONOUSLY (before any await), so the second sees it and supersedes
+    // it rather than reading no owner and running a second host prompt.
+    const first = runAcpTaskTurn({ container, task: "first turn", harnessId: "supersede-probe", endpoint });
+    const second = runAcpTaskTurn({ container, task: "second turn", harnessId: "supersede-probe", endpoint });
+    const [firstRes, secondRes] = await Promise.all([first, second]);
+
+    const oks = [firstRes, secondRes].filter((r) => r.ok === true).length;
+    assertEquals(oks, 1, `exactly one turn may complete; got ${JSON.stringify([firstRes, secondRes])}`);
+    assertEquals(secondRes.ok, true, String(secondRes.error));
+    assertEquals(firstRes.ok, false, "the superseded turn must not report success");
+    assert(
+      /superseded|cancel/i.test(String(firstRes.error)),
+      `the superseded turn must say so, got "${firstRes.error}"`,
+    );
+  } finally {
+    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
+    await bridge.shutdown();
+  }
+});
+
 Deno.test("runAcpTaskTurn: tool updates settle one card instead of appending running duplicates", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/frames-tools-${Date.now()}.jsonl`;
   Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
@@ -187,7 +223,13 @@ Deno.test("runAcpTaskTurn: tool updates settle one card instead of appending run
     // The fixture streams tool_call then tool_call_update for the SAME
     // toolCallId: one card, settled to the update's status.
     assertEquals(container.tools.length, 1, `one card for one call, got ${JSON.stringify(container.tools)}`);
-    assertEquals(container.tools[0].card.attrs["tool-status"], "completed");
+    // The card only renders running/done/error as settled — an ACP "completed"
+    // left raw would show a finished call as still running forever.
+    assertEquals(container.tools[0].card.attrs["tool-status"], "done");
+    assert(
+      ["done", "success", "error"].includes(container.tools[0].card.attrs["tool-status"]),
+      "the status written to the card must be one the card renders as settled",
+    );
   } finally {
     Deno.env.delete("CAP_ACP_FIXTURE_LOG");
     await bridge.shutdown();
