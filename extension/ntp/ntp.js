@@ -78,6 +78,8 @@ import {
   installPageDiagnostics,
   startDiagnosticSubscription,
 } from "../shared/diagnostics-client.js";
+import { AcpClient } from "../lib/acp-client.js";
+import { runAcpTaskTurn } from "../lib/acp-runner.js";
 import { capLog } from "../lib/cap-log.js";
 import { perfSpan, perfSummary } from "../lib/cap-perf.js";
 
@@ -3778,7 +3780,23 @@ async function runThreadTurn(text, attachments = [], mention = null) {
   const threadAtStart = currentThreadId;
   const owns = () => runSurfaceOwner.owns(owner) && currentAgentId === agentAtStart &&
     currentAgentKind === kindAtStart;
-  const res = await runConversationTurn(threadConversation, {
+  const isAcp = mention?.kind === "acp" || kindAtStart === "acp";
+  let res;
+  if (isAcp) {
+    if (typeof threadConversation.appendUser === "function") {
+      threadConversation.appendUser(text, Date.now(), attachments);
+    }
+    res = await runAcpTaskTurn({
+      container: threadConversation,
+      task: text,
+      attachments,
+      threadId: threadAtStart,
+      harnessId: mention?.id || agentAtStart || "pi",
+      onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
+      isStale: () => !owns(),
+    });
+  } else {
+    res = await runConversationTurn(threadConversation, {
     text,
     attachments,
     history: [], // the SW derives the history from the thread when threadId is set
@@ -3799,6 +3817,7 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     isStale: () => !owns(),
     projectionOwner: owner,
   });
+  }
   // The fence: a superseded run mutates NO global surface state. If THIS run
   // was the last status writer, reset its orphaned "running…" (a run parked
   // in a hanging permission request never reaches its own reset).

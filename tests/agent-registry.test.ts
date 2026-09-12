@@ -43,10 +43,11 @@ const groups = [
   },
 ];
 
-Deno.test("canonicalRef builds the three canonical kinds", () => {
+Deno.test("canonicalRef builds canonical kinds", () => {
   assertEquals(canonicalRef("named", "reader"), "named:reader");
   assertEquals(canonicalRef("background", "sorting-hat"), "background:sorting-hat");
   assertEquals(canonicalRef("site", "https://github.com"), "site:https://github.com");
+  assertEquals(canonicalRef("acp", "pi"), "acp:pi");
   assertEquals(canonicalRef("master", "x"), ""); // unknown kinds are rejected
   assertEquals(canonicalRef("named", ""), "");
 });
@@ -54,10 +55,11 @@ Deno.test("canonicalRef builds the three canonical kinds", () => {
 Deno.test("parseAgentRef round-trips and rejects malformed refs", () => {
   assertEquals(parseAgentRef("named:reader"), { kind: "named", id: "reader" });
   assertEquals(parseAgentRef("site:https://github.com"), { kind: "site", id: "https://github.com" });
+  assertEquals(parseAgentRef("acp:pi"), { kind: "acp", id: "pi" });
   assertEquals(parseAgentRef("agent:reader"), null); // the OLD ambiguous shape
   assertEquals(parseAgentRef("nope"), null);
   assertEquals(parseAgentRef(""), null);
-  assertEquals(AGENT_KINDS, ["named", "background", "site"]);
+  assertEquals(AGENT_KINDS, ["named", "background", "site", "acp"]);
 });
 
 Deno.test("flattenGroups keeps the group label on every agent", () => {

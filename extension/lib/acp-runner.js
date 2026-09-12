@@ -1,0 +1,203 @@
+// extension/lib/acp-runner.js — Coordinates ACP harness task runs for the UI surfaces (NTP, Side Panel).
+// CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
+//
+// Drives an external agent harness (e.g. pi via pi-acp) over the loopback ACP WebSocket bridge,
+// streaming thoughts, tool progress, and message chunks into the conversation surface.
+
+import { AcpClient } from "./acp-client.js";
+
+/** Default loopback WebSocket endpoint for the ACP bridge */
+export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
+
+/** Default working directory for summoned harness sessions */
+export const DEFAULT_ACP_CWD = "/home/paulkinlan/journal";
+
+/** In-memory cache of active ACP sessions by threadId */
+const threadSessions = new Map();
+
+/**
+ * Execute an ACP task turn on a conversation container.
+ *
+ * @param {Object} options
+ * @param {any} options.container - The `<agent-conversation>` DOM element
+ * @param {string} options.task - User prompt text
+ * @param {Array<any>} [options.attachments] - User attachments
+ * @param {string|null} [options.threadId] - Task thread ID
+ * @param {string} [options.harnessId] - Target harness ID (e.g. 'pi')
+ * @param {string} [options.endpoint] - Custom WebSocket URL
+ * @param {string} [options.cwd] - Custom working directory
+ * @param {(state: any) => void} [options.onStatus] - Status update callback
+ * @param {() => boolean} [options.isStale] - Run-lifecycle fence
+ * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, error?: string}>}
+ */
+export async function runAcpTaskTurn(options) {
+  const {
+    container,
+    task,
+    attachments = [],
+    threadId = null,
+    harnessId = "pi",
+    endpoint = DEFAULT_ACP_ENDPOINT,
+    cwd = DEFAULT_ACP_CWD,
+    onStatus = null,
+    isStale = () => false,
+  } = options;
+
+  const stale = () => {
+    try { return typeof isStale === "function" && !!isStale(); }
+    catch { return false; }
+  };
+
+  const status = (s) => {
+    if (!stale()) onStatus?.(s);
+  };
+
+  status({ state: "running", activity: `Connecting to ${harnessId} harness…` });
+
+  const client = new AcpClient({
+    url: endpoint,
+    defaultCwd: cwd,
+  });
+
+  try {
+    await client.connect();
+  } catch (err) {
+    const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${endpoint}.`;
+    const actionMsg = "Start the local ACP bridge with: npm run acp:bridge (or node scripts/acp-bridge.ts)";
+    if (!stale()) {
+      if (typeof container.appendError === "function") {
+        container.appendError(errorMsg, {
+          reason: String(err?.message ?? err),
+          action: actionMsg,
+          category: "harness-connection",
+        });
+      } else if (typeof container.appendSystem === "function") {
+        container.appendSystem(`${errorMsg} ${actionMsg}`);
+      }
+      status({ state: "failed", errorReason: errorMsg, errorAction: actionMsg });
+    }
+    return { ok: false, error: `${errorMsg} ${actionMsg}` };
+  }
+
+  if (stale()) {
+    client.close();
+    return { ok: false, error: "Task was superseded" };
+  }
+
+  try {
+    status({ state: "running", activity: `Initializing ${harnessId}…` });
+    await client.initialize();
+
+    // Session resolution: resume existing session if threadId has one, else create new
+    let sessionId = threadId ? threadSessions.get(threadId) : null;
+    let resumed = false;
+
+    if (sessionId) {
+      try {
+        await client.loadSession({ sessionId, cwd });
+        resumed = true;
+      } catch {
+        // Fall back to new session if resume fails
+        sessionId = null;
+      }
+    }
+
+    if (!sessionId) {
+      const sess = await client.newSession({ cwd });
+      sessionId = sess.sessionId;
+      if (threadId) {
+        threadSessions.set(threadId, sessionId);
+      }
+    }
+
+    if (stale()) {
+      client.close();
+      return { ok: false, error: "Task was superseded" };
+    }
+
+    status({ state: "running", activity: `${harnessId} is thinking…` });
+
+    let thinkingStarted = false;
+    let streamedAgentBubble = null;
+    let streamedText = "";
+
+    const turn = await client.prompt(
+      sessionId,
+      task,
+      (ev) => {
+        if (stale()) return;
+
+        if (ev.kind === "thought" && ev.text) {
+          if (typeof container.thinkingDelta === "function") {
+            container.thinkingDelta({ delta: ev.text, start: !thinkingStarted });
+            thinkingStarted = true;
+          }
+        } else if (ev.kind === "tool" && ev.detail) {
+          if (typeof container.appendTool === "function") {
+            container.appendTool({
+              name: `${harnessId}-tool`,
+              status: "running",
+              detail: ev.detail,
+            });
+          }
+          status({ state: "running", activity: `${harnessId}: ${ev.detail.slice(0, 40)}…` });
+        } else if (ev.kind === "chunk" && ev.text) {
+          if (thinkingStarted && typeof container.collapseThinkingTrace === "function") {
+            container.collapseThinkingTrace();
+          }
+          streamedText += ev.text;
+          if (!streamedAgentBubble) {
+            if (typeof container.appendAgent === "function") {
+              streamedAgentBubble = container.appendAgent(streamedText);
+            }
+          } else {
+            if (typeof streamedAgentBubble.setAttribute === "function") {
+              streamedAgentBubble.setAttribute("content", streamedText);
+            }
+          }
+          status({ state: "running", activity: "Writing response…" });
+        } else if (ev.kind === "permission") {
+          if (typeof container.appendSystem === "function") {
+            container.appendSystem(`Harness permission: ${ev.detail || "granted"}`);
+          }
+        }
+      },
+      attachments,
+    );
+
+    if (stale()) {
+      client.close();
+      return { ok: false, error: "Task was superseded" };
+    }
+
+    // Ensure complete response rendered
+    if (!streamedAgentBubble && turn.text) {
+      if (typeof container.appendAgent === "function") {
+        container.appendAgent(turn.text);
+      }
+    }
+
+    status({ state: "completed" });
+    return {
+      ok: true,
+      result: turn.text || streamedText,
+      stopReason: turn.stopReason,
+      sessionId,
+      resumed,
+    };
+  } catch (err) {
+    const errorDetail = String(err?.message ?? err);
+    if (!stale()) {
+      if (typeof container.appendError === "function") {
+        container.appendError(`ACP turn error: ${errorDetail}`, {
+          category: "harness-error",
+          reason: errorDetail,
+        });
+      }
+      status({ state: "failed", errorReason: errorDetail });
+    }
+    return { ok: false, error: errorDetail };
+  } finally {
+    client.close();
+  }
+}

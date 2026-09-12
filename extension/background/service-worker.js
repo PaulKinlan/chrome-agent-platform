@@ -7788,6 +7788,23 @@ const handlers = mergeRouteMaps(
           })),
         },
         { id: "site", label: "Site Agents", agents: site },
+        {
+          id: "acp",
+          label: "Harness Agents (ACP)",
+          agents: [
+            {
+              ref: "acp:pi",
+              id: "pi",
+              kind: "acp",
+              name: "pi",
+              summary: "Local harness · pi ACP adapter",
+              avatar: null,
+              skills: [],
+              status: "available",
+              enabled: true,
+            },
+          ],
+        },
       ],
     };
   },

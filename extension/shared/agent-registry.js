@@ -8,7 +8,7 @@
 // The registry itself is fetched from the service worker's `agent.registry`
 // route (the redacted single source of truth); these helpers only shape it.
 
-export const AGENT_KINDS = ["named", "background", "site"];
+export const AGENT_KINDS = ["named", "background", "site", "acp"];
 
 /** Build the canonical ref for an agent. */
 export function canonicalRef(kind, id) {
@@ -77,6 +77,7 @@ export function shouldApplyRegistrySnapshot(
 export function isCallable(agent) {
   if (!agent || typeof agent !== "object") return false;
   if (agent.kind === "background") return agent.enabled === true;
+  if (agent.kind === "acp") return agent.enabled !== false;
   return true; // named agents + enrolled Site Agents are always callable
 }
 
