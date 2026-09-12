@@ -8,6 +8,22 @@
 
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
 
+// Optional frame log (CAP_ACP_FIXTURE_LOG): every inbound request and outbound
+// frame as one JSON line, so a test can assert WHAT the client asked the
+// harness for (e.g. session/new on turn 1, session/load on turn 2) instead of
+// inferring it from a rendered string.
+import { appendFileSync } from "node:fs";
+const LOG = process.env.CAP_ACP_FIXTURE_LOG ?? "";
+function log(dir, msg) {
+  if (!LOG) return;
+  try { appendFileSync(LOG, JSON.stringify({ dir, msg }) + "\n"); } catch { /* logging is best-effort */ }
+}
+
+function sendAndLog(msg) {
+  log("out", msg);
+  send(msg);
+}
+
 let buf = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
@@ -28,9 +44,10 @@ process.stdin.on("data", (chunk) => {
 });
 
 function handle(msg) {
+  log("in", msg);
   switch (msg.method) {
     case "initialize":
-      send({
+      sendAndLog({
         jsonrpc: "2.0",
         id: msg.id,
         result: {
@@ -42,13 +59,13 @@ function handle(msg) {
       });
       break;
     case "session/new":
-      send({
+      sendAndLog({
         jsonrpc: "2.0",
         id: msg.id,
         result: { sessionId: "ses_fake_1", models: { currentModelId: "fake/model" } },
       });
       // Mirror pi-acp: a fresh session advertises its commands.
-      send({
+      sendAndLog({
         jsonrpc: "2.0",
         method: "session/update",
         params: {
@@ -64,26 +81,31 @@ function handle(msg) {
       });
       break;
     case "session/load":
-      send({ jsonrpc: "2.0", id: msg.id, result: {} });
+      sendAndLog({ jsonrpc: "2.0", id: msg.id, result: {} });
       break;
     case "session/prompt": {
       const sid = msg.params?.sessionId ?? "";
-      send({
+      sendAndLog({
         jsonrpc: "2.0",
         method: "session/update",
         params: { sessionId: sid, update: { sessionUpdate: "agent_thought_chunk", content: { text: "Fake reasoning…" } } },
       });
-      send({
+      sendAndLog({
         jsonrpc: "2.0",
         method: "session/update",
-        params: { sessionId: sid, update: { sessionUpdate: "tool_call", title: "fake tool call" } },
+        params: { sessionId: sid, update: { sessionUpdate: "tool_call", toolCallId: "tc_fake_1", title: "fake tool call", status: "in_progress" } },
       });
-      send({
+      sendAndLog({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionId: sid, update: { sessionUpdate: "tool_call_update", toolCallId: "tc_fake_1", title: "fake tool call", status: "completed" } },
+      });
+      sendAndLog({
         jsonrpc: "2.0",
         method: "session/update",
         params: { sessionId: sid, update: { sessionUpdate: "agent_message_chunk", content: { text: "fake reply" } } },
       });
-      send({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
+      sendAndLog({ jsonrpc: "2.0", id: msg.id, result: { stopReason: "end_turn" } });
       break;
     }
     case "session/cancel":
@@ -92,6 +114,6 @@ function handle(msg) {
     default:
       // Unknown method (e.g. authenticate): report method-not-found so the
       // client gets a well-formed error rather than hanging.
-      send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `${msg.method} not supported by fake adapter` } });
+      sendAndLog({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: `${msg.method} not supported by fake adapter` } });
   }
 }

@@ -17,16 +17,26 @@ export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
 export const DEFAULT_ACP_CWD = "";
 
 /** In-memory cache of active ACP sessions by conversation key. A key is the
- * task threadId when the turn runs inside a persisted thread, else
+ * task threadId + harness when the turn runs inside a persisted thread, else
  * `acp:<harnessId>` — so the dedicated harness surface and hub @mention
  * delegations keep ONE pi conversation across turns (pi-acp session/load
  * restores it from pi's on-disk session store even after the adapter process
- * is torn down between turns — proven live in cap-evidence/acp-resume-probe.ts). */
+ * is torn down between turns — proven live in cap-evidence/acp-resume-probe.ts).
+ * A SURFACE (not this map) is the durable authority across reloads: the caller
+ * passes a sessionStore (kv) and the resume hint is read back from it. */
 const threadSessions = new Map();
 
-/** The conversation key a session is cached under (exported for unit tests). */
+/** The turn currently running per conversation key. Starting a second turn on
+ * one key CANCELS the first before prompting: two concurrent prompts on one
+ * host session would interleave on the same pi conversation. */
+const activeTurns = new Map();
+
+/** The conversation key a session is cached under (exported for unit tests).
+ * A thread key names the harness too: two harnesses in one thread are two
+ * conversations, never one colliding key. */
 export function acpSessionKey(threadId, harnessId) {
-  return threadId || `acp:${String(harnessId || "pi")}`;
+  const harness = String(harnessId || "pi");
+  return threadId ? `${threadId}:${harness}` : `acp:${harness}`;
 }
 
 /**
@@ -42,7 +52,8 @@ export function acpSessionKey(threadId, harnessId) {
  * @param {string} [options.cwd] - Custom working directory
  * @param {(state: any) => void} [options.onStatus] - Status update callback
  * @param {() => boolean} [options.isStale] - Run-lifecycle fence
- * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, error?: string}>}
+ * @param {{get: (key: string) => Promise<string|null>, set: (key: string, sessionId: string) => Promise<void>}} [options.sessionStore] - Durable session-id store (kv), so a reload resumes instead of forking
+ * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, sessionId?: string, resumed?: boolean, error?: string}>}
  */
 export async function runAcpTaskTurn(options) {
   const {
@@ -55,6 +66,7 @@ export async function runAcpTaskTurn(options) {
     cwd = DEFAULT_ACP_CWD,
     onStatus = null,
     isStale = () => false,
+    sessionStore = null,
   } = options;
 
   const stale = () => {
@@ -72,6 +84,9 @@ export async function runAcpTaskTurn(options) {
     url: endpoint,
     defaultCwd: cwd,
   });
+
+  /** The conversation key, owned by this turn (the finally clears it). */
+  let sessionKey = null;
 
   try {
     await client.connect();
@@ -103,10 +118,27 @@ export async function runAcpTaskTurn(options) {
     await client.initialize();
 
     // Session resolution: resume the conversation this surface/harness owns.
-    // Keyed by threadId inside a persisted thread, else by harness identity —
-    // the pi surface and hub @pi delegations are one continuous conversation.
-    const sessionKey = acpSessionKey(threadId, harnessId);
-    let sessionId = threadSessions.get(sessionKey);
+    // Keyed by threadId+harness inside a persisted thread, else by harness
+    // identity — the pi surface and hub @pi delegations are one continuous
+    // conversation. A reload recovers the session id from the caller's
+    // sessionStore (kv), so continuity survives the page.
+    const sessionKeyForTurn = acpSessionKey(threadId, harnessId);
+    sessionKey = sessionKeyForTurn;
+
+    // Supersede: a second turn for the same conversation cancels the first.
+    // isStale() only stops it RENDERING — without this the old prompt would
+    // keep running on the host (and interleave with the new one).
+    const prior = activeTurns.get(sessionKey);
+    if (prior) {
+      try { await prior.client.cancel(prior.sessionId); } catch { /* best effort */ }
+      try { prior.client.close(); } catch { /* best effort */ }
+      activeTurns.delete(sessionKey);
+    }
+
+    let sessionId = threadSessions.get(sessionKey) ?? null;
+    if (!sessionId && typeof sessionStore?.get === "function") {
+      try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
+    }
     let resumed = false;
 
     if (sessionId) {
@@ -122,7 +154,11 @@ export async function runAcpTaskTurn(options) {
     if (!sessionId) {
       const sess = await client.newSession({ cwd });
       sessionId = sess.sessionId;
-      threadSessions.set(sessionKey, sessionId);
+    }
+    threadSessions.set(sessionKey, sessionId);
+    activeTurns.set(sessionKey, { client, sessionId });
+    if (typeof sessionStore?.set === "function") {
+      try { await sessionStore.set(sessionKey, sessionId); } catch { /* resume hint only */ }
     }
 
     if (stale()) {
@@ -135,6 +171,9 @@ export async function runAcpTaskTurn(options) {
     let thinkingStarted = false;
     let streamedAgentBubble = null;
     let streamedText = "";
+    /** toolCallId → the card this turn appended, so updates SETTLE it instead
+     * of appending a second permanently-running card per update. */
+    const toolCards = new Map();
 
     const turn = await client.prompt(
       sessionId,
@@ -147,15 +186,27 @@ export async function runAcpTaskTurn(options) {
             container.thinkingDelta({ delta: ev.text, start: !thinkingStarted });
             thinkingStarted = true;
           }
-        } else if (ev.kind === "tool" && ev.detail) {
+        } else if (ev.kind === "tool") {
+          const cardId = ev.toolCallId || ev.detail || "tool";
+          const toolStatus = ev.status || "running";
           if (typeof container.appendTool === "function") {
-            container.appendTool({
-              name: `${harnessId}-tool`,
-              status: "running",
-              detail: ev.detail,
-            });
+            const existing = toolCards.get(cardId);
+            if (existing) {
+              // The same call progressing: settle the card it already has.
+              if (typeof existing.setAttribute === "function") {
+                existing.setAttribute("tool-status", toolStatus);
+                if (ev.detail) existing.setAttribute("tool-detail", ev.detail);
+              }
+            } else {
+              const card = container.appendTool({
+                name: `${harnessId}-tool`,
+                status: toolStatus,
+                detail: ev.detail,
+              });
+              if (card) toolCards.set(cardId, card);
+            }
           }
-          status({ state: "running", activity: `${harnessId}: ${ev.detail.slice(0, 40)}…` });
+          if (ev.detail) status({ state: "running", activity: `${harnessId}: ${String(ev.detail).slice(0, 40)}…` });
         } else if (ev.kind === "chunk" && ev.text) {
           if (thinkingStarted && typeof container.collapseThinkingTrace === "function") {
             container.collapseThinkingTrace();
@@ -213,6 +264,9 @@ export async function runAcpTaskTurn(options) {
     }
     return { ok: false, error: errorDetail };
   } finally {
+    // This turn is no longer the active one for the key (a newer turn may own
+    // it already — never clear a successor's registration).
+    if (activeTurns.get(sessionKey)?.client === client) activeTurns.delete(sessionKey);
     client.close();
   }
 }

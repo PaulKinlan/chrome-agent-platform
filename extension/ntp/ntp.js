@@ -2650,8 +2650,10 @@ async function openAgentSurface({ kind, id, name }) {
   editAgentBtn.hidden = kind !== "named";
   if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
   if (deleteAgentBtn) {
-    deleteAgentBtn.hidden = !kind;
-    if (kind) deleteAgentBtn.setAttribute("aria-label", "Delete " + (name || id));
+    // ACP harness agents have no delete route (nothing to delete: the harness
+    // lives on the host) — the control must not be offered for them.
+    deleteAgentBtn.hidden = !kind || kind === "acp";
+    if (kind && kind !== "acp") deleteAgentBtn.setAttribute("aria-label", "Delete " + (name || id));
   }
   threadTitle.classList.remove("editable-task");
   threadTitle.removeAttribute("role");
@@ -3767,6 +3769,19 @@ let lastReconciledTerminalId = null;
  * @-mention delegation directive ({kind,id,name}): the task stays the hub's
  * thread and the run delegates to the referenced agent, whose result lands
  * back in this thread (CAP-FB-20260824-TASK-AGENT-BOUNDARY-01). */
+/** The durable ACP session-id store (kv): a reload asks the harness to RESUME
+ * the conversation this surface/harness owns instead of forking a new one. */
+const acpSessionStore = {
+  async get(key) {
+    const r = await send("kv.get", { keys: key }).catch(() => null);
+    const v = r?.[key] ?? r?.values?.[key];
+    return typeof v === "string" && v ? v : null;
+  },
+  async set(key, sessionId) {
+    await send("kv.set", { values: { [key]: sessionId } }).catch(() => null);
+  },
+};
+
 async function runThreadTurn(text, attachments = [], mention = null) {
   const owner = runSurfaceOwner.claim();
   liveClientRunId = null;
@@ -3793,6 +3808,7 @@ async function runThreadTurn(text, attachments = [], mention = null) {
       harnessId: mention?.id || agentAtStart || "pi",
       onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
       isStale: () => !owns(),
+      sessionStore: acpSessionStore,
     });
   } else {
     res = await runConversationTurn(threadConversation, {

@@ -15,6 +15,7 @@
 
 import { newId } from "../lib/pure.js";
 import { send } from "../lib/messages.js";
+import { runAcpTaskTurn } from "../lib/acp-runner.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { formatBudgetProgress, formatContinuationStop } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
@@ -1870,7 +1871,7 @@ export function projectThreadMessages(thread) {
   return output;
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null, onRunRegistered = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null, onRunRegistered = null, sessionStore = null }) {
   const c = container;
   // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
   // this turn no longer owns the surface (a newer turn started, or the user
@@ -1882,6 +1883,27 @@ export async function runConversationTurn(container, { text, attachments = [], h
     catch { return false; }
   };
   const status = (s) => { if (!stale()) onStatus?.(s); };
+
+  // An EXTERNAL HARNESS agent (ACP): the harness runs on the host and CAP is
+  // the client, so there is no service-worker run to dispatch. Every composer
+  // that offers an acp agent (the hub, the side panel) reaches the same runner
+  // here — the NTP routes to it before this function for its own surface
+  // lifecycle, and both paths must behave identically.
+  if (agentKind === "acp") {
+    if (!stale()) c.resetPlan?.();
+    status({ state: "queued" });
+    const res = await runAcpTaskTurn({
+      container: c,
+      task: text,
+      attachments,
+      threadId,
+      harnessId: agentId || "pi",
+      onStatus: (s) => status(s),
+      isStale: stale,
+      sessionStore,
+    });
+    return res;
+  }
   // A new turn starts with a fresh plan strip: clear the prior turn's checklist
   // so the strip rebuilds from THIS turn's steps (CAP-FB-20260830-PLAN-STRIP-
   // CHECKPOINTS-01).

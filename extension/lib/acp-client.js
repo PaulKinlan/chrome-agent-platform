@@ -404,8 +404,16 @@ export class AcpClient {
       const text = String(update.content?.text ?? "");
       this.activeTurnListener?.({ kind: "thought", text, raw: update });
     } else if (kind === "tool_call" || kind === "tool_call_update") {
+      // toolCallId + status travel with the event so a consumer can SETTLE the
+      // card a call already created instead of appending a new one per update.
       const detail = String(update.title ?? update.toolCallId ?? update.name ?? "");
-      this.activeTurnListener?.({ kind: "tool", detail, raw: update });
+      this.activeTurnListener?.({
+        kind: "tool",
+        detail,
+        toolCallId: String(update.toolCallId ?? ""),
+        status: String(update.status ?? (kind === "tool_call" ? "running" : "")),
+        raw: update,
+      });
     } else if (kind === "available_commands_update") {
       if (Array.isArray(update.availableCommands)) {
         this.availableCommands = update.availableCommands;

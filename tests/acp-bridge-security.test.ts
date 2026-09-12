@@ -13,11 +13,11 @@ import { createAcpServer } from "../scripts/acp-bridge.ts";
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
 
 /** Send a WebSocket upgrade by hand and return the response status line. */
-async function upgradeStatus(port: number, origin: string | null): Promise<string> {
+async function upgradeStatus(port: number, origin: string | null, token?: string): Promise<string> {
   const conn = await Deno.connect({ hostname: "127.0.0.1", port });
   try {
     const headers = [
-      "GET /acp HTTP/1.1",
+      `GET /acp${token ? `?token=${token}` : ""} HTTP/1.1`,
       `Host: 127.0.0.1:${port}`,
       ...(origin ? [`Origin: ${origin}`] : []),
       "Connection: Upgrade",
@@ -37,8 +37,8 @@ async function upgradeStatus(port: number, origin: string | null): Promise<strin
 }
 
 Deno.test("ACP bridge: a web page's Origin is refused, an extension's is accepted", async () => {
-  const PORT = 3227;
-  const bridge = createAcpServer(PORT, FAKE_ADAPTER);
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const PORT = (bridge as any).addr.port;
   try {
     const web = await upgradeStatus(PORT, "https://evil.example");
     assertEquals(web.includes("403"), true, `a web-page origin must be refused, got: ${web}`);
@@ -47,5 +47,33 @@ Deno.test("ACP bridge: a web page's Origin is refused, an extension's is accepte
     assertEquals(extension.includes("101"), true, `an extension origin must be accepted, got: ${extension}`);
   } finally {
     await bridge.shutdown();
+  }
+});
+
+Deno.test("ACP bridge: --token requires the shared secret on the upgrade", async () => {
+  // Kernel-assigned port for the CLI child (it prints the bound port).
+  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+  const port = (listener.addr as Deno.NetAddr).port;
+  listener.close();
+  const root = new URL("..", import.meta.url).pathname;
+  const child = new Deno.Command(Deno.execPath(), {
+    args: ["run", "-A", "scripts/acp-bridge.ts", "--port", String(port), "--token", "s3cret", "--adapter", FAKE_ADAPTER],
+    cwd: root,
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  try {
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) {
+      try { const c = await Deno.connect({ hostname: "127.0.0.1", port }); c.close(); up = true; }
+      catch { await new Promise((r) => setTimeout(r, 200)); }
+    }
+    assertEquals(up, true, "the bridge CLI must start listening");
+    assertEquals((await upgradeStatus(port, null)).includes("403"), true, "no token must be refused");
+    assertEquals((await upgradeStatus(port, null, "wrong")).includes("403"), true, "a wrong token must be refused");
+    assertEquals((await upgradeStatus(port, null, "s3cret")).includes("101"), true, "the right token is accepted");
+  } finally {
+    try { child.kill("SIGTERM"); } catch { /* already gone */ }
+    await child.status.catch(() => null);
   }
 });

@@ -29,8 +29,10 @@ const HOME_ENV = Deno.env.get("HOME") ?? "";
 const LIVE_CWD = Deno.env.get("CAP_ACP_CWD") ?? (HOME_ENV ? `${HOME_ENV}/journal` : "");
 
 Deno.test("ACP End-to-End (fixture): drives a full turn through the loopback bridge", async () => {
-  const TEST_PORT = 3222;
-  const bridge = createAcpServer(TEST_PORT, FAKE_ADAPTER);
+  // Kernel-assigned port (never a fixed literal): two lanes, or a stray
+  // process, can never collide on it.
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const TEST_PORT = (bridge as any).addr.port;
 
   const client = new AcpClient({
     url: `ws://127.0.0.1:${TEST_PORT}/acp`,
@@ -94,10 +96,10 @@ Deno.test({
   // An ignored test is LOUD — it reports as ignored, never as passed.
   ignore: !LIVE,
   fn: async () => {
-  const TEST_PORT = 3218;
   assert(LIVE_CWD, "set CAP_ACP_CWD (or $HOME) — the live journey needs a working directory");
 
-  const bridge = createAcpServer(TEST_PORT);
+  const bridge = createAcpServer(0);
+  const TEST_PORT = (bridge as any).addr.port;
 
   const client = new AcpClient({
     url: `ws://127.0.0.1:${TEST_PORT}/acp`,

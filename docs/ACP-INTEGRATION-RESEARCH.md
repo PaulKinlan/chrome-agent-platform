@@ -253,13 +253,32 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
 - **Session continuity** — `session/load` genuinely restores pi's on-disk
   session across adapter restarts (proven live: a memory planted in turn 1 was
   recalled in turn 2 after the bridge killed the adapter between turns —
-  `cap-evidence/acp-resume-probe.ts`). The runner caches the session per
-  thread, else per harness (`acp:<harnessId>`).
-- **Tests** — unit suites for client + runner, and an end-to-end fixture test
-  (bridge + deterministic fake adapter, part of `npm test`, no live pi, no
-  tokens). The LIVE pi journey is opt-in: `npm run test:acp:live`
-  (CAP_ACP_LIVE=1), because it needs pi-acp installed and spends real model
-  tokens — it is deliberately NOT part of the default suite.
+  `cap-evidence/acp-resume-probe.ts`). The runner keys a session by
+  `threadId:harness`, else `acp:<harness>`, and the NTP ALSO persists the id to
+  kv, so a page reload resumes the conversation instead of forking it
+  (`tests/acp-runner.test.ts` pins the behaviour from the fixture's frame log).
+  A second turn for the same conversation cancels the first before prompting:
+  `isStale()` only stops a superseded turn RENDERING, not running.
+- **Tests** — unit suites for client + runner, an end-to-end fixture test and a
+  bridge security/port test (bridge + deterministic fake adapter, all part of
+  `npm test`; no live pi, no tokens, kernel-assigned ports so no fixed literal
+  can collide). The LIVE pi journey is opt-in: `npm run test:acp:live`
+  (CAP_ACP_LIVE=1) — it needs pi-acp and spends real model tokens, so it is
+  deliberately NOT part of the default suite and reports as ignored.
+- **Every composer routes acp agents** — the hub reaches the ACP runner through
+  `runThreadTurn`, and `runConversationTurn` has the same ACP branch, so the
+  side panel (and any other `<agent-conversation>` surface) drives a harness
+  agent instead of dispatching it as a named agent.
+- **Host-side failure behaviour** — a missing adapter fails the turn immediately
+  (the bridge closes the socket with the adapter's exit reason and `/health`
+  reports `adapterReady: false`), and the tool stream settles ONE card per call
+  (`tool_call` + `tool_call_update` share a card and a status) instead of
+  appending a permanently-running card per update.
+- **Origin scope** — a web page cannot drive the bridge (browsers always send
+  `Origin`; non-extension origins are refused). The residual is that the default
+  allowlist is the extension SCHEME, so any installed extension could connect;
+  `--token <secret>` (required in the upgrade URL) and `--allow-origin <prefix>`
+  bind the bridge to one client when an operator needs that.
 
 Deliberately NOT yet implemented (tracked as beads):
 
@@ -274,3 +293,9 @@ Deliberately NOT yet implemented (tracked as beads):
   but the CAP task list does not yet show ACP turns).
 - **Additional harnesses** — only `acp:pi` is registered; the bridge accepts
   `--adapter`/`--harness` for others, the registry entry does not yet exist.
+- **Stop for ACP turns** — no durable run is registered, so the rendered Stop
+  has nothing to cancel (the supersede path cancels a replaced turn, but the
+  owner cannot stop one). Bead chrome-agent-platform-c6gq.
+- **Bridge client binding** — the default extension-scheme allowlist admits any
+  installed extension; `--token` exists but the extension has no setting to
+  send one (Settings bead chrome-agent-platform-khkk).

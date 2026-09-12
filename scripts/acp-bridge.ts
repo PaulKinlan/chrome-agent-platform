@@ -13,12 +13,15 @@
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
 
 const args = parseArgs(Deno.args, {
-  string: ["port", "adapter", "harness", "cwd"],
+  string: ["port", "adapter", "harness", "cwd", "token", "allow-origin"],
+  collect: ["allow-origin"],
   default: {
     port: "3210",
     adapter: "",
     harness: "pi",
     cwd: "",
+    token: "",
+    "allow-origin": [],
   },
 });
 
@@ -27,6 +30,26 @@ const ADAPTER_PATH = args.adapter;
 const HARNESS = args.harness;
 
 const HOME = Deno.env.get("HOME") ?? "";
+
+/** Extra origin prefixes `--allow-origin` admitted (repeatable). */
+const ALLOWED_ORIGIN_PREFIXES = (Array.isArray(args["allow-origin"]) ? args["allow-origin"] : []).filter(Boolean);
+
+/** Shared-secret requirement (`--token`): when set, the upgrade URL must carry
+ * `?token=…`, binding the bridge to one client even on a shared machine. */
+const TOKEN = String(args.token ?? "");
+
+/** May this WebSocket Origin drive the harness? Browsers ALWAYS send Origin on
+ * an upgrade, so an ABSENT one is a local script (deno/node test clients).
+ * Default: extension pages only. `--allow-origin <prefix>` admits others
+ * explicitly, and `--token` adds the shared-secret requirement on top. The
+ * residual is documented: any INSTALLED extension matches the extension
+ * scheme, so the token (or naming one extension in --allow-origin) is how an
+ * operator binds the bridge to a single client. */
+function originAllowed(origin: string | null): boolean {
+  if (!origin) return true; // local script client
+  if (ALLOWED_ORIGIN_PREFIXES.some((p) => origin.startsWith(p))) return true;
+  return /^(chrome|moz)-extension:\/\//.test(origin);
+}
 
 /** The adapter a bare `npm run acp:bridge` runs: $HOME at run time, never a
  * source literal. Fails loudly when HOME is unset and no --adapter was given. */
@@ -41,14 +64,17 @@ function defaultCwd() {
 }
 
 /** Give a client frame the host defaults only the bridge knows: a session/new
- * or session/load with no working directory gets --cwd / $HOME/journal. */
-function applyHostDefaults(raw: string): string {
+ * or session/load with no working directory gets `hostCwd` (undefined = the
+ * bridge's --cwd / $HOME/journal; "" = no host default configured, so nothing
+ * is invented and the adapter reports the missing cwd itself). Exported so the
+ * rule is unit-tested rather than pinned by a substring. */
+export function applyHostDefaults(raw: string, hostCwd?: string): string {
   try {
     const msg: any = JSON.parse(raw);
     if (msg?.method === "session/new" || msg?.method === "session/load") {
       const params = msg.params ?? (msg.params = {});
       if (!params.cwd) {
-        const cwd = defaultCwd();
+        const cwd = hostCwd === undefined ? defaultCwd() : hostCwd;
         if (cwd) params.cwd = cwd;
       }
       return JSON.stringify(msg);
@@ -65,9 +91,23 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
 
     if (url.pathname === "/health") {
       let defaultCwdValue = "";
+      let adapterValue = "";
+      let adapterReady = false;
       try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
+      try {
+        adapterValue = adapterPathOverride || defaultAdapterPath();
+        // Honest health: report whether the adapter this bridge would spawn is
+        // actually present, so a missing adapter is visible before a turn.
+        adapterReady = Deno.statSync(adapterValue).isFile;
+      } catch { adapterReady = false; }
       return new Response(
-        JSON.stringify({ ok: true, harness: HARNESS, adapter: ADAPTER_PATH || "(default)", defaultCwd: defaultCwdValue }),
+        JSON.stringify({
+          ok: adapterReady,
+          harness: HARNESS,
+          adapter: adapterValue || "(default)",
+          adapterReady,
+          defaultCwd: defaultCwdValue,
+        }),
         { headers: { "Content-Type": "application/json" } },
       );
     }
@@ -79,21 +119,32 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
     // Origin guard: browsers ALWAYS send Origin on WebSocket upgrades. A web
     // page (http/https) may not drive the local harness over loopback — that
     // would let any site execute shell commands through the user's pi session.
-    // Extension pages and local scripts (no Origin header) are allowed.
+    // Extension pages and local scripts (no Origin header) are allowed; the
+    // optional --token binds the connection to a client that knows the secret.
     const clientOrigin = req.headers.get("origin");
-    if (clientOrigin && !/^(chrome|moz)-extension:\/\//.test(clientOrigin)) {
+    if (!originAllowed(clientOrigin)) {
       return new Response("ACP Bridge: web origins are not allowed to drive the harness", { status: 403 });
+    }
+    if (TOKEN && url.searchParams.get("token") !== TOKEN) {
+      return new Response("ACP Bridge: missing or wrong token", { status: 403 });
     }
     const { socket, response } = Deno.upgradeWebSocket(req);
 
     // Spawn the ACP adapter process
     let child: Deno.ChildProcess | null = null;
     let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+    /** Tail of the adapter's stderr, for the exit reason when it dies. */
+    let lastStderr = "";
 
     socket.onopen = async () => {
       console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"}`);
       try {
         const adapterPath = adapterPathOverride || defaultAdapterPath();
+        // Say so plainly before node has a chance to die with a
+        // module-not-found stack.
+        if (!Deno.statSync(adapterPath).isFile) {
+          throw new Error(`adapter not found: ${adapterPath}`);
+        }
         const cmd = new Deno.Command("node", {
           args: [adapterPath],
           stdin: "piped",
@@ -104,12 +155,26 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
             PI_ACP_HARNESS: HARNESS,
           },
         });
-        child = cmd.spawn();
-        writer = child.stdin.getWriter();
+        const proc = cmd.spawn();
+        child = proc;
+        writer = proc.stdin.getWriter();
+        lastStderr = "";
+
+        // A dead adapter must FAIL THE TURN, not hang it: when the child exits
+        // (crash, missing module, bad flags) close the socket with its exit
+        // status and the last stderr lines, so a client's pending requests
+        // reject at once instead of waiting out the request timeout.
+        (async () => {
+          const exitStatus = await proc.status;
+          if (socket.readyState !== WebSocket.OPEN) return;
+          const detail = lastStderr.trim().split("\n").slice(-3).join(" | ") || "no stderr";
+          console.error(`[acp-bridge] adapter exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
+          try { socket.close(1011, `adapter exited: ${detail}`.slice(0, 120)); } catch { /* already closed */ }
+        })();
 
         // Stream stdout from adapter to WebSocket client
         (async () => {
-          const reader = child.stdout.getReader();
+          const reader = proc.stdout.getReader();
           const decoder = new TextDecoder();
           let buffer = "";
           try {
@@ -131,9 +196,9 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           }
         })();
 
-        // Relay stderr to console
+        // Relay stderr to console and remember its tail for the exit reason
         (async () => {
-          const reader = child.stderr.getReader();
+          const reader = proc.stderr.getReader();
           const decoder = new TextDecoder();
           try {
             while (true) {
@@ -141,10 +206,11 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
               if (done) break;
               const text = decoder.decode(value, { stream: true });
               if (text.trim()) {
+                lastStderr = (lastStderr + text).slice(-2000);
                 console.error(`[adapter-stderr] ${text.trim()}`);
               }
             }
-          } catch {}
+          } catch { /* stream closed */ }
         })();
       } catch (err) {
         console.error("[acp-bridge] Failed to spawn adapter:", err);
@@ -182,5 +248,6 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
 
 // If invoked directly from CLI
 if (import.meta.main) {
-  createAcpServer(PORT);
+  const server = createAcpServer(PORT);
+  console.log(`[acp-bridge] listening on ws://127.0.0.1:${(server as any).addr?.port ?? PORT}${TOKEN ? " (token required)" : ""}`);
 }
