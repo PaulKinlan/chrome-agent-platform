@@ -35,6 +35,18 @@ export function acpToolStatusUi(status) {
   return TOOL_STATUS_UI[key] ?? (key ? "running" : "running");
 }
 
+/** Append a bridge token to an ACP endpoint URL (idempotent, escaped). The
+ * bridge's `--token` mode requires `?token=…` on the upgrade; the extension has
+ * no settings UI yet, so the operator sets `acp.endpoint` / `acp.token` in kv
+ * and this is the piece that carries them onto the wire. */
+export function acpEndpointWithToken(endpoint, token) {
+  const url = String(endpoint ?? "");
+  const secret = String(token ?? "");
+  if (!url || !secret) return url;
+  if (/[?&]token=/.test(url)) return url; // already carries one
+  return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(secret)}`;
+}
+
 /** In-memory cache of active ACP sessions by conversation key. A key is the
  * task threadId + harness when the turn runs inside a persisted thread, else
  * `acp:<harnessId>` — so the dedicated harness surface and hub @mention
@@ -72,6 +84,7 @@ export function acpSessionKey(threadId, harnessId) {
  * @param {(state: any) => void} [options.onStatus] - Status update callback
  * @param {() => boolean} [options.isStale] - Run-lifecycle fence
  * @param {{get: (key: string) => Promise<string|null>, set: (key: string, sessionId: string) => Promise<void>}} [options.sessionStore] - Durable session-id store (kv), so a reload resumes instead of forking
+ * @param {{get: (key: string) => Promise<string|null>}} [options.settings] - kv reader for `acp.endpoint` / `acp.token` (Settings UI pending)
  * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, sessionId?: string, resumed?: boolean, error?: string}>}
  */
 export async function runAcpTaskTurn(options) {
@@ -86,6 +99,7 @@ export async function runAcpTaskTurn(options) {
     onStatus = null,
     isStale = () => false,
     sessionStore = null,
+    settings = null,
   } = options;
 
   const stale = () => {
@@ -99,33 +113,47 @@ export async function runAcpTaskTurn(options) {
 
   status({ state: "running", activity: `Connecting to ${harnessId} harness…` });
 
+  // Operator settings (Settings UI pending): a configured endpoint replaces the
+  // default, and a configured token rides the upgrade query — the bridge's
+  // --token mode refuses a connection without it.
+  let effectiveEndpoint = endpoint;
+  if (typeof settings?.get === "function") {
+    try {
+      const configuredEndpoint = await settings.get("acp.endpoint");
+      if (typeof configuredEndpoint === "string" && configuredEndpoint.trim()) effectiveEndpoint = configuredEndpoint.trim();
+      const token = await settings.get("acp.token");
+      effectiveEndpoint = acpEndpointWithToken(effectiveEndpoint, token);
+    } catch { /* fall back to the built-in default */ }
+  }
+
   const client = new AcpClient({
-    url: endpoint,
+    url: effectiveEndpoint,
     defaultCwd: cwd,
   });
 
   /** The conversation key, owned by this turn (the finally clears it). */
   const sessionKey = acpSessionKey(threadId, harnessId);
 
-  // CLAIM the conversation BEFORE any await. A second send while this turn is
-  // still connecting has to SEE this turn and supersede it — otherwise both
-  // turns read no prior owner, both connect, and two host prompts run
-  // concurrently on one session. `cancelled` makes the newer turn's intent
-  // visible even when the older one has not reached `session/prompt` yet.
+  // CLAIM the conversation BEFORE ANY await — synchronously. A second (or
+  // third) send while this turn is still connecting has to SEE this turn and
+  // supersede it; if the claim were installed after `await prior.cancel(...)`,
+  // a third send would still read the OLD claim and overwrite the second one,
+  // leaving two turns unnotified and both prompting. `cancelled` makes the
+  // newer turn's intent visible even before this turn reaches the wire.
   const claim = { client: null, sessionId: null, cancelled: false };
   const prior = activeTurns.get(sessionKey);
-  if (prior) {
-    prior.cancelled = true;
-    const priorClient = prior.client;
-    if (priorClient) {
-      try { await priorClient.cancel(prior.sessionId); } catch { /* best effort */ }
-      try { priorClient.close(); } catch { /* best effort */ }
-    }
-  }
+  if (prior) prior.cancelled = true;
   activeTurns.set(sessionKey, claim);
   const releaseClaim = () => { if (activeTurns.get(sessionKey) === claim) activeTurns.delete(sessionKey); };
   /** This turn no longer owns the conversation (superseded, or its surface left). */
   const superseded = () => claim.cancelled || stale();
+
+  // The prior turn's host prompt is stopped after the claim is installed (the
+  // claim is what makes a LATER send able to stop US).
+  if (prior?.client) {
+    try { await prior.client.cancel(prior.sessionId); } catch { /* best effort */ }
+    try { prior.client.close(); } catch { /* best effort */ }
+  }
 
   try {
     await client.connect();
@@ -290,6 +318,13 @@ export async function runAcpTaskTurn(options) {
     };
   } catch (err) {
     const errorDetail = String(err?.message ?? err);
+    // A SUPERSEDED turn renders nothing: the socket close / prompt rejection a
+    // successor caused is not this surface's error to show (and would land
+    // over the successor's own output). Surfaces without an isStale fence (the
+    // side panel) depend on this check, not on stale() alone.
+    if (claim.cancelled) {
+      return { ok: false, error: "Task was superseded" };
+    }
     if (!stale()) {
       if (typeof container.appendError === "function") {
         container.appendError(`ACP turn error: ${errorDetail}`, {

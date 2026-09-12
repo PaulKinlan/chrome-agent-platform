@@ -115,7 +115,7 @@ FAILED | 5 passed | 1 failed
 ```
 Restored → `6 passed | 0 failed`.
 
-## M11 — the supersede claim never marked cancelled (`extension/lib/acp-runner.js`)
+## M11 / M14 / M16 — the supersede claim (`extension/lib/acp-runner.js`)
 
 Mutant: `prior.cancelled = true;` → `prior.cancelled = false;`
 
@@ -126,9 +126,58 @@ FAILED | 5 passed | 1 failed
 Restored → `6 passed | 0 failed`. This is the second drilling of this property:
 the FIRST version of the test waited for turn 1's prompt and then started turn 2,
 which killed the mutant only via the client close — the test was rewritten to
-start both turns with no gap, which is the window `cancelled` exists for. (An
-equivalent mutant that moves `activeTurns.set(...)` after the awaits is killed by
-the same assertion: the second call would then read no prior owner.)
+start both turns with no gap, which is the window `cancelled` exists for.
+
+The observer is now the FRAME LOG, not just the result count: the two-send test
+asserts exactly one `session/prompt` reached the harness, and the live-prior test
+below asserts the successor prompted only AFTER the `session/cancel` (sequential
+prompts are the design; overlapping ones are the race).
+
+## M15 — a superseded turn renders the error its successor caused (`extension/lib/acp-runner.js`)
+
+Mutant: the `if (claim.cancelled) return { ok: false, error: "Task was superseded" };`
+guard removed from the catch (the pre-fix shape: `stale()` only, which the side
+panel never supplies). The first version of the drill SURVIVED, because the
+cancelled prompt settled politely; the test now runs with
+`CAP_ACP_FIXTURE_IGNORE_CANCEL=1` so the successor's socket close is what rejects
+the prompt, and asserts the superseded turn appended NO error bubble:
+
+```
+FAILED | 9 passed | 1 failed
+```
+Restored → `10 passed | 0 failed`.
+
+## M17 — `--allow-origin` back to a prefix match (`scripts/acp-bridge.ts`)
+
+Mutant: exact-origin equality → `origin.startsWith(p)`.
+
+```
+ACP bridge: --allow-origin admits the EXACT origin, never a confusable one ... FAILED
+FAILED | 2 passed | 1 failed
+```
+Restored → `3 passed | 0 failed`. (The pin starts the CLI with
+`--allow-origin https://trusted.example` and asserts `https://trusted.example`
+→ 101 while `https://trusted.example.evil.test` → 403.)
+
+## M14 — the claim installed AFTER `await prior.cancel(...)` (`extension/lib/acp-runner.js`)
+
+Mutant: `activeTurns.set(sessionKey, claim)` moved back below the `await
+prior.client.cancel(...)` block (the pre-fix order — the order a third
+independent review caught as a real 3-send race).
+
+The FIRST version of this test was NOT discriminating: with the prior turn still
+connecting its `client` is null, the await is skipped, and the mutant survived
+(`9 passed | 0 failed`). The test was rewritten to the real window — one turn
+LIVE (its prompt held by the fixture) and TWO sends arriving together — and the
+mutant then died:
+
+```
+runAcpTaskTurn: two sends arriving while a turn is LIVE leave exactly one winner ... FAILED
+FAILED | 8 passed | 1 failed
+```
+Restored → `10 passed | 0 failed`. This is the second time in this audit that a
+surviving mutant forced a test to be rewritten; the survivor is the evidence
+that the first test was a formality.
 
 ## Live probes (durable evidence, real pi-acp 0.0.33)
 
@@ -142,7 +191,9 @@ the same assertion: the second call would then read no prior owner.)
 ```
 
 `cap-evidence/acp-runner-continuity-probe.ts` — the exact NTP call shape (no cwd,
-no threadId) through `runAcpTaskTurn`, two turns:
+no threadId) through `runAcpTaskTurn`, two turns (it reports only what it
+observes: a session created with no client cwd; the cwd the ADAPTER received is
+pinned by the fixture test, not by this probe):
 
 ```
 [probe] turn1 ok=true resumed=false session=01a09763-... result="stored"

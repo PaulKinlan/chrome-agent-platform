@@ -50,6 +50,45 @@ Deno.test("ACP bridge: a web page's Origin is refused, an extension's is accepte
   }
 });
 
+Deno.test("ACP bridge: --allow-origin admits the EXACT origin, never a confusable one", async () => {
+  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
+  const port = (listener.addr as Deno.NetAddr).port;
+  listener.close();
+  const root = new URL("..", import.meta.url).pathname;
+  const child = new Deno.Command(Deno.execPath(), {
+    args: [
+      "run", "-A", "scripts/acp-bridge.ts",
+      "--port", String(port),
+      "--adapter", FAKE_ADAPTER,
+      "--allow-origin", "https://trusted.example",
+    ],
+    cwd: root,
+    stdout: "null",
+    stderr: "null",
+  }).spawn();
+  try {
+    let up = false;
+    for (let i = 0; i < 60 && !up; i++) {
+      try { const c = await Deno.connect({ hostname: "127.0.0.1", port }); c.close(); up = true; }
+      catch { await new Promise((r) => setTimeout(r, 200)); }
+    }
+    assertEquals(up, true, "the bridge CLI must start listening");
+    assertEquals(
+      (await upgradeStatus(port, "https://trusted.example")).includes("101"),
+      true,
+      "the allowed exact origin must be accepted",
+    );
+    assertEquals(
+      (await upgradeStatus(port, "https://trusted.example.evil.test")).includes("403"),
+      true,
+      "a prefix-extension of the allowed origin must NOT be accepted",
+    );
+  } finally {
+    try { child.kill("SIGTERM"); } catch { /* already gone */ }
+    await child.status.catch(() => null);
+  }
+});
+
 Deno.test("ACP bridge: --token requires the shared secret on the upgrade", async () => {
   // Kernel-assigned port for the CLI child (it prints the bound port).
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });

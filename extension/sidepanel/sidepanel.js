@@ -772,6 +772,7 @@ async function runAgentTurn(target, text, attachments) {
     agentId: target.id,
     agentKind: target.kind,
     sessionStore: acpSessionStore,
+    settings: acpSessionStore,
     // The conversation emits the authoritative terminal status before its
     // promise resolves. Do not overwrite that complete status afterwards with
     // a bare error string — doing so stripped "Fix in Settings" from the row.

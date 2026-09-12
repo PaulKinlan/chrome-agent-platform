@@ -281,16 +281,19 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   `Origin`; non-extension origins are refused). The residual is that the default
   allowlist is the extension SCHEME, so any installed extension could connect;
   `--token <secret>` (required in the upgrade URL) and `--allow-origin <exact
-  origin>` bind the bridge to one client when an operator needs that, and an
-  operator can name the one extension origin they trust.
+  origin>` bind the bridge to one client when an operator needs that. The
+  extension CAN send a token and a custom endpoint today through kv
+  (`acp.endpoint`, `acp.token` — read by the runner and carried onto the upgrade
+  query); only the Settings UI for them is still pending (bead khkk).
 
 Deliberately NOT yet implemented (tracked as beads):
 
 - **Interactive permission cards** — only the auto-grant mode exists (matching
   attended-harness behavior); §5.2's inline Allow/Deny card UI is planned, not built.
-- **Settings surface** — endpoint/cwd/permission-mode configuration (§5.4.2) is
-  not built; defaults are the loopback endpoint and the bridge's host-side
-  `$HOME/journal` working directory (`--cwd` overrides it).
+- **Settings surface** — the endpoint and the bridge token are read from kv
+  (`acp.endpoint`, `acp.token`); the UI for them, for the working directory and
+  for the permission mode is not built (§5.4.2), and defaults are the loopback
+  endpoint and the bridge's host-side `$HOME/journal` (`--cwd` overrides it).
 - **Task-thread persistence** — ACP turns render in the live surface but are
   not journaled to the SW task/thread store; the conversation lives in the
   page session and the harness's own session (survives reloads via session/load,

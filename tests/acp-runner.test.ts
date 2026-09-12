@@ -6,7 +6,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
-import { acpSessionKey, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
+import { acpEndpointWithToken, acpSessionKey, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
@@ -25,6 +25,15 @@ Deno.test("acpSessionKey: thread-scoped inside a persisted thread, per-harness o
   assertEquals(acpSessionKey(undefined, "claude-code"), "acp:claude-code");
   // No harness defaults to pi.
   assertEquals(acpSessionKey(null, null), "acp:pi");
+});
+
+Deno.test("acpEndpointWithToken: carries a configured bridge token, exactly once", () => {
+  assertEquals(acpEndpointWithToken("ws://127.0.0.1:3210/acp", "s3cret"), "ws://127.0.0.1:3210/acp?token=s3cret");
+  assertEquals(acpEndpointWithToken("ws://127.0.0.1:3210/acp?x=1", "s3 cret"), "ws://127.0.0.1:3210/acp?x=1&token=s3%20cret");
+  // Never doubled, and never invented when no token is configured.
+  assertEquals(acpEndpointWithToken("ws://127.0.0.1:3210/acp?token=already", "other"), "ws://127.0.0.1:3210/acp?token=already");
+  assertEquals(acpEndpointWithToken("ws://127.0.0.1:3210/acp", ""), "ws://127.0.0.1:3210/acp");
+  assertEquals(acpEndpointWithToken("", "s3cret"), "");
 });
 
 /** Mock conversation container simulating <agent-conversation> DOM element */
@@ -199,8 +208,128 @@ Deno.test("runAcpTaskTurn: two rapid sends for one conversation never prompt con
       /superseded|cancel/i.test(String(firstRes.error)),
       `the superseded turn must say so, got "${firstRes.error}"`,
     );
+    // The frame log is the OBSERVER for "never two prompts": one prompt only.
+    const prompts = (await Deno.readTextFile(logPath)).trim().split("\n").filter(Boolean)
+      .map((l) => JSON.parse(l)).filter((f) => f.dir === "in" && f.msg.method === "session/prompt");
+    assertEquals(prompts.length, 1, `one prompt may reach a session, saw ${prompts.length}`);
   } finally {
     Deno.env.delete("CAP_ACP_FIXTURE_LOG");
+    await bridge.shutdown();
+  }
+});
+
+Deno.test("runAcpTaskTurn: two sends arriving while a turn is LIVE leave exactly one winner", async () => {
+  const logPath = `${durableDir("acp-fixture-logs")}/frames-triple-${Date.now()}.jsonl`;
+  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
+  Deno.env.set("CAP_ACP_FIXTURE_HOLD_TEXT", "held first");
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const container = new MockContainer();
+  const methods = async () => {
+    try {
+      return (await Deno.readTextFile(logPath)).trim().split("\n").filter(Boolean)
+        .map((l) => JSON.parse(l)).filter((f) => f.dir === "in").map((f) => f.msg.method);
+    } catch { return []; }
+  };
+
+  try {
+    // Turn A is LIVE (prompting, held by the fixture) when B and C arrive
+    // together — the window where a claim installed AFTER `await prior.cancel`
+    // lets the third send read A's stale claim and overwrite B's, so B and C
+    // both prompt.
+    const a = runAcpTaskTurn({ container, task: "held first", harnessId: "triple-probe", endpoint });
+    for (let i = 0; i < 100; i++) {
+      if ((await methods()).includes("session/prompt")) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert((await methods()).includes("session/prompt"), "turn A must reach its held prompt");
+
+    const b = runAcpTaskTurn({ container, task: "second", harnessId: "triple-probe", endpoint });
+    const c = runAcpTaskTurn({ container, task: "third", harnessId: "triple-probe", endpoint });
+    const [aRes, bRes, cRes] = await Promise.all([a, b, c]);
+
+    const oks = [aRes, bRes, cRes].filter((r) => r.ok === true).length;
+    assertEquals(oks, 1, `exactly one turn may complete; got ${JSON.stringify([aRes, bRes, cRes])}`);
+    // The property is SEQUENCING, not a single prompt: the live turn must be
+    // cancelled before its successor prompts. (Sequential prompts on one
+    // session are the design — that is what turn 2 resuming means.)
+    const order = await methods();
+    const cancelAt = order.indexOf("session/cancel");
+    const lastPromptAt = order.lastIndexOf("session/prompt");
+    assert(cancelAt !== -1, `the live turn must be cancelled, saw ${JSON.stringify(order)}`);
+    assert(
+      cancelAt < lastPromptAt,
+      `the successor must prompt only AFTER the cancel, saw ${JSON.stringify(order)}`,
+    );
+    assertEquals(aRes.ok, false, "the held turn must be superseded");
+    for (const loser of [aRes, bRes, cRes].filter((r) => r.ok !== true)) {
+      assert(/superseded|cancel/i.test(String(loser.error)), `a losing turn must say it was superseded, got "${loser.error}"`);
+    }
+  } finally {
+    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
+    Deno.env.delete("CAP_ACP_FIXTURE_HOLD_TEXT");
+    await bridge.shutdown();
+  }
+});
+
+Deno.test("runAcpTaskTurn: a superseded turn renders NO error when its socket is closed", async () => {
+  const logPath = `${durableDir("acp-fixture-logs")}/frames-leak-${Date.now()}.jsonl`;
+  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
+  Deno.env.set("CAP_ACP_FIXTURE_HOLD_TEXT", "held first");
+  Deno.env.set("CAP_ACP_FIXTURE_IGNORE_CANCEL", "1");
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const container = new MockContainer();
+  const readMethods = async () => {
+    try {
+      return (await Deno.readTextFile(logPath)).trim().split("\n").filter(Boolean)
+        .map((l) => JSON.parse(l)).filter((f) => f.dir === "in").map((f) => f.msg.method);
+    } catch { return []; }
+  };
+
+  try {
+    const a = runAcpTaskTurn({ container, task: "held first", harnessId: "leak-probe", endpoint });
+    for (let i = 0; i < 100; i++) {
+      if ((await readMethods()).includes("session/prompt")) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    // The successor cancels and CLOSES the live turn; its pending prompt
+    // rejects. That rejection is the successor's doing — the superseded turn
+    // must not paint an error over the surface.
+    const b = await runAcpTaskTurn({ container, task: "successor", harnessId: "leak-probe", endpoint });
+    const aRes = await a;
+
+    assertEquals(b.ok, true, String(b.error));
+    assertEquals(aRes.ok, false);
+    assert(/superseded|cancel/i.test(String(aRes.error)), `got "${aRes.error}"`);
+    assertEquals(container.errors.length, 0, `a superseded turn must render no error, got ${JSON.stringify(container.errors)}`);
+  } finally {
+    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
+    Deno.env.delete("CAP_ACP_FIXTURE_HOLD_TEXT");
+    Deno.env.delete("CAP_ACP_FIXTURE_IGNORE_CANCEL");
+    await bridge.shutdown();
+  }
+});
+
+Deno.test("runAcpTaskTurn: a configured endpoint setting overrides the built-in default", async () => {
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const container = new MockContainer();
+  try {
+    // The caller's endpoint is unusable; only the kv-configured one can work.
+    const res = await runAcpTaskTurn({
+      container,
+      task: "configured endpoint",
+      harnessId: "settings-probe",
+      endpoint: "ws://127.0.0.1:1/unreachable",
+      settings: {
+        get: (key: string) => Promise.resolve(key === "acp.endpoint" ? `ws://127.0.0.1:${port}/acp` : null),
+      },
+    });
+    assertEquals(res.ok, true, String(res.error));
+  } finally {
     await bridge.shutdown();
   }
 });

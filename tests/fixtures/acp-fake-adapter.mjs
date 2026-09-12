@@ -20,6 +20,10 @@ const LOG = process.env.CAP_ACP_FIXTURE_LOG ?? "";
 // spawns a fresh adapter per connection, so "the first prompt" would hold the
 // superseding turn too.
 const HOLD_TEXT = process.env.CAP_ACP_FIXTURE_HOLD_TEXT ?? "";
+// With this set, a cancel does NOT settle the held prompt, so the socket close
+// the successor performs is what rejects it (the error path a superseded turn
+// must render NOTHING for).
+const IGNORE_CANCEL = process.env.CAP_ACP_FIXTURE_IGNORE_CANCEL === "1";
 let heldPromptId = null;
 function log(dir, msg) {
   if (!LOG) return;
@@ -128,7 +132,7 @@ function handle(msg) {
     }
     case "session/cancel":
       // Settle the held prompt so the cancelled turn ends instead of hanging.
-      if (heldPromptId != null) {
+      if (heldPromptId != null && !IGNORE_CANCEL) {
         sendAndLog({ jsonrpc: "2.0", id: heldPromptId, result: { stopReason: "cancelled" } });
         heldPromptId = null;
       }

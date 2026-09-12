@@ -57,7 +57,10 @@ ws.onmessage = (ev: MessageEvent) => {
 const send = (method: string, params: any = {}, sessionId?: string) =>
   new Promise<any>((resolve, reject) => {
     const mid = ++idc;
-    const timer = setTimeout(() => { pend.delete(mid); reject(new Error(`cdp timeout: ${method}`)); }, 20000);
+    // 60s, not 20s: the page is streaming a live harness turn, and a busy
+    // renderer must not turn into a false product red (the repo's CDP-timeout
+    // class is load, not product).
+    const timer = setTimeout(() => { pend.delete(mid); reject(new Error(`cdp timeout: ${method}`)); }, 60000);
     pend.set(mid, (m: any) => { clearTimeout(timer); m.error ? reject(new Error(m.error.message)) : resolve(m.result); });
     ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
   });

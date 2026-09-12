@@ -3809,6 +3809,7 @@ async function runThreadTurn(text, attachments = [], mention = null) {
       onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
       isStale: () => !owns(),
       sessionStore: acpSessionStore,
+      settings: acpSessionStore,
     });
   } else {
     res = await runConversationTurn(threadConversation, {

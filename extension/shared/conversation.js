@@ -1871,7 +1871,7 @@ export function projectThreadMessages(thread) {
   return output;
 }
 
-export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null, onRunRegistered = null, sessionStore = null }) {
+export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null, onRunRegistered = null, sessionStore = null, settings = null }) {
   const c = container;
   // The RUN-LIFECYCLE FENCE: the caller passes isStale() returning true once
   // this turn no longer owns the surface (a newer turn started, or the user
@@ -1905,6 +1905,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       onStatus: (s) => status(s),
       isStale: stale,
       sessionStore,
+      settings,
     });
     return res;
   }

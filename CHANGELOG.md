@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.398] — 2026-09-12
+- a pi turn can carry a bridge token, and a superseded turn can no longer paint an error over the newer one
+
 ## [0.3.397] — 2026-09-12
 - never run two prompts on one pi conversation, show a tool call as settled when it is, and keep the user's message on every surface
 

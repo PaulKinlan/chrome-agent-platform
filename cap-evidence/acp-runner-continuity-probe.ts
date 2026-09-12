@@ -3,8 +3,8 @@
 //   1. session continuity — turn 2 must RESUME turn 1's pi session and recall
 //      a memory planted in turn 1 (the host session id is asserted, not the
 //      rendered text alone);
-//   2. no client cwd — the BRIDGE supplies the host working directory, and the
-//      probe asserts the turn only succeeds because it did.
+//   2. no client cwd — a session is created although the client sent none (the
+//      cwd the adapter received is pinned by the fixture test, not here).
 // Fails closed: a failed property exits non-zero.
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { runAcpTaskTurn } from "../extension/lib/acp-runner.js";
@@ -45,7 +45,10 @@ try {
   console.log(`[probe] turn2 ok=${t2.ok} resumed=${t2.resumed} session=${t2.sessionId} result="${t2.result}" error=${t2.error ?? "-"}`);
 
   checks.push(["turns completed", t1.ok === true && t2.ok === true, `t1.ok=${t1.ok} t2.ok=${t2.ok}`]);
-  checks.push(["host cwd default (session created with no client cwd)", typeof t1.sessionId === "string" && t1.sessionId.length > 0, `session=${t1.sessionId}`]);
+  // OBSERVED: a session was created although the client never sent a cwd. The
+  // cwd the ADAPTER actually received is asserted in tests/acp-runner.test.ts
+  // (from the fixture's frame log) — this probe cannot see it with real pi-acp.
+  checks.push(["session created with no client-supplied cwd", typeof t1.sessionId === "string" && t1.sessionId.length > 0, `session=${t1.sessionId}`]);
   checks.push(["session continuity (turn 2 resumed the same session)", t2.resumed === true && t2.sessionId === t1.sessionId, `resumed=${t2.resumed} t1=${t1.sessionId} t2=${t2.sessionId}`]);
   checks.push(["memory across turns (recall verified)", /kumquat-?7777/i.test(t2.result ?? ""), `result="${t2.result}"`]);
 } finally {
