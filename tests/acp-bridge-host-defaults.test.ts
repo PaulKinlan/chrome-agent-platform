@@ -7,8 +7,9 @@
 //
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
-import { assertEquals } from "jsr:@std/assert@1";
-import { applyHostDefaults } from "../scripts/acp-bridge.ts";
+import { assert, assertEquals } from "jsr:@std/assert@1";
+import { applyHostDefaults, clipCloseReason, resolveAdapter, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const sessionNew = (params: Record<string, unknown>) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params });
 
@@ -41,4 +42,39 @@ Deno.test("applyHostDefaults: other methods and malformed frames pass through un
   assertEquals(applyHostDefaults(initialize, "/host/journal"), initialize);
 
   assertEquals(applyHostDefaults("not json", "/host/journal"), "not json");
+});
+
+Deno.test("resolveAdapter: registry packages by harness, npx needs nothing installed", () => {
+  const pi = resolveAdapter("pi");
+  assertEquals(pi.cmd, "npx");
+  assertEquals(pi.args[0], "-y");
+  assertEquals(pi.args[1], "pi-acp@0.0.33");
+
+  const claude = resolveAdapter("claude-code");
+  assertEquals(claude.args[1], "@agentclientprotocol/claude-agent-acp@0.78.0");
+  const codex = resolveAdapter("codex");
+  assertEquals(codex.args[1], "@agentclientprotocol/codex-acp@1.12.0");
+
+  // An explicit adapter wins and runs through node.
+  const customPath = `${durableDir("acp-adapter-fixture")}/my-adapter.mjs`;
+  const custom = resolveAdapter("pi", customPath);
+  assertEquals(custom.cmd, "node");
+  assertEquals(custom.args, [customPath]);
+
+  // An unknown harness fails loudly with the known list instead of spawning.
+  let threw = "";
+  try { resolveAdapter("not-a-harness"); } catch (e) { threw = String((e as Error)?.message ?? e); }
+  assert(threw.includes("unknown harness"));
+  for (const known of Object.keys(HARNESS_ADAPTERS)) assert(threw.includes(known));
+});
+
+Deno.test("clipCloseReason: a WebSocket close reason is always <= 123 bytes", () => {
+  const long = `adapter not found: /Users/someone/very/long/path/that/keeps/going/and/going/and/going/past/the/websocket/limit/pi-acp/dist/index.js`;
+  const clipped = clipCloseReason(`Failed to spawn adapter: ${long}`);
+  assert(new TextEncoder().encode(clipped).length <= 123, `clipped reason is ${new TextEncoder().encode(clipped).length} bytes`);
+  // Short reasons pass through untouched, and multi-byte characters never split.
+  assertEquals(clipCloseReason("adapter exited: boom"), "adapter exited: boom");
+  const multibyte = clipCloseReason("é".repeat(200));
+  assert(new TextEncoder().encode(multibyte).length <= 123);
+  assertEquals(new TextDecoder().decode(new TextEncoder().encode(multibyte)), multibyte);
 });

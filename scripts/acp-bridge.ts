@@ -54,11 +54,45 @@ function originAllowed(origin: string | null): boolean {
   return /^(chrome|moz)-extension:\/\//.test(origin);
 }
 
-/** The adapter a bare `npm run acp:bridge` runs: $HOME at run time, never a
- * source literal. Fails loudly when HOME is unset and no --adapter was given. */
-function defaultAdapterPath() {
-  if (!HOME) throw new Error("HOME is not set — pass --adapter <path to the ACP adapter>");
-  return `${HOME}/.pi/agent/npm/node_modules/pi-acp/dist/index.js`;
+/** The ACP adapters CAP knows how to launch, from the official registry
+ * (https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json):
+ * package + pinned version, run with `npx -y` so NOTHING has to be installed
+ * by hand. `--adapter <path>` still overrides for a local/custom build. */
+export const HARNESS_ADAPTERS: Record<string, { pkg: string; version: string; label: string }> = {
+  "pi": { pkg: "pi-acp", version: "0.0.33", label: "pi" },
+  "claude-code": { pkg: "@agentclientprotocol/claude-agent-acp", version: "0.78.0", label: "Claude Code" },
+  "codex": { pkg: "@agentclientprotocol/codex-acp", version: "1.12.0", label: "Codex" },
+};
+
+/** How to launch a harness's adapter: an explicit `--adapter <path>` (run with
+ * node), else the registry package via npx. Unknown harnesses fail loudly with
+ * the known list instead of spawning something arbitrary. Exported for tests. */
+export function resolveAdapter(harness: string, adapterOverride = ""): { cmd: string; args: string[]; describe: string } {
+  if (adapterOverride) return { cmd: "node", args: [adapterOverride], describe: adapterOverride };
+  const spec = HARNESS_ADAPTERS[harness];
+  if (!spec) {
+    throw new Error(
+      `unknown harness "${harness}" — known harnesses: ${Object.keys(HARNESS_ADAPTERS).join(", ")} ` +
+        `(or pass --adapter <path to an ACP adapter>)`,
+    );
+  }
+  return {
+    cmd: "npx",
+    args: ["-y", `${spec.pkg}@${spec.version}`],
+    describe: `${spec.pkg}@${spec.version}`,
+  };
+}
+
+/** A WebSocket close reason must be ≤123 BYTES or the close throws. 
+ * Exported so the bound is unit-tested. */
+export function clipCloseReason(reason: string, limit = 123): string {
+  const bytes = new TextEncoder().encode(String(reason ?? ""));
+  if (bytes.length <= limit) return String(reason ?? "");
+  // Slice on a UTF-8 boundary, then trim to the last whole word.
+  let end = limit;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  const clipped = new TextDecoder().decode(bytes.subarray(0, end)).trimEnd();
+  return clipped.length > 0 ? clipped : "adapter error";
 }
 
 /** The working directory a session request without one gets (host-side default). */
@@ -86,7 +120,12 @@ export function applyHostDefaults(raw: string, hostCwd?: string): string {
   return raw;
 }
 
-console.log(`[acp-bridge] Starting bridge for harness "${HARNESS}" using adapter: ${ADAPTER_PATH || "(default: $HOME pi-acp)"}`);
+try {
+  const startResolved = resolveAdapter(HARNESS, ADAPTER_PATH);
+  console.log(`[acp-bridge] Starting bridge for harness "${HARNESS}" via: ${startResolved.cmd} ${startResolved.args.join(" ")}`);
+} catch (e) {
+  console.error(`[acp-bridge] ${(e as Error).message}`);
+}
 
 export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH) {
   return Deno.serve({ port, hostname: "127.0.0.1" }, (req) => {
@@ -94,23 +133,31 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
 
     if (url.pathname === "/health") {
       let defaultCwdValue = "";
-      let adapterValue = "";
+      let adapterDescribe = "";
       let adapterPresent = false;
+      let error = "";
       try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
       try {
-        adapterValue = adapterPathOverride || defaultAdapterPath();
-        adapterPresent = Deno.statSync(adapterValue).isFile;
-      } catch { adapterPresent = false; }
-      // `ok` is the BRIDGE being up. Whether the adapter can actually serve a
-      // turn is `adapterPresent` (a file on disk); a readiness probe would need
-      // a turn, so this endpoint never pretends to know more than it does.
+        const resolved = resolveAdapter(HARNESS, adapterPathOverride);
+        adapterDescribe = resolved.describe;
+        // For an explicit --adapter (a file) we can say whether it exists; for
+        // a registry package npx resolves (and if needed downloads) it at run
+        // time, so "present" is not knowable here and is not claimed.
+        adapterPresent = resolved.cmd === "node" ? Deno.statSync(resolved.args[0]).isFile : true;
+      } catch (e) {
+        error = String((e as Error)?.message ?? e);
+      }
+      // `ok` is the BRIDGE being up. A readiness probe would need a turn, so
+      // this endpoint never pretends to know more than it does.
       return new Response(
         JSON.stringify({
           ok: true,
           harness: HARNESS,
-          adapter: adapterValue || "(default)",
+          adapter: adapterDescribe || "(unresolved)",
           adapterPresent,
           defaultCwd: defaultCwdValue,
+          knownHarnesses: Object.keys(HARNESS_ADAPTERS),
+          ...(error ? { error } : {}),
         }),
         { headers: { "Content-Type": "application/json" } },
       );
@@ -143,14 +190,14 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
     socket.onopen = async () => {
       console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"}`);
       try {
-        const adapterPath = adapterPathOverride || defaultAdapterPath();
-        // Say so plainly before node has a chance to die with a
-        // module-not-found stack.
-        if (!Deno.statSync(adapterPath).isFile) {
-          throw new Error(`adapter not found: ${adapterPath}`);
+        const resolved = resolveAdapter(HARNESS, adapterPathOverride);
+        // An explicit adapter is a file: say so plainly instead of letting node
+        // die with a module-not-found stack.
+        if (resolved.cmd === "node" && !Deno.statSync(resolved.args[0]).isFile) {
+          throw new Error(`adapter not found: ${resolved.args[0]}`);
         }
-        const cmd = new Deno.Command("node", {
-          args: [adapterPath],
+        const cmd = new Deno.Command(resolved.cmd, {
+          args: resolved.args,
           stdin: "piped",
           stdout: "piped",
           stderr: "piped",
@@ -173,7 +220,7 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           if (socket.readyState !== WebSocket.OPEN) return;
           const detail = lastStderr.trim().split("\n").slice(-3).join(" | ") || "no stderr";
           console.error(`[acp-bridge] adapter exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
-          try { socket.close(1011, `adapter exited: ${detail}`.slice(0, 120)); } catch { /* already closed */ }
+          try { socket.close(1011, clipCloseReason(`adapter exited: ${detail}`)); } catch { /* already closed */ }
         })();
 
         // Stream stdout from adapter to WebSocket client
@@ -218,7 +265,10 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
         })();
       } catch (err) {
         console.error("[acp-bridge] Failed to spawn adapter:", err);
-        socket.close(1011, `Failed to spawn adapter: ${err}`);
+        // A close reason is capped at 123 BYTES — an unbounded one throws
+        // (seen live: a long adapter path turned this into an uncaught
+        // SyntaxError instead of a clean, reported failure).
+        socket.close(1011, clipCloseReason(`Failed to spawn adapter: ${err}`));
       }
     };
 

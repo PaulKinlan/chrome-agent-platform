@@ -15,7 +15,9 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const EXT = `${ROOT}extension`;
+// CAP_ACCEPTANCE_EXT lets this run against another checkout's built extension
+// (e.g. the primary checkout Chrome actually loads).
+const EXT = Deno.env.get("CAP_ACCEPTANCE_EXT") || `${ROOT}extension`;
 const EVIDENCE_DIR = durableDir(`cap-acp-browser-${Date.now()}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
@@ -134,6 +136,28 @@ try {
   check("hub composer rendered", (await evl(ntp, `!!${NTP_INPUT}`)) === true);
   await shot(ntp, "01-hub-composer");
 
+  // ── 0. the + menu's "Choose agent" lists the pi harness agent ──────────
+  await clickExpr(ntp, `${COMPOSER}.querySelector('#attach').shadowRoot.querySelector('.plus')`);
+  await sleep(400);
+  const plusItems = await evl(ntp, `(() => { const m = document.getElementById('composer'); const b = m.querySelector('#attach').shadowRoot;
+    return [...b.querySelectorAll('button, [role=menuitem]')].map(x => x.textContent?.trim()).filter(Boolean).slice(0, 12); })()`);
+  await shot(ntp, "00-plus-menu");
+  check("the + menu exposes an agent-choosing entry", Array.isArray(plusItems) && plusItems.some((x) => /agent/i.test(x)), plusItems);
+  const chooseAgent = `${COMPOSER}.querySelector('#attach').shadowRoot.querySelector('button[data-kind="choose-agent"]')`;
+  const opened = await clickExpr(ntp, chooseAgent);
+  await sleep(600);
+  const pickGroups = await evl(ntp, `(() => { const p = ${COMPOSER}.querySelector('#agent-pick'); if (!p) return null;
+    return [...p.shadowRoot.querySelectorAll('.group-h, .opt .name')].map(x => x.textContent?.trim()).filter(Boolean); })()`);
+  await shot(ntp, "00-agent-picker");
+  check(
+    "the agent picker lists pi under a Harness Agents (ACP) group",
+    Array.isArray(pickGroups) && pickGroups.some((x) => /ACP/i.test(x)) && pickGroups.some((x) => /^pi$/i.test(x)),
+    { opened, pickGroups },
+  );
+  await evl(ntp, `document.body.click()`);
+  await pressKey(ntp, "Escape");
+  await sleep(200);
+
   // ── 1. the @ mention lists the pi harness agent ────────────────────────
   await clickExpr(ntp, NTP_INPUT);
   await typeText(ntp, "@pi");
@@ -184,6 +208,23 @@ try {
   check("a real pi turn produced agent text in the conversation", /ACP browser OK/i.test(agentText), { agentText: agentText.slice(0, 300) });
   check("the run settled (no orphaned running status)", !/running/i.test(finalTurn?.status ?? ""), finalTurn?.status);
   check("no console errors during the acceptance", (consoleErrors.get(ntp) ?? []).length === 0, consoleErrors.get(ntp));
+
+  // ── the side panel's Agents section lists the harness agent ────────────
+  const panel = await openPage(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
+  await sleep(2000);
+  const panelRows = await evl(panel, `(() => {
+    const p = document.getElementById('agents-picker');
+    if (!p) return null;
+    const rows = [...p.shadowRoot.querySelectorAll('.group-h, .opt .name, .opt .sub')].map(x => x.textContent?.trim()).filter(Boolean);
+    return { rows, tabHidden: document.getElementById('agents-view')?.hidden ?? null };
+  })()`);
+  await shot(panel, "06-sidepanel-agents");
+  const panelHasAcpGroup = Array.isArray(panelRows?.rows) && panelRows.rows.some((r) => /ACP/i.test(r));
+  const panelHasPi = Array.isArray(panelRows?.rows) && panelRows.rows.some((r) => /^pi$/i.test(r));
+  check("side panel · Agents section shows the ACP harness group", panelHasAcpGroup, panelRows);
+  check("side panel · Agents section lists pi", panelHasPi, panelRows);
+  const panelErrors = consoleErrors.get(panel) ?? [];
+  check("side panel: no console errors", panelErrors.length === 0, panelErrors);
 
   await Deno.writeFile(`${EVIDENCE_DIR}/acceptance.json`, new TextEncoder().encode(JSON.stringify({
     ranAt: new Date().toISOString(),

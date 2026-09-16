@@ -298,12 +298,26 @@ Deliberately NOT yet implemented (tracked as beads):
   not journaled to the SW task/thread store; the conversation lives in the
   page session and the harness's own session (survives reloads via session/load,
   but the CAP task list does not yet show ACP turns).
-- **Additional harnesses** — only `acp:pi` is registered; the bridge accepts
-  `--adapter`/`--harness` for others, the registry entry does not yet exist.
+- **Additional harnesses** — IMPLEMENTED: the bridge's `HARNESS_ADAPTERS` table
+  (sourced from the official ACP registry) resolves `pi`, `claude-code` and
+  `codex` to their registry packages and runs them with `npx -y`, so no adapter
+  is installed by hand and `--harness <name>` just works. The agent registry
+  exposes all three under "Harness Agents (ACP)" (NTP picker, @mention, the side
+  panel's Agents section). Verified here by handshake + session + command
+  discovery for Claude Code (77 commands) and Codex (87) — no model turn was
+  sent, to avoid spending the operator's quota. The harness's OWN CLI (pi /
+  claude / codex) must be installed and signed in; the adapter drives it.
 - **Stop for ACP turns** — no durable run is registered, so the rendered Stop
   has nothing to cancel. Bead chrome-agent-platform-c6gq. (Supersede is handled:
   the newer turn cancels the running one, and the runner claims the conversation
   synchronously so two rapid sends cannot prompt the same session at once.)
 - **Bridge client binding** — the default extension-scheme allowlist admits any
-  installed extension; `--token` exists but the extension has no setting to
-  send one (Settings bead chrome-agent-platform-khkk).
+  installed extension; `--token` exists and the extension can send one from kv
+  (`acp.token`), with the Settings UI still pending (bead khkk).
+- **No CLI to run** — `node scripts/acp-service.mjs install` registers the bridge
+  as a background service (macOS launchd LaunchAgent / Linux systemd --user):
+  it starts at login and restarts on crash, so the bridge is simply present.
+  `npm run acp:service` prints status. The endgame that removes the service too
+  is Chrome Native Messaging (the extension spawns the host itself; it needs a
+  native-messaging host manifest + a stable extension key, and the ACP client
+  gains a native-messaging transport instead of the WebSocket bridge).
