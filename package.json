@@ -1,7 +1,7 @@
 {
   "default_locale": "en",
   "name": "chrome-agent-platform",
-  "version": "0.3.400",
+  "version": "0.3.401",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -28,6 +28,8 @@
     "test:capabilities": "deno run -A scripts/capability-lifecycle.ts",
     "acp:bridge": "deno run -A scripts/acp-bridge.ts",
     "acp:service": "node scripts/acp-service.mjs",
+    "acp:native:install": "node scripts/acp-native-install.mjs install",
+    "acp:native:status": "node scripts/acp-native-install.mjs status",
     "test:acp:live": "CAP_ACP_LIVE=1 CAP_TEST_RUNNER=1 deno test -A --config deno.runner.jsonc tests/acp-end-to-end.test.ts",
     "test:all": "npm run check:vocabulary && npm run check:reachability && npm test && npm run build && npm run test:security && npm run test:security:injection && npm run test:chrome && npm run test:components && npm run test:a11y && npm run test:kat",
     "version:patch": "node scripts/bump-version.mjs patch",

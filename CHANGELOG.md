@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.401] — 2026-09-16
+- connect to an agent on another machine, and run one with no bridge at all
+
 ## [0.3.400] — 2026-09-16
 - version 0.3.399 (release note for the agent picker + background bridge)
 

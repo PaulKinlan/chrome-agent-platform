@@ -180,6 +180,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
 
   // ── helpers ─────────────────────────────────────────────────────────────
   "acp-bridge.ts": { class: "helper", reason: "a loopback WebSocket→stdio bridge the ACP client connects to; a server, not a harness" },
+  "acp-native-host.ts": { class: "helper", reason: "the Chrome native-messaging host the extension spawns on demand; speaks Chrome's framing, not a harness" },
   "mcp-test-server.ts": { class: "helper", reason: "a local MCP server the MCP KATs spawn; not a harness" },
 };
 

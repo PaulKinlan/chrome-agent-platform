@@ -13,7 +13,7 @@
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
 
 const args = parseArgs(Deno.args, {
-  string: ["port", "adapter", "harness", "cwd", "token", "allow-origin"],
+  string: ["port", "adapter", "harness", "cwd", "token", "allow-origin", "host"],
   collect: ["allow-origin"],
   default: {
     port: "3210",
@@ -22,6 +22,9 @@ const args = parseArgs(Deno.args, {
     cwd: "",
     token: "",
     "allow-origin": [],
+    // Loopback by default: this process spawns a shell-capable agent, so it is
+    // only exposed deliberately (--host 0.0.0.0 / a LAN address).
+    host: "127.0.0.1",
   },
 });
 
@@ -34,9 +37,19 @@ const HOME = Deno.env.get("HOME") ?? "";
 /** Extra exact origins `--allow-origin` admitted (repeatable). */
 const ALLOWED_ORIGINS = (Array.isArray(args["allow-origin"]) ? args["allow-origin"] : []).filter(Boolean);
 
+const HOST = String(args.host || "127.0.0.1");
+
+/** Is this bind address reachable from another machine? */
+export function isLoopbackHost(host: string): boolean {
+  const h = String(host || "").trim().toLowerCase();
+  return h === "127.0.0.1" || h === "::1" || h === "localhost" || h.startsWith("127.");
+}
+
 /** Shared-secret requirement (`--token`): when set, the upgrade URL must carry
- * `?token=…`, binding the bridge to one client even on a shared machine. */
-const TOKEN = String(args.token ?? "");
+ * `?token=…`, binding the bridge to one client even on a shared machine. A
+ * NETWORK bind always has one: either the operator's or a generated one, so a
+ * shell-capable agent is never left open to the LAN. */
+const TOKEN = String(args.token ?? "") || (isLoopbackHost(HOST) ? "" : crypto.randomUUID().replace(/-/g, ""));
 
 /** May this WebSocket Origin drive the harness? Browsers ALWAYS send Origin on
  * an upgrade, so an ABSENT one is a local script (deno/node test clients).
@@ -120,15 +133,26 @@ export function applyHostDefaults(raw: string, hostCwd?: string): string {
   return raw;
 }
 
-try {
+// Startup logging belongs to a RUN, not an import: this module is imported by
+// scripts/acp-native-host.ts for its harness table, and anything printed at
+// import time would land in the native-messaging channel on stdout and desync
+// Chrome's framing (found by tests/acp-native-host.test.ts).
+if (import.meta.main) { try {
   const startResolved = resolveAdapter(HARNESS, ADAPTER_PATH);
   console.log(`[acp-bridge] Starting bridge for harness "${HARNESS}" via: ${startResolved.cmd} ${startResolved.args.join(" ")}`);
 } catch (e) {
   console.error(`[acp-bridge] ${(e as Error).message}`);
+} }
+if (!isLoopbackHost(HOST) && import.meta.main) {
+  console.log(`[acp-bridge] Bound to ${HOST} — reachable from other machines on this network.`);
+  console.log(`[acp-bridge] Token required${args.token ? "" : " (generated)"}: ${TOKEN}`);
+  console.log("[acp-bridge] Plain ws:// on a network is UNENCRYPTED (the token and the agent's traffic are visible");
+  console.log("[acp-bridge] to anything on the path). For anything beyond a trusted LAN, put TLS in front (a reverse");
+  console.log("[acp-bridge] proxy or a tunnel) and keep this process on loopback behind it.");
 }
 
 export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH) {
-  return Deno.serve({ port, hostname: "127.0.0.1" }, (req) => {
+  return Deno.serve({ port, hostname: HOST }, (req) => {
     const url = new URL(req.url);
 
     if (url.pathname === "/health") {
@@ -303,5 +327,15 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
 // If invoked directly from CLI
 if (import.meta.main) {
   const server = createAcpServer(PORT);
-  console.log(`[acp-bridge] listening on ws://127.0.0.1:${(server as any).addr?.port ?? PORT}${TOKEN ? " (token required)" : ""}`);
+  const bound = (server as any).addr?.port ?? PORT;
+  const q = TOKEN ? `?token=${TOKEN}` : "";
+  if (isLoopbackHost(HOST)) {
+    console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp${q}${TOKEN ? " (token required)" : ""}`);
+  } else {
+    const addrs = Deno.networkInterfaces()
+      .filter((i) => i.family === "IPv4" && !i.address.startsWith("127."))
+      .map((i) => i.address);
+    for (const a of addrs) console.log(`[acp-bridge] reachable at ws://${a}:${bound}/acp${q}`);
+    console.log(`[acp-bridge] paste one of those into CAP: acp.endpoint, and the token into acp.token`);
+  }
 }

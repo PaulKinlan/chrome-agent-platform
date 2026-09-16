@@ -116,7 +116,13 @@ Deno.test("runAcpTaskTurn: reports clear actionable error when harness is unreac
 });
 
 Deno.test("runAcpTaskTurn: turn 2 RESUMES the session (session/new once, session/load after)", async () => {
-  const logPath = `${durableDir("acp-fixture-logs")}/frames-${Date.now()}.jsonl`;
+  // TWO attempts, because each turn opens a connection and the bridge spawns a
+  // fresh adapter process for it: under the 32-worker phase that spawn can die
+  // (observed), and the runner then legitimately falls back to a new session.
+  // A genuine resume regression fails BOTH attempts, so the pin still holds.
+  let lastFailure = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+  const logPath = `${durableDir("acp-fixture-logs")}/frames-${Date.now()}-${attempt}.jsonl`;
   Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
   const bridge = createAcpServer(0, FAKE_ADAPTER);
   const port = (bridge as any).addr.port;
@@ -144,10 +150,16 @@ Deno.test("runAcpTaskTurn: turn 2 RESUMES the session (session/new once, session
     const newSession = frames.find((f) => f.dir === "in" && f.msg.method === "session/new");
     const home = Deno.env.get("HOME") ?? "";
     assertEquals(newSession.msg.params.cwd, `${home}/journal`, "the adapter received the host-side default cwd");
+    lastFailure = "";
+    return;
+  } catch (err) {
+    lastFailure = String((err as Error)?.message ?? err);
   } finally {
     Deno.env.delete("CAP_ACP_FIXTURE_LOG");
     await bridge.shutdown();
   }
+  }
+  throw new Error(`resume failed on both attempts: ${lastFailure}`);
 });
 
 Deno.test("runAcpTaskTurn: a sessionStore hint resumes a session from a previous page", async () => {

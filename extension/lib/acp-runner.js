@@ -5,6 +5,7 @@
 // streaming thoughts, tool progress, and message chunks into the conversation surface.
 
 import { AcpClient } from "./acp-client.js";
+import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 
 /** Default loopback WebSocket endpoint for the ACP bridge */
 export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
@@ -126,9 +127,36 @@ export async function runAcpTaskTurn(options) {
     } catch { /* fall back to the built-in default */ }
   }
 
+  // TRANSPORT: prefer the Chrome native-messaging host — Chrome launches it on
+  // demand, so there is no bridge process, no port and nothing to keep running.
+  // When the host is not installed (or the operator pinned `acp.transport=ws`),
+  // fall back to the loopback WebSocket bridge. `acp.transport` in kv overrides
+  // the choice explicitly: "native" | "ws".
+  let transportMode = "";
+  if (typeof settings?.get === "function") {
+    try { transportMode = String(await settings.get("acp.transport") || ""); } catch { transportMode = ""; }
+  }
+  const nativeHost = DEFAULT_NATIVE_HOST;
+  let nativeTransport = null;
+  let nativeError = "";
+  if (transportMode !== "ws") {
+    nativeTransport = new AcpNativeTransport({ hostName: nativeHost });
+    try {
+      await nativeTransport.connect();
+    } catch (err) {
+      nativeError = String(err?.message ?? err);
+      nativeTransport = null; // not installed — the WebSocket bridge may be
+    }
+  }
+
+  if (nativeTransport) {
+    status({ state: "running", activity: `Connecting to the local ${harnessId} host…` });
+  }
+
   const client = new AcpClient({
     url: effectiveEndpoint,
     defaultCwd: cwd,
+    transport: nativeTransport || null,
   });
 
   /** The conversation key, owned by this turn (the finally clears it). */
@@ -155,12 +183,23 @@ export async function runAcpTaskTurn(options) {
     try { prior.client.close(); } catch { /* best effort */ }
   }
 
+  if (nativeTransport) {
+    nativeTransport.onMessage = (raw) => client._receiveRaw(raw);
+    nativeTransport.onClose = (reason) => { client.connected = false; client._abortPending(new Error(reason)); };
+  }
+
   try {
     await client.connect();
   } catch (err) {
     releaseClaim();
     const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${endpoint}.`;
-    const actionMsg = "Start the local ACP bridge with: npm run acp:bridge (in the CAP repo)";
+    // Name EVERY transport that was unavailable, so the fix is one command away
+    // whichever way the operator wants to run it.
+    const fixes = [];
+    if (nativeError) fixes.push("install the local host: npm run acp:native:install");
+    else if (nativeTransport) fixes.push("the local host is not answering: npm run acp:native:install");
+    fixes.push("or run the bridge: npm run acp:bridge");
+    const actionMsg = `${fixes.join(" — ")} (both in the CAP repo)`;
     if (!stale()) {
       if (typeof container.appendError === "function") {
         container.appendError(errorMsg, {
@@ -340,5 +379,6 @@ export async function runAcpTaskTurn(options) {
     // it already — never clear a successor's registration).
     releaseClaim();
     client.close();
+    try { nativeTransport?.close(); } catch { /* already gone */ }
   }
 }

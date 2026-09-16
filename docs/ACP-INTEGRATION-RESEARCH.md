@@ -314,10 +314,36 @@ Deliberately NOT yet implemented (tracked as beads):
 - **Bridge client binding** — the default extension-scheme allowlist admits any
   installed extension; `--token` exists and the extension can send one from kv
   (`acp.token`), with the Settings UI still pending (bead khkk).
-- **No CLI to run** — `node scripts/acp-service.mjs install` registers the bridge
-  as a background service (macOS launchd LaunchAgent / Linux systemd --user):
-  it starts at login and restarts on crash, so the bridge is simply present.
-  `npm run acp:service` prints status. The endgame that removes the service too
-  is Chrome Native Messaging (the extension spawns the host itself; it needs a
-  native-messaging host manifest + a stable extension key, and the ACP client
-  gains a native-messaging transport instead of the WebSocket bridge).
+- **No CLI to run** — three shapes, narrowest first:
+  1. **Chrome Native Messaging** (no bridge, no port, no daemon): Chrome spawns
+     `scripts/acp-native-host.ts` (via the wrapper `scripts/acp-native-host.sh`)
+     when the extension calls `chrome.runtime.connectNative`, and kills it when
+     the port closes. `npm run acp:native:install` writes the host manifest.
+     The host speaks Chrome's 4-byte framing and relays to the adapter's
+     newline-delimited stdio, reusing the SAME harness table and host-default
+     rules as the bridge. STATUS: host + framing + transport are unit-tested
+     (`tests/acp-native-host.test.ts`) and the host was driven end to end over
+     Chrome's own framing; the BROWSER leg is unverified in this repo because
+     the harnesses launch headless Chrome, which reports "native messaging host
+     not found" even with a manifest installed for every Chrome product
+     directory — that needs a headed browser. The extension only uses this
+     transport when the host is installed; otherwise it falls back to the
+     bridge. Activating it also needs `nativeMessaging` in
+     `extension/manifest.json` plus a re-pin of
+     `packages/bundled/evidence/emscripten-abi/loaded-probe/snapshot.json`
+     (its manifest hash), which is deliberately NOT done yet.
+  2. **A background service** — `node scripts/acp-service.mjs install` registers
+     the bridge as a launchd LaunchAgent (macOS) or a systemd --user unit
+     (Linux): starts at login, restarts on crash. `npm run acp:service` status.
+  3. **A network bind** — `--host 0.0.0.0` (or a LAN address) makes the bridge
+     reachable from another machine; a token is then REQUIRED (generated when
+     not given) and the exact `ws://<ip>:<port>/acp?token=…` URLs are printed.
+     The extension sets `acp.endpoint` + `acp.token` and connects — verified
+     from the loaded extension to a LAN address (13/13 acceptance). Plain `ws://`
+     on a network is UNENCRYPTED; for anything past a trusted LAN put TLS in
+     front and keep the bridge on loopback behind it.
+- **Why not `wss://` straight to the harness** — `pi-acp`, `claude-agent-acp`
+  and `codex-acp` are stdio programs (that is the ACP registry's distribution
+  shape): they have no socket. A `wss://` endpoint therefore means a translator
+  running SOMEWHERE — on this machine (native host or bridge) or on another one
+  (a container you connect to, which is supported today by configuration).

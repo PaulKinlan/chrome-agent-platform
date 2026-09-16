@@ -32,11 +32,29 @@ const sha256Hex = async (bytes: Uint8Array) => {
 };
 
 // The real bridge on the extension's default endpoint (ws://127.0.0.1:3210/acp).
-const bridge = createAcpServer(3210);
+// CAP_ACCEPTANCE_NO_BRIDGE=1 skips it: the acceptance then drives an EXISTING
+// bridge (e.g. one bound to a LAN address) configured through kv below.
+const NO_LOCAL_BRIDGE = Deno.env.get("CAP_ACCEPTANCE_NO_BRIDGE") === "1";
+const LAN_ENDPOINT = Deno.env.get("CAP_ACCEPTANCE_ENDPOINT") ?? "";
+const LAN_TOKEN = Deno.env.get("CAP_ACCEPTANCE_TOKEN") ?? "";
+const EXPECT_RE = new RegExp(Deno.env.get("CAP_ACCEPTANCE_EXPECT") ?? "ACP browser OK");
+const bridge = NO_LOCAL_BRIDGE ? null : createAcpServer(3210);
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 const profile = durableDir(`cap-acp-browser-profile-${Date.now()}`);
-const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,2000", clearEnv: true });
+// CAP_ACCEPTANCE_CHROME_ENV=K=V,K2=V2 passes extra variables to the browser (the
+// native host inherits them), e.g. CAP_ACP_ADAPTER to point the host at a fixture.
+const extraEnv = Object.fromEntries(
+  String(Deno.env.get("CAP_ACCEPTANCE_CHROME_ENV") ?? "").split(",").filter(Boolean)
+    .map((kv) => { const i = kv.indexOf("="); return [kv.slice(0, i), kv.slice(i + 1)]; }),
+);
+const chrome = await launchChrome({
+  extension: EXT,
+  profile,
+  windowSize: "1400,2000",
+  clearEnv: true,
+  ...(Object.keys(extraEnv).length ? { env: { PATH: Deno.env.get("PATH") ?? "", HOME: Deno.env.get("HOME") ?? "", ...extraEnv } } : {}),
+});
 const port = chrome.port;
 
 const ws = new WebSocket(chrome.wsUrl);
@@ -158,6 +176,50 @@ try {
   await pressKey(ntp, "Escape");
   await sleep(200);
 
+  // ── 0a. no bridge at all: is the loopback endpoint silent? ─────────────
+  if (NO_LOCAL_BRIDGE) {
+    const bridgeProbe = await evl(ntp, `fetch("http://127.0.0.1:3210/health").then(() => "up").catch(() => "down")`);
+    check("no WebSocket bridge is running (native-messaging run)", bridgeProbe === "down", bridgeProbe);
+  }
+
+  // ── 0a2. the native host, straight from the page (its own error text) ──
+  // Gated: a HEADLESS browser reports "native messaging host not found" even
+  // with a correct manifest (unverified whether that is headless itself or this
+  // install), so this assertion runs only when explicitly asked for
+  // (CAP_ACCEPTANCE_EXPECT_NATIVE=1, i.e. a headed run).
+  if (NO_LOCAL_BRIDGE && Deno.env.get("CAP_ACCEPTANCE_EXPECT_NATIVE") === "1") {
+    const nativeProbe = await evl(ntp, `new Promise((resolve) => {
+      try {
+        const port = chrome.runtime.connectNative("com.chrome_agent_platform.acp");
+        let settled = false; const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+        port.onMessage.addListener((m) => done(["message", m]));
+        port.onDisconnect.addListener(() => done(["disconnect", (chrome.runtime.lastError && chrome.runtime.lastError.message) || "(no lastError)"]));
+        port.postMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } });
+        setTimeout(() => done(["timeout", ""]), 6000);
+      } catch (e) { resolve(["throw", String((e && e.message) || e)]); }
+    })`);
+    console.log(`  native port: ${JSON.stringify(nativeProbe).slice(0, 300)}`);
+    check("native host replies to initialize from the extension", Array.isArray(nativeProbe) && nativeProbe[0] === "message", nativeProbe);
+  }
+
+  // ── 0b. can the EXTENSION open a plaintext ws:// to a LAN address? ─────
+  if (LAN_ENDPOINT) {
+    const probeUrl = `${LAN_ENDPOINT}${LAN_TOKEN ? (LAN_ENDPOINT.includes("?") ? "&" : "?") + `token=${LAN_TOKEN}` : ""}`;
+    const wsResult = await evl(ntp, `new Promise((resolve) => {
+      let done = false; const finish = (r) => { if (!done) { done = true; resolve(r); } };
+      try {
+        const ws = new WebSocket(${JSON.stringify(probeUrl)});
+        ws.onopen = () => { finish("open"); ws.close(); };
+        ws.onerror = () => finish("error");
+        ws.onclose = (e) => finish("close:" + e.code + (e.reason ? ":" + e.reason : ""));
+      } catch (e) { finish("throw:" + String(e && e.message || e)); }
+      setTimeout(() => finish("timeout"), 8000);
+    })`);
+    check(`extension can open ${LAN_ENDPOINT} (mixed-content / PNA test)`, wsResult === "open", wsResult);
+    const configured = await evl(ntp, `chrome.runtime.sendMessage({ type: "kv.set", values: { "acp.endpoint": ${JSON.stringify(LAN_ENDPOINT)}, "acp.token": ${JSON.stringify(LAN_TOKEN)} } }).then(r => r, e => ({ err: String(e) }))`);
+    console.log(`  kv acp.endpoint/acp.token set: ${JSON.stringify(configured).slice(0, 120)}`);
+  }
+
   // ── 1. the @ mention lists the pi harness agent ────────────────────────
   await clickExpr(ntp, NTP_INPUT);
   await typeText(ntp, "@pi");
@@ -204,8 +266,11 @@ try {
   await sleep(500);
   await shot(ntp, "05-after-turn");
   const finalTurn = await readTurn();
+  const transcript = await evl(ntp, `(() => { const c = document.getElementById('thread-conversation');
+    return c ? [...c.querySelectorAll('message-bubble')].map(b => ({ role: b.getAttribute('role'), text: (b.getAttribute('content') || '').slice(0, 160) })) : null; })()`);
+  console.log(`  transcript: ${JSON.stringify(transcript).slice(0, 600)}`);
   const agentText = (finalTurn?.bubbles ?? []).join(" | ");
-  check("a real pi turn produced agent text in the conversation", /ACP browser OK/i.test(agentText), { agentText: agentText.slice(0, 300) });
+  check("a real pi turn produced agent text in the conversation", EXPECT_RE.test(agentText), { agentText: agentText.slice(0, 300), expected: String(EXPECT_RE) });
   check("the run settled (no orphaned running status)", !/running/i.test(finalTurn?.status ?? ""), finalTurn?.status);
   check("no console errors during the acceptance", (consoleErrors.get(ntp) ?? []).length === 0, consoleErrors.get(ntp));
 
@@ -239,7 +304,7 @@ try {
 } finally {
   try { ws.close(); } catch { /* closing */ }
   try { chrome.proc.kill("SIGTERM"); } catch { /* already gone */ }
-  await bridge.shutdown();
+  await bridge?.shutdown();
 }
 
 console.log(`\nACP browser acceptance: ${pass} passed, ${fail} failed`);
