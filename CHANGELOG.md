@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.400] — 2026-09-16
+- version 0.3.399 (release note for the agent picker + background bridge)
+
+## [0.3.399] — 2026-09-16
+- Claude Code, Codex and pi appear as agents you can pick, and the local agent bridge can run in the background
+
 ## [0.3.398] — 2026-09-12
 - a pi turn can carry a bridge token, and a superseded turn can no longer paint an error over the newer one
 
