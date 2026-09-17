@@ -55,9 +55,11 @@ const pageComposer = document.getElementById("page-composer");
 // actions the agents took, each with Undo where reversible. The section stays
 // hidden until it has rows. After an undo, re-read so the list reflects the new
 // state (the undone row flips to "Undone").
-const actionLedgerEl = document.getElementById("action-ledger");
-const actionLedgerSection = document.getElementById("activity-ledger-section");
-const harnessQuickEl = document.getElementById("harness-quick");
+
+const harnessQuickEls = [
+  document.getElementById("harness-quick"),
+  document.getElementById("harness-quick-page"),
+].filter(Boolean);
 
 /** ONE-CLICK harness agents: the acp rows of the SAME agent.registry authority
  * the picker uses (no second list to keep in sync), rendered above the picker so
@@ -65,43 +67,36 @@ const harnessQuickEl = document.getElementById("harness-quick");
  * rows open the ordinary agent conversation (openAgentDetail), so everything
  * below — history, composer, permissions — behaves identically. */
 async function renderHarnessQuick() {
-  if (!harnessQuickEl) return;
+  if (!harnessQuickEls.length) return;
   const res = await send("agent.registry").catch(() => null);
   const groups = Array.isArray(res?.groups) ? res.groups : [];
   const harnesses = groups
     .filter((g) => g?.id === "acp")
     .flatMap((g) => (Array.isArray(g.agents) ? g.agents : []))
     .filter((a) => a?.kind === "acp" && a.enabled !== false);
-  harnessQuickEl.replaceChildren();
-  if (!harnesses.length) {
-    harnessQuickEl.hidden = true;
-    return;
-  }
-  harnessQuickEl.hidden = false;
-  for (const a of harnesses) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "hq";
-    btn.dataset.ref = a.ref ?? `acp:${a.id}`;
-    btn.textContent = a.name || a.id;
-    btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
-    if (openAgent?.ref && openAgent.ref === (a.ref ?? `acp:${a.id}`)) btn.setAttribute("aria-current", "true");
-    btn.addEventListener("click", () => {
-      openAgentDetail({ ref: a.ref ?? `acp:${a.id}`, kind: "acp", id: a.id, name: a.name || a.id });
-    });
-    harnessQuickEl.append(btn);
+  for (const el of harnessQuickEls) {
+    el.replaceChildren();
+    el.hidden = harnesses.length === 0;
+    for (const a of harnesses) {
+      const ref = a.ref ?? `acp:${a.id}`;
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "hq";
+      btn.dataset.ref = ref;
+      btn.textContent = a.name || a.id;
+      btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
+      if (openAgent?.ref === ref) btn.setAttribute("aria-current", "true");
+      btn.addEventListener("click", () => {
+        // The conversation lives in the Agents view: switch there first, so a
+        // click from the page view opens something visible.
+        try { switchView("agents"); } catch { /* not wired yet */ }
+        openAgentDetail({ ref, kind: "acp", id: a.id, name: a.name || a.id });
+      });
+      el.append(btn);
+    }
   }
 }
 renderHarnessQuick();
-if (actionLedgerEl && actionLedgerSection) {
-  actionLedgerEl.addEventListener("entries-change", (ev) => {
-    const ledgerCount = Number(ev.detail?.count ?? 0);
-  actionLedgerSection.hidden = ledgerCount === 0;
-  const countEl = document.getElementById("ledger-count");
-  if (countEl) countEl.textContent = ledgerCount ? `(${ledgerCount})` : "";
-  });
-  actionLedgerEl.refresh?.().catch(() => {});
-}
 
 function setStatus(text, isError = false) {
   statusEl.textContent = text;
@@ -342,7 +337,7 @@ async function runPageTurn(text, attachments, mention) {
     if (continueHubBtn) continueHubBtn.hidden = false;
   }
   // A run may have mutated this tab — refresh the ledger + the tool list.
-  actionLedgerEl?.refresh?.().catch(() => {});
+
   if (currentTabOrigin) renderTools(currentTabOrigin);
   return res;
 }

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.405] — 2026-09-17
+- your agents are in the side panel where you are, and the activity list is gone
+
 ## [0.3.404] — 2026-09-17
 - your agents are one click away in the side panel, and the activity ledger stays folded
 

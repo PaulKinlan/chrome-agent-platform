@@ -308,12 +308,13 @@ try {
     detailHidden: document.getElementById('agent-detail-pane')?.hidden ?? null,
     name: document.getElementById('agent-detail-name')?.textContent ?? null,
     kind: document.getElementById('agent-detail-kind')?.textContent ?? null,
-    ledgerCollapsed: document.getElementById('activity-ledger-section')?.tagName ?? null,
-    ledgerOpen: document.getElementById('activity-ledger-section')?.open ?? null,
+    ledgerGone: document.getElementById('activity-ledger-section') === null && document.getElementById('action-ledger') === null,
+    pageQuickRows: [...(document.getElementById('harness-quick-page')?.querySelectorAll('button.hq') ?? [])].map(b => b.textContent.trim()),
   }))()`);
   await shot(panel, "07-sidepanel-quick-open");
   check("side panel · one click opens that harness conversation", quickOpen?.detailHidden === false && !!quickOpen?.name, quickOpen);
-  check("side panel · the activity ledger no longer expands the pane by default", quickOpen?.ledgerCollapsed === "DETAILS" && quickOpen?.ledgerOpen === false, quickOpen);
+  check("side panel · the activity ledger is GONE (owner: not needed here)", quickOpen?.ledgerGone === true, quickOpen);
+  check("side panel · the page view also offers the harness rows", Array.isArray(quickOpen?.pageQuickRows) && quickOpen.pageQuickRows.length >= 1, quickOpen?.pageQuickRows);
 
   const panelErrors = consoleErrors.get(panel) ?? [];
   check("side panel: no console errors", panelErrors.length === 0, panelErrors);
