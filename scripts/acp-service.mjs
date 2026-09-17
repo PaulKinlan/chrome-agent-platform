@@ -59,6 +59,35 @@ function run(cmd, argv) {
   return execFileSync(cmd, argv, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
+/** Refuse an install that cannot work: the service gets the PATH captured here,
+ * so every binary it needs (deno, npx or a local adapter, the harness CLI) must
+ * resolve NOW. Failing here names the fix while the operator is watching. */
+function preflight() {
+  const path = process.env.PATH || "";
+  const look = (name) => {
+    for (const dir of path.split(":").filter(Boolean)) {
+      try { if (existsSync(join(dir, name))) return join(dir, name); } catch { /* skip */ }
+    }
+    return "";
+  };
+  const wanted = [["deno", denoPath()]];
+  const localAdapter = existsSync(join(HOME, ".pi", "agent", "npm", "node_modules", "pi-acp", "dist", "index.js"));
+  if (!localAdapter) wanted.push(["npx", look("npx")]);
+  if (HARNESS === "pi") wanted.push(["pi", look("pi")]);
+  if (HARNESS === "claude-code") wanted.push(["claude", look("claude")]);
+  if (HARNESS === "codex") wanted.push(["codex", look("codex")]);
+  const missing = wanted.filter(([, found]) => !found);
+  if (missing.length) {
+    console.error(`refusing to install: not resolvable with the PATH being captured:`);
+    for (const [name] of missing) console.error(`  - ${name}`);
+    console.error(`PATH: ${path}`);
+    console.error(`Fix one of: install the missing binary; start this from a shell where it resolves;`);
+    console.error(`or for a service that needs no npx, install the adapter locally (npm i --prefix ~/.pi/agent/npm pi-acp).`);
+    process.exit(1);
+  }
+  return { npx: localAdapter ? "" : look("npx") };
+}
+
 function installMac() {
   const plistDir = join(HOME, "Library", "LaunchAgents");
   const plist = join(plistDir, `${LABEL}.plist`);
@@ -160,6 +189,7 @@ function status() {
 }
 
 if (ACTION === "install") {
+  preflight();
   if (OS === "darwin") installMac();
   else installLinux();
 } else if (ACTION === "uninstall") {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.403] — 2026-09-17
+- the adapter itself is found without relying on the launcher's PATH
+
 ## [0.3.402] — 2026-09-17
 - the agent CLI is found even when the launcher's PATH is not your shell's
 

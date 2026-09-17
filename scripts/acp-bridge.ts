@@ -106,10 +106,29 @@ export function childEnvForHarness(harness: string, pathValue = ""): Record<stri
   return resolved ? { [spec.envVar]: resolved } : {};
 }
 
-/** How to launch a harness's adapter: an explicit `--adapter <path>` (run with
- * node), else the registry package via npx. Unknown harnesses fail loudly with
+/** An adapter installed under the pi agent's npm prefix (how pi-acp gets
+ * there). Preferring it avoids npx entirely — no PATH lookup, no network. */
+export function localAdapterPath(pkg: string, home = HOME, exists: (p: string) => boolean = (p) => {
+  try { return Deno.statSync(p).isFile; } catch { return false; }
+}): string {
+  if (!home) return "";
+  const entry = `${home}/.pi/agent/npm/node_modules/${pkg}/dist/index.js`;
+  return exists(entry) ? entry : "";
+}
+
+/** How to launch a harness's adapter. Order: an explicit `--adapter <path>`; a
+ * LOCAL install of the registry package; otherwise `npx` — resolved to an
+ * ABSOLUTE path here, because Deno.Command's PATH lookup happens in THIS
+ * process's environment, and a launcher (launchd/systemd/Chrome native host)
+ * does not inherit the shell's PATH: the spawn then dies with
+ * "Failed to spawn 'npx': entity not found". Unknown harnesses fail loudly with
  * the known list instead of spawning something arbitrary. Exported for tests. */
-export function resolveAdapter(harness: string, adapterOverride = ""): { cmd: string; args: string[]; describe: string } {
+export function resolveAdapter(
+  harness: string,
+  adapterOverride = "",
+  pathValue = "",
+  opts: { home?: string; exists?: (p: string) => boolean } = {},
+): { cmd: string; args: string[]; describe: string } {
   if (adapterOverride) return { cmd: "node", args: [adapterOverride], describe: adapterOverride };
   const spec = HARNESS_ADAPTERS[harness];
   if (!spec) {
@@ -118,11 +137,18 @@ export function resolveAdapter(harness: string, adapterOverride = ""): { cmd: st
         `(or pass --adapter <path to an ACP adapter>)`,
     );
   }
-  return {
-    cmd: "npx",
-    args: ["-y", `${spec.pkg}@${spec.version}`],
-    describe: `${spec.pkg}@${spec.version}`,
-  };
+  const local = localAdapterPath(spec.pkg, opts.home ?? HOME, opts.exists);
+  if (local) return { cmd: "node", args: [local], describe: `${local} (local install)` };
+
+  const npx = resolveCliOnPath("npx", pathValue || (Deno.env.get("PATH") ?? ""));
+  if (!npx) {
+    throw new Error(
+      `cannot run the "${harness}" adapter: "npx" is not on this process's PATH ` +
+        `(PATH=${pathValue || (Deno.env.get("PATH") ?? "(unset)")}). Install Node/npx, or pass ` +
+        `--adapter <path to the ${spec.pkg} entry file>.`,
+    );
+  }
+  return { cmd: npx, args: ["-y", `${spec.pkg}@${spec.version}`], describe: `${spec.pkg}@${spec.version} via ${npx}` };
 }
 
 /** A WebSocket close reason must be ≤123 BYTES or the close throws. 
@@ -271,6 +297,9 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
             ...Deno.env.toObject(),
             PI_ACP_HARNESS: HARNESS,
             ...childEnvForHarness(HARNESS, Deno.env.get("PATH") ?? ""),
+            // Give the adapter a PATH that contains the binaries we resolved
+            // (npx/CLI), because it spawns the harness CLI itself.
+            PATH: [Deno.build.os === "windows" ? "" : "", Deno.env.get("PATH") ?? ""].filter(Boolean).join(":"),
           },
         });
         const proc = cmd.spawn();

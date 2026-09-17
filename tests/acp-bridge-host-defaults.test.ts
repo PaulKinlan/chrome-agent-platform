@@ -44,28 +44,49 @@ Deno.test("applyHostDefaults: other methods and malformed frames pass through un
   assertEquals(applyHostDefaults("not json", "/host/journal"), "not json");
 });
 
-Deno.test("resolveAdapter: registry packages by harness, npx needs nothing installed", () => {
-  const pi = resolveAdapter("pi");
-  assertEquals(pi.cmd, "npx");
-  assertEquals(pi.args[0], "-y");
-  assertEquals(pi.args[1], "pi-acp@0.0.33");
+Deno.test("resolveAdapter: local install > absolute npx > loud refusal", () => {
+  const dir = durableDir("acp-adapter-fixture");
+  const binDir = `${dir}/bin`;
+  try { Deno.mkdirSync(binDir, { recursive: true }); } catch { /* exists */ }
+  const npx = `${binDir}/npx`;
+  Deno.writeTextFileSync(npx, "#!/bin/sh\nexit 0\n");
+  Deno.chmodSync(npx, 0o755);
 
-  const claude = resolveAdapter("claude-code");
-  assertEquals(claude.args[1], "@agentclientprotocol/claude-agent-acp@0.78.0");
-  const codex = resolveAdapter("codex");
-  assertEquals(codex.args[1], "@agentclientprotocol/codex-acp@1.12.0");
+  // npx is resolved to an ABSOLUTE path: Deno.Command's PATH lookup happens in
+  // the launcher's environment, and a launchd/Chrome-spawned bridge cannot see
+  // the shell's PATH ("Failed to spawn 'npx': entity not found").
+  const viaNpx = resolveAdapter("claude-code", "", binDir, { home: "/nonexistent-home" });
+  assertEquals(viaNpx.cmd, npx);
+  assertEquals(viaNpx.args, ["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]);
+
+  // A LOCAL adapter install wins: no npx, no network.
+  const localHome = `${dir}/home`;
+  const localEntry = `${localHome}/.pi/agent/npm/node_modules/pi-acp/dist/index.js`;
+  const viaLocal = resolveAdapter("pi", "", "", {
+    home: localHome,
+    exists: (p) => p === localEntry,
+  });
+  assertEquals(viaLocal.cmd, "node");
+  assertEquals(viaLocal.args, [localEntry]);
+
+  // No npx anywhere and no local install: refuse, naming the fix.
+  let threw = "";
+  try { resolveAdapter("codex", "", "/nonexistent-bin", { home: "/nonexistent-home" }); }
+  catch (e) { threw = String((e as Error)?.message ?? e); }
+  assert(threw.includes("npx"), threw);
+  assert(threw.includes("--adapter"), threw);
 
   // An explicit adapter wins and runs through node.
-  const customPath = `${durableDir("acp-adapter-fixture")}/my-adapter.mjs`;
+  const customPath = `${dir}/my-adapter.mjs`;
   const custom = resolveAdapter("pi", customPath);
   assertEquals(custom.cmd, "node");
   assertEquals(custom.args, [customPath]);
 
   // An unknown harness fails loudly with the known list instead of spawning.
-  let threw = "";
-  try { resolveAdapter("not-a-harness"); } catch (e) { threw = String((e as Error)?.message ?? e); }
-  assert(threw.includes("unknown harness"));
-  for (const known of Object.keys(HARNESS_ADAPTERS)) assert(threw.includes(known));
+  let unknown = "";
+  try { resolveAdapter("not-a-harness", "", binDir); } catch (e) { unknown = String((e as Error)?.message ?? e); }
+  assert(unknown.includes("unknown harness"), unknown);
+  for (const known of Object.keys(HARNESS_ADAPTERS)) assert(unknown.includes(known), unknown);
 });
 
 Deno.test("clipCloseReason: a WebSocket close reason is always <= 123 bytes", () => {

@@ -353,7 +353,13 @@ Deliberately NOT yet implemented (tracked as beads):
   the native wrapper); the bridge resolves the harness CLI on its own PATH and
   hands the adapter an absolute path (`PI_ACP_PI_COMMAND` for pi-acp); and when
   it cannot see the CLI it says so AT STARTUP (with the fix and the PATH it
-  actually has) while `/health` reports `harnessCliPath: null`.
+  actually has) while `/health` reports `harnessCliPath: null`. The same trap
+  bites the ADAPTER spawn ("Failed to spawn 'npx': entity not found"), so
+  `resolveAdapter` resolves `npx` to an absolute path in this process, prefers a
+  local adapter install under `~/.pi/agent/npm` when one exists (no npx, no
+  network), and refuses with the fix when neither is available — and the service
+  installer runs the same preflight, refusing an install whose captured PATH
+  cannot resolve deno/npx/the harness CLI.
 - **Why not `wss://` straight to the harness** — `pi-acp`, `claude-agent-acp`
   and `codex-acp` are stdio programs (that is the ACP registry's distribution
   shape): they have no socket. A `wss://` endpoint therefore means a translator
