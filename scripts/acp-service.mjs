@@ -65,6 +65,15 @@ function installMac() {
   mkdirSync(plistDir, { recursive: true });
   mkdirSync(LOG_DIR, { recursive: true });
   const programArgs = [denoPath(), ...bridgeArgs()];
+  // PATH AT INSTALL TIME: launchd gives a daemon a minimal environment
+  // (/usr/bin:/bin:/usr/sbin:/sbin), so a harness CLI in ~/.local/bin is
+  // invisible — the adapter then dies with "executable not found". Capturing
+  // the installing shell's PATH is the difference between "just works" and that
+  // error. HOME is needed too (harness config + the $HOME/journal default cwd).
+  const envEntries = {
+    PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
+    HOME,
+  };
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -73,6 +82,8 @@ function installMac() {
   <key>ProgramArguments</key>
   <array>${programArgs.map((a) => `<string>${a.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</string>`).join("")}</array>
   <key>WorkingDirectory</key><string>${ROOT}</string>
+  <key>EnvironmentVariables</key>
+  <dict>${Object.entries(envEntries).map(([k, v]) => `<key>${k}</key><string>${String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</string>`).join("")}</dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${LOG}</string>
@@ -85,6 +96,7 @@ function installMac() {
   run("launchctl", ["load", plist]);
   console.log(`installed ${plist}`);
   console.log(`harness ${HARNESS} · port ${PORT}${TOKEN ? " · token required" : ""} · logs: ${LOG}`);
+  console.log(`captured PATH: ${process.env.PATH || "(default)"}`);
 }
 
 function installLinux() {
@@ -99,6 +111,8 @@ Description=Chrome Agent Platform ACP bridge (${HARNESS})
 [Service]
 ExecStart=${exec}
 WorkingDirectory=${ROOT}
+Environment=HOME=${HOME}
+Environment=PATH=${process.env.PATH || "/usr/local/bin:/usr/bin:/bin"}
 Restart=on-failure
 RestartSec=2
 
@@ -108,6 +122,7 @@ WantedBy=default.target
   run("systemctl", ["--user", "daemon-reload"]);
   run("systemctl", ["--user", "enable", "--now", "cap-acp-bridge.service"]);
   console.log(`installed ${unit} (enabled + started)`);
+  console.log(`captured PATH: ${process.env.PATH || "(default)"}`);
   console.log(`harness ${HARNESS} · port ${PORT}${TOKEN ? " · token required" : ""}`);
   console.log("logs: journalctl --user -u cap-acp-bridge -f");
 }

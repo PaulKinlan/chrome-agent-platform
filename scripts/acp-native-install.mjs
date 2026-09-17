@@ -110,7 +110,18 @@ function install() {
       written.push(join(dir, `${HOST_NAME}.json`));
     } catch { /* unwritable candidate dir */ }
   }
+  // Chrome spawns the host with CHROME's environment, which lacks the user's
+  // bin dirs — so the wrapper sources this file to get the PATH that installed
+  // it (otherwise the harness CLI is "not found" from a native-host turn).
+  const envDir = join(HOME, ".cap-acp");
+  mkdirSync(envDir, { recursive: true });
+  writeFileSync(
+    join(envDir, "path.env"),
+    `# written by scripts/acp-native-install.mjs — PATH captured at install time\nexport PATH="${(process.env.PATH || "/usr/local/bin:/usr/bin:/bin").replace(/"/g, "")}"\nexport HOME="${HOME}"\n`,
+  );
   console.log(`installed ${written.join(", ")}`);
+  console.log(`captured PATH → ${join(envDir, "path.env")}`);
+  console.log(`captured PATH → ${join(HOME, ".cap-acp", "path.env")}`);
   console.log("NOTE: this branch does NOT add nativeMessaging to extension/manifest.json yet.");
   console.log("      To activate the transport, add it to the manifest's permissions and re-pin");
   console.log("      packages/bundled/evidence/emscripten-abi/loaded-probe/snapshot.json (sha256 +");

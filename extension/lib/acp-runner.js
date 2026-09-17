@@ -356,7 +356,16 @@ export async function runAcpTaskTurn(options) {
       resumed,
     };
   } catch (err) {
-    const errorDetail = String(err?.message ?? err);
+    let errorDetail = String(err?.message ?? err);
+    // The adapter says "executable not found" when IT cannot see the harness
+    // CLI — the usual cause is the launcher's PATH (a launchd/systemd service or
+    // a Chrome-spawned native host inherits a minimal environment, not the
+    // shell's), and that cause is not obvious from the adapter's wording.
+    if (/executable not found|not found \(command:/i.test(errorDetail)) {
+      errorDetail += " — the harness CLI is not on the PATH of the process that started the adapter. "
+        + "If the bridge was auto-started (service or native host), reinstall the launcher so it captures "
+        + "your shell PATH (npm run acp:service install), or install the CLI it names.";
+    }
     // A SUPERSEDED turn renders nothing: the socket close / prompt rejection a
     // successor caused is not this surface's error to show (and would land
     // over the successor's own output). Surfaces without an isStale fence (the

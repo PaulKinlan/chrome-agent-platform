@@ -77,6 +77,35 @@ export const HARNESS_ADAPTERS: Record<string, { pkg: string; version: string; la
   "codex": { pkg: "@agentclientprotocol/codex-acp", version: "1.12.0", label: "Codex" },
 };
 
+/** The harness CLI each adapter drives, and how pi-acp takes an explicit path
+ * (`PI_ACP_PI_COMMAND`; the other adapters resolve their own CLI, so PATH is
+ * what has to be right for them). */
+export const HARNESS_CLI: Record<string, { cli: string; envVar?: string; install: string }> = {
+  "pi": { cli: "pi", envVar: "PI_ACP_PI_COMMAND", install: "npm install -g @earendil-works/pi-coding-agent" },
+  "claude-code": { cli: "claude", install: "install the Claude Code CLI and sign in" },
+  "codex": { cli: "codex", install: "install the Codex CLI and sign in" },
+};
+
+/** Find an executable on a PATH string (no shell, no side effects). Exported so
+ * the resolution rule is unit-tested rather than pinned by a substring. */
+export function resolveCliOnPath(cli: string, pathValue = ""): string {
+  for (const dir of String(pathValue || "").split(":").filter(Boolean)) {
+    const candidate = `${dir}/${cli}`;
+    try { if (Deno.statSync(candidate).isFile) return candidate; } catch { /* not here */ }
+  }
+  return "";
+}
+
+/** Environment additions for the adapter child: when the harness CLI is on the
+ * bridge's PATH, hand the adapter its ABSOLUTE path (pi-acp honours it), so a
+ * harness found here is found even if the adapter's own PATH differs. */
+export function childEnvForHarness(harness: string, pathValue = ""): Record<string, string> {
+  const spec = HARNESS_CLI[harness];
+  if (!spec?.envVar) return {};
+  const resolved = resolveCliOnPath(spec.cli, pathValue);
+  return resolved ? { [spec.envVar]: resolved } : {};
+}
+
 /** How to launch a harness's adapter: an explicit `--adapter <path>` (run with
  * node), else the registry package via npx. Unknown harnesses fail loudly with
  * the known list instead of spawning something arbitrary. Exported for tests. */
@@ -143,6 +172,17 @@ if (import.meta.main) { try {
 } catch (e) {
   console.error(`[acp-bridge] ${(e as Error).message}`);
 } }
+if (import.meta.main && HARNESS_CLI[HARNESS]) {
+  const spec = HARNESS_CLI[HARNESS];
+  const found = resolveCliOnPath(spec.cli, Deno.env.get("PATH") ?? "");
+  if (!found) {
+    console.error(`[acp-bridge] WARNING: "${spec.cli}" is not on THIS process's PATH — the adapter will fail with`);
+    console.error(`[acp-bridge]          "executable not found". Auto-started bridges (launchd/systemd/native host)`);
+    console.error(`[acp-bridge]          get a minimal PATH, not your shell's. Fix: reinstall the launcher so it`);
+    console.error(`[acp-bridge]          captures your PATH (npm run acp:service install), or install the harness CLI`);
+    console.error(`[acp-bridge]          (${spec.install}). This process's PATH: ${Deno.env.get("PATH") ?? "(unset)"}`);
+  }
+}
 if (!isLoopbackHost(HOST) && import.meta.main) {
   console.log(`[acp-bridge] Bound to ${HOST} — reachable from other machines on this network.`);
   console.log(`[acp-bridge] Token required${args.token ? "" : " (generated)"}: ${TOKEN}`);
@@ -181,6 +221,8 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           adapterPresent,
           defaultCwd: defaultCwdValue,
           knownHarnesses: Object.keys(HARNESS_ADAPTERS),
+          harnessCli: HARNESS_CLI[HARNESS]?.cli ?? null,
+          harnessCliPath: HARNESS_CLI[HARNESS] ? (resolveCliOnPath(HARNESS_CLI[HARNESS].cli, Deno.env.get("PATH") ?? "") || null) : null,
           ...(error ? { error } : {}),
         }),
         { headers: { "Content-Type": "application/json" } },
@@ -228,6 +270,7 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           env: {
             ...Deno.env.toObject(),
             PI_ACP_HARNESS: HARNESS,
+            ...childEnvForHarness(HARNESS, Deno.env.get("PATH") ?? ""),
           },
         });
         const proc = cmd.spawn();

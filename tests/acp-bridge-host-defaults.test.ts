@@ -8,7 +8,7 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { applyHostDefaults, clipCloseReason, resolveAdapter, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
+import { applyHostDefaults, childEnvForHarness, clipCloseReason, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const sessionNew = (params: Record<string, unknown>) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params });
@@ -77,4 +77,22 @@ Deno.test("clipCloseReason: a WebSocket close reason is always <= 123 bytes", ()
   const multibyte = clipCloseReason("é".repeat(200));
   assert(new TextEncoder().encode(multibyte).length <= 123);
   assertEquals(new TextDecoder().decode(new TextEncoder().encode(multibyte)), multibyte);
+});
+
+Deno.test("harness CLI resolution: found on PATH, handed to the adapter as an absolute path", () => {
+  const dir = durableDir("acp-cli-fixture");
+  const cli = `${dir}/pi`;
+  Deno.writeTextFileSync(cli, "#!/bin/sh\nexit 0\n");
+  Deno.chmodSync(cli, 0o755);
+
+  assertEquals(resolveCliOnPath("pi", dir), cli);
+  assertEquals(resolveCliOnPath("pi", "/nonexistent:/usr/bin"), "");
+  assertEquals(resolveCliOnPath("pi", ""), "");
+
+  // pi-acp honours PI_ACP_PI_COMMAND: without it the adapter searches its own
+  // PATH, which is exactly the launchd/Chrome minimal-PATH failure.
+  assertEquals(childEnvForHarness("pi", dir), { PI_ACP_PI_COMMAND: cli });
+  assertEquals(childEnvForHarness("pi", "/nonexistent"), {});
+  assertEquals(childEnvForHarness("claude-code", dir), {}, "adapters without an override get nothing extra");
+  assertEquals(childEnvForHarness("nope", dir), {});
 });

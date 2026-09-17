@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.402] — 2026-09-17
+- the agent CLI is found even when the launcher's PATH is not your shell's
+
 ## [0.3.401] — 2026-09-16
 - connect to an agent on another machine, and run one with no bridge at all
 

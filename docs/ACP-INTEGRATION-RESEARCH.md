@@ -342,6 +342,18 @@ Deliberately NOT yet implemented (tracked as beads):
      from the loaded extension to a LAN address (13/13 acceptance). Plain `ws://`
      on a network is UNENCRYPTED; for anything past a trusted LAN put TLS in
      front and keep the bridge on loopback behind it.
+- **PATH: the "executable not found" trap** — the adapter drives the harness CLI
+  (`pi`, `claude`, `codex`), so the CLI must be on the PATH of the process that
+  STARTED the adapter. An auto-started bridge (launchd/systemd, or a
+  Chrome-spawned native host) gets a minimal environment, not the shell's, and
+  fails with `Could not start pi: executable not found` even though `pi` works in
+  the terminal. Handled three ways: `npm run acp:service install` and
+  `npm run acp:native:install` capture the installing shell's PATH (launchd
+  `EnvironmentVariables`, systemd `Environment=`, and `~/.cap-acp/path.env` for
+  the native wrapper); the bridge resolves the harness CLI on its own PATH and
+  hands the adapter an absolute path (`PI_ACP_PI_COMMAND` for pi-acp); and when
+  it cannot see the CLI it says so AT STARTUP (with the fix and the PATH it
+  actually has) while `/health` reports `harnessCliPath: null`.
 - **Why not `wss://` straight to the harness** — `pi-acp`, `claude-agent-acp`
   and `codex-acp` are stdio programs (that is the ACP registry's distribution
   shape): they have no socket. A `wss://` endpoint therefore means a translator
