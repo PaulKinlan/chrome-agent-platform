@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.414] — 2026-09-17
+- opening a running task no longer waits on the live run's own log lock
+
+## [0.3.413] — 2026-09-17
+- land cap/h638-slow-open: opening a running task no longer waits on the live run's log lock
+
+## [0.3.412] — 2026-09-17
+- opening a running task is fast again
+
 ## [0.3.411] — 2026-09-17
 - merge cap/9mz1-approval (union-resolved changelog + version bookkeeping)
 

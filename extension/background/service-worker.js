@@ -7791,24 +7791,16 @@ const handlers = mergeRouteMaps(
         { id: "site", label: "Site Agents", agents: site },
         {
           id: "acp",
-          label: "Harness Agents (ACP)",
+          label: "Harnesses (ACP)",
           // Harnesses CAP drives over ACP; the bridge runs each adapter from
           // the ACP registry via npx — the harness CLI itself must be signed in.
-          agents: [
-            ["pi", "pi", "Local harness · pi ACP adapter"],
-            ["claude-code", "Claude Code", "Local harness · Claude Code ACP adapter"],
-            ["codex", "Codex", "Local harness · Codex ACP adapter"],
-          ].map(([id, name, summary]) => ({
-            // avatar/skills/status/enabled are all defaulted by the consumers
-            // (a.avatar || null, Array.isArray(a.skills), a.status || "", and
-            // isCallable's enabled !== false) — omit them and keep the store
-            // bundle inside its budget.
-            ref: `acp:${id}`,
-            id,
-            kind: "acp",
-            name,
-            summary,
-          })),
+          // Omitted fields are defaulted by the consumers (a.avatar || null,
+          // Array.isArray(a.skills), a.status || "", isCallable's
+          // enabled !== false): the store bundle is at its budget ceiling.
+          agents: "pi,claude-code:Claude Code,codex:Codex".split(",").map((row) => {
+            const [id, name = id] = row.split(":");
+            return { id, kind: "acp", name }; // ref is derived by the consumers
+          }),
         },
       ],
     };
