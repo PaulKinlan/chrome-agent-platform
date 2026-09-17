@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.407] — 2026-09-17
+- version bump for the sidebar agents + folded permissions
+
+## [0.3.406] — 2026-09-17
+- your agents appear in the sidebar, and permissions no longer cover the chat
+
 ## [0.3.405] — 2026-09-17
 - your agents are in the side panel where you are, and the activity list is gone
 
