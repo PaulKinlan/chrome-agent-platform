@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.408] — 2026-09-17
+- ask before an external agent runs a command
+
 ## [0.3.407] — 2026-09-17
 - version bump for the sidebar agents + folded permissions
 

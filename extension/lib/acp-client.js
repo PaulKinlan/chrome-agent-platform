@@ -34,6 +34,25 @@
  * @property {Record<string, unknown>} [toolCall]
  */
 
+/** The option an APPROVAL should answer with: the NARROWEST allow the harness
+ * offers ("allow once" over "allow always"), else any allow, else nothing. */
+export function acpAllowOptionId(options = []) {
+  const list = Array.isArray(options) ? options : [];
+  const text = (o) => `${o?.kind ?? ""} ${o?.optionId ?? ""} ${o?.name ?? ""}`.toLowerCase();
+  const once = list.find((o) => /allow[_\s-]?once|allow_once|once/.test(text(o)) && /allow/.test(text(o)));
+  const anyAllow = list.find((o) => /allow/.test(text(o)));
+  return (once ?? anyAllow)?.optionId ?? null;
+}
+
+/** The option a DENIAL should answer with (fail closed): an explicit deny
+ * option when the harness offers one, else null — which ACP reads as "no
+ * selection", never as approval. */
+export function acpDenyOptionId(options = []) {
+  const list = Array.isArray(options) ? options : [];
+  const deny = list.find((o) => /deny|reject|cancel|no\b/i.test(`${o?.kind ?? ""} ${o?.optionId ?? ""} ${o?.name ?? ""}`));
+  return deny?.optionId ?? null;
+}
+
 export class AcpClient {
   /**
    * @param {AcpClientOptions} [options]
@@ -346,8 +365,9 @@ export class AcpClient {
     if (msg.method === "session/request_permission") {
       const options = Array.isArray(msg.params?.options) ? msg.params.options : [];
       let selectedOptionId = null;
+      const asked = typeof this.permissionHandler === "function";
 
-      if (typeof this.permissionHandler === "function") {
+      if (asked) {
         try {
           selectedOptionId = await this.permissionHandler({
             title: msg.params?.toolCall?.title ?? "a tool",
@@ -359,12 +379,20 @@ export class AcpClient {
         }
       }
 
-      // Default fallback: select option matching 'allow', else first option
+      // A gate that answers with anything but a non-empty STRING option id has
+      // not approved anything: treat it as no answer (and therefore a denial)
+      // rather than forwarding a malformed value to the harness.
+      if (asked && (typeof selectedOptionId !== "string" || !selectedOptionId)) selectedOptionId = null;
+
+      // WHEN A HANDLER IS CONFIGURED, an unanswered request is a DENIAL: the
+      // owner's gate either chose an option or it did not, and a request the
+      // owner never approved must never be answered with an allow just because
+      // one exists in the list. The old behaviour (pick any allow) is now the
+      // explicit AUTO mode only — a client with NO handler at all.
       if (!selectedOptionId) {
-        const allow =
-          options.find((o) => /allow/i.test(`${o.kind ?? ""} ${o.optionId ?? ""} ${o.name ?? ""}`)) ??
-          options[0];
-        selectedOptionId = allow?.optionId ?? null;
+        selectedOptionId = asked
+          ? acpDenyOptionId(options)
+          : acpAllowOptionId(options);
       }
 
       this.activeTurnListener?.({

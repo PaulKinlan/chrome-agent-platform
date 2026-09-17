@@ -4,7 +4,7 @@
 // Drives an external agent harness (e.g. pi via pi-acp) over the loopback ACP WebSocket bridge,
 // streaming thoughts, tool progress, and message chunks into the conversation surface.
 
-import { AcpClient } from "./acp-client.js";
+import { AcpClient, acpAllowOptionId, acpDenyOptionId } from "./acp-client.js";
 import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 
 /** Default loopback WebSocket endpoint for the ACP bridge */
@@ -71,6 +71,95 @@ export function acpSessionKey(threadId, harnessId) {
   return threadId ? `${threadId}:${harness}` : `acp:${harness}`;
 }
 
+/** How long an unanswered permission card stays open before the turn answers
+ * DENY. ACP gives a request no deadline of its own, and the harness is blocked
+ * for as long as we hold it, so something has to settle it: 2 minutes is long
+ * enough to read the card and short enough that a walked-away window does not
+ * wedge the conversation. The automatic answer is ALWAYS deny — an unattended
+ * window must never grant shell/file access. */
+export const ACP_PERMISSION_TIMEOUT_MS = 120_000;
+
+/** The permission posture. "ask" (the default) renders the owner's card; "auto"
+ * is the explicit trust-the-harness mode. Anything unrecognised resolves to
+ * "ask": a typo must fail closed, never silently auto-grant. */
+export function acpPermissionMode(value) {
+  return String(value ?? "").trim().toLowerCase() === "auto" ? "auto" : "ask";
+}
+
+/** Render the owner's decision card and resolve with the chosen optionId.
+ * Reuses the SAME <permission-approval-card> the in-browser approval flow uses
+ * (only the element + its approve/deny events — deliberately NOT the
+ * `approval-decision` event, which surfaces route to the Chrome-grant channel:
+ * an ACP decision is answered to the harness, not granted here). */
+export async function requestAcpPermission(prompt, options = {}) {
+  const { title = "a tool", toolCall = null, options: acpOptions = [] } = prompt ?? {};
+  const timeoutMs = Number(options.timeoutMs ?? ACP_PERMISSION_TIMEOUT_MS);
+  const isCancelled = typeof options.isCancelled === "function" ? options.isCancelled : () => false;
+  const container = options.container ?? null;
+
+  // createCard is injectable so the decision logic is unit-testable without a
+  // DOM; the default is the real <permission-approval-card>.
+  const card = (options.createCard ?? createAcpPermissionCard)(container, { title, toolCall, acpOptions });
+  if (!card) {
+    // No surface to ask on: DENY rather than silently granting.
+    settleAcpPermissionCard(null, "denied");
+    return { optionId: acpDenyOptionId(acpOptions), answered: false, timedOut: false, reason: "no-surface", title };
+  }
+
+  const decision = await new Promise((resolve) => {
+    let settled = false;
+    const onApprove = () => finish({ approved: true });
+    const onDeny = () => finish({ approved: false });
+    const cancelPoll = setInterval(() => { if (isCancelled()) finish({ approved: false, cancelled: true }); }, 500);
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(cancelPoll);
+      try { card.removeEventListener("approve", onApprove); card.removeEventListener("deny", onDeny); } catch { /* detached */ }
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish({ approved: false, timedOut: true }), timeoutMs);
+    card.addEventListener("approve", onApprove);
+    card.addEventListener("deny", onDeny);
+  });
+
+  const approved = decision.approved === true;
+  settleAcpPermissionCard(card, approved ? "granted" : "denied");
+  return {
+    optionId: approved ? acpAllowOptionId(acpOptions) : acpDenyOptionId(acpOptions),
+    answered: !decision.timedOut && !decision.cancelled,
+    timedOut: decision.timedOut === true,
+    cancelled: decision.cancelled === true,
+    title,
+  };
+}
+
+/** Build the card element and put it in the transcript: the SAME component the
+ * in-browser approval flow uses. Returns null when the surface cannot show one
+ * (the caller then denies). */
+function createAcpPermissionCard(container, { title, toolCall, acpOptions }) {
+  try {
+    if (typeof document === "undefined" || typeof document.createElement !== "function") return null;
+    if (!container || typeof container.appendTranscript !== "function") return null;
+    const card = document.createElement("permission-approval-card");
+    card.setAttribute("reason", String(title || "run a tool").slice(0, 240));
+    const detail = (Array.isArray(acpOptions) ? acpOptions : [])
+      .map((o) => String(o?.name || o?.optionId || "").trim())
+      .filter(Boolean)
+      .join(" · ");
+    if (detail) card.setAttribute("detail", detail.slice(0, 240));
+    card.setAttribute("state", "pending");
+    return container.appendTranscript(card);
+  } catch {
+    return null;
+  }
+}
+
+function settleAcpPermissionCard(card, state) {
+  try { card?.setAttribute?.("state", state); } catch { /* detached */ }
+}
+
 /**
  * Execute an ACP task turn on a conversation container.
  *
@@ -85,7 +174,9 @@ export function acpSessionKey(threadId, harnessId) {
  * @param {(state: any) => void} [options.onStatus] - Status update callback
  * @param {() => boolean} [options.isStale] - Run-lifecycle fence
  * @param {{get: (key: string) => Promise<string|null>, set: (key: string, sessionId: string) => Promise<void>}} [options.sessionStore] - Durable session-id store (kv), so a reload resumes instead of forking
- * @param {{get: (key: string) => Promise<string|null>}} [options.settings] - kv reader for `acp.endpoint` / `acp.token` (Settings UI pending)
+ * @param {{get: (key: string) => Promise<string|null>}} [options.settings] - kv reader for `acp.endpoint` / `acp.token` / `acp.transport` / `acp.permissions`
+ * @param {(prompt: any, opts?: any) => Promise<any>} [options.permissionPrompter] - the owner gate (default: the inline Allow/Deny card); injectable for tests
+ * @param {number} [options.permissionTimeoutMs] - how long an unanswered card waits before the turn denies (default 120s)
  * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, sessionId?: string, resumed?: boolean, error?: string}>}
  */
 export async function runAcpTaskTurn(options) {
@@ -133,8 +224,10 @@ export async function runAcpTaskTurn(options) {
   // fall back to the loopback WebSocket bridge. `acp.transport` in kv overrides
   // the choice explicitly: "native" | "ws".
   let transportMode = "";
+  let permissionsMode = acpPermissionMode(null); // "ask" unless kv says otherwise
   if (typeof settings?.get === "function") {
     try { transportMode = String(await settings.get("acp.transport") || ""); } catch { transportMode = ""; }
+    try { permissionsMode = acpPermissionMode(await settings.get("acp.permissions")); } catch { permissionsMode = "ask"; }
   }
   const nativeHost = DEFAULT_NATIVE_HOST;
   let nativeTransport = null;
@@ -153,10 +246,33 @@ export async function runAcpTaskTurn(options) {
     status({ state: "running", activity: `Connecting to the local ${harnessId} host…` });
   }
 
+  // THE OWNER GATE: in "ask" (the default) every harness permission request is
+  // rendered as an inline Allow/Deny card and the turn waits for the click, so
+  // the harness runs shell/file commands with the owner's consent or not at all.
+  // "auto" keeps the auto-grant and must be set deliberately in kv. The
+  // cancellation check is late-bound: the claim it reads is created below.
+  let permissionCancelled = () => false;
+  // permissionPrompter is injectable for tests (the real one renders the card).
+  const permissionPrompter = options.permissionPrompter ?? requestAcpPermission;
+  const permissionHandler = permissionsMode === "auto"
+    ? null
+    // The client's contract is an OPTION ID (a string) — a prompter that
+    // resolves to a richer decision object must never put that object on the
+    // wire (the fixture caught exactly that: "permission: [object Object]").
+    : async (request) => {
+        const decision = await permissionPrompter(request, {
+          container,
+          isCancelled: () => permissionCancelled(),
+          timeoutMs: options.permissionTimeoutMs ?? ACP_PERMISSION_TIMEOUT_MS,
+        });
+        return typeof decision?.optionId === "string" && decision.optionId ? decision.optionId : null;
+      };
+
   const client = new AcpClient({
     url: effectiveEndpoint,
     defaultCwd: cwd,
     transport: nativeTransport || null,
+    ...(permissionHandler ? { permissionHandler } : {}),
   });
 
   /** The conversation key, owned by this turn (the finally clears it). */
@@ -175,6 +291,9 @@ export async function runAcpTaskTurn(options) {
   const releaseClaim = () => { if (activeTurns.get(sessionKey) === claim) activeTurns.delete(sessionKey); };
   /** This turn no longer owns the conversation (superseded, or its surface left). */
   const superseded = () => claim.cancelled || stale();
+  // The gate above was built before this turn's claim existed; from here on it
+  // can see whether this turn still owns the conversation.
+  permissionCancelled = superseded;
 
   // The prior turn's host prompt is stopped after the claim is installed (the
   // claim is what makes a LATER send able to stop US).
@@ -321,8 +440,15 @@ export async function runAcpTaskTurn(options) {
           }
           status({ state: "running", activity: "Writing response…" });
         } else if (ev.kind === "permission") {
+          // Honest, in the owner's words: what the harness asked for and what it
+          // was told. A denial reads as a denial, never as an ambiguous line.
           if (typeof container.appendSystem === "function") {
-            container.appendSystem(`Harness permission: ${ev.detail || "granted"}`);
+            const detail = String(ev.detail ?? "");
+            const denied = /deny|declined|not allowed|no\b/i.test(detail);
+            container.appendSystem(
+              denied ? `Permission denied: ${detail || "the harness was told no"}`
+                     : `Permission granted: ${detail || "allowed"}`,
+            );
           }
         }
       },
