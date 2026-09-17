@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.408] — 2026-09-17
+- pay for the repeated generated prose once, reclaiming ~4 KB of the store bundle
+
 ## [0.3.407] — 2026-09-17
 - version bump for the sidebar agents + folded permissions
 
