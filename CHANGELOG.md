@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.409] — 2026-09-17
+- reclaim store-service-worker bundle headroom instead of raising the budget
+
 ## [0.3.408] — 2026-09-17
 - pay for the repeated generated prose once, reclaiming ~4 KB of the store bundle
 
