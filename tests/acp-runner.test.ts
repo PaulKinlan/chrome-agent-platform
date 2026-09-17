@@ -6,7 +6,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
-import { acpEndpointWithToken, acpSessionKey, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
+import { acpEndpointWithToken, acpPermissionMode, acpSessionKey, ACP_PERMISSION_TIMEOUT_MS, requestAcpPermission, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
@@ -83,6 +83,12 @@ class MockContainer {
 
   appendError(msg: string, meta?: any) {
     this.errors.push({ msg, meta });
+  }
+
+  /** The owner-visible system lines (permission decisions land here). */
+  system: string[] = [];
+  appendSystem(text: string) {
+    this.system.push(String(text));
   }
 }
 
@@ -373,6 +379,135 @@ Deno.test("runAcpTaskTurn: tool updates settle one card instead of appending run
     );
   } finally {
     Deno.env.delete("CAP_ACP_FIXTURE_LOG");
+    await bridge.shutdown();
+  }
+});
+
+/** A card stub: the same events the real <permission-approval-card> emits, with
+ * no DOM (the real element is exercised by the browser acceptance). */
+function fakeCard() {
+  const listeners = new Map<string, Array<() => void>>();
+  return {
+    state: "pending",
+    setAttribute(name: string, value: string) { if (name === "state") this.state = value; },
+    addEventListener(type: string, fn: () => void) { listeners.set(type, [...(listeners.get(type) ?? []), fn]); },
+    removeEventListener(type: string) { listeners.delete(type); },
+    click(type: string) { for (const fn of listeners.get(type) ?? []) fn(); },
+    get listenerCount() { return [...listeners.values()].reduce((n, l) => n + l.length, 0); },
+  };
+}
+
+const PROMPT = {
+  title: "Run bash: rm -rf ./demo-dir",
+  toolCall: { toolCallId: "tc_1" },
+  options: [
+    { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+    { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
+    { optionId: "deny", name: "Deny", kind: "deny" },
+  ],
+};
+
+Deno.test("acpPermissionMode: only an explicit 'auto' auto-grants; everything else asks", () => {
+  assertEquals(acpPermissionMode("auto"), "auto");
+  assertEquals(acpPermissionMode(" AUTO "), "auto");
+  // Fail closed: a typo, an empty setting or a missing one must never auto-grant.
+  for (const value of ["ask", "", null, undefined, "autoo", "yes", 1, {}]) {
+    assertEquals(acpPermissionMode(value as any), "ask", `mode for ${JSON.stringify(value)}`);
+  }
+});
+
+Deno.test("requestAcpPermission: the owner's click decides the option, and the card settles", async () => {
+  const approveCard = fakeCard();
+  const approved = requestAcpPermission(PROMPT, { container: {}, createCard: () => approveCard, timeoutMs: 50 });
+  // The listeners are attached synchronously, so the owner can click before the
+  // promise is awaited — exactly the browser's ordering.
+  approveCard.click("approve");
+  const approvedRes = await approved;
+  assertEquals(approvedRes.optionId, "allow_once", "approving picks the NARROWEST allow");
+  assertEquals(approvedRes.answered, true);
+  assertEquals(approveCard.state, "granted");
+  assertEquals(approveCard.listenerCount, 0, "the card's listeners are released");
+
+  const denyCard = fakeCard();
+  const denied = requestAcpPermission(PROMPT, { container: {}, createCard: () => denyCard, timeoutMs: 50 });
+  denyCard.click("deny");
+  const deniedRes = await denied;
+  assertEquals(deniedRes.optionId, "deny");
+  assertEquals(deniedRes.answered, true);
+  assertEquals(denyCard.state, "denied");
+});
+
+Deno.test("requestAcpPermission: no answer times out to DENY (an unattended window never grants)", async () => {
+  const card = fakeCard();
+  const res = await requestAcpPermission(PROMPT, { container: {}, createCard: () => card, timeoutMs: 30 });
+  assertEquals(res.optionId, "deny", "the timeout answer is a denial");
+  assertEquals(res.timedOut, true);
+  assertEquals(res.answered, false);
+  assertEquals(card.state, "denied");
+  assertEquals(card.listenerCount, 0);
+});
+
+Deno.test("requestAcpPermission: no surface to ask on denies rather than granting", async () => {
+  const res = await requestAcpPermission(PROMPT, { container: null });
+  assertEquals(res.optionId, "deny");
+  assertEquals(res.answered, false);
+  assertEquals(res.reason, "no-surface");
+  assertEquals(ACP_PERMISSION_TIMEOUT_MS, 120_000, "the documented default timeout");
+});
+
+Deno.test("runAcpTaskTurn: ask mode sends the OWNER's decision to the harness (deny stays deny)", async () => {
+  const logPath = `${durableDir("acp-fixture-logs")}/perm-${Date.now()}.jsonl`;
+  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
+  Deno.env.set("CAP_ACP_FIXTURE_ASK_PERMISSION", "1");
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const container = new MockContainer();
+
+  try {
+    const res = await runAcpTaskTurn({
+      container,
+      task: "do the risky thing",
+      harnessId: "perm-probe",
+      endpoint: `ws://127.0.0.1:${port}/acp`,
+      // "ask" is the default (no acp.permissions setting), and the injection
+      // stands in for the owner clicking Deny on the card.
+      permissionPrompter: () => Promise.resolve({ optionId: "deny", answered: true, title: PROMPT.title }),
+    });
+    assertEquals(res.ok, true, String(res.error));
+    // The harness itself reports what it was told.
+    assert(String(res.result).includes("permission: deny"), `harness saw: ${res.result}`);
+    // And the transcript says it plainly.
+    assert(
+      container.system.some((line) => /Permission denied/i.test(line)),
+      `transcript: ${JSON.stringify(container.system)}`,
+    );
+    const frames = (await Deno.readTextFile(logPath)).trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const answered = frames.find((f: any) => f.dir === "in" && f.msg?.result?.outcome);
+    assertEquals(answered?.msg?.result?.outcome?.optionId, "deny", "the wire answer is the owner's denial");
+  } finally {
+    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
+    Deno.env.delete("CAP_ACP_FIXTURE_ASK_PERMISSION");
+    await bridge.shutdown();
+  }
+});
+
+Deno.test("runAcpTaskTurn: auto mode is opt-in and still auto-grants", async () => {
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const container = new MockContainer();
+  Deno.env.set("CAP_ACP_FIXTURE_ASK_PERMISSION", "1");
+  try {
+    const res = await runAcpTaskTurn({
+      container,
+      task: "do the risky thing",
+      harnessId: "perm-auto-probe",
+      endpoint: `ws://127.0.0.1:${port}/acp`,
+      settings: { get: (key: string) => Promise.resolve(key === "acp.permissions" ? "auto" : null) },
+    });
+    assertEquals(res.ok, true, String(res.error));
+    assert(String(res.result).includes("permission: allow_once"), `auto mode should allow: ${res.result}`);
+  } finally {
+    Deno.env.delete("CAP_ACP_FIXTURE_ASK_PERMISSION");
     await bridge.shutdown();
   }
 });

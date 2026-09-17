@@ -20,6 +20,14 @@ const LOG = process.env.CAP_ACP_FIXTURE_LOG ?? "";
 // spawns a fresh adapter per connection, so "the first prompt" would hold the
 // superseding turn too.
 const HOLD_TEXT = process.env.CAP_ACP_FIXTURE_HOLD_TEXT ?? "";
+let pendingPermissionId = null;
+let pendingPromptId = null;
+let lastPermissionAnswer = "none";
+let lastSessionId = "";
+// With this set, a prompt first asks the CLIENT for permission (the ACP
+// session/request_permission flow) and only then completes — carrying the answer
+// it received, so a test can assert what the harness was actually told.
+const ASK_PERMISSION = process.env.CAP_ACP_FIXTURE_ASK_PERMISSION === "1";
 // With this set, a cancel does NOT settle the held prompt, so the socket close
 // the successor performs is what rejects it (the error path a superseded turn
 // must render NOTHING for).
@@ -56,6 +64,24 @@ process.stdin.on("data", (chunk) => {
 
 function handle(msg) {
   log("in", msg);
+  // A response to a permission request WE sent: remember the option and finish
+  // the turn that asked for it.
+  if (msg.id !== undefined && msg.result !== undefined && pendingPermissionId === msg.id) {
+    pendingPermissionId = null;
+    const optionId = msg.result?.outcome?.optionId ?? "none";
+    lastPermissionAnswer = optionId;
+    if (pendingPromptId != null) {
+      const id = pendingPromptId;
+      pendingPromptId = null;
+      sendAndLog({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionId: lastSessionId, update: { sessionUpdate: "agent_message_chunk", content: { text: `fake reply (permission: ${optionId})` } } },
+      });
+      sendAndLog({ jsonrpc: "2.0", id, result: { stopReason: "end_turn" } });
+    }
+    return;
+  }
   switch (msg.method) {
     case "initialize":
       sendAndLog({
@@ -98,6 +124,28 @@ function handle(msg) {
       const sid = msg.params?.sessionId ?? "";
       const promptText = (Array.isArray(msg.params?.prompt) ? msg.params.prompt : [])
         .map((p) => (typeof p?.text === "string" ? p.text : "")).join(" ");
+      lastSessionId = sid;
+      if (ASK_PERMISSION && pendingPermissionId === null) {
+        // ONE permission request per connection, then the prompt completes with
+        // whatever the client answered.
+        pendingPromptId = msg.id;
+        pendingPermissionId = 9000 + (msg.id ?? 0);
+        sendAndLog({
+          jsonrpc: "2.0",
+          id: pendingPermissionId,
+          method: "session/request_permission",
+          params: {
+            sessionId: sid,
+            toolCall: { toolCallId: "tc_perm_1", title: "Run bash: rm -rf ./demo-dir" },
+            options: [
+              { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+              { optionId: "allow_always", name: "Allow always", kind: "allow_always" },
+              { optionId: "deny", name: "Deny", kind: "deny" },
+            ],
+          },
+        });
+        break;
+      }
       if (HOLD_TEXT && promptText.includes(HOLD_TEXT)) {
         heldPromptId = msg.id;
         sendAndLog({

@@ -38,7 +38,13 @@ const NO_LOCAL_BRIDGE = Deno.env.get("CAP_ACCEPTANCE_NO_BRIDGE") === "1";
 const LAN_ENDPOINT = Deno.env.get("CAP_ACCEPTANCE_ENDPOINT") ?? "";
 const LAN_TOKEN = Deno.env.get("CAP_ACCEPTANCE_TOKEN") ?? "";
 const EXPECT_RE = new RegExp(Deno.env.get("CAP_ACCEPTANCE_EXPECT") ?? "ACP browser OK");
-const bridge = NO_LOCAL_BRIDGE ? null : createAcpServer(3210);
+// CAP_ACCEPTANCE_ADAPTER points the driver's bridge at a chosen adapter (the
+// deterministic fixture), and CAP_ACCEPTANCE_PERMISSION=1 makes that fixture ask
+// for permission before answering, so the owner gate can be driven for real.
+const ADAPTER = Deno.env.get("CAP_ACCEPTANCE_ADAPTER") ?? "";
+const PERMISSION_RUN = Deno.env.get("CAP_ACCEPTANCE_PERMISSION") === "1";
+if (PERMISSION_RUN) Deno.env.set("CAP_ACP_FIXTURE_ASK_PERMISSION", "1");
+const bridge = NO_LOCAL_BRIDGE ? null : (ADAPTER ? createAcpServer(3210, ADAPTER) : createAcpServer(3210));
 
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });
 const profile = durableDir(`cap-acp-browser-profile-${Date.now()}`);
@@ -194,7 +200,9 @@ try {
   await sleep(200);
 
   // ── 0a. no bridge at all: is the loopback endpoint silent? ─────────────
-  if (NO_LOCAL_BRIDGE) {
+  // Only meaningful for a NATIVE-transport run: with an explicit endpoint we are
+  // deliberately driving an external bridge, so 3210 says nothing.
+  if (NO_LOCAL_BRIDGE && !LAN_ENDPOINT) {
     const bridgeProbe = await evl(ntp, `fetch("http://127.0.0.1:3210/health").then(() => "up").catch(() => "down")`);
     check("no WebSocket bridge is running (native-messaging run)", bridgeProbe === "down", bridgeProbe);
   }
@@ -290,6 +298,71 @@ try {
   check("a real pi turn produced agent text in the conversation", EXPECT_RE.test(agentText), { agentText: agentText.slice(0, 300), expected: String(EXPECT_RE) });
   check("the run settled (no orphaned running status)", !/running/i.test(finalTurn?.status ?? ""), finalTurn?.status);
   check("no console errors during the acceptance", (consoleErrors.get(ntp) ?? []).length === 0, consoleErrors.get(ntp));
+
+  // ── the OWNER GATE: a real card, a real click, and what the harness got ─
+  if (PERMISSION_RUN) {
+    const cardSnapshot = () => evl(ntp, `(() => {
+      const c = document.getElementById('thread-conversation');
+      const card = [...(c?.querySelectorAll('permission-approval-card') ?? [])].pop();
+      if (!card) return null;
+      return { state: card.getAttribute('state'), text: (card.shadowRoot?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+    })()`);
+    const clickCardButton = async (which: "allow" | "deny") => {
+      const box = await evl(ntp, `(() => {
+        const c = document.getElementById('thread-conversation');
+        const card = [...(c?.querySelectorAll('permission-approval-card') ?? [])].pop();
+        const b = card?.shadowRoot?.querySelector('.${which}');
+        if (!b) return null;
+        b.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = b.getBoundingClientRect();
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      })()`);
+      if (!box) return false;
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", buttons: 1, clickCount: 1 }, ntp);
+      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", buttons: 0, clickCount: 1 }, ntp);
+      return true;
+    };
+
+    const driveGatedTurn = async (label: string, decision: "allow" | "deny") => {
+      // The chip is already committed from the steps above: type + Enter.
+      await clickExpr(ntp, NTP_INPUT);
+      await typeText(ntp, `permission gate ${label}`);
+      await pressKey(ntp, "Enter");
+      let card = null;
+      for (let i = 0; i < 60; i++) {
+        await sleep(1000);
+        card = await cardSnapshot();
+        if (card) break;
+      }
+      check(`owner gate · the card appears for ${label}`, !!card, card);
+      if (!card) return;
+      const clicked = await clickCardButton(decision);
+      check(`owner gate · the ${decision} control is clickable for ${label}`, clicked === true);
+      let settled = null;
+      for (let i = 0; i < 60; i++) {
+        await sleep(1000);
+        settled = await cardSnapshot();
+        const turn = await readTurn();
+        if (settled?.state === (decision === "allow" ? "granted" : "denied")) {
+          check(`owner gate · ${label}: the card settles to ${decision === "allow" ? "granted" : "denied"}`, true);
+          check(`owner gate · ${label}: the harness was told "${decision === "allow" ? "allow_once" : "deny"}"`,
+            (turn?.bubbles ?? []).some((b: string) => b.includes(`permission: ${decision === "allow" ? "allow_once" : "deny"}`)),
+            turn?.bubbles);
+          const lines = await evl(ntp, `(() => { const c = document.getElementById('thread-conversation');
+            return [...(c?.querySelectorAll('message-bubble') ?? [])].map(b => ({ role: b.getAttribute('role'), text: b.getAttribute('content') ?? '' })); })()`);
+          const wants = decision === "allow" ? /Permission granted/i : /Permission denied/i;
+          check(`owner gate · ${label}: the transcript says "${decision === "allow" ? "granted" : "denied"}"`,
+            Array.isArray(lines) && lines.some((b: any) => wants.test(b.text)), lines?.slice(-4));
+          return;
+        }
+      }
+      check(`owner gate · ${label}: the card settles after the click`, false, settled);
+    };
+
+    await driveGatedTurn("deny", "deny");
+    await driveGatedTurn("allow", "allow");
+    await shot(ntp, "09-owner-gate");
+  }
 
   // ── the side panel's Agents section lists the harness agent ────────────
   const panel = await openPage(`chrome-extension://${extId}/sidepanel/sidepanel.html`);
