@@ -152,6 +152,23 @@ try {
   await sleep(2000);
 
   check("hub composer rendered", (await evl(ntp, `!!${NTP_INPUT}`)) === true);
+
+  // The owner's ask (hub sidebar): harness rows visible where he works, and the
+  // activity ledger folded rather than competing for the pane.
+  const hubSide = await evl(ntp, `(() => {
+    const host = document.getElementById('side-harness');
+    const section = host?.closest('section');
+    const ledger = document.getElementById('activity-ledger-section');
+    return {
+      rows: host ? [...host.querySelectorAll('button')].map(b => b.textContent.trim()) : null,
+      sectionHidden: section?.hidden ?? null,
+      ledgerTagName: ledger?.tagName ?? null,
+      ledgerOpen: ledger?.open ?? null,
+    };
+  })()`);
+  await shot(ntp, "08-hub-sidebar-harness");
+  check("hub sidebar · harness rows are visible", Array.isArray(hubSide?.rows) && hubSide.rows.length >= 1, hubSide);
+  check("hub sidebar · Activity is folded (not hidden, not expanded)", hubSide?.ledgerTagName === "DETAILS" && hubSide?.ledgerOpen === false, hubSide);
   await shot(ntp, "01-hub-composer");
 
   // ── 0. the + menu's "Choose agent" lists the pi harness agent ──────────
@@ -315,6 +332,16 @@ try {
   check("side panel · one click opens that harness conversation", quickOpen?.detailHidden === false && !!quickOpen?.name, quickOpen);
   check("side panel · the activity ledger is GONE (owner: not needed here)", quickOpen?.ledgerGone === true, quickOpen);
   check("side panel · the page view also offers the harness rows", Array.isArray(quickOpen?.pageQuickRows) && quickOpen.pageQuickRows.length >= 1, quickOpen?.pageQuickRows);
+
+  // Owner bug: the permissions block filled the pane and hid the chat.
+  const permShape = await evl(panel, `(() => { const p = document.getElementById('agent-permissions-slot');
+    const d = p?.querySelector('details.agent-permissions');
+    const c = document.getElementById('agent-history');
+    return { isDetails: !!d, open: d?.open ?? null, summary: d?.querySelector('summary')?.textContent ?? null,
+      chatHeight: c ? c.getBoundingClientRect().height : null }; })()`);
+  check("side panel · permissions are FOLDED, not a wall over the chat",
+    permShape?.isDetails === true && permShape?.open === false, permShape);
+  check("side panel · the conversation has room (non-zero height)", (permShape?.chatHeight ?? 0) > 50, permShape);
 
   const panelErrors = consoleErrors.get(panel) ?? [];
   check("side panel: no console errors", panelErrors.length === 0, panelErrors);

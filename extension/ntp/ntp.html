@@ -145,6 +145,13 @@
        needs its own explicit `[hidden]` display:none (the pattern documented at
        `.view-head .back[hidden]`). */
     .side-activity { flex: 0 0 auto; max-block-size: 40%; overflow-y: auto; }
+    .side-activity > summary { cursor: pointer; list-style: none; }
+    .side-activity > summary::-webkit-details-marker { display: none; }
+    .harness-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 8px; }
+    .harness-list button { border: 1px solid var(--border,#e3e0d9); background: var(--panel,#fff);
+      color: var(--text,#1d1b18); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+    .harness-list button:hover, .harness-list button[aria-current="true"] { border-color: var(--accent,#0e6e63); color: var(--accent,#0e6e63); }
+    .harness-list button:focus-visible { outline: 2px solid var(--accent,#0e6e63); outline-offset: 2px; }
     .side-activity[hidden] { display: none; }
     .side-label-row { display: flex; align-items: center; gap: 4px; min-inline-size: 0; }
     .side-label-row .side-label { flex: 1 1 auto; min-inline-size: 0; }
@@ -1111,6 +1118,12 @@
       <div class="brand-row">
         <button class="brand" id="home" type="button" aria-label="Home" title="Home"><span>Chrome <span class="brand-accent">Agent</span> Platform</span></button>
       </div>
+      <section class="side-section side-harness" aria-labelledby="harness-label">
+        <div class="side-label-row">
+          <span class="side-label" id="harness-label">Harness agents</span>
+        </div>
+        <div class="side-list harness-list" id="side-harness" aria-label="Harness agents (ACP)"></div>
+      </section>
       <section class="side-section side-tasks" aria-labelledby="tasks-label">
         <div class="side-label-row">
           <span class="side-label" id="tasks-label">Tasks</span>
@@ -1128,12 +1141,12 @@
         </div>
         <div class="side-list agent-list" id="side-agents" aria-label="Interactive and scheduled agent list" tabindex="0"></div>
       </section>
-      <section id="activity-ledger-section" class="side-section side-activity" hidden aria-labelledby="activity-ledger-label">
-        <div class="side-label-row">
-          <span class="side-label" id="activity-ledger-label">Activity</span>
-        </div>
+      <details id="activity-ledger-section" class="side-section side-activity" hidden>
+        <summary class="side-label-row">
+          <span class="side-label" id="activity-ledger-label">Activity <span class="muted" id="side-activity-count"></span></span>
+        </summary>
         <action-ledger id="side-action-ledger" limit="8" aria-label="Recent actions with undo"></action-ledger>
-      </section>
+      </details>
       <div class="side-foot">
         <span id="sidebar-durability-hint" role="status" aria-live="polite" hidden></span>
         <button class="btn ghost foot-btn" id="open-directory" type="button" title="Directory">

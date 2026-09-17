@@ -13644,9 +13644,13 @@ export async function renderAgentPermissionsPanel(host, {
 } = {}) {
   if (!host) return;
   host.textContent = "";
-  const section = document.createElement("section");
+  // FOLDED by default: the extension-wide permission list runs to ~30 rows plus
+  // a row per host origin, and as an open block it pushed the conversation out
+  // of the pane (owner report). The summary carries the counts, so the state is
+  // still visible at a glance; the revoke controls stay one click away.
+  const section = document.createElement("details");
   section.className = "agent-permissions";
-  const heading = document.createElement("h4");
+  const heading = document.createElement("summary");
   heading.textContent = "Permissions";
   section.append(heading);
 
@@ -13655,6 +13659,14 @@ export async function renderAgentPermissionsPanel(host, {
     p.className = className ?? "agent-permissions-note";
     p.textContent = text;
     return p;
+  };
+
+  /** Keep the summary informative: N extension permissions · M sites. */
+  const summarize = (granted = [], origins = []) => {
+    const parts = [];
+    if (granted.length) parts.push(`${granted.length} extension permission${granted.length === 1 ? "" : "s"}`);
+    if (origins.length) parts.push(`${origins.length} site${origins.length === 1 ? "" : "s"}`);
+    heading.textContent = parts.length ? `Permissions — ${parts.join(" · ")}` : "Permissions";
   };
 
   if (!chromePermissions || typeof chromePermissions.getAll !== "function") {
@@ -13677,6 +13689,7 @@ export async function renderAgentPermissionsPanel(host, {
   }
   const origins = Array.isArray(state.origins) ? state.origins.filter((o) => typeof o === "string") : [];
   const permissions = Array.isArray(state.permissions) ? state.permissions.filter((p) => typeof p === "string") : [];
+  summarize(permissions, origins);
 
   if (kind === "site") {
     const origin = String(id).replace(/\/$/, "");

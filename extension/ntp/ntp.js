@@ -1476,11 +1476,47 @@ function renderActionLedger() {
   const section = document.getElementById("activity-ledger-section");
   if (!actionLedgerEl || !section) return;
   actionLedgerEl.addEventListener("entries-change", (ev) => {
-    section.hidden = (ev.detail?.count ?? 0) === 0;
+    const count = Number(ev.detail?.count ?? 0);
+    section.hidden = count === 0;
+    const countEl = document.getElementById("side-activity-count");
+    if (countEl) countEl.textContent = count ? `(${count})` : "";
   });
   // An undo mutates tabs/bookmarks — refresh the run log so both surfaces agree.
   actionLedgerEl.addEventListener("action-undo", () => scheduleRunLogRefresh());
   actionLedgerEl.refresh?.().catch(() => {});
+  void renderSidebarHarnessRows();
+}
+
+// HARNESS AGENTS in the hub sidebar: the acp rows of the agent.registry route
+// (the same authority the picker/mention lists use), one click each to open that
+// harness's conversation. The owner asked for the harnesses to be reachable, not
+// buried behind the + menu.
+async function renderSidebarHarnessRows() {
+  const host = document.getElementById("side-harness");
+  // The NTP module is also imported under DOM stubs (unit + integration tests):
+  // a partially-stubbed document must not throw from a background render.
+  if (!host || typeof host.replaceChildren !== "function") return;
+  const res = await send("agent.registry").catch(() => null);
+  const groups = Array.isArray(res?.groups) ? res.groups : [];
+  const harnesses = groups
+    .filter((g) => g?.id === "acp")
+    .flatMap((g) => (Array.isArray(g.agents) ? g.agents : []))
+    .filter((a) => a?.kind === "acp" && a.enabled !== false);
+  host.replaceChildren();
+  const section = host.closest?.("section");
+  if (section) section.hidden = harnesses.length === 0;
+  for (const a of harnesses) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.dataset.ref = a.ref ?? `acp:${a.id}`;
+    btn.textContent = a.name || a.id;
+    btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
+    if (currentAgentKind === "acp" && currentAgentId === a.id) btn.setAttribute("aria-current", "true");
+    btn.addEventListener("click", () => {
+      openAgentSurface?.({ kind: "acp", id: a.id, name: a.name || a.id });
+    });
+    host.append(btn);
+  }
 }
 
 // The Jobs panel (the shared agent-to-agent board): ONE <jobs-board> mounted
@@ -4145,6 +4181,7 @@ subscribeProgress((ev) => {
     renderSiteAgents();
   }
   if (ev?.type === "agent-registry-changed") {
+    void renderSidebarHarnessRows();
     renderSiteOffer();
     // The unified registry changed (named/background/site) — refresh every
     // agent surface + revalidate any composer's selected-agent chip live
