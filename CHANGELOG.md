@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.410] — 2026-09-17
+- the owner's own artifact edit stops dead-ending in Settings, and an agent's edit is still gated
+
 ## [0.3.409] — 2026-09-17
 - reclaim store-service-worker bundle headroom instead of raising the budget
 

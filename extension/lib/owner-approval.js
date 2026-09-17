@@ -127,6 +127,16 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "asset.delete",
   // The owner's own Restore click in the viewer IS the approval.
   "asset.restore",
+  // WIDENING, REVIEWED (chrome-agent-platform-9mz1, owner report 2026-09-12):
+  // the owner's own edit of an artifact body through the extension's UI IS the
+  // approval. Before this it was bound to `ui:<documentId>` — a row only the
+  // Settings document may resolve — so the surface that raised the card could
+  // only ever answer "approvals are available only in Settings" (reproduced in
+  // a real browser: the write was refused and the content never changed).
+  // A MODEL/agent-initiated asset.update keeps the full inline card: the
+  // predicate below matches extension-document principals only, and that is
+  // pinned by tests/asset-update-owner-direct.test.ts (model → false).
+  "asset.update",
   "agent.delete",
   "named-agent.delete",
   // The owner's own Edit dialog Save IS the approval; model edits still pay
@@ -154,6 +164,16 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   "script.create",
   "script.run",
 ]);
+
+/** Why a resolution request is refused, in the owner's terms. A MISSING row is
+ * not an authority problem — telling the owner "approvals are available only in
+ * Settings" for a request that has already expired sends them to a list that no
+ * longer mentions it (chrome-agent-platform-9mz1). Empty string = allowed. */
+export function approvalResolutionRefusal(row, principal, documentId = "") {
+  if (!row) return "this approval request has expired — ask the agent to try it again";
+  if (mayResolveApproval(row, principal, documentId)) return "";
+  return "this approval can only be decided in Settings → Permissions";
+}
 
 export function isOwnerDirectApproval(context, action) {
   if (!OWNER_DIRECT_ACTIONS.has(action)) return false;

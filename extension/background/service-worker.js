@@ -1000,6 +1000,7 @@ import {
   consumeApproved,
   approvalCardDenial,
   mayResolveApproval,
+  approvalResolutionRefusal,
   createApprovalStore,
   createPendingApproval,
   isOwnerDirectApproval,
@@ -8449,8 +8450,18 @@ const handlers = mergeRouteMaps(
     // bound approvals (a model-initiated action awaiting its owner) — never
     // a ui:-bound one, which stays an exact-Settings-document decision.
     const before = ownerApprovalStore.approvals.get(String(approvalId ?? ""));
-    if (!mayResolveApproval(before, context?.principal, context?.documentId)) {
-      return { ok: false, error: "approvals are available only in Settings" };
+    const refusal = approvalResolutionRefusal(before, context?.principal, context?.documentId);
+    if (refusal) {
+      // Actionable, and honest about WHICH refusal this is: an expired request
+      // must not send the owner to a Settings list that no longer mentions it
+      // (chrome-agent-platform-9mz1). The category drives the existing
+      // "Fix in Settings" affordance wherever the surface projects it.
+      return {
+        ok: false,
+        error: refusal,
+        errorCategory: "owner-approval",
+        errorAction: before ? "review and approve it in Settings → Permissions" : "ask the agent to try that action again",
+      };
     }
     const result = resolvePendingApproval(ownerApprovalStore, String(approvalId ?? ""), approve === true);
     if (result.ok && before) {

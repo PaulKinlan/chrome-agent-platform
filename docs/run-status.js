@@ -71,7 +71,9 @@ export function normalizeConversationRunStatus(input) {
 // fix in Settings (provider auth, model config, host permission, network).
 // ONE authority shared by the NTP thread surface and the sidepanel — the
 // sidepanel dropping this logic was review P1-b (2026-08-28).
-const RECOVERABLE_CATEGORY = /host-permission|provider-auth|provider-config|model-config|network/i;
+// `owner-approval` (chrome-agent-platform-9mz1): an approval that genuinely can
+// only be decided in Settings must OFFER the route, not just name it.
+const RECOVERABLE_CATEGORY = /host-permission|provider-auth|provider-config|model-config|network|owner-approval/i;
 
 /** Which recovery the action button performs: "settings" opens Settings;
  * "continue" runs the budget continuation turn on the same thread
