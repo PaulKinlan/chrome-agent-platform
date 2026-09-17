@@ -1,14 +1,16 @@
 # Changelog
 
+## [0.3.411] — 2026-09-17
+- merge cap/9mz1-approval (union-resolved changelog + version bookkeeping)
+
 ## [0.3.410] — 2026-09-17
-- merge cap/e24e-acp-permissions (union-resolved: keep both changelog entries, higher version)
+- the owner's own artifact edit stops dead-ending in Settings, and an agent's edit is still gated
 
 ## [0.3.409] — 2026-09-17
 - reclaim store-service-worker bundle headroom instead of raising the budget
 
 ## [0.3.408] — 2026-09-17
 - pay for the repeated generated prose once, reclaiming ~4 KB of the store bundle
-- ask before an external agent runs a command
 
 ## [0.3.407] — 2026-09-17
 - version bump for the sidebar agents + folded permissions

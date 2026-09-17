@@ -9,8 +9,13 @@ import { runInNewContext } from "node:vm";
 import { DESTRUCTIVE_ACTIONS, OWNER_DIRECT_ACTIONS, isOwnerDirectApproval } from "../extension/lib/owner-approval.js";
 
 // Explicit policy, NOT the implicit complement of OWNER_DIRECT_ACTIONS.
+// chrome-agent-platform-9mz1: asset.update moved to OWNER_DIRECT_ACTIONS (the
+// owner's own edit in an extension document IS the approval — reviewed). The
+// route still calls requireOwnerApproval, because a MODEL-initiated edit keeps
+// the full inline card; that path is pinned in
+// tests/asset-update-owner-direct.test.ts.
 const APPROVAL_REQUIRED_ACTIONS = new Set([
-  "agent.update", "asset.update", "capability.revoke", "hooks.subscribe", "hooks.unsubscribe",
+  "agent.update", "capability.revoke", "hooks.subscribe", "hooks.unsubscribe",
   "named-agent.create", "named-agent.set-provider", "script.delete", "script.update", "fs.write",
   "task.schedule-script", "browser.cookie-value", "webmcp.use-tool", "mcp.use-server",
   "browser.close-foreign-tab", "browser.close-window", "browser.wipe", "browser.remove-bookmark",

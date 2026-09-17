@@ -64,9 +64,15 @@ Deno.test("owner-direct approval: a browser-attested owner UI document's asset.d
   assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "" }, "asset.delete"), false);
   assertEquals(isOwnerDirectApproval({ principal: "extension" }, "asset.delete"), false);
   assertEquals(isOwnerDirectApproval({ principal: "owner-options", documentId: 7 }, "asset.delete"), false);
-  // Only asset.delete is owner-direct: every other destructive action keeps
-  // the Settings approval flow even from a UI document.
-  for (const other of ["asset.update", "script.delete", "script.update", "capability.revoke", "hooks.subscribe"]) {
+  // asset.update JOINED the owner-direct set by a REVIEWED decision
+  // (chrome-agent-platform-9mz1, owner report + supervisor decision
+  // 2026-09-12): the owner's own edit of an artifact body through the
+  // extension's UI was bound to `ui:<documentId>`, a row only Settings may
+  // resolve, so the surface that raised the card could only ever answer
+  // "approvals are available only in Settings". Every OTHER destructive action
+  // here still keeps the Settings approval flow from a UI document.
+  assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, "asset.update"), true);
+  for (const other of ["script.delete", "script.update", "capability.revoke", "hooks.subscribe"]) {
     assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, other), false, other);
   }
   for (const direct of ["asset.delete", "agent.delete", "named-agent.delete", "recipe.delete"]) {
@@ -99,7 +105,10 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // per-agent MCP-server config in the SAME agent dialog IS the approval.
   // This operation is strictly owner-only (absent from DESTRUCTIVE_ACTIONS);
   // non-owner callers fail closed as not approvable (CAP-FB-20260908-MCP-APPROVAL-CONTRACT-01).
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "named-agent.update", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
+  // chrome-agent-platform-9mz1: asset.update joined the AUDITED set (the owner's
+  // own artifact edit IS the approval) — the set is still exact, and every other
+  // member is unchanged; widening it again still requires a review.
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "asset.update", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "named-agent.update", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {
