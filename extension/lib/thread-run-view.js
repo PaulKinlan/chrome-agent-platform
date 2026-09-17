@@ -41,6 +41,14 @@ async function mapBounded(items, limit, fn) {
 // load on demand via pagination options ({ limit, offset, all }).
 export const MAX_VIEW_EXECUTIONS = 50;
 export const DEFAULT_VIEW_EXECUTIONS = 50;
+// A run that is still writing its own log is NOT read here: the read queues
+// behind its own appends (measured ~1 s vs ~3 ms settled — bead
+// chrome-agent-platform-h638). Its rows stream in through the surface's live
+// transcript; the next build reads them once the phase settles. The PAUSED
+// phases stay readable (their producer is stopped) — that is what the owner
+// needs on open.
+const BUSY = ["running", "settling", "resume-dispatching", "cancel-requested"];
+
 // Bounded fan-out across executions (each page read is itself bounded).
 // 16 since CAP-FB-20260901-THREAD-RELOAD-FIDELITY-01: the view reads up to 50
 // executions (each a lock-shared bounded page read); measured 109 ms for a
@@ -82,6 +90,11 @@ function viewBoundNotice(viewed, total, { turnsKept = false, at = Date.now() } =
  *  views): a read failure is captured on the row, never thrown. dptw: no row
  *  bound — every row the store kept is read. */
 async function readExecutionLogs(e, listLogs, recordFailure) {
+  // A run still WRITING its own log is not read: the read queues behind its own
+  // appends (~1 s vs ~3 ms settled — bead chrome-agent-platform-h638). Its rows
+  // stream in through the surface's live transcript; the next build reads them
+  // once it settles. PAUSED phases are read (their producer is stopped).
+  if (BUSY.includes(e.record?.phase)) return { executionId: e.executionId, logs: [] };
   let logs = [];
   let logFailed = false;
   const logSpan = perfSpan(`thread-view:logs:${e.executionId}`);

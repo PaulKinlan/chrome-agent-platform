@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.408] — 2026-09-17
+- a task that is still running opens as fast as one that finished
+
 ## [0.3.407] — 2026-09-17
 - version bump for the sidebar agents + folded permissions
 
