@@ -68,6 +68,15 @@
   #agents-view { flex:1; display:flex; flex-direction:column; min-height:0; }
   #agents-view[hidden] { display:none; }
   #agents-list-pane { flex:1; overflow-y:auto; padding:12px 14px; }
+  .harness-quick { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .harness-quick .hq { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border,#e3e0d9);
+    background:var(--panel,#fff); color:var(--text,#1d1b18); border-radius:999px; padding:5px 10px;
+    font:inherit; font-size:12.5px; cursor:pointer; }
+  .harness-quick .hq:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+  .harness-quick .hq:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+  .harness-quick .hq[aria-current="true"] { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+  .ledger-sect > summary { cursor:pointer; list-style:none; }
+  .ledger-sect > summary::-webkit-details-marker { display:none; }
   #agents-list-pane[hidden] { display:none; }
   .tasks-sect { margin-top:16px; border-top:1px solid var(--border); padding-top:10px; }
   #agents-tasks { display:flex; flex-direction:column; gap:2px; }
@@ -137,10 +146,10 @@
     <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true"></div>
     <div class="tools" id="tools" aria-label="Available tools on this page"></div>
     <agent-conversation id="page-history" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
-    <section id="activity-ledger-section" class="ledger-sect" hidden aria-labelledby="ledger-h">
-      <h2 class="tasks-h" id="ledger-h">Activity on this tab</h2>
+    <details id="activity-ledger-section" class="ledger-sect" hidden>
+      <summary class="tasks-h" id="ledger-h">Activity on this tab <span class="muted" id="ledger-count"></span></summary>
       <action-ledger id="action-ledger" limit="10" aria-label="Recent actions with undo"></action-ledger>
-    </section>
+    </details>
     <div class="page-composer">
       <agent-composer id="page-composer" placeholder="Ask about this page, or ask the agent to act on it…" send-label="Ask" label="Ask the agent about this page"></agent-composer>
     </div>
@@ -158,6 +167,9 @@
 
   <section id="agents-view" role="tabpanel" aria-labelledby="tab-agents" hidden>
     <div id="agents-list-pane">
+      <!-- One-click access to the external harness agents (ACP): the entries
+           come from the same agent.registry route as the picker below. -->
+      <div class="harness-quick" id="harness-quick" aria-label="Harness agents"></div>
       <agent-picker id="agents-picker" label="Agents" callable-only></agent-picker>
       <div class="tasks-sect">
         <h2 class="tasks-h">Scheduled tasks</h2>

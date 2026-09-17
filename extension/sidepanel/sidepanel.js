@@ -57,9 +57,48 @@ const pageComposer = document.getElementById("page-composer");
 // state (the undone row flips to "Undone").
 const actionLedgerEl = document.getElementById("action-ledger");
 const actionLedgerSection = document.getElementById("activity-ledger-section");
+const harnessQuickEl = document.getElementById("harness-quick");
+
+/** ONE-CLICK harness agents: the acp rows of the SAME agent.registry authority
+ * the picker uses (no second list to keep in sync), rendered above the picker so
+ * reaching pi / Claude Code / Codex is a single click rather than a search. The
+ * rows open the ordinary agent conversation (openAgentDetail), so everything
+ * below — history, composer, permissions — behaves identically. */
+async function renderHarnessQuick() {
+  if (!harnessQuickEl) return;
+  const res = await send("agent.registry").catch(() => null);
+  const groups = Array.isArray(res?.groups) ? res.groups : [];
+  const harnesses = groups
+    .filter((g) => g?.id === "acp")
+    .flatMap((g) => (Array.isArray(g.agents) ? g.agents : []))
+    .filter((a) => a?.kind === "acp" && a.enabled !== false);
+  harnessQuickEl.replaceChildren();
+  if (!harnesses.length) {
+    harnessQuickEl.hidden = true;
+    return;
+  }
+  harnessQuickEl.hidden = false;
+  for (const a of harnesses) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hq";
+    btn.dataset.ref = a.ref ?? `acp:${a.id}`;
+    btn.textContent = a.name || a.id;
+    btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
+    if (openAgent?.ref && openAgent.ref === (a.ref ?? `acp:${a.id}`)) btn.setAttribute("aria-current", "true");
+    btn.addEventListener("click", () => {
+      openAgentDetail({ ref: a.ref ?? `acp:${a.id}`, kind: "acp", id: a.id, name: a.name || a.id });
+    });
+    harnessQuickEl.append(btn);
+  }
+}
+renderHarnessQuick();
 if (actionLedgerEl && actionLedgerSection) {
   actionLedgerEl.addEventListener("entries-change", (ev) => {
-    actionLedgerSection.hidden = (ev.detail?.count ?? 0) === 0;
+    const ledgerCount = Number(ev.detail?.count ?? 0);
+  actionLedgerSection.hidden = ledgerCount === 0;
+  const countEl = document.getElementById("ledger-count");
+  if (countEl) countEl.textContent = ledgerCount ? `(${ledgerCount})` : "";
   });
   actionLedgerEl.refresh?.().catch(() => {});
 }
@@ -790,6 +829,7 @@ subscribeProgress((ev) => {
   if (ev?.type !== "agent-registry-changed") return;
   picker.refresh?.();
   agentComposer.revalidateSelectedAgent?.();
+  void renderHarnessQuick();
   renderTasks();
   revalidateOpenAgent();
 });

@@ -288,6 +288,33 @@ try {
   const panelHasPi = Array.isArray(panelRows?.rows) && panelRows.rows.some((r) => /^pi$/i.test(r));
   check("side panel · Agents section shows the ACP harness group", panelHasAcpGroup, panelRows);
   check("side panel · Agents section lists pi", panelHasPi, panelRows);
+  // The owner's ask: harness agents reachable in ONE click from the side panel.
+  // Select the Agents tab FIRST: the pane is hidden until then, and a click at
+  // the coordinates of a hidden element lands on whatever is behind it.
+  const tabClicked = await clickExpr(panel, `document.getElementById('tab-agents')`);
+  await sleep(400);
+  const quickRows = await evl(panel, `(() => { const q = document.getElementById('harness-quick');
+    return q ? [...q.querySelectorAll('button.hq')].map(b => b.textContent.trim()) : null; })()`);
+  check("side panel · the Agents tab is reachable", tabClicked === true);
+  check("side panel · one-click harness rows exist", Array.isArray(quickRows) && quickRows.length >= 1, quickRows);
+  // Click the FIRST row with real input and confirm the conversation opens.
+  const firstRow = await boxOf(panel, `document.querySelector('#harness-quick button.hq')`);
+  if (firstRow) {
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: firstRow.x, y: firstRow.y, button: "left", buttons: 1, clickCount: 1 }, panel);
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: firstRow.x, y: firstRow.y, button: "left", buttons: 0, clickCount: 1 }, panel);
+  }
+  await sleep(1200);
+  const quickOpen = await evl(panel, `(() => ({
+    detailHidden: document.getElementById('agent-detail-pane')?.hidden ?? null,
+    name: document.getElementById('agent-detail-name')?.textContent ?? null,
+    kind: document.getElementById('agent-detail-kind')?.textContent ?? null,
+    ledgerCollapsed: document.getElementById('activity-ledger-section')?.tagName ?? null,
+    ledgerOpen: document.getElementById('activity-ledger-section')?.open ?? null,
+  }))()`);
+  await shot(panel, "07-sidepanel-quick-open");
+  check("side panel · one click opens that harness conversation", quickOpen?.detailHidden === false && !!quickOpen?.name, quickOpen);
+  check("side panel · the activity ledger no longer expands the pane by default", quickOpen?.ledgerCollapsed === "DETAILS" && quickOpen?.ledgerOpen === false, quickOpen);
+
   const panelErrors = consoleErrors.get(panel) ?? [];
   check("side panel: no console errors", panelErrors.length === 0, panelErrors);
 

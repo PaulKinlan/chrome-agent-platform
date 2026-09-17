@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.404] — 2026-09-17
+- your agents are one click away in the side panel, and the activity ledger stays folded
+
 ## [0.3.403] — 2026-09-17
 - the adapter itself is found without relying on the launcher's PATH
 
