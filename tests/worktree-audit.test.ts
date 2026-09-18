@@ -225,3 +225,21 @@ Deno.test("audit: origin/main is the anchor when it exists, and a merged worktre
   assert(candidate && candidate.reach === "unreachable", "the unmerged candidate is not on-main");
 })(); } finally { await cleanupFixtures(); }
 });
+
+// w0i8 verifier observation: `counts.detached` held the ARRAY of detached
+// worktree entries while every sibling key held a number. The entries already
+// live in `worktrees` (branch === "detached"), so `counts` is counts-only now —
+// pinned generally: every value under `counts` must be a number.
+Deno.test("audit: counts holds counts, and detached worktrees are listed under worktrees (w0i8)", async () => { try { await (async () => {
+  const { dir, git } = await mkRepo("counts");
+  git(["worktree", "add", "-q", "--detach", `${dir}-wt`, "main"]);
+  const result = runIn(dir);
+  const audit = JSON.parse(result.out);
+  for (const [key, value] of Object.entries(audit.counts)) {
+    assert(typeof value === "number", `counts.${key} must be a number, got ${Array.isArray(value) ? "array" : typeof value}`);
+  }
+  assertEquals(audit.counts.detached, 1);
+  const listed = audit.worktrees.filter((w: { branch: string }) => w.branch === "detached");
+  assertEquals(listed.length, 1, "the detached worktree is still inventoried");
+})(); } finally { await cleanupFixtures(); }
+});

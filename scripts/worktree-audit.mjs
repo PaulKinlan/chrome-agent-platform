@@ -127,7 +127,10 @@ audit.counts = {
   dirtyUntrackedPaths: dirty.reduce((n, w) => n + w.untracked, 0),
   unreachable: unreachable.length,
   tmpfs: tmpfs.length,
-  detached,
+  // A COUNT, not the list: the detached entries already live in `worktrees`
+  // (branch === "detached"), and a counts object whose key holds an array
+  // misdescribes itself (verifier observation on w0i8).
+  detached: detached.length,
   rescueTags: RESCUE_TAGS.size,
 };
 // FAIL-CLOSED: an unreachable durable head or a worktree the audit cannot read
