@@ -37,9 +37,10 @@ const ACTION = args._[0] || "status";
 let HARNESS = String(args.harness || ""); // "" = resolve from what this machine has (never a binary it lacks)
 const PORT = String(args.port || "3210");
 const TOKEN = args.token ? String(args.token) : "";
-// The working directory the service hands the adapter. NOT defaulted: a machine
-// that has no $HOME/journal must declare one or have the adapter report it
-// (chrome-agent-platform-7p7e: the old default invented /Users/<name>/journal).
+// The working directory the service hands the adapter. NOT defaulted at all: the
+// caller declares one or the adapter reports it. A tool must not carry a directory
+// convention (chrome-agent-platform-7p7e: the old default invented
+// /Users/<name>/journal on a machine that had no such directory).
 const CWD = args.cwd ? String(args.cwd) : "";
 const UNIT_OVERRIDE = args.unit ? String(args.unit) : "";
 const LOG_OVERRIDE = args.log ? String(args.log) : "";
@@ -154,7 +155,7 @@ function installMac() {
   // (/usr/bin:/bin:/usr/sbin:/sbin), so a harness CLI in ~/.local/bin is
   // invisible — the adapter then dies with "executable not found". Capturing
   // the installing shell's PATH is the difference between "just works" and that
-  // error. HOME is needed too (harness config + the $HOME/journal default cwd).
+  // error. HOME is needed too (harness config and its own working directory).
   const envEntries = {
     PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
     HOME,

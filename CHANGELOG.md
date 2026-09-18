@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.437] — 2026-09-18
+- the background agent service no longer assumes a folder called journal exists on your machine, and says so when a requested working folder is missing
+
 ## [0.3.436] — 2026-09-18
 - the background agent service uses the agent tool your machine actually has, and no longer passes your terminal a folder that is not there
 

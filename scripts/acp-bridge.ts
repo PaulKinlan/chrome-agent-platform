@@ -7,7 +7,7 @@
 // Host defaults the extension cannot know live HERE, never as source literals:
 // the adapter path and the session working directory resolve from $HOME at run
 // time, and a `session/new`/`session/load` arriving without a cwd gets the
-// bridge's --cwd (default $HOME/journal). A machine-path literal in the
+// bridge's --cwd (or nothing at all). A machine-path literal in the
 // extension would be wrong on every other machine (3khn/evidence-durable).
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
@@ -197,23 +197,23 @@ export function clipCloseReason(reason: string, limit = 123): string {
 
 /** The working directory a session request without one gets (host-side default).
  *
- * chrome-agent-platform-7p7e: `$HOME/journal` is a CONVENIENCE for a machine that
- * has one, never an invention for a machine that does not. Defaulting to it on a
- * Mac handed the client `/Users/paulkinlan/journal`, which does not exist there,
- * and the turn died with "Invalid params: `cwd` does not exist on the machine
- * running the agent" — nothing on that machine knows about this fleet's layout.
- * When the directory is not there, the host default is "" — exactly the case the
- * contract above describes: nothing is invented and the adapter reports the
- * missing cwd itself. */
+ * `--cwd`, or NOTHING (""). There is deliberately no `$HOME/journal` guess here:
+ * this bridge is a tool, and a tool must not carry somebody's directory
+ * convention. Guarding the guess with `existsSync` only made the invention SAFE —
+ * on any machine that happens to have a `~/journal` it would still silently adopt
+ * it as the working directory, and on Paul's Mac it handed the client
+ * `/Users/paulkinlan/journal`, which does not exist there, so the turn died with
+ * "Invalid params: `cwd` does not exist on the machine running the agent"
+ * (chrome-agent-platform-7p7e). "" is the documented contract: nothing is
+ * invented and the adapter reports the missing cwd itself. A client that wants a
+ * directory declares one, and so does an install (`--cwd`). */
 function defaultCwd() {
-  if (args.cwd) return args.cwd;
-  const guess = HOME ? `${HOME}/journal` : "";
-  return guess && existsSync(guess) ? guess : "";
+  return args.cwd || "";
 }
 
 /** Give a client frame the host defaults only the bridge knows: a session/new
  * or session/load with no working directory gets `hostCwd` (undefined = the
- * bridge's --cwd / $HOME/journal; "" = no host default configured, so nothing
+ * bridge's --cwd; "" = no host default configured, so nothing
  * is invented and the adapter reports the missing cwd itself). Exported so the
  * rule is unit-tested rather than pinned by a substring. */
 export function applyHostDefaults(raw: string, hostCwd?: string): string {

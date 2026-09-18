@@ -120,11 +120,18 @@ Deno.test("acp-bridge: a session with no cwd gets NOTHING invented when $HOME/jo
   assertEquals(got.params?.cwd, undefined, `nothing may be invented: ${JSON.stringify(got)}`);
 });
 
-Deno.test("acp-bridge: $HOME/journal is used only on a machine that HAS one (the convenience, kept)", async () => {
+Deno.test("acp-bridge: a machine that HAS $HOME/journal still does not have it invented", async () => {
+  // The pointed case (Paul, 2026-09-18): guarding the guess with existsSync made
+  // the invention SAFE and left the KNOWLEDGE in — on any machine with a real
+  // ~/journal it would have been silently adopted as the working directory. A
+  // tool must not carry somebody's directory convention, so the default is "".
   const scratch = await durableDir(`acp-cwd-with-${Date.now()}`);
   const home = join(scratch, "with-journal");
   const got = await hostDefaultsFor(home, true, { method: "session/new", params: {} });
-  assertEquals(got.params?.cwd, join(home, "journal"), JSON.stringify(got));
+  assertEquals(got.params?.cwd, undefined, `nothing may be invented, even here: ${JSON.stringify(got)}`);
+  // and with an explicit host default it IS used (the declared path, not a guess)
+  const explicit = await hostDefaultsFor(home, true, null, join(home, "journal"));
+  assertEquals(explicit.params?.cwd, join(home, "journal"), JSON.stringify(explicit));
 });
 
 Deno.test("acp-bridge: an explicit cwd in the frame, or the documented empty host default, is never overridden", async () => {
