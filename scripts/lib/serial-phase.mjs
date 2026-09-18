@@ -24,7 +24,7 @@ export const DEFAULT_SERIAL_FILE_TIMEOUT_MS = 180_000; // 3 minutes per file
 /**
  * @param {string} file
  * @param {{ timeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
- * @returns {{ code: number, timedOut: boolean, error?: Error }}
+ * @returns {{ code: number, timedOut: boolean, error?: Error, stdout?: Buffer|null, stderr?: Buffer|null }}
  */
 export function runSerialFile(file, {
   timeoutMs = Number(process.env.CAP_SERIAL_TEST_TIMEOUT_MS ?? DEFAULT_SERIAL_FILE_TIMEOUT_MS),
@@ -50,7 +50,7 @@ export function runSerialFile(file, {
       }
     }
     console.error(`\nrun-tests: serial file ${file} TIMED OUT after ${timeoutMs / 1000}s`);
-    return { code: 124, timedOut: true, error: r.error };
+    return { code: 124, timedOut: true, error: r.error, stdout: r.stdout, stderr: r.stderr };
   }
   // Safety: kill any remaining process group descendants so orphaned background processes
   // cannot linger even if the direct child exited or crashed.
@@ -61,7 +61,7 @@ export function runSerialFile(file, {
       // Clean.
     }
   }
-  return { code: r.status ?? 1, timedOut: false, error: r.error };
+  return { code: r.status ?? 1, timedOut: false, error: r.error, stdout: r.stdout, stderr: r.stderr };
 }
 
 /**

@@ -45,35 +45,30 @@ Deno.test("hangs indefinitely", async () => {
 });
 
 Deno.test("6yrq: lock tests clean up temporary lock files and leave /tmp clean", async () => {
-  // Count pre-existing lock files in /tmp
-  const scanLocks = () => {
-    const list = [];
-    try {
-      for (const entry of Deno.readDirSync("/tmp")) {
-        if (
-          entry.name.startsWith("cap-chrome-lock-test-") ||
-          entry.name.startsWith("cap-lock-scope-") ||
-          entry.name.startsWith("cap-slot-dir-")
-        ) {
-          list.push(entry.name);
-        }
-      }
-    } catch { /* ignore */ }
-    return new Set(list);
-  };
-
-  const before = scanLocks();
-
-  // Run the lock tests through the real runner
+  // Attribution, not a shared-prefix scan (chrome-agent-platform-p15i): with
+  // ~8 lanes sharing /tmp, a scan for `cap-chrome-lock-test-*` also matches a
+  // CONCURRENT lane's fixtures, and a foreign file was flagged as our leak — a
+  // false red that tempts retry-until-green. The child reports its own fixture
+  // path(s) as CAP_LOCK_FIXTURE:<path> lines; we assert exactly those are gone.
+  // A killed child still attributes correctly: the marker is printed at start,
+  // and the residue is then genuinely ours.
   const res = runSerialFile("tests/chrome-launch-lock.test.ts", {
     stdio: "pipe",
     cwd: ROOT,
   });
   assertEquals(res.code, 0, "chrome-launch-lock must pass cleanly");
 
-  const after = scanLocks();
-  const leaked = [...after].filter((name) => !before.has(name));
-  assertEquals(leaked, [], `lock tests must not leak temporary lock files in /tmp: ${leaked.join(", ")}`);
+  const out = new TextDecoder().decode(res.stdout ?? new Uint8Array());
+  const fixtures = [...out.matchAll(/^CAP_LOCK_FIXTURE:(\S+)$/gm)].map((m) => m[1]);
+  assert(fixtures.length > 0, "the child must report its fixture paths (marker protocol broken — never pass vacuously)");
+  const leaked = [];
+  for (const fixture of fixtures) {
+    try {
+      await Deno.lstat(fixture);
+      leaked.push(fixture);
+    } catch { /* gone, as required */ }
+  }
+  assertEquals(leaked, [], `lock tests must not leak their own temporary lock files: ${leaked.join(", ")}`);
 });
 
 Deno.test("pozs: timed-out serial file leaves no descendant processes behind (process group kill)", async () => {

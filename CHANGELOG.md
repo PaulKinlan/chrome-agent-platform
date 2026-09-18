@@ -16,6 +16,7 @@
 - sync-changelog check treats absent destination as unbuilt rather than drift (idco)
 - scrub legacy project references from codebase comments and guard with tests (i6n6)
 - classify acp.journal route in SW dispatch authority census (vv98)
+- isolate serial lock fixtures and heal killed drift residue (p15i)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode
