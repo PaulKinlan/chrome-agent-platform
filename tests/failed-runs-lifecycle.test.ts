@@ -14,7 +14,7 @@
 // @ts-nocheck — deterministic in-memory durable-store harness (same pattern as
 // tests/ux008-failed-dispatch.test.ts).
 import { assertEquals, assert } from "jsr:@std/assert";
-import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { selectFailedRuns } from "../extension/lib/run-retry.js";
 

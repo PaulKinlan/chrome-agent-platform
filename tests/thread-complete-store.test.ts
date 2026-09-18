@@ -9,7 +9,7 @@
 // legacy truncated row back-fills from the journal. (Realistic heterogeneous
 // content by habit; the homogeneous-run redactor quadratic was fixed in vj4s.)
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 
 function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(content) { return { kind: "file", content }; }

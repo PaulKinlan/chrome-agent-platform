@@ -5,7 +5,7 @@
 // (buildThreadRunView / listThreadExecutions / finalizeUnadmittedThreadRun do
 // not exist; the replay drops rows) and PASS on the redesign.
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
-import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 
 // ── OPFS fake (threads.js / memory.js live store) ──────────────────────────
 function dirNode() { return { kind: "directory", children: new Map() }; }

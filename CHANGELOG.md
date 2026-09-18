@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.428] — 2026-09-18
+- move test double run-log-wal-memory.js from extension/lib to tests/fixtures
+
 ## [0.3.427] — 2026-09-18
 - bound the bundled-tool generator so a hang cannot wedge a build or blame a test
 

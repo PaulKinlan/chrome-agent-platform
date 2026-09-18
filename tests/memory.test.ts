@@ -6,7 +6,7 @@
 // @ts-nocheck — the OPFS fake is intentionally dynamic (no FileSystem types in Deno).
 
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 import { masterMemory, siteMemory, MemoryStoreQuotaError, usageLedgerInspector, saveScreenshot, listScreenshots, journalAppend, journalAppendWithReceipt, journalCompensateExecution, journalAppendOnce, journalCommitCancellation, backgroundAgentMemory, namedAgentMemory, listNamedAgentIds, listBackgroundAgentIds, durableRunMemory, migrateLegacyDurableRunMemory, forgetDurableThread } from "../extension/lib/memory.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
 import { createThread, deleteThread } from "../extension/lib/threads.js";

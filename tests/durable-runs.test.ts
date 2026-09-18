@@ -6,7 +6,7 @@ import {
   DURABLE_RUN_POLICY,
   RUN_RETENTION_POLICY,
 } from "../extension/lib/durable-runs.js";
-import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 import { dispatchDurableProviderRun } from "../extension/lib/durable-provider-dispatch.js";
 import { admitDurableRun, durableQuotaResponse } from "../extension/lib/durable-quota.js";
 

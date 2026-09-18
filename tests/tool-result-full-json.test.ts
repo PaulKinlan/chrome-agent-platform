@@ -30,7 +30,7 @@ import {
   TOOL_RESULT_FULL_MAX_BYTES,
 } from "../extension/lib/tool-summary.js";
 import { createDurableRunRegistry } from "../extension/lib/durable-runs.js";
-import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 import { pairToolJournal, projectThreadMessages, toolRowsFromRunLog } from "../extension/shared/conversation.js";
 
 const utf8 = (s: string) => new TextEncoder().encode(s).byteLength;

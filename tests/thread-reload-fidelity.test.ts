@@ -21,7 +21,7 @@
 //   4. what is not shown is stated — never a silent drop.
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { createMemoryRunLogHandles } from "../extension/lib/run-log-wal-memory.js";
+import { createMemoryRunLogHandles } from "./fixtures/run-log-wal-memory.js";
 
 function dirNode() { return { kind: "directory", children: new Map() }; }
 function fileNode(content) { return { kind: "file", content }; }
