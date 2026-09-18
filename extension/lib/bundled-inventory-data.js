@@ -2,7 +2,11 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 export const BUNDLED_INVENTORY = Object.freeze({
  "schemaVersion": 1,
+<<<<<<< HEAD
  "release": "0.3.422",
+=======
+ "release": "0.3.421",
+>>>>>>> beb604b9 (docs: OPEN-QUESTIONS #11 resolved by owner decision — name stays, no Store release (isocan-32io))
  "signer": {
   "lane": "bundled",
   "keyId": "cap-bundled-release"

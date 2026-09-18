@@ -1,10 +1,7 @@
 # Changelog
 
-## [0.3.422] — 2026-09-18
-- use supported syntax for bd link discovered-from and blocks in AGENTS.md
-
 ## [0.3.421] — 2026-09-18
-- genuine reachable subset test for executable evidence instruments
+- OPEN-QUESTIONS #11 resolved by owner decision — name stays, no Store release (isocan-32io)
 
 ## [0.3.420] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode (khkk)
@@ -24,10 +21,6 @@
 - classify acp.journal route in SW dispatch authority census (vv98)
 - isolate serial lock fixtures and heal killed drift residue (p15i)
 - include source-inspecting test guards in always-on changed set (qcfc)
-- extend fileURLToPath root handling across verification and fixture scripts (0j1a)
-- pin unbounded executor bounds and calibrate non-finite over-budget test (cqhq)
-- report symlinked dependency root in bundle budget errors (2eb5)
-- bundle NTP hub and side panel surfaces as single modules (ox5s)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode
