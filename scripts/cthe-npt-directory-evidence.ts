@@ -200,9 +200,33 @@ try {
   check("directory shows the Discovered section", frame?.heading === "Discovered — pages offering tools", frame);
   check("the shop row names the origin and its tool count",
     Array.isArray(frame?.rows) && frame.rows.some((r: string) => r.includes("127.0.0.1:8934") && r.includes("5 tools")), frame?.rows);
-  check("the discovered section is VISIBLE: non-zero box in the viewport, checkVisibility true, and its own action hit-testable",
-    frame?.sectionVisible === true && frame?.hitInFrame === true && /IFRAME/.test(String(frame?.hitAtTop)),
-    { sectionVisible: frame?.sectionVisible, hitInFrame: frame?.hitInFrame, sectionRect: frame?.sectionRect, iframeRect: frame?.iframeRect, hitAtTop: frame?.hitAtTop });
+  check("the discovered section is VISIBLE: non-zero box in the viewport + checkVisibility",
+    frame?.sectionVisible === true,
+    { sectionVisible: frame?.sectionVisible, sectionRect: frame?.sectionRect, iframeRect: frame?.iframeRect });
+  check("the discovered row's action is REACHABLE: hit-testable inside the frame and through the iframe at the top level",
+    frame?.hitInFrame === true && /IFRAME/.test(String(frame?.hitAtTop)),
+    { hitInFrame: frame?.hitInFrame, hitAtTop: frame?.hitAtTop });
+
+  // 4a. The same two properties at the narrow width the reviewer checked.
+  await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 650, deviceScaleFactor: 1, mobile: true }, ntpSession);
+  await sleep(800);
+  const narrow = await ev(ntpSession, `(() => {
+    const f = [...document.querySelectorAll("iframe")].find((x) => (x.getAttribute("src") || "").includes("directory/directory.html"));
+    const d = f && f.contentDocument;
+    const section = d && d.getElementById("discovered-heading")?.closest("section");
+    const addBtn = d && [...d.querySelectorAll("button")].find((b) => b.textContent === "Add in Settings");
+    const sr = section ? section.getBoundingClientRect() : null;
+    const br = addBtn ? addBtn.getBoundingClientRect() : null;
+    const vw = d?.defaultView?.innerWidth ?? 0, vh = d?.defaultView?.innerHeight ?? 0;
+    const visible = !!(section && sr && sr.width > 1 && sr.height > 1 && sr.bottom > 0 && sr.top < vh && sr.right > 0 && sr.left < vw &&
+      section.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+    const reachable = !!(addBtn && br && d.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) === addBtn);
+    return { visible, reachable, rect: sr ? { x: Math.round(sr.x), y: Math.round(sr.y), w: Math.round(sr.width), h: Math.round(sr.height) } : null };
+  })()`);
+  check("at 390x650 the discovered section is still VISIBLE and its action reachable",
+    narrow?.visible === true && narrow?.reachable === true, narrow);
+  await send("Emulation.clearDeviceMetricsOverride", {}, ntpSession);
+  await sleep(500);
   check("the directory is not showing the empty state while discovery exists", frame?.empty === false, frame);
 
   // 4b. NATIVE ACTION: a real mouse event at the TOP-level coordinates (through
