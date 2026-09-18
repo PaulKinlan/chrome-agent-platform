@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.417] — 2026-09-18
+- the final generated Store JavaScript gets an evaluator AST gate
+
 ## [0.3.416] — 2026-09-18
 - (+4f3j absorbed): Doc.compile denial wired over all four bundles
 

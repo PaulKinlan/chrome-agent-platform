@@ -11,6 +11,7 @@
 // tests; the node:fs/promises read shim + acorn types are intentionally dynamic.
 
 import { parse } from "acorn";
+import { findDynamicEvaluators } from "./lib/dynamic-evaluator-scan.mjs";
 import { auditWasmBinary } from "../extension/lib/wasm-package-authority.js";
 
 // Test controls/oracles that must never appear in shipped code (scanned
@@ -566,19 +567,8 @@ export async function scanShippedJs(files, {
         }
       }
 
-      // (c) Dynamic source evaluation is forbidden except for the exact
-      // manifest-sandbox evaluator path supplied by Store policy. Generated
-      // service-worker/options bundles never inherit this exemption.
-      if (
-        !allowedDynamicEvaluatorFiles.has(file) &&
-        ((node.type === "CallExpression" &&
-          node.callee?.type === "Identifier" && node.callee.name === "eval") ||
-          (node.type === "NewExpression" &&
-            node.callee?.type === "Identifier" &&
-            node.callee.name === "Function"))
-      ) {
-        violations.push(`${file}: dynamic source evaluator is forbidden`);
-      }
+      // (c) moved BELOW the walk: dynamic-source-evaluator detection now runs
+      // as a whole-AST lexical-provenance pass per file (see the comment there).
 
       // (d) Dynamic Wasm construction/compilation and literal .wasm fetches
       // are forbidden in shipped source. The bundled authority is record-only;
@@ -694,6 +684,22 @@ export async function scanShippedJs(files, {
         }
       }
     });
+
+    // (c) Dynamic source evaluation is forbidden except for the exact
+    // manifest-sandbox evaluator path supplied by Store policy. Generated
+    // service-worker/options bundles never inherit this exemption.
+    // chrome-agent-platform-kdax: detection is the shared bounded classifier
+    // (scripts/lib/dynamic-evaluator-scan.mjs), a whole-AST lexical-provenance
+    // pass that sees ALIAS (`const F = Function; new F(...)`), MEMBER
+    // (`globalThis["Function"](...)`), SEQUENCE (`(0, eval)(...)`) and
+    // constructor-trick (`(function(){}).constructor(...)`) evaluators the old
+    // direct-Identifier check missed — while lexical shadowing
+    // (`function f(Function) {...}`) is correctly NOT the global evaluator.
+    if (!allowedDynamicEvaluatorFiles.has(file)) {
+      for (const _site of findDynamicEvaluators(ast)) {
+        violations.push(`${file}: dynamic source evaluator is forbidden`);
+      }
+    }
   }
 
   return violations;

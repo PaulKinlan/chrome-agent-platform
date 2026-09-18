@@ -561,6 +561,20 @@ try {
       }
     }
 
+    // Final evaluator gate (chrome-agent-platform-kdax): parse the ACTUAL final
+    // bytes of every generated bundle — after the scrub AND any minify transform
+    // — and refuse publication when ANY dynamic evaluator site survives. The
+    // regex checks above are defense in depth; this whole-AST classifier pass is
+    // what sees ALIAS/MEMBER/SEQUENCE evaluators (the zod Doc.compile aliases a
+    // regex could never name — 8 live sites on unmodified main, 2026-09-18).
+    // Scope is exactly the four generated bundles: the wasm-tools runtime ships
+    // as a separately reviewed, manifest-hash-pinned blob lane
+    // (scripts/store-target-policy.mjs), not generated JavaScript.
+    const { assertNoDynamicEvaluators } = await import("./scripts/lib/dynamic-evaluator-scan.mjs");
+    for (const gatePath of [SW, WORKER, OPT, DIFF_CORE]) {
+      assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
+    }
+
     // The bundle budget gate (CAP-FB-20260830-BUNDLE-BUDGET-01): the store
     // build FAILS over budget and names the top contributors; the developer
     // build warns (its unminified bytes are larger by design).
