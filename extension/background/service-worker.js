@@ -129,6 +129,12 @@ import {
   siteMemory,
 } from "../lib/memory.js";
 import {
+  filterBundledWasmRowsForAgent,
+  filterWebmcpOriginsForAgent,
+  isWebmcpOriginAllowed,
+  webmcpAllowlistForAgent,
+} from "../lib/agent-tools-filter.js";
+import {
   kvGet,
   kvSet,
   kvRemove,
@@ -2067,13 +2073,9 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
       : []),
     // Admitted bundled Wasm packages provide spec-derived validation, run-bound
     // authorization, and task execution dispatch closures through the shared core.
+    // The allow-list filter is shared with tests (lib/agent-tools-filter.js).
     ...executableBundledToolRecords(
-      agentTools?.bundledWasm != null
-        ? BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => {
-            const allowed = new Set(agentTools.bundledWasm);
-            return allowed.has(row.packageId) || allowed.has(row.toolId);
-          })
-        : BUNDLED_TOOL_PACKAGE_ROWS,
+      filterBundledWasmRowsForAgent(agentTools, BUNDLED_TOOL_PACKAGE_ROWS),
       {
         scope,
         sourceGeneration: `bundled-inventory:${BUNDLED_INVENTORY.release}`,
@@ -2395,12 +2397,11 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     const masterComposed = await resolveSystemPrompt(promptScope ?? "hub", { role: agentRole, runtimeContext });
     // Workers = enrolled site origins, each with its own memory + skills.
     const allOrigins = await listOrigins();
-    const allowedWebmcpOrigins = agentTools?.webmcpOrigins != null
-      ? new Set(agentTools.webmcpOrigins.map((o) => canonicalOrigin(o) || o.toLowerCase()))
-      : null;
-    const origins = allowedWebmcpOrigins == null
-      ? allOrigins
-      : allOrigins.filter((origin) => allowedWebmcpOrigins.has(origin) || allowedWebmcpOrigins.has(canonicalOrigin(origin)));
+    // The WebMCP origin allow-list filter is shared with tests
+    // (lib/agent-tools-filter.js) — the run builds workers only for origins
+    // this agent may drive, and the delegateGuard below denies the rest.
+    const allowedWebmcpOrigins = webmcpAllowlistForAgent(agentTools);
+    const origins = filterWebmcpOriginsForAgent(agentTools, allOrigins);
     // BUILD-LOCAL run-generation cells (the round-27 blocker 4): the cells are
     // created INSIDE this build and never shared across builds. The old code used
     // a module-global `runGenCells` Map, so two concurrent same-generation builds
@@ -2629,7 +2630,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       }),
       serverTooling,
       delegateGuard: async (origin) => {
-        if (allowedWebmcpOrigins != null && !allowedWebmcpOrigins.has(origin) && !allowedWebmcpOrigins.has(canonicalOrigin(origin))) {
+        if (!isWebmcpOriginAllowed(allowedWebmcpOrigins, origin)) {
           return { ok: false, error: `origin ${origin} is not in this agent's WebMCP origin allow-list` };
         }
         // The model-facing delegate_task must revalidate LIVE enrollment before
