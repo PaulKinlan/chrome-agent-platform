@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.434] — 2026-09-18
+- remove scripts/repro-recent-activity.ts
+
 ## [0.3.433] — 2026-09-18
 - automate named-HUNG path and pin start-failure promptness
 

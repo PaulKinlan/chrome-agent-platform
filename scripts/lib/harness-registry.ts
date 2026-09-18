@@ -167,7 +167,6 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "page-actions-journey.ts": { class: "manual", reason: "green at the re-inventory (7 s); the page-actions journey standalone, run by hand" },
   "panel-leak-probe.ts": { class: "manual", reason: "a leak probe with an honest verdict since the re-inventory: docs/frames grow only while each of the three panels is first visited, then stay flat for the remaining cycles and 0 options/ targets are retained after a forced GC (PASS); its old unconditional exit is gone" },
   "permission-matrix-acceptance.ts": { class: "manual", reason: "26/0 ATTESTED at the re-inventory (28 s); the permission-matrix acceptance run by hand for evidence" },
-  "repro-recent-activity.ts": { class: "manual", reason: "a repro probe for the stale Recent-activity bug; exits 0 when the live explorer shows new activity" },
   "run-status-lifecycle.ts": { class: "manual", reason: "30/34 at the re-inventory: three hard-stop checks (the @demo-slow run completes before a Stop button renders) and the clean-worktree manifest gate; kept for bisecting" },
   "screenshot-vision-evidence.ts": { class: "manual", reason: "green at the re-inventory (25 s); the screenshot-to-model evidence run" },
   "sidepanel-companion-journey.ts": { class: "manual", reason: "9/0 at the re-inventory (54 s); the side-panel companion journey standalone" },
