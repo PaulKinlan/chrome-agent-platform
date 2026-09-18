@@ -478,11 +478,52 @@ Deno.test(
     const result = await runSupervisor("escape", 2_000, {
       CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "400",
     });
+    let escapedPid = 0;
+    let escapedStart = "";
     try {
       assertEquals(result.code, 70);
       assertEquals(result.receipt?.custodyReason, "descendant-residue");
-      assert((result.receipt?.residue as Array<unknown>).length >= 1);
+      const residue = result.receipt?.residue as Array<Record<string, unknown>>;
+      assert(residue.length >= 1);
+      escapedPid = Number(residue[0].pid);
+      escapedStart = String(residue[0].starttime);
+      /**
+       * d2vz: 70/residue is only HALF the guard. The handshake's other half is
+       * that the runner CONSUMED the supervisor's ACK for its real child — the
+       * fixture records that as `escape-observed-by-supervisor`, and records
+       * `escape-unconfirmed` when the handshake did not complete (which is what
+       * an unimported reader made it record silently). Requiring the first and
+       * rejecting the second is what makes this case about the handshake rather
+       * than about the outer exit code.
+       */
+      const events = (Array.isArray(result.state) ? result.state : []).map((r) => r?.event);
+      assert(
+        events.includes("escape-observed-by-supervisor"),
+        `the supervisor's ACK must be consumed for this run's child (state events: ${JSON.stringify(events)})`,
+      );
+      assert(
+        !events.includes("escape-unconfirmed"),
+        "the fixture must not report escape-unconfirmed when its ACK named the child",
+      );
     } finally {
+      // Reap the child THIS case created, bound to its recorded identity
+      // (pid + starttime + uid). Never a prefix scan, never a foreign process.
+      if (escapedPid === 0 && Array.isArray(result?.state)) {
+        const row = result.state.find((r) => r.event === "escape-child-spawned");
+        if (typeof row?.childPid === "number") escapedPid = row.childPid;
+      }
+      if (escapedPid > 0) {
+        try {
+          const live = await readProcIdentity(escapedPid);
+          if (escapedStart === "" || (live.starttime === escapedStart && live.uid === Deno.uid())) {
+            Deno.kill(escapedPid, "SIGKILL");
+          }
+        } catch {
+          // Already gone.
+        }
+        const gone = await waitUntil(() => pidAlive(escapedPid), 2_000);
+        assert(gone, `the fixture's escaped child ${escapedPid} must be gone after teardown`);
+      }
       await removeEvidence(result);
     }
   },

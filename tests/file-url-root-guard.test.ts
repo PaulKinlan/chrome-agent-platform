@@ -136,7 +136,7 @@ Deno.test("e273: no test or harness derives a filesystem root from a URL pathnam
 const HASH_PINS = [
   {
     file: "tests/fixtures/security-suite-fake-runner.mjs",
-    digest: "a7a87d464288f0ebcc66b645bb24bb5fa8d23da13070af708b68c8d8f7ba411b",
+    digest: "a6288bcb21d89bd4eba06f561c9319ab09c77bcefdb464d682f69984f355ee58",
     pinIn: "scripts/security-suite-supervisor.mjs",
     pinName: "EXPECTED_FIXTURE_HASH",
   },
