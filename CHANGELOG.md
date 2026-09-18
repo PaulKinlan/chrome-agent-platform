@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.430] — 2026-09-18
+- automate the named-HUNG path, and never call a start failure a hang
+
 ## [0.3.429] — 2026-09-18
 - remove shared/agent-candidates.js replaced by agent-registry.js
 
