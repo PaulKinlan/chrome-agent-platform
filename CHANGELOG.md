@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.432] — 2026-09-18
+- correct durable-root import in cap-evidence/tar-stream-large-probe.ts
+
 ## [0.3.431] — 2026-09-18
 - remove scripts/opfs-wal-probe.ts and thread-open-trace.ts
 

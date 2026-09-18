@@ -5,11 +5,11 @@
 // 1. Streams a 520 MiB file payload to disk without buffering in memory; compares incremental digest.
 // 2. Streams >100,000 entries through an async generator without building an array in memory.
 //
-// Run: deno run -A scripts/tar-stream-large-probe.ts
+// Run: deno run -A cap-evidence/tar-stream-large-probe.ts
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { encodeTarStream } from "../extension/lib/tar-stream.js";
-import { durableDir } from "./lib/durable-root.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createHash } from "node:crypto";
 
 const DIR = durableDir("tar-stream-large-probe");
