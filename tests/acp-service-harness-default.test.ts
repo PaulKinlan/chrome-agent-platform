@@ -143,3 +143,93 @@ Deno.test("acp-bridge: an explicit cwd in the frame, or the documented empty hos
   const emptyHostDefault = await hostDefaultsFor(home, false, null, "");
   assertEquals(emptyHostDefault.params?.cwd, undefined, JSON.stringify(emptyHostDefault));
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// chrome-agent-platform-5i9i: a CLIENT-supplied cwd that does not exist on this
+// host used to fail silently, several machines from the cause. The bridge warns
+// (naming the path, the host, and whose choice it was) and never substitutes it.
+// ───────────────────────────────────────────────────────────────────────────
+
+Deno.test("acp-bridge: a client cwd that is missing HERE warns with the path, the host and the client as its author", async () => {
+  const { clientCwdWarning } = await import("../scripts/acp-bridge.ts");
+  const frame = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params: { cwd: "/no/such/place" } });
+  const lines = clientCwdWarning(frame, { exists: () => false, host: "bridge-host-1" });
+  const text = lines.join("\n");
+  assert(lines.length > 0, "a missing client cwd must warn");
+  assert(text.includes("/no/such/place"), `names the path: ${text}`);
+  assert(text.includes("bridge-host-1"), `names the host: ${text}`);
+  assert(/client/i.test(text), `says the client supplied it: ${text}`);
+  assert(/never substitutes/i.test(text), `says it is not substituted: ${text}`);
+
+  // no warning when the directory IS there, when no cwd was sent (the 7p7e path),
+  // or for methods that carry no session directory
+  assertEquals(clientCwdWarning(frame, { exists: () => true, host: "h" }), []);
+  assertEquals(clientCwdWarning(JSON.stringify({ method: "session/new", params: {} }), { exists: () => false, host: "h" }), []);
+  assertEquals(clientCwdWarning(JSON.stringify({ method: "session/load", params: { cwd: "" } }), { exists: () => false, host: "h" }), []);
+  assertEquals(clientCwdWarning(JSON.stringify({ method: "session/prompt", params: { cwd: "/no/such" } }), { exists: () => false, host: "h" }), []);
+  assertEquals(clientCwdWarning("not json", { exists: () => false, host: "h" }), []);
+});
+
+Deno.test("acp-bridge drive: the client's missing cwd is warned about once and reaches the adapter UNSHANGED", async () => {
+  const scratch = await durableDir(`acp-client-cwd-${Date.now()}`);
+  const home = join(scratch, "home");
+  const log = join(scratch, "frames.jsonl");
+  await Deno.mkdir(home, { recursive: true });
+  const port = 39847;
+  const bridge = new Deno.Command(Deno.execPath(), {
+    args: ["run", "-A", "scripts/acp-bridge.ts", "--port", String(port), "--harness", "claude-code",
+      "--adapter", join(Deno.cwd(), "tests/fixtures/acp-fake-adapter.mjs")],
+    cwd: Deno.cwd(),
+    env: {
+      HOME: home,
+      PATH: Deno.env.get("PATH") ?? "",
+      CAP_ACP_FIXTURE_LOG: log,
+    },
+    stdout: "null",
+    stderr: "piped",
+  }).spawn();
+  // Collect stderr INCREMENTALLY: awaiting the stream to end would deadlock, since
+  // the bridge only exits when this test kills it.
+  let stderrSeen = "";
+  const collector = (async () => {
+    try {
+      for await (const chunk of bridge.stderr) stderrSeen += new TextDecoder().decode(chunk);
+    } catch { /* stream closed with the process */ }
+  })();
+  try {
+    // Deno's global WebSocket (browser-shaped events), so no client dependency.
+    // wait for the listener
+    for (let i = 0; i < 100; i++) {
+      try {
+        const probe = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(500) });
+        if (probe.status < 500) break;
+      } catch { /* not up yet */ }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/acp`);
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("websocket error"));
+      setTimeout(() => reject(new Error("ws open timeout")), 10_000);
+    });
+    const frame = JSON.stringify({ jsonrpc: "2.0", id: 7, method: "session/new", params: { cwd: "/no/such/place", mcpServers: [] } });
+    ws.send(frame);
+    await new Promise((r) => setTimeout(r, 400));
+    ws.send(frame); // same path again: the warning must not repeat
+    await new Promise((r) => setTimeout(r, 1_500));
+    ws.close();
+    const seen = stderrSeen;
+    const hits = seen.split("\n").filter((l) => l.includes("/no/such/place")).length;
+    assert(hits >= 1, `the bridge must warn about the missing client cwd; stderr: ${seen.slice(0, 800)}`);
+    assertEquals(hits, 1, `the warning must appear once per path, not per frame; stderr: ${seen.slice(0, 800)}`);
+    assert(seen.includes("does not exist on THIS host"), `names the disagreement: ${seen.slice(0, 800)}`);
+    const frames = (await Deno.readTextFile(log).catch(() => "")).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+    const sent = frames.map((f: any) => f.msg).filter((m: any) => m?.method === "session/new");
+    assert(sent.length >= 1, `the adapter must have received the frame; log: ${JSON.stringify(frames).slice(0, 500)}`);
+    assertEquals(sent[0]?.params?.cwd, "/no/such/place", "the client's cwd must reach the adapter UNSHANGED — never substituted");
+  } finally {
+    try { bridge.kill("SIGKILL"); } catch { /* already gone */ }
+    await bridge.status.catch(() => {});
+    await collector;
+  }
+});

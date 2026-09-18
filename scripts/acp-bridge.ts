@@ -12,6 +12,7 @@
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
 import { existsSync } from "node:fs";
+import { hostname } from "node:os";
 
 const args = parseArgs(Deno.args, {
   string: ["port", "adapter", "harness", "cwd", "token", "allow-origin", "host"],
@@ -216,6 +217,44 @@ function defaultCwd() {
  * bridge's --cwd; "" = no host default configured, so nothing
  * is invented and the adapter reports the missing cwd itself). Exported so the
  * rule is unit-tested rather than pinned by a substring. */
+/** The lines to print when a CLIENT sends a cwd this host does not have.
+ *
+ * chrome-agent-platform-5i9i, and the other half of 7p7e. `defaultCwd` no longer
+ * invents anything; this is about a directory the CLIENT chose. That choice is
+ * authoritative for its own session and is NEVER substituted here — but when it
+ * does not exist on this host, the refusal arrives from the adapter, several
+ * machines away from the cause, and reads like the bridge's own mistake (Paul's
+ * "/Users/paulkinlan/journal" on a Linux bridge). Name the path, the host, and
+ * whose choice it was. It carries no knowledge of any directory convention —
+ * only the fact that two machines disagree.
+ */
+export function clientCwdWarning(
+  raw: string,
+  opts: { exists?: (path: string) => boolean; host?: string } = {},
+): string[] {
+  try {
+    const msg: any = JSON.parse(raw);
+    if (msg?.method !== "session/new" && msg?.method !== "session/load") return [];
+    const cwd = msg?.params?.cwd;
+    if (typeof cwd !== "string" || cwd === "") return [];
+    const exists = opts.exists ?? ((path: string) => {
+      try { return existsSync(path); } catch { return false; }
+    });
+    if (exists(cwd)) return [];
+    let host = "this machine";
+    try { host = opts.host ?? hostname(); } catch { /* keep the fallback */ }
+    return [
+      `[acp-bridge] WARNING: the client asked for cwd "${cwd}", which does not exist on THIS host (${host}) —`,
+      `[acp-bridge]          the adapter will refuse it with "Invalid params". The client's choice is passed`,
+      `[acp-bridge]          through unchanged (this bridge never substitutes one): fix it in the client's own`,
+      `[acp-bridge]          settings, or install this service with --cwd if the host should declare it.`,
+    ];
+  } catch { return []; }
+}
+
+/** Warn once per distinct line, so a repeating frame cannot flood the log. */
+const warnedClientCwdLines = new Set<string>();
+
 export function applyHostDefaults(raw: string, hostCwd?: string): string {
   try {
     const msg: any = JSON.parse(raw);
@@ -264,13 +303,22 @@ if (!isLoopbackHost(HOST) && import.meta.main) {
  * appended its frames to the other file's frame log, which made a resume pin
  * that had actually resumed count two `session/new`. Explicit keys win over
  * the inherited environment. */
-export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH, childEnv: Record<string, string> = {}) {
+export function createAcpServer(
+  port: number,
+  adapterPathOverride = ADAPTER_PATH,
+  childEnv: Record<string, string> = {},
+  /** The host-side working directory, DECLARED by the caller (CLI --cwd for the
+   * service, an explicit argument for a test or probe). There is no detection and
+   * no guess: "" means a session without a cwd gets none, and the adapter reports
+   * it (chrome-agent-platform-7p7e / 5i9i). */
+  hostCwdDefault: string = args.cwd,
+) {
   return Deno.serve({ port, hostname: HOST }, (req) => {
     const url = new URL(req.url);
 
     if (url.pathname === "/health") {
       const probeHarness = url.searchParams.get("harness")?.trim() || HARNESS;
-      let defaultCwdValue = "";
+      let defaultCwdValue = hostCwdDefault;
       let adapterDescribe = "";
       let adapterPresent = false;
       let error = "";
@@ -436,7 +484,13 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
     socket.onmessage = async (event) => {
       if (!writer) return;
       try {
-        const data = applyHostDefaults(String(event.data));
+        for (const line of clientCwdWarning(String(event.data))) {
+          if (!warnedClientCwdLines.has(line)) {
+            console.error(line);
+            warnedClientCwdLines.add(line);
+          }
+        }
+        const data = applyHostDefaults(String(event.data), hostCwdDefault || undefined);
         const encoder = new TextEncoder();
         await writer.write(encoder.encode(data + "\n"));
       } catch (err) {

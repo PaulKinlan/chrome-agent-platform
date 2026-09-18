@@ -1,6 +1,6 @@
 // tests/acp-bridge-host-defaults.test.ts — the bridge's host-side session
 // defaults: a session request that arrives without a working directory gets the
-// bridge's --cwd / $HOME/journal, an explicit one is never touched, and nothing
+// bridge's DECLARED --cwd, an explicit one is never touched, and nothing
 // is invented when no host default exists (the adapter reports it instead).
 // Pure over the exported rule, so the contract is pinned by behaviour rather
 // than by a substring.

@@ -132,8 +132,8 @@ async function freePort(): Promise<number> {
  * adapter spawn (measured, chrome-agent-platform-jp78: the other file's fixture
  * appended its own session/new to THIS file's frame log, so a resume that had
  * genuinely resumed counted two session/new). */
-function fixtureBridge(adapterEnv: Record<string, string> = {}) {
-  return createAcpServer(0, FAKE_ADAPTER, adapterEnv);
+function fixtureBridge(adapterEnv: Record<string, string> = {}, hostCwd = "") {
+  return createAcpServer(0, FAKE_ADAPTER, adapterEnv, hostCwd);
 }
 
 /** The fixture's frame log, or [] when no adapter lived long enough to write. */
@@ -178,7 +178,12 @@ async function continuityAttempt(
   const run = continuityRuns++;
   const harnessId = run === 0 ? "pi" : `pi-attempt-${run}`;
   const logPath = `${durableDir("acp-fixture-logs")}/frames-${Date.now()}-${run}.jsonl`;
-  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, ...adapterEnv });
+  // The working directory this bridge is DECLARED to fill in, created here so the
+  // assertion below can name it. It used to be $HOME/journal, inherited from the
+  // bridge's own default — which meant this pin passed on machines that happen to
+  // have ~/journal and failed everywhere else (chrome-agent-platform-5i9i).
+  const hostCwd = await durableDir(`acp-runner-hostcwd-${Date.now()}-${run}`);
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, ...adapterEnv }, hostCwd);
   const endpoint = `ws://127.0.0.1:${(bridge as any).addr.port}/acp`;
   const container = new MockContainer();
 
@@ -201,8 +206,7 @@ async function continuityAttempt(
     // the WIRING of applyHostDefaults (a unit test on the pure rule would not
     // notice the call site being removed).
     const newSession = frames.find((f) => f.dir === "in" && f.msg.method === "session/new");
-    const home = Deno.env.get("HOME") ?? "";
-    assertEquals(newSession.msg.params.cwd, `${home}/journal`, "the adapter received the host-side default cwd");
+    assertEquals(newSession.msg.params.cwd, hostCwd, "the adapter received the host-side default the bridge was DECLARED");
     return { ok: true };
   } catch (err) {
     const detail = String((err as Error)?.message ?? err);

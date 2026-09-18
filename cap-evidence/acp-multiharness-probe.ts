@@ -6,7 +6,12 @@
 import { AcpClient } from "../extension/lib/acp-client.js";
 
 const harness = Deno.args[0] || "claude-code";
-const cwd = Deno.env.get("CAP_ACP_CWD") || `${Deno.env.get("HOME")}/journal`;
+const cwd = Deno.env.get("CAP_ACP_CWD") || (() => {
+  // Declared, never guessed: this probe used to fall back to $HOME/journal, which
+  // is this fleet's convention and wrong anywhere else (7p7e / 5i9i).
+  console.error("[probe] set CAP_ACP_CWD to the working directory this probe should drive");
+  Deno.exit(2);
+})();
 
 // The harness table is the same one the bridge uses, so this proves the
 // REGISTRY resolution → spawn path a real bridge run takes.

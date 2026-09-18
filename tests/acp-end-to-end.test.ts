@@ -33,10 +33,12 @@ export const CLEAN_FIXTURE_ENV: Record<string, string> = {
   CAP_ACP_FIXTURE_ASK_PERMISSION: "0",
   CAP_ACP_FIXTURE_IGNORE_CANCEL: "0",
 };
-// The LIVE journey's working directory: $CAP_ACP_CWD, else $HOME/journal
-// resolved at RUN time (a machine path is never a source literal, 3khn).
-const HOME_ENV = Deno.env.get("HOME") ?? "";
-const LIVE_CWD = Deno.env.get("CAP_ACP_CWD") ?? (HOME_ENV ? `${HOME_ENV}/journal` : "");
+// The LIVE journey's working directory: DECLARED by the operator as $CAP_ACP_CWD,
+// never guessed. It used to fall back to $HOME/journal — this fleet's convention,
+// wrong on any machine that keeps its work elsewhere, and the exact default that
+// produced Paul's "cwd does not exist on the machine running the agent"
+// (chrome-agent-platform-7p7e / 5i9i). The live test fails loudly without it.
+const LIVE_CWD = Deno.env.get("CAP_ACP_CWD") ?? "";
 
 Deno.test("ACP End-to-End (fixture): drives a full turn through the loopback bridge", async () => {
   // Fail loudly if any concurrent test published a stray fixture knob to process env.
