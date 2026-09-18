@@ -12,6 +12,7 @@
 - build root derived via fileURLToPath for spaced checkout support (7fzu)
 - audit and test labels use fileURLToPath paths (k7c5)
 - guard teardown browser termination in unique composer evidence script (8dmf)
+- repair model-edit approval acceptance instrument (b5q4)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode

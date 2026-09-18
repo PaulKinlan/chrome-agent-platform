@@ -23,7 +23,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 let hub = null;
 const failures = [];
+const results = [];
+const observations = { during: null, after: null, card: null, stateAfter: null };
 function check(name, cond, detail = "") {
+  results.push({ name, passed: !!cond, detail });
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; failures.push(name); console.log(`  FAIL  ${name} ${JSON.stringify(detail).slice(0, 400)}`); }
 }
@@ -82,10 +85,10 @@ try {
   // Drive a REAL turn from the hub composer (genuine CDP input).
   const sent = await cdp.eval(hub.sessionId, `(() => {
     const c = document.getElementById("composer");
-    const i = c?.querySelector("#task-input");
+    const i = c?.querySelector("[data-composer-input]");
     if (!i) return null;
     i.focus();
-    return true;
+    return document.activeElement === i && !i.disabled;
   })()`);
   check("hub composer is drivable", sent === true);
   await cdp.send("Input.insertText", { text: "Edit model-edit-proof.html to say after" }, hub.sessionId);
@@ -104,14 +107,15 @@ try {
     })()`).catch(() => null);
     if (card) break;
   }
+  observations.card = card;
   check("the AGENT's artifact edit pauses on an approval card (still gated)", !!card, card);
 
-  const during = await msg({ type: "asset.get", origin: "master", id: assetId });
-  check("the artifact is untouched while the card waits", !String(during?.v?.asset?.content ?? "").includes("agent edit"), { content: String(during?.v?.asset?.content ?? "").slice(0, 80) });
+  const during = observations.during = await msg({ type: "asset.get", origin: "master", id: assetId });
+  check("the artifact is untouched while the card waits", during?.v?.ok === true && during.v.asset?.content === "<p>before</p>", during);
+  const beforeShot = await cdp.screenshot(hub.sessionId);
+  await Deno.writeFile(`${EVIDENCE_DIR}/before-allow.png`, beforeShot instanceof Uint8Array ? beforeShot : Uint8Array.from(atob(beforeShot), (c) => c.charCodeAt(0)));
 
   if (card) {
-    const shot = await cdp.screenshot(hub.sessionId).catch(() => null);
-    if (shot) await Deno.writeFile(`${EVIDENCE_DIR}/card.png`, shot instanceof Uint8Array ? shot : Uint8Array.from(atob(shot), (c) => c.charCodeAt(0)));
     // The owner's Allow resolves it INLINE (the surface hosts the card).
     const allowBox = `(() => { const c = [...document.querySelectorAll("#thread-conversation approval-card, #thread-conversation permission-approval-card")].find((x) => (x.getAttribute("state") || "pending") === "pending"); const b = c?.shadowRoot?.querySelector(".allow, .approve"); if (!b) return null; b.scrollIntoView({ block: "center" }); const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`;
     const box = await cdp.eval(hub.sessionId, allowBox);
@@ -119,12 +123,12 @@ try {
       await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", buttons: 1, clickCount: 1 }, hub.sessionId);
       await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", buttons: 0, clickCount: 1 }, hub.sessionId);
     }
-    console.log(`  allow button found: ${!!box}`);
+    check("the pending card exposes a native Allow target", !!box);
     let landed = false;
     for (let i = 0; i < 45 && !landed; i++) {
       await sleep(1000);
-      const after = await msg({ type: "asset.get", origin: "master", id: assetId });
-      landed = String(after?.v?.asset?.content ?? "").includes("agent edit");
+      const after = observations.after = await msg({ type: "asset.get", origin: "master", id: assetId });
+      landed = after?.v?.ok === true && after.v.asset?.content === "<p>after — agent edit</p>";
     }
     const stateAfter = await cdp.eval(hub.sessionId, `(() => {
       const c = [...document.querySelectorAll("#thread-conversation approval-card, #thread-conversation permission-approval-card")];
@@ -136,16 +140,24 @@ try {
         status: (status?.textContent ?? "").slice(0, 160),
       };
     })()`).catch(() => null);
+    observations.stateAfter = stateAfter;
     console.log(`  after Allow: ${JSON.stringify(stateAfter)}`);
     check("the owner's Allow resolves it INLINE and the edit lands", landed);
+    const afterShot = await cdp.screenshot(hub.sessionId);
+    await Deno.writeFile(`${EVIDENCE_DIR}/after-allow.png`, afterShot instanceof Uint8Array ? afterShot : Uint8Array.from(atob(afterShot), (c) => c.charCodeAt(0)));
   }
-  check("the scripted model's script was consumed (no overflow)", (provider.overflow ?? 0) === 0, { overflow: provider.overflow });
+  // Zero overflow alone also passes when the composer never sent a turn.
+  for (let i = 0; i < 10 && provider.cursor() < 3; i++) await sleep(1000);
+  check("the scripted model's script was consumed (no overflow)", provider.requests.length === 3 && provider.cursor() === 3 && provider.overflow === 0,
+    { requests: provider.requests.length, cursor: provider.cursor(), overflow: provider.overflow });
 } catch (err) {
   fail++;
   failures.push(`driver error: ${String(err)}`);
   console.log(`  FAIL  driver error: ${String(err)}`);
 } finally {
   await provider.close().catch(() => null);
+  await Deno.writeTextFile(`${EVIDENCE_DIR}/results.json`, JSON.stringify({ pass, fail, failures, results, assetId, ...observations,
+    provider: { requests: provider.requests.length, cursor: provider.cursor(), overflow: provider.overflow } }, null, 2) + "\n");
   await cdp.eval(hub?.sessionId, `chrome.runtime.sendMessage({ type: "provider.set", config: { provider: "demo", apiKey: "" } }).catch(() => null)`).catch(() => null);
   try { cdp.close(); } catch { /* closing */ }
   try { chrome.proc.kill("SIGTERM"); } catch { /* gone */ }
