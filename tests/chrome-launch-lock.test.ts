@@ -16,6 +16,10 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const origLockPath = Deno.env.get("CAP_CHROME_LOCK_PATH");
 const LOCK = await Deno.makeTempFile({ prefix: "cap-chrome-lock-test-" });
+// Attribution marker (chrome-agent-platform-p15i): the serial-phase resilience
+// check reads THIS line to learn which fixture THIS run owns, instead of
+// scanning a shared /tmp prefix space that also matches other lanes' files.
+console.log(`CAP_LOCK_FIXTURE:${LOCK}`);
 Deno.env.set("CAP_CHROME_LOCK_PATH", LOCK);
 Deno.env.delete("CAP_SECURITY_NONCE");
 Deno.env.delete("CAP_CHROME_LOCK_HELD");

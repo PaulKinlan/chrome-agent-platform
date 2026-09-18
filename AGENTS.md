@@ -359,6 +359,22 @@ read in run 2.
   unconditionally launches a REAL Chromium instance to test live profile mutation
   during whole-tree copies. It requires `/usr/bin/chromium` (or Chrome binary).
   See `docs/CHROME-TEST-CONTRACT.md` for the full contract.
+- **A suite must not depend on ambient state it does not create** (chrome-agent-platform-p15i,
+  fleet convention 2026-09-18). One property, three live instances: another lane's
+  `/tmp` (a shared-prefix scan flagged a concurrent lane's fixture as our leak),
+  killed-run residue in the shared tracked tree (a SIGKILLed fixture red the NEXT
+  run), and the worktree's dependency-root resolution (a symlinked `node_modules`
+  moved the measured bundle 688 bytes over budget with source unchanged). The fix
+  shape, proven by `41216bde` on the fourth instance (Git identity absent on a
+  sanitized HOME): **create the state locally where the work happens, and fail
+  closed with diagnostics when it cannot be created** — a fixture that silently
+  degrades is what turns an environmental cause into a mystery red. Fixtures carry
+  unique per-process roots; a check attributes only what its own run created (the
+  `CAP_LOCK_FIXTURE:` marker protocol in tests/serial-phase-resilience.test.ts);
+  residue is reconciled only by exact fixture signature, never by shape
+  (tests/build-tool-bundling.test.ts's reconcileFixtureResidue);
+  environment-caused verdicts get named as environmental rather than read as
+  product reds.
 - Load the extension in headless Chrome + verify the surfaces render + the
   journeys work (CDP). See docs/CONSTITUTION.md for the required journeys.
 - **Never name a debugging port.** Every harness in `scripts/` launches its
