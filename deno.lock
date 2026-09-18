@@ -9,6 +9,7 @@
     "jsr:@std/internal@^1.0.12": "1.0.14",
     "jsr:@std/internal@^1.0.14": "1.0.14",
     "jsr:@std/path@*": "1.1.6",
+    "jsr:@std/path@1": "1.1.6",
     "npm:@ai-sdk/anthropic@^4.0.45": "4.0.45_zod@3.25.76",
     "npm:@ai-sdk/google@^4.0.44": "4.0.44_zod@3.25.76",
     "npm:@ai-sdk/openai-compatible@^3.0.30": "3.0.31_zod@3.25.76",
