@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.416] — 2026-09-18
+- (+4f3j absorbed): Doc.compile denial wired over all four bundles
+
 ## [0.3.415] — 2026-09-18
 - the pinned Doc denial respects lexical Function bindings
 

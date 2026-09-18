@@ -499,12 +499,22 @@ try {
       },
     });
 
-    // Scrub + seam-scan IN STAGING (both the SW AND the agent-worker bundle —
-    // agent-do/ai/mcp-sdk carry a `new Function`/`new F("")` evaluator that the
-    // store-target policy forbids as a dynamic source evaluator).
+    // Scrub + seam-scan IN STAGING over ALL FOUR generated bundles (the SW,
+    // the agent-worker bundle — agent-do/ai/mcp-sdk carry a `new Function`/
+    // `new F("")` evaluator that the store-target policy forbids — the Options
+    // bundle, and diff-core). chrome-agent-platform-tptx (+4f3j, absorbed):
+    // the pinned Zod Doc.compile denial runs here too, and OPT is inside the
+    // loop — before this change OPT was the one bundle still taking zod's JIT
+    // path (its allowsEval probe and Doc.compile survived). After it, OPT's
+    // probe throws inside zod's own try/catch, `allowsEval` is false, and zod
+    // runs its jitless interpreter BY DESIGN (util.allowsEval consumers gate
+    // JIT: schemas.js). That is a runtime behavior change for ONE bundle,
+    // made deliberately: an evaluator-free Store package beats JIT parsing.
     let occurrences = 0;
     let zodProbes = 0;
-    for (const scrubPath of [SW, WORKER, DIFF_CORE]) {
+    let zodDocCompiles = 0;
+    const { denyZodDocCompiles } = await import("./scripts/lib/scrub-zod-doc.mjs");
+    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE]) {
       let bundle = await readFile(scrubPath, "utf8");
       if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
         throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
@@ -513,6 +523,13 @@ try {
       bundle = bundle.replace(/new Function\s*\(/g, "(function(){ throw new Error('eval disabled (MV3 CSP)'); })(");
       zodProbes += (bundle.match(/new F\(""\)/g) ?? []).length;
       bundle = bundle.replace(/new F\(""\)/g, '(() => { throw new Error("eval disabled (MV3 CSP)"); })()');
+      // The pinned Doc.compile denial: hash-recognized class bodies only, and
+      // (chrome-agent-platform-ol0j) only when the constructor's own lexical
+      // provenance resolves to the GLOBAL evaluator — a shadowed/local
+      // `Function` binding is preserved.
+      const denied = denyZodDocCompiles(bundle);
+      bundle = denied.code;
+      zodDocCompiles += denied.count;
       await writeFile(scrubPath, bundle);
       const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
       if (remaining > 0) throw new Error(`bundle still contains ${remaining} eval sites after cleaning`);
@@ -734,7 +751,7 @@ try {
     } catch (e) {
       throw new Error(`FATAL: version GC failed after publish (${e?.message ?? e}) — the live tree at ${VERSIONED} is valid, but stale versions remain under ${VERSIONS}`);
     }
-    console.log(`built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes; seam scan clean; dist.complete marker; rollback-fatal)`);
+    console.log(`built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes + ${zodDocCompiles} pinned Doc.compile methods; seam scan clean; dist.complete marker; rollback-fatal)`);
     // The dist is published and the marker validated — the build is a genuine
     // success from here. The changelog-delta print + version record are NOT
     // done here: they run AFTER the final fatal step (staging cleanup + lock

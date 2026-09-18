@@ -24,6 +24,7 @@
 // asserts every entry carries one.
 export const SERIAL_REASONS = {
   "tests/build-bootstrap.test.ts": "runs node build.mjs in-place (dist/dist-versions rewrite)",
+  "tests/store-doc-denial.test.ts": "runs node build.mjs in-place and reads the built extension/dist bundles (shared build artifacts)",
   "tests/build-debug-mode.test.ts": "runs node build.mjs in-place (debug+store bundles)",
   "tests/build-tool-bundling.test.ts": "runs build.mjs / the bundled-tool generator in-place and mutates packages/bundled",
   "tests/bundled-tool-packages.test.ts": "asserts the shipped CAS bytes (races with rebuilds)",
