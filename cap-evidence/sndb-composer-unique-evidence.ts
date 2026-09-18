@@ -184,5 +184,12 @@ Because \`document.getElementById()\` resolves to the first element in tree orde
   console.log(`\nEvidence written to ${path.join(outDir, "EVIDENCE.md")}`);
   cdp.close();
 } finally {
-  chrome.proc.kill("SIGTERM");
+  // The browser may already be gone (exactly when this evidence gets re-checked):
+  // killing a terminated child throws, and a green run must not exit 1 at teardown
+  // (same shape as the cthe harness fix, chrome-agent-platform-hhh8).
+  try {
+    chrome.proc.kill("SIGTERM");
+  } catch {
+    // already exited
+  }
 }
