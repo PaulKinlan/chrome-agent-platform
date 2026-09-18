@@ -75,7 +75,37 @@ if (process.argv[2] === "--stubborn-child") {
     });
     child.unref();
     record("escape-child-spawned", { childPid: child.pid });
-    setTimeout(() => process.exit(0), 300);
+    // chrome-agent-platform-7poq: a failed spawn reports asynchronously, and a
+    // descendant killed under suite pressure leaves no residue. Either way,
+    // exiting 0 would make a no-op scenario indistinguishable from a passing
+    // custody run (the nightly full-suite red: "exit 70 expected, got 0").
+    // Fail the scenario loudly instead; the supervisor reports the refusal.
+    child.once("error", () => {
+      record("escape-child-spawn-error", {});
+      process.exit(97);
+    });
+    if (process.env.CAP_SECURITY_TEST_ESCAPE_CHILD_FAIL === "1") {
+      // Test-only mutant (CAP_SECURITY_TEST_* envs are stripped from the
+      // child environment in production): kill the descendant so it cannot
+      // persist, simulating the observed full-suite failure shape.
+      setTimeout(() => child.kill("SIGKILL"), 50);
+    }
+    setTimeout(() => {
+      let persisted = false;
+      if (typeof child.pid === "number" && child.pid > 0) {
+        try {
+          process.kill(child.pid, 0);
+          persisted = true;
+        } catch {
+          persisted = false;
+        }
+      }
+      if (!persisted) {
+        record("escape-child-not-persistent", {});
+        process.exit(97);
+      }
+      process.exit(0);
+    }, 300);
   } else if (scenario === "serialize") {
     setTimeout(() => process.exit(0), 700);
   } else {

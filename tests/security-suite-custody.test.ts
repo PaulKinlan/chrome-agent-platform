@@ -401,6 +401,37 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
   assertEquals(pidAlive(escapedPid), false);
 });
 
+Deno.test(
+  "security-suite custody: an escape descendant that fails to persist fails the scenario loudly, never as a silent pass (7poq)",
+  async () => {
+    // The nightly full-suite red (chrome-agent-platform-7poq): the escape
+    // scenario's descendant did not persist (spawn failure / death under
+    // 32-worker suite pressure), the fixture still exited 0, and the run
+    // looked exactly like a clean custody pass. The fixture must refuse the
+    // scenario (exit 97) when it cannot establish the escape it promises;
+    // the mutant below kills the descendant to reproduce that shape.
+    const result = await runSupervisor("escape", 2_000, {
+      CAP_SECURITY_TEST_ESCAPE_CHILD_FAIL: "1",
+    });
+    try {
+      assertEquals(result.receipt?.exit, 97);
+      assertEquals(result.receipt?.result, "FAIL");
+      assertEquals(result.receipt?.custodyReason, "");
+      assert(
+        result.state.some((r) =>
+          r.event === "escape-child-not-persistent" ||
+          r.event === "escape-child-spawn-error"
+        ),
+        `fixture must record WHY the scenario could not run: ${
+          JSON.stringify(result.state)
+        }`,
+      );
+    } finally {
+      await removeEvidence(result);
+    }
+  },
+);
+
 
 Deno.test("uzik guard: the shared Chrome-slot poison mechanism is gone from production source", async () => {
   // Deleting coverage requires a guard: the poison marker only existed because
