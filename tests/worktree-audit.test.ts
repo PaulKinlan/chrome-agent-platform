@@ -32,8 +32,17 @@ async function cleanupFixtures() {
 async function mkRepo(name: string) {
   const dir = await Deno.makeTempDir({ prefix: `hygiene-${name}-` });
   fixtures.push(dir);
-  const git = (args: string[]) => new Deno.Command("git", { args, cwd: dir, stdout: "piped", stderr: "piped" }).outputSync();
+  const git = (args: string[]) => {
+    const p = new Deno.Command("git", { args, cwd: dir, stdout: "piped", stderr: "piped" }).outputSync();
+    if (p.code !== 0) {
+      const err = new TextDecoder().decode(p.stderr).trim();
+      throw new Error(`fixture git ${args.join(" ")} failed (exit ${p.code}): ${err}`);
+    }
+    return p;
+  };
   git(["init", "-q", "-b", "main"]);
+  git(["config", "user.name", "CAP Test"]);
+  git(["config", "user.email", "cap-test@example.com"]);
   Deno.writeTextFileSync(`${dir}/file.txt`, "x");
   git(["add", "."]);
   git(["commit", "-q", "-m", "init"]);
@@ -112,4 +121,55 @@ Deno.test("audit: the output is PUBLIC-SAFE (no private absolute paths in the co
     assert(typeof w.pathClass === "string" && typeof w.dirty === "number");
   }
 })(); } finally { await cleanupFixtures(); }
+});
+
+Deno.test("audit fixtures: broken git setup fails explicitly naming the setup failure (2d36)", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "hygiene-broken-" });
+  fixtures.push(dir);
+  let threw = false;
+  try {
+    const git = (args: string[]) => {
+      const p = new Deno.Command("git", { args, cwd: dir, stdout: "piped", stderr: "piped" }).outputSync();
+      if (p.code !== 0) {
+        const err = new TextDecoder().decode(p.stderr).trim();
+        throw new Error(`fixture git ${args.join(" ")} failed (exit ${p.code}): ${err}`);
+      }
+      return p;
+    };
+    git(["nonexistent-command"]);
+  } catch (e) {
+    threw = true;
+    assert((e as Error).message.includes("fixture git nonexistent-command failed (exit 1)"));
+  } finally {
+    await cleanupFixtures();
+  }
+  assert(threw, "broken git setup must fail explicitly rather than silently continuing");
+});
+
+Deno.test("audit fixtures: git failure under missing identity fails explicitly with code and stderr (2d36)", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "hygiene-unconfigured-" });
+  fixtures.push(dir);
+  new Deno.Command("git", { args: ["init", "-q", "-b", "main"], cwd: dir }).outputSync();
+  Deno.writeTextFileSync(`${dir}/file.txt`, "x");
+  new Deno.Command("git", { args: ["add", "."], cwd: dir }).outputSync();
+  let errorMsg = "";
+  try {
+    const p = new Deno.Command("git", {
+      args: ["commit", "-q", "-m", "fail"],
+      cwd: dir,
+      env: { HOME: dir },
+      stdout: "piped",
+      stderr: "piped",
+    }).outputSync();
+    if (p.code !== 0) {
+      const err = new TextDecoder().decode(p.stderr).trim();
+      throw new Error(`fixture git commit failed (exit ${p.code}): ${err}`);
+    }
+  } catch (e) {
+    errorMsg = (e as Error).message;
+  } finally {
+    await cleanupFixtures();
+  }
+  assert(errorMsg.includes("fixture git commit failed (exit 128)"), "must capture exit code 128");
+  assert(errorMsg.includes("Author identity unknown") || errorMsg.includes("unable to auto-detect email"), "must capture stderr reason");
 });
