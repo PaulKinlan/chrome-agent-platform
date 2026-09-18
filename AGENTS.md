@@ -116,8 +116,8 @@ checkout's root; `tests/beads-precommit-hook.test.ts` pins this.
   the way becomes a bead IN THE SAME SESSION you find it, with an honest
   description (what was observed, how to reproduce, acceptance for done).
 - **Link as you go**: issues discovered during a task get
-  `bd link <new-id> --discovered-from <current-id>`; hard ordering gets
-  `bd link <blocked-id> --blocked-by <blocker-id>`. The dependency graph — not
+  `bd link <new-id> <current-id> --type discovered-from`; hard ordering gets
+  `bd link <blocked-id> <blocker-id>` (or `bd dep add <blocked-id> --blocked-by <blocker-id>`). The dependency graph — not
   a human dispatcher — decides what is workable next.
 - `.beads/issues.jsonl` is a passive export, not the tracker.
 

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.422] — 2026-09-18
+- use supported syntax for bd link discovered-from and blocks in AGENTS.md
+
 ## [0.3.421] — 2026-09-18
 - genuine reachable subset test for executable evidence instruments
 
