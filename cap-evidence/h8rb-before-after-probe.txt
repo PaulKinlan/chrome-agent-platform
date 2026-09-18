@@ -1,0 +1,5 @@
+BEFORE [cp -r, relative] link='dist-versions/v1' worker-before-GC=yes worker-after-GC=yes
+BEFORE [cp -r, absolute] link='/home/paulkinlan/cap-evidence/h8rb-probe-1789725514/raw-src-absolute/dist-versions/v1' worker-before-GC=yes worker-after-GC=no
+AFTER  [copyBuiltTree, relative] isLink=false materialized=[{"path":"dist","target":"dist-versions/v1"}] worker-before-GC=yes worker-after-GC=yes
+AFTER  [copyBuiltTree, absolute] isLink=false materialized=[{"path":"dist","target":"dist-versions/v1"}] worker-before-GC=yes worker-after-GC=yes
+root: /home/paulkinlan/cap-evidence/h8rb-probe-1789725514

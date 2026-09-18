@@ -22,6 +22,7 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -62,8 +63,8 @@ check("fixture server answers on 127.0.0.1:8934 (/errors)", fixtureUp);
 // pregrants scripting+tabs (the webmcp-acceptance.ts headless pattern).
 const VARIANT = durableDir(`cap-kat-honest-errors-${Date.now()}`);
 {
-  const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", VARIANT] }).spawn();
-  await cp.status;
+  // h8rb: materialize — the KAT must exercise the copied tree's own bytes.
+  await copyBuiltTree({ src: EXT, dest: VARIANT });
   const mf = JSON.parse(await Deno.readTextFile(`${VARIANT}/manifest.json`));
   mf.permissions = [...new Set([...(mf.permissions ?? []), "scripting", "tabs"])];
   mf.optional_permissions = (mf.optional_permissions ?? []).filter((p: string) => p !== "scripting" && p !== "tabs");

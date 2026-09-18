@@ -47,6 +47,7 @@
 // read back from Chrome's own stderr — never a fixed port).
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const EXT = `${ROOT}extension`;
@@ -187,7 +188,9 @@ async function waitFor(fn: () => Promise<unknown>, ms = 20000) {
 async function makeVariant() {
   const dir = durableDir(`cap-read-page-variant-${Date.now()}`);
   await Deno.mkdir(dir, { recursive: true });
-  await new Deno.Command("cp", { args: ["-r", EXT + "/.", dir] }).spawn().status;
+  // h8rb: materialize — a link copied into the variant would make this
+  // acceptance test the source checkout instead of the tree it owns.
+  await copyBuiltTree({ src: EXT, dest: dir });
   const shipped = JSON.parse(await Deno.readTextFile(`${EXT}/manifest.json`));
   const mf = JSON.parse(await Deno.readTextFile(`${dir}/manifest.json`));
   mf.permissions = [...new Set([...(mf.permissions ?? []), "tabs"])];

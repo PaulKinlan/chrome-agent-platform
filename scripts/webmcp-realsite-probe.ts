@@ -30,6 +30,7 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = new URL("..", import.meta.url).pathname;
@@ -53,8 +54,10 @@ await Deno.mkdir(OUT, { recursive: true });
 // Transient build scratch, rebuilt every run (webmcp-acceptance.ts pattern).
 const VARIANT = durableDir(`cap-webmcp-probe-variant-${Date.now()}`);
 {
-  const cp = new Deno.Command("cp", { args: ["-r", EXT + "/.", VARIANT] }).spawn();
-  await cp.status;
+  // h8rb: one dereferencing copy — the variant must own its built bytes, not
+  // hold a link into this checkout (a link here loads the source's bytes and
+  // dies when the source's build GC removes the target).
+  await copyBuiltTree({ src: EXT, dest: VARIANT });
   const mf = JSON.parse(await Deno.readTextFile(`${VARIANT}/manifest.json`));
   mf.permissions = [...new Set([...(mf.permissions ?? []), "scripting", "tabs"])];
   mf.optional_permissions = (mf.optional_permissions ?? []).filter((p: string) => p !== "scripting" && p !== "tabs");
