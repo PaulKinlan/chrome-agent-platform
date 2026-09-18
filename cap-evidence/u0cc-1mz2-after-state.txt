@@ -1,0 +1,7 @@
+=== 1mz2 AFTER: the documented rebuild (npm run build:production, ~14s) ===
+--- command: npm run check:dist (silent = current)
+
+
+[silent: no staleness output]
+--- command: npm run test:file -- tests/bundled-tool-packages.test.ts
+ok | 23 passed | 0 failed (4s)

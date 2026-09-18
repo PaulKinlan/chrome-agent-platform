@@ -24,6 +24,19 @@ git add package.json package-lock.json extension/manifest.json CHANGELOG.md exte
 # changed nothing — bookkeeping commits must not be rewritten)
 git diff --cached --quiet || git commit -q --amend --no-edit
 
+# 1mz2: extension/dist/dist.complete binds HEAD + every indexed source byte, and
+# the amend above already moved HEAD — so the built extension is stale from this
+# commit on, and the next gate would red on a marker instead of naming the cause.
+# Say it once, with the fix. A NOTE, never a gate: the script always exits 0 and
+# prints nothing when the build is current, and a missing node never blocks.
+# 1mz2: this hook is MACHINE-LOCAL (.git/hooks), while the note script is
+# TRACKED and may not exist on the branch being committed (a worktree off an
+# older main, or before the change lands). Never call it blind: a missing
+# script must be silence, not a Node crash trace in every lane's commit log.
+if command -v node >/dev/null 2>&1 && [ -f scripts/dist-staleness-note.mjs ]; then
+  node scripts/dist-staleness-note.mjs 2>&1 || true
+fi
+
 # Beads: auto-push Dolt data to remote after each commit. Runs from the
 # committing checkout's root (where git runs every hook); bd resolves the shared
 # database from a linked worktree by itself. Never locate the repo via $0 — that

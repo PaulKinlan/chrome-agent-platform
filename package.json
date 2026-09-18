@@ -12,6 +12,7 @@
     "build:regen-tools": "node build.mjs --target=store --regen-tools",
     "sync:gallery": "node scripts/sync-gallery.mjs",
     "check:gallery": "node scripts/sync-gallery.mjs --check",
+    "check:dist": "node scripts/dist-staleness-note.mjs",
     "check:vocabulary": "node scripts/check-vocabulary.mjs",
     "watch": "node build.mjs --watch",
     "test": "node scripts/run-tests.mjs",
