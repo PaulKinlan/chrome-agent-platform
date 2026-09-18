@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.420] — 2026-09-18
+- entry-point checks compare the same encoding, so a spaced checkout cannot pass vacuously
+
+## [0.3.419] — 2026-09-18
+- entry-point checks compare the same encoding, so a spaced checkout cannot pass vacuously
+
 ## [0.3.418] — 2026-09-18
 - connect landings back to the beads they already name (j4t1)
 - enable Stop affordance for in-flight ACP turns (c6gq)

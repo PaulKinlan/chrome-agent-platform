@@ -26,6 +26,7 @@
 // the convention it relies on (bead id in the commit subject) is already the
 // fleet's practice.
 
+import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 
 const DEFAULT_PREFIX = "chrome-agent-platform-";
@@ -155,6 +156,6 @@ function main(argv) {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2));
 }
