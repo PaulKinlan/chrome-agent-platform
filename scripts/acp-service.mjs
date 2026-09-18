@@ -12,7 +12,7 @@
 
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
-import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, accessSync, constants } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const HOME = homedir();
@@ -36,6 +36,8 @@ const ACTION = args._[0] || "status";
 const HARNESS = String(args.harness || "pi");
 const PORT = String(args.port || "3210");
 const TOKEN = args.token ? String(args.token) : "";
+const UNIT_OVERRIDE = args.unit ? String(args.unit) : "";
+const LOG_OVERRIDE = args.log ? String(args.log) : "";
 
 function bridgeArgs() {
   const a = ["run", "-A", join(ROOT, "scripts", "acp-bridge.ts"), "--port", PORT, "--harness", HARNESS];
@@ -188,6 +190,237 @@ function status() {
   }
 }
 
+async function doctor() {
+  let healthy = true;
+  console.log(`=== ACP Service Doctor (${OS}) ===\n`);
+
+  // 1. Installed unit & captured PATH
+  let unitPath = UNIT_OVERRIDE;
+  if (!unitPath) {
+    if (OS === "darwin") {
+      unitPath = join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`);
+    } else {
+      unitPath = join(HOME, ".config", "systemd", "user", "cap-acp-bridge.service");
+    }
+  }
+
+  let capturedPath = "";
+  let workingDir = ROOT;
+  let serviceHarness = HARNESS;
+  let servicePort = PORT;
+
+  console.log(`1. Service Unit:`);
+  if (!existsSync(unitPath)) {
+    console.log(`   Unit file: NOT INSTALLED (${unitPath})`);
+    healthy = false;
+  } else {
+    console.log(`   Unit file: ${unitPath}`);
+    const unitContent = readFileSync(unitPath, "utf8");
+    const isPlist = unitContent.includes("<?xml") || unitContent.includes("<plist");
+    if (isPlist) {
+      const pathMatch = unitContent.match(/<key>PATH<\/key>\s*<string>([^<]*)<\/string>/);
+      capturedPath = pathMatch ? pathMatch[1] : "";
+      const dirMatch = unitContent.match(/<key>WorkingDirectory<\/key>\s*<string>([^<]*)<\/string>/);
+      if (dirMatch) workingDir = dirMatch[1];
+      const harnessMatch = unitContent.match(/<string>--harness<\/string>\s*<string>([^<]*)<\/string>/);
+      if (harnessMatch) serviceHarness = harnessMatch[1];
+      const portMatch = unitContent.match(/<string>--port<\/string>\s*<string>([^<]*)<\/string>/);
+      if (portMatch) servicePort = portMatch[1];
+    } else {
+      const pathMatch = unitContent.match(/Environment=(?:")?PATH=([^"\n]+)(?:")?/);
+      capturedPath = pathMatch ? pathMatch[1] : "";
+      const dirMatch = unitContent.match(/WorkingDirectory=([^\n]+)/);
+      if (dirMatch) workingDir = dirMatch[1];
+      const harnessMatch = unitContent.match(/--harness\s+([^\s]+)/);
+      if (harnessMatch) serviceHarness = harnessMatch[1];
+      const portMatch = unitContent.match(/--port\s+([^\s]+)/);
+      if (portMatch) servicePort = portMatch[1];
+    }
+    console.log(`   Captured PATH: ${capturedPath || "(empty/none)"}`);
+    if (!capturedPath) {
+      console.log(`   WARNING: No captured PATH in service unit file`);
+      healthy = false;
+    }
+  }
+
+  // 2. Binary resolution from captured PATH
+  console.log(`\n2. Binary Resolution (from captured PATH):`);
+  const pathEntries = (capturedPath || "").split(":").filter(Boolean);
+  const resolveInCapturedPath = (name) => {
+    for (const dir of pathEntries) {
+      const full = join(dir, name);
+      try {
+        if (existsSync(full)) {
+          try {
+            accessSync(full, constants.X_OK);
+            return { found: true, path: full, entry: dir };
+          } catch {
+            return { found: false, path: full, entry: dir, notExecutable: true };
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    return { found: false };
+  };
+
+  const harnessBinary = serviceHarness === "pi" ? "pi" : serviceHarness === "claude-code" ? "claude" : serviceHarness === "codex" ? "codex" : serviceHarness;
+  const binariesToCheck = [
+    ["deno", "Deno runtime (runs bridge)"],
+    ["npx", "npx (on-demand adapter resolution)"],
+    [harnessBinary, `Harness CLI '${serviceHarness}' (agent execution)`],
+  ];
+
+  for (const [bin, desc] of binariesToCheck) {
+    const res = resolveInCapturedPath(bin);
+    if (res.found) {
+      console.log(`   [OK] ${bin} (${desc})`);
+      console.log(`        -> ${res.path}`);
+      console.log(`        (provided by: ${res.entry})`);
+    } else if (res.notExecutable) {
+      console.log(`   [FAIL] ${bin} (${desc})`);
+      console.log(`        -> ${res.path} exists but is NOT EXECUTABLE`);
+      healthy = false;
+    } else {
+      console.log(`   [FAIL] ${bin} (${desc})`);
+      console.log(`        -> NOT FOUND in any captured PATH entry`);
+      healthy = false;
+    }
+  }
+
+  // 3. Log tail & last fatal line
+  console.log(`\n3. Service Logs:`);
+  const effectiveLog = LOG_OVERRIDE || LOG;
+  let logLines = [];
+  if (existsSync(effectiveLog)) {
+    console.log(`   Log path: ${effectiveLog}`);
+    const logContent = readFileSync(effectiveLog, "utf8");
+    logLines = logContent.trim().split("\n").filter(Boolean);
+  } else if (OS !== "darwin" && !LOG_OVERRIDE) {
+    try {
+      const out = execFileSync("journalctl", ["--user", "-u", "cap-acp-bridge", "-n", "30", "--no-pager"], { encoding: "utf8" });
+      logLines = out.trim().split("\n").filter(Boolean);
+      console.log(`   Log source: journalctl --user -u cap-acp-bridge`);
+    } catch {
+      console.log(`   Log path: ${effectiveLog} (not found)`);
+    }
+  } else {
+    console.log(`   Log path: ${effectiveLog} (not found)`);
+  }
+
+  if (logLines.length > 0) {
+    const tail = logLines.slice(-15);
+    console.log(`   Recent log tail (${tail.length} lines):`);
+    for (const l of tail) console.log(`     ${l}`);
+
+    const fatalPattern = /executable not found|could not start|failed to start|cannot connect|fatal|error:|uncaught|exit \d+/i;
+    const lastFatal = [...logLines].reverse().find((l) => fatalPattern.test(l));
+    if (lastFatal) {
+      console.log(`\n   >>> LAST FATAL/ERROR LINE IDENTIFIED:`);
+      console.log(`   >>> ${lastFatal}`);
+    }
+  } else {
+    console.log(`   (no log entries recorded yet)`);
+  }
+
+  // 4. Repo version, commit, and cleanliness
+  console.log(`\n4. Bridge Codebase & Version:`);
+  console.log(`   Working directory: ${workingDir}`);
+  try {
+    const gitHead = execFileSync("git", ["-C", workingDir, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    const gitShort = execFileSync("git", ["-C", workingDir, "rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim();
+    const gitStatus = execFileSync("git", ["-C", workingDir, "status", "--porcelain"], { encoding: "utf8" }).trim();
+    let version = "unknown";
+    try {
+      const pkg = JSON.parse(readFileSync(join(workingDir, "package.json"), "utf8"));
+      version = pkg.version || "unknown";
+    } catch { /* ignore */ }
+
+    console.log(`   Version: ${version}`);
+    console.log(`   Commit: ${gitShort} (${gitHead})`);
+    if (gitStatus) {
+      const dirtyCount = gitStatus.split("\n").filter(Boolean).length;
+      console.log(`   Worktree: DIRTY (${dirtyCount} uncommitted changes)`);
+    } else {
+      console.log(`   Worktree: clean`);
+    }
+
+    try {
+      const behind = execFileSync("git", ["-C", workingDir, "rev-list", "--count", "HEAD..@{u}"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+      if (Number(behind) > 0) {
+        console.log(`   Upstream status: ${behind} commit(s) behind upstream`);
+      } else {
+        console.log(`   Upstream status: up to date with upstream tracking`);
+      }
+    } catch {
+      console.log(`   Upstream status: no upstream tracking branch configured`);
+    }
+  } catch (err) {
+    console.log(`   Git check failed: ${String(err?.message || err)}`);
+  }
+
+  // 5. Service state from launchctl / systemctl
+  console.log(`\n5. Service State:`);
+  if (OS === "darwin") {
+    try {
+      const out = execFileSync("launchctl", ["list", LABEL], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+      console.log(`   launchctl status for ${LABEL}:`);
+      console.log(out.split("\n").map((l) => `     ${l}`).join("\n"));
+      const pidMatch = out.match(/"PID"\s*=\s*(\d+)/);
+      const exitMatch = out.match(/"LastExitStatus"\s*=\s*(\d+)/);
+      if (pidMatch) console.log(`   PID: ${pidMatch[1]} (running)`);
+      if (exitMatch && exitMatch[1] !== "0") {
+        console.log(`   WARNING: Last exit status was non-zero (${exitMatch[1]}), service may be restarting`);
+        healthy = false;
+      }
+    } catch (err) {
+      console.log(`   Service is NOT running or not loaded in launchctl: ${String(err?.message || err)}`);
+      healthy = false;
+    }
+  } else {
+    try {
+      const isActive = execFileSync("systemctl", ["--user", "is-active", "cap-acp-bridge.service"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+      console.log(`   systemd active state: ${isActive}`);
+      if (isActive !== "active") {
+        healthy = false;
+        try {
+          const statusOut = execFileSync("systemctl", ["--user", "status", "cap-acp-bridge.service", "--no-pager"], { encoding: "utf8" });
+          console.log(statusOut.split("\n").slice(0, 10).map((l) => `     ${l}`).join("\n"));
+        } catch { /* ignore */ }
+      }
+    } catch (err) {
+      console.log(`   systemd status check failed: ${String(err?.message || err)}`);
+      healthy = false;
+    }
+  }
+
+  // 6. Endpoint probe
+  console.log(`\n6. Endpoint Probe:`);
+  const healthUrl = `http://127.0.0.1:${servicePort}/health`;
+  try {
+    const res = await fetch(healthUrl, { signal: AbortSignal.timeout(1500) });
+    if (res.ok) {
+      const json = await res.json();
+      console.log(`   [OK] Bridge responding at ${healthUrl}`);
+      console.log(`        Harness: ${json.harness}, Adapter: ${json.adapter}`);
+    } else {
+      console.log(`   [FAIL] Bridge returned HTTP ${res.status} at ${healthUrl}`);
+      healthy = false;
+    }
+  } catch {
+    console.log(`   [DOWN] Bridge is not reachable at ${healthUrl}`);
+    healthy = false;
+  }
+
+  console.log(`\n================================`);
+  if (healthy) {
+    console.log(`Result: ALL CHECKS PASSED (service and captured PATH healthy)`);
+    process.exit(0);
+  } else {
+    console.log(`Result: DOCTOR DETECTED DEFECTS (see FAIL items above)`);
+    process.exit(1);
+  }
+}
+
 if (ACTION === "install") {
   preflight();
   if (OS === "darwin") installMac();
@@ -197,6 +430,8 @@ if (ACTION === "install") {
 } else if (ACTION === "logs") {
   if (OS === "darwin") console.log(existsSync(LOG) ? readFileSync(LOG, "utf8").split("\n").slice(-40).join("\n") : "(no log yet)");
   else console.log(run("journalctl", ["--user", "-u", "cap-acp-bridge", "-n", "40", "--no-pager"]));
+} else if (ACTION === "doctor") {
+  await doctor();
 } else {
   status();
 }

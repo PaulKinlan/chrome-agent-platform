@@ -11,6 +11,7 @@
 - guard against ambient CAP_ACP_FIXTURE_* process env contamination (tqfg)
 - discovered open pages reach the hub's Directory button (cthe)
 - land ejme's tool-config test driving the production filters (1frz)
+- add acp:service doctor to diagnose captured PATH rot and bridge health (d1ti)
 
 ## [0.3.415] — 2026-09-18
 - isolate ACP fixture child env and evidence-gate continuity retries
