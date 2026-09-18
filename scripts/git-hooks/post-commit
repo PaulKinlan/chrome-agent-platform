@@ -2,7 +2,7 @@
 # Reference post-commit hook (xk2u, 2026-09-05). Install with:
 #   cp scripts/git-hooks/post-commit .git/hooks/post-commit && chmod +x .git/hooks/post-commit
 #
-# Chaos-style: auto-bump the patch version after each commit (guard against the
+# Auto-bump the patch version after each commit (guard against the
 # amend loop). The changelog entry uses the commit's message.
 #
 # xk2u hardening: bump-version.mjs --skip-if-no-note means commits whose message

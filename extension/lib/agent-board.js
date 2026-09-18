@@ -3,7 +3,7 @@
 // delegation (delegate_to_agent): agents POST work to a hub-level board and
 // capable agents CLAIM it, instead of the poster naming the worker.
 //
-// Shape (ported from the owner's CHAOS extension, onto CAP's stronger guards):
+// Shape (ported from the owner's earlier extension, onto CAP's stronger guards):
 // two append-only event-sourced logs in the hub tier (jobs + messages),
 // lock-serialized writes, atomic claim transition, lease + heartbeat copied
 // verbatim from the scheduler (INFLIGHT_LEASE_MS / INFLIGHT_HEARTBEAT_MS,

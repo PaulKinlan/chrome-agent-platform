@@ -16,6 +16,14 @@
 - entry-point CLI checks compare canonical pathToFileURL encoding (esh8)
 - reclaim store service-worker bundle headroom by lowering hoisting threshold (eerc)
 - build root derived via fileURLToPath for spaced checkout support (7fzu)
+- audit and test labels use fileURLToPath paths (k7c5)
+- guard teardown browser termination in unique composer evidence script (8dmf)
+- repair model-edit approval acceptance instrument (b5q4)
+- sync-changelog check treats absent destination as unbuilt rather than drift (idco)
+- scrub legacy project references from codebase comments and guard with tests (i6n6)
+- classify acp.journal route in SW dispatch authority census (vv98)
+- isolate serial lock fixtures and heal killed drift residue (p15i)
+- include source-inspecting test guards in always-on changed set (qcfc)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode

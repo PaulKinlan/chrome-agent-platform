@@ -4008,7 +4008,7 @@ await renderWebmcpStatus();
   }
 }
 
-// The version in the footer (chaos-style semantic versioning — read from the
+// The version in the footer (semantic versioning — read from the
 // manifest so it always matches the installed build).
 try {
   const v = chrome.runtime.getManifest().version;

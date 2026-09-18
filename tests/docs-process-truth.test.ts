@@ -119,6 +119,24 @@ Deno.test("6j8i: no tracked markdown names the owner's other project (AGENTS.md 
   assert(/^# .*RETIRED/m.test(read("TASKS-DONE.md").split("\n").slice(0, 3).join("\n")), "TASKS-DONE.md is exempt only as retired history");
 });
 
+Deno.test("i6n6: no tracked code files (.js, .mjs, .ts) name the owner's other project (AGENTS.md hard rule)", () => {
+  const ls = spawnSync("git", ["ls-files", "-z", "--", "*.js", "*.mjs", "*.ts"], { cwd: ROOT, encoding: "utf8" });
+  assertEquals(ls.status, 0, ls.stderr);
+  const files = ls.stdout.split("\0").filter(Boolean);
+  assert(files.length > 50, `tracked code files enumerated (${files.length})`);
+  const offenders: string[] = [];
+  for (const rel of files) {
+    if (rel === "tests/docs-process-truth.test.ts") continue;
+    if (rel.startsWith(".beads/") || rel.startsWith("node_modules/")) continue;
+    if (Deno.lstatSync(ROOT + rel).isSymlink) continue;
+    read(rel).split("\n").forEach((line, i) => {
+      if (line.includes("chaos-relay") || line.includes("chaos_relay")) return;
+      if (BANNED_NAME_RE.test(line)) offenders.push(`${rel}:${i + 1}: ${line.trim().slice(0, 90)}`);
+    });
+  }
+  assertEquals(offenders, [], "no chaos references in tracked code (AGENTS.md hard rule, i6n6)");
+});
+
 // ── w56b: the constitution itself ──────────────────────────────────────────
 // AGENTS.md is the first thing every agent reads. Besides the pointer rule
 // above (it is in POINTER_DOCS), three more things rot there: a path it cites

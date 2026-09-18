@@ -1029,7 +1029,7 @@ export function memoryStore(origin) {
 /** The OPFS sandbox for a NAMED agent (a persistent teammate — not an origin).
  * Lives at `memory/agents/<slug>/*`, distinct from the site-origin stores and
  * the master store, so a named agent has its own memory, history, and skills
- * (the chaos-extension-style per-agent sandbox). `id` is the agent's slug; the
+ * (the per-agent sandbox pattern). `id` is the agent's slug; the
  * `origin` label is `agent:<slug>` so journal/usage tagging never collides with
  * a real origin. */
 export function namedAgentMemory(id) {

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Bump the version across package.json + package-lock.json + extension/manifest.json + CHANGELOG.md.
-// Chaos-extension-style (adapted from ~/chaos/scripts/bump-version.mjs).
+// Adapted from the owner's earlier extension pattern.
 //
 // Usage:
 //   node scripts/bump-version.mjs patch                   # 0.2.0 -> 0.2.1
