@@ -34,7 +34,10 @@ Deno.test("gallery: every relative import in the synced docs module graph resolv
       }
       try {
         await Deno.stat(resolved);
-        const rel = resolved.pathname.split("/docs/")[1];
+        // URL-relative, not a filesystem path: the value is re-resolved against
+        // DOCS below. Slicing the base URL's pathname keeps it exact — no literal
+        // segment, no percent-decoding round trip (k7c5).
+        const rel = resolved.pathname.slice(DOCS.pathname.length);
         if (rel) queue.push(rel);
       } catch {
         unresolved.push(`${f} → ${spec} (missing)`);

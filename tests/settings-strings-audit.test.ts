@@ -14,6 +14,7 @@
 //     control, FS grants) is preserved — rendered for waitingForPermission
 //     results with Allow/Deny.
 import { assert, assertStringIncludes } from "jsr:@std/assert@1";
+import { fileURLToPath } from "node:url";
 
 const EXT = new URL("../extension/", import.meta.url);
 
@@ -56,9 +57,11 @@ function stripComments(src: string): string {
   return out;
 }
 
-const sources = new Map<string, string>(); // path → comment-stripped source
+const sources = new Map<string, string>(); // real path → comment-stripped source
 for await (const u of walk(EXT)) {
-  sources.set(u.pathname, stripComments(await Deno.readTextFile(u)));
+  // fileURLToPath, not u.pathname: the key is a filesystem path and it appears in
+  // failure messages, where a percent-encoded root would read .../spaced%20probe/... (k7c5).
+  sources.set(fileURLToPath(u), stripComments(await Deno.readTextFile(u)));
 }
 
 const optionsHtml = await Deno.readTextFile(new URL("../extension/options/options.html", import.meta.url));
