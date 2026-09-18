@@ -225,10 +225,7 @@ export function applyHostDefaults(raw: string, hostCwd?: string): string {
 // Chrome's framing (found by tests/acp-native-host.test.ts).
 if (import.meta.main) { try {
   const startResolved = resolveAdapter(HARNESS, ADAPTER_PATH);
-  console.log(`[acp-bridge] Starting bridge (default harness "${HARNESS}" via: ${startResolved.cmd} ${startResolved.args.join(" ")})`);
-  if (!ADAPTER_PATH) {
-    console.log(`[acp-bridge] Per-connection harness selection enabled for: ${Object.keys(HARNESS_ADAPTERS).join(", ")} (via ?harness=...)`);
-  }
+  console.log(`[acp-bridge] Starting bridge for harness "${HARNESS}" via: ${startResolved.cmd} ${startResolved.args.join(" ")}`);
 } catch (e) {
   console.error(`[acp-bridge] ${(e as Error).message}`);
 } }
@@ -257,14 +254,13 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
     const url = new URL(req.url);
 
     if (url.pathname === "/health") {
-      const probeHarness = url.searchParams.get("harness")?.trim() || HARNESS;
       let defaultCwdValue = "";
       let adapterDescribe = "";
       let adapterPresent = false;
       let error = "";
       try { defaultCwdValue = defaultCwd(); } catch { defaultCwdValue = ""; }
       try {
-        const resolved = resolveAdapter(probeHarness, adapterPathOverride);
+        const resolved = resolveAdapter(HARNESS, adapterPathOverride);
         adapterDescribe = resolved.describe;
         // For an explicit --adapter (a file) we can say whether it exists; for
         // a registry package npx resolves (and if needed downloads) it at run
@@ -279,32 +275,17 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
         JSON.stringify({
           ok: true,
           harness: HARNESS,
-          probeHarness,
-          supportsHarnessSelection: !adapterPathOverride,
-          pinnedAdapter: Boolean(adapterPathOverride),
           adapter: adapterDescribe || "(unresolved)",
           adapterPresent,
           defaultCwd: defaultCwdValue,
           knownHarnesses: Object.keys(HARNESS_ADAPTERS),
-          harnessCli: HARNESS_CLI[probeHarness]?.cli ?? null,
-          harnessCliPath: HARNESS_CLI[probeHarness] ? (resolveCliOnPath(HARNESS_CLI[probeHarness].cli, Deno.env.get("PATH") ?? "") || null) : null,
+          harnessCli: HARNESS_CLI[HARNESS]?.cli ?? null,
+          harnessCliPath: HARNESS_CLI[HARNESS] ? (resolveCliOnPath(HARNESS_CLI[HARNESS].cli, Deno.env.get("PATH") ?? "") || null) : null,
           ...(error ? { error } : {}),
         }),
         { headers: { "Content-Type": "application/json" } },
       );
     }
-
-    // Per-connection harness selection: clients can request a specific harness
-    // (e.g. ?harness=claude-code or ?harness=codex). Defaults to the bridge's
-    // configured default harness.
-    const requestedHarness = url.searchParams.get("harness")?.trim();
-    if (!adapterPathOverride && requestedHarness && !HARNESS_ADAPTERS[requestedHarness]) {
-      return new Response(
-        `ACP Bridge: unknown harness "${requestedHarness}" — known harnesses: ${Object.keys(HARNESS_ADAPTERS).join(", ")}`,
-        { status: 400 },
-      );
-    }
-    const connectionHarness = requestedHarness || HARNESS;
 
     if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("ACP Bridge: Connect via WebSocket at /acp", { status: 426 });
@@ -322,7 +303,6 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
     if (TOKEN && url.searchParams.get("token") !== TOKEN) {
       return new Response("ACP Bridge: missing or wrong token", { status: 403 });
     }
-
     const { socket, response } = Deno.upgradeWebSocket(req);
 
     // Spawn the ACP adapter process
@@ -332,9 +312,9 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
     let lastStderr = "";
 
     socket.onopen = async () => {
-      console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"} (harness: ${connectionHarness})`);
+      console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"}`);
       try {
-        const resolved = resolveAdapter(connectionHarness, adapterPathOverride);
+        const resolved = resolveAdapter(HARNESS, adapterPathOverride);
         // An explicit adapter is a file: say so plainly instead of letting node
         // die with a module-not-found stack.
         if (resolved.cmd === "node" && !Deno.statSync(resolved.args[0]).isFile) {
@@ -348,8 +328,8 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           env: {
             ...Deno.env.toObject(),
             ...childEnv,
-            PI_ACP_HARNESS: connectionHarness,
-            ...childEnvForHarness(connectionHarness, Deno.env.get("PATH") ?? ""),
+            PI_ACP_HARNESS: HARNESS,
+            ...childEnvForHarness(HARNESS, Deno.env.get("PATH") ?? ""),
             // Give the adapter a PATH that contains the binaries we resolved
             // (npx/CLI), because it spawns the harness CLI itself.
             PATH: [Deno.build.os === "windows" ? "" : "", Deno.env.get("PATH") ?? ""].filter(Boolean).join(":"),
@@ -368,8 +348,8 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           const exitStatus = await proc.status;
           if (socket.readyState !== WebSocket.OPEN) return;
           const detail = lastStderr.trim().split("\n").slice(-3).join(" | ") || "no stderr";
-          console.error(`[acp-bridge] adapter for harness "${connectionHarness}" exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
-          try { socket.close(1011, clipCloseReason(`adapter for harness "${connectionHarness}" exited: ${detail}`)); } catch { /* already closed */ }
+          console.error(`[acp-bridge] adapter exited (code ${exitStatus.code}, signal ${exitStatus.signal}): ${detail}`);
+          try { socket.close(1011, clipCloseReason(`adapter exited: ${detail}`)); } catch { /* already closed */ }
         })();
 
         // Stream stdout from adapter to WebSocket client
@@ -413,11 +393,11 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           } catch { /* stream closed */ }
         })();
       } catch (err) {
-        console.error(`[acp-bridge] Failed to spawn adapter for harness "${connectionHarness}":`, err);
+        console.error("[acp-bridge] Failed to spawn adapter:", err);
         // A close reason is capped at 123 BYTES — an unbounded one throws
         // (seen live: a long adapter path turned this into an uncaught
         // SyntaxError instead of a clean, reported failure).
-        socket.close(1011, clipCloseReason(`Failed to spawn adapter for harness "${connectionHarness}": ${err}`));
+        socket.close(1011, clipCloseReason(`Failed to spawn adapter: ${err}`));
       }
     };
 

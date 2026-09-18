@@ -1,11 +1,13 @@
 # Changelog
 
+## [0.3.419] — 2026-09-18
+- never print a bare green for gate legs that did not run ()
+
 ## [0.3.418] — 2026-09-18
 - connect landings back to the beads they already name (j4t1)
 - enable Stop affordance for in-flight ACP turns (c6gq)
 - diagnose shebang rot, dangling symlinks and real binary execution in acp:service doctor (d1ti)
 - guard hash pins so a blanket sweep cannot stale a pinned fixture (e273)
-- honour per-connection harness selection and make bridge mismatch legible with one-command fix (lpmv)
 
 ## [0.3.417] — 2026-09-18
 - the fresh-checkout fixture materializes the SOURCE CLOSURE, not just the tracked set

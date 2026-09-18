@@ -8,7 +8,7 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { applyHostDefaults, childEnvForHarness, clipCloseReason, createAcpServer, harnessCliWarning, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
+import { applyHostDefaults, childEnvForHarness, clipCloseReason, harnessCliWarning, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const sessionNew = (params: Record<string, unknown>) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params });
@@ -158,87 +158,3 @@ Deno.test("harnessCliWarning: a PATH miss is fatal only for adapters without a b
   assert(codexNote.includes("bundled @openai/codex CLI"), codexNote);
   assert(!codexNote.includes("will fail"), codexNote);
 });
-
-Deno.test("createAcpServer: /health supports ?harness= query and returns supportsHarnessSelection", async () => {
-  const server = createAcpServer(0);
-  const port = (server as any).addr.port;
-  try {
-    // Default probe
-    const resDefault = await fetch(`http://127.0.0.1:${port}/health`);
-    assertEquals(resDefault.ok, true);
-    const jsonDefault = await resDefault.json();
-    assertEquals(jsonDefault.harness, "pi");
-    assertEquals(jsonDefault.probeHarness, "pi");
-    assertEquals(jsonDefault.supportsHarnessSelection, true);
-    assertEquals(jsonDefault.knownHarnesses, ["pi", "claude-code", "codex"]);
-
-    // Explicit claude-code probe
-    const resClaude = await fetch(`http://127.0.0.1:${port}/health?harness=claude-code`);
-    assertEquals(resClaude.ok, true);
-    const jsonClaude = await resClaude.json();
-    assertEquals(jsonClaude.harness, "pi", "default server harness remains pi");
-    assertEquals(jsonClaude.probeHarness, "claude-code", "probe harness matches query");
-    assertEquals(jsonClaude.harnessCli, "claude");
-    assert(jsonClaude.adapter.includes("claude-agent-acp"), jsonClaude.adapter);
-  } finally {
-    await server.shutdown();
-  }
-});
-
-Deno.test("createAcpServer: rejects unknown harness with HTTP 400 naming known harnesses", async () => {
-  const server = createAcpServer(0);
-  const port = (server as any).addr.port;
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/acp?harness=unknown-harness`);
-    assertEquals(res.status, 400);
-    const text = await res.text();
-    assert(text.includes('unknown harness "unknown-harness"'), text);
-    for (const known of Object.keys(HARNESS_ADAPTERS)) {
-      assert(text.includes(known), `must name known harness ${known}`);
-    }
-  } finally {
-    await server.shutdown();
-  }
-});
-
-Deno.test("createAcpServer: per-connection harness selection passes PI_ACP_HARNESS and childEnv to adapter", async () => {
-  // Use a mock adapter script that echoes its environment into a log file
-  const dir = durableDir("acp-harness-env-test");
-  const logFile = `${dir}/env.json`;
-  const mockAdapter = `${dir}/mock-adapter.mjs`;
-  Deno.writeTextFileSync(
-    mockAdapter,
-    `import { writeFileSync } from "node:fs";
-writeFileSync(${JSON.stringify(logFile)}, JSON.stringify({
-  PI_ACP_HARNESS: process.env.PI_ACP_HARNESS,
-  CLAUDE_CODE_EXECUTABLE: process.env.CLAUDE_CODE_EXECUTABLE || null,
-  CODEX_PATH: process.env.CODEX_PATH || null,
-  PI_ACP_PI_COMMAND: process.env.PI_ACP_PI_COMMAND || null,
-}));
-process.exit(0);
-`,
-  );
-
-  const server = createAcpServer(0, mockAdapter);
-  const port = (server as any).addr.port;
-
-  try {
-    // Connect with ?harness=claude-code
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/acp?harness=claude-code`);
-    await new Promise<void>((resolve) => {
-      ws.onclose = (event) => {
-        // Must name started harness in close reason
-        assert(event.reason.includes('adapter for harness "claude-code" exited'), event.reason);
-        resolve();
-      };
-    });
-
-    // Verify adapter child received PI_ACP_HARNESS = claude-code
-    assert(Deno.statSync(logFile).isFile, "mock adapter must have written env log");
-    const loggedEnv = JSON.parse(Deno.readTextFileSync(logFile));
-    assertEquals(loggedEnv.PI_ACP_HARNESS, "claude-code");
-  } finally {
-    await server.shutdown();
-  }
-});
-

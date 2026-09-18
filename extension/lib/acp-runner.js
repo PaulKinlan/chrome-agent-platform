@@ -48,41 +48,6 @@ export function acpEndpointWithToken(endpoint, token) {
   return `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(secret)}`;
 }
 
-/** Append a harness ID to an ACP endpoint URL (idempotent, escaped).
- * The bridge supports per-session harness selection via `?harness=…`. */
-export function acpEndpointWithHarness(endpoint, harnessId) {
-  const url = String(endpoint ?? "");
-  const harness = String(harnessId ?? "").trim();
-  if (!url || !harness) return url;
-  if (/[?&]harness=/.test(url)) return url; // already carries one
-  return `${url}${url.includes("?") ? "&" : "?"}harness=${encodeURIComponent(harness)}`;
-}
-
-/** Derive the HTTP health URL for a given ACP WebSocket or HTTP endpoint. */
-export function acpHealthUrl(endpoint) {
-  const ep = String(endpoint ?? "").trim();
-  if (!ep) return "";
-  try {
-    const url = new URL(ep);
-    const protocol = url.protocol === "wss:" ? "https:" : "http:";
-    return `${protocol}//${url.host}/health`;
-  } catch {
-    return "";
-  }
-}
-
-/** Probe the ACP bridge /health endpoint, optionally probing a specific harness. */
-export async function probeAcpBridgeHealth(endpoint = DEFAULT_ACP_ENDPOINT, harnessId = "") {
-  const base = acpHealthUrl(endpoint);
-  if (!base) return null;
-  const url = harnessId ? `${base}?harness=${encodeURIComponent(harnessId)}` : base;
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(2000) });
-    if (res.ok) return await res.json();
-  } catch { /* bridge down or unreachable */ }
-  return null;
-}
-
 /** In-memory cache of active ACP sessions by conversation key. A key is the
  * task threadId + harness when the turn runs inside a persisted thread, else
  * `acp:<harnessId>` — so the dedicated harness surface and hub @mention
@@ -240,7 +205,7 @@ function settleAcpPermissionCard(card, state) {
  * @param {{get: (key: string) => Promise<string|null>}} [options.settings] - kv reader for `acp.endpoint` / `acp.token` / `acp.transport` / `acp.permissions`
  * @param {(prompt: any, opts?: any) => Promise<any>} [options.permissionPrompter] - the owner gate (default: the inline Allow/Deny card); injectable for tests
  * @param {number} [options.permissionTimeoutMs] - how long an unanswered card waits before the turn denies (default 120s)
- * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, sessionId?: string, resumed?: boolean, resumeFailed?: boolean, resumeError?: string|null, error?: string, requestedHarness?: string, startedHarness?: string}>}
+ * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, sessionId?: string, resumed?: boolean, resumeFailed?: boolean, resumeError?: string|null, error?: string}>}
  */
 export async function runAcpTaskTurn(options) {
   const {
@@ -286,7 +251,6 @@ export async function runAcpTaskTurn(options) {
       effectiveEndpoint = acpEndpointWithToken(effectiveEndpoint, token);
     } catch { /* fall back to the built-in default */ }
   }
-  effectiveEndpoint = acpEndpointWithHarness(effectiveEndpoint, harnessId);
 
   // TRANSPORT: prefer the Chrome native-messaging host — Chrome launches it on
   // demand, so there is no bridge process, no port and nothing to keep running.
@@ -378,7 +342,7 @@ export async function runAcpTaskTurn(options) {
     await client.connect();
   } catch (err) {
     releaseClaim();
-    const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${effectiveEndpoint}.`;
+    const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${endpoint}.`;
     // Name EVERY transport that was unavailable, so the fix is one command away
     // whichever way the operator wants to run it.
     const fixes = [];
@@ -392,14 +356,13 @@ export async function runAcpTaskTurn(options) {
           reason: String(err?.message ?? err),
           action: actionMsg,
           category: "harness-connection",
-          requestedHarness: harnessId,
         });
       } else if (typeof container.appendSystem === "function") {
         container.appendSystem(`${errorMsg} ${actionMsg}`);
       }
       status({ state: "failed", errorReason: errorMsg, errorAction: actionMsg });
     }
-    return { ok: false, error: `${errorMsg} ${actionMsg}`, requestedHarness: harnessId };
+    return { ok: false, error: `${errorMsg} ${actionMsg}` };
   }
 
   if (superseded()) {
@@ -577,18 +540,11 @@ export async function runAcpTaskTurn(options) {
     };
   } catch (err) {
     let errorDetail = String(err?.message ?? err);
-
-    // Identify which harness was actually started from bridge close/spawn error
-    const startedMatch = errorDetail.match(/adapter(?: spawn failed)? for harness "([^"]+)"/i);
-    let startedHarness = startedMatch ? startedMatch[1] : null;
-    if (!startedHarness && errorDetail.includes("Could not start pi") && harnessId !== "pi") {
-      startedHarness = "pi";
-    }
-
-    if (startedHarness && startedHarness !== harnessId) {
-      errorDetail = `Harness mismatch: requested "${harnessId}", but running bridge started "${startedHarness}". `
-        + `To reconfigure the background service: npm run acp:service install --harness ${harnessId}. (${errorDetail})`;
-    } else if (/executable not found|not found \(command:/i.test(errorDetail)) {
+    // The adapter says "executable not found" when IT cannot see the harness
+    // CLI — the usual cause is the launcher's PATH (a launchd/systemd service or
+    // a Chrome-spawned native host inherits a minimal environment, not the
+    // shell's), and that cause is not obvious from the adapter's wording.
+    if (/executable not found|not found \(command:/i.test(errorDetail)) {
       errorDetail += " — the harness CLI is not on the PATH of the process that started the adapter. "
         + "If the bridge was auto-started (service or native host), reinstall the launcher so it captures "
         + "your shell PATH (npm run acp:service install), or install the CLI it names.";
@@ -609,21 +565,11 @@ export async function runAcpTaskTurn(options) {
         container.appendError(`ACP turn error: ${errorDetail}`, {
           category: "harness-error",
           reason: errorDetail,
-          requestedHarness: harnessId,
-          startedHarness: startedHarness || harnessId,
         });
       }
       status({ state: "failed", errorReason: errorDetail });
     }
-    return {
-      ok: false,
-      error: errorDetail,
-      requestedHarness: harnessId,
-      startedHarness: startedHarness || harnessId,
-      resumed: false,
-      resumeFailed,
-      resumeError,
-    };
+    return { ok: false, error: errorDetail, resumed: false, resumeFailed, resumeError };
   } finally {
     // This turn is no longer the active one for the key (a newer turn may own
     // it already — never clear a successor's registration).

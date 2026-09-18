@@ -22,6 +22,10 @@ const EVIDENCE_DIR = durableDir(`cap-acp-browser-${Date.now()}`);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const failures: string[] = [];
+// How many owner-gate legs actually ran. A run that skips them must say so:
+// the summary's green otherwise reads as evidence about a gate it never drove
+// (chrome-agent-platform-dbmz, found verifying e24e).
+let gateLegsRun = 0;
 function check(name: string, cond: boolean, detail: unknown = "") {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; failures.push(name); console.log(`  FAIL  ${name} ${JSON.stringify(detail).slice(0, 400)}`); }
@@ -409,6 +413,7 @@ try {
 
     await driveGatedTurn("deny", "deny");
     await driveGatedTurn("allow", "allow");
+    gateLegsRun = 2;
     await shot(ntp, "09-owner-gate");
   }
 
@@ -484,5 +489,10 @@ try {
 }
 
 console.log(`\nACP browser acceptance: ${pass} passed, ${fail} failed`);
+if (gateLegsRun === 0) {
+  console.log("owner gate legs: SKIPPED (set CAP_ACCEPTANCE_PERMISSION=1) — this run says NOTHING about the owner gate");
+} else {
+  console.log(`owner gate legs: ${gateLegsRun} driven (deny + allow, each PENDING→settled on a real click)`);
+}
 console.log(`evidence: ${EVIDENCE_DIR}`);
 if (fail > 0) { console.log(`failures: ${failures.join("; ")}`); Deno.exit(1); }
