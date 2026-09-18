@@ -91,7 +91,8 @@ async function filesUnder(dir: string, keep?: (name: string) => boolean): Promis
 const isSource = (name: string) => EXTENSIONS.some((ext) => name.endsWith(ext));
 
 Deno.test("e273: no test or harness derives a filesystem root from a URL pathname", async () => {
-  const files = (await Promise.all(SCAN_DIRS.map((d) => filesUnder(d, isSource)))).flat().sort();
+  const dirFiles = (await Promise.all(SCAN_DIRS.map((d) => filesUnder(d, isSource)))).flat();
+  const files = [...dirFiles, `${ROOT}/build.mjs`].sort();
   // The scan itself must cover the tree: a wrong ROOT or a broken walk would
   // otherwise pass vacuously — the exact failure mode this guard exists for.
   assert(

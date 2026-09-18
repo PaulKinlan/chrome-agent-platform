@@ -9,6 +9,7 @@
 - persist ACP agent turns into the task and thread store (hg03)
 - entry-point CLI checks compare canonical pathToFileURL encoding (esh8)
 - reclaim store service-worker bundle headroom by lowering hoisting threshold (eerc)
+- build root derived via fileURLToPath for spaced checkout support (7fzu)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode

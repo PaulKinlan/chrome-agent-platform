@@ -18,6 +18,7 @@ import { createRequire } from "node:module";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
@@ -60,7 +61,7 @@ function parseBuildTarget(args) {
 const RAW_ARGS = process.argv.slice(2);
 const REGEN_TOOLS = RAW_ARGS.includes("--regen-tools");
 const BUILD_TARGET = parseBuildTarget(RAW_ARGS.filter((a) => a !== "--regen-tools"));
-const ROOT = new URL(".", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
 const EXT_DIR = path.join(ROOT, "extension");
 const DIST = path.join(EXT_DIR, "dist");
 const COMPLETE_MARKER = path.join(DIST, "dist.complete");
