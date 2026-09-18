@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.306] — 2026-09-18
+- journal-ahv preservation: j6au — verbatim untracked deliverable(s) of
+
 ## [0.3.305] — 2026-09-07
 - j6au: the tranche2 KAT cleans up its browser profile (9t1b copy-test hygiene)
 
