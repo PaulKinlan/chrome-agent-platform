@@ -257,6 +257,7 @@ export async function runAcpTaskTurn(options) {
     sessionStore = null,
     settings = null,
     executionId = null,
+    onEvent = null,
   } = options;
 
   const sessionKey = acpSessionKey(threadId, harnessId);
@@ -490,6 +491,7 @@ export async function runAcpTaskTurn(options) {
       task,
       (ev) => {
         if (superseded()) return;
+        try { onEvent?.(ev); } catch { /* a consumer's error never fails the turn */ }
 
         if (ev.kind === "thought" && ev.text) {
           if (typeof container.thinkingDelta === "function") {

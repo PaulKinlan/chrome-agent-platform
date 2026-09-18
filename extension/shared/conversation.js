@@ -1896,17 +1896,41 @@ export async function runConversationTurn(container, { text, attachments = [], h
     if (!stale()) appendBubble(c, "user", text, attachments);
     if (!stale()) c.resetPlan?.();
     status({ state: "queued" });
-    const res = await runAcpTaskTurn({
-      container: c,
+    const opened = await send("acp.journal", {
+      action: "open",
       task: text,
       attachments,
       threadId,
       harnessId: agentId || "pi",
+    }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    const acpThreadId = opened?.ok === true ? opened.threadId : null;
+    const acpTools = [];
+    const res = await runAcpTaskTurn({
+      container: c,
+      task: text,
+      attachments,
+      threadId: acpThreadId ?? threadId,
+      harnessId: agentId || "pi",
+      executionId: opened?.executionId ?? null,
       onStatus: (s) => status(s),
+      onEvent: (ev) => { if (ev?.kind === "tool") acpTools.push(ev); },
       isStale: stale,
       sessionStore,
       settings,
     });
+    if (acpThreadId) {
+      await send("acp.journal", {
+        action: "result",
+        threadId: acpThreadId,
+        executionId: opened?.executionId ?? "",
+        text: res?.result ?? "",
+        ok: res?.ok === true,
+        error: res?.error ?? "",
+        tools: acpTools,
+      }).catch(() => null);
+      return { ...res, threadId: acpThreadId };
+    }
+    if (opened?.error && !stale()) appendBubble(c, "system", `This turn could not be saved to your tasks: ${opened.error}`);
     return res;
   }
   // A new turn starts with a fresh plan strip: clear the prior turn's checklist

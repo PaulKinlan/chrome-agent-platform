@@ -3858,14 +3858,23 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     if (typeof threadConversation.appendUser === "function") {
       threadConversation.appendUser(text, Date.now(), attachments);
     }
-    const acpExecutionId = `acp:${threadAtStart || "hub"}:${mention?.id || agentAtStart || "pi"}:${Date.now()}`;
+    const opened = await send("acp.journal", {
+      action: "open",
+      task: text,
+      attachments,
+      threadId: threadAtStart,
+      harnessId: mention?.id || agentAtStart || "pi",
+    }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    const acpThreadId = opened?.ok === true ? opened.threadId : null;
+    const acpExecutionId = opened?.executionId || `acp:${threadAtStart || "hub"}:${mention?.id || agentAtStart || "pi"}:${Date.now()}`;
     liveClientRunId = acpExecutionId;
     threadConversation?.bindLiveStatusExecution?.(acpExecutionId);
+    const acpTools = [];
     res = await runAcpTaskTurn({
       container: threadConversation,
       task: text,
       attachments,
-      threadId: threadAtStart,
+      threadId: acpThreadId ?? threadAtStart,
       harnessId: mention?.id || agentAtStart || "pi",
       executionId: acpExecutionId,
       onRunRegistered: (id) => runSurfaceOwner.commit(owner, () => {
@@ -3873,10 +3882,27 @@ async function runThreadTurn(text, attachments = [], mention = null) {
         threadConversation?.bindLiveStatusExecution?.(id);
       }),
       onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
+      onEvent: (ev) => { if (ev?.kind === "tool") acpTools.push(ev); },
       isStale: () => !owns(),
       sessionStore: acpSessionStore,
       settings: acpSessionStore,
     });
+    if (acpThreadId) {
+      await send("acp.journal", {
+        action: "result",
+        threadId: acpThreadId,
+        executionId: acpExecutionId,
+        text: res?.result ?? "",
+        ok: res?.ok === true,
+        error: res?.error ?? "",
+        tools: acpTools,
+      }).catch(() => null);
+      res = { ...res, threadId: acpThreadId };
+    } else if (opened?.error) {
+      if (typeof threadConversation.appendSystem === "function") {
+        threadConversation.appendSystem(`This turn could not be saved to your tasks: ${opened.error}`);
+      }
+    }
   } else {
     res = await runConversationTurn(threadConversation, {
     text,

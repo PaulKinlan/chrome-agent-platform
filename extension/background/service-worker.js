@@ -259,6 +259,7 @@ import { effectiveMcpServers, normalizeMcpServerList, redactMcpServerList } from
 // build-time registry/inject seam is gone — redundant once the source imports the
 // client directly.
 import { mountRemoteMcpServers } from "../lib/mcp-client.js";
+import { openAcpTurn, recordAcpTurn } from "../lib/acp-thread-journal.js";
 import { buildMcpRunTools } from "../lib/mcp-run-tools.js";
 import {
   commitThreadTerminal,
@@ -6927,6 +6928,11 @@ const handlers = mergeRouteMaps(
       } catch { /* best effort */ }
     }
     return { ok: true, thread: view };
+  },
+  async "acp.journal"(m) {
+    if (m?.action === "open") return await openAcpTurn(m, { createThread, continueThread, nameThread: nameThreadAsync });
+    if (m?.action === "result") return await recordAcpTurn(m, { appendThreadMessage, commitThreadTerminal });
+    return { ok: false, error: "invalid acp.journal action" };
   },
   async "thread.delete"(m) {
     const removed = await deleteThread(m?.id);
