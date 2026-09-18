@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.417] — 2026-09-18
+- the fresh-checkout fixture materializes the SOURCE CLOSURE, not just the tracked set
+
 ## [0.3.416] — 2026-09-18
 - security-suite escape fixture fails closed when descendant fails to persist
 - exported agentConfig credentials can no longer cross the owner export walk

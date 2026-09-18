@@ -4,8 +4,9 @@
 //     source tree (/tmp, /home/<user>); (2) full regeneration verification
 //     passes on a pristine fresh-checkout materialization with NO /tmp
 //     evidence present — the evidence lives in the repo now.
-import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { join, relative } from "jsr:@std/path";
+import { materializeSourceTree } from "../scripts/lib/source-materialization.mjs";
 
 const ROOT = new URL("..", import.meta.url).pathname;
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
@@ -68,21 +69,38 @@ Deno.test("no text artifact references paths outside the source tree (/tmp, /hom
 Deno.test("fresh-checkout: FULL verify (not fallback) passes on a pristine tree materialization with no /tmp evidence", () => {
   const tmp = Deno.makeTempDirSync();
   try {
-    // materialize tracked files + the (pre-commit, untracked) evidence tree
-    const ls = run("git", ["-C", ROOT, "ls-files"]);
-    assertEquals(ls.code, 0, ls.stderr);
-    const files = ls.stdout.split("\n").filter(Boolean);
-    files.push(...[...walk(join(ROOT, "packages/bundled/evidence"))].map((p) => relative(ROOT, p)));
-    for (const rel of files) {
-      const dst = join(tmp, rel);
-      Deno.mkdirSync(join(dst, ".."), { recursive: true });
-      Deno.copyFileSync(join(ROOT, rel), dst);
-    }
+    // The SOURCE CLOSURE, not just the tracked set (woem): a candidate that adds
+    // a source module used to materialize WITHOUT it, so the child died with
+    // ERR_MODULE_NOT_FOUND and this evidence described a tree the candidate
+    // never built. The helper keeps the explicitly named ignored evidence tree
+    // and fails closed on a listed file that is missing on disk.
+    const { count } = materializeSourceTree({
+      root: ROOT,
+      dest: tmp,
+      evidenceRoots: ["packages/bundled/evidence"],
+    });
+    assert(count > 0, "the materializer produced an empty tree");
     const r = run("node", [join(tmp, "scripts/build-bundled-tool-packages.mjs"), "--verify"], { cwd: tmp });
     assertEquals(r.code, 0, r.stderr);
     assertStringIncludes(r.stdout, "VERIFY OK: 141 generated files byte-identical");
     if (r.stderr.includes("self-consistency fallback") || r.stdout.includes("self-consistency fallback")) {
       throw new Error("fresh checkout fell back to degraded verify — migration incomplete");
+    }
+
+    // NEGATIVE CONTROL: the same fixture with a REQUIRED source module removed
+    // must FAIL. Without it, a materializer that copies nothing — or a verifier
+    // that treats a degraded input as green — could still look healthy.
+    const required = join(tmp, "scripts/lib/shared-strings.mjs");
+    const backup = Deno.readTextFileSync(required);
+    try {
+      Deno.removeSync(required);
+      const bad = run("node", [join(tmp, "scripts/build-bundled-tool-packages.mjs"), "--verify"], { cwd: tmp });
+      assert(
+        bad.code !== 0,
+        `verify PASSED with a required source module missing (exit ${bad.code}) — the fixture cannot detect an incomplete tree`,
+      );
+    } finally {
+      Deno.writeTextFileSync(required, backup);
     }
   } finally {
     Deno.removeSync(tmp, { recursive: true });
