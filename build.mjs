@@ -21,6 +21,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";
 import {
@@ -83,10 +84,30 @@ if (process.platform === "win32") {
 // CLOSED on any drift (hand edit, stale bytes, ungenerated file), so
 // `npm run build` truthfully bundles the exact pinned tools. Full regeneration
 // never happens implicitly — only via the explicit --regen-tools flag.
-execFileSync(process.execPath, [
-  path.join(ROOT, "scripts/build-bundled-tool-packages.mjs"),
-  ...(REGEN_TOOLS ? [] : ["--verify"]),
-], { cwd: ROOT, stdio: "inherit" });
+//
+// BOUNDED (chrome-agent-platform-fnmr): the generator can block in a futex wait
+// and never exit, and an unbounded execFileSync here wedged a worktree's build
+// for 3h37m. The bound names the hang instead and takes the group down.
+try {
+  const generator = await runBoundedChild(process.execPath, [
+    path.join(ROOT, "scripts/build-bundled-tool-packages.mjs"),
+    ...(REGEN_TOOLS ? [] : ["--verify"]),
+  ], {
+    cwd: ROOT,
+    stdio: "inherit",
+    label: "bundled-tool generator",
+    timeoutMs: Number(process.env.CAP_BUNDLED_TOOL_TIMEOUT_MS ?? 120_000),
+  });
+  if (generator.status !== 0) {
+    // execFileSync used to throw here; the bounded runner reports the status
+    // instead, so the fail-closed contract has to be explicit.
+    console.error(`\nbuild: bundled-tool generator failed (status ${generator.status})`);
+    process.exit(1);
+  }
+} catch (error) {
+  console.error(`\nbuild: ${error?.message ?? error}`);
+  process.exit(1);
+}
 
 // SECURITY/build assertion: TEST-ONLY controls/oracles must never reach the
 // shipped extension. RECURSIVELY discover every shipped .js under extension/,

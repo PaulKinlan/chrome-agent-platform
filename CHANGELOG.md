@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.424] — 2026-09-18
+- bound the bundled-tool generator so a hang cannot wedge a build or blame a test
+
+## [0.3.423] — 2026-09-18
+- bound the bundled-tool generator so a hang cannot wedge a build or blame a test
+
 ## [0.3.422] — 2026-09-18
 - use supported syntax for bd link discovered-from and blocks in AGENTS.md
 
