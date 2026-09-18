@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.418] — 2026-09-18
+- falsification evidence for the final evaluator gate
+
 ## [0.3.417] — 2026-09-18
 - the final generated Store JavaScript gets an evaluator AST gate
 
