@@ -4,7 +4,7 @@
 // never raw JSON blobs.
 //
 // Falsification: the live-update checks FAIL against the pre-fix build (proven
-// by scripts/repro-recent-activity.ts: 0 rows live, 6 only after reload); the
+// by the historical live-update repro: 0 rows live, 6 only after reload); the
 // structured-detail checks fail against the old <pre>-only detail (no .tt-row
 // nodes, no show-more).
 //

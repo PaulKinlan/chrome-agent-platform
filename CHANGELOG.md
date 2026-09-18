@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.435] — 2026-09-18
+- remove stale repro-recent-activity comment citations
+
 ## [0.3.434] — 2026-09-18
 - remove scripts/repro-recent-activity.ts
 

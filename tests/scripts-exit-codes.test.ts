@@ -3,7 +3,7 @@
 // Deno.exit at all and lets a rejected promise decide) turns a red run green
 // the moment it is wired into an aggregate: `npm run test:all` only sees the
 // exit status. `scripts/flake-evidence.ts` always exited 0; `panel-leak-probe`
-// and `repro-recent-activity` set no code at all.
+// and earlier unversioned probes set no code at all.
 //
 // The guard is a static scan: every harness the registry classes as a gate,
 // a named script, or a KAT must contain a `Deno.exit(<expr>)` whose argument
