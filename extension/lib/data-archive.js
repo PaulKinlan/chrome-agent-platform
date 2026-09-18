@@ -49,6 +49,8 @@
 // failure after that commit point leaves the complete verified bundle plus
 // possibly stale extras — loss-free, cleaned by the next import.
 
+import { isManagedRedactedTarget, sanitizeRedactedTargetText } from "./logical-site-agent-config.js";
+
 const ENCODER = new TextEncoder();
 const FATAL_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -330,7 +332,11 @@ export async function collectExportData({ kvGet, opfs, alarms, maxOpfsFiles = MA
   let totalBytes = 0;
   for (const path of await opfs.listFiles()) {
     if (isExcludedOpfsPath(path)) continue;
-    const bytes = await opfs.readFile(path);
+    let bytes = await opfs.readFile(path);
+    if (isManagedRedactedTarget(path)) {
+      const sanitized = sanitizeRedactedTargetText(path, FATAL_DECODER.decode(bytes));
+      bytes = ENCODER.encode(JSON.stringify(sanitized));
+    }
     files.push({ path, bytes });
     totalBytes += bytes.length;
   }

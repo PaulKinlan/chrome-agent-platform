@@ -1,10 +1,13 @@
 # Changelog
 
+## [0.3.416] — 2026-09-18
+- security-suite escape fixture fails closed when descendant fails to persist
+- exported agentConfig credentials can no longer cross the owner export walk
+
 ## [0.3.415] — 2026-09-18
 - isolate ACP fixture child env and evidence-gate continuity retries
 - claude/codex ACP adapters get the same absolute-CLI handoff as pi
 - a failed ACP session/load is reported, not a silent new conversation
-- security-suite escape fixture fails closed when the descendant fails to persist
 
 ## [0.3.414] — 2026-09-17
 - opening a running task no longer waits on the live run's own log lock

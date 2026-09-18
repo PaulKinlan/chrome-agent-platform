@@ -6,6 +6,15 @@
 
 ---
 
+<!-- chrome-agent-platform-8fuc (landed on the legacy walk 2026-09-18) -->
+> **CONVERTER REQUIREMENT (inherited, non-negotiable):** the streamed converter's
+> file loop MUST keep the redacted-target dispatch that `collectExportData` now
+> performs — every OPFS path must be classified before it enters the archive, and
+> anything the archive-target registry classes portable-redacted must go through
+> its registered sanitizer (or fail closed). Tracked as its own bead linked from
+> chrome-agent-platform-8fuc; `lib/archive-target-registry.js` stays RETAINED-parked
+> until that converter becomes its importer.
+
 ## 1. Problem Statement & Confirmed Source Evidence
 
 ### 1.1 The Existing Architecture & Hard Caps

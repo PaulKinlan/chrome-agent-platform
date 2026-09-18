@@ -1010,3 +1010,44 @@ Deno.test("5l73 lifecycle: existing install HMAC key in OPFS does not block impo
     "overwrite:true must NOT wipe the install-scoped owner approval key",
   );
 });
+
+// ── redacted-target dispatch (chrome-agent-platform-8fuc) ──────────────────
+// The archive-target registry classifies memory/origins/<origin>/agentConfig.json
+// as portable-redacted, but the export walk shipped its raw bytes untouched.
+// These tests pin the dispatched sanitizer at the real export path.
+
+Deno.test("redacted-target dispatch: a managed agentConfig's credential never crosses export; non-redacted files are untouched", async () => {
+  const b = fixtureBackends();
+  b.opfs.map.set(
+    "memory/origins/https%3A%2F%2Fexample.com/agentConfig.json",
+    new TextEncoder().encode(JSON.stringify({ name: "Site Bot", apiKey: "sk-injected-secret" })),
+  );
+  b.opfs.map.set("artifacts/plain-notes.txt", new TextEncoder().encode("owner notes stay verbatim"));
+  const snapshot = await collectExportData({ kvGet: b.kv.kvGet, opfs: b.opfs, alarms: b.alarms });
+
+  const entry = snapshot.files.find((f) => f.path === "memory/origins/https%3A%2F%2Fexample.com/agentConfig.json");
+  assert(entry, "the managed redacted target is still exported (sanitized, not dropped)");
+  const text = new TextDecoder().decode(entry.bytes);
+  assertStringIncludes(text, "Site Bot");
+  assert(
+    !text.includes("sk-injected-secret"),
+    `the injected credential crossed the export bundle verbatim: ${text}`,
+  );
+  assertEquals(JSON.parse(text), { name: "Site Bot" });
+
+  const plain = snapshot.files.find((f) => f.path === "artifacts/plain-notes.txt");
+  assertEquals(new TextDecoder().decode(plain.bytes), "owner notes stay verbatim");
+});
+
+Deno.test("redacted-target dispatch: a managed agentConfig that cannot be decoded fails the export CLOSED, never ships raw bytes", async () => {
+  const b = fixtureBackends();
+  b.opfs.map.set(
+    "memory/origins/https%3A%2F%2Fexample.com/agentConfig.json",
+    new TextEncoder().encode("{not json at all"),
+  );
+  await assertRejects(
+    () => collectExportData({ kvGet: b.kv.kvGet, opfs: b.opfs, alarms: b.alarms }),
+    TypeError,
+    "archive_target_agent_config_json",
+  );
+});
