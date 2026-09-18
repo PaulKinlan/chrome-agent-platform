@@ -6997,7 +6997,7 @@ class AgentComposer extends Component {
    * lands on "#compose") can put the caret in the composer without reaching
    * into the shadow root from outside. Safe before connect: no-ops. */
   focusInput() {
-    const el = this._input ?? this._root?.querySelector("#task-input");
+    const el = this._input ?? this.querySelector("[data-composer-input]");
     el?.focus?.();
     return !!el;
   }
@@ -7032,19 +7032,19 @@ class AgentComposer extends Component {
     const html = `
       <div class="composer" part="composer">
         <span class="sr-only" id="composer-description-${this._uid}">${escapeHtml(description)}</span>
-        <textarea id="task-input" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
+        <textarea data-composer-input id="${this.id ? `${this.id}-input` : `cmp-input-${this._uid}`}" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
           aria-describedby="composer-description-${this._uid}" aria-haspopup="listbox" aria-expanded="false"
           aria-controls="popup-${this._uid}" aria-multiline="true" rows="2"></textarea>
         <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
-        <div class="chips" id="chips"></div>
+        <div class="chips"></div>
         <div class="row">
-          <mic-button id="mic"></mic-button>
-          <attach-button id="attach"></attach-button>
+          <mic-button id="${this.id ? `${this.id}-mic` : `mic-${this._uid}`}"></mic-button>
+          <attach-button id="${this.id ? `${this.id}-attach` : `attach-${this._uid}`}"></attach-button>
           <span class="spacer"></span>
-          <button id="run-task" class="btn send" type="button">${escapeHtml(sendLabel)}</button>
+          <button id="${this.id ? `${this.id}-send` : `cmp-send-${this._uid}`}" class="btn send" data-composer-send type="button">${escapeHtml(sendLabel)}</button>
         </div>
-        <div class="agent-pop" id="agent-pop" popover="manual" hidden>
-          <agent-picker id="agent-pick" callable-only label="Run with agent"
+        <div class="agent-pop" popover="manual" hidden>
+          <agent-picker callable-only label="Run with agent"
             ${currentAgent ? `current-agent-id="${escapeHtml(currentAgent)}" exclude-current` : ""}></agent-picker>
         </div>
       </div>
@@ -7141,15 +7141,15 @@ class AgentComposer extends Component {
         agent-composer .composer textarea { min-width: 0; }
       }
     `, html);
-    this._input = this._root.querySelector("#task-input");
-    this._mic = this._root.querySelector("#mic");
-    this._attach = this._root.querySelector("#attach");
-    this._run = this._root.querySelector("#run-task");
-    this._status = this._root.querySelector(".composer-status");
-    this._popup = this._root.querySelector(".popup");
-    this._chips = this._root.querySelector("#chips");
-    this._agentPop = this._root.querySelector("#agent-pop");
-    this._agentPick = this._root.querySelector("#agent-pick");
+    this._input = this.querySelector("[data-composer-input]");
+    this._mic = this.querySelector("mic-button");
+    this._attach = this.querySelector("attach-button");
+    this._run = this.querySelector("[data-composer-send]");
+    this._status = this.querySelector(".composer-status");
+    this._popup = this.querySelector(".popup");
+    this._chips = this.querySelector(".chips");
+    this._agentPop = this.querySelector(".agent-pop");
+    this._agentPick = this.querySelector("agent-picker");
     this._popupItems = [];
     this._popupActive = -1;
     this._popupToken = null;
@@ -8197,7 +8197,7 @@ class AgentComposer extends Component {
     // dictating, recognition kept listening in the background). Composer-level
     // rejections (empty text, stale agent above) keep BOTH the draft and the
     // recording; only the accepted path tears the mic down.
-    this._root.querySelector("#mic")?.stop?.();
+    (this._mic ?? this.querySelector("mic-button"))?.stop?.();
     if (this._input) { this._input.value = ""; this._autoGrow(); }
     this._resolvedSpans = []; // the input is cleared — the recorded boundaries are gone
     const pending = this.attachments.splice(0);

@@ -367,7 +367,19 @@ async function boxOf(cdp, session, selector) {
   const v = await evalIn(
     cdp,
     session,
-    `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width/2, y: r.y + r.height/2 }; })()`,
+    `(() => {
+      let el = document.querySelector(${JSON.stringify(selector)});
+      if (!el && ${JSON.stringify(selector)}.includes("#task-input")) {
+        el = document.querySelector(${JSON.stringify(selector)}.replace("#task-input", "[data-composer-input]"));
+      }
+      if (!el && ${JSON.stringify(selector)}.includes("#run-task")) {
+        el = document.querySelector(${JSON.stringify(selector)}.replace("#run-task", "[data-composer-send]"));
+      }
+      if (!el) return null;
+      el.scrollIntoView({ block: "center", inline: "center" });
+      const r = el.getBoundingClientRect();
+      return { x: r.x + r.width/2, y: r.y + r.height/2 };
+    })()`,
   );
   return v && typeof v === "object" && typeof v.x === "number" ? v : null;
 }
@@ -1421,7 +1433,7 @@ async function main() {
     await pressTab(cdp, ntpSession); // ONE genuine Tab key from a neutral start
     const tab1 = await focusedInHub();
     console.log("fresh hub Tab #1:", JSON.stringify(tab1));
-    check("fresh hub: Tab #1 focuses the composer", tab1?.inComposer === true && tab1?.id === "task-input");
+    check("fresh hub: Tab #1 focuses the composer", tab1?.inComposer === true && (tab1?.id === "composer-input" || tab1?.id === "task-input" || tab1?.tag === "TEXTAREA"));
     await evalIn(cdp, ntpSession, `document.activeElement?.blur?.(); true`);
     const bannerButtons = await evalIn(cdp, ntpSession, `(() => {
       const g = document.getElementById('first-run-guide');
@@ -2746,7 +2758,7 @@ async function main() {
     );
     const taskVal = await evalIn(
       cdp, ntpSession,
-      `document.querySelector('#task-input').value`,
+      `document.querySelector('#composer [data-composer-input], #composer textarea, #task-input')?.value`,
     );
     check("NTP: textarea reflects the typed text", taskVal === typedTask);
     check(
@@ -7895,7 +7907,7 @@ async function main() {
       const readPalette = () => evalIn(cdp, paletteSess, `(() => {
         // The composer renders in the LIGHT DOM (no shadow): find the input
         // carrying the /skill token, then its composer's popup.
-        const input = [...document.querySelectorAll('#task-input')].find((i) => String(i.value ?? '').startsWith('/skill'));
+        const input = [...document.querySelectorAll('[data-composer-input], #task-input')].find((i) => String(i.value ?? '').startsWith('/skill'));
         if (!input) return "";
         const c = input.closest('agent-composer') ?? document;
         const pop = c.querySelector('.popup') ?? document.querySelector('.popup');
@@ -7920,7 +7932,7 @@ async function main() {
       // same event the composer's slash-command listener consumes.
       const typePalette = (text) => evalIn(cdp, paletteSess, `(() => {
         // Light DOM: the first visible composer input.
-        for (const i of document.querySelectorAll('#task-input')) {
+        for (const i of document.querySelectorAll('[data-composer-input], #task-input')) {
           const host = i.closest('agent-composer') ?? i;
           if (!host.getBoundingClientRect().width) continue;
           i.value = ${JSON.stringify(text ?? '')};
@@ -7941,7 +7953,7 @@ async function main() {
       if (paletteShot) await writeEvidence("site-playbook-palette.png", paletteShot);
       // Clear the composer, switch the ACTIVE tab to a non-matching origin
       // (the hub itself — chrome-extension://), and re-open the palette.
-      await evalIn(cdp, paletteSess, `(() => { for (const i of document.querySelectorAll('#task-input')) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
+      await evalIn(cdp, paletteSess, `(() => { for (const i of document.querySelectorAll('[data-composer-input], #task-input')) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
       await cdp.send("Target.activateTarget", { targetId: palettePage.id }).catch(() => {});
       await sleep(800);
       await typePalette("/skill:");
@@ -7954,7 +7966,7 @@ async function main() {
       await cdp.send("Target.closeTarget", { targetId: palettePage.id }).catch(() => {});
       await cdp.send("Target.activateTarget", { targetId: playbookTab.id }).catch(() => {});
       await sleep(500);
-      await evalIn(cdp, ntpSession, `(() => { const c = document.querySelector('agent-composer'); const i = c?.shadowRoot?.querySelector('#task-input'); if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
+      await evalIn(cdp, ntpSession, `(() => { const c = document.querySelector('agent-composer'); const i = c?.shadowRoot?.querySelector('[data-composer-input], textarea') ?? c?.querySelector('[data-composer-input], textarea'); if (i) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
 
       // The composition half: a run whose ACTIVE tab is the fixture origin
       // carries the note + the bound skill's body in the REAL system message.

@@ -34,8 +34,8 @@ Deno.test("a11y: ntp + sidepanel have a level-one heading (UX-007)", async () =>
 
 Deno.test("a11y: the composer textarea is a textbox-with-popup (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01)", async () => {
   const js = await read("./extension/shared/components.js");
-  const m = js.match(/<textarea id="task-input"[^>]*>/);
-  assert(m, "task-input textarea not found");
+  const m = js.match(/<textarea\b[^>]*data-composer-input[^>]*>/);
+  assert(m, "data-composer-input textarea not found");
   // The multiline textarea KEEPS textbox semantics — the ARIA 1.2 combobox
   // role is reserved for single-line inputs, so a multiline editable combo is
   // expressed as a textbox-with-popup: aria-haspopup + aria-expanded +

@@ -1,6 +1,9 @@
 # Changelog
 
 ## [0.3.416] — 2026-09-18
+- render unique per-instance IDs and data-composer-input for agent-composer
+
+## [0.3.416] — 2026-09-18
 - security-suite escape fixture fails closed when descendant fails to persist
 - exported agentConfig credentials can no longer cross the owner export walk
 - preserve the unlanded S3 registry-oracle work with 49-control execution matrix
