@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.432] — 2026-09-18
+- correct the stale '~10 bytes under' comments to the measured headroom
+
 ## [0.3.431] — 2026-09-18
 - remove scripts/opfs-wal-probe.ts and thread-open-trace.ts
 
