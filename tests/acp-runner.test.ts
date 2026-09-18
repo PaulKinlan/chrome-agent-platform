@@ -6,7 +6,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
-import { acpEndpointWithToken, acpPermissionMode, acpSessionKey, ACP_PERMISSION_TIMEOUT_MS, requestAcpPermission, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
+import { acpEndpointWithHarness, acpEndpointWithToken, acpHealthUrl, acpPermissionMode, acpSessionKey, ACP_PERMISSION_TIMEOUT_MS, probeAcpBridgeHealth, requestAcpPermission, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
@@ -34,6 +34,25 @@ Deno.test("acpEndpointWithToken: carries a configured bridge token, exactly once
   assertEquals(acpEndpointWithToken("ws://127.0.0.1:3210/acp?token=already", "other"), "ws://127.0.0.1:3210/acp?token=already");
   assertEquals(acpEndpointWithToken("ws://127.0.0.1:3210/acp", ""), "ws://127.0.0.1:3210/acp");
   assertEquals(acpEndpointWithToken("", "s3cret"), "");
+});
+
+Deno.test("acpEndpointWithHarness: appends requested harness to ACP endpoint URL without duplication", () => {
+  assertEquals(acpEndpointWithHarness("ws://127.0.0.1:3210/acp", "claude-code"), "ws://127.0.0.1:3210/acp?harness=claude-code");
+  assertEquals(acpEndpointWithHarness("ws://127.0.0.1:3210/acp?token=s3cret", "codex"), "ws://127.0.0.1:3210/acp?token=s3cret&harness=codex");
+  assertEquals(acpEndpointWithHarness("ws://127.0.0.1:3210/acp?harness=pi", "claude-code"), "ws://127.0.0.1:3210/acp?harness=pi");
+  assertEquals(acpEndpointWithHarness("ws://127.0.0.1:3210/acp", ""), "ws://127.0.0.1:3210/acp");
+  assertEquals(acpEndpointWithHarness("", "pi"), "");
+
+  // Composition: token + harness work in either order
+  const composed = acpEndpointWithToken(acpEndpointWithHarness("ws://127.0.0.1:3210/acp", "claude-code"), "tok");
+  assertEquals(composed, "ws://127.0.0.1:3210/acp?harness=claude-code&token=tok");
+});
+
+Deno.test("acpHealthUrl: derives health URL from ws/wss/http/https endpoints", () => {
+  assertEquals(acpHealthUrl("ws://127.0.0.1:3210/acp"), "http://127.0.0.1:3210/health");
+  assertEquals(acpHealthUrl("wss://bridge.local:8443/acp?token=foo"), "https://bridge.local:8443/health");
+  assertEquals(acpHealthUrl("http://localhost:3210/acp"), "http://localhost:3210/health");
+  assertEquals(acpHealthUrl(""), "");
 });
 
 /** Mock conversation container simulating <agent-conversation> DOM element */
@@ -645,3 +664,60 @@ Deno.test("runAcpTaskTurn: auto mode is opt-in and still auto-grants", async () 
     await bridge.shutdown();
   }
 });
+
+Deno.test("runAcpTaskTurn: detects harness mismatch and reports requested vs started harness with reinstall command", async () => {
+  // Simulate Paul's exact failure: bridge started 'pi' when user clicked 'claude-code'
+  const server = Deno.serve({ port: 0, hostname: "127.0.0.1" }, (req) => {
+    if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Upgrade required", { status: 426 });
+    }
+    const { socket, response } = Deno.upgradeWebSocket(req);
+    socket.onopen = () => {
+      socket.close(1011, 'adapter for harness "pi" exited: Could not start pi: executable not found (command: /path/to/pi)');
+    };
+    return response;
+  });
+  const port = (server as any).addr.port;
+  const container = new MockContainer();
+
+  try {
+    const res = await runAcpTaskTurn({
+      container,
+      task: "hello claude",
+      harnessId: "claude-code",
+      endpoint: `ws://127.0.0.1:${port}/acp`,
+    });
+    assertEquals(res.ok, false);
+    assertEquals(res.requestedHarness, "claude-code");
+    assertEquals(res.startedHarness, "pi");
+    assert(res.error?.includes('Harness mismatch: requested "claude-code", but running bridge started "pi"'), res.error);
+    assert(res.error?.includes("npm run acp:service install --harness claude-code"), res.error);
+    assert(res.error?.includes("Could not start pi: executable not found"), res.error);
+
+    assertEquals(container.errors.length, 1);
+    assertEquals(container.errors[0].meta.requestedHarness, "claude-code");
+    assertEquals(container.errors[0].meta.startedHarness, "pi");
+  } finally {
+    await server.shutdown();
+  }
+});
+
+Deno.test("runAcpTaskTurn: requested harness is honoured and completes turn", async () => {
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const container = new MockContainer();
+
+  try {
+    const res = await runAcpTaskTurn({
+      container,
+      task: "hello claude",
+      harnessId: "claude-code",
+      endpoint: `ws://127.0.0.1:${port}/acp`,
+    });
+    assertEquals(res.ok, true, String(res.error));
+    assertEquals(res.result, "fake reply");
+  } finally {
+    await bridge.shutdown();
+  }
+});
+
