@@ -1,0 +1,19 @@
+{"srcDistIsSymlink":true,"linkTarget":"dist-versions/v-905598-1789724045261","outDir":"/home/paulkinlan/cap-evidence/54k5-real-tree-1789724056826/variant"}
+{
+  "variantDistIsSymlink": false,
+  "variantDistWorkerBytes": 2996308,
+  "attestationCoversDist": true,
+  "materializedLinks": [
+    {
+      "path": "dist",
+      "target": "dist-versions/v-905598-1789724045261"
+    }
+  ],
+  "symlinksInVariant": 0,
+  "differsFromSource": [
+    "manifest.json"
+  ],
+  "verify": "accepted"
+}
+
+REAL-TREE VARIANT: self-contained and fully attested.
