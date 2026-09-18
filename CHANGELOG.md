@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.421] — 2026-09-18
+- the serial phase's per-file bound scales with load instead of assuming an idle box ()
+
 ## [0.3.420] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode (khkk)
 - disclose owner-gate leg execution state in ACP browser acceptance (dbmz)
