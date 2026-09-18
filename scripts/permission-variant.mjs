@@ -28,7 +28,7 @@
 // Every build writes <outDir>/VARIANT-INTEGRITY.json: the sha256 of every
 // file, and the assertion that ONLY manifest.json differs from the source.
 
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -229,7 +229,7 @@ export async function verifyVariantIntegrity({ dir, srcDir }) {
 }
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
   const opt = (name) => {
     const i = args.indexOf(`--${name}`);

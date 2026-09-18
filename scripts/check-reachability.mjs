@@ -32,7 +32,7 @@
 //
 // Runs under node (build.mjs) AND Deno (tests/reachability.test.ts) —
 // `readFile`/`readdir` are injectable for the test; acorn is the only import.
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tokenizer } from "acorn";
 
 export const SHIPPED_EXTENSIONS = new Set([".js", ".mjs", ".html", ".css"]);
@@ -293,7 +293,7 @@ export async function runNode({ root, log = console.log } = {}) {
   return result;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     const result = await runNode();
     if (process.argv.includes("--list")) {
