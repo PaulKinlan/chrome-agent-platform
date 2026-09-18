@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.427] — 2026-09-18
+- bound the bundled-tool generator so a hang cannot wedge a build or blame a test
+
 ## [0.3.426] — 2026-09-18
 - wire scripts/check-models.mjs into test:all and clean retired model references
 
