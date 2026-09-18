@@ -35,6 +35,18 @@ const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_TOTAL_BYTES = 512 * 1024 * 1024;
 const MAX_MARKER_BYTES = 4_096;
 
+/** chrome-agent-platform-1mz2: the marker binds HEAD, every indexed source byte
+ * and the generated outputs, so ANY commit invalidates a built tree — including
+ * the post-commit hook's own version bump and `git commit --amend`. A lane then
+ * meets the staleness as red serial-phase tests, and a verdict that names only
+ * the marker costs a re-diagnosis every time. Both staleness verdicts carry the
+ * cause and the exact fix; the pinned substrings stay at the front so every
+ * existing tamper assertion still reads the same verdict. */
+const STALE_REBUILD_GUIDANCE =
+  " — dist.complete binds the exact commit, every indexed source byte and the generated " +
+  "bundles, so any commit invalidates it (the post-commit hook also bumps the version and " +
+  "amends HEAD); rebuild before the gate: npm run build:production";
+
 function markerError(message) {
   return new Error(`dist.complete validation failed: ${message}`);
 }
@@ -290,12 +302,12 @@ export async function validateDistCompleteMarker({
     outputAuthority(distRoot),
   ]);
   if (marker.commit !== gitCommit(root)) {
-    throw markerError("marker commit is stale");
+    throw markerError(`marker commit is stale${STALE_REBUILD_GUIDANCE}`);
   }
   if (
     marker.source.digest !== source.digest ||
     marker.source.files !== source.files
-  ) throw markerError("marker indexed source authority is stale");
+  ) throw markerError(`marker indexed source authority is stale${STALE_REBUILD_GUIDANCE}`);
   for (let index = 0; index < outputs.length; index++) {
     if (
       marker.outputs[index].path !== outputs[index].path ||

@@ -1,0 +1,15 @@
+=== 1mz2 BEFORE: a commit moved HEAD, the built tree is stale ===
+--- command: npm run check:dist
+
+
+[dist] the built extension is stale against this tree: dist.complete validation failed: marker commit is stale — dist.complete binds the exact commit, every indexed source byte and the generated bundles, so any commit invalidates it (the post-commit hook also bumps the version and amends HEAD); rebuild before the gate: npm run build:production
+[dist] rebuild before the gate — npm run build:production  (npm run check:dist re-checks)
+--- command: npm run test:file -- tests/bundled-tool-packages.test.ts (the serial-phase reader, real path)
+store map: exact archivePath→executable mapping for ALL 38 shipped CAS binaries ... FAILED (189ms)
+store map hostile: WITHOUT the map every shipped binary is refused (no silent admission) ... FAILED (169ms)
+store map: exact archivePath→executable mapping for ALL 38 shipped CAS binaries => ./tests/bundled-tool-packages.test.ts:361:6
+error: Error: dist.complete validation failed: marker commit is stale — dist.complete binds the exact commit, every indexed source byte and the generated bundles, so any commit invalidates it (the post-commit hook also bumps the version and amends HEAD); rebuild before the gate: npm run build:production
+store map hostile: WITHOUT the map every shipped binary is refused (no silent admission) => ./tests/bundled-tool-packages.test.ts:373:6
+error: Error: dist.complete validation failed: marker commit is stale — dist.complete binds the exact commit, every indexed source byte and the generated bundles, so any commit invalidates it (the post-commit hook also bumps the version and amends HEAD); rebuild before the gate: npm run build:production
+store map: exact archivePath→executable mapping for ALL 38 shipped CAS binaries => ./tests/bundled-tool-packages.test.ts:361:6
+store map hostile: WITHOUT the map every shipped binary is refused (no silent admission) => ./tests/bundled-tool-packages.test.ts:373:6

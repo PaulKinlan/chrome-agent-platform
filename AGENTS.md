@@ -44,9 +44,15 @@ an exception. These rules make that safe:
    then set it up before the first gate: `npm ci` (the npm deps), `deno install` (the deno
    store — since chrome-agent-platform-63et `build.mjs` resolves a deno.lock transitive from
    `node_modules/.deno/`, and a worktree without it fails the store build and the whole
-   serial test phase with "build target mismatch"), then `npm run build` (the
-   `extension/dist/` artifacts the type-checked suite imports). A fresh worktree has none
-   of the three, and each gap fails somewhere that does not name it.
+   serial test phase with "build target mismatch"), then `npm run build:production` (the
+   `extension/dist/` artifacts the suite's serial phase reads — it requires the STORE
+   target, so the developer-target `npm run build` alone is not enough). A fresh worktree
+   has none of the three, and each gap fails somewhere that does not name it.
+   **`extension/dist/dist.complete` binds HEAD, every indexed source byte and the generated
+   bundles: ANY commit invalidates the build — including the post-commit hook's own version
+   bump and `git commit --amend`.** Rebuild after your LAST commit, before `npm test`
+   (`npm run check:dist` says whether the build is current in ~0.2 s); otherwise the serial
+   phase reds on `dist.complete` markers that are unrelated to your change (1mz2).
    Never implement directly in the primary checkout (`~/chrome-agent-platform`)
    — the primary checkout is shared by every session, and one session moving
    its `main` ref or leaving dirty files breaks everyone else (this happened
@@ -266,6 +272,9 @@ read in run 2.
   3. `npm test` — the full unit suite, once, before you push or report done.
      It is the only way to run the whole suite: a raw `deno test tests/` is
      refused, and a raw single-file run finds no modules.
+     The suite's serial phase asserts the built tree is current at HEAD, so run
+     `npm run build:production` after your LAST commit and before this gate:
+     any commit invalidates `extension/dist/dist.complete` (1mz2).
   Never weaken or skip a test to make a subset pass; the subset differs from
   the gate only in WHICH files run.
 - **Visual verification.** UI work is verified by driving the real UI in headless
