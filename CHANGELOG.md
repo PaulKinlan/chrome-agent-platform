@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.415] — 2026-09-18
+- per-agent tool-config coverage lands — derived from the shipped inventory, not a rotting literal
+
 ## [0.3.414] — 2026-09-17
 - opening a running task no longer waits on the live run's own log lock
 
