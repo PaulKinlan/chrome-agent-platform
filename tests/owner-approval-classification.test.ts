@@ -6,6 +6,7 @@
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { parse } from "npm:acorn";
 import { runInNewContext } from "node:vm";
+import { fileURLToPath } from "node:url";
 import { DESTRUCTIVE_ACTIONS, OWNER_DIRECT_ACTIONS, isOwnerDirectApproval } from "../extension/lib/owner-approval.js";
 
 // Explicit policy, NOT the implicit complement of OWNER_DIRECT_ACTIONS.
@@ -68,7 +69,7 @@ function isApprovedInjection(node, ancestors, file) {
 }
 
 function assertApprovalHelperReferences(ast, url) {
-  const file = url.pathname.split("/extension/background/")[1];
+  const file = fileURLToPath(url).split("/extension/background/")[1];
   const helpers = ["requireOwnerApproval", "scriptApprovalGate"];
   walk(ast, (node, ancestors) => {
     const parent = ancestors.at(-1);
@@ -82,7 +83,7 @@ function assertApprovalHelperReferences(ast, url) {
         (parent?.type === "CallExpression" && parent.callee === node && !parent.optional) ||
         (parent?.type === "FunctionDeclaration" && parent.id === node && file === "service-worker.js" && ancestors.at(-2)?.type === "Program") ||
         isApprovedInjection(node, ancestors, file)
-      ), `unresolved approval helper reference: ${url.pathname}:${node.start}`);
+      ), `unresolved approval helper reference: ${fileURLToPath(url)}:${node.start}`);
     }
   });
 }
@@ -108,7 +109,7 @@ Deno.test("owner-approval classification: every executable approval call has exp
       if (node.type !== "CallExpression" || !["requireOwnerApproval", "scriptApprovalGate"].includes(node.callee.name)) return;
       calls++;
       const action = node.arguments[1];
-      const where = `${url.pathname.split("/extension/")[1]}:${node.start}`;
+      const where = `${fileURLToPath(url).split("/extension/")[1]}:${node.start}`;
       if (action?.type === "Literal" && typeof action.value === "string") {
         operations.add(action.value);
         return;
