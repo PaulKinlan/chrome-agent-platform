@@ -78,7 +78,7 @@ import {
   installPageDiagnostics,
   startDiagnosticSubscription,
 } from "../shared/diagnostics-client.js";
-import { runAcpTaskTurn } from "../lib/acp-runner.js";
+import { cancelAcpTurn, runAcpTaskTurn } from "../lib/acp-runner.js";
 import { capLog } from "../lib/cap-log.js";
 import { perfSpan, perfSummary } from "../lib/cap-perf.js";
 
@@ -3760,6 +3760,28 @@ threadConversation?.addEventListener("action", (ev) => {
 threadConversation?.addEventListener("stop", async (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
   const row = ev.target;
+  const executionId = ev.detail?.executionId || row.getAttribute("execution-id");
+  if (typeof executionId === "string" && executionId.startsWith("acp:")) {
+    const button = row._root?.querySelector?.(".stop");
+    if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+    renderRunStatus({ state: "running", activity: "Stopping…", executionId });
+    const parts = executionId.slice(4).split(":");
+    const threadOrHub = parts[0] === "hub" ? null : parts[0];
+    const harness = parts[1] || "pi";
+    const result = await cancelAcpTurn({ threadId: threadOrHub, harnessId: harness });
+    if (result?.ok) {
+      renderRunStatus({ state: "cancelled", executionId });
+      setStatus("Stopped.");
+    } else if (result?.error === "run_already_terminal" || result?.error === "no_active_turn") {
+      setStatus("Stop had no effect — this run already finished.");
+      renderRunStatus({ state: "completed", executionId });
+    } else {
+      const message = `Stop failed — ${result?.error ?? "unknown error"}`;
+      renderRunStatus({ state: "failed", message, errorCategory: "aborted", executionId });
+      setStatus(message, false);
+    }
+    return;
+  }
   const result = await cancelRunFromRenderedStop(ev, (executionId) => {
     const button = row._root?.querySelector?.(".stop");
     if (button) { button.disabled = true; button.textContent = "Stopping…"; }
@@ -3836,12 +3858,20 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     if (typeof threadConversation.appendUser === "function") {
       threadConversation.appendUser(text, Date.now(), attachments);
     }
+    const acpExecutionId = `acp:${threadAtStart || "hub"}:${mention?.id || agentAtStart || "pi"}:${Date.now()}`;
+    liveClientRunId = acpExecutionId;
+    threadConversation?.bindLiveStatusExecution?.(acpExecutionId);
     res = await runAcpTaskTurn({
       container: threadConversation,
       task: text,
       attachments,
       threadId: threadAtStart,
       harnessId: mention?.id || agentAtStart || "pi",
+      executionId: acpExecutionId,
+      onRunRegistered: (id) => runSurfaceOwner.commit(owner, () => {
+        liveClientRunId = id;
+        threadConversation?.bindLiveStatusExecution?.(id);
+      }),
       onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
       isStale: () => !owns(),
       sessionStore: acpSessionStore,

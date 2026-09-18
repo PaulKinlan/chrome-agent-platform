@@ -63,6 +63,32 @@ const threadSessions = new Map();
  * host session would interleave on the same pi conversation. */
 const activeTurns = new Map();
 
+/**
+ * Cancel an in-flight ACP turn for a conversation.
+ * Sends `session/cancel` with the active sessionId over the wire to the harness,
+ * marks the turn as stopped by the owner, and settles the turn.
+ *
+ * @param {string|{threadId?: string|null, harnessId?: string, key?: string}} [options]
+ * @returns {Promise<{ok: boolean, error?: string, cancelledOnWire?: boolean, sessionId?: string|null}>}
+ */
+export async function cancelAcpTurn(options = {}) {
+  const { threadId = null, harnessId = "pi", key = null } = typeof options === "string" ? { key: options } : options;
+  const sessionKey = key || acpSessionKey(threadId, harnessId);
+  const active = activeTurns.get(sessionKey);
+  if (!active) return { ok: false, error: "no_active_turn" };
+  if (active.cancelled) return { ok: false, error: "run_already_terminal" };
+  active.cancelled = true;
+  active.stoppedByOwner = true;
+  let cancelledOnWire = false;
+  if (active.client && active.sessionId) {
+    try {
+      await active.client.cancel(active.sessionId);
+      cancelledOnWire = true;
+    } catch { /* best effort */ }
+  }
+  return { ok: true, cancelledOnWire, sessionId: active.sessionId };
+}
+
 /** The conversation key a session is cached under (exported for unit tests).
  * A thread key names the harness too: two harnesses in one thread are two
  * conversations, never one colliding key. */
@@ -172,6 +198,8 @@ function settleAcpPermissionCard(card, state) {
  * @param {string} [options.endpoint] - Custom WebSocket URL
  * @param {string} [options.cwd] - Custom working directory
  * @param {(state: any) => void} [options.onStatus] - Status update callback
+ * @param {(id: string) => void} [options.onRunRegistered] - Run registered callback
+ * @param {string} [options.executionId] - Execution ID override
  * @param {() => boolean} [options.isStale] - Run-lifecycle fence
  * @param {{get: (key: string) => Promise<string|null>, set: (key: string, sessionId: string) => Promise<void>}} [options.sessionStore] - Durable session-id store (kv), so a reload resumes instead of forking
  * @param {{get: (key: string) => Promise<string|null>}} [options.settings] - kv reader for `acp.endpoint` / `acp.token` / `acp.transport` / `acp.permissions`
@@ -189,10 +217,16 @@ export async function runAcpTaskTurn(options) {
     endpoint = DEFAULT_ACP_ENDPOINT,
     cwd = DEFAULT_ACP_CWD,
     onStatus = null,
+    onRunRegistered = null,
     isStale = () => false,
     sessionStore = null,
     settings = null,
+    executionId = null,
   } = options;
+
+  const sessionKey = acpSessionKey(threadId, harnessId);
+  const currentExecutionId = executionId || `acp:${sessionKey}:${Date.now()}`;
+  onRunRegistered?.(currentExecutionId);
 
   const stale = () => {
     try { return typeof isStale === "function" && !!isStale(); }
@@ -200,7 +234,7 @@ export async function runAcpTaskTurn(options) {
   };
 
   const status = (s) => {
-    if (!stale()) onStatus?.(s);
+    if (!stale()) onStatus?.({ executionId: currentExecutionId, ...s });
   };
 
   status({ state: "running", activity: `Connecting to ${harnessId} harness…` });
@@ -275,16 +309,13 @@ export async function runAcpTaskTurn(options) {
     ...(permissionHandler ? { permissionHandler } : {}),
   });
 
-  /** The conversation key, owned by this turn (the finally clears it). */
-  const sessionKey = acpSessionKey(threadId, harnessId);
-
   // CLAIM the conversation BEFORE ANY await — synchronously. A second (or
   // third) send while this turn is still connecting has to SEE this turn and
   // supersede it; if the claim were installed after `await prior.cancel(...)`,
   // a third send would still read the OLD claim and overwrite the second one,
   // leaving two turns unnotified and both prompting. `cancelled` makes the
   // newer turn's intent visible even before this turn reaches the wire.
-  const claim = { client: null, sessionId: null, cancelled: false };
+  const claim = { client: null, sessionId: null, cancelled: false, stoppedByOwner: false };
   const prior = activeTurns.get(sessionKey);
   if (prior) prior.cancelled = true;
   activeTurns.set(sessionKey, claim);
@@ -479,13 +510,15 @@ export async function runAcpTaskTurn(options) {
 
     if (superseded()) {
       client.close();
-      return { ok: false, error: "Task was superseded" };
+      if (claim.stoppedByOwner) status({ state: "cancelled" });
+      return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId, resumed, resumeFailed, resumeError };
     }
 
     // A cancelled turn is NOT a success: the harness reports stopReason
     // "cancelled" when a newer turn (or a cancel request) stopped it.
-    if (String(turn.stopReason ?? "").toLowerCase().startsWith("cancel")) {
-      return { ok: false, error: "Task was cancelled", stopReason: turn.stopReason, sessionId, resumed, resumeFailed, resumeError };
+    if (String(turn.stopReason ?? "").toLowerCase().startsWith("cancel") || claim.stoppedByOwner) {
+      status({ state: "cancelled" });
+      return { ok: false, error: "Task was cancelled", stopReason: turn.stopReason || "cancelled", sessionId, resumed, resumeFailed, resumeError };
     }
 
     // Ensure complete response rendered
@@ -516,10 +549,14 @@ export async function runAcpTaskTurn(options) {
         + "If the bridge was auto-started (service or native host), reinstall the launcher so it captures "
         + "your shell PATH (npm run acp:service install), or install the CLI it names.";
     }
-    // A SUPERSEDED turn renders nothing: the socket close / prompt rejection a
-    // successor caused is not this surface's error to show (and would land
+    // A SUPERSEDED or STOPPED turn renders nothing: the socket close / prompt rejection a
+    // successor or stop caused is not this surface's error to show (and would land
     // over the successor's own output). Surfaces without an isStale fence (the
     // side panel) depend on this check, not on stale() alone.
+    if (claim.stoppedByOwner) {
+      status({ state: "cancelled" });
+      return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId: claim.sessionId, resumed: false, resumeFailed, resumeError };
+    }
     if (claim.cancelled) {
       return { ok: false, error: "Task was superseded" };
     }
