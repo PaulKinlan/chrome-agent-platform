@@ -76,6 +76,8 @@ export const RETAINED = {
     "Only tests/opfs-tool-workspace.test.ts imports it.",
   "lib/profile-store.js":
     "Only tests/profile-store.test.ts imports it.",
+  "lib/tar-stream.js":
+    "Streaming regular-file TAR/PAX encoder (11rm.1): options/settings export will import it once staging and barrier integration exist; tests/tar-stream.test.ts imports it.",
   "lib/preference-bridge.js":
     "No page mounts the preference bridge (docs/PREFERENCE-PERCOLATION.md describes the design); only tests/security.test.ts imports it to pin the message validation.",
 };

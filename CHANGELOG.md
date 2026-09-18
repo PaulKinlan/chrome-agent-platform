@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.430] — 2026-09-18
+- backpressured TAR and PAX encoder without product wiring
+
 ## [0.3.429] — 2026-09-18
 - remove shared/agent-candidates.js replaced by agent-registry.js
 
