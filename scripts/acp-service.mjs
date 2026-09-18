@@ -12,7 +12,7 @@
 
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
-import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, accessSync, constants } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, lstatSync, readlinkSync, openSync, readSync, closeSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const HOME = homedir();
@@ -190,6 +190,53 @@ function status() {
   }
 }
 
+function diagnoseExecutionFailure(fullPath, capturedPath, err) {
+  try {
+    const stat = lstatSync(fullPath);
+    if (stat.isSymbolicLink()) {
+      const target = readlinkSync(fullPath);
+      const absTarget = target.startsWith("/") ? target : join(dirname(fullPath), target);
+      if (!existsSync(absTarget)) {
+        return `Dangling symlink (target does not exist: ${target})`;
+      }
+    }
+    const fd = openSync(fullPath, "r");
+    const buf = Buffer.alloc(512);
+    const bytesRead = readSync(fd, buf, 0, 512, 0);
+    closeSync(fd);
+    const header = buf.toString("utf8", 0, bytesRead);
+    if (header.startsWith("#!")) {
+      const shebangLine = header.split("\n")[0].slice(2).trim();
+      const parts = shebangLine.split(/\s+/);
+      const interp = parts[0];
+      if (interp.endsWith("/env") && parts[1]) {
+        const envBin = parts[1];
+        let foundEnv = false;
+        for (const dir of (capturedPath || "").split(":").filter(Boolean)) {
+          if (existsSync(join(dir, envBin))) { foundEnv = true; break; }
+        }
+        if (!foundEnv) {
+          return `Missing shebang interpreter (env "${envBin}" not found in captured PATH)`;
+        }
+      } else if (!existsSync(interp)) {
+        return `Missing shebang interpreter (interpreter "${interp}" does not exist)`;
+      }
+    }
+  } catch { /* ignore secondary diagnostic failure */ }
+
+  if (err.code === "EACCES" || err.code === "EPERM") {
+    return `Permission or quarantine failure (${err.code})`;
+  }
+  if (err.code === "ENOENT") {
+    return `Executable binary or interpreter not found (ENOENT)`;
+  }
+  if (err.status !== undefined && err.status !== null) {
+    const detail = err.stderr?.toString()?.trim() || err.stdout?.toString()?.trim() || "";
+    return `Process exited with code ${err.status}${detail ? `: ${detail}` : ""}`;
+  }
+  return String(err?.message || err);
+}
+
 async function doctor() {
   let healthy = true;
   console.log(`=== ACP Service Doctor (${OS}) ===\n`);
@@ -243,20 +290,17 @@ async function doctor() {
     }
   }
 
-  // 2. Binary resolution from captured PATH
-  console.log(`\n2. Binary Resolution (from captured PATH):`);
+  // 2. Binary resolution and execution from captured PATH
+  console.log(`\n2. Binary Resolution & Execution (from captured PATH):`);
   const pathEntries = (capturedPath || "").split(":").filter(Boolean);
   const resolveInCapturedPath = (name) => {
     for (const dir of pathEntries) {
       const full = join(dir, name);
       try {
-        if (existsSync(full)) {
-          try {
-            accessSync(full, constants.X_OK);
-            return { found: true, path: full, entry: dir };
-          } catch {
-            return { found: false, path: full, entry: dir, notExecutable: true };
-          }
+        let exists = false;
+        try { exists = existsSync(full) || lstatSync(full).isSymbolicLink(); } catch { exists = false; }
+        if (exists) {
+          return { found: true, path: full, entry: dir };
         }
       } catch { /* ignore */ }
     }
@@ -272,17 +316,30 @@ async function doctor() {
 
   for (const [bin, desc] of binariesToCheck) {
     const res = resolveInCapturedPath(bin);
-    if (res.found) {
-      console.log(`   [OK] ${bin} (${desc})`);
-      console.log(`        -> ${res.path}`);
-      console.log(`        (provided by: ${res.entry})`);
-    } else if (res.notExecutable) {
-      console.log(`   [FAIL] ${bin} (${desc})`);
-      console.log(`        -> ${res.path} exists but is NOT EXECUTABLE`);
-      healthy = false;
-    } else {
+    if (!res.found) {
       console.log(`   [FAIL] ${bin} (${desc})`);
       console.log(`        -> NOT FOUND in any captured PATH entry`);
+      healthy = false;
+      continue;
+    }
+
+    const testEnv = { ...process.env, PATH: capturedPath };
+    try {
+      const output = execFileSync(res.path, ["--version"], {
+        env: testEnv,
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 4000,
+        encoding: "utf8",
+      });
+      const firstLine = output.trim().split("\n")[0] || "(empty output)";
+      console.log(`   [OK] ${bin} (${desc})`);
+      console.log(`        -> ${res.path} (version: ${firstLine})`);
+      console.log(`        (provided by: ${res.entry})`);
+    } catch (err) {
+      const cause = diagnoseExecutionFailure(res.path, capturedPath, err);
+      console.log(`   [FAIL] ${bin} (${desc})`);
+      console.log(`        -> ${res.path} (provided by: ${res.entry})`);
+      console.log(`        Execution failed: ${cause} (code: ${err.code || err.status || "error"}, signal: ${err.signal || "none"})`);
       healthy = false;
     }
   }

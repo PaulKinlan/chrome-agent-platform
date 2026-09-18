@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.419] — 2026-09-18
+- verify binary execution with --version and diagnose broken shebang / dangling symlink
+
 ## [0.3.418] — 2026-09-18
 - connect landings back to the beads they already name (j4t1)
 
