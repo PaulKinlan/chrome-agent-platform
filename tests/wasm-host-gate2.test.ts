@@ -902,6 +902,22 @@ Deno.test("B2 text tranche: sort/uniq/tr/grep/toml2json produce the EXACT exampl
     // dptw: neither the logical request nor the Wasm artifact is content-capped;
     // exact shipped bytes are admitted regardless of whether a replacement got smaller.
     assert(casBytes.byteLength > 0, `${toolId} ships a non-empty exact CAS artifact`);
+    // chrome-agent-platform-cqhq: an Infinity bound SILENTLY DISABLES its check
+    // (every `> bound` comparison is false). So the unbounded set is pinned here:
+    // exactly these fields may be non-finite, everything else must be finite, and a
+    // stray Infinity in a finite field fails this test instead of quietly removing
+    // a refusal.
+    const UNBOUNDED_BY_DESIGN = [
+      "maxWasmBytes", "maxRequestBytes", "maxResponseBytes", "maxBinaryResponseBytes",
+      "maxBase64ResponseChars", "maxTransportErrorBytes", "maxFileOpBytes", "maxWorkspaceRpcBytes",
+    ];
+    for (const [field, value] of Object.entries(EXECUTOR_BOUNDS)) {
+      if (UNBOUNDED_BY_DESIGN.includes(field)) {
+        assertEquals(value, Number.POSITIVE_INFINITY, `${field} is declared unbounded by design`);
+      } else {
+        assert(Number.isFinite(value), `${field} must be finite — a non-finite bound silently disables its check`);
+      }
+    }
     assertEquals(EXECUTOR_BOUNDS.maxWasmBytes, Number.POSITIVE_INFINITY, "no wasm byte cap remains");
     const job = makeJob({
       stdin: new Uint8Array(new TextEncoder().encode(contract.stdin)),
@@ -1359,7 +1375,13 @@ Deno.test("schemas: the worker RESULT is EXACT-key validated (extra keys, field 
     { ...base, ok: true, result: 42 },                   // non-null result
     { ...base, counters: { hostCalls: 3 } },             // missing counter keys
     { ...base, counters: { hostCalls: -1, pathCalls: 0, fileBytes: 0, stdinBytesRead: 0, stdoutBytes: 0, stderrBytes: 0, openDynamicFds: 0 } }, // negative counter
-    { ...base, stdoutBytes: EXECUTOR_BOUNDS.maxResponseBytes + 1 }, // over-budget
+    // NON-FINITE counter. This case used to read `maxResponseBytes + 1` and claim
+    // "over-budget" — but the byte ceilings are Infinity BY DESIGN (dptw), and
+    // `Infinity + 1 === Infinity`, so it was never over budget: it is rejected by
+    // the FINITENESS clause (!Number.isSafeInteger) at wasm-executor.js:148, and the
+    // byte clause (`> maxResponseBytes`) is unreachable while the ceilings are
+    // unbounded (chrome-agent-platform-cqhq). Named for what it exercises.
+    { ...base, stdoutBytes: Number.POSITIVE_INFINITY }, // non-finite → result-bounds
     { ...base, ok: true, error: "x" },                   // ok/error conflict
     { ...base, phase: "unknown-phase" },
   ]) {
