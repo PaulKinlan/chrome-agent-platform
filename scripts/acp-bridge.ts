@@ -217,7 +217,16 @@ if (!isLoopbackHost(HOST) && import.meta.main) {
   console.log("[acp-bridge] proxy or a tunnel) and keep this process on loopback behind it.");
 }
 
-export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH) {
+/** `childEnv` is added to the adapter child's environment on top of this
+ * process's. It exists so a caller can pin the adapter's configuration for the
+ * children IT causes, instead of setting a process-global variable: `deno test
+ * --parallel` runs every test file in ONE process, so a `Deno.env.set` in one
+ * file is inherited by another file's adapter spawn through this very spread.
+ * Measured (chrome-agent-platform-jp78): a concurrent test file's fixture
+ * appended its frames to the other file's frame log, which made a resume pin
+ * that had actually resumed count two `session/new`. Explicit keys win over
+ * the inherited environment. */
+export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH, childEnv: Record<string, string> = {}) {
   return Deno.serve({ port, hostname: HOST }, (req) => {
     const url = new URL(req.url);
 
@@ -295,6 +304,7 @@ export function createAcpServer(port: number, adapterPathOverride = ADAPTER_PATH
           stderr: "piped",
           env: {
             ...Deno.env.toObject(),
+            ...childEnv,
             PI_ACP_HARNESS: HARNESS,
             ...childEnvForHarness(HARNESS, Deno.env.get("PATH") ?? ""),
             // Give the adapter a PATH that contains the binaries we resolved

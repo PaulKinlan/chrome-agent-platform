@@ -101,6 +101,93 @@ async function freePort(): Promise<number> {
   return port;
 }
 
+/** A bridge whose adapter children get EXACTLY these fixture knobs on top of
+ * the process environment. Per-test adapter config must NEVER travel through
+ * Deno.env here: `deno test --parallel` runs every test FILE in one process, so
+ * a Deno.env.set in this file is inherited by a concurrently running file's
+ * adapter spawn (measured, chrome-agent-platform-jp78: the other file's fixture
+ * appended its own session/new to THIS file's frame log, so a resume that had
+ * genuinely resumed counted two session/new). */
+function fixtureBridge(adapterEnv: Record<string, string> = {}) {
+  return createAcpServer(0, FAKE_ADAPTER, adapterEnv);
+}
+
+/** The fixture's frame log, or [] when no adapter lived long enough to write. */
+async function fixtureFrames(logPath: string): Promise<any[]> {
+  try {
+    return (await Deno.readTextFile(logPath)).trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+/** Read a FAILED continuity attempt from the frame log — the observer decides
+ * what the failure IS. A `session/load` frame is a load the ADAPTER saw: if the
+ * turn still fell back to a new session, the runner stopped resuming and that is
+ * the product property failing. No load frame at all means no load reached an
+ * adapter, which is retryable ONLY with the transport evidence that an adapter
+ * was there and died; a turn that completed without ever attempting a load is
+ * the same product regression, not a flaky environment. */
+function resumeFailureVerdict(frames: any[], message: string): "environment" | "product" {
+  if (frames.some((f) => f.dir === "in" && f.msg?.method === "session/load")) return "product";
+  const TRANSPORT_FAILURE =
+    /connection closed|adapter exited|Cannot connect to ACP harness|Failed to connect to ACP harness|timed out/i;
+  return TRANSPORT_FAILURE.test(message) ? "environment" : "product";
+}
+
+const CONTINUITY_ATTEMPTS = 3;
+/** How many continuity attempts this process has started (also names their logs). */
+let continuityRuns = 0;
+
+/** One continuity attempt: two turns through the real runner + bridge + fixture,
+ * with the fixture's frame log as the observer. Returns a verdict instead of
+ * throwing, so a caller can tell an adapter the ENVIRONMENT killed (retry) from
+ * the product failing to resume (red). */
+async function continuityAttempt(
+  adapterEnv: Record<string, string> = {},
+): Promise<{ ok: true } | { ok: false; verdict: "environment" | "product"; detail: string }> {
+  // A fresh conversation key per attempt: the runner caches the session id in
+  // module state (threadSessions), so a second attempt on the same key RESUMES
+  // on its FIRST turn and fails "the first turn has nothing to resume". The
+  // retired blind two-attempt loop could never survive a first failure for
+  // exactly that reason.
+  const run = continuityRuns++;
+  const harnessId = run === 0 ? "pi" : `pi-attempt-${run}`;
+  const logPath = `${durableDir("acp-fixture-logs")}/frames-${Date.now()}-${run}.jsonl`;
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, ...adapterEnv });
+  const endpoint = `ws://127.0.0.1:${(bridge as any).addr.port}/acp`;
+  const container = new MockContainer();
+
+  try {
+    const t1 = await runAcpTaskTurn({ container, task: "first", harnessId, endpoint });
+    const t2 = await runAcpTaskTurn({ container, task: "second", harnessId, endpoint });
+    assertEquals(t1.ok, true, String(t1.error));
+    assertEquals(t2.ok, true, String(t2.error));
+    assertEquals(t1.resumed, false, "the first turn has nothing to resume");
+    assertEquals(t2.resumed, true, "the second turn must resume the first turn's session");
+    assertEquals(t2.sessionId, t1.sessionId, "the same host session is reused");
+
+    const frames = await fixtureFrames(logPath);
+    const methods = frames.filter((f) => f.dir === "in").map((f) => f.msg.method);
+    assertEquals(methods.filter((m) => m === "session/new").length, 1, "exactly one session/new across two turns");
+    assertEquals(methods.filter((m) => m === "session/load").length, 1, "the second turn loads the existing session");
+    const load = frames.find((f) => f.dir === "in" && f.msg.method === "session/load");
+    assertEquals(load.msg.params.sessionId, t1.sessionId, "the load names the session the first turn created");
+    // The bridge filled the working directory the client never sent: this is
+    // the WIRING of applyHostDefaults (a unit test on the pure rule would not
+    // notice the call site being removed).
+    const newSession = frames.find((f) => f.dir === "in" && f.msg.method === "session/new");
+    const home = Deno.env.get("HOME") ?? "";
+    assertEquals(newSession.msg.params.cwd, `${home}/journal`, "the adapter received the host-side default cwd");
+    return { ok: true };
+  } catch (err) {
+    const detail = String((err as Error)?.message ?? err);
+    return { ok: false, verdict: resumeFailureVerdict(await fixtureFrames(logPath), detail), detail };
+  } finally {
+    await bridge.shutdown();
+  }
+}
+
 Deno.test("runAcpTaskTurn: reports clear actionable error when harness is unreachable", async () => {
   const container = new MockContainer();
   const statuses: any[] = [];
@@ -122,56 +209,51 @@ Deno.test("runAcpTaskTurn: reports clear actionable error when harness is unreac
 });
 
 Deno.test("runAcpTaskTurn: turn 2 RESUMES the session (session/new once, session/load after)", async () => {
-  // TWO attempts, because each turn opens a connection and the bridge spawns a
-  // fresh adapter process for it: under the 32-worker phase that spawn can die
-  // (observed), and the runner then legitimately falls back to a new session.
-  // A genuine resume regression fails BOTH attempts, so the pin still holds.
-  let lastFailure = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
-  const logPath = `${durableDir("acp-fixture-logs")}/frames-${Date.now()}-${attempt}.jsonl`;
-  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
-  const port = (bridge as any).addr.port;
-  const endpoint = `ws://127.0.0.1:${port}/acp`;
-  const container = new MockContainer();
-
-  try {
-    const t1 = await runAcpTaskTurn({ container, task: "first", harnessId: "pi", endpoint });
-    const t2 = await runAcpTaskTurn({ container, task: "second", harnessId: "pi", endpoint });
-    assertEquals(t1.ok, true, String(t1.error));
-    assertEquals(t2.ok, true, String(t2.error));
-    assertEquals(t1.resumed, false, "the first turn has nothing to resume");
-    assertEquals(t2.resumed, true, "the second turn must resume the first turn's session");
-    assertEquals(t2.sessionId, t1.sessionId, "the same host session is reused");
-
-    const frames = (await Deno.readTextFile(logPath)).trim().split("\n").map((l) => JSON.parse(l));
-    const methods = frames.filter((f) => f.dir === "in").map((f) => f.msg.method);
-    assertEquals(methods.filter((m) => m === "session/new").length, 1, "exactly one session/new across two turns");
-    assertEquals(methods.filter((m) => m === "session/load").length, 1, "the second turn loads the existing session");
-    const load = frames.find((f) => f.dir === "in" && f.msg.method === "session/load");
-    assertEquals(load.msg.params.sessionId, t1.sessionId, "the load names the session the first turn created");
-    // The bridge filled the working directory the client never sent: this is
-    // the WIRING of applyHostDefaults (a unit test on the pure rule would not
-    // notice the call site being removed).
-    const newSession = frames.find((f) => f.dir === "in" && f.msg.method === "session/new");
-    const home = Deno.env.get("HOME") ?? "";
-    assertEquals(newSession.msg.params.cwd, `${home}/journal`, "the adapter received the host-side default cwd");
-    lastFailure = "";
-    return;
-  } catch (err) {
-    lastFailure = String((err as Error)?.message ?? err);
-  } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
-    await bridge.shutdown();
+  const failures: string[] = [];
+  for (let attempt = 0; attempt < CONTINUITY_ATTEMPTS; attempt++) {
+    const res = await continuityAttempt();
+    if (res.ok) return;
+    // Only an adapter the ENVIRONMENT killed may be retried. A failure whose
+    // frame log shows a load reaching the adapter — or that shows no transport
+    // failure at all — is the runner no longer resuming, and that reds the pin
+    // here and now rather than being retried into a pass.
+    assertEquals(res.verdict, "environment", `attempt ${attempt + 1}: ${res.detail}`);
+    failures.push(`attempt ${attempt + 1}: ${res.detail}`);
   }
+  throw new Error(
+    `resume failed on all ${CONTINUITY_ATTEMPTS} attempts, each with no session/load reaching an adapter: ${failures.join(" | ")}`,
+  );
+});
+
+Deno.test("runAcpTaskTurn: an adapter spawn the environment killed is retried, never sold as a resume regression", async () => {
+  // The death this pin used to be blamed on, injected through the SAME path the
+  // bridge uses (a fresh adapter process per connection): the SECOND adapter
+  // spawn of this run exits before it reads a frame, so turn 2's connection has
+  // no adapter to reject it. The counter keeps counting, so the death is
+  // TRANSIENT — one spawn — exactly like a load-dependent spawn death. A
+  // permanently dead adapter is NOT retried into a pass: the loop above fails
+  // closed after its attempts.
+  const counter = `${durableDir("acp-fixture-logs")}/spawns-${Date.now()}.count`;
+  const injection = { CAP_ACP_FIXTURE_DIE_ON_SPAWN: "2", CAP_ACP_FIXTURE_SPAWN_COUNTER: counter };
+
+  const killed = await continuityAttempt(injection);
+  if (killed.ok) throw new Error("the injected adapter death must fail its attempt");
+  assertEquals(
+    killed.verdict,
+    "environment",
+    `an adapter the environment killed must not read as a resume regression: ${killed.detail}`,
+  );
+
+  // The retry serves the SAME two-turn property on a clean adapter.
+  const retried = await continuityAttempt(injection);
+  if (!retried.ok) {
+    throw new Error(`the retry must serve the same property: ${retried.verdict} — ${retried.detail}`);
   }
-  throw new Error(`resume failed on both attempts: ${lastFailure}`);
 });
 
 Deno.test("runAcpTaskTurn: a sessionStore hint resumes a session from a previous page", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/frames-store-${Date.now()}.jsonl`;
-  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath });
   const port = (bridge as any).addr.port;
   const endpoint = `ws://127.0.0.1:${port}/acp`;
   const container = new MockContainer();
@@ -197,15 +279,13 @@ Deno.test("runAcpTaskTurn: a sessionStore hint resumes a session from a previous
     const load = frames.find((f) => f.dir === "in" && f.msg.method === "session/load");
     assertEquals(load.msg.params.sessionId, "ses_from_kv");
   } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
     await bridge.shutdown();
   }
 });
 
 Deno.test("runAcpTaskTurn: two rapid sends for one conversation never prompt concurrently", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/frames-supersede-${Date.now()}.jsonl`;
-  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath });
   const port = (bridge as any).addr.port;
   const endpoint = `ws://127.0.0.1:${port}/acp`;
   const container = new MockContainer();
@@ -231,16 +311,13 @@ Deno.test("runAcpTaskTurn: two rapid sends for one conversation never prompt con
       .map((l) => JSON.parse(l)).filter((f) => f.dir === "in" && f.msg.method === "session/prompt");
     assertEquals(prompts.length, 1, `one prompt may reach a session, saw ${prompts.length}`);
   } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
     await bridge.shutdown();
   }
 });
 
 Deno.test("runAcpTaskTurn: two sends arriving while a turn is LIVE leave exactly one winner", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/frames-triple-${Date.now()}.jsonl`;
-  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
-  Deno.env.set("CAP_ACP_FIXTURE_HOLD_TEXT", "held first");
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, CAP_ACP_FIXTURE_HOLD_TEXT: "held first" });
   const port = (bridge as any).addr.port;
   const endpoint = `ws://127.0.0.1:${port}/acp`;
   const container = new MockContainer();
@@ -285,18 +362,17 @@ Deno.test("runAcpTaskTurn: two sends arriving while a turn is LIVE leave exactly
       assert(/superseded|cancel/i.test(String(loser.error)), `a losing turn must say it was superseded, got "${loser.error}"`);
     }
   } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
-    Deno.env.delete("CAP_ACP_FIXTURE_HOLD_TEXT");
     await bridge.shutdown();
   }
 });
 
 Deno.test("runAcpTaskTurn: a superseded turn renders NO error when its socket is closed", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/frames-leak-${Date.now()}.jsonl`;
-  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
-  Deno.env.set("CAP_ACP_FIXTURE_HOLD_TEXT", "held first");
-  Deno.env.set("CAP_ACP_FIXTURE_IGNORE_CANCEL", "1");
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = fixtureBridge({
+    CAP_ACP_FIXTURE_LOG: logPath,
+    CAP_ACP_FIXTURE_HOLD_TEXT: "held first",
+    CAP_ACP_FIXTURE_IGNORE_CANCEL: "1",
+  });
   const port = (bridge as any).addr.port;
   const endpoint = `ws://127.0.0.1:${port}/acp`;
   const container = new MockContainer();
@@ -324,9 +400,6 @@ Deno.test("runAcpTaskTurn: a superseded turn renders NO error when its socket is
     assert(/superseded|cancel/i.test(String(aRes.error)), `got "${aRes.error}"`);
     assertEquals(container.errors.length, 0, `a superseded turn must render no error, got ${JSON.stringify(container.errors)}`);
   } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
-    Deno.env.delete("CAP_ACP_FIXTURE_HOLD_TEXT");
-    Deno.env.delete("CAP_ACP_FIXTURE_IGNORE_CANCEL");
     await bridge.shutdown();
   }
 });
@@ -354,8 +427,7 @@ Deno.test("runAcpTaskTurn: a configured endpoint setting overrides the built-in 
 
 Deno.test("runAcpTaskTurn: tool updates settle one card instead of appending running duplicates", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/frames-tools-${Date.now()}.jsonl`;
-  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath });
   const port = (bridge as any).addr.port;
   const container = new MockContainer();
 
@@ -378,7 +450,6 @@ Deno.test("runAcpTaskTurn: tool updates settle one card instead of appending run
       "the status written to the card must be one the card renders as settled",
     );
   } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
     await bridge.shutdown();
   }
 });
@@ -457,9 +528,7 @@ Deno.test("requestAcpPermission: no surface to ask on denies rather than grantin
 
 Deno.test("runAcpTaskTurn: ask mode sends the OWNER's decision to the harness (deny stays deny)", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/perm-${Date.now()}.jsonl`;
-  Deno.env.set("CAP_ACP_FIXTURE_LOG", logPath);
-  Deno.env.set("CAP_ACP_FIXTURE_ASK_PERMISSION", "1");
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, CAP_ACP_FIXTURE_ASK_PERMISSION: "1" });
   const port = (bridge as any).addr.port;
   const container = new MockContainer();
 
@@ -485,17 +554,14 @@ Deno.test("runAcpTaskTurn: ask mode sends the OWNER's decision to the harness (d
     const answered = frames.find((f: any) => f.dir === "in" && f.msg?.result?.outcome);
     assertEquals(answered?.msg?.result?.outcome?.optionId, "deny", "the wire answer is the owner's denial");
   } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_LOG");
-    Deno.env.delete("CAP_ACP_FIXTURE_ASK_PERMISSION");
     await bridge.shutdown();
   }
 });
 
 Deno.test("runAcpTaskTurn: auto mode is opt-in and still auto-grants", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = fixtureBridge({ CAP_ACP_FIXTURE_ASK_PERMISSION: "1" });
   const port = (bridge as any).addr.port;
   const container = new MockContainer();
-  Deno.env.set("CAP_ACP_FIXTURE_ASK_PERMISSION", "1");
   try {
     const res = await runAcpTaskTurn({
       container,
@@ -507,7 +573,6 @@ Deno.test("runAcpTaskTurn: auto mode is opt-in and still auto-grants", async () 
     assertEquals(res.ok, true, String(res.error));
     assert(String(res.result).includes("permission: allow_once"), `auto mode should allow: ${res.result}`);
   } finally {
-    Deno.env.delete("CAP_ACP_FIXTURE_ASK_PERMISSION");
     await bridge.shutdown();
   }
 });

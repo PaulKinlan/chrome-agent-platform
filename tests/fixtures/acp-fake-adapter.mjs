@@ -12,8 +12,27 @@ const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
 // frame as one JSON line, so a test can assert WHAT the client asked the
 // harness for (e.g. session/new on turn 1, session/load on turn 2) instead of
 // inferring it from a rendered string.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const LOG = process.env.CAP_ACP_FIXTURE_LOG ?? "";
+// Fault injection for the adapter spawn that dies under machine load: with
+// CAP_ACP_FIXTURE_DIE_ON_SPAWN=N the Nth adapter process started for the shared
+// CAP_ACP_FIXTURE_SPAWN_COUNTER counter exits at once, before reading a single
+// frame. A shared file counts because the bridge spawns a FRESH process per
+// connection, so no one process can tell which spawn it is; a counter that
+// keeps counting makes the death TRANSIENT (one spawn), which is what a
+// load-dependent spawn death is. Off unless both are set.
+const DIE_ON_SPAWN = Number(process.env.CAP_ACP_FIXTURE_DIE_ON_SPAWN ?? 0);
+const SPAWN_COUNTER = process.env.CAP_ACP_FIXTURE_SPAWN_COUNTER ?? "";
+if (DIE_ON_SPAWN > 0 && SPAWN_COUNTER) {
+  let spawns = 0;
+  try { spawns = Number(readFileSync(SPAWN_COUNTER, "utf8")) || 0; } catch { /* first spawn */ }
+  spawns += 1;
+  try { writeFileSync(SPAWN_COUNTER, String(spawns)); } catch { /* best effort */ }
+  if (spawns === DIE_ON_SPAWN) {
+    console.error(`[fake-acp-adapter] injected spawn death (spawn ${spawns})`);
+    process.exit(1);
+  }
+}
 // Hold a prompt whose TEXT contains CAP_ACP_FIXTURE_HOLD_TEXT open until a
 // session/cancel arrives (so a test can prove a newer turn really cancels the
 // turn already running). Selected by CONTENT, not arrival order: the bridge

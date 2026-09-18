@@ -1,0 +1,32 @@
+{"dir":"in","msg":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"fake-acp-adapter","title":"Deterministic ACP test adapter","version":"0.0.1"},"authMethods":[],"agentCapabilities":{"loadSession":true}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/home/paulkinlan/cap-evidence/acp-fixture","mcpServers":[]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ses_fake_1","models":{"currentModelId":"fake/model"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"skill:beads","description":"bd task tracking skill"},{"name":"skill:fake","description":"fixture skill"}]}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"fake-acp-adapter","title":"Deterministic ACP test adapter","version":"0.0.1"},"authMethods":[],"agentCapabilities":{"loadSession":true}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/home/paulkinlan/journal","mcpServers":[]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":2,"result":{"sessionId":"ses_fake_1","models":{"currentModelId":"fake/model"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"skill:beads","description":"bd task tracking skill"},{"name":"skill:fake","description":"fixture skill"}]}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"ses_fake_1","prompt":[{"type":"text","text":"first"}]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"Fake reasoning…"}}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"tool_call","toolCallId":"tc_fake_1","title":"fake tool call","status":"in_progress"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_fake_1","title":"fake tool call","status":"completed"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"agent_message_chunk","content":{"text":"fake reply"}}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"fake-acp-adapter","title":"Deterministic ACP test adapter","version":"0.0.1"},"authMethods":[],"agentCapabilities":{"loadSession":true}}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":"ses_fake_1","cwd":"/home/paulkinlan/journal","mcpServers":[]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":2,"result":{}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"ses_fake_1","prompt":[{"type":"text","text":"second"}]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"Fake reasoning…"}}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"tool_call","toolCallId":"tc_fake_1","title":"fake tool call","status":"in_progress"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_fake_1","title":"fake tool call","status":"completed"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"agent_message_chunk","content":{"text":"fake reply"}}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}}
+{"dir":"in","msg":{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"ses_fake_1","prompt":[{"type":"text","text":"fixture prompt"}]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"agent_thought_chunk","content":{"text":"Fake reasoning…"}}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"tool_call","toolCallId":"tc_fake_1","title":"fake tool call","status":"in_progress"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc_fake_1","title":"fake tool call","status":"completed"}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"ses_fake_1","update":{"sessionUpdate":"agent_message_chunk","content":{"text":"fake reply"}}}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}}
