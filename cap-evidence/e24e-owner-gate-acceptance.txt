@@ -1,0 +1,52 @@
+Listening on http://127.0.0.1:3210/
+  PASS  extension loaded (service worker registered)
+  PASS  hub composer rendered
+  PASS  hub sidebar · harness rows are visible
+  PASS  hub sidebar · Activity is folded (not hidden, not expanded)
+  PASS  the + menu exposes an agent-choosing entry
+  PASS  the agent picker lists pi under a Harness Agents (ACP) group
+  PASS  @pi offers the pi harness agent in the mention popup
+  PASS  the composer committed a routing chip after selecting pi
+[acp-bridge] Client connected from chrome-extension://pnkofdmakbjoaimgjnpigjdmncanjefb
+[acp-bridge] Client disconnected, cleaning up adapter process
+  transcript: [{"role":"user","text":"@piReply with exactly: ACP browser OK"},{"role":"system","text":"Permission denied: Run bash: rm -rf ./demo-dir → deny"},{"role":"agent","text":"fake reply (permission: deny)"}]
+  PASS  a real pi turn produced agent text in the conversation
+  PASS  the run settled (no orphaned running status)
+  PASS  no console errors during the acceptance
+  PASS  owner gate · deny: the harness chip is committed for THIS turn
+[acp-bridge] Client connected from chrome-extension://pnkofdmakbjoaimgjnpigjdmncanjefb
+  PASS  owner gate · a NEW card appears for deny
+  [leg deny] t+2115ms cards=[{"state":"denied","allow":false,"deny":false,"text":":ho t { di play:flex; margin:0 0 14px; ju tify-content:flex- tart; }\n      .card { max-width:88%; border-radiu :12px; pa"},{"state":"pending","allow":true,"deny":true,"text":":ho t { di play:flex; margin:0 0 14px; ju tify-content:flex- tart; }\n      .card { max-width:88%; border-radiu :12px; pa"}]
+  PASS  owner gate · deny: the card is PENDING with both controls
+  PASS  owner gate · deny: the turn is BLOCKED on the owner (no harness answer yet)
+  PASS  owner gate · the deny control is clickable for deny
+[acp-bridge] Client disconnected, cleaning up adapter process
+  PASS  owner gate · deny: the CLICK settles the card to denied
+  [leg deny] t+3194ms settled={"state":"denied","allow":false,"deny":false,"text":":ho t { di play:flex; margin:0 0 14px; ju tify-content:flex- tart; }\n      .card { max-width:88%; border-radiu :12px; pa"}
+  PASS  owner gate · deny: the harness was told "deny"
+  PASS  owner gate · deny: the transcript says "deny"
+  PASS  owner gate · allow: the harness chip is committed for THIS turn
+[acp-bridge] Client connected from chrome-extension://pnkofdmakbjoaimgjnpigjdmncanjefb
+  PASS  owner gate · a NEW card appears for allow
+  [leg allow] t+2116ms cards=[{"state":"denied","allow":false,"deny":false,"text":":ho t { di play:flex; margin:0 0 14px; ju tify-content:flex- tart; }\n      .card { max-width:88%; border-radiu :12px; pa"},{"state":"denied","allow":false,"deny":false,"text":":ho t { di play:flex; margin:0 0 14px; ju tify-content:flex- tart; }\n      .card { max-width:88%; border-radiu :12px; pa"},{"state":"pending","allow":true,"deny":true,"text":":ho t { di play:flex; margin:0 0 14px; ju tify-content:flex- tart; }\n      .card { max-width:88%; border-radiu :12px; pa"}]
+  PASS  owner gate · allow: the card is PENDING with both controls
+  PASS  owner gate · allow: the turn is BLOCKED on the owner (no harness answer yet)
+  PASS  owner gate · the allow control is clickable for allow
+[acp-bridge] Client disconnected, cleaning up adapter process
+  PASS  owner gate · allow: the CLICK settles the card to granted
+  [leg allow] t+3210ms settled={"state":"granted","allow":false,"deny":false,"text":":ho t { di play:flex; margin:0 0 14px; ju tify-content:flex- tart; }\n      .card { max-width:88%; border-radiu :12px; pa"}
+  PASS  owner gate · allow: the harness was told "allow_once"
+  PASS  owner gate · allow: the transcript says "allow"
+  PASS  side panel · Agents section shows the ACP harness group
+  PASS  side panel · Agents section lists pi
+  PASS  side panel · the Agents tab is reachable
+  PASS  side panel · one-click harness rows exist
+  PASS  side panel · one click opens that harness conversation
+  PASS  side panel · the activity ledger is GONE (owner: not needed here)
+  PASS  side panel · the page view also offers the harness rows
+  PASS  side panel · permissions are FOLDED, not a wall over the chat
+  PASS  side panel · the conversation has room (non-zero height)
+  PASS  side panel: no console errors
+
+ACP browser acceptance: 37 passed, 0 failed
+evidence: /home/paulkinlan/cap-evidence/cap-acp-browser-1789722805053

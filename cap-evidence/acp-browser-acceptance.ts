@@ -140,6 +140,13 @@ try {
   };
   const COMPOSER = `document.getElementById('composer')`;
   const NTP_INPUT = `${COMPOSER}.querySelector('#task-input')`;
+  // After the first send the NTP switches to the THREAD view: the gated legs
+  // must drive the thread composer. They used the hub input and typed into a
+  // hidden element, so the gate was never reached and the checks were satisfied
+  // by the ungated first turn's card — the vacuity this driver now refuses.
+  const THREAD_COMPOSER = `document.getElementById('thread-composer')`;
+  const THREAD_INPUT = `${THREAD_COMPOSER}.querySelector('#task-input')`;
+  const THREAD_CHIP = `${THREAD_COMPOSER}.querySelector('.chips .chip.agent-chip')`;
   // AgentComposer is LIGHT-DOM (static shadow() returns false): its popup and
   // chips are direct children, not shadow content.
   const POPUP = `${COMPOSER}.querySelector('.popup')`;
@@ -300,17 +307,27 @@ try {
   check("no console errors during the acceptance", (consoleErrors.get(ntp) ?? []).length === 0, consoleErrors.get(ntp));
 
   // ── the OWNER GATE: a real card, a real click, and what the harness got ─
+  // The leg is only evidence if the card is PENDING, the harness has NOT been
+  // answered before the decision, and the CLICK is what settles it. Without
+  // those three the leg can pass while the gate did nothing — the 7poq lesson
+  // (a check that satisfies itself without exercising the behaviour).
   if (PERMISSION_RUN) {
-    const cardSnapshot = () => evl(ntp, `(() => {
+    const cardsNow = () => evl(ntp, `(() => {
       const c = document.getElementById('thread-conversation');
-      const card = [...(c?.querySelectorAll('permission-approval-card') ?? [])].pop();
-      if (!card) return null;
-      return { state: card.getAttribute('state'), text: (card.shadowRoot?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 200) };
+      return [...(c?.querySelectorAll('permission-approval-card') ?? [])].map(card => {
+        const root = card.shadowRoot;
+        return {
+          state: card.getAttribute('state'),
+          allow: !!root?.querySelector('.allow'),
+          deny: !!root?.querySelector('.deny'),
+          text: (root?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 120),
+        };
+      });
     })()`);
-    const clickCardButton = async (which: "allow" | "deny") => {
+    const clickCardButton = async (index: number, which: "allow" | "deny") => {
       const box = await evl(ntp, `(() => {
         const c = document.getElementById('thread-conversation');
-        const card = [...(c?.querySelectorAll('permission-approval-card') ?? [])].pop();
+        const card = [...(c?.querySelectorAll('permission-approval-card') ?? [])][${index}];
         const b = card?.shadowRoot?.querySelector('.${which}');
         if (!b) return null;
         b.scrollIntoView({ block: 'center', inline: 'center' });
@@ -322,41 +339,72 @@ try {
       await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", buttons: 0, clickCount: 1 }, ntp);
       return true;
     };
+    const replyCount = async () => ((await readTurn())?.bubbles ?? []).length;
 
     const driveGatedTurn = async (label: string, decision: "allow" | "deny") => {
-      // The chip is already committed from the steps above: type + Enter.
-      await clickExpr(ntp, NTP_INPUT);
+      const wanted = decision === "allow" ? "granted" : "denied";
+      const told = decision === "allow" ? "allow_once" : "deny";
+      const before = ((await cardsNow()) ?? []) as any[];
+      const repliesBefore = await replyCount();
+      const t0 = Date.now();
+      // Re-commit the harness chip: the composer clears it after a send, and a
+      // leg that silently went to the MASTER agent would test nothing (the
+      // first patched run proved it — no new card appeared, and the settled
+      // card from the ungated turn was satisfying the checks).
+      await clickExpr(ntp, THREAD_INPUT);
+      await typeText(ntp, "@pi");
+      await sleep(700);
+      await pressKey(ntp, "Enter");
+      await sleep(400);
+      const chipNow = await evl(ntp, `(() => { const chip = ${THREAD_CHIP}; return chip ? chip.textContent?.trim() : null; })()`);
+      check(`owner gate · ${label}: the harness chip is committed for THIS turn`, /pi/i.test(String(chipNow ?? "")), chipNow);
       await typeText(ntp, `permission gate ${label}`);
       await pressKey(ntp, "Enter");
-      let card = null;
+      // THIS leg's card is the NEW one: a settled card from an earlier leg is
+      // not evidence about this one.
+      let cards: any[] = [];
       for (let i = 0; i < 60; i++) {
         await sleep(1000);
-        card = await cardSnapshot();
-        if (card) break;
+        cards = ((await cardsNow()) ?? []) as any[];
+        if (cards.length > before.length) break;
       }
-      check(`owner gate · the card appears for ${label}`, !!card, card);
+      const index = before.length;
+      const card = cards[index];
+      check(`owner gate · a NEW card appears for ${label}`, cards.length > before.length, { before: before.length, now: cards.length, cards });
+      console.log(`  [leg ${label}] t+${Date.now() - t0}ms cards=${JSON.stringify(cards)}`);
       if (!card) return;
-      const clicked = await clickCardButton(decision);
-      check(`owner gate · the ${decision} control is clickable for ${label}`, clicked === true);
-      let settled = null;
+      check(`owner gate · ${label}: the card is PENDING with both controls`, card.state === "pending" && card.allow === true && card.deny === true, card);
+      const repliesWhileWaiting = await replyCount();
+      check(`owner gate · ${label}: the turn is BLOCKED on the owner (no harness answer yet)`, repliesWhileWaiting === repliesBefore, { repliesBefore, repliesWhileWaiting });
+      await shot(ntp, `06-owner-gate-${label}-pending`);
+
+      const clicked = await clickCardButton(index, decision);
+      check(`owner gate · the ${decision} control is clickable for ${label}`, clicked === true, card);
+      let settled: any = null;
       for (let i = 0; i < 60; i++) {
         await sleep(1000);
-        settled = await cardSnapshot();
-        const turn = await readTurn();
-        if (settled?.state === (decision === "allow" ? "granted" : "denied")) {
-          check(`owner gate · ${label}: the card settles to ${decision === "allow" ? "granted" : "denied"}`, true);
-          check(`owner gate · ${label}: the harness was told "${decision === "allow" ? "allow_once" : "deny"}"`,
-            (turn?.bubbles ?? []).some((b: string) => b.includes(`permission: ${decision === "allow" ? "allow_once" : "deny"}`)),
-            turn?.bubbles);
-          const lines = await evl(ntp, `(() => { const c = document.getElementById('thread-conversation');
-            return [...(c?.querySelectorAll('message-bubble') ?? [])].map(b => ({ role: b.getAttribute('role'), text: b.getAttribute('content') ?? '' })); })()`);
-          const wants = decision === "allow" ? /Permission granted/i : /Permission denied/i;
-          check(`owner gate · ${label}: the transcript says "${decision === "allow" ? "granted" : "denied"}"`,
-            Array.isArray(lines) && lines.some((b: any) => wants.test(b.text)), lines?.slice(-4));
-          return;
-        }
+        settled = (((await cardsNow()) ?? []) as any[])[index] ?? null;
+        if (settled?.state === wanted) break;
       }
-      check(`owner gate · ${label}: the card settles after the click`, false, settled);
+      // The mirror coord asked for: if it never reaches the wanted state, that
+      // is a FAILURE, not a tolerated timeout.
+      check(`owner gate · ${label}: the CLICK settles the card to ${wanted}`, settled?.state === wanted, settled);
+      console.log(`  [leg ${label}] t+${Date.now() - t0}ms settled=${JSON.stringify(settled)}`);
+      await shot(ntp, `07-owner-gate-${label}-settled`);
+
+      let turn: any = null;
+      for (let i = 0; i < 30; i++) {
+        await sleep(1000);
+        turn = await readTurn();
+        if ((turn?.bubbles ?? []).some((b: string) => b.includes(`permission: ${told}`))) break;
+      }
+      check(`owner gate · ${label}: the harness was told "${told}"`,
+        (turn?.bubbles ?? []).some((b: string) => b.includes(`permission: ${told}`)), turn?.bubbles);
+      const lines = await evl(ntp, `(() => { const c = document.getElementById('thread-conversation');
+        return [...(c?.querySelectorAll('message-bubble') ?? [])].map(b => ({ role: b.getAttribute('role'), text: b.getAttribute('content') ?? '' })); })()`);
+      const wants = decision === "allow" ? /Permission granted/i : /Permission denied/i;
+      check(`owner gate · ${label}: the transcript says "${decision}"`,
+        Array.isArray(lines) && lines.some((b: any) => wants.test(b.text)), lines?.slice(-4));
     };
 
     await driveGatedTurn("deny", "deny");
