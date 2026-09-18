@@ -65,7 +65,9 @@ function seams() {
 function finalize(k, over = {}) {
   return finalizeKatExecution({
     runError: null,
-    checks: [{ name: "c1", passed: true }],
+    // `checks` is overridable so a case can exercise the zero-check guard; the
+    // default keeps every other test's single passing check.
+    checks: over.checks ?? [{ name: "c1", passed: true }],
     teardown: {
       cdp: null, chrome: null, profilePath: null,
       poisonPath: "/mock/out/no-poison",
@@ -333,4 +335,90 @@ Deno.test("kat-finalizer guards: sanitizeKatLogError is bounded to the FIRST lin
   const paddedPath = sanitizeKatLogError(new Error(`${"/home/paul kinlan/cap/run-1234/result.json".repeat(40)}`));
   assert(paddedPath.length <= 512);
   assert(!/\/home\/paul kinlan/.test(paddedPath), "no run path survives the sanitizer at any length");
+});
+
+// ── 3yfs: the two remaining false-GREEN holes, found by an independent probe
+// (cap-evidence/3yfs-finalizer-matrix.ts) that executes THIS production
+// function with controlled IO/CDP/process seams.
+//
+// (a) ZERO checks recorded: the decision only asked whether any check FAILED, so
+// a run that reached no check at all published an authoritative GREEN 0/0 — a
+// pass for work that never happened. An empty list is a harness failure.
+Deno.test("kat-finalizer guards: a run that recorded ZERO checks is RED — 0/0 is not a pass (3yfs)", async () => {
+  const k = seams();
+  const outcome = await finalize(k, { checks: [] });
+  assertEquals(outcome.state, "RED");
+  assertEquals(outcome.exitCode, 1);
+  assertEquals(k.exits, [1], "the failure-derived exit is 1");
+  const receipt = JSON.parse(k.payload());
+  assertEquals(receipt.state, "RED");
+  assertEquals(receipt.error, "no_checks_recorded");
+  assertEquals(receipt.checks, []);
+});
+
+// (b) A rejected/timed-out Browser.close was swallowed by `.catch(() => {})`, so
+// with no process handle NOTHING confirmed the browser was gone and the run
+// still passed. The process handle is the authority; without one, the failure is
+// a cleanup error.
+Deno.test("kat-finalizer guards: a rejected Browser.close with NO process handle is a cleanup failure, never GREEN (3yfs)", async () => {
+  const k = seams();
+  const outcome = await finalize(k, {
+    teardown: {
+      cdp: { send: async () => { throw new Error("browser_close_refused"); }, close: () => {} },
+      chrome: null,
+      profilePath: null,
+      poisonPath: "/mock/out/no-poison",
+      withTimeout: (p) => p,
+      statFile: async () => false,
+    },
+  });
+  assertEquals(outcome.state, "RED");
+  assertEquals(outcome.exitCode, 1);
+  assert(String(outcome.cleanupError).includes("cdp_browser_close_failed"));
+  assertEquals(JSON.parse(k.payload()).state, "RED");
+});
+
+// (b-counter) The same rejected Browser.close WITH a confirmed process exit is
+// NOT over-red: the kill/status path is the authority, and a merely slow
+// graceful close must not fail an otherwise clean run.
+Deno.test("kat-finalizer guards: a rejected Browser.close WITH a confirmed process exit stays GREEN (3yfs)", async () => {
+  const k = seams();
+  const outcome = await finalize(k, {
+    teardown: {
+      cdp: { send: async () => { throw new Error("browser_close_refused"); }, close: () => {} },
+      chrome: { proc: { status: Promise.resolve({ success: true, code: 0 }), kill: () => {} } },
+      profilePath: null,
+      poisonPath: "/mock/out/no-poison",
+      withTimeout: (p) => p,
+      statFile: async () => false,
+    },
+  });
+  assertEquals(outcome.state, "GREEN");
+  assertEquals(outcome.cleanupError, null);
+});
+
+// (c) The bead's ORIGINAL defect: an evidence-write failure exiting before
+// cleanup. The writes are after the teardown by construction now — pinned here
+// so a future reordering cannot silently skip cleanup on a write failure.
+Deno.test("kat-finalizer guards: an evidence-write failure still ran the FULL teardown first (3yfs)", async () => {
+  const k = seams();
+  const calls: string[] = [];
+  const outcome = await finalize(k, {
+    writeTextFile: async () => { throw new Error("kat_log_refused"); },
+    teardown: {
+      cdp: {
+        send: async () => { calls.push("browser-close"); return {}; },
+        close: () => { calls.push("cdp-close"); },
+      },
+      chrome: { proc: { status: Promise.resolve({ success: true, code: 0 }), kill: () => calls.push("kill") } },
+      profilePath: "/mock/profile",
+      poisonPath: "/mock/out/no-poison",
+      withTimeout: (p) => p,
+      removeDir: async () => { calls.push("remove-profile"); },
+      statFile: async () => false,
+    },
+  });
+  assertEquals(outcome.state, "RED");
+  assertEquals(calls, ["browser-close", "cdp-close", "remove-profile"], "every teardown phase ran before the failed write");
+  assertEquals(k.exits, [1]);
 });

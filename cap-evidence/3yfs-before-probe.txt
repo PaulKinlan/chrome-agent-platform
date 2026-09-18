@@ -1,0 +1,197 @@
+profile_cleanup_failed: profile_remove_refused
+browser_teardown_failed: teardown_wait_expired
+poison_slot_detected
+{
+  "root": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115",
+  "falseGreens": 2,
+  "results": [
+    {
+      "name": "clean",
+      "verdict": "OK",
+      "detail": {
+        "state": "GREEN",
+        "exitCode": 0,
+        "cleanupError": null,
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/clean/result.json",
+        "exitSeam": [],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "cleanup-profile-removal-fails",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": "profile_cleanup_failed: profile_remove_refused",
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/cleanup-profile-removal-fails/result.json",
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "cleanup-browser-never-dies",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": "browser_teardown_failed: teardown_wait_expired",
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/cleanup-browser-never-dies/result.json",
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "write-kat-log-fails",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": null,
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/write-kat-log-fails/result.json",
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "write-result-stage-fails",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": null,
+        "receiptPath": null,
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "write-rename-unreconcilable",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": null,
+        "receiptPath": null,
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "write-dir-sync-fails",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": null,
+        "receiptPath": null,
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "vacuity-no-checks-recorded",
+      "verdict": "UNEXPECTED",
+      "detail": {
+        "state": "GREEN",
+        "exitCode": 0,
+        "cleanupError": null,
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/vacuity-no-checks-recorded/result.json",
+        "exitSeam": [],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "cleanup-browser-close-rejects-no-handle",
+      "verdict": "UNEXPECTED",
+      "detail": {
+        "state": "GREEN",
+        "exitCode": 0,
+        "cleanupError": null,
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/cleanup-browser-close-rejects-no-handle/result.json",
+        "exitSeam": [],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "cleanup-browser-close-rejects-process-dies",
+      "verdict": "OK",
+      "detail": {
+        "state": "GREEN",
+        "exitCode": 0,
+        "cleanupError": null,
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/cleanup-browser-close-rejects-process-dies/result.json",
+        "exitSeam": [],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "run-error",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": null,
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/run-error/result.json",
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "failed-check",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": null,
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/failed-check/result.json",
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "poison-slot",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": "poison_slot_detected",
+        "receiptPath": "/home/paulkinlan/cap-evidence/3yfs-matrix-1789723434115/poison-slot/result.json",
+        "exitSeam": [
+          1
+        ],
+        "teardownRan": true
+      }
+    },
+    {
+      "name": "write-publish-failure-exit-returns",
+      "verdict": "OK",
+      "detail": {
+        "state": "RED",
+        "exitCode": 1,
+        "cleanupError": null,
+        "receiptPath": null,
+        "exitSeam": [],
+        "teardownRan": true
+      }
+    }
+  ]
+}
+
+PROBE FAILED: 2 false-GREEN case(s) survived.

@@ -70,11 +70,18 @@ export async function teardownChromeAndProfile(
   // 1. CDP teardown (Browser.close and CDP transport close independently guarded)
   if (cdp) {
     try {
-      await withTimeout(cdp.send("Browser.close"), 4_000).catch(() => {});
+      await withTimeout(cdp.send("Browser.close"), 4_000);
     } catch (err) {
-      recordCleanupError(
-        `cdp_browser_close_failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      // 3yfs: a rejected/timed-out Browser.close is NOT swallowed. When a
+      // process handle exists it is the authority on whether the browser is
+      // gone (its own failure below is recorded, and a graceful close that is
+      // merely slow is not a cleanup error). With NO handle, nothing confirms
+      // the exit — an unconfirmed browser teardown is a cleanup failure.
+      if (!chrome) {
+        recordCleanupError(
+          `cdp_browser_close_failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
     try {
       cdp.close();
@@ -232,10 +239,16 @@ export async function finalizeKatExecution(
 
   const pass = checks.filter((c) => c.passed).length;
   const failCount = checks.length - pass;
-  const isGreen = !runError && failCount === 0 && !cleanupError && !poisonDetected;
+  // 3yfs: a run that recorded NO checks verified nothing. 0/0 must never be an
+  // authoritative GREEN — an empty list means the KAT body never reached its
+  // first check (an early return, a caller wired to the shared finalizer without
+  // checks) and the receipt would claim a pass for work that did not happen.
+  const noChecksRecorded = checks.length === 0;
+  const isGreen = !runError && !noChecksRecorded && failCount === 0 && !cleanupError &&
+    !poisonDetected;
   const resultData = {
     state: isGreen ? "GREEN" : "RED",
-    error: runError || cleanupError,
+    error: runError || cleanupError || (noChecksRecorded ? "no_checks_recorded" : null),
     cleanupError,
     poisonDetected,
     expected: report.expected,
