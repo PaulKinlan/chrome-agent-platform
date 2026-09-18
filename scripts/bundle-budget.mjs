@@ -1,6 +1,7 @@
 // scripts/bundle-budget.mjs — the store-target bundle size gate
 // (CAP-FB-20260830-BUNDLE-BUDGET-01).
 //
+import { lstatSync, readlinkSync } from "node:fs";
 // The constitution watches the service-worker bundle (docs/CONSTITUTION.md):
 // unmeasured growth shipped 4.56 MB against a ~2.5 MB note in Aug 2026 because
 // nothing in the build failed when it grew. This module is the teeth: the
@@ -93,12 +94,26 @@ export function nonDenoStoreInputs(metafile) {
     .sort();
 }
 
+/** If <root>/node_modules resolves through a symlink, say so in the error —
+ * dependency-root layout changes measured bytes (a symlinked root measured
+ * 688 bytes over budget with source unchanged, chrome-agent-platform-2eb5),
+ * and the environmental-vs-product distinction should cost zero gate runs. */
+function dependencyRootNote(root) {
+  try {
+    const nm = `${root}/node_modules`;
+    if (lstatSync(nm).isSymbolicLink()) {
+      return `\nNOTE: ${nm} is a SYMLINK → ${readlinkSync(nm)}. Dependency-root layout changes the measured bundle (688 bytes observed with source unchanged) — verify with a real node_modules before treating this as product growth.`;
+    }
+  } catch { /* no node_modules here — nothing to say */ }
+  return "";
+}
+
 /**
  * The gate: `bytes` over `budgetBytes` throws an error that names the bundle,
  * the actual size, the budget, and the top contributors (when a metafile is
  * available). Returns the measured size on pass.
  */
-export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null }) {
+export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null, root = process.cwd() }) {
   const size = Number(bytes);
   if (!Number.isFinite(size) || size < 0) {
     throw new Error(`bundle budget: ${label} size is not measurable (${bytes})`);
@@ -130,7 +145,8 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
     throw new Error(
       `bundle budget exceeded: ${label} is ${size} bytes; the store budget is ${budgetBytes}.\n` +
       `Top contributors:\n${formatContributors(metafile)}\n` +
-      `Cut the largest contributors (lazy-load a feature, drop a dependency) or raise the budget with an owner decision in docs/CONSTITUTION.md.`,
+      `Cut the largest contributors (lazy-load a feature, drop a dependency) or raise the budget with an owner decision in docs/CONSTITUTION.md.` +
+      dependencyRootNote(root),
     );
   }
   return size;

@@ -20,6 +20,7 @@
 - include source-inspecting test guards in always-on changed set (qcfc)
 - extend fileURLToPath root handling across verification and fixture scripts (0j1a)
 - pin unbounded executor bounds and calibrate non-finite over-budget test (cqhq)
+- report symlinked dependency root in bundle budget errors (2eb5)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode
