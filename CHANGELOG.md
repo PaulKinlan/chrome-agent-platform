@@ -5,6 +5,7 @@
 - disclose owner-gate leg execution state in ACP browser acceptance (dbmz)
 - configure self-contained fixture identity and explicit failure in hygiene audit tests (2d36)
 - close custody supervisor detection blind window via during-life sample handshake (d5st)
+- guard teardown child process termination in directory discovery test runner (hhh8)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode

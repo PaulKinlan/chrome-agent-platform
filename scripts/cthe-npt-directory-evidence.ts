@@ -265,8 +265,12 @@ try {
   console.log(`screenshot: ${OUT}/ntp-directory-discovered.png`);
   cdp.close();
 } finally {
-  proc.kill("SIGKILL");
-  server.kill("SIGKILL");
+  // Both children can be gone before this runs: the fixture server exits on its own
+  // when the port it wants is already held, and killing a terminated child throws
+  // — which used to turn an all-green run into exit 1 and suppress the RESULT line
+  // (chrome-agent-platform-hhh8, found verifying the cthe landing).
+  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
+  try { server.kill("SIGKILL"); } catch { /* already gone */ }
 }
 console.log(`RESULT: ${pass} passed, ${fail} failed; evidence: ${OUT}`);
 Deno.exit(fail ? 1 : 0);
