@@ -6,6 +6,7 @@ extension/**/*.bundle.js
 # docs/ gallery bundles are BUILD OUTPUT (scripts/sync-gallery.mjs regenerates
 # them on every build); never track them (owner feedback 2026-08-31).
 docs/*.bundle.js
+docs/.build/
 dist/
 !packages/bundled/evidence/**/dist/
 extension/CHANGELOG.md
