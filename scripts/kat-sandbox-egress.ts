@@ -1,6 +1,10 @@
-// ovfm4-sandbox-egress-kat.ts — Stage 4 KAT: what can the script sandbox reach?
+// kat-sandbox-egress.ts — Stage 4 KAT (ovfm.4 / jfpx): what can the script sandbox reach?
 //
-//   deno run -A cap-evidence/ovfm4-sandbox-egress-kat.ts [outDir]
+// Registered KAT (scripts/lib/harness-registry.ts, class "kat"): run by
+// `npm run test:kat` one at a time, taking bounded-concurrency slots through
+// launchChrome — never started above the core count (the Box load rule).
+//
+//   deno run -A scripts/kat-sandbox-egress.ts [outDir]      (or: npm run test:kat -- --only=sandbox)
 //
 // The claim under test (docs/SANDBOX-JS-MODULES-DESIGN.md Stage 2/3, and the
 // sandbox's own header): a script in sandbox/script-sandbox.html has exactly
@@ -24,8 +28,8 @@
 // source as an ES module inside the sandboxed iframe.
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
-import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { launchChrome, openCdp, computeUnpackedExtensionId } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;

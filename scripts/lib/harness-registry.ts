@@ -78,6 +78,15 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "capability-lifecycle.ts": { class: "named", npm: "test:capabilities", reason: "12/9 at the re-inventory (capability lifecycle checks red); promote once green" },
   "data-memory-clear.ts": { class: "named", npm: "test:data-clear", reason: "13/0 at the re-inventory (8 s); run on demand — promotion is the owner's call" },
   "kat-local-files.ts": { class: "kat" },
+  // The only suite that measures the sandbox's EGRESS confinement (ovfm.4, hardened
+  // by jfpx): every network claim is asserted at an owned endpoint that records
+  // arrivals, each arrival paired with a non-arrival, and each refusal asserted by
+  // the MECHANISM's own words (teaching guards vs Chrome's native refusal; URL
+  // validation vs the policy gate). Browser-only.
+  "kat-sandbox-egress.ts": {
+    class: "kat",
+    loadSensitive: "serialized-Chrome browser suite (up to three sequential launches per run, each taking a bounded-concurrency slot through launchChrome). Never start it above the core count: under heavy load the launches slow and the digest/import-map cases can time out rather than fail — a load red, not a product red.",
+  },
   "opfs-real-browser.ts": { class: "named", npm: "test:opfs", reason: "6/0 at the re-inventory (2 s); run on demand — promotion is the owner's call" },
   "perf-leak-trace.ts": { class: "named", npm: "test:perf", reason: "8/0 at the re-inventory (3 s); run on demand — promotion is the owner's call" },
   "perf-seeded-scale.ts": { class: "named", npm: "test:perf:seeded", reason: "takes a seed-count argument (120) and a seeded profile; SEEDED-PROFILE-GATES-01 owns wiring it as a gate" },
