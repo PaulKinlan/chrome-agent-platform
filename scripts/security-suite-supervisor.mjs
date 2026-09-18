@@ -5,14 +5,7 @@
 
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
-import {
-  chmod,
-  mkdir,
-  open,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -36,7 +29,7 @@ import {
 } from "./security-suite-custody.mjs";
 
 const EXPECTED_FIXTURE_HASH =
-  "098ae0f52d85f5a69b8c0af754f74a4be2510c685efba41321042b06e20a0800";
+  "a7a87d464288f0ebcc66b645bb24bb5fa8d23da13070af708b68c8d8f7ba411b";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(SCRIPT_DIR);
 const SUPERVISOR_SIGNALS = new Map([
@@ -123,6 +116,10 @@ const childEnv = {
   CAP_SECURITY_GUARD: guardPath,
   CAP_SECURITY_PARENT: String(process.pid),
   CAP_SECURITY_PROFILE: profile,
+  // d5st: where the runner reads the supervisor's own observation of its
+  // subtree, so a scenario that must establish an escape waits until it has
+  // been SEEN instead of racing the sampler on exit.
+  CAP_SECURITY_SAMPLE_ACK: path.join(out, "sample-ack.json"),
 };
 if (config.selfTest) {
   childEnv.CAP_SECURITY_TEST_SCENARIO = config.scenario;
@@ -252,15 +249,48 @@ await writeFile(
 
 const observed = new Map();
 let sampling = false;
+// chrome-agent-platform-d5st: the determinism knob. A supervisor that gets no
+// CPU during a short runner's lifetime samples nothing in that window — under
+// full-suite load that was the nightly false pass. The knob forces that exact
+// window so the handshake below can be falsified deterministically instead of
+// waiting for the scheduler to cooperate. Test-only: CAP_SECURITY_TEST_* envs
+// never reach a production runner's environment.
+const sampleFreezeMs =
+  Number(process.env.CAP_SECURITY_TEST_SAMPLE_FREEZE_MS ?? 0) || 0;
+if (sampleFreezeMs > 0) {
+  await new Promise((resolve) => setTimeout(resolve, sampleFreezeMs));
+}
 // Observation is best-effort sampling: one failed sample must never crash the
 // supervisor (an unhandled rejection in the interval callback did, under
 // process churn — CAP-FB-20260830-SUITE-HONESTY-01).
+const ackPath = path.join(out, "sample-ack.json");
+let ackedPids = "";
+async function ackSample() {
+  // Written after every scan whose observed set changed, so a runner can wait
+  // for the supervisor to have SEEN its subtree before it exits — the runner
+  // no longer races the sampler (d5st: the blind window).
+  const sig = [...observed.keys()].sort((a, b) => a - b).join(",");
+  if (sig === ackedPids) return;
+  ackedPids = sig;
+  try {
+    await writeFile(
+      ackPath,
+      `${JSON.stringify({ pids: [...observed.keys()] })}\n`,
+      { flag: "w" },
+    );
+  } catch {
+    // An unwritable ack degrades to the old racy world; the fixture's bounded
+    // wait then refuses loudly rather than passing silently.
+  }
+}
 await observeDescendants(child.pid, observed).catch(() => {});
+await ackSample();
 const monitor = setInterval(async () => {
   if (sampling) return;
   sampling = true;
   try {
     await observeDescendants(child.pid, observed);
+    await ackSample();
   } catch {
     // A missed sample; the next tick samples again.
   } finally {
@@ -390,6 +420,7 @@ await makeReadOnly([
   receiptPath,
   identityPath,
   statePath,
+  ackPath,
 ]);
 console.log(
   `CAP_SECURITY_RESULT ${JSON.stringify({ ...receipt, evidence: out })}`,

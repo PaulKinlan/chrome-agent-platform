@@ -91,22 +91,53 @@ if (process.argv[2] === "--stubborn-child") {
       // persist, simulating the observed full-suite failure shape.
       setTimeout(() => child.kill("SIGKILL"), 50);
     }
-    setTimeout(() => {
-      let persisted = false;
+    // chrome-agent-platform-d5st: the scenario is not ESTABLISHED until the
+    // supervisor has actually SEEN this descendant — exiting earlier raced
+    // the supervisor's sampler, and a run where no sample landed in the
+    // window exited 0, indistinguishable from a clean pass. The supervisor
+    // writes its observed subtree to CAP_SECURITY_SAMPLE_ACK after each scan;
+    // wait (bounded, inside this scenario's own budget) for our child to be
+    // in it, then exit. A descendant that never shows up is the loud refusal,
+    // not a silent pass.
+    const ackPath = process.env.CAP_SECURITY_SAMPLE_ACK;
+    if (!ackPath) {
+      record("escape-no-ack-path", {});
+      process.exit(97);
+    }
+    const deadline = Date.now() + 1_500;
+    const confirmed = () => {
+      try {
+        const ack = JSON.parse(readFileSync(ackPath, "utf8"));
+        return Array.isArray(ack.pids) && ack.pids.includes(child.pid);
+      } catch {
+        return false;
+      }
+    };
+    const poll = () => {
+      let alive = false;
       if (typeof child.pid === "number" && child.pid > 0) {
         try {
           process.kill(child.pid, 0);
-          persisted = true;
+          alive = true;
         } catch {
-          persisted = false;
+          alive = false;
         }
       }
-      if (!persisted) {
+      if (!alive) {
         record("escape-child-not-persistent", {});
         process.exit(97);
       }
-      process.exit(0);
-    }, 300);
+      if (confirmed()) {
+        record("escape-observed-by-supervisor", { childPid: child.pid });
+        process.exit(0);
+      }
+      if (Date.now() > deadline) {
+        record("escape-unconfirmed", {});
+        process.exit(97);
+      }
+      setTimeout(poll, 10);
+    };
+    poll();
   } else if (scenario === "serialize") {
     setTimeout(() => process.exit(0), 700);
   } else {

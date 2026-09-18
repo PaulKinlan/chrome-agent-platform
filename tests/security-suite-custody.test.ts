@@ -421,7 +421,8 @@ Deno.test(
       assert(
         result.state.some((r) =>
           r.event === "escape-child-not-persistent" ||
-          r.event === "escape-child-spawn-error"
+          r.event === "escape-child-spawn-error" ||
+          r.event === "escape-unconfirmed"
         ),
         `fixture must record WHY the scenario could not run: ${
           JSON.stringify(result.state)
@@ -461,3 +462,28 @@ Deno.test("uzik guard: the shared Chrome-slot poison mechanism is gone from prod
   // And the retired marker is not sitting on this box making gates refuse.
   assertEquals(await Deno.lstat(RETIRED_POISON).catch(() => null), null);
 });
+
+Deno.test(
+  "d5st: the escape is still detected when the supervisor's sampling misses the runner's whole lifetime (forced window)",
+  async () => {
+    // The blind window (chrome-agent-platform-d5st): the escape child is
+    // setsid'd, so its only link to the attested group is ppid -> runner
+    // while the runner lives. The supervisor samples on its own event loop;
+    // with sampling frozen past the runner's exit, nothing was ever
+    // observed, residue came back empty, and the run exited 0 — a silent
+    // pass. The handshake makes the runner wait for the supervisor's own
+    // observation, so the forced window now ends in a DETECTED escape.
+    // CAP_SECURITY_TEST_SAMPLE_FREEZE_MS delays the supervisor's first
+    // sample past the point where an un-handshaked runner has already exited.
+    const result = await runSupervisor("escape", 2_000, {
+      CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "400",
+    });
+    try {
+      assertEquals(result.code, 70);
+      assertEquals(result.receipt?.custodyReason, "descendant-residue");
+      assert((result.receipt?.residue as Array<unknown>).length >= 1);
+    } finally {
+      await removeEvidence(result);
+    }
+  },
+);

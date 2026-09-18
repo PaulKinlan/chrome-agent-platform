@@ -3,7 +3,8 @@
 ## [0.3.420] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode (khkk)
 - disclose owner-gate leg execution state in ACP browser acceptance (dbmz)
-- configure self-contained fixture identity and explicit failure in worktree-audit tests (2d36)
+- configure self-contained fixture identity and explicit failure in hygiene audit tests (2d36)
+- close custody supervisor detection blind window via during-life sample handshake (d5st)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode
@@ -13,7 +14,7 @@
 - enable Stop affordance for in-flight ACP turns (c6gq)
 - diagnose shebang rot, dangling symlinks and real binary execution in acp:service doctor (d1ti)
 - guard hash pins so a blanket sweep cannot stale a pinned fixture (e273)
-- honour per-connection harness selection and make bridge mismatch legible with one-command fix (lpmv)
+- honour per-connection agent selection and make bridge mismatch legible with one-command fix (lpmv)
 
 ## [0.3.417] — 2026-09-18
 - the fresh-checkout fixture materializes the SOURCE CLOSURE, not just the tracked set
