@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.421] — 2026-09-18
+- genuine reachable subset test for executable evidence instruments
+
 ## [0.3.420] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode (khkk)
 - disclose owner-gate leg execution state in ACP browser acceptance (dbmz)

@@ -117,6 +117,16 @@ function importsOf(absPath) {
       }
     }
   }
+  // Also link executable code instruments referenced via new URL(..., import.meta.url) (chrome-agent-platform-1smd)
+  for (const m of text.matchAll(/new\s+URL\s*\(\s*["']([^"']+)["']\s*,\s*import\.meta\.url\s*\)/g)) {
+    const spec = m[1].trim();
+    if (spec.startsWith(".") && /\.(js|ts|mjs)$/.test(spec)) {
+      const clean = spec.split("?")[0].split("#")[0];
+      const resolved = resolve(dirname(absPath), clean);
+      const found = resolvePath(resolved);
+      if (found) out.push(found);
+    }
+  }
   return out;
 }
 
@@ -143,7 +153,7 @@ export function buildReverseGraph() {
       else if (/\.(js|ts|mjs)$/.test(ent.name)) files.add(p);
     }
   };
-  for (const d of ["extension", "scripts", "lib", "packages", "tests"]) {
+  for (const d of ["extension", "scripts", "lib", "packages", "tests", "cap-evidence"]) {
     if (existsSync(join(ROOT, d))) walk(join(ROOT, d));
   }
   for (const f of files) {
