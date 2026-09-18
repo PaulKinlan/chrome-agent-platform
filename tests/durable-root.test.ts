@@ -139,7 +139,6 @@ const ALLOWED_FILES = new Set([
   "scripts/kat-user-wasm-store.ts",
   "scripts/live-every-tab.ts",
   "scripts/mic-transcript-smoke.ts",
-  "scripts/opfs-wal-probe.ts",
   "scripts/panel-leak-probe.ts",
   "scripts/perf-leak-trace.ts",
   "scripts/perf-seeded-scale.ts",
@@ -149,7 +148,6 @@ const ALLOWED_FILES = new Set([
   "scripts/sidebar-parity.ts",
   "scripts/skills-in-settings-evidence.ts",
   "scripts/system-prompts-integration.ts",
-  "scripts/thread-open-trace.ts",
   "scripts/validate-package-load.ts",
   "scripts/verify-script-run.ts",
   // Build/package scratch: mkdtemp appears only in comments/imports, the call

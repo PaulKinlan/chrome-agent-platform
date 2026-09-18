@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.431] — 2026-09-18
+- remove scripts/opfs-wal-probe.ts and thread-open-trace.ts
+
 ## [0.3.430] — 2026-09-18
 - backpressured TAR and PAX encoder without product wiring
 
