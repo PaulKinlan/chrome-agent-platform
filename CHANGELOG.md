@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.422] — 2026-09-18
+- the URL pathname root defect in the eight files outside e273's directory scope
+
+## [0.3.421] — 2026-09-18
+- the URL pathname root defect in the eight files outside e273's directory scope
+
 ## [0.3.420] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode (khkk)
 - disclose owner-gate leg execution state in ACP browser acceptance (dbmz)

@@ -13,8 +13,9 @@
 import { launchChrome } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // CAP_ACCEPTANCE_EXT lets this run against another checkout's built extension
 // (e.g. the primary checkout Chrome actually loads).
 const EXT = Deno.env.get("CAP_ACCEPTANCE_EXT") || `${ROOT}extension`;

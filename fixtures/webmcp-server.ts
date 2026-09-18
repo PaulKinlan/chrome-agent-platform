@@ -17,8 +17,10 @@
 // production-path acceptance has REAL pages to drive.
 //
 //   deno run -A fixtures/webmcp-server.ts
+import { fileURLToPath } from "node:url";
+
 const PORT = 8934;
-const ROOT = new URL(".", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL(".", import.meta.url));
 
 const HTML = await Deno.readTextFile(`${ROOT}webmcp-fixture.html`);
 const SHOP = await Deno.readTextFile(`${ROOT}showcase-shop.html`);
