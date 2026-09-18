@@ -139,13 +139,13 @@ try {
     await send("Input.dispatchKeyEvent", { type: "keyUp", key, code: k.code, windowsVirtualKeyCode: k.vk, nativeVirtualKeyCode: k.vk }, session);
   };
   const COMPOSER = `document.getElementById('composer')`;
-  const NTP_INPUT = `${COMPOSER}.querySelector('#task-input')`;
+  const NTP_INPUT = `${COMPOSER}.querySelector('[data-composer-input], textarea')`;
   // After the first send the NTP switches to the THREAD view: the gated legs
   // must drive the thread composer. They used the hub input and typed into a
   // hidden element, so the gate was never reached and the checks were satisfied
   // by the ungated first turn's card — the vacuity this driver now refuses.
   const THREAD_COMPOSER = `document.getElementById('thread-composer')`;
-  const THREAD_INPUT = `${THREAD_COMPOSER}.querySelector('#task-input')`;
+  const THREAD_INPUT = `${THREAD_COMPOSER}.querySelector('[data-composer-input], textarea')`;
   const THREAD_CHIP = `${THREAD_COMPOSER}.querySelector('.chips .chip.agent-chip')`;
   // AgentComposer is LIGHT-DOM (static shadow() returns false): its popup and
   // chips are direct children, not shadow content.
@@ -185,16 +185,16 @@ try {
   await shot(ntp, "01-hub-composer");
 
   // ── 0. the + menu's "Choose agent" lists the pi harness agent ──────────
-  await clickExpr(ntp, `${COMPOSER}.querySelector('#attach').shadowRoot.querySelector('.plus')`);
+  await clickExpr(ntp, `${COMPOSER}.querySelector('attach-button, .composer-attach, #attach').shadowRoot.querySelector('.plus')`);
   await sleep(400);
-  const plusItems = await evl(ntp, `(() => { const m = document.getElementById('composer'); const b = m.querySelector('#attach').shadowRoot;
+  const plusItems = await evl(ntp, `(() => { const m = document.getElementById('composer'); const b = m.querySelector('attach-button, .composer-attach, #attach').shadowRoot;
     return [...b.querySelectorAll('button, [role=menuitem]')].map(x => x.textContent?.trim()).filter(Boolean).slice(0, 12); })()`);
   await shot(ntp, "00-plus-menu");
   check("the + menu exposes an agent-choosing entry", Array.isArray(plusItems) && plusItems.some((x) => /agent/i.test(x)), plusItems);
-  const chooseAgent = `${COMPOSER}.querySelector('#attach').shadowRoot.querySelector('button[data-kind="choose-agent"]')`;
+  const chooseAgent = `${COMPOSER}.querySelector('attach-button, .composer-attach, #attach').shadowRoot.querySelector('button[data-kind="choose-agent"]')`;
   const opened = await clickExpr(ntp, chooseAgent);
   await sleep(600);
-  const pickGroups = await evl(ntp, `(() => { const p = ${COMPOSER}.querySelector('#agent-pick'); if (!p) return null;
+  const pickGroups = await evl(ntp, `(() => { const p = ${COMPOSER}.querySelector('agent-picker, .composer-agent-pick, #agent-pick'); if (!p) return null;
     return [...p.shadowRoot.querySelectorAll('.group-h, .opt .name')].map(x => x.textContent?.trim()).filter(Boolean); })()`);
   await shot(ntp, "00-agent-picker");
   check(

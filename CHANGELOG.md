@@ -7,6 +7,7 @@
 - the pinned Doc denial respects lexical Function bindings (ol0j)
 - Doc.compile denial wired over all four bundles (tptx, absorbing 4f3j)
 - the final generated Store JavaScript gets an evaluator AST gate (kdax)
+- scoped per-instance IDs and data-composer-input for agent-composer (sndb)
 
 ## [0.3.415] — 2026-09-18
 - isolate ACP fixture child env and evidence-gate continuity retries
