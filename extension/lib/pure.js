@@ -590,6 +590,24 @@ export function fnv1a64(input) {
     (b >>> 0).toString(16).padStart(8, "0");
 }
 
+/** Discovered-but-not-enrolled tool-offering pages for the Directory surface
+ * (chrome-agent-platform-cthe): the passive detection list minus origins the
+ * directory already shows as enrolled, deduped by origin, most-recently-used
+ * first (the route sorts by lastAccessed). Pure so the hub surface and its
+ * test share one rule. */
+export function discoveredOnly(tabs, enrolledOrigins) {
+  const enrolled = new Set(enrolledOrigins);
+  const seen = new Set();
+  const out = [];
+  for (const t of Array.isArray(tabs) ? tabs : []) {
+    if (typeof t?.origin !== "string" || !t.origin) continue;
+    if (enrolled.has(t.origin) || seen.has(t.origin)) continue;
+    seen.add(t.origin);
+    out.push(t);
+  }
+  return out;
+}
+
 /* ── SHA-256 (FIPS 180-4), synchronous + dependency-free ──────────────────
  * The collision-resistant digest for every security-relevant fingerprint
  * (registry content hashes, prompt attestations). Pure JS over UTF-8 BYTES —
