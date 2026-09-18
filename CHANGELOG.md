@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.85] — 2026-09-18
+- journal-ahv preservation: ims — verbatim untracked jq/sed bounded-filter admission deliverable of chrome-agent-platform-ims
+
 ## [0.3.84] — 2026-09-04
 - Fix the build lock file for fresh checkouts — the dist-complete validator needs it to pass
 

@@ -1,0 +1,9 @@
+tool=jq
+upstream=jq 1.8.2 (pinned release commit 34f7186b; tarball sha256 71b8d6e8f5fe81f6c6d0d110e3892251f6ce76ed095abd315e26e6e1193af3af)
+patch=single-threaded WASI preview-1 fork: -femulated-tls, pthread TLS/mutex/once -> no-op shim (source/pthread-shim.c + pthread.h), -D_WASI_EMULATED_SIGNAL, --without-oniguruma
+toolchain=clang version 22.1.8 (host); wasi-sysroot-22.0; libclang_rt.builtins wasm32 (wasi-sdk-22)
+configure=--without-oniguruma --disable-maintainer-mode --disable-docs --host=wasm32-wasip1 (CC/CFLAGS/LDFLAGS env; CFLAGS -O2 -g0 -ffile-prefix-map=<source-root>=/src -DNDEBUG -femulated-tls)
+flags=make CPPFLAGS=-I<shim-dir> -D_WASI_EMULATED_SIGNAL; final link -O2 -femulated-tls -lwasi-emulated-signal -Wl,--strip-all,--max-memory=33554432
+binary_sha256=55543604db368e4526cf1e7554312863323797c128b68bb08acea053055cb8c0
+binary_bytes=501522
+reproducible=byte-identical

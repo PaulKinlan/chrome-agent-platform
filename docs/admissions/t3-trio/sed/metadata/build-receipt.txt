@@ -1,0 +1,7 @@
+tool=sed
+upstream=minised 1.16 (release tarball sha256 46e072d5d45c9fd3d5b268523501bbea0ad016232b2d3f366a7aad0b1e7b3f71)
+toolchain=clang version 22.1.8 (host); wasi-sysroot-22.0; libclang_rt.builtins wasm32 (wasi-sdk-22)
+flags=--target=wasm32-wasip1 -O2 -DNDEBUG -g0 -ffile-prefix-map=<source-root>=/src -Wl,--strip-all -Wl,--max-memory=33554432
+binary_sha256=2c06b0adbbdf33b6f051393a339548ab25219348c3667c96efc3b903cc3803e3
+binary_bytes=49977
+reproducible=byte-identical

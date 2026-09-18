@@ -1,0 +1,30 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "sed_filter_bounded",
+      "version": "1.0.0",
+      "licenses": [{ "expression": "BSD-3-Clause" }]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "minised",
+      "version": "1.16",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "hashes": [{ "alg": "SHA-256", "content": "46e072d5d45c9fd3d5b268523501bbea0ad016232b2d3f366a7aad0b1e7b3f71" }],
+      "externalReferences": [{ "type": "distribution", "url": "https://dl.exactcode.de/oss/minised/minised-1.16.tar.gz" }]
+    },
+    {
+      "type": "library",
+      "name": "wasi-libc",
+      "version": "wasi-sdk-22.0-sysroot",
+      "licenses": [{ "expression": "Apache-2.0 WITH LLVM-exception" }],
+      "externalReferences": [{ "type": "website", "url": "https://github.com/WebAssembly/wasi-libc" }]
+    }
+  ]
+}
