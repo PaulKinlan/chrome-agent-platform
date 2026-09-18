@@ -278,12 +278,15 @@ export async function runAcpTaskTurn(options) {
   // default, and a configured token rides the upgrade query — the bridge's
   // --token mode refuses a connection without it.
   let effectiveEndpoint = endpoint;
+  let effectiveCwd = cwd;
   if (typeof settings?.get === "function") {
     try {
       const configuredEndpoint = await settings.get("acp.endpoint");
       if (typeof configuredEndpoint === "string" && configuredEndpoint.trim()) effectiveEndpoint = configuredEndpoint.trim();
       const token = await settings.get("acp.token");
       effectiveEndpoint = acpEndpointWithToken(effectiveEndpoint, token);
+      const configuredCwd = await settings.get("acp.cwd");
+      if (!effectiveCwd && typeof configuredCwd === "string" && configuredCwd.trim()) effectiveCwd = configuredCwd.trim();
     } catch { /* fall back to the built-in default */ }
   }
   effectiveEndpoint = acpEndpointWithHarness(effectiveEndpoint, harnessId);
@@ -439,7 +442,7 @@ export async function runAcpTaskTurn(options) {
 
     if (sessionId) {
       try {
-        await client.loadSession({ sessionId, cwd });
+        await client.loadSession({ sessionId, cwd: effectiveCwd });
         resumed = true;
       } catch (err) {
         // Fall back to new session if resume fails
@@ -451,7 +454,7 @@ export async function runAcpTaskTurn(options) {
     }
 
     if (!sessionId) {
-      const sess = await client.newSession({ cwd });
+      const sess = await client.newSession({ cwd: effectiveCwd });
       sessionId = sess.sessionId;
     }
     threadSessions.set(sessionKey, sessionId);

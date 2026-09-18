@@ -172,6 +172,41 @@
           </div>
           <div id="enrolled-sites" class="origin-list"></div>
         </div>
+        <div class="acp-settings" id="acp-settings-section" style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border, #e3e0d9);">
+          <h3>External agent harnesses (ACP)</h3>
+          <p class="muted">Configure local agent harnesses (pi, Claude Code, Codex). Control the bridge endpoint, token, working directory, and permission prompt mode.</p>
+          <div class="enroll-row" style="margin-bottom: 8px;">
+            <label class="field" style="flex:2"><span class="field-label">Bridge endpoint</span>
+              <input type="text" id="acp-endpoint" placeholder="ws://127.0.0.1:3210/acp">
+            </label>
+            <label class="field" style="flex:1"><span class="field-label">Token</span>
+              <input type="password" id="acp-token" placeholder="Optional secret token">
+            </label>
+          </div>
+          <div class="enroll-row" style="margin-bottom: 8px;">
+            <label class="field" style="flex:2"><span class="field-label">Working directory</span>
+              <input type="text" id="acp-cwd" placeholder="Default: harness/bridge host directory">
+            </label>
+            <label class="field" style="flex:1"><span class="field-label">Permission mode</span>
+              <select id="acp-permissions" class="input-select">
+                <option value="ask" selected>Always ask</option>
+                <option value="auto">Auto-grant</option>
+              </select>
+            </label>
+            <label class="field" style="flex:1"><span class="field-label">Transport</span>
+              <select id="acp-transport" class="input-select">
+                <option value="" selected>Auto</option>
+                <option value="native">Native host</option>
+                <option value="ws">WebSocket bridge</option>
+              </select>
+            </label>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px;">
+            <button class="btn small" id="acp-test-btn" type="button">Test connection</button>
+            <span id="acp-status" class="muted" style="font-size: 13px;" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+
         <div class="site-tool-consent">
           <h3 data-i18n="options_site_tool_permissions">Site tool permissions</h3>
           <p class="muted" data-i18n="options_site_tool_permissions_help">A Site Agent can report tools after enrollment, but the first model use of each exact tool asks you. Allowed tools run automatically until you disable them here; denied tools stay blocked until you allow or reset them.</p>

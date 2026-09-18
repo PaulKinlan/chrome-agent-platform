@@ -1465,6 +1465,89 @@ async function renderAgents() {
   // Interactive and scheduled agents share one management list. The data
   // models remain separate; this function only joins their presentation.
   await renderUnifiedAgentSettings();
+
+  // ACP external harness settings (endpoint, token, cwd, permissions mode, transport)
+  await renderAcpSettings();
+}
+
+async function renderAcpSettings() {
+  const endpointEl = $("#acp-endpoint");
+  const tokenEl = $("#acp-token");
+  const cwdEl = $("#acp-cwd");
+  const permEl = $("#acp-permissions");
+  const transportEl = $("#acp-transport");
+  const statusEl = $("#acp-status");
+  const testBtn = $("#acp-test-btn");
+  if (!endpointEl) return;
+
+  const s = await storage.get(["acp.endpoint", "acp.token", "acp.cwd", "acp.permissions", "acp.transport"]);
+  endpointEl.value = s?.["acp.endpoint"] || "";
+  tokenEl.value = s?.["acp.token"] || "";
+  cwdEl.value = s?.["acp.cwd"] || "";
+  permEl.value = s?.["acp.permissions"] || "ask";
+  transportEl.value = s?.["acp.transport"] || "";
+
+  endpointEl.addEventListener("change", async () => {
+    const val = endpointEl.value.trim();
+    if (val) await storage.set({ "acp.endpoint": val });
+    else await storage.remove(["acp.endpoint"]);
+    saveFlash("ACP endpoint saved.");
+  });
+
+  tokenEl.addEventListener("change", async () => {
+    const val = tokenEl.value.trim();
+    if (val) await storage.set({ "acp.token": val });
+    else await storage.remove(["acp.token"]);
+    saveFlash("ACP token saved.");
+  });
+
+  cwdEl.addEventListener("change", async () => {
+    const val = cwdEl.value.trim();
+    if (val) await storage.set({ "acp.cwd": val });
+    else await storage.remove(["acp.cwd"]);
+    saveFlash("ACP working directory saved.");
+  });
+
+  permEl.addEventListener("change", async () => {
+    await storage.set({ "acp.permissions": permEl.value });
+    saveFlash("ACP permission mode saved.");
+  });
+
+  transportEl.addEventListener("change", async () => {
+    const val = transportEl.value;
+    if (val) await storage.set({ "acp.transport": val });
+    else await storage.remove(["acp.transport"]);
+    saveFlash("ACP transport mode saved.");
+  });
+
+  if (testBtn) {
+    testBtn.addEventListener("click", async () => {
+      if (statusEl) {
+        statusEl.textContent = "Connecting…";
+        statusEl.style.color = "";
+      }
+      try {
+        const ep = endpointEl.value.trim() || "http://127.0.0.1:3210/health";
+        const healthUrl = ep.replace(/^ws(s)?:/i, "http$1:").replace(/\/acp(\?.*)?$/i, "/health");
+        const resp = await fetch(healthUrl, { signal: AbortSignal.timeout(3000) });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (statusEl) {
+            statusEl.textContent = `Connected: ${data.harness ?? "bridge active"}`;
+            statusEl.style.color = "var(--success, #1b873f)";
+          }
+        } else if (statusEl) {
+          statusEl.textContent = `HTTP ${resp.status}`;
+          statusEl.style.color = "var(--danger, #b3261e)";
+        }
+      } catch (err) {
+        if (statusEl) {
+          statusEl.textContent = `Offline (${err?.message ?? err})`;
+          statusEl.style.color = "var(--danger, #b3261e)";
+        }
+      }
+    });
+  }
 }
 
 // Provider server tools (Gemini google_search, Anthropic web_search): the GLOBAL toggle gates
