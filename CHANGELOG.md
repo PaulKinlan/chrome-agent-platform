@@ -17,6 +17,7 @@
 - scrub legacy project references from codebase comments and guard with tests (i6n6)
 - classify acp.journal route in SW dispatch authority census (vv98)
 - isolate serial lock fixtures and heal killed drift residue (p15i)
+- include source-inspecting test guards in always-on changed set (qcfc)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode

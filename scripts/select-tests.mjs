@@ -47,6 +47,32 @@ export const CORE = [
   "tests/vocabulary.test.ts",
 ];
 
+// ---- always-on source-inspecting invariant guards (chrome-agent-platform-qcfc) ----
+// Invariant: tests that read tracked source as data (AST census, source scans,
+// root-path guards) have no static import edges in the dependency graph.
+// They must be in the always-on set so test:changed cannot pass silently green.
+export const SOURCE_INSPECTING_GUARDS = [
+  "tests/sw-dispatch-authority-census.test.ts",
+  "tests/sw-route-modularization.test.ts",
+  "tests/file-url-root-guard.test.ts",
+  "tests/docs-process-truth.test.ts",
+  "tests/main-module-check-guard.test.ts",
+  "tests/test-partition-guard.test.ts",
+  "tests/package-scripts-exist.test.ts",
+  "tests/changelog.test.ts",
+  "tests/changelog-shipping.test.ts",
+  "tests/acp-fixture-env-guard.test.ts",
+  "tests/manifest-permissions.test.ts",
+  "tests/harness-registry.test.ts",
+  "tests/source-materialization.test.ts",
+  "tests/source-inspecting-tests-guard.test.ts",
+];
+
+export const ALWAYS_ON = Object.freeze([
+  ...CORE,
+  ...SOURCE_INSPECTING_GUARDS,
+]);
+
 function git(args, cwd = ROOT) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
@@ -156,7 +182,7 @@ function reachableTestFrom(startAbs, reverse, isTest) {
 }
 
 export function selectTestFiles(changed, reverse) {
-  const selected = new Set(CORE.filter((c) => existsSync(join(ROOT, c))));
+  const selected = new Set(ALWAYS_ON.filter((c) => existsSync(join(ROOT, c))));
   const changedAbs = [];
   for (const c of changed) {
     const abs = resolve(ROOT, c);
