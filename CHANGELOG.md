@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.429] — 2026-09-18
+- remove shared/agent-candidates.js replaced by agent-registry.js
+
 ## [0.3.428] — 2026-09-18
 - move test double run-log-wal-memory.js from extension/lib to tests/fixtures
 

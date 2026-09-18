@@ -224,7 +224,7 @@ Deno.test("site-agent copy: the centralized vocabulary is the ACTUAL consumer au
     "extension/sidepanel/sidepanel.js",
     "extension/directory/directory.js",
     "extension/ntp/ntp.html", "extension/ntp/ntp.js", "extension/shared/conversation.js",
-    "extension/shared/components.js", "extension/shared/agent-candidates.js",
+    "extension/shared/components.js",
     "extension/lib/capabilities.js", "extension/lib/browser-tools.js",
     "extension/background/service-worker.js"];
   let all = "";

@@ -20,7 +20,6 @@ const FILES = [
   // it; the gallery renders through the same byte-identical fallback).
   ["extension/shared/i18n.js", "docs/i18n.js"],
   ["extension/shared/theme.css", "docs/theme.css"],
-  ["extension/shared/agent-candidates.js", "docs/agent-candidates.js"],
   ["extension/shared/agent-registry.js", "docs/agent-registry.js"],
   ["extension/shared/command-parser.js", "docs/command-parser.js"],
   ["extension/shared/composer-commands.js", "docs/composer-commands.js"],

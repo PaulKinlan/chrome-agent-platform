@@ -15,7 +15,6 @@ Object.defineProperty(globalThis, "navigator", { value: { storage: { async getDi
 
 import { describeTool, getCurrentSiteIdentity, listSiteIdentityHistory, listTools, replacePageTools, replaceTools } from "../extension/lib/tools.js";
 import { matchesPageIdentity, planWebmcpInvocationTab } from "../extension/lib/pure.js";
-import { buildAgentCandidates } from "../extension/shared/agent-candidates.js";
 import { attestReportedPageUrl, formatSiteAgentName } from "../extension/lib/site-identity.js";
 
 const CANONICAL = "https://app.example";
@@ -155,7 +154,7 @@ Deno.test("page identity: planWebmcpInvocationTab matches exact declaring page a
   assertEquals(planSettings.url, "https://app.example/settings?tab=profile");
 });
 
-Deno.test("page identity: buildAgentCandidates formats page-scoped site agents with paths and titles", () => {
+Deno.test("page identity: formatSiteAgentName formats page-scoped site agents with paths and titles", () => {
   const siteAgents = [
     {
       origin: "https://shop.example",
@@ -174,10 +173,8 @@ Deno.test("page identity: buildAgentCandidates formats page-scoped site agents w
     },
   ];
 
-  const candidates = buildAgentCandidates([], [], siteAgents);
-  assertEquals(candidates.length, 2);
-  assertEquals(candidates[0].label, "@shop.example/checkout");
-  assertEquals(candidates[1].label, "@docs.example");
+  assertEquals(formatSiteAgentName(siteAgents[0]), "@shop.example/checkout");
+  assertEquals(formatSiteAgentName(siteAgents[1]), "@docs.example");
 });
 
 Deno.test("page identity: attestReportedPageUrl prevents same-origin path spoofing and cross-origin claims", () => {

@@ -78,8 +78,6 @@ export const RETAINED = {
     "Only tests/profile-store.test.ts imports it.",
   "lib/preference-bridge.js":
     "No page mounts the preference bridge (docs/PREFERENCE-PERCOLATION.md describes the design); only tests/security.test.ts imports it to pin the message validation.",
-  "shared/agent-candidates.js":
-    "shared/agent-registry.js replaced it in the product; scripts/sync-gallery.mjs still copies it into docs/ and tests/agent-command.test.ts, tests/site-agent-copy.test.ts, tests/webmcp-page-identity.test.ts import it.",
 };
 
 // Parse the esbuild entries out of build.mjs: `const X = path.join(STAGE, "<dist rel>")`
