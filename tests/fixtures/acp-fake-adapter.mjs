@@ -51,6 +51,12 @@ const ASK_PERMISSION = process.env.CAP_ACP_FIXTURE_ASK_PERMISSION === "1";
 // the successor performs is what rejects it (the error path a superseded turn
 // must render NOTHING for).
 const IGNORE_CANCEL = process.env.CAP_ACP_FIXTURE_IGNORE_CANCEL === "1";
+// A session id starting with `ses_gone` names a session the harness NO LONGER
+// HOLDS: session/load rejects for it. Deliberately keyed on the id, not on a
+// process env knob — `deno test --parallel` runs every test FILE in one
+// process, so an env-set fixture switch leaks into a sibling file's adapter
+// and reds ITS assertions (chrome-agent-platform-jp78 measured this class).
+const GONE_SESSION = /^ses_gone/;
 let heldPromptId = null;
 function log(dir, msg) {
   if (!LOG) return;
@@ -137,7 +143,11 @@ function handle(msg) {
       });
       break;
     case "session/load":
-      sendAndLog({ jsonrpc: "2.0", id: msg.id, result: {} });
+      if (GONE_SESSION.test(String(msg.params?.sessionId ?? ""))) {
+        sendAndLog({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: `session ${msg.params?.sessionId ?? ""} is gone` } });
+      } else {
+        sendAndLog({ jsonrpc: "2.0", id: msg.id, result: {} });
+      }
       break;
     case "session/prompt": {
       const sid = msg.params?.sessionId ?? "";

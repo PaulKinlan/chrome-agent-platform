@@ -61,6 +61,7 @@ class MockContainer {
       },
     };
     this.agentMessages.push(text);
+    this.timeline.push(`agent: ${text}`);
     return bubble;
   }
 
@@ -87,8 +88,12 @@ class MockContainer {
 
   /** The owner-visible system lines (permission decisions land here). */
   system: string[] = [];
+  /** Ordered view of what the surface rendered, so a test can pin ORDER
+   * (e.g. the resume note lands before the fresh reply it explains). */
+  timeline: string[] = [];
   appendSystem(text: string) {
     this.system.push(String(text));
+    this.timeline.push(`system: ${String(text)}`);
   }
 }
 
@@ -278,6 +283,70 @@ Deno.test("runAcpTaskTurn: a sessionStore hint resumes a session from a previous
     assert(!methods.includes("session/new"), "no new session is created when the store has one");
     const load = frames.find((f) => f.dir === "in" && f.msg.method === "session/load");
     assertEquals(load.msg.params.sessionId, "ses_from_kv");
+  } finally {
+    await bridge.shutdown();
+  }
+});
+
+Deno.test("runAcpTaskTurn: a failed session/load is REPORTED, never a silent new conversation (u0cc)", async () => {
+  // The fallback stays (a dead adapter must not block the turn) but it must be
+  // visible: a stale stored session id must not quietly become a fresh
+  // conversation the owner believes is a continuation. The stale id names a
+  // session the fixture no longer holds, so session/load rejects for it.
+  //
+  // Deliberately NO frame log here: CAP_ACP_FIXTURE_LOG is a PROCESS-GLOBAL env
+  // sink that leaks across test files under `deno test --parallel` (jp78), and
+  // this test does not need it — the load failure is proven by the result (the
+  // host error names the stale id, which only a load attempt can produce), and
+  // the new session by the fixture id the fallback returned and the store now
+  // holds. cap-evidence/acp-resume-failure-probe.ts keeps the frame-level
+  // observer in a standalone process.
+  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const port = (bridge as any).addr.port;
+  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const container = new MockContainer();
+  const stored = new Map<string, string>([["acp:pi-stale", "ses_gone_forever"]]);
+
+  try {
+    // A FIRST turn has nothing to resume: it must NOT render a restore note.
+    const first = await runAcpTaskTurn({ container, task: "a brand new conversation", harnessId: "pi-fresh-u0cc", endpoint });
+    assertEquals(first.ok, true, String(first.error));
+    assertEquals(first.resumeFailed, false, "a first turn is not a resume failure");
+    assertEquals(container.system.length, 0, `a first turn renders no restore note: ${JSON.stringify(container.system)}`);
+
+    // Turn 2 resumes a conversation the harness no longer holds.
+    const res = await runAcpTaskTurn({
+      container,
+      task: "carry on where we left off",
+      harnessId: "pi-stale",
+      endpoint,
+      sessionStore: {
+        get: (key: string) => Promise.resolve(stored.get(key) ?? null),
+        set: (key: string, sessionId: string) => { stored.set(key, sessionId); return Promise.resolve(); },
+      },
+    });
+    assertEquals(res.ok, true, `a dead adapter must not block the turn: ${res.error}`);
+    assertEquals(res.resumed, false, "the stored session was NOT resumed");
+    assertEquals(res.resumeFailed, true, "the result must mark the fallback (resumeFailed)");
+    // The fixture rejects the load with the session it was asked for — so this
+    // text can only exist if the runner really attempted the resume.
+    assert(/ses_gone_forever/.test(String(res.resumeError)), `the result carries the host's reason: ${res.resumeError}`);
+    assertEquals(res.result, "fake reply", "the turn itself still ran");
+    assertEquals(res.sessionId, "ses_fake_1", "the fallback created the fixture's new session and used it");
+
+    // The SURFACE is told, in words, and the note lands BEFORE the fresh reply
+    // it explains — the owner must not read a context-free answer first.
+    const note = container.timeline.find((line) => line.startsWith("system:"));
+    assert(note, `the surface must be told the session was not restored: ${JSON.stringify(container.timeline)}`);
+    assert(/could not be restored/i.test(note), `the note names what happened: ${note}`);
+    assert(/ses_gone_forever/.test(note), `the note carries the why: ${note}`);
+    const noteAt = container.timeline.indexOf(note);
+    const replyAfterNote = container.timeline.findIndex((line, i) => i > noteAt && line.startsWith("agent:"));
+    assert(replyAfterNote > noteAt, `the note precedes this turn's fresh reply: ${JSON.stringify(container.timeline)}`);
+    assertEquals(container.errors.length, 0, "a fallback is not a hard failure card");
+
+    // The stale hint is replaced, so the NEXT turn resumes the new conversation.
+    assertEquals(stored.get("acp:pi-stale"), "ses_fake_1", "the store now points at the new session");
   } finally {
     await bridge.shutdown();
   }

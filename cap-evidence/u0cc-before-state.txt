@@ -1,0 +1,14 @@
+Listening on http://127.0.0.1:44303/
+[acp-bridge] Client connected from local script
+[probe] result: {"ok":true,"resumed":false,"resumeFailed":null,"resumeError":null,"sessionId":"ses_fake_1","error":null}
+[probe] surface system lines: []
+[probe] surface error cards: []
+[probe] frames: method(s) = ["initialize","session/load","session/new","session/prompt"]
+[acp-bridge] Client disconnected, cleaning up adapter process
+[probe] PASS — session/load was attempted for the stored session
+[probe] PASS — the load failure fell back to a new session (turn not blocked)
+[probe] FAIL — the result marks the fallback (resumed:false + resumeFailed:true) (resumed=false resumeFailed=undefined)
+[probe] FAIL — the surface was told, with a reason (note="")
+[probe] PASS — the fallback is not rendered as a hard failure
+[probe] PASS — the stale store hint was replaced by the new session
+[probe] 4/6 checks PASS — 2 FAILED

@@ -1,0 +1,14 @@
+Listening on http://127.0.0.1:45535/
+[acp-bridge] Client connected from local script
+[probe] result: {"ok":true,"resumed":false,"resumeFailed":true,"resumeError":"session ses_gone_stale is gone","sessionId":"ses_fake_1","error":null}
+[probe] surface system lines: ["Started a new conversation — the previous session could not be restored (session ses_gone_stale is gone)."]
+[probe] surface error cards: []
+[acp-bridge] Client disconnected, cleaning up adapter process
+[probe] frames: method(s) = ["initialize","session/load","session/new","session/prompt"]
+[probe] PASS — session/load was attempted for the stored session
+[probe] PASS — the load failure fell back to a new session (turn not blocked)
+[probe] PASS — the result marks the fallback (resumed:false + resumeFailed:true)
+[probe] PASS — the surface was told, with a reason
+[probe] PASS — the fallback is not rendered as a hard failure
+[probe] PASS — the stale store hint was replaced by the new session
+[probe] 6/6 checks PASS

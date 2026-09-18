@@ -177,7 +177,7 @@ function settleAcpPermissionCard(card, state) {
  * @param {{get: (key: string) => Promise<string|null>}} [options.settings] - kv reader for `acp.endpoint` / `acp.token` / `acp.transport` / `acp.permissions`
  * @param {(prompt: any, opts?: any) => Promise<any>} [options.permissionPrompter] - the owner gate (default: the inline Allow/Deny card); injectable for tests
  * @param {number} [options.permissionTimeoutMs] - how long an unanswered card waits before the turn denies (default 120s)
- * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, sessionId?: string, resumed?: boolean, error?: string}>}
+ * @returns {Promise<{ok: boolean, result?: string, stopReason?: string, sessionId?: string, resumed?: boolean, resumeFailed?: boolean, resumeError?: string|null, error?: string}>}
  */
 export async function runAcpTaskTurn(options) {
   const {
@@ -340,6 +340,18 @@ export async function runAcpTaskTurn(options) {
     return { ok: false, error: "Task was superseded" };
   }
 
+  // Resume bookkeeping lives OUTSIDE the try: the turn's catch has to report
+  // whether this turn already fell back to a fresh session (u0cc).
+  let resumed = false;
+  // A failed session/load falls back to a fresh session — a dead adapter must
+  // not block the turn — but the fallback is NEVER silent: the user is told the
+  // previous conversation could not be restored (and why), and the result marks
+  // it so a surface can tell a restored conversation from a new one.
+  // `resumeFailed` stays false when there was nothing to resume: a first turn is
+  // not a failure.
+  let resumeFailed = false;
+  let resumeError = null;
+
   try {
     status({ state: "running", activity: `Initializing ${harnessId}…` });
     await client.initialize();
@@ -356,15 +368,17 @@ export async function runAcpTaskTurn(options) {
     if (!sessionId && typeof sessionStore?.get === "function") {
       try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
     }
-    let resumed = false;
 
     if (sessionId) {
       try {
         await client.loadSession({ sessionId, cwd });
         resumed = true;
-      } catch {
+      } catch (err) {
         // Fall back to new session if resume fails
         sessionId = null;
+        resumeFailed = true;
+        resumeError = String(err?.message ?? err).replace(/\s+/gu, " ").trim().slice(0, 240)
+          || "the harness did not say why";
       }
     }
 
@@ -377,6 +391,14 @@ export async function runAcpTaskTurn(options) {
     claim.sessionId = sessionId;
     if (typeof sessionStore?.set === "function") {
       try { await sessionStore.set(sessionKey, sessionId); } catch { /* resume hint only */ }
+    }
+
+    // Tell the surface BEFORE this fresh conversation streams: the owner must
+    // know the conversation they expected is gone, and why, before reading a
+    // reply that was written without any of its context. A system line, not an
+    // error card — the turn itself is still going to run.
+    if (resumeFailed && !superseded() && typeof container.appendSystem === "function") {
+      container.appendSystem(`Started a new conversation — the previous session could not be restored (${resumeError}).`);
     }
 
     if (superseded()) {
@@ -463,7 +485,7 @@ export async function runAcpTaskTurn(options) {
     // A cancelled turn is NOT a success: the harness reports stopReason
     // "cancelled" when a newer turn (or a cancel request) stopped it.
     if (String(turn.stopReason ?? "").toLowerCase().startsWith("cancel")) {
-      return { ok: false, error: "Task was cancelled", stopReason: turn.stopReason, sessionId, resumed };
+      return { ok: false, error: "Task was cancelled", stopReason: turn.stopReason, sessionId, resumed, resumeFailed, resumeError };
     }
 
     // Ensure complete response rendered
@@ -480,6 +502,8 @@ export async function runAcpTaskTurn(options) {
       stopReason: turn.stopReason,
       sessionId,
       resumed,
+      resumeFailed,
+      resumeError,
     };
   } catch (err) {
     let errorDetail = String(err?.message ?? err);
@@ -508,7 +532,7 @@ export async function runAcpTaskTurn(options) {
       }
       status({ state: "failed", errorReason: errorDetail });
     }
-    return { ok: false, error: errorDetail };
+    return { ok: false, error: errorDetail, resumed: false, resumeFailed, resumeError };
   } finally {
     // This turn is no longer the active one for the key (a newer turn may own
     // it already — never clear a successor's registration).
