@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.417] — 2026-09-18
+- residual: the post-scrub remaining count includes the pinned Doc.compile shape
+
 ## [0.3.416] — 2026-09-18
 - security-suite escape fixture fails closed when descendant fails to persist
 - exported agentConfig credentials can no longer cross the owner export walk

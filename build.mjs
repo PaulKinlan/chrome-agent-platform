@@ -531,7 +531,11 @@ try {
       bundle = denied.code;
       zodDocCompiles += denied.count;
       await writeFile(scrubPath, bundle);
-      const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
+      // The remaining count includes the pinned Doc.compile shape so a future
+      // drift between the denial regex and esbuild's output is caught HERE,
+      // post-scrub, instead of silently shipping a renamed evaluator
+      // (chrome-agent-platform-4f3j residual).
+      const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)|compile\s*\(\)\s*\{\s*(?:let|const|var)\s+[A-Za-z0-9_$]+\s*=\s*Function/g) ?? []).length;
       if (remaining > 0) throw new Error(`bundle still contains ${remaining} eval sites after cleaning`);
     }
 
