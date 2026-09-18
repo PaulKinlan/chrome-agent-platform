@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.415] — 2026-09-18
+- the pinned Doc denial respects lexical Function bindings
+
 ## [0.3.414] — 2026-09-17
 - opening a running task no longer waits on the live run's own log lock
 
