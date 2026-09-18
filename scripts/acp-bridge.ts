@@ -77,13 +77,17 @@ export const HARNESS_ADAPTERS: Record<string, { pkg: string; version: string; la
   "codex": { pkg: "@agentclientprotocol/codex-acp", version: "1.12.0", label: "Codex" },
 };
 
-/** The harness CLI each adapter drives, and how pi-acp takes an explicit path
- * (`PI_ACP_PI_COMMAND`; the other adapters resolve their own CLI, so PATH is
- * what has to be right for them). */
-export const HARNESS_CLI: Record<string, { cli: string; envVar?: string; install: string }> = {
+/** The harness CLI each adapter drives, and the env var each adapter honours
+ * for an EXPLICIT CLI path (verified against the pinned adapters, 2026-09-18:
+ * claude-agent-acp@0.78.0 reads CLAUDE_CODE_EXECUTABLE in claudeCliPath();
+ * codex-acp@1.12.0 reads CODEX_PATH in startAcpServer()). pi-acp has no other
+ * way to find `pi`; the claude-code/codex adapters BUNDLE a CLI (the Claude
+ * Agent SDK's native binary / @openai/codex/bin/codex.js), so for them a PATH
+ * miss is not fatal — `bundledFallback` says what runs instead. */
+export const HARNESS_CLI: Record<string, { cli: string; envVar?: string; install: string; bundledFallback?: string }> = {
   "pi": { cli: "pi", envVar: "PI_ACP_PI_COMMAND", install: "npm install -g @earendil-works/pi-coding-agent" },
-  "claude-code": { cli: "claude", install: "install the Claude Code CLI and sign in" },
-  "codex": { cli: "codex", install: "install the Codex CLI and sign in" },
+  "claude-code": { cli: "claude", envVar: "CLAUDE_CODE_EXECUTABLE", install: "install the Claude Code CLI and sign in", bundledFallback: "the Claude Agent SDK's bundled native binary" },
+  "codex": { cli: "codex", envVar: "CODEX_PATH", install: "install the Codex CLI and sign in", bundledFallback: "the bundled @openai/codex CLI" },
 };
 
 /** Find an executable on a PATH string (no shell, no side effects). Exported so
@@ -104,6 +108,33 @@ export function childEnvForHarness(harness: string, pathValue = ""): Record<stri
   if (!spec?.envVar) return {};
   const resolved = resolveCliOnPath(spec.cli, pathValue);
   return resolved ? { [spec.envVar]: resolved } : {};
+}
+
+/** The startup lines for a harness CLI the bridge cannot see on ITS OWN PATH.
+ * pi has no fallback: the adapter WILL fail with "executable not found", so
+ * the warning names the fix. The claude-code/codex adapters bundle a CLI
+ * (HARNESS_CLI.bundledFallback), so a PATH miss is a NOTE — the bundled CLI
+ * runs — not a false "will fail" alarm. Empty when the CLI is visible or the
+ * harness is unknown. Exported so the rule is unit-tested, not substring-pinned. */
+export function harnessCliWarning(harness: string, pathValue = ""): string[] {
+  const spec = HARNESS_CLI[harness];
+  if (!spec) return [];
+  if (resolveCliOnPath(spec.cli, pathValue)) return [];
+  if (spec.bundledFallback) {
+    return [
+      `[acp-bridge] NOTE: "${spec.cli}" is not on THIS process's PATH — the adapter will use`,
+      `[acp-bridge]          ${spec.bundledFallback}. To run a specific CLI instead, reinstall the`,
+      `[acp-bridge]          launcher so it captures your PATH (npm run acp:service install) and the`,
+      `[acp-bridge]          bridge will hand the adapter its absolute path. This process's PATH: ${pathValue || "(unset)"}`,
+    ];
+  }
+  return [
+    `[acp-bridge] WARNING: "${spec.cli}" is not on THIS process's PATH — the adapter will fail with`,
+    `[acp-bridge]          "executable not found". Auto-started bridges (launchd/systemd/native host)`,
+    `[acp-bridge]          get a minimal PATH, not your shell's. Fix: reinstall the launcher so it`,
+    `[acp-bridge]          captures your PATH (npm run acp:service install), or install the harness CLI`,
+    `[acp-bridge]          (${spec.install}). This process's PATH: ${pathValue || "(unset)"}`,
+  ];
 }
 
 /** An adapter installed under the pi agent's npm prefix (how pi-acp gets
@@ -198,16 +229,8 @@ if (import.meta.main) { try {
 } catch (e) {
   console.error(`[acp-bridge] ${(e as Error).message}`);
 } }
-if (import.meta.main && HARNESS_CLI[HARNESS]) {
-  const spec = HARNESS_CLI[HARNESS];
-  const found = resolveCliOnPath(spec.cli, Deno.env.get("PATH") ?? "");
-  if (!found) {
-    console.error(`[acp-bridge] WARNING: "${spec.cli}" is not on THIS process's PATH — the adapter will fail with`);
-    console.error(`[acp-bridge]          "executable not found". Auto-started bridges (launchd/systemd/native host)`);
-    console.error(`[acp-bridge]          get a minimal PATH, not your shell's. Fix: reinstall the launcher so it`);
-    console.error(`[acp-bridge]          captures your PATH (npm run acp:service install), or install the harness CLI`);
-    console.error(`[acp-bridge]          (${spec.install}). This process's PATH: ${Deno.env.get("PATH") ?? "(unset)"}`);
-  }
+if (import.meta.main) {
+  for (const line of harnessCliWarning(HARNESS, Deno.env.get("PATH") ?? "")) console.error(line);
 }
 if (!isLoopbackHost(HOST) && import.meta.main) {
   console.log(`[acp-bridge] Bound to ${HOST} — reachable from other machines on this network.`);

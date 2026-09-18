@@ -8,7 +8,7 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { applyHostDefaults, childEnvForHarness, clipCloseReason, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
+import { applyHostDefaults, childEnvForHarness, clipCloseReason, harnessCliWarning, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const sessionNew = (params: Record<string, unknown>) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params });
@@ -110,10 +110,51 @@ Deno.test("harness CLI resolution: found on PATH, handed to the adapter as an ab
   assertEquals(resolveCliOnPath("pi", "/nonexistent:/usr/bin"), "");
   assertEquals(resolveCliOnPath("pi", ""), "");
 
-  // pi-acp honours PI_ACP_PI_COMMAND: without it the adapter searches its own
-  // PATH, which is exactly the launchd/Chrome minimal-PATH failure.
+  // Every known adapter honours an explicit-CLI env var (verified against the
+  // pinned packages 2026-09-18: pi-acp PI_ACP_PI_COMMAND; claude-agent-acp@0.78.0
+  // CLAUDE_CODE_EXECUTABLE; codex-acp@1.12.0 CODEX_PATH), so a CLI the bridge
+  // can see is handed over as an ABSOLUTE path even under a minimal launcher PATH.
   assertEquals(childEnvForHarness("pi", dir), { PI_ACP_PI_COMMAND: cli });
   assertEquals(childEnvForHarness("pi", "/nonexistent"), {});
-  assertEquals(childEnvForHarness("claude-code", dir), {}, "adapters without an override get nothing extra");
+
+  const claudeCli = `${dir}/claude`;
+  Deno.writeTextFileSync(claudeCli, "#!/bin/sh\nexit 0\n");
+  Deno.chmodSync(claudeCli, 0o755);
+  const codexCli = `${dir}/codex`;
+  Deno.writeTextFileSync(codexCli, "#!/bin/sh\nexit 0\n");
+  Deno.chmodSync(codexCli, 0o755);
+  assertEquals(childEnvForHarness("claude-code", dir), { CLAUDE_CODE_EXECUTABLE: claudeCli });
+  assertEquals(childEnvForHarness("codex", dir), { CODEX_PATH: codexCli });
+  // Off the bridge's PATH nothing is invented: claude/codex fall back to their
+  // bundled CLI, pi relies on the startup warning naming the fix.
+  assertEquals(childEnvForHarness("claude-code", "/nonexistent"), {});
+  assertEquals(childEnvForHarness("codex", "/nonexistent"), {});
   assertEquals(childEnvForHarness("nope", dir), {});
+});
+
+Deno.test("harnessCliWarning: a PATH miss is fatal only for adapters without a bundled CLI", () => {
+  const dir = durableDir("acp-cli-warning-fixture");
+  const cli = `${dir}/pi`;
+  Deno.writeTextFileSync(cli, "#!/bin/sh\nexit 0\n");
+  Deno.chmodSync(cli, 0o755);
+
+  // Visible on PATH: silence, for every harness.
+  assertEquals(harnessCliWarning("pi", dir), []);
+  assertEquals(harnessCliWarning("not-a-harness", "/nonexistent"), []);
+
+  // pi has no fallback: the warning must say the adapter WILL fail and name the fix.
+  const piWarning = harnessCliWarning("pi", "/nonexistent").join("\n");
+  assert(piWarning.includes("will fail"), piWarning);
+  assert(piWarning.includes("executable not found"), piWarning);
+  assert(piWarning.includes("acp:service install"), piWarning);
+  assert(piWarning.includes("npm install -g @earendil-works/pi-coding-agent"), piWarning);
+
+  // claude-code/codex bundle a CLI: a PATH miss is a NOTE naming the fallback,
+  // never a false "will fail" alarm (the adapters run their bundled CLI).
+  const claudeNote = harnessCliWarning("claude-code", "/nonexistent").join("\n");
+  assert(claudeNote.includes("bundled native binary"), claudeNote);
+  assert(!claudeNote.includes("will fail"), claudeNote);
+  const codexNote = harnessCliWarning("codex", "/nonexistent").join("\n");
+  assert(codexNote.includes("bundled @openai/codex CLI"), codexNote);
+  assert(!codexNote.includes("will fail"), codexNote);
 });
