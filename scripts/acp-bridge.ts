@@ -11,6 +11,7 @@
 // extension would be wrong on every other machine (3khn/evidence-durable).
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
+import { existsSync } from "node:fs";
 
 const args = parseArgs(Deno.args, {
   string: ["port", "adapter", "harness", "cwd", "token", "allow-origin", "host"],
@@ -194,9 +195,20 @@ export function clipCloseReason(reason: string, limit = 123): string {
   return clipped.length > 0 ? clipped : "adapter error";
 }
 
-/** The working directory a session request without one gets (host-side default). */
+/** The working directory a session request without one gets (host-side default).
+ *
+ * chrome-agent-platform-7p7e: `$HOME/journal` is a CONVENIENCE for a machine that
+ * has one, never an invention for a machine that does not. Defaulting to it on a
+ * Mac handed the client `/Users/paulkinlan/journal`, which does not exist there,
+ * and the turn died with "Invalid params: `cwd` does not exist on the machine
+ * running the agent" — nothing on that machine knows about this fleet's layout.
+ * When the directory is not there, the host default is "" — exactly the case the
+ * contract above describes: nothing is invented and the adapter reports the
+ * missing cwd itself. */
 function defaultCwd() {
-  return args.cwd || (HOME ? `${HOME}/journal` : "");
+  if (args.cwd) return args.cwd;
+  const guess = HOME ? `${HOME}/journal` : "";
+  return guess && existsSync(guess) ? guess : "";
 }
 
 /** Give a client frame the host defaults only the bridge knows: a session/new

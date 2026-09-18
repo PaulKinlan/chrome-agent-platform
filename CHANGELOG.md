@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.436] — 2026-09-18
+- the background agent service uses the agent tool your machine actually has, and no longer passes your terminal a folder that is not there
+
 ## [0.3.435] — 2026-09-18
 - remove stale repro-recent-activity comment citations
 

@@ -34,15 +34,68 @@ function parseArgs(argv) {
 }
 const args = parseArgs(process.argv.slice(2));
 const ACTION = args._[0] || "status";
-const HARNESS = String(args.harness || "pi");
+let HARNESS = String(args.harness || ""); // "" = resolve from what this machine has (never a binary it lacks)
 const PORT = String(args.port || "3210");
 const TOKEN = args.token ? String(args.token) : "";
+// The working directory the service hands the adapter. NOT defaulted: a machine
+// that has no $HOME/journal must declare one or have the adapter report it
+// (chrome-agent-platform-7p7e: the old default invented /Users/<name>/journal).
+const CWD = args.cwd ? String(args.cwd) : "";
 const UNIT_OVERRIDE = args.unit ? String(args.unit) : "";
 const LOG_OVERRIDE = args.log ? String(args.log) : "";
+
+// The harnesses this service can drive, and the CLI each needs. This order is the
+// DEFAULT PREFERENCE when --harness is absent — never a harness whose binary this
+// machine does not have. pi is LAST on purpose: it is the least likely to be
+// installed, and defaulting to it is how a service came up on pi on a Mac that
+// had claude (chrome-agent-platform-chrome-agent-platform-7p7e).
+const HARNESS_BINARIES = { "claude-code": "claude", "codex": "codex", "pi": "pi" };
+const HARNESS_PREFERENCE = ["claude-code", "codex", "pi"];
+const harnessBinaryFor = (harness) => HARNESS_BINARIES[harness] ?? harness;
+
+/** Is `bin` executable somewhere on this process's PATH? (no exec, no shell) */
+function binaryOnPath(bin) {
+  for (const dir of String(process.env.PATH || "").split(":")) {
+    if (!dir) continue;
+    try {
+      const p = join(dir, bin);
+      if (existsSync(p)) return p;
+    } catch { /* unreadable entry */ }
+  }
+  return "";
+}
+
+/** The first preferred harness this machine can actually run. */
+function detectHarness() {
+  for (const harness of HARNESS_PREFERENCE) {
+    if (binaryOnPath(HARNESS_BINARIES[harness])) return { harness, why: `${HARNESS_BINARIES[harness]} is on PATH` };
+  }
+  return { harness: "", why: `none of ${HARNESS_PREFERENCE.map((h) => `${h} (${HARNESS_BINARIES[h]})`).join(", ")} is on PATH` };
+}
+
+/** The harness an install will use: the explicit one, else the machine's own. */
+function resolveHarnessForInstall() {
+  if (HARNESS) {
+    const bin = harnessBinaryFor(HARNESS);
+    if (!binaryOnPath(bin)) {
+      console.log(`   [warn] --harness ${HARNESS} needs '${bin}', which is not on this machine's PATH — the service will not be able to start until it is (the doctor reports this too)`);
+    }
+    return HARNESS;
+  }
+  const { harness, why } = detectHarness();
+  if (!harness) {
+    throw new Error(
+      `no harness CLI found on PATH — ${why}. Pass --harness <${HARNESS_PREFERENCE.join("|")}> to choose one explicitly.`,
+    );
+  }
+  console.log(`   harness: ${harness} (chosen because ${why}; pass --harness to override)`);
+  return harness;
+}
 
 function bridgeArgs() {
   const a = ["run", "-A", join(ROOT, "scripts", "acp-bridge.ts"), "--port", PORT, "--harness", HARNESS];
   if (TOKEN) a.push("--token", TOKEN);
+  if (CWD) a.push("--cwd", CWD);
   return a;
 }
 
@@ -255,6 +308,15 @@ async function doctor() {
   let capturedPath = "";
   let workingDir = ROOT;
   let serviceHarness = HARNESS;
+  if (!serviceHarness) {
+    const detected = detectHarness();
+    serviceHarness = detected.harness || "pi"; // "pi" keeps the per-binary FAIL below meaningful
+    if (!detected.harness) {
+      console.log(`   [FAIL] no harness CLI found — ${detected.why}`);
+      console.log(`        -> pass --harness <${HARNESS_PREFERENCE.join("|")}> explicitly`);
+      healthy = false;
+    }
+  }
   let servicePort = PORT;
 
   console.log(`1. Service Unit:`);
@@ -480,9 +542,26 @@ async function doctor() {
 }
 
 if (ACTION === "install") {
-  preflight();
-  if (OS === "darwin") installMac();
-  else installLinux();
+  try {
+    HARNESS = resolveHarnessForInstall();
+  } catch (err) {
+    // A refusal, not a crash: one line, and nothing installed.
+    console.error(`acp:service: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+  if (args["dry-run"]) {
+    // Print the plan and write NOTHING: the harness choice is inspectable and
+    // testable without installing a unit on the machine.
+    console.log(`install --dry-run (nothing written):`);
+    console.log(`   unit: ${OS === "darwin" ? join(HOME, "Library", "LaunchAgents", `${LABEL}.plist`) : join(HOME, ".config", "systemd", "user", "cap-acp-bridge.service")}`);
+    console.log(`   harness: ${HARNESS}`);
+    console.log(`   cwd: ${CWD || "(none — the adapter reports a missing working directory itself)"}`);
+    console.log(`   bridge: ${["deno", ...bridgeArgs()].join(" ")}`);
+  } else {
+    preflight();
+    if (OS === "darwin") installMac();
+    else installLinux();
+  }
 } else if (ACTION === "uninstall") {
   uninstall();
 } else if (ACTION === "logs") {
