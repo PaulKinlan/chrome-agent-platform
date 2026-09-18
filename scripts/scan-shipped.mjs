@@ -239,19 +239,11 @@ const EMSCRIPTEN_VALIDATE_LOCATION = { line: 274, column: 7 };
 const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
 const WORKER_HOST_CANONICAL_LOCATION = { line: 226, column: 9 };
 const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
-// The bounded JS-minifier host constructs its fresh Worker through an injected
-// `WorkerCtor` (the `{ WorkerCtor = globalThis.Worker }` dependency). It is a
-// SEPARATE canonical entry bound to the exact line/column + the exact
-// `new WorkerCtor(` shape, never a broad exemption for the minifier files.
-const MINIFIER_WORKER_HOST_CANONICAL_PATH = "extension/lib/js-minifier-lifecycle.js";
-const MINIFIER_WORKER_HOST_CANONICAL_LOCATION = { line: 13, column: 13 };
-const MINIFIER_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
-// The bounded JWT-decode host constructs its fresh browser Worker directly
-// (`new Worker(workerUrl, { type: "module" })`). A SEPARATE canonical entry
-// bound to the exact line/column + the exact `new Worker(` shape.
-const JWT_WORKER_HOST_CANONICAL_PATH = "extension/lib/jwt-decode.js";
-const JWT_WORKER_HOST_CANONICAL_LOCATION = { line: 60, column: 19 };
-const JWT_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
+// (chrome-agent-platform-9bse: the js-minifier and jwt-decode tools + worker
+// bundles were removed — unregistered tools with only test consumers. Their
+// canonical worker-host exemptions are deleted WITH them: a canonical entry
+// bound to a file that no longer exists is dead authority, and if such a file
+// ever returns the scanner flags it, which is the safe direction.)
 // The agent-worker host (CAP-FB-20260826-AGENT-WORKERS-01) constructs the
 // per-agent SHARED worker from a runtime-resolved `chrome.runtime.getURL` URL
 // (shared workers require an ABSOLUTE URL, so a source literal is impossible).
@@ -492,20 +484,6 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(WORKER_HOST_ALLOWED_RE) ?? []).length === 1
-          ) || (
-            isCanonicalScannedPath(file, MINIFIER_WORKER_HOST_CANONICAL_PATH) &&
-            workerSink === "WorkerCtor" &&
-            node.loc?.start?.line === MINIFIER_WORKER_HOST_CANONICAL_LOCATION.line &&
-            node.loc?.start?.column === MINIFIER_WORKER_HOST_CANONICAL_LOCATION.column &&
-            value === null &&
-            (text.match(MINIFIER_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
-          ) || (
-            isCanonicalScannedPath(file, JWT_WORKER_HOST_CANONICAL_PATH) &&
-            workerSink === "Worker" &&
-            node.loc?.start?.line === JWT_WORKER_HOST_CANONICAL_LOCATION.line &&
-            node.loc?.start?.column === JWT_WORKER_HOST_CANONICAL_LOCATION.column &&
-            value === null &&
-            (text.match(JWT_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           ) || (
             isCanonicalScannedPath(file, AGENT_WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "SharedWorker" &&

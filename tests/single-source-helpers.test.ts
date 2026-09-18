@@ -19,7 +19,7 @@ const CANONICAL_FILE = "lib/pure.js";
 
 /** Paths (relative to extension/) that are build output or vendored bundles —
  * never hand-written product code, so never a duplicate we own. */
-const EXCLUDED_PREFIXES = ["dist/", "dist-versions/", "wasm/", "lib/terser-bounded.worker.js"];
+const EXCLUDED_PREFIXES = ["dist/", "dist-versions/", "wasm/"];
 
 /** The helper family, one row per single-sourced helper: the canonical export
  * in pure.js and the alias names a re-rolled copy tends to pick. Each lane of
