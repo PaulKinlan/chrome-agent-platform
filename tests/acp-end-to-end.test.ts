@@ -23,15 +23,33 @@ const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", impo
 // The cwd is a protocol string the fake adapter never touches; route it
 // through the durable-root convention so the static guard stays honest.
 const FIXTURE_CWD = durableDir("acp-fixture");
+// All fixture knobs explicitly pinned off so ambient process environment
+// can never contaminate this run (chrome-agent-platform-tqfg).
+export const CLEAN_FIXTURE_ENV: Record<string, string> = {
+  CAP_ACP_FIXTURE_LOG: "",
+  CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
+  CAP_ACP_FIXTURE_SPAWN_COUNTER: "",
+  CAP_ACP_FIXTURE_HOLD_TEXT: "",
+  CAP_ACP_FIXTURE_ASK_PERMISSION: "0",
+  CAP_ACP_FIXTURE_IGNORE_CANCEL: "0",
+};
 // The LIVE journey's working directory: $CAP_ACP_CWD, else $HOME/journal
 // resolved at RUN time (a machine path is never a source literal, 3khn).
 const HOME_ENV = Deno.env.get("HOME") ?? "";
 const LIVE_CWD = Deno.env.get("CAP_ACP_CWD") ?? (HOME_ENV ? `${HOME_ENV}/journal` : "");
 
 Deno.test("ACP End-to-End (fixture): drives a full turn through the loopback bridge", async () => {
+  // Fail loudly if any concurrent test published a stray fixture knob to process env.
+  const strayEnv = Object.keys(Deno.env.toObject()).filter((k) => k.startsWith("CAP_ACP_FIXTURE_"));
+  assertEquals(
+    strayEnv,
+    [],
+    `acp-end-to-end must run in a clean environment without stray fixture knobs: ${strayEnv.join(", ")}`,
+  );
+
   // Kernel-assigned port (never a fixed literal): two lanes, or a stray
-  // process, can never collide on it.
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  // process, can never collide on it. All knobs pinned cleanly.
+  const bridge = createAcpServer(0, FAKE_ADAPTER, CLEAN_FIXTURE_ENV);
   const TEST_PORT = (bridge as any).addr.port;
 
   const client = new AcpClient({
