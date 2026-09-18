@@ -156,23 +156,41 @@ try {
   console.log("hub-level offer at the time of the directory check:", JSON.stringify(hubOffer));
 
   // 4. THE CLAIM: the hub's Directory button, clicked for real, shows the
-  // discovered page. Poll the embedded frame's own document.
+  // discovered page — VISIBLY, reachable, and its action opens the REAL
+  // Settings surface. Structural presence is not the claim; a blank region
+  // with the right nodes in it must fail.
   check("hub's Directory button is present", (await ev(ntpSession, `!!document.getElementById("open-directory")`)) === true);
   await click(ntpSession, "#open-directory");
-  let frame: any = { heading: null, rows: [], hasAdd: false, frameUrl: null, loaded: false };
+  let frame: any = { loaded: false };
   for (let i = 0; i < 30; i++) {
     frame = await ev(ntpSession, `(() => {
       const f = [...document.querySelectorAll("iframe")].find((x) => (x.getAttribute("src") || "").includes("directory/directory.html"));
       const d = f && f.contentDocument;
-      if (!d) return { heading: null, rows: [], hasAdd: false, frameUrl: f ? f.getAttribute("src") : null, loaded: false };
+      if (!d || !f) return { loaded: false };
       const heading = d.getElementById("discovered-heading");
+      const section = heading ? heading.closest("section") : null;
+      const rows = [...d.querySelectorAll(".policy-note")].map((p) => p.textContent);
+      const addBtn = [...d.querySelectorAll("button")].find((b) => b.textContent === "Add in Settings") || null;
+      const fr = f.getBoundingClientRect();
+      const sr = section ? section.getBoundingClientRect() : null;
+      const br = addBtn ? addBtn.getBoundingClientRect() : null;
+      const vw = d.defaultView.innerWidth, vh = d.defaultView.innerHeight;
+      const sectionVisible = !!(section && sr && sr.width > 1 && sr.height > 1 &&
+        sr.bottom > 0 && sr.top < vh && sr.right > 0 && sr.left < vw &&
+        section.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
+      const hitInFrame = !!(addBtn && br && d.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) === addBtn);
+      const topX = fr.left + (br ? br.left + br.width / 2 : 0);
+      const topY = fr.top + (br ? br.top + br.height / 2 : 0);
+      const hit = f.ownerDocument.elementFromPoint(topX, topY);
       return {
-        heading: heading ? heading.textContent : null,
-        rows: [...d.querySelectorAll(".policy-note")].map((p) => p.textContent),
-        hasAdd: [...d.querySelectorAll("button")].some((b) => b.textContent === "Add in Settings"),
-        empty: !!d.querySelector(".empty"),
-        frameUrl: f.getAttribute("src"),
-        loaded: true,
+        loaded: true, frameUrl: f.getAttribute("src"),
+        heading: heading ? heading.textContent : null, rows,
+        hasAdd: !!addBtn, empty: !!d.querySelector(".empty"),
+        sectionVisible,
+        sectionRect: sr ? { x: Math.round(sr.x), y: Math.round(sr.y), w: Math.round(sr.width), h: Math.round(sr.height) } : null,
+        iframeRect: { x: Math.round(fr.x), y: Math.round(fr.y), w: Math.round(fr.width), h: Math.round(fr.height) },
+        hitInFrame, hitAtTop: hit ? (hit.tagName + (hit.id ? "#" + hit.id : "")) : null,
+        topX: Math.round(topX), topY: Math.round(topY),
       };
     })()`);
     if (frame?.heading) break;
@@ -182,8 +200,40 @@ try {
   check("directory shows the Discovered section", frame?.heading === "Discovered — pages offering tools", frame);
   check("the shop row names the origin and its tool count",
     Array.isArray(frame?.rows) && frame.rows.some((r: string) => r.includes("127.0.0.1:8934") && r.includes("5 tools")), frame?.rows);
-  check("the row carries the Add in Settings action", frame?.hasAdd === true, frame);
+  check("the discovered section is VISIBLE: non-zero box in the viewport, checkVisibility true, and its own action hit-testable",
+    frame?.sectionVisible === true && frame?.hitInFrame === true && /IFRAME/.test(String(frame?.hitAtTop)),
+    { sectionVisible: frame?.sectionVisible, hitInFrame: frame?.hitInFrame, sectionRect: frame?.sectionRect, iframeRect: frame?.iframeRect, hitAtTop: frame?.hitAtTop });
   check("the directory is not showing the empty state while discovery exists", frame?.empty === false, frame);
+
+  // 4b. NATIVE ACTION: a real mouse event at the TOP-level coordinates (through
+  // the iframe) on "Add in Settings", then the REAL Settings surface must
+  // actually open — not a stand-in for the action the user is asked to take.
+  if (frame?.topX) {
+    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: frame.topX, y: frame.topY, button: "left", buttons: 1, clickCount: 1 }, ntpSession);
+    await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: frame.topX, y: frame.topY, button: "left", buttons: 0, clickCount: 1 }, ntpSession);
+  }
+  let settings: any = { openedTarget: null, contexts: [], embedded: false };
+  for (let i = 0; i < 20; i++) {
+    // Two independent observables of the REAL Settings surface opening: the
+    // browser's target list (this client wraps replies as {result:{...}}) and
+    // chrome.runtime.getContexts, which — unlike chrome.tabs.query — shows
+    // extension document URLs.
+    const raw: any = await send("Target.getTargets").catch(() => null);
+    const targetUrls: string[] = (raw?.result?.targetInfos ?? raw?.targetInfos ?? []).map((t: any) => String(t.url || ""));
+    const contexts: string[] = await ev(swSession, `chrome.runtime.getContexts({}).then((c) => c.map((x) => x.documentUrl || x.contextType))`).catch(() => []);
+    const targetOpts = targetUrls.find((u) => u.includes("/options/options.html"));
+    const ctxOpts = (contexts ?? []).find((u) => u.includes("/options/options.html"));
+    const embedded = await ev(ntpSession, `(() => {
+      const f = [...document.querySelectorAll("iframe")].find((x) => (x.getAttribute("src") || "").includes("options/options.html"));
+      if (!f) return false;
+      const r = f.getBoundingClientRect();
+      return !f.hidden && r.width > 1 && r.height > 1;
+    })()`);
+    settings = { openedTarget: targetOpts ?? ctxOpts ?? null, contexts, targetUrls, embedded };
+    if (settings.openedTarget || settings.embedded) break;
+    await sleep(500);
+  }
+  check("the Add in Settings action opens the REAL Settings surface", !!(settings.openedTarget || settings.embedded), settings);
 
   const shot = await cdp.screenshot(ntpSession);
   if (shot) await Deno.writeFile(`${OUT}/ntp-directory-discovered.png`, shot);
