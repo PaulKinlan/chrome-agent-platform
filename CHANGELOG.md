@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.127] — 2026-09-18
+- journal-ahv preservation: ejme — verbatim untracked deliverable(s) of chrome-agent-platform-ejme
+
 ## [0.3.126] — 2026-09-04
 - Maintenance and fixes.
 
