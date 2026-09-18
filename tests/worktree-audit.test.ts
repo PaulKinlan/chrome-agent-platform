@@ -6,8 +6,9 @@ import { assertEquals, assert } from "jsr:@std/assert@1";
 
 const script = fileURLToPath(new URL("../scripts/worktree-audit.mjs", import.meta.url));
 
-function runIn(repo: string, args: string[] = []) {
-  const p = new Deno.Command("node", { args: [script, repo, ...args], stdout: "piped", stderr: "piped" }).outputSync();
+function runIn(repo: string, args: string[] = [], cwd?: string) {
+  const base = { args: [script, repo, ...args], stdout: "piped" as const, stderr: "piped" as const };
+  const p = new Deno.Command("node", cwd ? { ...base, cwd } : base).outputSync();
   return { code: p.code, out: new TextDecoder().decode(p.stdout), err: new TextDecoder().decode(p.stderr) };
 }
 
@@ -172,4 +173,55 @@ Deno.test("audit fixtures: git failure under missing identity fails explicitly w
   }
   assert(errorMsg.includes("fixture git commit failed (exit 128)"), "must capture exit code 128");
   assert(errorMsg.includes("Author identity unknown") || errorMsg.includes("unable to auto-detect email"), "must capture stderr reason");
+});
+
+// chrome-agent-platform-w0i8: the audit compared each worktree HEAD to the
+// INVOKING checkout's HEAD ("HEAD" in the audited repo). Auditing an unmerged
+// candidate from its own worktree therefore compared it to itself and reported
+// reach=on-main. The anchor is the comparison ref now: origin/main when it
+// exists, else main, else HEAD — and `on-main` is claimed only for origin/main.
+Deno.test("audit: an unmerged candidate audited from its OWN worktree is not on-main (w0i8)", async () => { try { await (async () => {
+  const { dir, git } = await mkRepo("candidate");
+  git(["checkout", "-q", "-b", "candidate"]);
+  Deno.writeTextFileSync(`${dir}/candidate.txt`, "c");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "candidate"]);
+  git(["checkout", "-q", "main"]);
+  git(["worktree", "add", "-q", `${dir}-wt`, "candidate"]);
+  const candidateHead = new TextDecoder().decode(git(["rev-parse", "candidate"]).stdout).trim();
+  // Invoked FROM the candidate worktree (cwd) with repo ".": exactly the shape
+  // that used to self-compare.
+  const result = runIn(".", [], `${dir}-wt`);
+  const audit = JSON.parse(result.out);
+  assertEquals(audit.comparisonRef, "main", "no origin/main in the fixture: main is the anchor");
+  assertEquals(audit.invokingHead, candidateHead.slice(0, 12), "the invoking checkout HEAD is reported as itself");
+  const mine = audit.worktrees.find((w: { head: string }) => w.head === candidateHead.slice(0, 12));
+  assert(mine, "the candidate worktree is inventoried");
+  assertEquals(mine.reach, "unreachable", "an unmerged private commit must never be on-main");
+})(); } finally { await cleanupFixtures(); }
+});
+
+Deno.test("audit: origin/main is the anchor when it exists, and a merged worktree is on-main (w0i8)", async () => { try { await (async () => {
+  const { dir, git } = await mkRepo("remote");
+  git(["init", "-q", "--bare", `${dir}-remote.git`]);
+  git(["remote", "add", "origin", `${dir}-remote.git`]);
+  git(["push", "-q", "origin", "main"]);
+  git(["fetch", "-q", "origin"]);
+  const mainHead = new TextDecoder().decode(git(["rev-parse", "main"]).stdout).trim();
+  git(["checkout", "-q", "-b", "candidate"]);
+  Deno.writeTextFileSync(`${dir}/candidate.txt`, "c");
+  git(["add", "."]);
+  git(["commit", "-q", "-m", "candidate"]);
+  git(["checkout", "-q", "main"]);
+  git(["worktree", "add", "-q", `${dir}-wt`, "candidate"]);
+  const candidateHead = new TextDecoder().decode(git(["rev-parse", "candidate"]).stdout).trim();
+  const result = runIn(".", [], `${dir}-wt`);
+  const audit = JSON.parse(result.out);
+  assertEquals(audit.comparisonRef, "origin/main", "the fetched integration ref is the anchor");
+  assertEquals(audit.comparisonRefHead, mainHead.slice(0, 12));
+  const merged = audit.worktrees.find((w: { head: string }) => w.head === mainHead.slice(0, 12));
+  assert(merged && merged.reach === "on-main", "a worktree at origin/main's commit is on-main");
+  const candidate = audit.worktrees.find((w: { head: string }) => w.head === candidateHead.slice(0, 12));
+  assert(candidate && candidate.reach === "unreachable", "the unmerged candidate is not on-main");
+})(); } finally { await cleanupFixtures(); }
 });

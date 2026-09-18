@@ -4,11 +4,18 @@
 //
 // Inventories every registered git worktree: the HEAD commit, the branch (or
 // detached), the dirty tracked + untracked path counts, the reachability from
-// origin/main or an explicit rescue tag, and the worktree's location class
-// (durable vs the RAM-backed tmpfs). It NEVER removes, prunes, relocates,
-// resets, or deletes anything — a destructive op is refused with a non-zero
-// exit. The private path inventory (absolute paths outside the repo) is never
-// printed as a full list in any committed output — only per-class COUNTS.
+// the comparison ref (origin/main when it exists, else main, else the invoking
+// HEAD), and the worktree's location class (durable vs the RAM-backed tmpfs).
+// It NEVER removes, prunes, relocates, resets, or deletes anything — a
+// destructive op is refused with a non-zero exit. The private path inventory
+// (absolute paths outside the repo) is never printed as a full list in any
+// committed output — only per-class COUNTS.
+//
+// ANCHOR (chrome-agent-platform-w0i8): reachability is measured against the
+// COMPARISON REF, never the invoking checkout's HEAD. Comparing to "HEAD" meant
+// auditing an unmerged candidate from its OWN worktree compared the candidate to
+// itself and reported reach=on-main — a context-dependent label, not evidence of
+// a merge. `on-main` is only claimed when the anchor is origin/main.
 
 import { execFileSync } from "node:child_process";
 
@@ -36,8 +43,19 @@ function parseWorktrees() {
   }).filter((w) => w.path);
 }
 
-const MAIN_HEAD = run(["rev-parse", "HEAD"]);
-const MAIN_REF = "origin/main";
+// The comparison anchor is the FETCHED INTEGRATION REF, never the invoking
+// checkout's HEAD (w0i8): with HEAD, a candidate audited from its own worktree
+// compared to itself and reported reach=on-main. `on-main` is claimed ONLY when
+// the anchor is origin/main; any other anchor is labelled `on:<ref>` so the
+// output cannot overstate what was checked.
+const COMPARISON_REF = (() => {
+  for (const ref of ["origin/main", "main"]) {
+    if (run(["rev-parse", "--verify", "--quiet", ref])) return ref;
+  }
+  return "HEAD";
+})();
+const COMPARISON_HEAD = run(["rev-parse", COMPARISON_REF]);
+const INVOKING_HEAD = run(["rev-parse", "HEAD"]);
 const RESCUE_TAGS = new Set(run(["tag", "-l", `${RESCUE_TAG_PREFIX}*`]).split("\n").filter(Boolean));
 
 function isAncestor(head, ref) {
@@ -51,16 +69,20 @@ function isAncestor(head, ref) {
 
 function reachability(head) {
   if (!head) return "unknown";
-  if (isAncestor(head, "HEAD")) return "on-main";
+  if (isAncestor(head, COMPARISON_REF)) return COMPARISON_REF === "origin/main" ? "on-main" : `on:${COMPARISON_REF}`;
   const byTag = [...RESCUE_TAGS].find((t) => isAncestor(head, t));
   if (byTag) return `rescue:${byTag}`;
   return "unreachable";
 }
 
 const audit = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   generatedAt: new Date().toISOString(),
-  repositoryMainHead: MAIN_HEAD,
+  // What the reachability verdict was measured against, and the invoking
+  // checkout's own HEAD — labelled separately so neither is mistaken for main.
+  comparisonRef: COMPARISON_REF,
+  comparisonRefHead: COMPARISON_HEAD ? COMPARISON_HEAD.slice(0, 12) : "",
+  invokingHead: INVOKING_HEAD ? INVOKING_HEAD.slice(0, 12) : "",
   worktrees: [],
   counts: {},
   safeToOperate: true,
