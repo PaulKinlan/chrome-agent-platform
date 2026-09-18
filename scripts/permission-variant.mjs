@@ -29,16 +29,36 @@
 // file, and the assertion that ONLY manifest.json differs from the source.
 
 import { createHash } from "node:crypto";
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
-async function* walk(dir) {
+/** Content-following walk (54k5): a dev checkout's `extension/dist` is a LINK
+ * into `dist-versions/`, and a link-blind walk both omits that runnable path
+ * from the attestation and hides where it points. Symlinks are followed, and
+ * only a real ANCESTOR cycle is pruned — the same file reached through two
+ * legitimate paths (dist/ and dist-versions/vN/) is hashed under BOTH, exactly
+ * as the dereferencing copy materialises it, so the two trees stay comparable. */
+async function* walk(dir, ancestors = new Set()) {
+  const realDir = await realpath(dir).catch(() => dir);
+  if (ancestors.has(realDir)) return; // a link cycle, not a second path to the same dir
+  const chain = new Set(ancestors).add(realDir);
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
-    if (entry.isDirectory()) yield* walk(path);
-    else if (entry.isFile()) yield path;
+    const info = await stat(path).catch(() => null); // stat follows links
+    if (!info) continue; // a dangling link has no content; the copy step refuses it
+    if (info.isDirectory()) yield* walk(path, chain);
+    else if (info.isFile()) yield path;
+  }
+}
+
+/** Every symlink under `dir` with its raw link text. */
+async function* findLinks(dir) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isSymbolicLink()) yield { path, target: await readlink(path) };
+    else if (entry.isDirectory()) yield* findLinks(path);
   }
 }
 
@@ -86,7 +106,34 @@ export async function buildVariant({ srcDir, outDir, permissions }) {
 
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
-  await cp(src, out, { recursive: true });
+  // 54k5: MATERIALIZE the copy. fs.cp copies a symlink AS a symlink and
+  // re-bases its target to an ABSOLUTE path inside the SOURCE tree — so the
+  // variant's runnable dist/ pointed back at the checkout that built it, its
+  // loaded bytes died when source build GC removed dist-versions/, and the
+  // link-blind attestation never noticed either. A variant must own its bytes.
+  const sourceLinks = [];
+  for await (const link of findLinks(src)) {
+    const target = resolve(dirname(link.path), link.target);
+    const info = await stat(target).catch(() => null);
+    if (!info) {
+      throw new Error(
+        `buildVariant: the source contains a dangling symlink (${relative(src, link.path)} -> ${link.target}) — refusing to build a variant from an incomplete tree`,
+      );
+    }
+    sourceLinks.push({
+      path: relative(src, link.path),
+      target: relative(src, target),
+    });
+  }
+  await cp(src, out, { recursive: true, dereference: true });
+  // Self-containment invariant, checked rather than assumed: after a
+  // dereferencing copy no link may remain, and a shape the copy could not
+  // materialize fails closed here instead of silently loading source bytes.
+  for await (const link of findLinks(out)) {
+    throw new Error(
+      `buildVariant: the copy still contains a symlink (${relative(out, link.path)} -> ${link.target}) — refusing to attest a variant that does not own its bytes`,
+    );
+  }
 
   const manifest = JSON.parse(await readFile(join(out, "manifest.json"), "utf8"));
   manifest.permissions = [...new Set([...(manifest.permissions ?? []), ...permissions])].sort();
@@ -115,6 +162,11 @@ export async function buildVariant({ srcDir, outDir, permissions }) {
     sourceDir: src,
     permissionsPreHeld: permissions,
     fileCount: Object.keys(variantFiles).length,
+    // 54k5: the SOURCE links this copy materialized, and the checked fact that
+    // the variant carries none — so an attestation can never again describe a
+    // variant whose runnable path is a link into another tree.
+    materializedLinks: sourceLinks,
+    symlinksInVariant: 0,
     differsFromSource: differs,
     files: variantFiles,
   };

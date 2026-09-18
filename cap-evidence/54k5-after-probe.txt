@@ -1,0 +1,9 @@
+[absolute] {"shape":"absolute","isSymlink":false,"linkText":null,"resolvesInsideVariant":null,"workerLoadableBeforeGc":true,"workerLoadableAfterSourceGc":true,"variantOwnCopyAfterSourceGc":true,"integrityCoversDist":true,"integrityFileCount":5,"verifyVerdictAfterSourceGc":"accepted"}
+[relative] {"shape":"relative","isSymlink":false,"linkText":null,"resolvesInsideVariant":null,"workerLoadableBeforeGc":true,"workerLoadableAfterSourceGc":true,"variantOwnCopyAfterSourceGc":true,"integrityCoversDist":true,"integrityFileCount":5,"verifyVerdictAfterSourceGc":"accepted"}
+{
+  "root": "/home/paulkinlan/cap-evidence/54k5-probe-1789724006208",
+  "defects": 0,
+  "findings": []
+}
+
+PROBE: no defects — the variant copy is self-contained and fully attested.

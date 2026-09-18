@@ -1,0 +1,14 @@
+[absolute] {"shape":"absolute","isSymlink":true,"linkText":"/home/paulkinlan/cap-evidence/54k5-probe-1789724006162/source-absolute/dist-versions/v1","resolvesInsideVariant":false,"workerLoadableBeforeGc":true,"workerLoadableAfterSourceGc":false,"variantOwnCopyAfterSourceGc":true,"integrityCoversDist":false,"integrityFileCount":3,"verifyVerdictAfterSourceGc":"accepted"}
+[relative] {"shape":"relative","isSymlink":true,"linkText":"/home/paulkinlan/cap-evidence/54k5-probe-1789724006162/source-relative/dist-versions/v1","resolvesInsideVariant":false,"workerLoadableBeforeGc":true,"workerLoadableAfterSourceGc":false,"variantOwnCopyAfterSourceGc":true,"integrityCoversDist":false,"integrityFileCount":3,"verifyVerdictAfterSourceGc":"accepted"}
+{
+  "root": "/home/paulkinlan/cap-evidence/54k5-probe-1789724006162",
+  "defects": 4,
+  "findings": [
+    "absolute: the variant's runnable dist is a SYMLINK and the integrity report does not cover it (fileCount=3)",
+    "absolute: the copied link points OUTSIDE the variant (/home/paulkinlan/cap-evidence/54k5-probe-1789724006162/source-absolute/dist-versions/v1) — it tests the SOURCE tree",
+    "absolute: after source GC the variant's dist/worker.js is GONE although the variant's own dist-versions copy remains",
+    "relative: the variant's runnable dist is a SYMLINK and the integrity report does not cover it (fileCount=3)"
+  ]
+}
+
+PROBE: 4 defect(s) reproduced on main.
