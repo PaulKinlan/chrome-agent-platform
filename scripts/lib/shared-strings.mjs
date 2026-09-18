@@ -19,7 +19,7 @@ const placeholder = (index) => `\u0000S${index}\u0000`;
  * @param {{ minLength?: number, minCount?: number }} [options]
  * @returns {string[]}
  */
-export function collectSharedStrings(value, { minLength = 40, minCount = 3 } = {}) {
+export function collectSharedStrings(value, { minLength = 20, minCount = 2 } = {}) {
   /** @type {Map<string, number>} */
   const counts = new Map();
   /** @param {any} v */

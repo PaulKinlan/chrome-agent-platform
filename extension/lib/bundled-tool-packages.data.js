@@ -2,8 +2,15 @@
 // Rebuild: node scripts/build-bundled-tool-packages.mjs --evidence-root <dir>
 const SHARED_STRINGS = Object.freeze([
  "Settings preview requires an explicit owner click; model execution remains subject to run ownership and live package revalidation.",
+ "extension/wasm/licenses/Apache-2.0.txt",
+ "extension/wasm/licenses/MIT.txt",
  "Model and Settings execution use owner-bound OPFS input/output references; large results return a complete size and SHA-256 receipt instead of truncation, and can feed the next tool by reference.",
- "Stdin/stdout only; file operands are rejected."
+ "Stdin/stdout only; file operands are rejected.",
+ "C byte-locale semantics.",
+ "Execution is confined to the spec-owned scratch/touched fixture; the observable mutation is the post-run stat readback. Settings requires an owner click and model execution requires live run ownership.",
+ "extension/wasm/licenses/0BSD.txt",
+ "date_formatter_bounded",
+ "sqlite3_query_bounded"
 ]);
 export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
@@ -15,9 +22,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "data",
   "description": "base64 - stream binary data to base64 text or decode it. Use for lossless text/binary conversion. In/out: file-backed stdin to chainable output. Flag: -d. Example: 'hello' -> 'aGVsbG8=\\n'.",
   "caveats": [
-   SHARED_STRINGS[2],
-   "C byte-locale semantics.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[4],
+   SHARED_STRINGS[5],
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -26,7 +33,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -63,7 +70,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -100,7 +107,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -137,7 +144,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -174,7 +181,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -211,7 +218,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -238,9 +245,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "wc - stream and count lines, words, and bytes. Use to measure arbitrarily large text without loading it whole. In/out: file-backed stdin to counts. Flags: -l, -w, -c. Example: 'a b\\n' -> '1 2 4\\n'.",
   "caveats": [
-   SHARED_STRINGS[2],
-   "C byte-locale semantics.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[4],
+   SHARED_STRINGS[5],
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -249,7 +256,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -286,7 +293,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -323,7 +330,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -360,7 +367,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -387,9 +394,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "sort - external merge-sort file-backed text in the C byte locale. Use to order data larger than Wasm memory. In/out: chainable references. Flags: -r, -n, -u. Example: 'b\\na\\n' -> 'a\\nb\\n'.",
   "caveats": [
-   SHARED_STRINGS[2],
-   "C byte-locale semantics.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[4],
+   SHARED_STRINGS[5],
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -398,7 +405,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -425,9 +432,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "uniq - stream adjacent lines and remove or count duplicates. Use after sort for deduplication. In/out: file-backed stdin to chainable output. Flags: -c, -d, -u. Example: 'a\\na\\nb' -> 'a\\nb'.",
   "caveats": [
-   SHARED_STRINGS[2],
-   "C byte-locale semantics.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[4],
+   SHARED_STRINGS[5],
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -436,7 +443,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -463,9 +470,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "tr - stream byte translation, deletion, and squeezing in the C locale. Use for case shifts and character maps. In/out: file-backed stdin to chainable output. Flags: -c, -d, -s. Example: 'a-z' 'A-Z' maps 'hi' to 'HI'.",
   "caveats": [
-   SHARED_STRINGS[2],
-   "C byte-locale semantics.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[4],
+   SHARED_STRINGS[5],
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -474,7 +481,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -501,9 +508,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "category": "text",
   "description": "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
   "caveats": [
-   SHARED_STRINGS[2],
-   "C byte-locale semantics.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[4],
+   SHARED_STRINGS[5],
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -512,7 +519,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -549,7 +556,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -586,7 +593,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -624,7 +631,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT AND Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": "extension/wasm/licenses/toml2json-NOTICES.txt"
   },
   "binary": {
@@ -701,7 +708,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -739,7 +746,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -777,7 +784,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -805,7 +812,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
   "caveats": [
    "Creates empty files or mutates access/modify times via WASI utimensat. -t accepts Unix epoch seconds; absent files are created unless -c. Replay class is mutating and interruption is never auto-resumed",
-   "Execution is confined to the spec-owned scratch/touched fixture; the observable mutation is the post-run stat readback. Settings requires an owner click and model execution requires live run ownership.",
+   SHARED_STRINGS[6],
    "file.read/write is confined to the spec-owned scratch/touched fixture (bounded epoch timestamps); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
@@ -816,7 +823,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "mutating",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -844,7 +851,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
   "caveats": [
    "Shrinks or extends files in workspace; size accepts integer bytes or one binary K/M/G/T suffix, optional +/-; absent files created unless -c. Replay class is mutating and interruption is never auto-resumed",
-   "Execution is confined to the spec-owned scratch/touched fixture; the observable mutation is the post-run stat readback. Settings requires an owner click and model execution requires live run ownership.",
+   SHARED_STRINGS[6],
    "file.read/write is confined to the spec-owned scratch/touched fixture (0..10 MiB); path normalization and the scratch class rights prevent escape, persistence, and cross-job access."
   ],
   "capabilities": [
@@ -855,7 +862,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "mutating",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -892,7 +899,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -928,7 +935,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -964,7 +971,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -1000,7 +1007,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": null
   },
   "binary": {
@@ -1036,7 +1043,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT AND Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": "extension/wasm/licenses/oxipng-NOTICES.txt"
   },
   "binary": {
@@ -1072,7 +1079,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT AND Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": "extension/wasm/licenses/jxl-NOTICES.txt"
   },
   "binary": {
@@ -1108,7 +1115,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "BSD-3-Clause AND Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": "extension/wasm/licenses/avif-NOTICES.txt"
   },
   "binary": {
@@ -1144,7 +1151,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "MIT",
-   "file": "extension/wasm/licenses/MIT.txt",
+   "file": SHARED_STRINGS[2],
    "notices": null
   },
   "binary": {
@@ -1221,7 +1228,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "0BSD AND Apache-2.0",
-   "file": "extension/wasm/licenses/0BSD.txt",
+   "file": SHARED_STRINGS[7],
    "notices": "extension/wasm/licenses/awk-NOTICES.txt"
   },
   "binary": {
@@ -1242,9 +1249,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.date.formatter.bounded",
   "version": "1.0.0",
-  "toolId": "date_formatter_bounded",
+  "toolId": SHARED_STRINGS[8],
   "lane": "date",
-  "displayName": "date_formatter_bounded",
+  "displayName": SHARED_STRINGS[8],
   "category": "time",
   "description": "date_formatter_bounded - format current time, numeric epochs, or exact ISO dates. Use for UTC and ISO formatting. In/out: up to four bounded args to one stdout line. Invalid or missing date specs fail nonzero.",
   "caveats": [
@@ -1258,7 +1265,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "read-only",
   "licence": {
    "spdx": "0BSD AND Apache-2.0",
-   "file": "extension/wasm/licenses/0BSD.txt",
+   "file": SHARED_STRINGS[7],
    "notices": "extension/wasm/licenses/date-NOTICES.txt"
   },
   "binary": {
@@ -1286,7 +1293,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "sed - stream-edit text with minised 1.16. Use for substitutions, selection, deletion, and standard sed scripts. In/out: file-backed stdin to chainable output. Flags: -e, -n. Example: 's/a/b/g'.",
   "caveats": [
    "Stdin/stdout only; file operands and in-place editing are unavailable.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -1323,7 +1330,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "awk - run the posixutils-rs parser and interpreter over streaming records. Use for fields, expressions, regex, arrays, and reports. In/out: file-backed stdin to chainable output. Command pipes and system() are unavailable.",
   "caveats": [
    "Stdin record input only; command pipes are unavailable and system() returns -1.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -1360,7 +1367,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "description": "jq - parse and transform JSON with upstream jq 1.8.2. Use for object, array, filter, reduction, and formatting operations over JSON streams. In/out: file-backed stdin to chainable output. Oniguruma regex built-ins are unavailable.",
   "caveats": [
    "Oniguruma-dependent regex built-ins are unavailable in this WASI profile.",
-   SHARED_STRINGS[1]
+   SHARED_STRINGS[3]
   ],
   "capabilities": [
    "compute",
@@ -1390,9 +1397,9 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
  {
   "packageId": "cap.bundled.sqlite3.query.bounded",
   "version": "1.0.0",
-  "toolId": "sqlite3_query_bounded",
+  "toolId": SHARED_STRINGS[9],
   "lane": "sqlite3",
-  "displayName": "sqlite3_query_bounded",
+  "displayName": SHARED_STRINGS[9],
   "category": "data",
   "description": "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
   "caveats": [
@@ -1411,7 +1418,7 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "replayClass": "mutating",
   "licence": {
    "spdx": "blessing AND Apache-2.0",
-   "file": "extension/wasm/licenses/Apache-2.0.txt",
+   "file": SHARED_STRINGS[1],
    "notices": "extension/wasm/licenses/SQLite-Blessing-3.46.0.txt"
   },
   "binary": {
