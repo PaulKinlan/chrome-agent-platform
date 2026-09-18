@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.426] — 2026-09-18
+- wire scripts/check-models.mjs into test:all and clean retired model references
+
 ## [0.3.425] — 2026-09-18
 - clean local docs/.build/ Rust residue and add .gitignore guard
 

@@ -303,7 +303,7 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - **A reply that claims an action it never performed is corrected in place**
   (`extension/lib/mutation-claim-check.js`, applied in `agent.js` on both the
   `done` progress event and the authoritative returned result). The prompt's
-  honesty clause is an instruction a model can ignore — gpt-4.1 answered "I have
+  honesty clause is an instruction a model can ignore — an earlier model answered "I have
   saved that your favourite colour is green" with zero tool calls, and the demo
   model reported "Delegation succeeded" over a `delegate_task` card that read
   `error`. So the turn's final text is checked, at runtime, against the set of

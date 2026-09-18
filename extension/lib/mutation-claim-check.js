@@ -41,7 +41,7 @@ const CLAIMS = [
   // ── Browser / memory / capture / delegation claims ───────────────────────
   // The four kinds above only cover NAMED AGENTS. The same lie is told about
   // the browser ("I opened the tab"), memory ("I have saved that your
-  // favourite colour is green" — gpt-4.1, zero tool calls) and delegation
+  // favourite colour is green" — legacy model, zero tool calls) and delegation
   // ("Delegation succeeded" over a delegate_task card that said `error`).
   // These follow the same shape: first-person past tense (with the terse
   // subjectless action report the guard already recognizes), anchored on the
