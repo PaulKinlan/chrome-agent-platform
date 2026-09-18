@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.112] — 2026-09-18
+- journal-ahv preservation: 4usu — verbatim untracked deliverable(s) of chrome-agent-platform-4usu
+
 ## [0.3.111] — 2026-09-04
 - python_execute works in the shipped build again — restored the runtime-provider wiring and matched the tool counts to the catalog
 
