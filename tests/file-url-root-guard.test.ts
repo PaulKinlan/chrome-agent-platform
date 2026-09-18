@@ -1,12 +1,17 @@
 // tests/file-url-root-guard.test.ts — bead chrome-agent-platform-e273.
 //
-// Invariant: no file under tests/ or scripts/ derives a filesystem path from a
-// URL's `.pathname`. `new URL(rel, import.meta.url)` carries a PERCENT-ENCODED
+// Invariant: no file in any tracked source tree derives a filesystem path from
+// a URL's `.pathname`. `new URL(rel, import.meta.url)` carries a PERCENT-ENCODED
 // pathname, so on a checkout whose path contains a space or a non-ASCII
 // character the derived root names a directory that is not on disk — the
 // 54k5/h8rb/woem family: a root that is not the tree under test. Every
 // affected file then fails as a file-not-found SETUP error (or, worse,
 // silently scans an empty tree) instead of reaching its real assertion.
+//
+// SCOPE IS THE PATTERN, NOT A DIRECTORY LIST (coord, 2026-09-18): e273's sweep
+// was ruled over tests/ + scripts/, and the pattern kept appearing outside that
+// list (root build.mjs, cap-evidence harnesses, fixtures/, packages/ evidence,
+// .agents/). SCAN_DIRS below is the pattern's real scope.
 //
 // The sweep that landed with this guard rewrote every live occurrence to
 // `fileURLToPath(new URL(rel, import.meta.url))` and added the `node:url`
@@ -16,9 +21,9 @@
 // code-only scan below.
 //
 // Falsification: plant `const ROOT = new URL("..", import.meta.url).pathname;`
-// as live code in any tests/ or scripts/ file; this guard goes RED naming
-// file:line. Remove it; GREEN. (The planted file is the control, not this
-// file's own detector text — the detectors are assembled and the scan masks
+// as live code in any SCAN_DIRS file; this guard goes RED naming file:line.
+// Remove it; GREEN. (The planted file is the control, not this file's own
+// detector text — the detectors are assembled and the scan masks
 // strings/comments, so the guard's own source cannot match itself.)
 //
 // Second half, same class (e273 x 7poq): a blanket sweep must not silently
@@ -26,14 +31,20 @@
 // tests/fixtures/security-suite-fake-runner.mjs, whose bytes 7poq pins through
 // EXPECTED_FIXTURE_HASH; the pin had to be re-anchored in the same commit. The
 // hash-pin tests below check every registered pin against the file's current
-// bytes, and discover any new live pin over a file under tests/ or scripts/ so
-// it cannot stay unregistered.
+// bytes, and discover any new live pin over a scanned file so it cannot stay
+// unregistered.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
 
 // The guarded form itself: decoded, not percent-encoded.
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SCAN_DIRS = ["tests", "scripts"];
+const SCAN_DIRS = ["tests", "scripts", "cap-evidence", "fixtures", "packages", ".agents"];
+// Files a source sweep can edit. New-pin DISCOVERY is scoped here on purpose: the
+// 80+ digest literals over packages/bundled/evidence/... binaries are already
+// asserted by their own admission tests (avif-admission, bundled-tool-packages,
+// wasm-host-gate2, …), so re-registering them here would duplicate enforcement
+// 88 times over. A sweep that targets packages/ should register them in HASH_PINS.
+const HASH_MAP_DIRS = ["tests", "scripts", "cap-evidence", "fixtures", ".agents"];
 const EXTENSIONS = [".ts", ".mjs", ".js"];
 const HAZARD = new RegExp(
   "new URL\\(" + "[^\\n]*?" + "import\\.meta" + "\\.url\\)" + "\\.pathname",
@@ -182,16 +193,16 @@ Deno.test("e273/hash pins: every registered pin matches its file's current bytes
   }
 });
 
-Deno.test("e273/hash pins: no unregistered file-digest pin under tests/ or scripts/", async () => {
-  const files = (await Promise.all(SCAN_DIRS.map((d) => filesUnder(d)))).flat().sort();
-  assert(files.length > 400, `hashed only ${files.length} files under ${SCAN_DIRS.join(" + ")} — the scan is broken`);
+Deno.test("e273/hash pins: no unregistered file-digest pin under the swept source trees", async () => {
+  const files = (await Promise.all(HASH_MAP_DIRS.map((d) => filesUnder(d)))).flat().sort();
+  assert(files.length > 400, `hashed only ${files.length} files under ${HASH_MAP_DIRS.join(" + ")} — the scan is broken`);
   const byDigest = new Map<string, string>();
   for (const rel of files) {
     const digest = await sha256Hex(rel);
     if (!byDigest.has(digest)) byDigest.set(digest, rel);
   }
   const hits: string[] = [];
-  const sources = (await Promise.all(SCAN_DIRS.map((d) => filesUnder(d, isSource)))).flat().sort();
+  const sources = (await Promise.all(HASH_MAP_DIRS.map((d) => filesUnder(d, isSource)))).flat().sort();
   for (const rel of sources) {
     for (const m of (await Deno.readTextFile(rel)).matchAll(/\b[0-9a-f]{64}\b/g)) {
       const target = byDigest.get(m[0]);
@@ -200,5 +211,5 @@ Deno.test("e273/hash pins: no unregistered file-digest pin under tests/ or scrip
       }
     }
   }
-  assertEquals(hits, [], `unregistered file-digest pin(s) under ${SCAN_DIRS.join(" + ")}:\n${hits.join("\n")}`);
+  assertEquals(hits, [], `unregistered file-digest pin(s) under ${HASH_MAP_DIRS.join(" + ")}:\n${hits.join("\n")}`);
 });

@@ -18,6 +18,7 @@
 - classify acp.journal route in SW dispatch authority census (vv98)
 - isolate serial lock fixtures and heal killed drift residue (p15i)
 - include source-inspecting test guards in always-on changed set (qcfc)
+- extend fileURLToPath root handling across verification and fixture scripts (0j1a)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode

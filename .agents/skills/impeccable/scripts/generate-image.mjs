@@ -18,6 +18,7 @@
  */
 import fs from 'node:fs';
 import zlib from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 
 function arg(name, fallback = null) {
   const i = process.argv.indexOf(`--${name}`);
@@ -271,7 +272,7 @@ fs.writeFileSync(out, Buffer.from(b64, 'base64'));
 // plus a sidecar for anything that indexes rather than opens the image.
 try {
   const { spawnSync } = await import('node:child_process');
-  spawnSync(process.execPath, [new URL('./embed-prompt.mjs', import.meta.url).pathname, out, '--prompt', prompt], { stdio: 'ignore' });
+  spawnSync(process.execPath, [fileURLToPath(new URL('./embed-prompt.mjs', import.meta.url)), out, '--prompt', prompt], { stdio: 'ignore' });
   fs.writeFileSync(`${out}.json`, JSON.stringify({ prompt, createdAt: new Date().toISOString(), tool: 'generate-image.mjs', model: 'gpt-image-2', ...(refs.length ? { refs } : {}) }, null, 2));
 } catch { /* embedding is best-effort */ }
 console.log(`IMAGE: ${out} (${size}, ${quality}, gpt-image-2, billed to your OpenAI key); prompt embedded + sidecar at ${out}.json`);

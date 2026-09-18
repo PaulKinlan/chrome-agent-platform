@@ -15,8 +15,9 @@
 import { launchChrome, openCdp } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { SCRIPTED_DUMMY_KEY, selectionRefOf, startScriptedProvider } from "../scripts/lib/scripted-provider.ts";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const EVIDENCE_DIR = durableDir(`cap-model-edit-${Date.now()}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

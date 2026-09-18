@@ -1,6 +1,7 @@
 // Harmless local execution of compiler evidence. No Chrome or extension runtime.
 import { spawnSync } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 
 const root = new URL("./build-a/", import.meta.url);
 globalThis.self = globalThis;
@@ -98,7 +99,7 @@ if (mode === "--negative-side-em-asm") {
   const embeddedJs = {};
   for (const fixture of ["em-asm", "em-js"]) {
     const child = spawnSync(process.execPath, [
-      new URL(import.meta.url).pathname,
+      fileURLToPath(new URL(import.meta.url)),
       `--negative-side-${fixture}`,
     ], {
       encoding: "utf8",

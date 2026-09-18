@@ -21,8 +21,9 @@
 //   4. a second edit also succeeds (no once-per-asset accident).
 import { launchChrome, openCdp } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const EVIDENCE_DIR = durableDir(`cap-owner-edit-${Date.now()}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

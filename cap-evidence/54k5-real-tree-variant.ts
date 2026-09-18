@@ -9,8 +9,9 @@
 import { buildVariant, verifyVariantIntegrity } from "../scripts/permission-variant.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const EXT = new URL("../extension", import.meta.url).pathname.replace(/\/$/, "");
+const EXT = fileURLToPath(new URL("../extension", import.meta.url)).replace(/\/$/, "");
 const outDir = join(durableDir(`54k5-real-tree-${Date.now()}`), "variant");
 const link = await Deno.lstat(`${EXT}/dist`).then((i) => Boolean(i.isSymlink)).catch(() => false);
 const linkTarget = link ? await Deno.readLink(`${EXT}/dist`) : null;
