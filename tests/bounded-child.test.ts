@@ -57,7 +57,7 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
 Deno.test("bounded child: a fast, successful child raises nothing", async () => {
   const s = await sample("node", ["-e", "process.exit(0)"]);
   assert(s.ok, `a fast successful child must not throw; sample=${JSON.stringify(s)}`);
-  assertEquals(s.status, 0);
+  assertEquals(s.status, 0, `a fast successful child must exit 0; sample=${JSON.stringify(s)}`);
   assert(s.ms < TIMEOUT_MS, `and it must finish inside the bound; sample=${JSON.stringify(s)}`);
 });
 
@@ -67,4 +67,9 @@ Deno.test("bounded child: a command that cannot start is FAILED TO START, never 
   assert(!s.ok, `a missing command must throw; sample=${report}`);
   assert(/FAILED TO START/.test(s.message ?? ""), `the error must name the start failure; sample=${report}`);
   assert(!/HUNG/.test(s.message ?? ""), `a start failure must never be reported as a hang; sample=${report}`);
+  // PROMPTNESS IS PART OF THE CLAIM (astra's survivor mutation delayed spawnError
+  // by timeoutMs + 100 and passed): a child that never started must be reported
+  // BEFORE the hang bound would have fired, not at or after it. The stopwatch is
+  // the assertion, exactly as for the futex case above.
+  assert(s.ms < TIMEOUT_MS, `a start failure must report before the bound fires (got ${s.ms}ms, bound ${TIMEOUT_MS}ms); sample=${report}`);
 });

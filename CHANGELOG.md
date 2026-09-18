@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.431] — 2026-09-18
+- pin the start-failure PROMPTNESS (astra's survivor mutation) and show the sample everywhere
+
 ## [0.3.430] — 2026-09-18
 - automate the named-HUNG path, and never call a start failure a hang
 
