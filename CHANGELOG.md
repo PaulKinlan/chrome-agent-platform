@@ -8,6 +8,8 @@
 - Doc.compile denial wired over all four bundles (tptx, absorbing 4f3j)
 - the final generated Store JavaScript gets an evaluator AST gate (kdax)
 - scoped per-instance IDs and data-composer-input for agent-composer (sndb)
+- guard against ambient CAP_ACP_FIXTURE_* process env contamination (tqfg)
+- discovered open pages reach the hub's Directory button (cthe)
 
 ## [0.3.415] — 2026-09-18
 - isolate ACP fixture child env and evidence-gate continuity retries
