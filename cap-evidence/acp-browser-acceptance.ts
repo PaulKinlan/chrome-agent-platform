@@ -1,8 +1,10 @@
 // cap-evidence/acp-browser-acceptance.ts — REAL-BROWSER acceptance for the ACP
 // surfaces (repo hard rule: "never accept 'it serves' as 'it works'").
 //
-// Drives the BUILT extension in headless Chrome with GENUINE CDP input, against
-// a real ACP bridge on the default loopback endpoint (which spawns real pi-acp):
+// Drives the BUILT extension with GENUINE CDP input. Headless by default;
+// CAP_ACCEPTANCE_HEADED=1 uses the real display. A deterministic fixture adapter
+// proves transport only, NOT the real adapter or any provider/model turn.
+// Default mode uses the loopback bridge (which spawns real pi-acp):
 //   1. the hub composer's @ mention lists the pi harness agent (acp kind)
 //   2. selecting it commits the acp:pi routing chip
 //   3. a real send streams pi's answer into the conversation and settles
@@ -10,7 +12,7 @@
 //   deno run -A cap-evidence/acp-browser-acceptance.ts
 // @ts-nocheck — untyped CDP scripting in the house pattern.
 
-import { launchChrome } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, chromeBaseArgs, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
 
@@ -38,6 +40,12 @@ const NO_LOCAL_BRIDGE = Deno.env.get("CAP_ACCEPTANCE_NO_BRIDGE") === "1";
 const LAN_ENDPOINT = Deno.env.get("CAP_ACCEPTANCE_ENDPOINT") ?? "";
 const LAN_TOKEN = Deno.env.get("CAP_ACCEPTANCE_TOKEN") ?? "";
 const EXPECT_RE = new RegExp(Deno.env.get("CAP_ACCEPTANCE_EXPECT") ?? "ACP browser OK");
+const HEADED = Deno.env.get("CAP_ACCEPTANCE_HEADED") === "1";
+const EXPECT_NATIVE = Deno.env.get("CAP_ACCEPTANCE_EXPECT_NATIVE") === "1";
+const EXPECT_MISSING = Deno.env.get("CAP_ACCEPTANCE_EXPECT_MISSING_HOST") === "1";
+const FRAME_LOG = Deno.env.get("CAP_ACCEPTANCE_FRAME_LOG") ?? "";
+if (EXPECT_NATIVE && (!HEADED || !NO_LOCAL_BRIDGE)) throw new Error("native acceptance requires headed Chrome and no local bridge");
+if (EXPECT_MISSING && (!HEADED || NO_LOCAL_BRIDGE)) throw new Error("missing-host fallback requires headed Chrome and a local bridge");
 // CAP_ACCEPTANCE_ADAPTER points the driver's bridge at a chosen adapter (the
 // deterministic fixture), and CAP_ACCEPTANCE_PERMISSION=1 makes that fixture ask
 // for permission before answering, so the owner gate can be driven for real.
@@ -54,10 +62,28 @@ const extraEnv = Object.fromEntries(
   String(Deno.env.get("CAP_ACCEPTANCE_CHROME_ENV") ?? "").split(",").filter(Boolean)
     .map((kv) => { const i = kv.indexOf("="); return [kv.slice(0, i), kv.slice(i + 1)]; }),
 );
+// Linux user native-host discovery follows --user-data-dir, not the browser's
+// default product directory. Copy an operator-supplied installer manifest into
+// this owned fresh profile; never install into the real user's configuration.
+const installedManifest = Deno.env.get("CAP_ACCEPTANCE_NATIVE_MANIFEST") ?? "";
+let nativeRegistration = null;
+if (installedManifest) {
+  if (!EXPECT_NATIVE) throw new Error("profile host registration is only for native acceptance");
+  const bytes = await Deno.readFile(installedManifest);
+  const manifest = JSON.parse(new TextDecoder().decode(bytes));
+  const origin = `chrome-extension://${await computeUnpackedExtensionId(EXT)}/`;
+  if (manifest.name !== "com.chrome_agent_platform.acp" || manifest.type !== "stdio" || JSON.stringify(manifest.allowed_origins) !== JSON.stringify([origin])) throw new Error("unexpected native manifest authority");
+  const dir = `${profile}/NativeMessagingHosts`;
+  await Deno.mkdir(dir, { recursive: true });
+  const path = `${dir}/${manifest.name}.json`;
+  await Deno.writeFile(path, bytes);
+  nativeRegistration = { installerSource: installedManifest, profilePath: path, sha256: await sha256Hex(bytes), manifest };
+}
+const browserArgs = chromeBaseArgs({ extension: EXT, profile, windowSize: "1400,1000" })
+  .filter((arg) => !HEADED || !arg.startsWith("--headless"));
+browserArgs.push("--enable-automation", "--enable-logging", `--log-file=${EVIDENCE_DIR}/chrome.log`, "--no-first-run", "--no-default-browser-check", "about:blank");
 const chrome = await launchChrome({
-  extension: EXT,
-  profile,
-  windowSize: "1400,2000",
+  args: browserArgs,
   clearEnv: true,
   ...(Object.keys(extraEnv).length ? { env: { PATH: Deno.env.get("PATH") ?? "", HOME: Deno.env.get("HOME") ?? "", ...extraEnv } } : {}),
 });
@@ -68,9 +94,13 @@ await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
 let idc = 0;
 const pend = new Map();
 const consoleErrors = new Map();
+const socketEvents: any[] = [];
 ws.onmessage = (ev: MessageEvent) => {
   const m = JSON.parse(String(ev.data));
   if (m.id && pend.has(m.id)) { pend.get(m.id)(m); pend.delete(m.id); }
+  if (m.method === "Network.webSocketCreated") {
+    socketEvents.push({ sessionId: m.sessionId, url: String(m.params.url).split("?")[0], requestId: m.params.requestId });
+  }
   if (m.method === "Runtime.exceptionThrown" ||
       (m.method === "Runtime.consoleAPICalled" && m.params?.type === "error")) {
     const detail = m.params?.exceptionDetails?.exception?.description ??
@@ -92,7 +122,19 @@ const send = (method: string, params: any = {}, sessionId?: string) =>
   });
 
 const results: any[] = [];
+const proof: any = { headedRequested: HEADED, noLocalBridge: NO_LOCAL_BRIDGE, expectNative: EXPECT_NATIVE, expectMissingHost: EXPECT_MISSING, fixtureTransportOnly: !!FRAME_LOG, extension: EXT, profile, nativeRegistration, browserPid: chrome.proc.pid, socketEvents, bridgeSamples: [] };
+async function bridgeSample(stage: string) {
+  const result = await new Deno.Command("ss", { args: ["-H", "-ltnp", "sport = :3210"], stdout: "piped", stderr: "piped" }).output();
+  if (!result.success) throw new Error("cannot observe ACP listener with ss");
+  const listeners = new TextDecoder().decode(result.stdout).trim();
+  proof.bridgeSamples.push({ stage, at: new Date().toISOString(), listeners });
+  if (EXPECT_NATIVE) check(`no ACP bridge listener · ${stage}`, listeners === "", listeners);
+}
 try {
+  proof.browser = await send("Browser.getVersion");
+  proof.commandLine = (await send("Browser.getBrowserCommandLine")).arguments;
+  if (HEADED) check("actual browser is headed", !proof.commandLine.some((arg: string) => arg.startsWith("--headless")) && !proof.browser.userAgent.includes("HeadlessChrome"), proof.browser);
+  await bridgeSample("before initialize");
   async function evl(session: string, expression: string) {
     const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, session);
     if (r?.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
@@ -103,6 +145,7 @@ try {
     const a = await send("Target.attachToTarget", { targetId: t.id, flatten: true });
     await send("Runtime.enable", {}, a.sessionId);
     await send("Page.enable", {}, a.sessionId);
+    await send("Network.enable", {}, a.sessionId);
     consoleErrors.set(a.sessionId, []);
     return a.sessionId;
   }
@@ -153,7 +196,11 @@ try {
     if (!sw) await sleep(200);
   }
   check("extension loaded (service worker registered)", !!sw);
+  if (!sw) throw new Error("extension service worker did not register");
   const extId = sw.url.split("/")[2];
+  proof.extensionId = extId;
+  check("loaded extension matches the declared copy path", extId === await computeUnpackedExtensionId(EXT), extId);
+  proof.manifestSha256 = await sha256Hex(await Deno.readFile(`${EXT}/manifest.json`));
   const ntp = await openPage(`chrome-extension://${extId}/ntp/ntp.html`);
   await sleep(2000);
 
@@ -199,32 +246,25 @@ try {
   await pressKey(ntp, "Escape");
   await sleep(200);
 
-  // ── 0a. no bridge at all: is the loopback endpoint silent? ─────────────
-  // Only meaningful for a NATIVE-transport run: with an explicit endpoint we are
-  // deliberately driving an external bridge, so 3210 says nothing.
-  if (NO_LOCAL_BRIDGE && !LAN_ENDPOINT) {
-    const bridgeProbe = await evl(ntp, `fetch("http://127.0.0.1:3210/health").then(() => "up").catch(() => "down")`);
-    check("no WebSocket bridge is running (native-messaging run)", bridgeProbe === "down", bridgeProbe);
-  }
-
-  // ── 0a2. the native host, straight from the page (its own error text) ──
-  // Gated: a HEADLESS browser reports "native messaging host not found" even
-  // with a correct manifest (unverified whether that is headless itself or this
-  // install), so this assertion runs only when explicitly asked for
-  // (CAP_ACCEPTANCE_EXPECT_NATIVE=1, i.e. a headed run).
-  if (NO_LOCAL_BRIDGE && Deno.env.get("CAP_ACCEPTANCE_EXPECT_NATIVE") === "1") {
-    const nativeProbe = await evl(ntp, `new Promise((resolve) => {
+  // A real initialize result, not arbitrary host output. A missing-host run
+  // keeps nativeMessaging enabled and automatic transport selection untouched.
+  if (EXPECT_NATIVE || EXPECT_MISSING) {
+    proof.nativeProbe = await evl(ntp, `new Promise((resolve) => {
+      let port, timer, settled = false;
+      const done = (r) => { if (settled) return; settled = true; clearTimeout(timer); try { port?.disconnect(); } catch {} resolve(r); };
       try {
-        const port = chrome.runtime.connectNative("com.chrome_agent_platform.acp");
-        let settled = false; const done = (r) => { if (!settled) { settled = true; resolve(r); } };
-        port.onMessage.addListener((m) => done(["message", m]));
-        port.onDisconnect.addListener(() => done(["disconnect", (chrome.runtime.lastError && chrome.runtime.lastError.message) || "(no lastError)"]));
+        port = chrome.runtime.connectNative("com.chrome_agent_platform.acp");
+        port.onMessage.addListener((m) => { if (m.id === 1 || m.method === 'host/exit') done(["message", m]); });
+        port.onDisconnect.addListener(() => done(["disconnect", chrome.runtime.lastError?.message || "(no lastError)"]));
+        timer = setTimeout(() => done(["timeout", ""]), 6000);
         port.postMessage({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } });
-        setTimeout(() => done(["timeout", ""]), 6000);
-      } catch (e) { resolve(["throw", String((e && e.message) || e)]); }
+      } catch (e) { done(["throw", String(e?.message || e)]); }
     })`);
-    console.log(`  native port: ${JSON.stringify(nativeProbe).slice(0, 300)}`);
-    check("native host replies to initialize from the extension", Array.isArray(nativeProbe) && nativeProbe[0] === "message", nativeProbe);
+    console.log(`  native port: ${JSON.stringify(proof.nativeProbe)}`);
+    if (EXPECT_NATIVE) check("native host returns correlated initialize result", proof.nativeProbe?.[0] === "message" && proof.nativeProbe[1]?.id === 1 && proof.nativeProbe[1]?.result?.protocolVersion === 1, proof.nativeProbe);
+    if (EXPECT_MISSING) check("native host is actually absent", proof.nativeProbe?.[0] === "disconnect" && /native messaging host not found/i.test(proof.nativeProbe[1]), proof.nativeProbe);
+    await bridgeSample("after initialize probe");
+    if (failures.some((name) => name.startsWith("native host"))) throw new Error("native precondition failed; refusing to run a different transport");
   }
 
   // ── 0b. can the EXTENSION open a plaintext ws:// to a LAN address? ─────
@@ -268,6 +308,15 @@ try {
   await typeText(ntp, "Reply with exactly: ACP browser OK");
   await sleep(200);
   await shot(ntp, "04-before-send");
+  await bridgeSample("before turn");
+  await evl(ntp, `(() => {
+    const status = document.getElementById('status');
+    window.__acpStatusTransitions = [];
+    window.__acpStatusObserver = new MutationObserver(() => {
+      window.__acpStatusTransitions.push({ text: status.textContent, hidden: status.hidden, state: status.getAttribute('data-state') });
+    });
+    window.__acpStatusObserver.observe(status, { childList: true, attributes: true, subtree: true });
+  })()`);
   await pressKey(ntp, "Enter");
 
   const readTurn = async () => await evl(ntp, `(() => {
@@ -277,16 +326,22 @@ try {
     // message-bubble is a custom element (its copy lives in attributes).
     const contents = c ? [...c.querySelectorAll('message-bubble')].map(b => ({ role: b.getAttribute('role'), content: b.getAttribute('content') ?? '' })) : [];
     const bubbles = contents.filter(b => b.role === 'agent').map(b => b.content.trim()).filter(Boolean);
-    return { status: status?.textContent ?? '', textLen: text.length, bubbles: bubbles.slice(-3), roles: contents.map(b => b.role), statusHidden: !!status?.hidden };
+    return { status: status?.textContent ?? '', statusPresent: !!status, statusState: status?.getAttribute('data-state') ?? null,
+      liveStatus: c?.querySelector('.live-status')?.getAttribute('state') ?? null,
+      composerGlow: !!document.querySelector('.composer.glow'),
+      textLen: text.length, bubbles: bubbles.slice(-3), roles: contents.map(b => b.role), statusHidden: !!status?.hidden };
   })()`);
+  // setStatus('ready') deliberately hides/clears the pill; completed removes
+  // the live row. Empty text ALONE is never evidence of a successful turn.
+  const isReady = (turn: any) => turn?.statusPresent && turn.statusHidden && turn.status === "" && turn.statusState === null && turn.liveStatus === null && !turn.composerGlow;
 
   let turn: any = null;
   for (let i = 0; i < 90; i++) { // up to ~180s: a real pi turn
     await sleep(2000);
     turn = await readTurn();
-    const settled = turn && (turn.status === "ready" || /^error/i.test(turn.status ?? ""));
-    const streamed = (turn?.bubbles ?? []).some((b: string) => /ACP browser OK/i.test(b));
-    if (streamed && settled) break;
+    const settled = turn && (isReady(turn) || turn.statusState === "error");
+    const streamed = (turn?.bubbles ?? []).some((b: string) => EXPECT_RE.test(b));
+    if (settled && (streamed || /^error/i.test(turn.status ?? ""))) break;
   }
   await sleep(500);
   await shot(ntp, "05-after-turn");
@@ -295,8 +350,23 @@ try {
     return c ? [...c.querySelectorAll('message-bubble')].map(b => ({ role: b.getAttribute('role'), text: (b.getAttribute('content') || '').slice(0, 160) })) : null; })()`);
   console.log(`  transcript: ${JSON.stringify(transcript).slice(0, 600)}`);
   const agentText = (finalTurn?.bubbles ?? []).join(" | ");
-  check("a real pi turn produced agent text in the conversation", EXPECT_RE.test(agentText), { agentText: agentText.slice(0, 300), expected: String(EXPECT_RE) });
-  check("the run settled (no orphaned running status)", !/running/i.test(finalTurn?.status ?? ""), finalTurn?.status);
+  check("the ACP turn produced expected agent text", EXPECT_RE.test(agentText), { agentText: agentText.slice(0, 300), expected: String(EXPECT_RE) });
+  check("the run settled successfully to ready (hidden idle pill, no live row/glow)", isReady(finalTurn), finalTurn);
+  proof.statusTransitions = await evl(ntp, `(() => { window.__acpStatusObserver.disconnect(); return window.__acpStatusTransitions; })()`);
+  check("observed running followed by idle", proof.statusTransitions.some((state: any) => state.state === "working" && !state.hidden) && proof.statusTransitions.at(-1)?.hidden === true && proof.statusTransitions.at(-1)?.state === null, proof.statusTransitions);
+  proof.finalTurn = finalTurn;
+  proof.transcript = transcript;
+  await bridgeSample("after completed turn");
+  const acpSockets = socketEvents.filter((event) => event.url.startsWith("ws://127.0.0.1:3210/"));
+  if (EXPECT_NATIVE) check("native turn opened no ACP WebSocket", acpSockets.length === 0, acpSockets);
+  if (EXPECT_MISSING) check("automatic fallback opened the ACP WebSocket", acpSockets.length > 0, acpSockets);
+  if (FRAME_LOG) {
+    const frames = (await Deno.readTextFile(FRAME_LOG)).trim().split("\n").map((line) => JSON.parse(line));
+    const prompts = frames.filter((frame) => frame.dir === "in" && frame.msg.method === "session/prompt");
+    const completed = prompts.some((request) => frames.some((frame) => frame.dir === "out" && frame.msg.id === request.msg.id && frame.msg.result?.stopReason === "end_turn"));
+    check("fixture received prompt and returned correlated end_turn", prompts.length > 0 && completed, prompts);
+    proof.fixtureFrames = frames;
+  }
   check("no console errors during the acceptance", (consoleErrors.get(ntp) ?? []).length === 0, consoleErrors.get(ntp));
 
   // ── the OWNER GATE: a real card, a real click, and what the harness got ─
@@ -419,12 +489,6 @@ try {
   const panelErrors = consoleErrors.get(panel) ?? [];
   check("side panel: no console errors", panelErrors.length === 0, panelErrors);
 
-  await Deno.writeFile(`${EVIDENCE_DIR}/acceptance.json`, new TextEncoder().encode(JSON.stringify({
-    ranAt: new Date().toISOString(),
-    extensionId: extId,
-    gitHead: (await new Deno.Command("/usr/bin/git", { args: ["-C", ROOT, "rev-parse", "HEAD"], stdout: "piped" }).output()).stdout.toString().trim(),
-    results, pass, fail, failures,
-  }, null, 2)));
 } catch (err) {
   fail++;
   failures.push(`driver error: ${String(err)}`);
@@ -432,7 +496,15 @@ try {
 } finally {
   try { ws.close(); } catch { /* closing */ }
   try { chrome.proc.kill("SIGTERM"); } catch { /* already gone */ }
+  proof.browserExit = await chrome.proc.status;
+  proof.browserStderrTail = chrome.stderrTail();
   await bridge?.shutdown();
+  await Deno.writeTextFile(`${EVIDENCE_DIR}/acceptance.json`, JSON.stringify({
+    ranAt: new Date().toISOString(),
+    gitHead: new TextDecoder().decode((await new Deno.Command("git", { args: ["-C", ROOT, "rev-parse", "HEAD"], stdout: "piped" }).output()).stdout).trim(),
+    driverSha256: await sha256Hex(await Deno.readFile(new URL(import.meta.url))),
+    proof, results, pass, fail, failures,
+  }, null, 2) + "\n");
 }
 
 console.log(`\nACP browser acceptance: ${pass} passed, ${fail} failed`);
