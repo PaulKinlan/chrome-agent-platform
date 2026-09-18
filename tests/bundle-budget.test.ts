@@ -15,6 +15,7 @@
 // @ts-nocheck
 
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import {
   assertBundleBudget,
   BUDGET_REPORTED_BUNDLES,
@@ -198,4 +199,34 @@ Deno.test("63et assertBundleBudget fails closed on lockfile drift (non-Deno-stor
   );
   assertStringIncludes(error.message, "lockfile drift");
   assertStringIncludes(error.message, "node_modules/ai/dist/index.js");
+});
+
+Deno.test("2eb5: an oversize error names a symlinked node_modules — and stays silent with a real one", async () => {
+  // The environmental-vs-product distinction must cost zero gate runs: a
+  // symlinked dependency root measured 688 bytes over budget with source
+  // unchanged, so the error must say when that is the case.
+  const root = durableDir("cap-budget-symlink/root");
+  const real = durableDir("cap-budget-symlink/real");
+  const plain = durableDir("cap-budget-symlink/plain");
+  for (const d of [root, real, plain]) await Deno.mkdir(d, { recursive: true }).catch(() => {});
+  try {
+    // Symlinked dependency root: the note names it.
+    await Deno.symlink(real, `${root}/node_modules`);
+    const symlinkError = assertThrows(() =>
+      assertBundleBudget({ label: "background/service-worker.js", bytes: 3_000_001, root })
+    );
+    assertStringIncludes(symlinkError.message, "SYMLINK");
+    assertStringIncludes(symlinkError.message, "node_modules");
+    assertStringIncludes(symlinkError.message, "before treating this as product growth");
+    // A real node_modules directory: no environmental note.
+    await Deno.mkdir(`${plain}/node_modules`, { recursive: true }).catch(() => {});
+    const plainError = assertThrows(() =>
+      assertBundleBudget({ label: "background/service-worker.js", bytes: 3_000_001, root: plain })
+    );
+    assert(!plainError.message.includes("SYMLINK"), "a real node_modules carries no symlink note");
+    // A passing call is untouched in both worlds.
+    assertEquals(assertBundleBudget({ label: "background/service-worker.js", bytes: 100, root }), 100);
+  } finally {
+    await Deno.remove(durableDir("cap-budget-symlink"), { recursive: true }).catch(() => {});
+  }
 });
