@@ -14,6 +14,7 @@
 //  - versioned singleton teardown: re-execution leaves exactly one listener
 // @ts-nocheck — the content script runs in the page world; mocks are dynamic.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 // The MAC primitive the production injection loads BEFORE main-world.js.
@@ -21,7 +22,7 @@ await import("../extension/content/bridge-auth.js");
 const bridgeAuth = globalThis.CapBridgeAuth;
 
 const SRC = Deno.readTextFileSync(
-  new URL("../extension/content/main-world.js", import.meta.url).pathname,
+  fileURLToPath(new URL("../extension/content/main-world.js", import.meta.url)),
 );
 
 // The SW-issued bridge key the test arms each world with (>= 16 chars).

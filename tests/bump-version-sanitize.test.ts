@@ -14,13 +14,14 @@
 // same approach as the bump tests in named-agents-provider.test.ts — and reads
 // the bullet it actually wrote.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const REPO_SCRIPTS = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts");
+const REPO_SCRIPTS = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "scripts");
 
 // A complete scratch mirror: the real bump + sync scripts, every version
 // surface, a changelog with one prior entry. Returns the bump outcome, the

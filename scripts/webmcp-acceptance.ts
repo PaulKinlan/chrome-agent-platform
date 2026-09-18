@@ -59,10 +59,11 @@
 // bytes (permissionGrant:"jit-silent-no-prompt"; status ATTESTED on success).
 // See docs/WEBMCP-ACCEPTANCE.md.
 //
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const FIXTURE_PORT = 8934;

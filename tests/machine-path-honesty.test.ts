@@ -34,9 +34,10 @@
 // THE ALLOWLIST carries the reviewed exceptions with their reasons, keyed
 // `file::path-or-const` so a line move cannot break it, and an entry that stops
 // matching FAILS — a stale exception hides a fix.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const TESTS = `${ROOT}tests/`;
 const SCRIPTS = `${ROOT}scripts/`;
 

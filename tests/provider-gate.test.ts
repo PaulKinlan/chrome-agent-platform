@@ -7,6 +7,7 @@
 // provider-error classifier (all pure + deterministic).
 
 // @ts-nocheck — dynamic chrome stubs in the race tests (no types in Deno).
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   providerOriginPattern,
@@ -489,7 +490,7 @@ Deno.test("shipped seam: the scan-shipped harness CATCHES a fixture seam (fail-c
     assertEquals(violations.length > 0, true, "the scanner flags a __-prefixed export");
     assertEquals(violations[0].includes("__resetForTest"), true, "the violation names the seam");
     // …and the PRODUCTION module scans clean:
-    const clean = await scanMod.scanShippedJs([new URL("../extension/lib/perm-lease.js", import.meta.url).pathname], { readText: (f) => fsp2.readFile(f, "utf8") });
+    const clean = await scanMod.scanShippedJs([fileURLToPath(new URL("../extension/lib/perm-lease.js", import.meta.url))], { readText: (f) => fsp2.readFile(f, "utf8") });
     assertEquals(clean, [], "perm-lease ships clean");
   } finally {
     await fsp2.rm(dir, { recursive: true, force: true });

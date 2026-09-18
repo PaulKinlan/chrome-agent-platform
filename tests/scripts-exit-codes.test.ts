@@ -8,10 +8,11 @@
 // The guard is a static scan: every harness the registry classes as a gate,
 // a named script, or a KAT must contain a `Deno.exit(<expr>)` whose argument
 // is NOT the literal 0 — i.e. an exit computed from the run's own failures.
+import { fileURLToPath } from "node:url";
 import { assertEquals } from "jsr:@std/assert@1";
 import { HARNESSES, harnessFiles } from "../scripts/lib/harness-registry.ts";
 
-const SCRIPTS = new URL("../scripts/", import.meta.url).pathname;
+const SCRIPTS = fileURLToPath(new URL("../scripts/", import.meta.url));
 
 /** True when the source carries an exit whose code is derived, not `0`. */
 export function hasFailureDerivedExit(src: string): boolean {

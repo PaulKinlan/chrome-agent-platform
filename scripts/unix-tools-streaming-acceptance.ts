@@ -9,10 +9,11 @@
 // A hostile grep program must fail without leaving an unsealed output
 // directory. Evidence and the Chrome profile live on durable disk.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXTENSION = `${ROOT}extension`;
 const INPUT_BYTES = 100 * 1024 * 1024;
 const INPUT_SHA256 = "a795474f28638d77ba005fab9a310e390f530092b153115940cfb6f1d99fd4d0";

@@ -3,8 +3,9 @@
 // registers + the options page renders the shared picker. No seam — this is
 // the shipped extension exactly as a user would load it.
 // @ts-nocheck
+import { fileURLToPath } from "node:url";
 import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const archives = [];
 for await (const f of Deno.readDir(ROOT + "dist-archives")) { if (f.name.endsWith(".zip")) archives.push(ROOT + "dist-archives/" + f.name); }
 archives.sort();

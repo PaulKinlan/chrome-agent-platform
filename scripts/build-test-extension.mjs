@@ -11,12 +11,13 @@
 //
 // Prints the destination dir as the last stdout line.
 
+import { fileURLToPath } from "node:url";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = path.join(ROOT, "extension");
 // PRIVATE, self-created destination on DURABLE scratch (disk, bead chp) — the
 // only path this script touches. tmpfs copies of the extension tree were part

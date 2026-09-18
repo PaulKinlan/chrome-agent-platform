@@ -11,9 +11,10 @@
 // copy) so the test stays RED if the emitted script regresses, and parse them
 // with `new Function` — test-side use only; production bundles are still
 // CSP-scrubbed and contain no eval/new Function.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const COMPONENTS_PATH = new URL("../extension/shared/components.js", import.meta.url).pathname;
+const COMPONENTS_PATH = fileURLToPath(new URL("../extension/shared/components.js", import.meta.url));
 
 /** Extract the string-fragment array of `function <fnName>` from the shipped
  * source and join it into the exact script string the extension emits.

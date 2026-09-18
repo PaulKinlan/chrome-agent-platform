@@ -9,6 +9,7 @@
 //   5. Unclassified mutations (e.g. named-agent.set-tools) are pinned to an explicit inventory.
 //   6. Unknown message types fail closed at the dispatcher.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
 import { PAGE_ALLOWED_ROUTES } from "../extension/lib/pure.js";
@@ -27,7 +28,7 @@ import { permLeaseRoutes } from "../extension/background/routes/perm-lease.js";
 import { createProviderRoutes } from "../extension/background/routes/provider.js";
 import { createMcpRoutes } from "../extension/background/routes/mcp.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // Exhaustive census classification
 export const CENSUS_CATEGORIES = {

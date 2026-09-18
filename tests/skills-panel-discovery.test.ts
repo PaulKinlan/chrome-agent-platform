@@ -3,6 +3,7 @@
 // The multi-skill discovery + batch import + installed-commands panel:
 // the pure decision functions AND the mount wiring are executed against a
 // fake DOM + a fake send (the uodl rule: assertions that execute, not text).
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 // ── minimal DOM stub ────────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ Object.defineProperty(El.prototype, "__checked", {
   configurable: true,
 });
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const { mountSkillsSection } = await import(`${ROOT}extension/skills/skills-panel.js`);
 
 function makeSection() {

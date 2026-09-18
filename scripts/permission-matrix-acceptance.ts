@@ -45,10 +45,11 @@
 // Evidence: <evidence dir>/permission-matrix-manifest.json + screenshots.
 // Default evidence dir: test-artifacts/ (override: PERMISSION_MATRIX_ARTIFACT_DIR).
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const { verifyVariantIntegrity } = await import("./permission-variant.mjs");
 const HEADED = Deno.args.includes("--headed");

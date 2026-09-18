@@ -8,9 +8,10 @@
 // 1" label, and a genuine click opens the artifact viewer tab.
 //
 // Kernel-assigned debugging port via launchChrome() (no fixed port — see CLAUDE.md).
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${Deno.env.get("HOME")}/.cache/cap-image-strip`;
 const CHROME = "/usr/lib/chromium/chromium";

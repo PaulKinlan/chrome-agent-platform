@@ -24,12 +24,13 @@
 // lets the kernel assign the debugging port and reads the real endpoint off
 // this child's own DevTools line, so it can never attach to another lane's
 // browser (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 // The checkout this file runs FROM, never one machine's checkout path
 // (chrome-agent-platform-3khn): the harness drives the tree it ships with.
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const SHOTS = Deno.env.get("CAP_EVIDENCE_DIR") ?? "./evidence/live-run";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

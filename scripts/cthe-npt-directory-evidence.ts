@@ -10,10 +10,11 @@
 //
 // One-off evidence script (not a registered harness), kept beside the evidence.
 // deno run -A scripts/cthe-npt-directory-evidence.ts [outDir]
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const OUT = Deno.args[0] ?? durableDir("cthe-npt-directory");
 const SHOP = "http://127.0.0.1:8934/shop";

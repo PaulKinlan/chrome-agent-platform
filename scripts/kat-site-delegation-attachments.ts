@@ -2,11 +2,12 @@
 // Real browser verification of site-agent delegation with attachments & live progress.
 // CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { textToDataUrl } from "../extension/lib/attachments.js";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const EXT = new URL("../extension", import.meta.url).pathname;
+const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 const profile = chromeProfileDir("kat-site-delegate");
 
 const { proc, wsUrl } = await launchChrome({

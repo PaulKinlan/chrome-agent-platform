@@ -23,13 +23,14 @@
 //   deno run -A scripts/kat-runner.ts --only=mic      # name filter (substring)
 //   deno run -A scripts/kat-runner.ts --green-only    # skip the owned reds (local convenience; the gate runs all)
 
+import { fileURLToPath } from "node:url";
 import { HARNESSES, isKat, KAT_VERDICTS_PATH, readKatVerdicts } from "./lib/harness-registry.ts";
 import { makeChecker } from "./lib/expected-red.ts";
 import { runLockAware } from "./lib/lock-aware-command.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GREEN_BUDGET_MS = 600_000;
 const LOCK_WAIT_MS = 20 * 60_000;
 const RED_BUDGET_MS = 90_000;

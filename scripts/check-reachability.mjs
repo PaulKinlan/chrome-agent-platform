@@ -32,6 +32,7 @@
 //
 // Runs under node (build.mjs) AND Deno (tests/reachability.test.ts) —
 // `readFile`/`readdir` are injectable for the test; acorn is the only import.
+import { fileURLToPath } from "node:url";
 import { tokenizer } from "acorn";
 
 export const SHIPPED_EXTENSIONS = new Set([".js", ".mjs", ".html", ".css"]);
@@ -271,7 +272,7 @@ export async function checkReachability({ root, buildSource, manifest, retained 
 export async function runNode({ root, log = console.log } = {}) {
   const { readFile, readdir } = await import("node:fs/promises");
   const path = await import("node:path");
-  const ROOT = root ?? new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+  const ROOT = root ?? fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
   const extRoot = path.join(ROOT, "extension");
   const result = await checkReachability({
     root: extRoot,

@@ -11,11 +11,12 @@
 //       "Next run <relative> · <absolute>" (not an invented time).
 //
 //   deno run -A scripts/kat-scheduled-next-run-widget.ts [extension] [out-dir]
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-scheduled-next-run-widget`;
 const CHROME = resolveChromeForTesting();

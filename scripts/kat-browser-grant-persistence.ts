@@ -9,10 +9,11 @@
 // 6. Click toggle OFF: toggle unchecked, active false.
 // 7. Reload options page: toggle remains unchecked, active false.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 
 let pass = 0, fail = 0;

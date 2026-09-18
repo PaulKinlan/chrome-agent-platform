@@ -9,11 +9,12 @@
 //   (c) a chrome.notifications completion notification whose click opens the agent.
 //
 //   deno run -A scripts/kat-scheduled-run-output.ts [extension] [out-dir]
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-scheduled-run-output`;
 const CHROME = resolveChromeForTesting();

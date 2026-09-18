@@ -1,6 +1,7 @@
 // chrome-agent-platform-ltkj.1 — loaded test-only Emscripten ABI proof.
 // Requires a production build, then copies it byte-for-byte to durable scratch
 // and adds only hash-pinned probe assets. It does not modify or admit a package.
+import { fileURLToPath } from "node:url";
 import {
   type CdpSend,
   launchChrome,
@@ -11,7 +12,7 @@ import {
 import { validateDistCompleteMarker } from "./dist-complete.mjs";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
 const dirname = (value: string) => value.slice(0, value.lastIndexOf("/"));
 const EXTENSION = join(ROOT, "extension");

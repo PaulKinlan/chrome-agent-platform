@@ -10,6 +10,7 @@
 // shipped extension script (bare or window./globalThis.-qualified) — the
 // inventory is complete and stays complete.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 // ── Minimal browser-global stubs for importing extension/shared/components.js ──
@@ -200,7 +201,7 @@ Deno.test("inventory: NO window.confirm/alert/prompt call expressions remain in 
   const { parse } = await import("acorn");
   const { readFileSync, readdirSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const ROOT = new URL("../extension", import.meta.url).pathname;
+  const ROOT = fileURLToPath(new URL("../extension", import.meta.url));
   const SKIP = new Set(["dist", "dist-versions", "node_modules"]);
   const files = [];
   const walk = (dir) => {

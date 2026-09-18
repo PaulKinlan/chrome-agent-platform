@@ -16,10 +16,11 @@
 // Uses the mandated launchChrome() (kernel-assigned port, read from stderr) —
 // never a fixed debugging port.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const EVIDENCE = Deno.env.get("CAP_EVIDENCE_DIR") ?? durableDir("cap-exec-build-flag-kats");

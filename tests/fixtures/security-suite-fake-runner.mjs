@@ -1,6 +1,7 @@
 // Exact hash-pinned, no-Chrome fixture for security-suite supervisor mutants.
 // The production supervisor accepts this file only in explicit self-test mode.
 
+import { fileURLToPath } from "node:url";
 import { appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { verifyRunnerGuard } from "../../scripts/security-suite-custody.mjs";
@@ -53,7 +54,7 @@ if (process.argv[2] === "--stubborn-child") {
   } else if (scenario === "stubborn") {
     process.on("SIGTERM", () => record("runner-term-ignored"));
     const child = spawn(process.execPath, [
-      new URL(import.meta.url).pathname,
+      fileURLToPath(new URL(import.meta.url)),
       "--stubborn-child",
     ], {
       env: process.env,
@@ -66,7 +67,7 @@ if (process.argv[2] === "--stubborn-child") {
     stayAlive();
   } else if (scenario === "escape") {
     const child = spawn(process.execPath, [
-      new URL(import.meta.url).pathname,
+      fileURLToPath(new URL(import.meta.url)),
       "--escape-child",
     ], {
       detached: true,

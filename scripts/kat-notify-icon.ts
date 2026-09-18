@@ -14,11 +14,12 @@
 //
 //   deno run -A scripts/kat-notify-icon.ts [<path-to-extension>] [<out-dir>]
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-notify-icon`;
 const CHROMIUM = "/usr/bin/chromium";

@@ -24,9 +24,10 @@
 //
 // Launches through launchChrome() (kernel-assigned debugging port — never a
 // fixed one) and waits for the MV3 service worker with waitForServiceWorker().
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.env.get("CAP_EXT") ?? `${ROOT}extension`;
 const TARGET = Number(Deno.args[0] ?? "120");
 const OUT = Deno.args[1] ?? Deno.env.get("CAP_PERF_OUT") ?? await Deno.makeTempDir({ prefix: "cap-seeded-out-" });

@@ -6,9 +6,10 @@
 // recorded in the round-2 commit message).
 
 // @ts-nocheck — source-pin assertions over file contents.
+import { fileURLToPath } from "node:url";
 import { assert, assertStringIncludes } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const read = (rel) => Deno.readTextFileSync(ROOT + rel);
 
 Deno.test("task view: the registry lives INSIDE the debug overlay panel, not the thread-body flow", () => {

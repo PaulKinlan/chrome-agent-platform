@@ -13,9 +13,10 @@
 //      - Unclassified dispatch mutations (ygvt) at service-worker.js
 //      - Monolithic data archive caps (2g90) at data-archive.js
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("risk register: docs/RISK-REGISTER.md exists and is cited in AGENTS.md", async () => {
   const register = await Deno.readTextFile(`${ROOT}docs/RISK-REGISTER.md`).catch(() => null);

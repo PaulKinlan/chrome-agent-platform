@@ -1,9 +1,10 @@
 // kat-template-cards.ts — create-agent template-select acceptance.
 // Proves the shipped catalogue uses the shared subtle native select, stays
 // behind Advanced, applies an editable template, and saves through real MV3.
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${Deno.env.get("HOME")}/.local/state/chrome-agent-platform/template-cards/green`;
 const CHROMIUM = "/usr/bin/chromium";

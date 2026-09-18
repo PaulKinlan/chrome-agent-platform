@@ -8,10 +8,11 @@
 // turns the same executable test RED.
 // @ts-nocheck
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { allocateRunEvidenceDir, finalizeKatExecution, sanitizeKatLogError, stageReceiptFile, teardownChromeAndProfile } from "../scripts/lib/kat-finalizer.ts";
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 const REPORT = {
   expected: "head-1",

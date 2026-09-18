@@ -10,10 +10,11 @@
 // omitted the current review, and carried the banned name. These pins fail if
 // any of that comes back.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const read = (rel: string) => Deno.readTextFileSync(ROOT + rel);
 
 // Each retired tracker keeps a RETIRED banner at its top that points at beads,

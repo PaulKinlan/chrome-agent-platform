@@ -13,9 +13,10 @@
 // on disk, and every `npm run <name>` step inside a script names a script that
 // exists. Mechanical, so the next deletion cannot leave a dangling command.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const pkg = JSON.parse(Deno.readTextFileSync(`${ROOT}package.json`));
 const scripts: Record<string, string> = pkg.scripts ?? {};
 

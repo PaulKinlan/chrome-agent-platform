@@ -3,9 +3,10 @@
 // retains screenshots + geometry/AX evidence outside the source tree when
 // AGENT_DIRECTORY_ARTIFACT_DIR is set.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.env.get("AGENT_DIRECTORY_EXTENSION_DIR") || `${ROOT}extension`;
 const OUT = Deno.env.get("AGENT_DIRECTORY_ARTIFACT_DIR") ||
   await Deno.makeTempDir({ prefix: "cap-agent-directory-artifacts-" });
@@ -212,7 +213,7 @@ try {
   const sourceBinding = {
     extensionDir: EXT,
     files: Object.fromEntries(await Promise.all(sourceFiles.map(async (file) => [file, await sha256File(`${EXT}/${file}`)]))),
-    harnessSha256: await sha256File(new URL(import.meta.url).pathname),
+    harnessSha256: await sha256File(fileURLToPath(new URL(import.meta.url))),
   };
   await Deno.writeTextFile(`${OUT}/${BASELINE ? "before" : "after"}-evidence.json`, JSON.stringify({ mode:BASELINE?"baseline":"acceptance", passed, failed, assertions, evidence, diagnostics, sourceBinding }, null, 2) + "\n");
 } finally {

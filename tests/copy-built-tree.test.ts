@@ -12,6 +12,7 @@
 // Scratch lives under the durable root, never tmpfs (bead chp); prose here
 // avoids the built-tree path literal because the partition guard classifies
 // plain text, not behaviour.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { readFile, stat, symlink, writeFile, mkdir, rm, readFile as readText } from "node:fs/promises";
 import { join } from "node:path";
@@ -77,7 +78,7 @@ Deno.test("copy-built-tree: a copy that still contains a symlink is REFUSED — 
 });
 
 Deno.test("copy-built-tree: the three unblocked acceptance harnesses copy through the helper, never a raw cp -r (h8rb)", async () => {
-  const ROOT = new URL("..", import.meta.url).pathname;
+  const ROOT = fileURLToPath(new URL("..", import.meta.url));
   const harnesses = [
     "scripts/webmcp-realsite-probe.ts",
     "scripts/kat-webmcp-honest-errors.ts",

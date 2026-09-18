@@ -6,13 +6,14 @@
 //   3. A standard 512-byte ustar TAR header conforms to POSIX tar format and can be read by tar.
 //   4. Multi-stage project roadmap is documented and actionable.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   MAX_ARCHIVE_OPFS_FILES,
   MAX_ARCHIVE_TOTAL_BYTES,
 } from "../extension/lib/data-archive.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("backup architecture: docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md exists and is cited", async () => {
   const arch = await Deno.readTextFile(`${ROOT}docs/STREAMED-BACKUP-RESTORE-ARCHITECTURE.md`).catch(() => null);

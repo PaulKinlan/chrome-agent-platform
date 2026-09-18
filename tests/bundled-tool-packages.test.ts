@@ -2,6 +2,7 @@
 // SPDX token+exact-composite licence validation, real admission flow, and the
 // disabled/no-route posture. Pure no-Chrome tests over the REAL shipped bytes.
 // @ts-nocheck
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   auditWasmBinary,
@@ -356,7 +357,7 @@ Deno.test("posture: Settings preview and run-bound model dispatch share immutabl
 import { buildBundledWasmManifestMap, collectPackageInventory } from "../scripts/package-archive.mjs";
 import { assertStoreTargetBoundary } from "../scripts/store-target-policy.mjs";
 
-const repoRoot = new URL("..", import.meta.url).pathname;
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("store map: exact archivePath→executable mapping for ALL 38 shipped CAS binaries", async () => {
   const map = await buildBundledWasmManifestMap(repoRoot);

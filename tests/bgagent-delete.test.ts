@@ -6,6 +6,7 @@
 // delete path must cancel the DETERMINISTIC `recipe:<id>` scheduled task (the
 // enabled state derives from the task store), never the raw recipe id.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertMatch, assertNotMatch, assertEquals } from "jsr:@std/assert@1";
 import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
 
@@ -232,7 +233,7 @@ Deno.test({
     // harness resolve a different build than this module saw, the gate fails LOUDLY
     // instead of driving a browser nobody chose.
     const cmd = new Deno.Command(Deno.execPath(), {
-      args: ["run", "-A", new URL("../scripts/kat-bgagent-delete.ts", import.meta.url).pathname],
+      args: ["run", "-A", fileURLToPath(new URL("../scripts/kat-bgagent-delete.ts", import.meta.url))],
       stdout: "piped", stderr: "piped",
     });
     const out = await cmd.output();

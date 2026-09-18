@@ -8,10 +8,11 @@
 //   deno run -A scripts/flake-evidence.ts [runsPerSide=4]
 // @ts-nocheck — orchestration script (dynamic types).
 
+import { fileURLToPath } from "node:url";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const RUNS = Number(Deno.args[0] ?? 4);
 const OUT = `${ROOT}test-artifacts/flake-evidence`;
 await ensureDir(OUT);

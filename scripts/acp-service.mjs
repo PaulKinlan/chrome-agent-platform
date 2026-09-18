@@ -10,6 +10,7 @@
 //
 // The service runs THIS repo's bridge, so `git pull` + reinstall keeps it fresh.
 
+import { fileURLToPath } from "node:url";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, accessSync, constants } from "node:fs";
@@ -17,7 +18,7 @@ import { execFileSync } from "node:child_process";
 
 const HOME = homedir();
 const OS = platform();
-const ROOT = join(dirname(new URL(import.meta.url).pathname), "..");
+const ROOT = join(dirname(fileURLToPath(new URL(import.meta.url))), "..");
 const LABEL = "com.chrome-agent-platform.acp-bridge";
 const LOG_DIR = join(HOME, ".cap-acp");
 const LOG = join(LOG_DIR, "bridge.log");

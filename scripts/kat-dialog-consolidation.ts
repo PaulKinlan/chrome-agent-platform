@@ -16,9 +16,10 @@
 // behaviours the consolidation is supposed to make identical by construction:
 // focus trap entry point, Escape, backdrop light-dismiss, and the destructive
 // default-focus rule. CAP-FB-20260827-DIALOG-CONSOLIDATION-01.
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const EXT = new URL("../extension", import.meta.url).pathname;
+const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 const SHOTS = Deno.env.get("CAP_EVIDENCE_DIR") ?? "./evidence/dialogs";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 await Deno.mkdir(SHOTS, { recursive: true });

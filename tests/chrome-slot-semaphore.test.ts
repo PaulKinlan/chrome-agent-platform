@@ -26,6 +26,7 @@
 //   7. a fake-browser fixture with its own `lockPath` takes neither the
 //      canonical lock nor a slot (chrome-agent-platform-51x4 preserved);
 //   8. the slot wait is bounded by `CAP_CHROME_LOCK_WAIT_MS` and printed.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 
 const origSlotDir = Deno.env.get("CAP_CHROME_SLOT_DIR");
@@ -385,7 +386,7 @@ Deno.test("uzik: slots are held for the browser's lifetime, counted per process"
 
 // ── static pins for the opt-in decisions (unpinned product choices are how a
 //    gate silently drifts back to the machine-wide lock) ─────────────────────
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("uzik: the load-sensitive journey suite opts into the canonical lock", async () => {
   // chrome-journeys.ts is 370 sequential CDP round-trips over minutes — the

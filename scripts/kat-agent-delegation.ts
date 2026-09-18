@@ -19,6 +19,7 @@
 //   5. UI: the parent's agent-chat surface renders the delegation (screenshot).
 //
 //   deno run -A scripts/kat-agent-delegation.ts <path-to-extension> [<out-dir>]
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 // The pure delegation guard's own constants — the over-cap checks pin the
@@ -26,7 +27,7 @@ import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { CHILD_ITERATION_CAP, MIN_REMAINING_ITERATIONS } from "../extension/lib/agent-delegation.js";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-agent-delegation`;
 const CHROMIUM = resolveChromeForTesting();

@@ -2,6 +2,7 @@
 // MEDIUM): canonical CHANGELOG.md → the ignored, generated extension package
 // file. Run by bump-version.mjs after every bump, by the production build, and
 // by `npm run sync:changelog` / `check:changelog`.
+import { fileURLToPath } from "node:url";
 import { copyFile, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -45,7 +46,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     try {
       execFileSync(
         "node",
-        [new URL("./check-changelog.mjs", import.meta.url).pathname.replace(
+        [fileURLToPath(new URL("./check-changelog.mjs", import.meta.url)).replace(
           /^\/([A-Za-z]:)/,
           "",
         )],

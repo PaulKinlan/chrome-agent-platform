@@ -2,6 +2,7 @@
 // notification click routing and bounded action contracts (CAP-FB-20260823-NOTIFICATION-CLICK-ACTION-01).
 // @ts-nocheck
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   NotificationRegistry,
@@ -323,7 +324,7 @@ Deno.test("handleNotificationClick: un-registered / synthetic notification ID fa
 // after the run lookup, BEFORE any phase/resume mutation, null-skip for
 // callers that carry no expectation, exact fail-closed error code.
 Deno.test("N-2 enforcement: run.resume consumes expectedAgentId (agent_mismatch fails closed, in the right position)", async () => {
-  const sw = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
+  const sw = await Deno.readTextFile(fileURLToPath(new URL("../extension/background/service-worker.js", import.meta.url)));
   const guard = 'if (m?.expectedAgentId != null && run.agentId !== m.expectedAgentId) {\n      return { ok: false, error: "agent_mismatch", executionId };\n    }';
   assert(sw.includes(guard), "run.resume contains the exact expectedAgentId guard");
   const resumeHandler = sw.slice(sw.indexOf('async "run.resume"'));

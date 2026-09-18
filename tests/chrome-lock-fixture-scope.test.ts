@@ -24,9 +24,10 @@
 // scripts/lib/chrome-launch.ts), so it treats the fixture's file exactly as it
 // would the real one, and the pin keeps its teeth without touching the machine.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const TESTS_DIR = new URL("./", import.meta.url).pathname;
+const TESTS_DIR = fileURLToPath(new URL("./", import.meta.url));
 
 /** The machine-wide coordination files real browsers use (tmpfs by design). */
 const REAL_PATH_RE = /^\/tmp\/cap-(?:serialized-chrome-acceptance\.lock|chrome-slot-[\w.-]+)$/;
@@ -91,7 +92,7 @@ function offendersIn(source: string, name = "<inline>"): { offenders: string[]; 
   return { offenders, sites: sites.length, bound };
 }
 
-const SELF = new URL(import.meta.url).pathname.split("/").pop()!;
+const SELF = fileURLToPath(new URL(import.meta.url)).split("/").pop()!;
 
 function testFiles(): string[] {
   // This file is skipped: its inline samples are the shapes the scanner must

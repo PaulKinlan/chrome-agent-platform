@@ -103,9 +103,10 @@
 //     12 shell memberships the census brought into scope were unprotected. Excluding
 //     them would have frozen the bug, so `maskShell` strips `#`-to-EOL with quote
 //     awareness instead (a `#` inside a quoted string is not a comment).
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const TESTS = `${ROOT}tests/`;
 
 // The partition guard (test-partition-guard.test.ts) classifies a test file by
@@ -478,7 +479,7 @@ function stmtRhs(text: string, start: number, limit = 400): string {
 }
 
 function normalizeAbs(abs: string): string {
-  return new URL(`file://${abs}`).pathname;
+  return fileURLToPath(new URL(`file://${abs}`));
 }
 
 /** Absolute path -> repo-relative, or null when it escapes the repo. */
@@ -885,6 +886,19 @@ function resolvePath(src: Src, expr: string, subst: Map<string, string>, base: "
   }
   const ts = /^(.*?)\s*\.\s*(?:toString|href)\s*$/.exec(e);
   if (ts && ts[1].trim()) return resolvePath(src, ts[1].trim(), subst, base, pos, depth + 1);
+
+  // `fileURLToPath(new URL(rel, import.meta.url))` — the e273 replacement for the
+  // `.pathname` form above. Same base semantics, decoded (not percent-encoded)
+  // path; the repo's `.replace(/\/$/u, "")` normaliser is honoured identically.
+  const fup = /^fileURLToPath\s*\(([\s\S]*)\)\s*(\.replace\s*\(([^)]*)\))?\s*$/s.exec(e);
+  if (fup && fup[1].trim()) {
+    const inner = resolvePath(src, fup[1].trim(), subst, base, pos, depth + 1);
+    if (inner.no) return inner;
+    let abs = inner.oneAbs ?? `${ROOT}${inner.one ?? ""}`;
+    if (inner.dirish && !abs.endsWith("/")) abs += "/";
+    if (fup[2] && /\\?\/\s*\$/.test(fup[3] ?? "")) abs = abs.replace(/\/+$/, "");
+    return { one: toRel(abs) ?? "", oneAbs: abs };
+  }
 
   if (subst.has(e)) return resolvePath(src, subst.get(e)!, subst, base, pos, depth + 1);
 

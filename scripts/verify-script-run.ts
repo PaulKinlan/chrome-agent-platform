@@ -4,10 +4,11 @@
 // worker's `script.run` route (via chrome.runtime.sendMessage from a page
 // context), and asserts the sandboxed script returns its result.
 // @ts-nocheck
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 
 const CHROMIUM = Deno.env.get("CHROMIUM") || "/usr/bin/chromium";
-const EXT = new URL("../extension", import.meta.url).pathname;
+const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 
 async function sleep(ms) { await new Promise((r) => setTimeout(r, ms)); }
 

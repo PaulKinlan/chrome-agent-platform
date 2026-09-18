@@ -36,7 +36,7 @@ import {
 } from "./security-suite-custody.mjs";
 
 const EXPECTED_FIXTURE_HASH =
-  "af91df0c58c64690d6ce4c0aa74e71caf89cf19fe965847da64e475df08b1039";
+  "098ae0f52d85f5a69b8c0af754f74a4be2510c685efba41321042b06e20a0800";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.dirname(SCRIPT_DIR);
 const SUPERVISOR_SIGNALS = new Map([

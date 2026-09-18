@@ -6,9 +6,10 @@
 //      cannot probe a fixed global; the per-document randomized hook IS
 //      present (the detector still injects).
 // deno run -A scripts/kat-fingerprint-surface.ts [extension-dir] [evidence-dir]
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-fingerprint-surface`;
 await Deno.mkdir(OUT, { recursive: true });

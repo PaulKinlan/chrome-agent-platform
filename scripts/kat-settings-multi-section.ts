@@ -6,10 +6,11 @@
 // 3. Navigate directly to #skills deep link -> assert #skills is visible, others hidden.
 // 4. Navigate directly to #about deep link -> assert #about is visible, others hidden.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 
 let pass = 0, fail = 0;

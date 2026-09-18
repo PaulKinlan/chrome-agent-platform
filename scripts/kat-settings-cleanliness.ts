@@ -10,9 +10,10 @@
 //
 // deno run -A scripts/kat-settings-cleanliness.ts <extension> <out> [--baseline]
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-settings-cleanliness`;
 const BASELINE = Deno.args.includes("--baseline");

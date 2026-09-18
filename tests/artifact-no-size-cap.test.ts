@@ -26,6 +26,7 @@
 // through its source-pin: the inspector source must contain no
 // MAX_ARTIFACT_BODY_BYTES / mount-refusal branch (r4's did).
 // @ts-nocheck
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 const registry = new Map();
@@ -65,7 +66,7 @@ globalThis.document = globalThis.document || {
 };
 globalThis.matchMedia = globalThis.matchMedia || (() => ({ matches: false }));
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** A tiny stub element for the inspector's shadow queries. */
 function stubEl() {

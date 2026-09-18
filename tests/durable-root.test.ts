@@ -4,10 +4,11 @@
 // silent fall back to /tmp); (2) a static guard that no script/test still
 // defaults retained evidence or big scratch to /tmp (allowlist: tiny
 // cross-process coordination files and test fixtures).
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
 import { isRamBacked, durableRoot, durableDir } from "../scripts/lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("isRamBacked identifies the tmpfs /tmp and disk-backed $HOME", () => {
   assertEquals(isRamBacked("/tmp"), true, "/tmp is tmpfs on the build host");

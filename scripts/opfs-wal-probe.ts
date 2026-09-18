@@ -12,12 +12,13 @@
 // WAL would be unworkable in the service worker. It does not.
 //
 //   deno run -A scripts/opfs-wal-probe.ts
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
 // The extension under test is THIS tree's (never a hard-coded checkout — a
 // probe that loads another tree's bundle reports facts about a tree it never
 // built).
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 
 const profile = await Deno.makeTempDir({ prefix: "wal-probe-" });

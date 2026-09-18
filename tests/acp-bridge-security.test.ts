@@ -6,6 +6,7 @@
 //
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
+import { fileURLToPath } from "node:url";
 import { assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
@@ -54,7 +55,7 @@ Deno.test("ACP bridge: --allow-origin admits the EXACT origin, never a confusabl
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
   const port = (listener.addr as Deno.NetAddr).port;
   listener.close();
-  const root = new URL("..", import.meta.url).pathname;
+  const root = fileURLToPath(new URL("..", import.meta.url));
   const child = new Deno.Command(Deno.execPath(), {
     args: [
       "run", "-A", "scripts/acp-bridge.ts",
@@ -94,7 +95,7 @@ Deno.test("ACP bridge: --token requires the shared secret on the upgrade", async
   const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
   const port = (listener.addr as Deno.NetAddr).port;
   listener.close();
-  const root = new URL("..", import.meta.url).pathname;
+  const root = fileURLToPath(new URL("..", import.meta.url));
   const child = new Deno.Command(Deno.execPath(), {
     args: ["run", "-A", "scripts/acp-bridge.ts", "--port", String(port), "--token", "s3cret", "--adapter", FAKE_ADAPTER],
     cwd: root,

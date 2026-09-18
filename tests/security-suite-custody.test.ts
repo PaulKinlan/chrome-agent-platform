@@ -3,6 +3,7 @@
 // hash-pinned repository fixture; cleanup mutants call the same exported live
 // helper used by production supervision.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { lstat as nodeLstat } from "node:fs/promises";
 import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
@@ -16,7 +17,7 @@ import {
   waitUntil,
 } from "../scripts/security-suite-custody.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/u, "");
+const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 const SUPERVISOR = `${ROOT}/scripts/security-suite-supervisor.sh`;
 const SUPERVISOR_NODE = `${ROOT}/scripts/security-suite-supervisor.mjs`;
 const RUNNER = `${ROOT}/scripts/security-suite.ts`;

@@ -20,12 +20,13 @@
 //
 //   deno run -A scripts/kat-webmcp-honest-errors.ts [<out-dir>]
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const OUT = Deno.args[0] ?? `${ROOT}.cache/kat-webmcp-honest-errors`;
 const PAGE_ORIGIN = "http://127.0.0.1:8934";

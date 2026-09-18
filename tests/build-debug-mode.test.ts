@@ -9,13 +9,14 @@
 //     gate runs before bundling in both — proven here by both builds passing
 //     the same gates, and by the drift KAT in build-tool-bundling which runs
 //     the DEFAULT = debug build and must still fail closed).
+import { fileURLToPath } from "node:url";
 import {
   assert,
   assertEquals,
   assertStringIncludes,
 } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const pathMod = "node:path";
 const path = (await import(pathMod)).default;
 const fsMod = "node:fs/promises";

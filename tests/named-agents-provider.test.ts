@@ -6,6 +6,7 @@
 // the registry (kv) + the pure provider resolution without the OPFS sandbox.
 // @ts-nocheck — the chrome/kv mock is intentionally dynamic (no types in Deno).
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   getNamedAgent,
@@ -296,7 +297,7 @@ Deno.test("bump-version: unmodified script in a complete scratch mirror (--messa
   try {
     // COMPLETE mirror: the real scripts/ dir (bump + sync-changelog), package,
     // lock, manifest, changelog, extension/ — no rewrites of the script.
-    const repoScripts = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts");
+    const repoScripts = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "scripts");
     await fsp.mkdir(path.join(dir, "scripts"), { recursive: true });
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
@@ -338,7 +339,7 @@ Deno.test("bump-version: the changelog entry is sanitized (prefix, SHA and track
   const { execFileSync } = await import(cpQ);
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cap-bump-san-"));
   try {
-    const repoScripts = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts");
+    const repoScripts = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "scripts");
     await fsp.mkdir(path.join(dir, "scripts"), { recursive: true });
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
@@ -369,7 +370,7 @@ Deno.test("bump-version: controlled failure leaves NO partial write (atomicity)"
   const { spawnSync } = await import(cpQ);
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "cap-bump3-"));
   try {
-    const repoScripts = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts");
+    const repoScripts = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "scripts");
     await fsp.mkdir(path.join(dir, "scripts"), { recursive: true });
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));

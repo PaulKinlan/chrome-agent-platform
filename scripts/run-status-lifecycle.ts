@@ -37,10 +37,11 @@
 //
 //   deno run -A scripts/run-status-lifecycle.ts
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const GIT = "/usr/bin/git";
 const EVIDENCE_DIR = durableDir(`cap-run-status-evidence-${Date.now()}`);

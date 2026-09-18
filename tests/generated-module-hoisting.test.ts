@@ -6,10 +6,11 @@
 // These are PROPERTY pins, not prose pins: they fail if the hoisting stops
 // happening (bytes returned to the bundle) or if it corrupts a value.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { collectSharedStrings, renderHoistedValue } from "../scripts/lib/shared-strings.mjs";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const DATA_MODULE = `${ROOT}extension/lib/bundled-tool-packages.data.js`;
 
 Deno.test("shared-string hoisting: repeats are hoisted, one-offs are not, order is stable", () => {

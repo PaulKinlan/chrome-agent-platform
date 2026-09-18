@@ -3,9 +3,10 @@
 // It writes/reads the artifact through the real service-worker routes, renders
 // the exact lazy-protocol result shape through <agent-conversation>, and checks
 // both iframe layers through their own CDP execution contexts.
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${Deno.env.get("HOME")}/.cache/cap-artifact-preview`;
 const CHROME = "/usr/lib/chromium/chromium";

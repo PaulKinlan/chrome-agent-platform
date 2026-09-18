@@ -11,6 +11,7 @@
 //
 // The guard is mechanical: the ONLY debugging-port literal allowed anywhere in
 // scripts/ is `=0`, and it may only be written by the shared launcher.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { CHROME_LOCK_PATH, launchChrome } from "../scripts/lib/chrome-launch.ts";
 
@@ -20,7 +21,7 @@ import { CHROME_LOCK_PATH, launchChrome } from "../scripts/lib/chrome-launch.ts"
 // queue. The canonical lock stays the default for every real harness.
 const FAKE_LOCK = await Deno.makeTempFile({ prefix: "cap-fake-browser-lock-" });
 
-const SCRIPTS = new URL("../scripts/", import.meta.url).pathname;
+const SCRIPTS = fileURLToPath(new URL("../scripts/", import.meta.url));
 const LAUNCHER = "lib/chrome-launch.ts";
 
 function scriptFiles(dir = SCRIPTS, prefix = ""): string[] {

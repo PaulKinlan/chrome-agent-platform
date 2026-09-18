@@ -9,9 +9,10 @@
 // complete body could ever drop or reorder bytes. The end-to-end render is
 // pinned by the browser journey (scripts/kat-interactive-artifact-click.ts).
 // @ts-nocheck
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // Stub the browser globals the module touches at load time (same subset as
 // tests/html-render-sandbox.test.ts).

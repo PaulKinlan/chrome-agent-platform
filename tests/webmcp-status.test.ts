@@ -6,13 +6,14 @@
 //  - generation/source/disenrollment fencing and singleton teardown
 // @ts-nocheck — the content script runs in a mocked browser context.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 await import("../extension/content/bridge-auth.js");
 const bridgeAuth = globalThis.CapBridgeAuth;
 const NONCE = "test-bridge-key-0123456789abcdef";
 const BRIDGE_SRC = Deno.readTextFileSync(
-  new URL("../extension/content/content-script.js", import.meta.url).pathname,
+  fileURLToPath(new URL("../extension/content/content-script.js", import.meta.url)),
 );
 
 Deno.test("webmcp diagnostics: PAGE_ALLOWED_ROUTES admits only bridge read/report routes", async () => {

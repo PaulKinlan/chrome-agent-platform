@@ -3,6 +3,7 @@
 // node:child_process transitively, even though the production module itself
 // passes `deno check`. Run the executable fixture suite in a bounded no-check
 // child while keeping this canonical Deno gate type-checked.
+import { fileURLToPath } from "node:url";
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
 Deno.test("package archive freshness, exact inventory, and portability regressions", async () => {
@@ -13,7 +14,7 @@ Deno.test("package archive freshness, exact inventory, and portability regressio
       "-A",
       "tests/package-extension-freshness-driver.mjs",
     ],
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: fileURLToPath(new URL("..", import.meta.url)),
     stdout: "piped",
     stderr: "piped",
   }).spawn();

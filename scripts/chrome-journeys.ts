@@ -10,7 +10,7 @@
 //   deno run -A scripts/chrome-journeys.ts            # temporary evidence (default)
 //   deno run -A scripts/chrome-journeys.ts --retain   # opt-in: retain to test-artifacts/
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 // Evidence defaults to a fresh dir under the DURABLE evidence root (disk;
 // bead chp — /tmp is RAM-backed and has lost retained runs); `--retain` is the
@@ -40,6 +40,7 @@ const PGREP = "/usr/bin/pgrep";
 const RM = "/bin/rm";
 const GIT = "/usr/bin/git";
 
+import { fileURLToPath } from "node:url";
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";

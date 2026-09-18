@@ -17,13 +17,14 @@
 // is preserved. This module is importable so tests can pin the merge logic
 // without network.
 
+import { fileURLToPath } from "node:url";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DEFAULT_PRICING } from "agent-do";
 import { MODEL_PRICING } from "../extension/lib/model-prices.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PRICES_URL = "https://www.llm-prices.com/current-v1.json";
 
 // Zero-cost on-device + demo models (the Chrome Prompt API / gemini-nano and

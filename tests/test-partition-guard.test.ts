@@ -15,6 +15,7 @@
 // NOTE: the detector probe strings below are ASSEMBLED at runtime so this
 // file's own text never matches the hazard patterns it scans for.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   classifyHazards,
@@ -25,7 +26,7 @@ import {
   SERIAL_REASONS,
 } from "../scripts/test-partition.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // Recursive walk matching run-tests.mjs (deno test walks subdirectories too).
 // Returns repo-relative paths ("tests/...").

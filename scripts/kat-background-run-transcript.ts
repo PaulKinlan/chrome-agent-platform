@@ -6,11 +6,12 @@
 // opens the agent with a trusted click, and asserts its scheduled turn is shown.
 //
 //   deno run -A scripts/kat-background-run-transcript.ts [extension] [out-dir]
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-background-run-transcript`;
 const CHROME = resolveChromeForTesting();

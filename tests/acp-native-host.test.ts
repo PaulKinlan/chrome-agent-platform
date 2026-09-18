@@ -5,12 +5,13 @@
 //
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { encodeNativeMessage, NativeFrameDecoder } from "../scripts/acp-native-host.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
 const HOST_SH = `${ROOT}scripts/acp-native-host.sh`;
 

@@ -7,6 +7,7 @@
 // supported `z.config({ jitless: true })` knob. A perf sample is logged
 // (informational, never asserted — wall-clock gates flake).
 // @ts-nocheck — dynamic esbuild + temp-module imports.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { denyZodDocCompiles } from "../scripts/lib/scrub-zod-doc.mjs";
 
@@ -20,7 +21,7 @@ async function bundleZod(scrub) {
       // core — the extension's bundles carry it via `ai` / mcp-sdk importing
       // "zod/v4". The bare "zod" root is the v3-classic interpreted API and
       // contains no Doc at all (measured), so this fixture must use v4.
-      stdin: { contents: 'export * as z from "zod/v4";', sourcefile: "zod-entry.js", loader: "js", resolveDir: new URL("..", import.meta.url).pathname },
+      stdin: { contents: 'export * as z from "zod/v4";', sourcefile: "zod-entry.js", loader: "js", resolveDir: fileURLToPath(new URL("..", import.meta.url)) },
       bundle: true,
       write: false,
       platform: "browser",

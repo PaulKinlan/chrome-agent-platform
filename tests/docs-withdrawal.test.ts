@@ -1,9 +1,10 @@
 // CAP-FB-20260821-DEAD-SURFACE-REMOVAL-01 — the docs mock withdrawal: the
 // static link/redirect/AX semantics of the new docs root + the proof that no
 // dangling link to a deleted mock remains.
+import { fileURLToPath } from "node:url";
 import { assertEquals, assert } from "jsr:@std/assert@1";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 async function read(rel: string): Promise<string> {
   return await Deno.readTextFile(`${ROOT}${rel}`);

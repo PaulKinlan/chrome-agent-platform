@@ -11,13 +11,14 @@
 // matching the loaded unpacked extension's path in the Chrome profile when
 // possible; --extension-id overrides.
 
+import { fileURLToPath } from "node:url";
 import { homedir, platform } from "node:os";
 import { join, dirname } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from "node:fs";
 
 const HOME = homedir();
 const OS = platform();
-const ROOT = join(dirname(new URL(import.meta.url).pathname), "..");
+const ROOT = join(dirname(fileURLToPath(new URL(import.meta.url))), "..");
 const HOST_NAME = "com.chrome_agent_platform.acp";
 const HOST_SH = join(ROOT, "scripts", "acp-native-host.sh");
 

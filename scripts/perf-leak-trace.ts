@@ -10,9 +10,10 @@
 //
 //   deno run -A scripts/perf-leak-trace.ts
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

@@ -27,11 +27,12 @@
 // Evidence (under EVIDENCE_DIR, printed): page-actions-before.png,
 // page-actions-after-click.png, page-actions-after-type.png.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
 const CHROMIUM = Deno.env.get("CAP_CHROMIUM") ?? "/usr/bin/chromium";
 const EVIDENCE_DIR = Deno.env.get("PAGE_ACTIONS_EVIDENCE_DIR") ?? durableDir(`cap-page-actions-${Date.now()}`);

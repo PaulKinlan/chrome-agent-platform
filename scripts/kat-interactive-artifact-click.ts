@@ -31,9 +31,10 @@
 // Evidence: screenshots (viewer before/after click, hub dialog before/after
 // click, big-artifact Source tab) written to the OUT dir (default
 // ~/.cache/cap-p45y-interactive), durable storage by default.
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker, CHROMIUM } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${Deno.env.get("HOME")}/.cache/cap-p45y-interactive`;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));

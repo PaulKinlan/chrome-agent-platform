@@ -9,6 +9,7 @@
 // lib/kat-bistro-caller.ts and is EXECUTED by tests/kat-bistro-caller.test.ts —
 // this script is the wiring only.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp, withTimeout } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import {
@@ -34,7 +35,7 @@ import {
   settleBistroRun,
 } from "./lib/kat-bistro-caller.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 // The positional evidence arg is the PARENT. Every INVOCATION owns a fresh,
 // run-bound child OUT (z6xw: the current invocation's evidence authority is

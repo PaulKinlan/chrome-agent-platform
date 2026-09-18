@@ -15,12 +15,13 @@
 //      - wasm-tools/python/python-worker.js contains stripAmbientStorage().
 //      - wasm-tools/python/MANIFEST.json and extension/lib/python-runtime.js pins match.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   PYTHON_RUNTIME_PIN,
 } from "../extension/lib/python-runtime.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const RUNTIME_SRC = `${ROOT}wasm-tools/python/`;
 
 // ── 1. Static Source Pins & Manifest Agreement ──────────────────────────────

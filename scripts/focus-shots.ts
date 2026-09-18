@@ -1,6 +1,7 @@
 // Gate screenshots: hint-link focus ring + first-run-guide tab order.
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const fetchJson = async (url: string, opts: RequestInit = {}) => (await fetch(url, opts)).json();

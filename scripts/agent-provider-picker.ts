@@ -13,11 +13,12 @@
 // (disk; bead chp).
 // @ts-nocheck — dynamic CDP scripting (no types for the raw protocol).
 
+import { fileURLToPath } from "node:url";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // ── evidence manifest (the final review's MEDIUM): commit + results + console ──
 // ALL run state is declared BEFORE any git command: an early git failure or

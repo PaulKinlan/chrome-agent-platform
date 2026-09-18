@@ -4,6 +4,7 @@
 // fences, and the immutable manifest/CAS/imports/memory/caps revalidation
 // against the REAL shipped bundled csvtool bytes. No Chrome.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { EXECUTOR_BOUNDS } from "../extension/lib/wasm-executor-bounds.js";
 const EXECUTOR_BOUNDS_MAX_WASM = EXECUTOR_BOUNDS.maxWasmBytes;
@@ -25,7 +26,7 @@ import {
 import { BUNDLED_INVENTORY } from "../extension/lib/bundled-inventory-data.js";
 import { BUNDLED_TOOL_PACKAGE_ROWS } from "../extension/lib/bundled-tool-packages.data.js";
 
-const root = (rel: string): string => new URL(`../${rel}`, import.meta.url).pathname;
+const root = (rel: string): string => fileURLToPath(new URL(`../${rel}`, import.meta.url));
 
 async function realCsvtoolAssets() {
   const manifestText = await Deno.readTextFile(

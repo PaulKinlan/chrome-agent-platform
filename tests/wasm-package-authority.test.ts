@@ -2,6 +2,7 @@
 // Pure no-Chrome tests: strict raw manifest, bounded binary measurement,
 // immutable inventory, exact-generation WAL recovery, revocation and no route.
 // @ts-nocheck
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   auditWasmBinary,
@@ -543,7 +544,7 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
       else if (entry.isFile && entry.name.endsWith(".wasm")) wasmFiles.push(path);
     }
   };
-  await walk(new URL("../extension", import.meta.url).pathname);
+  await walk(fileURLToPath(new URL("../extension", import.meta.url)));
   // Since 0.2.157 the bundled lane PHYSICALLY SHIPS the 25 reviewed binaries
   // (inventory-only; still no route/execution). The successor invariant: the
   // shipped set is EXACTLY the inventory's declared CAS set — no more, no
@@ -551,7 +552,7 @@ Deno.test("wasm static/RHC boundary: no route, execution, owner, OPFS, network o
   const { BUNDLED_INVENTORY } = await import("../extension/lib/bundled-inventory-data.js");
   const declaredCas = BUNDLED_INVENTORY.files
     .filter((row) => row.rel.startsWith("extension/wasm/cas/"))
-    .map((row) => new URL(`../${row.rel}`, import.meta.url).pathname)
+    .map((row) => fileURLToPath(new URL(`../${row.rel}`, import.meta.url)))
     .sort();
   assertEquals([...wasmFiles].sort(), declaredCas, "shipped Wasm must be exactly the inventory CAS set");
   for (const row of BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/"))) {

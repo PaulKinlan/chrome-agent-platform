@@ -1,4 +1,5 @@
 // chrome-agent-platform-ltkj.1 — static/local checks only; never launches Chrome.
+import { fileURLToPath } from "node:url";
 import {
   assert,
   assertEquals,
@@ -253,7 +254,7 @@ Deno.test("dqxa: prepareLoadedExtension refuses a pre-existing probe before dest
     new URL("../scripts/emscripten-abi-loaded.ts", import.meta.url).href
   );
   const { durableDir } = await import("../scripts/lib/durable-root.mjs");
-  const extension = new URL("../extension", import.meta.url).pathname;
+  const extension = fileURLToPath(new URL("../extension", import.meta.url));
   const probe = `${extension}/_emscripten_abi_probe`;
   // Never replace a real fixture, including a dangling link. mkdir below also
   // refuses a path created after this check; only our empty directory is removed.

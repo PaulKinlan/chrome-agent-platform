@@ -13,9 +13,10 @@
 // the user message persist regardless (UX-008 semantics), which is exactly the
 // state needed to test continuity + projection.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/p0-repro`;
 const CHROMIUM = "/usr/bin/chromium";

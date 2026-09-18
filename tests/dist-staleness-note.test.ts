@@ -18,6 +18,7 @@
 // not behaviour. Scratch lives on disk, not RAM-backed tmpfs, per the durable
 // root rule (bead chp).
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
@@ -25,7 +26,7 @@ import path from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { validateDistCompleteMarker, writeDistCompleteMarker } from "../scripts/dist-complete.mjs";
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(new URL(import.meta.url)));
 const NOTE_SCRIPT = path.join(HERE, "..", "scripts", "dist-staleness-note.mjs");
 const REBUILD = "npm run build:production";
 

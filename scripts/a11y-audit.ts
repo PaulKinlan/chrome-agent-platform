@@ -13,8 +13,9 @@
 //
 //   deno run -A scripts/a11y-audit.ts
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { makeChecker } from "./lib/expected-red.ts";
 

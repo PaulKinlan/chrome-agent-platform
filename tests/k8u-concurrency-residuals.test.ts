@@ -25,6 +25,7 @@
 //      can never post. Eviction cannot resurrect what does not exist.
 //
 // @ts-nocheck — the browser-context mocks are intentionally dynamic (house style).
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 await import("../extension/content/bridge-auth.js");
@@ -38,7 +39,7 @@ const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
 // (the webmcp-status.test.ts pattern, minimized).
 // ---------------------------------------------------------------------------
 const CS_SRC = Deno.readTextFileSync(
-  new URL("../extension/content/content-script.js", import.meta.url).pathname,
+  fileURLToPath(new URL("../extension/content/content-script.js", import.meta.url)),
 );
 
 function makeBridge(swRoutes = {}) {
@@ -204,7 +205,7 @@ Deno.test("k8u (c): concurrent same-origin builds never share or repoint each ot
 // load the REAL content/main-world.js in a mocked page realm.
 // ---------------------------------------------------------------------------
 const MW_SRC = Deno.readTextFileSync(
-  new URL("../extension/content/main-world.js", import.meta.url).pathname,
+  fileURLToPath(new URL("../extension/content/main-world.js", import.meta.url)),
 );
 
 Deno.test("k8u (d): a cancelled in-flight invocation can never post under a cancel/resume flood", async () => {

@@ -21,11 +21,12 @@
 // are only ever consumed by commits that also write a real user-language entry,
 // which keeps the changelog contiguous by construction.
 
+import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf-8"));

@@ -14,10 +14,11 @@
 //
 // A new harness with no entry fails here; a deleted harness with a stale entry
 // fails here; a `gate` that is not actually in `test:all` fails here.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { HARNESSES, harnessFiles, katFiles, readKatVerdicts, RETIRED_KATS, staleExpectedReds } from "../scripts/lib/harness-registry.ts";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const pkg = JSON.parse(Deno.readTextFileSync(`${ROOT}package.json`));
 const scripts: Record<string, string> = pkg.scripts ?? {};
 

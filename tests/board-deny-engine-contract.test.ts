@@ -20,6 +20,7 @@
 //      - Live state MUST be read after acquiring the import maintenance barrier so
 //        concurrent owner policy modifications are not overwritten.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
   BOARD_DENY_RULES_KEY,
@@ -30,7 +31,7 @@ import {
   classifyOpfsPath,
 } from "../extension/lib/archive-target-registry.js";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // ── 1. Storage & Census Truth ───────────────────────────────────────────────
 

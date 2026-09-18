@@ -5,9 +5,10 @@
 // flag only. Drift target: packages/bundled/sqlite3/PROVENANCE.json — a
 // generated file no other test reads.
 // @ts-nocheck: subprocess and byte-level fixtures.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
 const DRIFT_TARGET = `${ROOT}packages/bundled/sqlite3/PROVENANCE.json`;
 const decoder = new TextDecoder();

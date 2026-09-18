@@ -13,9 +13,10 @@
 //
 //   deno run -A scripts/component-gallery-smoke.ts
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DOCS = `${ROOT}docs`;
 
 let pass = 0;

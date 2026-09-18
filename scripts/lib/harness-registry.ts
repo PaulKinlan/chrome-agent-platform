@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 // harness-registry.ts — every browser harness in scripts/ has exactly one class.
 // CAP-FB-20260830-SUITE-HONESTY-01
 //
@@ -200,7 +201,7 @@ export const RETIRED_KATS: ReadonlySet<string> = new Set(
   Object.entries(HARNESSES).filter(([f, e]) => isKat(f) && e.class === "manual").map(([f]) => f),
 );
 
-const SCRIPTS = new URL("../", import.meta.url).pathname;
+const SCRIPTS = fileURLToPath(new URL("../", import.meta.url));
 
 /** Every top-level scripts/*.ts (the harnesses; lib/ is not a harness). */
 export function harnessFiles(): string[] {
@@ -221,7 +222,7 @@ export function katFiles(): string[] {
  * so a KAT that has gone green while still listed expected-red fails
  * `deno test` too, not only the runner (CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01).
  * Gitignored (.cache/); absent on a machine that has not run the KATs. */
-export const KAT_VERDICTS_PATH = new URL("../../.cache/kat-verdicts.json", import.meta.url).pathname;
+export const KAT_VERDICTS_PATH = fileURLToPath(new URL("../../.cache/kat-verdicts.json", import.meta.url));
 
 export interface KatVerdict {
   exit: number;

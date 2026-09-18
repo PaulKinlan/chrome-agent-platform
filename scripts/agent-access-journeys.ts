@@ -22,10 +22,11 @@
 // agent-provider-picker.ts); the assertions are exercised at runtime by the
 // exact-assertion-set gate below, not by the type checker.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const GIT = "/usr/bin/git";
 const EVIDENCE_DIR = durableDir(`cap-agent-access-evidence-${Date.now()}`);

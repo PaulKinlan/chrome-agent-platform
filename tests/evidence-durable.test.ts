@@ -4,11 +4,12 @@
 //     source tree (/tmp, /home/<user>); (2) full regeneration verification
 //     passes on a pristine fresh-checkout materialization with NO /tmp
 //     evidence present — the evidence lives in the repo now.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { join, relative } from "jsr:@std/path";
 import { materializeSourceTree } from "../scripts/lib/source-materialization.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
 const decoder = new TextDecoder();
 function run(cmd, args, opts = {}) {

@@ -10,6 +10,7 @@
 // fixed canonical exemption with the exact allowed call shape.
 // @ts-nocheck
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   TRANSPORT_MESSAGE_TYPES,
@@ -120,7 +121,7 @@ const A2_CONTRACTS = {
 
 Deno.test("A2 stream tranche: base64/md5/sha256/sha512/wc/xxd produce the EXACT example outputs through the REAL worker", async () => {
   const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   for (const [toolId, contract] of Object.entries(A2_CONTRACTS)) {
     const spec = PREVIEW_SPECS[toolId];
     assert(spec, `${toolId} is in the spec map`);
@@ -161,7 +162,7 @@ const A1_CONTRACTS = {
 
 Deno.test("FND-1 predecessor KAT: csvtool/uuid/head/tail/cut retain exact UTF-8 result arms", async () => {
   const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   for (const [toolId, contract] of Object.entries(A1_CONTRACTS)) {
     const spec = PREVIEW_SPECS[toolId];
     const casBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${spec.casSha}.wasm`));
@@ -205,7 +206,7 @@ Deno.test("FND-1 predecessor KAT: csvtool/uuid/head/tail/cut retain exact UTF-8 
 const STAT_SHA = "cc493debd83fca19910ab7de3f174c89625efd2e03c3884ed2682e6f1cd39a5f";
 
 async function runStat(args, seed) {
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${STAT_SHA}.wasm`));
   const job = makeJob({
     stdin: new Uint8Array(0), workspaceSeed: seed,
@@ -406,7 +407,7 @@ const DU_SHA = "089510ba2c38685d487158d836ac2b08d41756356a66ac3c71860e2e15e1945d
 const TREE_SHA = "65362b548d918eeb102f034bc4fc270ef450be463b82a0ffbe71a3ef1b8aa2cb";
 
 async function runDirectoryTool(toolId, sha, args, workspaceSeed, acceptedExitCodes = [0]) {
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${sha}.wasm`));
   const job = makeJob({
     args: [toolId, ...args],
@@ -548,7 +549,7 @@ Deno.test("du/tree admission: exact 12-import retained binaries and exact isolat
 const DIFF_SHA = "47d674035f83bf0de7b4a2ae5ee7d5e6bbe505713974ec6e5c83b2c379307c6f";
 
 async function runDiffPatch(tool, args, acceptedExitCodes) {
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const row = BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === tool);
   const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${row.binary.sha256}.wasm`));
@@ -621,7 +622,7 @@ Deno.test("diff/patch Release C: schema/forgery/bounds mutants fail closed", asy
 // capture independently pins libc's mount mapping through an injected read-only adapter.
 // ──────────────────────────────────────────────────────────────────────────
 async function runActualStatAgainstCapture(guestPath) {
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
   const row = BUNDLED_TOOL_PACKAGE_ROWS.find((candidate) => candidate.toolId === "stat");
   assert(row, "the retained stat package row exists");
@@ -740,7 +741,7 @@ Deno.test("/job preopen: actual stat refuses non-mount and traversal argv before
 const MARKDOWN_SHA = "c149a61938bae19b5062f976b80e092729085564e0e1a31700704534043baf91";
 
 async function runMarkdown(args, stdin) {
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   const wasmBytes = new Uint8Array(await Deno.readFile(`${repoRoot}extension/wasm/cas/${MARKDOWN_SHA}.wasm`));
   const job = makeJob({ stdin: new Uint8Array(new TextEncoder().encode(stdin)) });
   const rehydrated = { ...job, stdin: new Uint8Array(job.stdin) };
@@ -781,7 +782,7 @@ Deno.test("fd_fdstat_set_flags: import linkage — the wasi table exposes it + t
   const { wasi } = directRuntimeFlags();
   assertEquals(typeof wasi.fd_fdstat_set_flags, "function", "the runtime exposes fd_fdstat_set_flags");
   // the SUPPORTED set now includes it (the markdown binary's 12 imports all audit-clean)
-  const rt = Deno.readTextFileSync(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url).pathname);
+  const rt = Deno.readTextFileSync(fileURLToPath(new URL("../extension/lib/wasi-preview1-runtime.js", import.meta.url)));
   const m = rt.match(/SUPPORTED_WASI_PREVIEW1_IMPORTS = Object\.freeze\(\[([^\]]+)\]/);
   assert(m, "supported import set found");
   const names = [...m[1].matchAll(/"([a-z_0-9]+)"/g)].map((x) => x[1]);
@@ -851,7 +852,7 @@ Deno.test("fd_fdstat_set_flags: BEHAVIORAL KAT of the pure planner (no FD seedin
 Deno.test("fd_fdstat_set_flags: the DISABLED markdown binary now RUNS through the real Worker with zero set_flags calls (package remains disabled)", async () => {
   const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
   const { BUNDLED_TOOL_PACKAGE_ROWS } = await import("../extension/lib/bundled-tool-packages.data.js");
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   // markdown IS admitted now (Release B) — this test's RUN assertion remains
   // the import-linkage proof
   const row = BUNDLED_TOOL_PACKAGE_ROWS.find((r) => r.toolId === "markdown");
@@ -893,7 +894,7 @@ const B2_CONTRACTS = {
 
 Deno.test("B2 text tranche: sort/uniq/tr/grep/toml2json produce the EXACT example outputs through the REAL worker", async () => {
   const { PREVIEW_SPECS } = await import("../extension/lib/tool-exec-preview.js");
-  const repoRoot = new URL("..", import.meta.url).pathname;
+  const repoRoot = fileURLToPath(new URL("..", import.meta.url));
   for (const [toolId, contract] of Object.entries(B2_CONTRACTS)) {
     const spec = PREVIEW_SPECS[toolId];
     assert(spec, `${toolId} is in the spec map`);

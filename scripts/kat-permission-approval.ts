@@ -13,10 +13,11 @@
 //      revocation and return to #permissions.
 //   5. Captures screenshots, console messages, network activity, and accessibility tree.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const EVIDENCE_DIR = chromeProfileDir("kat-permissions");
 await Deno.mkdir(EVIDENCE_DIR, { recursive: true });

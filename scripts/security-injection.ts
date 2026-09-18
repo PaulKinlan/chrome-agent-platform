@@ -19,9 +19,10 @@
 // assigned through launchChrome(); never fixed.
 //
 // usage: deno run -A scripts/security-injection.ts [--evidence <dir>]
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const CHROMIUM = Deno.env.get("CHROMIUM") ?? "/usr/bin/chromium";
 const args = [...Deno.args];

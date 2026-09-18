@@ -2,11 +2,12 @@
 // Native file chooser interception + CDP keyboard/mouse input; no mocked store,
 // no pregranted permissions, no giant runtime JSON payload, no Wasm execution.
 // deno run -A scripts/kat-user-wasm-store.ts [extension-dir] [evidence-dir]
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { launchChrome, openCdp, waitForServiceWorker, withTimeout } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? durableDir(`kat-user-wasm-${Date.now()}`);
 const PROFILE = durableDir(`kat-user-wasm-profile-${Date.now()}`);

@@ -9,10 +9,11 @@
 //
 // Screenshots land in <out-dir> (default ./.cache/kat-noun-discipline).
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const OUT = Deno.args[0] ?? `${ROOT}.cache/kat-noun-discipline`;
 const CHROMIUM = "/usr/bin/chromium";

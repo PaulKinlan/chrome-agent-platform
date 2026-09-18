@@ -9,6 +9,7 @@
 // wrote JSON.stringify(event.toolArgs) raw, and ntp.js DROPPED covered
 // refreshes with no dirty flag.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals } from "jsr:@std/assert@1";
 
 // ── minimal browser-global stubs (components.js touches these at load) ────
@@ -123,7 +124,7 @@ Deno.test("activity refresh: seeded (gallery) data is never re-queried", async (
 // ── P1-d: redaction at the persistence + render seams (source pins) ───────
 
 Deno.test("activity journal write path redacts tool args AND results at persistence", () => {
-  const sw = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
+  const sw = Deno.readTextFileSync(fileURLToPath(new URL("../extension/background/service-worker.js", import.meta.url)));
   assert(sw.includes("journalJson(redactSecrets(event.toolArgs))"), "tool-call journal must redact args before serialization (canonical redactor → valid bounded journalJson — a mid-string slice corrupts replays)");
   assert(sw.includes("redactToolResult(event.result)"), "tool-result journal must decode + redact STRING and wrapped results before persist (round-3 P1)");
 });
@@ -172,14 +173,14 @@ Deno.test("redactToolResult: non-secret values pass through unchanged", async ()
 });
 
 Deno.test("activity explorer: summary + detail/copy route tool RESULTS through redactToolResult", () => {
-  const src = Deno.readTextFileSync(new URL("../extension/shared/components.js", import.meta.url).pathname);
+  const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components.js", import.meta.url)));
   assert(src.includes("redactToolResult(raw)"), "the collapsed-row summary must redact the decoded result");
   assert(src.includes('addBlock("result", redactToolResult(e.result))'), "the detail tree + copy must render the redacted decoded view");
   assert(!/const d = _unwrap\(raw\)/.test(src), "the raw _unwrap interpolation seam must be gone");
 });
 
 Deno.test("activity explorer redacts historical values before render + copy", () => {
-  const src = Deno.readTextFileSync(new URL("../extension/shared/components.js", import.meta.url).pathname);
+  const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/shared/components.js", import.meta.url)));
   assert(src.includes('import { redactSecrets } from "../lib/pure.js";'), "the canonical redactor is imported");
   assert(src.includes("redactSecrets(parsed.value)"), "_detailBody redacts parsed values before tree render + copy");
   assert(src.includes("redactSecrets(p.value)"), "the summary-line args preview is redacted too");
@@ -224,7 +225,7 @@ Deno.test("redactToolResult: BARE credential shapes scrub without keyword contex
 });
 
 Deno.test("SW persistence: scheduled-script results route through redactToolResult before journalAppend", () => {
-  const sw = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
+  const sw = Deno.readTextFileSync(fileURLToPath(new URL("../extension/background/service-worker.js", import.meta.url)));
   assert(sw.includes("redactToolResult(scriptResultRaw)"), "the scheduled-script result/error must be redacted before persist (round-4 P1-d)");
 });
 
@@ -295,7 +296,7 @@ Deno.test("redactSecrets: a throwing getter never pollutes a caller-owned cycle 
 // ── P1-a: covered refreshes are DEFERRED (dirty flag + flush on HUB return)
 
 Deno.test("ntp: a covered refresh marks the log dirty; returning to HUB flushes it", () => {
-  const src = Deno.readTextFileSync(new URL("../extension/ntp/ntp.js", import.meta.url).pathname);
+  const src = Deno.readTextFileSync(fileURLToPath(new URL("../extension/ntp/ntp.js", import.meta.url)));
   assert(src.includes("runLogDirty = true; return;"), "covered refresh defers via the dirty flag");
   const flushes = src.split("flushRunLogDirty()").length - 1;
   // definition + closeView + hideThreadView call sites

@@ -2,9 +2,10 @@
 // tests/artifact-newtab.test.ts — Tests for Artifact Sizing, New-Tab Opening,
 // and Minimal Web-Accessible Resources (WAR) Security.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 // Stub browser globals for Deno test execution
 if (!globalThis.HTMLElement) {

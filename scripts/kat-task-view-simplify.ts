@@ -25,10 +25,11 @@
 //
 //   deno run -A scripts/kat-task-view-simplify.ts <path-to-extension> [<out-dir>]
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-task-view-simplify`;
 const CHROMIUM = "/usr/bin/chromium";

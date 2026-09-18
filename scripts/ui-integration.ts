@@ -6,10 +6,11 @@
 //
 //   deno run -A scripts/ui-integration.ts
 
+import { fileURLToPath } from "node:url";
 import { CHROMIUM, launchChrome, safeCaptureScreenshot } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 
 // Hard wall-clock budget: every CDP call below awaits a response with no

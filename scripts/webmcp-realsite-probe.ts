@@ -28,12 +28,13 @@
 // under the shim, the owner's DOMException originates in the native layer,
 // not in the site's code, and that conclusion is recorded in the evidence.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const OUT = Deno.args[0] ?? `${ROOT}.cache/webmcp-realsite-probe`;
 const SITE = "https://beads.gascity.com";

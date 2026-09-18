@@ -6,10 +6,11 @@
 //
 //   deno run -A scripts/panel-leak-probe.ts [cycles=10]
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const CYCLES = Number(Deno.args[0] ?? 10);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

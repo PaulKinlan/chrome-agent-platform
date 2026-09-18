@@ -9,6 +9,7 @@
 // Hermetic cases build their own scratch git repo under the durable root; the
 // last case is SOURCE-BOUND: it runs the real extractor over the real history
 // and requires it to find the links that exist there.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 import { writeFileSync, rmSync, mkdirSync } from "node:fs";
@@ -88,7 +89,7 @@ Deno.test("beads-landing-link: a bead with no landing reference is reported as n
 });
 
 Deno.test("beads-landing-link: SOURCE-BOUND — the real history yields the links that exist there (j4t1)", async () => {
-  const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+  const root = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
   const links = landingLinks({ cwd: root, range: "origin/main~30..origin/main" });
   // The measured fact that motivated the tool: most recent commits name a bead.
   assert(links.length >= 15, `expected the real history to reference many beads, got ${links.length}`);

@@ -24,12 +24,13 @@
 // Uses the mandated launchChrome() (kernel-assigned debug port). Never a fixed
 // port.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { startMcpTestServer } from "./mcp-test-server.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? Deno.env.get("CAP_EVIDENCE_DIR") ?? durableDir("cap-mcp-tool-injection-kats");
 const CHROMIUM = "/usr/bin/chromium";

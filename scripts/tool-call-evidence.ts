@@ -19,7 +19,8 @@
 // run is still not reproducible in headless — the provider gate needs the
 // provider's host permission and headless has no prompt UI to grant it.)
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+import { fileURLToPath } from "node:url";
 import { pairToolJournal } from "../extension/shared/conversation.js";
 import { CHROMIUM, launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -705,7 +706,7 @@ async function main() {
     await Deno.writeTextFile(`${EVIDENCE_OUT}/evidence.log`, JSON.stringify({ commit: head, generated: new Date().toISOString(), mode: MODE, checks: `${pass}/${pass + fail}` }, null, 2) + "\n");
     await Deno.writeTextFile(`${EVIDENCE_OUT}/transcript.jsonl`, transcript.map((t) => JSON.stringify(t)).join("\n") + "\n");
     let scriptHash = "unknown";
-    try { scriptHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await Deno.readFile(new URL(import.meta.url).pathname)))].map((b) => b.toString(16).padStart(2, "0")).join(""); } catch { /* ignore */ }
+    try { scriptHash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", await Deno.readFile(fileURLToPath(new URL(import.meta.url)))))].map((b) => b.toString(16).padStart(2, "0")).join(""); } catch { /* ignore */ }
     const meta: Record<string, unknown> = {
       commit: head,
       generated: new Date().toISOString(),

@@ -3,13 +3,14 @@
 // section live, a real skill import (local SKILL.md server), and the old
 // deep-link redirect. Evidence → the durable evidence root (cap-skills-evidence/).
 
+import { fileURLToPath } from "node:url";
 import { parse } from "https://deno.land/std/flags/mod.ts";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const args = parse(Deno.args, { string: ["out"], default: { out: durableDir("cap-skills-evidence") } });
 const OUT = args.out;
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 await Deno.mkdir(OUT, { recursive: true });
 

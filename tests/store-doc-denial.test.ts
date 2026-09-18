@@ -9,6 +9,7 @@
 // OPT runs zod's jitless interpreter BY DESIGN. Validation parity is pinned in
 // tests/zod-jitless-fallback.test.ts.
 // @ts-nocheck — build output text + AST classifier over real bundles.
+import { fileURLToPath } from "node:url";
 import { assertEquals, assertMatch } from "jsr:@std/assert@1";
 import { parse } from "npm:acorn";
 import { findDynamicEvaluators } from "../scripts/lib/dynamic-evaluator-scan.mjs";
@@ -17,7 +18,7 @@ const { execFileSync } = await import("node:child_process");
 const { readFile } = await import("node:fs/promises");
 const path = (await import("node:path")).default;
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("store: the pinned Doc.compile denial fires and no evaluator survives in any bundle", async () => {
   const output = execFileSync("node", ["build.mjs", "--target=store"], {

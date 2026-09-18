@@ -3,6 +3,7 @@
 // WebSocket stub attached via the production attachWsHandlers, and the real
 // pump/push buffers — no manual notifyExit/fallback arrays.
 // @ts-nocheck — dynamic stubs.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
 const fsQ = "node:fs/promises", osQ = "node:os", pathQ = "node:path", esbQ = "esbuild";
@@ -12,7 +13,7 @@ const path = (await import(pathQ)).default;
 const { build } = await import(esbQ);
 
 // ── extract the production client section (verbatim bytes) ──
-const src = await fsp.readFile(new URL("../scripts/agent-provider-picker.ts", import.meta.url).pathname, "utf8");
+const src = await fsp.readFile(fileURLToPath(new URL("../scripts/agent-provider-picker.ts", import.meta.url)), "utf8");
 const START = src.indexOf("// ── robust CDP client");
 const END = src.indexOf("// find the extension id");
 assert(START !== -1 && END !== -1 && END > START);
@@ -306,7 +307,7 @@ Deno.test("startup: a FAILING test-build child preserves its first cause (exit c
     // directory`), which read as a startup-handling defect in this test.
     // chrome-agent-platform-uzik made the gates concurrent, so the race is
     // reachable; `.cache/` is gitignored scratch and the child never needs it.
-    execSync(`rsync -a --exclude '/.cache/' ${JSON.stringify(new URL("..", import.meta.url).pathname + "/")} ${JSON.stringify(repo + "/")}`, { shell: "/bin/bash", stdio: "pipe" });
+    execSync(`rsync -a --exclude '/.cache/' ${JSON.stringify(fileURLToPath(new URL("..", import.meta.url)) + "/")} ${JSON.stringify(repo + "/")}`, { shell: "/bin/bash", stdio: "pipe" });
     // Break the builder so the child exits nonzero:
     await fsp2.writeFile(path2.join(repo, "scripts/build-test-extension.mjs"), "process.exit(97);\n");
     // Run the journey; it must exit nonzero and emit an early manifest naming code=97.

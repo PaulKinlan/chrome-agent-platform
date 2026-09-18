@@ -20,9 +20,10 @@
 // thread-view:project), and the OPFS read count, so the redesign argues from
 // measurements rather than from reading the code.
 
+import { fileURLToPath } from "node:url";
 import { CHROMIUM, launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 
 const arg = (name: string, dflt: number) => {

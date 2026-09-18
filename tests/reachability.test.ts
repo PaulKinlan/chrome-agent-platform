@@ -5,6 +5,7 @@
 // gate can fail by planting an unreferenced file in a copy of the tree.
 
 // @ts-nocheck — the checker is plain ESM shared with node's build.mjs.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   checkReachability,
@@ -14,7 +15,7 @@ import {
   resolveRef,
 } from "../scripts/check-reachability.mjs";
 
-const REPO = new URL("../", import.meta.url).pathname.replace(/\/$/, "");
+const REPO = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
 
 const io = {
   readFile: (p: string) => Deno.readTextFile(p),

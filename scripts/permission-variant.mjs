@@ -28,6 +28,7 @@
 // Every build writes <outDir>/VARIANT-INTEGRITY.json: the sha256 of every
 // file, and the assertion that ONLY manifest.json differs from the source.
 
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { cp, lstat, mkdir, readFile, readdir, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -78,7 +79,7 @@ async function treeHashes(dir) {
  * no-op that would hide a drifted manifest).
  */
 export async function buildVariant({ srcDir, outDir, permissions }) {
-  const src = resolve(srcDir ?? new URL("../extension", import.meta.url).pathname);
+  const src = resolve(srcDir ?? fileURLToPath(new URL("../extension", import.meta.url)));
   const out = resolve(outDir);
   if (!Array.isArray(permissions) || permissions.length === 0) {
     throw new Error("buildVariant: permissions must be a non-empty array");

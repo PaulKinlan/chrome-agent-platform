@@ -1,6 +1,7 @@
 // tests/permission-variant.test.ts — the generic permission-variant builder:
 // byte-identical copies that pre-hold optional permissions at install, with a
 // machine-verifiable integrity manifest, and fail-closed refusals.
+import { fileURLToPath } from "node:url";
 import { buildVariant, verifyVariantIntegrity } from "../scripts/permission-variant.mjs";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert";
 
@@ -119,7 +120,7 @@ Deno.test("permission variant: the real manifest keeps the matrix capabilities o
   // future change moves either out of optional_permissions, the variant
   // builder refuses — this pins the reason WHY (the matrix depends on it).
   const manifest = JSON.parse(await Deno.readTextFile(
-    new URL("../extension/manifest.json", import.meta.url).pathname,
+    fileURLToPath(new URL("../extension/manifest.json", import.meta.url)),
   ));
   const optional = manifest.optional_permissions ?? [];
   assert(optional.includes("tabGroups"), "tabGroups must stay optional (the matrix variant pre-holds it)");

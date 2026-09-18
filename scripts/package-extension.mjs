@@ -10,6 +10,7 @@
 // verification and atomic replacement. Store target checks do not transform
 // package bytes or replace that primary SHA authority.
 
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -25,7 +26,7 @@ import {
   STORE_TARGET,
 } from "./store-target-policy.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const parsed = parsePackageArguments(process.argv.slice(2));
 const { archivePath, target, validateOnly } = parsed;
 

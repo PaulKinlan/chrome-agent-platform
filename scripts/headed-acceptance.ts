@@ -36,9 +36,10 @@
 //      or idle session (monitors: []) cannot show the OS permission prompts.
 //   4. /usr/bin/chromium must exist.
 
+import { fileURLToPath } from "node:url";
 import { CHROMIUM, instanceProfile, launchChrome } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const FIXTURE_PORT = 8934;
 const PAGE_ORIGIN = `http://127.0.0.1:${FIXTURE_PORT}`;

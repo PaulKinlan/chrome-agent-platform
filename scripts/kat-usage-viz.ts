@@ -15,11 +15,12 @@
 // chrome-agent-platform-q2we). What this harness proves: the Usage panel
 // renders honestly from real stored data. Counter-on-run behavior, if the
 // product decision changes, needs a run-driven probe then.
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? durableDir("cap-usage-viz-kats");
 const CHROMIUM = "/usr/bin/chromium";

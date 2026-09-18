@@ -2,6 +2,7 @@
 // steady-state dist SYMLINK must NOT re-run the legacy-dir bootstrap, and
 // dangling v-boot symlink residue under dist-versions must be GC'd.
 // @ts-nocheck: dynamic Node filesystem imports exercise real build pointers.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { packageExtensionArchive } from "../scripts/package-archive.mjs";
 const fsMod = "node:fs/promises";
@@ -11,7 +12,7 @@ const { execFileSync } = await import(cpMod);
 const pathMod = "node:path";
 const path = (await import(pathMod)).default;
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = path.join(ROOT, "extension");
 const DIST = path.join(EXT, "dist");
 const VERSIONS = path.join(EXT, "dist-versions");

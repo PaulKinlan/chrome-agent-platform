@@ -10,11 +10,12 @@
 //   3. source pin: chrome-launch cancels stderr reader on proc exit, releasing
 //      the stream and preventing do_epoll_wait hangs on orphaned grandchild fds.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { runSerialFile } from "../scripts/lib/serial-phase.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("6yrq: runSerialFile times out a hanging test boundedly and returns exit 124", async () => {
   // Spawn a real test script that hangs indefinitely via an unresolving promise.

@@ -8,10 +8,11 @@
 //   4. No test in tests/ requests canonicalLock: true on launchChrome().
 //   5. tests/chrome-profile-location.test.ts runs in the parallel phase of npm test.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { partition } from "../scripts/test-partition.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 function stripComments(src: string): string {
   return src

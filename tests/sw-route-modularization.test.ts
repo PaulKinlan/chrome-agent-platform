@@ -2,6 +2,7 @@
 // Tests for CAP-FB-20260821-SW-ROUTE-MODULARIZATION-01 (first slice: provider + kv + perm-lease)
 // @ts-nocheck — unit tests run under Deno.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import * as acorn from "npm:acorn";
 import {
@@ -433,7 +434,7 @@ const AGENT_SCHEDULE_STUB_DEPS = {
 };
 
 Deno.test("sw routes: AST verification of route registration across service-worker and modules", () => {
-  const swSrc = Deno.readTextFileSync(new URL("../extension/background/service-worker.js", import.meta.url).pathname);
+  const swSrc = Deno.readTextFileSync(fileURLToPath(new URL("../extension/background/service-worker.js", import.meta.url)));
   const ast = acorn.parse(swSrc, { ecmaVersion: "latest", sourceType: "module" });
 
   // Find the mergeRouteMaps call for handlers

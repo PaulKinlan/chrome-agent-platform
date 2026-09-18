@@ -32,6 +32,7 @@
 //
 // Run: deno run -A scripts/kat-bundled-execute.ts   (takes the Chrome slot)
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import {
@@ -41,7 +42,7 @@ import {
   executeEnvelope,
 } from "./lib/scripted-provider.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXTENSION = `${ROOT}extension`;
 const TIMESTAMP = new Date().toISOString().replaceAll(":", "-");
 const EVIDENCE = durableDir("kat-bundled-execute", TIMESTAMP);
@@ -58,7 +59,7 @@ const PNG_1X1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8B
 // binary fixture; the same encoder shape is pinned in oxipng-admission.test.ts.
 const OXIPNG_INPUT = await naiveRgbaPng(32, 32);
 const OXIPNG_INPUT_B64 = base64Of(OXIPNG_INPUT);
-const JXL_INPUT_BYTES = await Deno.readFile(new URL("../packages/bundled/evidence/jxl/fixtures/small8.jxl", import.meta.url).pathname);
+const JXL_INPUT_BYTES = await Deno.readFile(fileURLToPath(new URL("../packages/bundled/evidence/jxl/fixtures/small8.jxl", import.meta.url)));
 const JXL_INPUT_B64 = base64Of(JXL_INPUT_BYTES);
 // moim: a pinned shapes/paths SVG (the native probe's fixture (a)) —
 // no text, no external refs: the assertion is the PNG signature + size.

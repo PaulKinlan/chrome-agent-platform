@@ -28,10 +28,11 @@
 // port, endpoint read from this process's own stderr). The extension is the
 // REAL built bundle; the tabs are served by a local fixture with one unique
 // FACT per page so "cited" is a verifiable count, not an impression.
+import { fileURLToPath } from "node:url";
 import { killProcessTree } from "./lib/process-tree.ts";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const CHROMIUM = Deno.env.get("CAP_CHROMIUM") ?? "/usr/bin/chromium";
 const MODEL_ID = Deno.env.get("CAP_LIVE_MODEL") ?? "gemini-3.7-flash";

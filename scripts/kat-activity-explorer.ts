@@ -10,9 +10,10 @@
 //
 //   deno run -A scripts/kat-activity-explorer.ts
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {

@@ -3,9 +3,10 @@
 // pointer + keyboard interactions, and retains screenshots/geometry outside the
 // source tree when SIDEBAR_PARITY_ARTIFACT_DIR is set.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const OUT = Deno.env.get("SIDEBAR_PARITY_ARTIFACT_DIR") ||
   await Deno.makeTempDir({ prefix: "cap-sidebar-parity-artifacts-" });

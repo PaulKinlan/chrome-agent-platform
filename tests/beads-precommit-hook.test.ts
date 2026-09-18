@@ -20,13 +20,14 @@
 // text through the same harness and DEMANDS the defect: a harness that cannot
 // see the bug would prove nothing about the fix.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-const HOOKS_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "scripts", "git-hooks");
+const HOOKS_DIR = path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "scripts", "git-hooks");
 const BASE = '{"_type":"issue","id":"base-1"}\n';
 const FRESH = '{"_type":"issue","id":"fresh-1"}\n{"_type":"issue","id":"fresh-2"}\n';
 

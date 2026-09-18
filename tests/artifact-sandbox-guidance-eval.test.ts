@@ -55,6 +55,7 @@ globalThis.document = {
 };
 globalThis.matchMedia = () => ({ matches: false });
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 const components = await import("../extension/shared/components.js");
 const { injectFrameGuards, sandboxApiGuardScript } = components;
@@ -180,7 +181,7 @@ Deno.test("eval: the generated frame's runtime guard teaches instead of throwing
 // ── Eval scenario 5: the shipped guard BEHAVES against shims ────────────────
 // Extract the exact shipped fragment array from the source (never a copy) and
 // execute it, so the test stays RED if the emitted script regresses.
-const COMPONENTS_PATH = new URL("../extension/shared/components.js", import.meta.url).pathname;
+const COMPONENTS_PATH = fileURLToPath(new URL("../extension/shared/components.js", import.meta.url));
 function extractGuardScript() {
   const src = Deno.readTextFileSync(COMPONENTS_PATH, "utf8");
   const start = src.indexOf("function sandboxApiGuardScript");

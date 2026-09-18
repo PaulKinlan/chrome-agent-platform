@@ -11,11 +11,12 @@
 //   - the computed body background must flip between the schemes
 //   - sampled visible text must hold WCAG AA (>= 4.5:1; large text >= 3:1)
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? durableDir("cap-dark-scheme-kats");
 const CHROMIUM = "/usr/bin/chromium";

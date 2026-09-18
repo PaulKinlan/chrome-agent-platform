@@ -16,6 +16,7 @@
 // So: profiles live outside the repo, on disk, one per instance. These tests
 // pin all four properties, plus the live race itself — a real browser holding a
 // profile while the whole tree is copied.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   chromeProfileDir,
@@ -26,7 +27,7 @@ import {
 } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableRoot, isRamBacked } from "../scripts/lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/u, "");
+const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 const SCRIPTS = `${ROOT}/scripts`;
 
 function scriptFiles(dir = SCRIPTS, prefix = ""): string[] {

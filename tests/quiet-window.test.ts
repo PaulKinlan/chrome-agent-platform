@@ -14,6 +14,7 @@
 // browsers, not other lanes' rustc/esbuild), so the fix is a measurement with
 // an honest verdict — and it must FAIL CLOSED: an unmeasurable box is never
 // assumed quiet.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   awaitQuietWindow,
@@ -30,7 +31,7 @@ import {
   type LoadSample,
 } from "../scripts/lib/quiet-window.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 function sample(over: Partial<LoadSample> = {}): LoadSample {
   return {

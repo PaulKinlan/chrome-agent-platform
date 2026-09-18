@@ -4,10 +4,11 @@
 // the hub page, and proves the returned stdout came from Pyodide execution.
 // The JSON result and a screenshot are kept under the durable evidence root.
 
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXTENSION = `${ROOT}extension`;
 const EVIDENCE = durableDir(
   "kat-pyodide",

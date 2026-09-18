@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { attachmentContext, buildMultimodalTask, validateRunAttachments, textToDataUrl } from "../extension/lib/attachments.js";
 
@@ -188,7 +189,7 @@ Deno.test("site delegation fencing: disenrollment generation mismatch aborts jou
 
 Deno.test("site delegation acceptance: real-browser delegation with attachments and live progress", async () => {
   const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["run", "-A", new URL("../scripts/kat-site-delegation-attachments.ts", import.meta.url).pathname],
+    args: ["run", "-A", fileURLToPath(new URL("../scripts/kat-site-delegation-attachments.ts", import.meta.url))],
     stdout: "piped",
     stderr: "piped",
   });

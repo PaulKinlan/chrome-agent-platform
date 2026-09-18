@@ -5,6 +5,7 @@
 // chrome-agent-platform-4usu: the bounded python execution contract, the
 // admitted-runtime pins, the runtime-provider transport, and — the
 // falsification — REAL Pyodide execution of python_execute code.
+import { fileURLToPath } from "node:url";
 import { assertEquals, assert, assertStringIncludes } from "jsr:@std/assert@1";
 import { runPython, PYTHON_EXEC_BOUNDS } from "../extension/lib/python-execution.js";
 import {
@@ -15,7 +16,7 @@ import {
 import { registerPythonHost } from "../extension/lib/python-host.js";
 
 // ── the pinned on-disk runtime (the same bytes the shipped worker loads) ──
-const RUNTIME_SRC = new URL("../wasm-tools/python/", import.meta.url).pathname;
+const RUNTIME_SRC = fileURLToPath(new URL("../wasm-tools/python/", import.meta.url));
 
 async function sha256HexBytes(bytes) {
   const digest = await crypto.subtle.digest("SHA-256", bytes);

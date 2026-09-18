@@ -7,6 +7,7 @@
 // it shows: it must truthfully disclose that the source preview is partial, state the
 // total length, show the SHA-256 digest of the full source, and mark the truncated preview.
 
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   APPROVAL_DETAIL_BOUNDS,
@@ -83,7 +84,7 @@ Deno.test("ApprovalCard component: renders honest preview notice and source trun
 });
 
 Deno.test("ArtifactInspector component: renders honest preview notice and copy button for file-backed stream artifacts", async () => {
-  const componentsPath = new URL("../extension/shared/components.js", import.meta.url).pathname;
+  const componentsPath = fileURLToPath(new URL("../extension/shared/components.js", import.meta.url));
   const components = await Deno.readTextFile(componentsPath);
 
   // Verifies fileBacked and contentIncomplete checks
@@ -97,7 +98,7 @@ Deno.test("ArtifactInspector component: renders honest preview notice and copy b
   assertStringIncludes(components, 'copyBtn.textContent = t("components_copy_preview_content");');
   assertStringIncludes(components, 't("components_preview_initial_note", String(totalBytes))');
   const catalogue = JSON.parse(await Deno.readTextFile(
-    new URL("../extension/_locales/en/messages.json", import.meta.url).pathname,
+    fileURLToPath(new URL("../extension/_locales/en/messages.json", import.meta.url)),
   ));
   assertStringIncludes(catalogue.components_preview_initial_note.message, "Preview showing initial 64 KiB. Complete file is retained in OPFS stream");
 

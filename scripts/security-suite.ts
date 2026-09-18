@@ -35,11 +35,12 @@
 //
 //   npm run test:security        (the supervisor holds the serialized-Chrome lock)
 
+import { fileURLToPath } from "node:url";
 import { inspectExactProfile, verifyRunnerGuard } from "./security-suite-custody.mjs";
 import { launchChrome, openCdp, type CdpClient } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 
 // Refuse before servers, profiles, or Chromium unless the supervisor-issued

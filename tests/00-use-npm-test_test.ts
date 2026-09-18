@@ -34,9 +34,10 @@ if (Deno.env.get(RUNNER_ENV) !== "1") {
 }
 
 // ---- pins (only reachable through the runner) ----
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 Deno.test("guard: deno.jsonc hides tests/*.test.ts from raw sweeps; deno.runner.jsonc keeps npm resolution", async () => {
   const strip = (s) => s.replace(/^\s*\/\/.*$/gm, "");

@@ -17,9 +17,10 @@
 //   deno run -A scripts/system-prompts-integration.ts            # temporary evidence
 //   deno run -A scripts/system-prompts-integration.ts --retain   # retain to test-artifacts/
 
+import { fileURLToPath } from "node:url";
 import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 // The preview↔run comparator (the single source of truth lives in the
 // extension lib): static layers match by exact receipt; the dynamic
 // runtime-context layer matches by its template receipt.

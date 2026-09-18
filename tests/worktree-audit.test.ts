@@ -1,9 +1,10 @@
 // CAP-FB-20260821-WORKTREE-HYGIENE-01 — the read-only audit over fixture
 // repos: dirty/untracked/detached/rescue/branch reachability + the
 // fail-closed output. The audit NEVER mutates.
+import { fileURLToPath } from "node:url";
 import { assertEquals, assert } from "jsr:@std/assert@1";
 
-const script = new URL("../scripts/worktree-audit.mjs", import.meta.url).pathname;
+const script = fileURLToPath(new URL("../scripts/worktree-audit.mjs", import.meta.url));
 
 function runIn(repo: string, args: string[] = []) {
   const p = new Deno.Command("node", { args: [script, repo, ...args], stdout: "piped", stderr: "piped" }).outputSync();

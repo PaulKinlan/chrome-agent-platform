@@ -9,8 +9,9 @@
 //
 // This runs on a CLEAN profile so it tests the button rather than whatever
 // global state a long suite has accumulated. Run: npm run test:data-clear
+import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
-const EXT = new URL("../extension", import.meta.url).pathname;
+const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, detail = "") => {

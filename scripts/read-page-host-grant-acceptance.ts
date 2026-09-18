@@ -45,11 +45,12 @@
 //
 // Chrome is launched through launchChrome() (a kernel-assigned debugging port
 // read back from Chrome's own stderr — never a fixed port).
+import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 const CHROMIUM = "/usr/bin/chromium";
 const RETAIN = Deno.args.includes("--retain");

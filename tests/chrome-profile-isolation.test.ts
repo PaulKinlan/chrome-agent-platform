@@ -22,10 +22,11 @@
 //     reviewer has to read;
 //   - `instanceProfile()` itself must be unique per call and must not double
 //     separators on a base that already ends in one.
+import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { instanceProfile } from "../scripts/lib/chrome-launch.ts";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SCRIPTS = `${ROOT}scripts`;
 
 /** A per-instance token. Granularity matters: `const STAMP = Date.now()`
