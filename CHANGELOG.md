@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.419] — 2026-09-18
+- guard hash pins so a blanket sweep cannot stale a pinned fixture
+
 ## [0.3.418] — 2026-09-18
 - connect landings back to the beads they already name (j4t1)
 
