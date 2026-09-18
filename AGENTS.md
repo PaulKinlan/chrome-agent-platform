@@ -62,6 +62,17 @@ an exception. These rules make that safe:
    to make the conflict go away), then runs the gates in order: production
    build → focused tests → full suite green → browser-driven verification
    where the lane touches behavior. Only then push.
+   **After every landing, connect the record (j4t1):**
+   `node scripts/beads-landing-link.mjs <range> --comment <landing-sha> --bundle <evidence-path>`
+   walks the landed commits, finds the bead ids they already carry (28 of the
+   last 30 commits on main name one), and appends that link — plus the evidence
+   bundle path — to each bead. Beads were reading OPEN while their behaviour was
+   already on main (four lanes spent a pass rediscovering that on 2026-09-18) and,
+   worse, CLOSED while their work had never landed; ancestry proves neither
+   direction, the commit reference does. `--verify <bead>` answers the inverse
+   question. The tool links, it does not judge: confirm the behaviour is on main
+   before closing, and say plainly when a landing RE-IMPLEMENTED a bead rather
+   than merging its branch.
 3. **Push explicit SHAs, never the local `main` ref**
    (`git push origin <sha>:main`) — the local ref can be moved by another
    session between your checks and your push. Never use
