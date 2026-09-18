@@ -1,6 +1,9 @@
 # Changelog
 
 ## [0.3.416] — 2026-09-18
+- land ejme's tool-config test — driving the PRODUCTION filters
+
+## [0.3.416] — 2026-09-18
 - security-suite escape fixture fails closed when descendant fails to persist
 - exported agentConfig credentials can no longer cross the owner export walk
 
