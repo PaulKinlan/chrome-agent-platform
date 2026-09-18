@@ -4,6 +4,9 @@
 - security-suite escape fixture fails closed when descendant fails to persist
 - exported agentConfig credentials can no longer cross the owner export walk
 - preserve the unlanded S3 registry-oracle work with 49-control execution matrix
+- the pinned Doc denial respects lexical Function bindings (ol0j)
+- Doc.compile denial wired over all four bundles (tptx, absorbing 4f3j)
+- the final generated Store JavaScript gets an evaluator AST gate (kdax)
 
 ## [0.3.415] — 2026-09-18
 - isolate ACP fixture child env and evidence-gate continuity retries
