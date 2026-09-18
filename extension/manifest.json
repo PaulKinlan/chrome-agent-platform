@@ -2,11 +2,7 @@
   "default_locale": "en",
   "manifest_version": 3,
   "name": "Chrome Agent Platform",
-<<<<<<< HEAD
-  "version": "0.3.422",
-=======
-  "version": "0.3.421",
->>>>>>> beb604b9 (docs: OPEN-QUESTIONS #11 resolved by owner decision — name stays, no Store release (isocan-32io))
+  "version": "0.3.423",
   "description": "Chrome as the agent platform: a multi-agent hub that orchestrates the web via WebMCP, with sites-as-sub-agents, origin-keyed OPFS memory, alarms, and usage accounting.",
   "permissions": [
     "alarms",
@@ -99,11 +95,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-<<<<<<< HEAD
-  "version_name": "0.3.422",
-=======
-  "version_name": "0.3.421",
->>>>>>> beb604b9 (docs: OPEN-QUESTIONS #11 resolved by owner decision — name stays, no Store release (isocan-32io))
+  "version_name": "0.3.423",
   "sandbox": {
     "pages": [
       "sandbox/script-sandbox.html",

@@ -1,11 +1,7 @@
 {
   "default_locale": "en",
   "name": "chrome-agent-platform",
-<<<<<<< HEAD
-  "version": "0.3.422",
-=======
-  "version": "0.3.421",
->>>>>>> beb604b9 (docs: OPEN-QUESTIONS #11 resolved by owner decision — name stays, no Store release (isocan-32io))
+  "version": "0.3.423",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",

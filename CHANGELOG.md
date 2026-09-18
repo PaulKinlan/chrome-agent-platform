@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.423] — 2026-09-18
+- repair the three files the idco-rebase landing corrupted with conflict markers (manifest, lock, inventory)
+
 ## [0.3.421] — 2026-09-18
 - OPEN-QUESTIONS #11 resolved by owner decision — name stays, no Store release (isocan-32io)
 
