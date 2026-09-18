@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.433] — 2026-09-18
+- automate named-HUNG path and pin start-failure promptness
+
 ## [0.3.432] — 2026-09-18
 - correct durable-root import in cap-evidence/tar-stream-large-probe.ts
 

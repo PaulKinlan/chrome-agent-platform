@@ -52,6 +52,7 @@ export async function runBoundedChild(command, args, {
     child.stderr?.on("data", (d) => errChunks.push(d));
   }
   let timedOut = false;
+  let spawnError = null;
   let at = "no snapshot";
   const timer = setTimeout(() => {
     timedOut = true;
@@ -62,12 +63,17 @@ export async function runBoundedChild(command, args, {
   }, timeoutMs);
   const [status, signal] = await new Promise((resolve) => {
     child.on("close", (code, sig) => resolve([code, sig]));
-    child.on("error", () => resolve([null, null]));
+    child.on("error", (error) => { spawnError = error; resolve([null, null]); });
   });
   clearTimeout(timer);
   // Reap any descendant that outlived the direct child (pozs).
   if (child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* clean */ } }
   const ms = Date.now() - started;
+  // A child that never STARTED is not a hang: naming it HUNG would be the
+  // wrong-cause error this helper exists to prevent (4ctv).
+  if (spawnError) {
+    throw new Error(`${label} FAILED TO START: ${spawnError.message}`);
+  }
   if (timedOut || status === null) {
     throw new Error(
       `${label} HUNG: no exit within ${(timeoutMs / 1000).toFixed(0)}s (${at}); its process group was killed. ` +
