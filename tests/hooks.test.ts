@@ -58,7 +58,7 @@ function reset() {
 
 Deno.test("hooks catalog covers the full chrome.* event surface", () => {
   const ids = new Set(HOOKS.map((h) => h.id));
-  // chaos's 11 wired events are all present
+  // the 11 baseline wired events are all present
   for (const id of [
     "tabs.onCreated",
     "tabs.onRemoved",

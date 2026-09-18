@@ -1,4 +1,4 @@
-// skill-import.test.ts — the external skill import (the chaos skill-loader
+// skill-import.test.ts — the external skill import (the skill-loader
 // pattern): frontmatter parsing, id slugging, the install-into-master-store
 // round trip, and the SKILLS-UNCAPPED-01 rules (large skills accepted,
 // multi-file files map persisted, generous physical budgets reject honestly).

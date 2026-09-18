@@ -1,4 +1,4 @@
-// lib/skill-import.js — import EXTERNAL skills (the chaos skill-loader pattern).
+// lib/skill-import.js — import EXTERNAL skills (the skill-loader pattern).
 //
 // A skill is fetched from a source (a GitHub repo with a SKILL.md, or a direct
 // URL to a markdown file), its frontmatter (name/description) is parsed, and it
@@ -88,7 +88,7 @@ function makeTotalBudget(label) {
 /**
  * Fetch a SKILL.md from a GitHub repo URL or a direct markdown URL.
  * Returns { files: {SKILL.md: content}, meta: {name, description, author} }.
- * Mirrors ~/chaos's skill-fetcher: GitHub Contents API → raw fallback → direct URL.
+ * Skill fetching pattern: GitHub Contents API → raw fallback → direct URL.
  */
 export async function fetchSkillFromUrl(url) {
   const u = validateHttpUrl(url);

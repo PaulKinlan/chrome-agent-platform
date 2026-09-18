@@ -14,6 +14,7 @@
 - guard teardown browser termination in unique composer evidence script (8dmf)
 - repair model-edit approval acceptance instrument (b5q4)
 - sync-changelog check treats absent destination as unbuilt rather than drift (idco)
+- scrub legacy project references from codebase comments and guard with tests (i6n6)
 
 ## [0.3.419] — 2026-09-18
 - ACP settings surface for endpoint, working directory, and permission mode
