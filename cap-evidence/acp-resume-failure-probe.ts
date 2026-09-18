@@ -95,10 +95,13 @@ try {
   console.log("[probe] frames: method(s) =", JSON.stringify(requests.map((m) => m.method)));
 
   const note = container.system.join(" \n ");
+  // Exact GONE_SESSION error from acp-fake-adapter.mjs, not the runner's self-report
+  // or the generic notice's word "session" (which survives removal of the reason).
+  const expectedResumeError = `session ${STALE_SESSION} is gone`;
   checks.push(["session/load was attempted for the stored session", load?.params?.sessionId === STALE_SESSION, `load=${JSON.stringify(load?.params ?? null)}`]);
   checks.push(["the load failure fell back to a new session (turn not blocked)", news.length === 1 && res.ok === true, `session/new=${news.length} ok=${res.ok} error=${res.error ?? "-"}`]);
   checks.push(["the result marks the fallback (resumed:false + resumeFailed:true)", res.resumed === false && res.resumeFailed === true, `resumed=${res.resumed} resumeFailed=${res.resumeFailed}`]);
-  checks.push(["the surface was told, with a reason", /could not be restored/i.test(note) && /not found|session/i.test(note), `note=${JSON.stringify(note)}`]);
+  checks.push(["the surface was told, with a reason", /could not be restored/i.test(note) && note.includes(expectedResumeError), `expected reason=${JSON.stringify(expectedResumeError)} note=${JSON.stringify(note)}`]);
   checks.push(["the fallback is not rendered as a hard failure", container.errors.length === 0, `error cards=${container.errors.length}`]);
   checks.push(["the stale store hint was replaced by the new session", stored.get(`acp:${HARNESS}`) === newSessionId && newSessionId !== STALE_SESSION, `store=${stored.get(`acp:${HARNESS}`)} new=${newSessionId}`]);
 } finally {

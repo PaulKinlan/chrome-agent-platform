@@ -7,7 +7,8 @@
 // names: can an EVIDENCE-WRITE failure skip cleanup, and can a CLEANUP failure
 // leave a GREEN? Every case records whether teardown actually ran.
 //
-// Exit 0 when every case behaves fail-closed; exit 1 on any surviving pass.
+// Exit 0 only when every case matches its expectations, including GREEN controls;
+// exit 1 on any unexpected state, cleanup, receipt, or exit result.
 // @ts-nocheck — evidence probe, untyped seams in the house pattern.
 import { finalizeKatExecution } from "../scripts/lib/kat-finalizer.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -99,7 +100,8 @@ async function runCase(
   const ok = outcome.state === expect.state
     && (expect.cleanupRan === undefined || teardownRan === expect.cleanupRan)
     && (expect.receipt === undefined || (expect.receipt === "null" ? outcome.receiptPath === null : outcome.receiptPath !== null))
-    && (expect.state === "GREEN" ? exits.length === 0 || exits[0] === 0 : (outcome.exitCode === 1));
+    && (expect.state === "GREEN" ? exits.length === 0 || exits[0] === 0 : (outcome.exitCode === 1))
+    && (!writeFailure || teardownRan === true);
   if (!ok) falseGreens += expect.state === "RED" && outcome.state === "GREEN" ? 1 : 0;
   results.push({
     name,
@@ -190,9 +192,11 @@ await runCase("write-publish-failure-exit-returns", { state: "RED", cleanupRan: 
   seams: { stageReport: async () => { throw new Error("stage_refused"); }, exit: () => {} },
 }));
 
-console.log(JSON.stringify({ root: ROOT, falseGreens, results }, null, 2));
-if (falseGreens > 0) {
-  console.log(`\nPROBE FAILED: ${falseGreens} false-GREEN case(s) survived.`);
+const unexpectedCases = results.filter((result) => result.verdict === "UNEXPECTED").map((result) => result.name);
+// falseGreens remains a diagnostic; over-rejection and other predicate failures count too.
+console.log(JSON.stringify({ root: ROOT, falseGreens, unexpectedCases, results }, null, 2));
+if (unexpectedCases.length > 0) {
+  console.log(`\nPROBE FAILED: ${unexpectedCases.length} unexpected case(s): ${unexpectedCases.join(", ")}.`);
   Deno.exit(1);
 }
-console.log(`\nPROBE PASSED: every case failed closed (${results.length} cases).`);
+console.log(`\nPROBE PASSED: every case matched expectations (${results.length} cases).`);

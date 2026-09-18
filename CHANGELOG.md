@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.418] — 2026-09-18
+- validation now rejects unexpected finalizer outcomes and missing session-restore reasons
 - connect landings back to the beads they already name (j4t1)
 - enable Stop affordance for in-flight ACP turns (c6gq)
 
