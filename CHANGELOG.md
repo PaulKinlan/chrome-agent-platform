@@ -2,6 +2,7 @@
 
 ## [0.3.418] — 2026-09-18
 - connect landings back to the beads they already name (j4t1)
+- enable Stop affordance for in-flight ACP turns (c6gq)
 
 ## [0.3.417] — 2026-09-18
 - the fresh-checkout fixture materializes the SOURCE CLOSURE, not just the tracked set
