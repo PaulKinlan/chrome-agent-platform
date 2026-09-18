@@ -433,6 +433,8 @@ try {
     };
     const SW = path.join(STAGE, "background/service-worker.js");
     const OPT = path.join(STAGE, "options.bundle.js");
+    const NTP_BUNDLE = path.join(STAGE, "ntp.bundle.js");
+    const SIDEPANEL_BUNDLE = path.join(STAGE, "sidepanel.bundle.js");
     await mkdir(path.dirname(SW), { recursive: true });
     const shimNode = path.join(ROOT, "browser-shim-node.js");
     // DEVELOPER-ONLY MCP transport-spike probe
@@ -471,6 +473,8 @@ try {
       await writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile));
     }
     await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
+    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE });
+    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE });
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
     // component / the SW imports this single build by relative path.
@@ -515,7 +519,7 @@ try {
     let zodProbes = 0;
     let zodDocCompiles = 0;
     const { denyZodDocCompiles } = await import("./scripts/lib/scrub-zod-doc.mjs");
-    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE]) {
+    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
       let bundle = await readFile(scrubPath, "utf8");
       if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
         throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
@@ -544,7 +548,7 @@ try {
     // only reliable on unminified code, and minification never reintroduces
     // them (globals are never renamed). The developer build is untouched.
     if (!DEBUG_BUILD) {
-      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE]) {
+      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
         const source = await readFile(minifyPath, "utf8");
         const minified = await transform(source, {
           minify: true,
@@ -572,7 +576,7 @@ try {
     // as a separately reviewed, manifest-hash-pinned blob lane
     // (scripts/store-target-policy.mjs), not generated JavaScript.
     const { assertNoDynamicEvaluators } = await import("./scripts/lib/dynamic-evaluator-scan.mjs");
-    for (const gatePath of [SW, WORKER, OPT, DIFF_CORE]) {
+    for (const gatePath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
       assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
     }
 
@@ -624,7 +628,7 @@ try {
       console.log(`build: admitted Pyodide runtime staged (${runtimeFiles.length} files, sha256-verified against MANIFEST.json)`);
     }
 
-    for (const rel of ["background/service-worker.js", "options.bundle.js", "shared/diff-core.bundle.js"]) {
+    for (const rel of ["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js"]) {
       const mode = await prevMode(rel);
       if (mode != null) await chmod(path.join(STAGE, rel), mode); // mode failure = publish failure (fatal)
     }

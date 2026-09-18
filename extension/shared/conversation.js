@@ -581,8 +581,6 @@ export function friendlyActivityLabel(toolName, args) {
     case "list_tabs": return "reading your tabs";
     case "read_page": return name ? `reading ${name}` : "reading the page";
     case "capture_screenshot": return "taking a screenshot";
-    case "search_tools": return "choosing a tool";
-    case "execute_tool": return "running a tool";
     case "update_asset": return name ? `updating ${name}` : "updating an artifact";
     case "get_asset": return "reading an artifact";
     case "list_assets": return "listing artifacts";
