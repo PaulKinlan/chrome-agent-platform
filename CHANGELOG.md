@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.419] — 2026-09-18
+- check:changelog passes at a clean checkout — the untracked artifact is 'not built yet', not drift
+
 ## [0.3.418] — 2026-09-18
 - connect landings back to the beads they already name (j4t1)
 - enable Stop affordance for in-flight ACP turns (c6gq)

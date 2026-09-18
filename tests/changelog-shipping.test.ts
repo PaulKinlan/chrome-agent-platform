@@ -75,3 +75,30 @@ Deno.test("production build and package gates own the ignored shipped changelog"
     "packaging fails closed when the generated shipped changelog is absent or stale",
   );
 });
+
+Deno.test("check:changelog passes at a clean checkout — the absent untracked artifact is 'not built yet', not drift (chrome-agent-platform-idco)", async () => {
+  // extension/CHANGELOG.md stopped being tracked (74891c78): at a fresh clone
+  // it does not exist until the build copies it in. Absence is "not built",
+  // and a gate that cannot tell absence from drift reddens every clean
+  // checkout forever.
+  const canonical = new TextEncoder().encode(
+    "# Changelog\n\n## [1.0.0]\n- exact\n",
+  );
+  const read = async (name) => {
+    if (name === "CHANGELOG.md") return canonical; // the canonical source is fine
+    throw Object.assign(new Error("missing"), { code: "ENOENT" }); // the destination is simply not there
+  };
+  let copied = false;
+  const neverCopy = async () => {
+    copied = true;
+  };
+  const result = await syncChangelog({
+    check: true,
+    source: "CHANGELOG.md",
+    destination: "extension/CHANGELOG.md",
+    read,
+    copy: neverCopy,
+  });
+  assertEquals(result.written, false, "a check must never write");
+  assertEquals(copied, false);
+});
