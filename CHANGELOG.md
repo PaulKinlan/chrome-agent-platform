@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.270] — 2026-09-18
+- preserve the unlanded S3 registry-oracle work (untracked in cap-astra-registry-oracle-20260906 since 2026-09-06)
+
 ## [0.3.269] — 2026-09-06
 - the toolbox gains hash_blake3 — BLAKE3 hashing on-device, the first call-export Wasm tool
 
