@@ -2,13 +2,13 @@
 
 **Status:** Authoritative Census (chrome-agent-platform-ygvt / CAP-FB-20260908-OWNER-DISPATCH-CENSUS-01)  
 **Seams:** `extension/background/service-worker.js`, `extension/background/routes/`, `extension/lib/owner-approval.js`, `extension/lib/pure.js`  
-**Population:** 258 total registered routes derived from executable composition (`mergeRouteMaps`).
+**Population:** 259 total registered routes derived from executable composition (`mergeRouteMaps`).
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-This document provides a total, honest census of all 258 message routes registered in the Chrome Agent Platform Service Worker.
+This document provides a total, honest census of all 259 message routes registered in the Chrome Agent Platform Service Worker.
 
 Prior audits (such as 18ug) focused narrowly on call sites of `requireOwnerApproval`, identifying 31 approval sites. However, `requireOwnerApproval` is only one of multiple gating layers in the extension. A route that does not call `requireOwnerApproval` is not necessarily insecure, but a mutation that reaches state modification without an explicit policy decision represents an unclassified authority boundary.
 
@@ -39,7 +39,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (258 registered routes)                 │
+│ - look up type in handlers map (259 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -71,7 +71,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (258 Routes)
+## 3. High-Level Population Summary (259 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
@@ -80,12 +80,12 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 16 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
 | **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 22 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
-| **Execution & Worker Orchestration** | 21 | `extension`, `model`, worker | `runControl`, `activeExecutions`, worker RPC |
+| **Execution & Worker Orchestration** | 22 | `extension`, `model`, worker | `runControl`, `activeExecutions`, worker RPC |
 | **Agent Task Board (`AGENT_BOARD`)** | 13 | `extension`, `model` | Board state machine, role fences |
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 31 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 88 | `owner-options`, `extension` | Read-only; no state mutation |
-| **Total** | **258** | | |
+| **Total** | **259** | | |
 
 ---
 
@@ -254,6 +254,7 @@ Triggers or manages interactive runs, background worker processes, and sandboxed
 | `agent-worker.close` | `routes/agent-worker.js` | Terminates an offscreen worker |
 | `agent-worker.steer` | `routes/agent-worker.js` | Sends steering input to offscreen worker |
 | `agent-worker.journal-append`| `routes/agent-worker.js` | Appends worker event to run journal |
+| `acp.journal` | `service-worker.js` | Journals user turn and streamed tool/assistant results from external agent harnesses into thread store |
 
 ---
 

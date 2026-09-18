@@ -4,7 +4,7 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers 100% of registered routes (258 total).
+//   3. The census classification is complete, disjoint, and covers 100% of registered routes (259 total).
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
 //   5. Unclassified mutations (e.g. named-agent.set-tools) are pinned to an explicit inventory.
 //   6. Unknown message types fail closed at the dispatcher.
@@ -75,6 +75,7 @@ export const CENSUS_CATEGORIES = {
     "python.execute", "table.run", "agent-worker.alive", "agent-worker.progress",
     "agent-worker.result", "agent-worker.ensure", "agent-worker.run", "agent-worker.dispatch",
     "agent-worker.tool", "agent-worker.close", "agent-worker.steer", "agent-worker.journal-append",
+    "acp.journal",
   ]),
   AGENT_BOARD: new Set([
     "board.list", "board.messages", "board.read", "board.deny.list", "board.post",
@@ -181,9 +182,9 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 258", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 259", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 258, `registered routes population must equal 258 (got ${registered.size})`);
+  assertEquals(registered.size, 259, `registered routes population must equal 259 (got ${registered.size})`);
 });
 
 Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {
