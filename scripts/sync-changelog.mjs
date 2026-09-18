@@ -21,8 +21,13 @@ export async function syncChangelog({
     if (error?.code === "ENOENT") return null;
     throw error;
   });
-  const same = shipped !== null && Buffer.compare(canonical, shipped) === 0;
-  if (check && !same) {
+  // chrome-agent-platform-idco: the destination is an UNTRACKED build artifact
+  // (74891c78 stopped tracking it — the build copies CHANGELOG.md in). At a
+  // clean checkout it is simply not there yet: absent is "nothing built",
+  // not drift. Drift is present-and-different, and only that fails --check.
+  const absent = shipped === null;
+  const same = !absent && Buffer.compare(canonical, shipped) === 0;
+  if (check && !same && !absent) {
     throw new Error(
       "DRIFT: extension/CHANGELOG.md differs from CHANGELOG.md — run `npm run sync:changelog`",
     );
