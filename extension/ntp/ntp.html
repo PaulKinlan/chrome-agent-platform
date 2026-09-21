@@ -179,6 +179,14 @@
       overscroll-behavior: contain;
       scrollbar-gutter: stable both-edges;
     }
+    .side-section.side-harness, .side.collapsed .side-section.side-harness { flex:0 0 auto; }
+    .side-harness[hidden] { display:none; }
+    .side-list.harness-list { flex:0 0 auto; gap:4px; padding:4px 4px 12px; scrollbar-gutter:auto; }
+    .side.collapsed .harness-list { padding-inline:0; }
+    .side.collapsed harness-agent-button::part(name),
+    .side.collapsed harness-agent-button::part(open) { display:none; }
+    .side.collapsed harness-agent-button::part(button) { justify-content:center; padding-inline:0; }
+    [dir="rtl"] harness-agent-button::part(open) { transform:scaleX(-1); }
     /* hide the text labels when collapsed (icon rail) */
     .side.collapsed .brand { opacity: 0; visibility: hidden; display: block; pointer-events: none; }
     .side.collapsed .side-label,

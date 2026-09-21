@@ -1,5 +1,7 @@
 # Chrome Agent Platform — Plan & Status
 
+The NTP harness entry points retain the existing registry and conversation routes; their shared launcher component follows the [harness visual contract](docs/DESIGN.md#harness-launchers).
+
 The working plan for the fleet. Every agent/session reads this to see what's happening + where things are.
 
 Browser dependency boundary: azlc replaces Node shims with a hash-pinned
