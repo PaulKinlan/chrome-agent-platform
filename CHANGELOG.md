@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.442] — 2026-09-21
+- merge fix/astra-unex-9z37 (, 9z37)
+
 ## [0.3.441] — 2026-09-21
-- merge cap/9bse-k3 (union-resolved changelog + version bookkeeping)
+- validation now rejects unexpected finalizer outcomes and missing session-restore reasons
 
 ## [0.3.440] — 2026-09-21
 - remove unregistered js-minifier + jwt-decode tools, worker bundles, and their tests
