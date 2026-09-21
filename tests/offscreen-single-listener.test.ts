@@ -12,6 +12,7 @@ Deno.test("offscreen host: exactly ONE listener handles a script-run message (cz
   const listeners: Array<(...args: unknown[]) => unknown> = [];
   (globalThis as any).chrome = {
     runtime: {
+      onConnect: { addListener() {} },
       onMessage: {
         addListener: (fn: (...args: unknown[]) => unknown) => listeners.push(fn),
         removeListener: (fn: (...args: unknown[]) => unknown) => {
