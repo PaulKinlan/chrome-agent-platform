@@ -1,9 +1,13 @@
 # Changelog
 
+## [0.3.444] — 2026-09-21
+- name Node imports in the pre-bundle refusal
+
 ## [0.3.443] — 2026-09-21
 - project browser agent runtime and reject Node imports
 
 ## Unreleased
+- Identify `node:` imports as Node builtins, with their importer, rather than remote script URLs in the pre-bundle scan (azlc review).
 - Remove Node process-launcher dependencies from browser bundles; reject builtin imports instead of shimming them (azlc).
 
 ## [0.3.442] — 2026-09-21

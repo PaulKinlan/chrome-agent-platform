@@ -138,6 +138,8 @@ The build now uses a full-source-hash-pinned browser projection of agent-do
 0.7.0, retaining its loop, in-memory routines, cron validation and remote MCP
 while excluding filesystem/stdio code. Every browser bundle refuses Node
 builtin imports by name and importer; there are no Node/process shims.
+The pre-bundle shipped-code scan identifies `node:` imports before its broad
+remote-URL check, preserving that diagnostic for prefixed builtins too.
 Upstream [agent-do#139](https://github.com/PaulKinlan/agent-do/issues/139)
 tracks replacing this temporary projection with a supported browser entry.
 SSE, its streaming parser, PKCE and runtime schema conversion remain: custom

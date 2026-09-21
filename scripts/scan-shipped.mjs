@@ -436,13 +436,19 @@ export async function scanShippedJs(files, {
       // AST checks are heuristic defense in depth; exact CSP and package SHA
       // verification remain primary authority.
       if (
-        (node.type === "ImportDeclaration" || node.type === "ExportNamedDeclaration" ||
-          node.type === "ExportAllDeclaration") &&
-        isRemoteScriptUrl(node.source?.value)
-      ) violations.push(`${file}: imports a remote script URL`);
-      if (
-        node.type === "ImportExpression" && isRemoteScriptUrl(foldString(node.source))
-      ) violations.push(`${file}: dynamically imports a remote script URL`);
+        node.type === "ImportDeclaration" || node.type === "ExportNamedDeclaration" ||
+        node.type === "ExportAllDeclaration" || node.type === "ImportExpression"
+      ) {
+        const dynamic = node.type === "ImportExpression";
+        const specifier = dynamic ? foldString(node.source) : node.source?.value;
+        // node: is a builtin specifier, not a remote URL. Diagnose it before
+        // the broad scheme check so this pre-bundle scan names the real cause.
+        if (typeof specifier === "string" && specifier.startsWith("node:")) {
+          violations.push(`Node builtin "${specifier}" forbidden in browser bundle (importer: ${file})`);
+        } else if (isRemoteScriptUrl(specifier)) {
+          violations.push(`${file}: ${dynamic ? "dynamically imports" : "imports"} a remote script URL`);
+        }
+      }
       if (
         node.type === "CallExpression" &&
         sinkName(node.callee, sinkAliases) === "importScripts"

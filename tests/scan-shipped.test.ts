@@ -26,6 +26,22 @@ async function violations(code, opts) {
   }
 }
 
+Deno.test("scan: Node-prefixed imports name the builtin and importer, not a remote URL", async () => {
+  for (const [code, specifier] of [
+    ['import fs from "node:fs";', 'node:fs'],
+    ['import fs from "node:fs/promises";', 'node:fs/promises'],
+    ['export { readFile } from "node:fs";', 'node:fs'],
+    ['export * from "node:fs/promises";', 'node:fs/promises'],
+    ['import("node:" + "fs/promises");', 'node:fs/promises'],
+  ]) {
+    const file = 'extension/background/importer.js';
+    const result = await scanShippedJs([file], { readText: async () => code });
+    assertEquals(result, [
+      `Node builtin "${specifier}" forbidden in browser bundle (importer: ${file})`,
+    ]);
+  }
+});
+
 Deno.test("scan: export default function __reset(){} is caught", async () => {
   const v = await violations(`export default function __reset() {}`);
   assertEquals(v.length, 1);
