@@ -68,10 +68,9 @@ export const RETAINED = {
   "lib/code-diff-artifacts.js":
     "Holds the sha256 retention helpers CAP-FB-20260830-ARTIFACT-VERSIONS-01 folds into the versions store; that entry deletes it (tests/code-diff-artifacts.test.ts).",
   // ── only tests import these; cut together with the named tests in a follow-up ──
-  "lib/js-minifier-tools.js":
-    "No tool registers the bounded minifier today; only tests/js-minifier.test.ts imports it. It pulls js-minifier.js, js-minifier-lifecycle.js and the terser/csso/html-minifier worker bundles, which tests/scan-shipped.test.ts reads from disk (the scanner's canonical WorkerCtor exemption is bound to js-minifier-lifecycle.js:13).",
-  "lib/jwt-decode-tools.js":
-    "No tool registers the bounded JWT decoder today; only tests/jwt-decode.test.ts imports it. It pulls jwt-decode.js, jwt-decode-worker.js and jwt-decode-core.js, which tests/scan-shipped.test.ts reads from disk (canonical new Worker exemption at jwt-decode.js:60).",
+  // (chrome-agent-platform-9bse: js-minifier-tools.js + jwt-decode-tools.js,
+  // their lib trees, worker bundles and named tests were cut here — the
+  // follow-up the entries above waited for.)
   "lib/opfs-tool-workspace.js":
     "Only tests/opfs-tool-workspace.test.ts imports it.",
   "lib/profile-store.js":

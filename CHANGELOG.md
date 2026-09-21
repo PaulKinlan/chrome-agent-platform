@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.441] — 2026-09-21
+- merge cap/9bse-k3 (union-resolved changelog + version bookkeeping)
+
+## [0.3.440] — 2026-09-21
+- remove unregistered js-minifier + jwt-decode tools, worker bundles, and their tests
+
 ## [0.3.439] — 2026-09-21
 - the forced-window proof consumes its ACK and reaps the child it creates (d2vz)
 
