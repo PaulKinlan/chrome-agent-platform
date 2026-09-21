@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.438] — 2026-09-21
+- give build checks bounded extra time on a busy machine
+
 ## [0.3.437] — 2026-09-18
 - the background agent service no longer assumes a folder called journal exists on your machine, and says so when a requested working folder is missing
 

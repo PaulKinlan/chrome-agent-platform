@@ -22,7 +22,7 @@ A reader or scheduler must not infer the absence of Chrome from names like "pure
 The full gate runs in two sequential phases:
 
 - **Phase 1: Serial Phase (15 hazard files)**
-  - Runs build-artifact hazard tests serially with per-file process isolation and bounded timeouts (180s, `scripts/lib/serial-phase.mjs`).
+  - Runs build-artifact hazard tests serially with per-file process isolation and bounded timeouts (`scripts/lib/serial-phase.mjs`): 180s per file at idle, scaled by load per CPU up to 720s. An explicit `CAP_SERIAL_TEST_TIMEOUT_MS` overrides this without scaling; scaled defaults print their effective bound.
   - **Browser requirement:** NONE of the serial files launch a real browser. Lock-machinery tests (`tests/chrome-launch-lock.test.ts`, `tests/chrome-launch-lock-scope.test.ts`, `tests/chrome-slot-semaphore.test.ts`, `tests/chrome-slot-semaphore-honesty.test.ts`) test concurrency and locking logic using `binary: fake` (a mock process printing DevTools banners).
 - **Phase 2: Parallel Phase (422+ files)**
   - Runs all non-hazard test files concurrently via `deno test --parallel`.
