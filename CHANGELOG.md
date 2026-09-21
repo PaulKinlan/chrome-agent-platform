@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.443] — 2026-09-21
+- add candidate ACP tool transport and model backend (incomplete)
+
+## Unreleased candidate
+- ACP backend and authenticated connection-owned tool plumbing; incomplete pending SW budget and real-harness acceptance (vl6c).
+
 ## [0.3.442] — 2026-09-21
 - merge fix/astra-unex-9z37 (, 9z37)
 
