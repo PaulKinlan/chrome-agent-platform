@@ -43,14 +43,18 @@ export function createAcpModel({ url, cwd = "", harnessId, permissionHandler, cl
       finish("tool-calls");
     });
   }
-  async function start(prompt) {
-    client = clientFactory({ url, defaultCwd: cwd, toolHandler: handleTool,
+  async function connectSession(capTools = true, onCommands = null) {
+    client = clientFactory({ url, defaultCwd: cwd, onCommands, requestTimeoutMs: 15000, toolHandler: capTools ? handleTool : null,
       // Never inherit AcpClient's legacy no-handler auto-allow mode.
       permissionHandler: permissionHandler ?? (async () => null) });
     await client.connect();
     if (closed) { client.close(); return; }
-    await client.initialize({ _meta: { capTools: true } });
-    const session = await client.newSession({ cwd });
+    await client.initialize(capTools ? { _meta: { capTools: true } } : {});
+    if (closed) throw new Error("CAP harness connection closed");
+    return await client.newSession({ cwd });
+  }
+  async function start(prompt) {
+    const session = await connectSession();
     // ACP has no system-prompt setter. Pass the complete CAP prompt, including
     // protected untrusted-content rules, as explicitly labelled conversation data.
     const text = "Follow the CAP instructions and conversation below. Use the CAP tools to act through CAP.\n" + JSON.stringify(prompt);
@@ -111,5 +115,16 @@ export function createAcpModel({ url, cwd = "", harnessId, permissionHandler, cl
       fail(new Error("CAP run ended"));
     },
   };
-  return { model: backend, modelId: harnessId, providerName: "acp", providerLane: "acp", fork: backend.fork, close: backend.close };
+  return { async discoverCommands(waitMs = 3000) {
+    // Snapshot only: no prompt, no CAP tools, permissions denied. The temporary
+    // session closes with this backend; it is not the later run's session.
+    let announce;
+    const arrived = new Promise((resolve) => { announce = resolve; });
+    const session = await connectSession(false, announce);
+    let timer;
+    try {
+      if (!client.commandsReceived) await Promise.race([arrived, new Promise((resolve) => { timer = setTimeout(resolve, waitMs); })]);
+      return { sessionId: session.sessionId, received: client.commandsReceived === true, commands: client.availableCommands || [] };
+    } finally { clearTimeout(timer); }
+  }, model: backend, modelId: harnessId, providerName: "acp", providerLane: "acp", fork: backend.fork, close: backend.close };
 }

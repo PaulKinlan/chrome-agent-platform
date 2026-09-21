@@ -4,6 +4,10 @@ ACP tool access is under implementation in `chrome-agent-platform-vl6c`;
 [architecture and measured gate limits](docs/ACP-HARNESS-TOOLS.md). Pi registration
 and browser-only binding remain separate stages (`jjzm`, `qnd4`).
 
+ACP command discovery and insertion-only composer picker are candidates in `wp7y`,
+dependent on harness-tools `430b76fa`. Native dispatch (`6yfm`) and retained
+session lifecycle (`v05y`) remain separate; insertion is not execution.
+
 The working plan for the fleet. Every agent/session reads this to see what's happening + where things are.
 
 **Reconciled 2026-08-27 against the actual tree at `0.2.319` / `origin/main@139b6f92`,

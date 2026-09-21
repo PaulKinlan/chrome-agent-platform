@@ -260,7 +260,7 @@ import { effectiveMcpServers, normalizeMcpServerList, redactMcpServerList } from
 // client directly.
 import { mountRemoteMcpServers } from "../lib/mcp-client.js";
 import { openAcpTurn, recordAcpTurn } from "../lib/acp-thread-journal.js";
-import { createAcpModelProxy } from "../lib/acp-model-proxy.js";
+import { createAcpModelProxy, discoverAcpCommands } from "../lib/acp-model-proxy.js";
 import { acpRunConfig } from "../lib/acp-run-config.js";
 import { createAcpRunPermissions } from "../lib/acp-run-permissions.js";
 import { buildMcpRunTools } from "../lib/mcp-run-tools.js";
@@ -6954,6 +6954,13 @@ const handlers = mergeRouteMaps(
       } catch { /* best effort */ }
     }
     return { ok: true, thread: view };
+  },
+  async "acp.commands"(m, context) {
+    if (context?.principal !== "extension") return { ok: false, error: "Harness commands are available only in a conversation." };
+    const config = await acpRunConfig(m?.harnessId, async (key) => (await kvGet(key))?.[key], { discovery: true });
+    const ready = await ensureOffscreen();
+    if (!ready.ok) return { ok: false, error: "Cannot open the harness connection. Try again." };
+    return { ok: true, harnessId: config.harnessId, ...await discoverAcpCommands(config) };
   },
   async "acp.journal"(m) {
     if (m?.action === "open") return await openAcpTurn(m, { createThread, continueThread, nameThread: nameThreadAsync });

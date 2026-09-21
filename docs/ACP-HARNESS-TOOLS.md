@@ -93,3 +93,22 @@ Each candidate ACP turn creates a fresh harness session and carries CAP's conver
 history. Restoring a harness's own hidden session state is not established by this
 path. Provider-native tools/model facilities that are not callable CAP tools are not
 automatically converted into tools. These limitations must remain visible in review.
+
+## Advertised command discovery (wp7y candidate)
+
+`acp.commands` is extension-surface-only. It reads the configured harness endpoint
+inside the SW, opens the existing offscreen model host, and reuses ACP
+connect/initialize/new-session without a prompt or CAP tool mount. All permission
+requests during discovery deny. The short-lived session closes after a catalogue
+snapshot (or three seconds without an update); the outer request is bounded to
+20 seconds. Errors returned to the picker do not expose the credential-bearing
+endpoint. No provider prompt is sent.
+
+`available_commands_update` is retained before the first prompt, bound to the
+returned session ID, and cleared on replacement/close. The snapshot is not the
+later run's session: retained lifecycle is follow-up `chrome-agent-platform-v05y`.
+Native command dispatch is separate (`chrome-agent-platform-6yfm`): the current
+model wraps CAP instructions and conversation as JSON, so inserting command text
+is **not** a native command invocation. Pi discovery is allowed, while its existing
+CAP-tool execution refusal is unchanged. Action metadata is not a text command;
+unsupported `commandAction` entries are shown as unavailable.

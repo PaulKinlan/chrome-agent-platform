@@ -413,3 +413,18 @@ export async function resolveComposerCommandSelection(
     },
   };
 }
+
+/** ACP names are protocol data, not CAP namespaces. Preserve explicit sigils. */
+export function harnessCommandItems(commands, query = "") {
+  const prefix = query.toLowerCase();
+  return (Array.isArray(commands) ? commands : []).flatMap((command) => {
+    if (typeof command?.name !== "string" || !command.name || /\s|[\x00-\x1f\x7f]/u.test(command.name)) return [];
+    const invocation = /^[/$]/u.test(command.name) ? command.name : `/${command.name}`;
+    if (prefix && !invocation.toLowerCase().startsWith(prefix)) return [];
+    const unsupported = command._meta?.commandAction != null;
+    const hint = typeof command.input?.hint === "string" ? command.input.hint : "";
+    return [{ id: invocation, label: invocation, kind: "harness-command", disabled: unsupported,
+      description: unsupported ? "This harness action is not supported in CAP yet."
+        : [typeof command.description === "string" ? command.description : "", hint].filter(Boolean).join(" · ") }];
+  });
+}

@@ -24,6 +24,7 @@
  * @property {string} [defaultCwd] - Default working directory for sessions
  * @property {number} [requestTimeoutMs] - Request timeout in milliseconds (default: 120,000)
  * @property {(permission: AcpPermissionRequest) => Promise<string|null>} [permissionHandler]
+ * @property {(commands: any[]) => void} [onCommands]
  * @property {any} [transport] - Optional explicit transport (for testing)
  * @property {(method: string, params: any) => Promise<any>} [toolHandler] - Run-owned CAP tool channel
  */
@@ -78,6 +79,9 @@ export class AcpClient {
     this.agentCapabilities = null;
     this.authMethods = [];
     this.availableCommands = [];
+    this.commandsReceived = false;
+    this.onCommands = options.onCommands || null;
+    this.pendingCommands = null;
     this.connected = false;
     this.activeSessionId = null;
   }
@@ -125,6 +129,8 @@ export class AcpClient {
         };
 
         ws.onclose = (event) => {
+          this._resetCommands();
+          this.activeSessionId = null;
           this.connected = false;
           const err = new Error(`ACP harness connection closed (code: ${event.code}, reason: ${event.reason || "none"})`);
           this._abortPending(err);
@@ -172,12 +178,16 @@ export class AcpClient {
     const cwd = params.cwd ?? this.defaultCwd ?? "";
     const mcpServers = Array.isArray(params.mcpServers) ? params.mcpServers : [];
 
+    this._resetCommands();
+    this.activeSessionId = null;
     const result = await this.request("session/new", { cwd, mcpServers });
     const sessionId = String(result?.sessionId ?? "");
     if (!sessionId) {
       throw new Error("ACP server returned session/new without a valid sessionId");
     }
     this.activeSessionId = sessionId;
+    if (this.pendingCommands?.sessionId === sessionId) this._acceptCommands(this.pendingCommands.commands);
+    this.pendingCommands = null;
     return {
       sessionId,
       models: result?.models ?? null,
@@ -195,6 +205,8 @@ export class AcpClient {
     const cwd = params.cwd ?? this.defaultCwd ?? "";
     const mcpServers = Array.isArray(params.mcpServers) ? params.mcpServers : [];
 
+    this._resetCommands();
+    this.activeSessionId = params.sessionId;
     await this.request("session/load", { sessionId: params.sessionId, cwd, mcpServers });
     this.activeSessionId = params.sessionId;
     return { sessionId: params.sessionId, resumed: true };
@@ -259,6 +271,8 @@ export class AcpClient {
    * Close the connection.
    */
   close() {
+    this._resetCommands();
+    this.activeSessionId = null;
     this.connected = false;
     this._abortPending(new Error("ACP client closed"));
     if (this.ws) {
@@ -356,7 +370,7 @@ export class AcpClient {
 
     // Inbound notification (e.g. session/update)
     if (msg.method === "session/update") {
-      this._handleSessionUpdate(msg.params?.update);
+      this._handleSessionUpdate(msg.params?.update, msg.params?.sessionId);
     }
   }
 
@@ -434,7 +448,19 @@ export class AcpClient {
    * Handle streaming session updates.
    * @private
    */
-  _handleSessionUpdate(update) {
+  _resetCommands() {
+    this.availableCommands = [];
+    this.commandsReceived = false;
+    this.pendingCommands = null;
+  }
+
+  _acceptCommands(commands) {
+    this.availableCommands = commands;
+    this.commandsReceived = true;
+    this.onCommands?.(commands);
+  }
+
+  _handleSessionUpdate(update, sessionId) {
     if (!update || typeof update !== "object") return;
     const kind = update.sessionUpdate;
 
@@ -457,7 +483,13 @@ export class AcpClient {
       });
     } else if (kind === "available_commands_update") {
       if (Array.isArray(update.availableCommands)) {
-        this.availableCommands = update.availableCommands;
+        if (!sessionId) return;
+        if (!this.activeSessionId) {
+          this.pendingCommands = { sessionId, commands: update.availableCommands };
+          return;
+        }
+        if (sessionId !== this.activeSessionId) return;
+        this._acceptCommands(update.availableCommands);
         this.activeTurnListener?.({ kind: "commands", detail: `${update.availableCommands.length} commands`, raw: update });
       }
     } else if (kind === "session_info_update") {
