@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.439] — 2026-09-21
+- the forced-window proof consumes its ACK and reaps the child it creates (d2vz)
+
 ## [0.3.438] — 2026-09-21
 - give build checks bounded extra time on a busy machine
 

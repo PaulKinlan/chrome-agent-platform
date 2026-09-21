@@ -2,7 +2,7 @@
 // The production supervisor accepts this file only in explicit self-test mode.
 
 import { fileURLToPath } from "node:url";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { verifyRunnerGuard } from "../../scripts/security-suite-custody.mjs";
 
@@ -87,9 +87,16 @@ if (process.argv[2] === "--stubborn-child") {
     });
     if (process.env.CAP_SECURITY_TEST_ESCAPE_CHILD_FAIL === "1") {
       // Test-only mutant (CAP_SECURITY_TEST_* envs are stripped from the
-      // child environment in production): kill the descendant so it cannot
-      // persist, simulating the observed full-suite failure shape.
-      setTimeout(() => child.kill("SIGKILL"), 50);
+      // child environment in production): the descendant must NOT persist,
+      // simulating the observed full-suite failure shape.
+      //
+      // d2vz: this used to kill the child after 50ms, which was only loud
+      // because the handshake could never confirm anything (the reader was
+      // unimported). With the reader working, the sampler can win that race and
+      // the run ends 70/residue instead of the loud 97 this case exists for. A
+      // descendant that does not persist must be killed BEFORE it can be
+      // observed, so the refusal is the outcome and not a race.
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
     }
     // chrome-agent-platform-d5st: the scenario is not ESTABLISHED until the
     // supervisor has actually SEEN this descendant — exiting earlier raced
