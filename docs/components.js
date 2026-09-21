@@ -5521,6 +5521,34 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
  *   - error: a left card with a danger border
  * Content comes from the `content` attribute (or the light-DOM text as a
  * fallback), so the gallery can populate it declaratively. */
+class HarnessAgentButton extends Component {
+  static get observedAttributes() { return ["name", "current"]; }
+  _render() {
+    const name = this.getAttribute("name") || "Harness";
+    mountTemplate(this, `
+      :host { display:block; min-inline-size:0; }
+      button { box-sizing:border-box; display:flex; align-items:center; gap:8px;
+        inline-size:100%; min-block-size:44px; padding:8px; border:1px solid transparent;
+        border-radius:var(--radius-sm,6px); background:transparent; color:var(--text,#1d1b18);
+        font:inherit; font-size:13px; font-weight:500; text-align:start; cursor:pointer; }
+      .mark { display:grid; place-items:center; flex:0 0 20px; color:var(--muted,#6e6a62); }
+      .name { flex:1; min-inline-size:0; overflow-wrap:anywhere; }
+      .open { flex:0 0 16px; color:var(--muted,#6e6a62); }
+      button:hover { background:var(--panel-2,#efede8); }
+      button:active { background:var(--border,#e3e0d9); }
+      button[aria-current="true"] { background:var(--panel-2,#efede8); border-color:var(--accent,#0e6e63); font-weight:600; }
+      button[aria-current="true"] .mark { color:var(--accent,#0e6e63); }
+      button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
+      @media (forced-colors:active) { button[aria-current="true"] { border-color:Highlight; } }
+    `, `<button type="button" part="button" title="${escapeHtml(name)}" aria-label="${escapeHtml(`Open the ${name} harness conversation`)}"${this.hasAttribute("current") ? ' aria-current="true"' : ""}>
+      <span class="mark" aria-hidden="true">${ICONS.terminal}</span>
+      <span class="name" part="name">${escapeHtml(name)}</span>
+      <svg class="open" part="open" aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>
+    </button>`);
+  }
+}
+customElements.define("harness-agent-button", HarnessAgentButton);
+
 /* <agent-identity name="Researcher" avatar="data:image/svg+xml…" time="1756550400000">
  * The one identity header for a conversation turn: a 24px avatar (the agent's
  * generated avatar image when it has one, otherwise an inline-SVG initial in

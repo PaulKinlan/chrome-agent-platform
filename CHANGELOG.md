@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased
+- NTP Harness agents now use aligned terminal-mark launchers with larger targets, visible keyboard focus, and a compact rail layout that no longer clips the choices (chrome-agent-platform-r65i).
+
 ## [0.3.442] — 2026-09-21
 - merge fix/astra-unex-9z37 (, 9z37)
 

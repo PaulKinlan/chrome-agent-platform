@@ -1506,12 +1506,10 @@ async function renderSidebarHarnessRows() {
   const section = host.closest?.("section");
   if (section) section.hidden = harnesses.length === 0;
   for (const a of harnesses) {
-    const btn = document.createElement("button");
-    btn.type = "button";
+    const btn = document.createElement("harness-agent-button");
     btn.dataset.ref = a.ref ?? `acp:${a.id}`;
-    btn.textContent = a.name || a.id;
-    btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
-    if (currentAgentKind === "acp" && currentAgentId === a.id) btn.setAttribute("aria-current", "true");
+    btn.setAttribute("name", a.name || a.id);
+    if (currentAgentKind === "acp" && currentAgentId === a.id) btn.setAttribute("current", "");
     btn.addEventListener("click", () => {
       openAgentSurface?.({ kind: "acp", id: a.id, name: a.name || a.id });
     });
