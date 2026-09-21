@@ -2,6 +2,10 @@
 
 The working plan for the fleet. Every agent/session reads this to see what's happening + where things are.
 
+Browser dependency boundary: azlc replaces Node shims with a hash-pinned
+agent-do browser projection and build refusals; upstream agent-do#139 tracks
+the permanent browser entry. SSE/auth/schema dependencies remain intact.
+
 **Reconciled 2026-08-27 against the actual tree at `0.2.319` / `origin/main@139b6f92`,
 by building and running the gates — not by reading trackers.**
 

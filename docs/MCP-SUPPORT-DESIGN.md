@@ -132,16 +132,17 @@ sufficient:
    use. Importing only `streamableHttp.js` + `sse.js` keeps it out by
    construction.
 
-**On the bundle question specifically:** the stdio import does **not** break
-`npm run build:production`. `build.mjs` already aliases every `node:*`
-specifier (`child_process` included) to `browser-shim-node.js` for the SW and
-agent-worker bundles, and those bundles *already* contain agent-do's MCP code
-(including a shimmed, never-called `StdioClientTransport`) because the agent
-loop imports agent-do. So the risk is real in mechanism but already mitigated
-by the existing shim + `new Function` scrub. Our new client adds **zero** stdio
-surface. (This also answers part of `AGENT-DO-MCP-ASSESSMENT-01`: we mount
-ourselves; a future agent-do bump is only warranted if it adds per-server
-resilience *and* stops importing stdio at module top.)
+**Browser dependency boundary (azlc):** the agent loop previously imported
+agent-do's stdio transport despite CAP mounting remote transports directly.
+The build now uses a full-source-hash-pinned browser projection of agent-do
+0.7.0, retaining its loop, in-memory routines, cron validation and remote MCP
+while excluding filesystem/stdio code. Every browser bundle refuses Node
+builtin imports by name and importer; there are no Node/process shims.
+Upstream [agent-do#139](https://github.com/PaulKinlan/agent-do/issues/139)
+tracks replacing this temporary projection with a supported browser entry.
+SSE, its streaming parser, PKCE and runtime schema conversion remain: custom
+Authorization headers, reconnect/id/retry and schema validation are behavior,
+not dead weight. MCP peer contexts bind different Zod majors and are not deduplicated.
 
 ### What landed
 

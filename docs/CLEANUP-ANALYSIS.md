@@ -65,7 +65,7 @@ analysis.
 - **RETAINED owner-pinned modules:** lib/agent-cards.js (open bead pu7n), lib/bundled-tool-packages.js +
   lib/bundled-inventory.js (owner directive must-not-change), lib/tabular-diff-artifacts.js +
   lib/code-diff-artifacts.js (open CAP-FB entries own them).
-- **.codex/hooks.json, CLAUDE.md → AGENTS.md symlink, browser-shim-*.js, deno*.jsonc** — live
+- **.codex/hooks.json, CLAUDE.md → AGENTS.md symlink, deno*.jsonc** — live
   tooling/build config.
 - **docs/.build caveat:** not tracked; the ONLY local-disk item (C18).
 
@@ -80,3 +80,6 @@ analysis.
 4. One correction this stage fed back: ARCHITECTURE.md §1.5/§5.4 initially described
    `opfs-tool-workspace.js` as the live workspace; the reachability RETAINED map proves it is
    tests-only, and the shipped stream plane is wasm-stream-files.js. Fixed in the draft.
+
+Browser Node/process shims were removed by azlc; the pinned browser projection
+and builtin refusal now live in `scripts/browser-dependencies.mjs`.

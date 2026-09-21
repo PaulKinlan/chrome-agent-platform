@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
+import { browserDependencies, browserDefines } from "./browser-dependencies.mjs";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -52,19 +53,14 @@ const shared = {
   logLevel: "silent",
   sourcemap: false,
   legalComments: "none",
+  plugins: [browserDependencies],
+  define: browserDefines,
+  metafile: true,
 };
-const shimNode = path.join(ROOT, "browser-shim-node.js");
 await build({
   ...shared,
   entryPoints: [path.join(EXT, "background/service-worker.js")],
   outfile: path.join(dest, "dist/background/service-worker.js"),
-  inject: [path.join(ROOT, "browser-shim-process.js")],
-  alias: {
-    "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
-    "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
-    "node:stream": shimNode, "node:util": shimNode, "node:module": shimNode,
-    "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
-  },
 });
 // Same resolver as build.mjs: components.js names the diff core by its dist
 // path; the bundled options page inlines the source wrapper instead.
@@ -78,7 +74,7 @@ await build({
   ...shared,
   entryPoints: [path.join(EXT, "options/options.js")],
   outfile: path.join(dest, "dist/options.bundle.js"), // matches the production dist layout the html loads
-  plugins: [diffCoreFromSource],
+  plugins: [browserDependencies, diffCoreFromSource],
 });
 // The diff core — kept in step with build.mjs (CAP-FB-20260830-DIFF-LIBRARY-01).
 await build({

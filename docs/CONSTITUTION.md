@@ -155,6 +155,9 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   remain active.
 - **Memory checks**: run the leak probe (heap/DOM-counter deltas across loops)
   on the long-lived surfaces (the hub, the chat) regularly.
+- **Browser builds reject Node builtin imports** rather than substituting shims.
+  The temporary agent-do browser projection is source-hash pinned; upstream
+  changes require explicit review before building.
 - **Performance budgets**: the SW must register fast (<500ms); the NTP/chat
   render fast (<1s); the agent loop doesn't block the UI thread; bundles stay
   reasonable (the minified store SW bundle is hard-capped at 3.0 MB — 2.97 MB

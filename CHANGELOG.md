@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.443] — 2026-09-21
+- project browser agent runtime and reject Node imports
+
+## Unreleased
+- Remove Node process-launcher dependencies from browser bundles; reject builtin imports instead of shimming them (azlc).
+
 ## [0.3.442] — 2026-09-21
 - merge fix/astra-unex-9z37 (, 9z37)
 

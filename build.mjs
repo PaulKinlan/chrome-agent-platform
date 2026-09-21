@@ -14,6 +14,7 @@
 //   - per-FILE modes preserved from the previous tree; failures roll back and
 //     ROLLBACK FAILURE IS FATAL; every failure path cleans its staging.
 import { build, transform } from "esbuild";
+import { browserDependencies, browserDefines } from './scripts/browser-dependencies.mjs';
 import { createRequire } from "node:module";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
@@ -445,9 +446,11 @@ try {
     const shared = {
       bundle: true, format: "esm", target: "chrome120", platform: "browser",
       logLevel: "silent", sourcemap: DEBUG_BUILD, legalComments: "none",
-      plugins: [diffCoreFromSource, capAiSdkDedup],
+      plugins: [browserDependencies, diffCoreFromSource, capAiSdkDedup],
+      metafile: true,
       nodePaths: [denoStoreNodeModules],
       define: {
+        ...browserDefines,
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify(DEBUG_BUILD ? "verbose" : "off"),
       },
     };
@@ -456,7 +459,6 @@ try {
     const NTP_BUNDLE = path.join(STAGE, "ntp.bundle.js");
     const SIDEPANEL_BUNDLE = path.join(STAGE, "sidepanel.bundle.js");
     await mkdir(path.dirname(SW), { recursive: true });
-    const shimNode = path.join(ROOT, "browser-shim-node.js");
     // DEVELOPER-ONLY MCP transport-spike probe
     // (CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01). scripts/mcp-probe-entry.js
     // imports the remote-MCP client (lib/mcp-client.js → the browser-safe
@@ -465,7 +467,7 @@ try {
     // INSIDE the real service worker (SW globals forbid dynamic import(), so
     // the probe must be part of the bundle). It is injected ONLY for the
     // developer target and is absent from every store build.
-    const swInject = [path.join(ROOT, "browser-shim-process.js")];
+    const swInject = [];
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
     const swResult = await build({
       ...shared,
@@ -476,12 +478,6 @@ try {
       // (CAP-FB-20260830-BUNDLE-BUDGET-01): the contributors are visible in
       // every build log, and the store gate failure names them.
       metafile: true,
-      alias: {
-        "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
-        "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
-        "node:stream": shimNode, "node:util": shimNode, "node:module": shimNode,
-        "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
-      },
     });
     {
       // The budget report NEVER lands in dist/: the shipped package must not
@@ -513,15 +509,6 @@ try {
       entryPoints: [path.join(EXT_DIR, "workers/agent-worker.js")],
       outfile: WORKER,
       format: "esm",
-      // agent-do pulls @modelcontextprotocol/sdk (MCP) which imports node: builtins
-      // even on the browser path — same shims as the SW bundle.
-      inject: [path.join(ROOT, "browser-shim-process.js")],
-      alias: {
-        "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
-        "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
-        "node:stream": shimNode, "node:util": shimNode, "node:module": shimNode,
-        "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
-      },
     });
 
     // Scrub + seam-scan IN STAGING over ALL FOUR generated bundles (the SW,

@@ -20,10 +20,8 @@
 // EventSource transports. See docs/MCP-SUPPORT-DESIGN.md "Transport spike
 // result" for the decision and rationale.
 //
-// This module is bundled by esbuild for the SW/worker (the SDK lives in
-// node_modules and pulls a few `node:` specifiers on paths we never take —
-// build.mjs aliases those to browser-shim-node.js exactly as it already does
-// for the agent-worker bundle).
+// The build projects agent-do to its browser subset and refuses Node builtin
+// imports instead of shimming them (scripts/browser-dependencies.mjs).
 
 // @ts-ignore — Deno's type-checker cannot resolve the SDK's `.js`-suffixed
 // subpath exports (esbuild resolves them for the bundle); the value import is
