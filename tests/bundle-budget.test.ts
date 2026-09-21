@@ -112,7 +112,7 @@ Deno.test("bundle budget: no shipped source or built bundle references a CDN (Py
 });
 
 Deno.test("bundle budget: testing over-budget Store bytes is allowed; packaging refuses the same bytes", async () => {
-  const root = await Deno.makeTempDir({ prefix: "cap-package-budget-" });
+  const root = await Deno.makeTempDir({ dir: durableDir("bundle-budget-tests"), prefix: "cap-package-budget-" });
   const worker = `${root}/worker.js`;
   try {
     await Deno.writeTextFile(worker, " ".repeat(STORE_SW_BUDGET_BYTES + 1));
