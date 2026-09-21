@@ -4,8 +4,8 @@
 - add candidate ACP tool transport and model backend (incomplete)
 
 ## Unreleased candidate
-- Harness agents can ask to use browser tools through CAP, with approval cards before permitted actions. This work is not released yet.
-- Harness connections retain their own tool requests and results. Further checks are needed before release.
+- Connected agents can ask to use browser tools through CAP, with approval cards before permitted actions. This work is not released yet.
+- Agent connections retain their own tool requests and results. Further checks are needed before release.
 
 ## [0.3.442] — 2026-09-21
 - merge fix/astra-unex-9z37 (, 9z37)
