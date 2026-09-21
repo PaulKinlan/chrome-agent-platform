@@ -683,3 +683,11 @@ creating a snapshot.
 No rainbow conic glow, no gradient text, no uppercase tracked kickers, no ghost
 cards, no over-rounded cards, no emoji, no default purple/blue-black, no AI-beige
 cream+serif.
+
+## ACP harness tools candidate (vl6c)
+
+The candidate keeps the existing conversation and approval components, rather than
+adding a tool-server settings product. Native operation cards name the requesting
+harness. Tool actions use the ordinary CAP run timeline. See
+[architecture and unverified acceptance](ACP-HARNESS-TOOLS.md); this is not a shipped
+behavior claim.

@@ -76,7 +76,7 @@ measured pre-publication candidate, not a claim about future commits. Evidence l
 are retained under the coordinator's durable `cap-evidence` root with the
 `cap-harness-` prefix. Five new focused tests pass; three applied mutations fail
 (model call name, bearer validation, document binding). The wider focused ACP run
-passes 33 tests. These are **not** full-suite or browser acceptance.
+passes 33 tests; two additional offscreen proxy/host tests pass. These are **not** full-suite or browser acceptance.
 
 The production build refusal prevents the required production-tree browser drive.
 Outstanding acceptance: real Claude/Codex call to existing `list_tabs`, a denied

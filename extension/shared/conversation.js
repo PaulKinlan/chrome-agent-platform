@@ -15,7 +15,7 @@
 
 import { newId } from "../lib/pure.js";
 import { send } from "../lib/messages.js";
-import { runAcpTaskTurn } from "../lib/acp-runner.js";
+import { requestAcpPermission } from "../lib/acp-runner.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { formatBudgetProgress, formatContinuationStop } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
@@ -1882,55 +1882,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
   };
   const status = (s) => { if (!stale()) onStatus?.(s); };
 
-  // An EXTERNAL HARNESS agent (ACP): the harness runs on the host and CAP is
-  // the client, so there is no service-worker run to dispatch. Every composer
-  // that offers an acp agent (the hub, the side panel) reaches the same runner
-  // here — the NTP routes to it before this function for its own surface
-  // lifecycle, and both paths must behave identically.
-  if (agentKind === "acp") {
-    // 1. the user's turn appears immediately — this branch returns before the
-    //    shared the-surface-becomes-a-conversation step below, so it appends
-    //    the user bubble itself (the NTP branch does the same).
-    if (!stale()) appendBubble(c, "user", text, attachments);
-    if (!stale()) c.resetPlan?.();
-    status({ state: "queued" });
-    const opened = await send("acp.journal", {
-      action: "open",
-      task: text,
-      attachments,
-      threadId,
-      harnessId: agentId || "pi",
-    }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    const acpThreadId = opened?.ok === true ? opened.threadId : null;
-    const acpTools = [];
-    const res = await runAcpTaskTurn({
-      container: c,
-      task: text,
-      attachments,
-      threadId: acpThreadId ?? threadId,
-      harnessId: agentId || "pi",
-      executionId: opened?.executionId ?? null,
-      onStatus: (s) => status(s),
-      onEvent: (ev) => { if (ev?.kind === "tool") acpTools.push(ev); },
-      isStale: stale,
-      sessionStore,
-      settings,
-    });
-    if (acpThreadId) {
-      await send("acp.journal", {
-        action: "result",
-        threadId: acpThreadId,
-        executionId: opened?.executionId ?? "",
-        text: res?.result ?? "",
-        ok: res?.ok === true,
-        error: res?.error ?? "",
-        tools: acpTools,
-      }).catch(() => null);
-      return { ...res, threadId: acpThreadId };
-    }
-    if (opened?.error && !stale()) appendBubble(c, "system", `This turn could not be saved to your tasks: ${opened.error}`);
-    return res;
-  }
+  const harnessId = mention?.kind === "acp" ? mention.id : agentKind === "acp" ? agentId : null;
   // A new turn starts with a fresh plan strip: clear the prior turn's checklist
   // so the strip rebuilds from THIS turn's steps (CAP-FB-20260830-PLAN-STRIP-
   // CHECKPOINTS-01).
@@ -1954,7 +1906,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
   // (a missing/invalid base URL); a missing host-ACCESS grant is a permission
   // and pauses on the in-context card below.
   try {
-    const summary = await send("provider.permission-summary");
+    const summary = await send("provider.permission-summary", harnessId ? { harnessId } : {});
     if (!summary?.local) {
       if (!summary?.origin) {
         // The gate's own reason (a missing vs an invalid base URL) is the
@@ -2032,7 +1984,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       return null;
     }
     let summary = null;
-    try { summary = await send("provider.permission-summary"); } catch { summary = null; }
+    try { summary = await send("provider.permission-summary", harnessId ? { harnessId } : {}); } catch { summary = null; }
     if (!summary || summary.local || !summary.origin) {
       // Nothing a card can grant (local/demo provider, or a configuration
       // problem): Settings remains the right surface, and the text says so.
@@ -2485,6 +2437,12 @@ export async function runConversationTurn(container, { text, attachments = [], h
         toolCards.push(ev.toolName, card);
         break;
       }
+      case "acp-permission": {
+        void requestAcpPermission(ev.request, { container: c, isCancelled: stale }).then((decision) =>
+          send("run.resolve-inline-approval", { requestId: ev.requestId, optionId: decision.optionId })
+        ).catch(() => send("run.resolve-inline-approval", { requestId: ev.requestId, optionId: null }).catch(() => {}));
+        break;
+      }
       case "approval-request": {
         // The tool invocation is still pending in the worker. Render the card
         // on this exact runId-filtered conversation; its decision wakes that
@@ -2646,6 +2604,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       // result is committed back into THIS task thread. This is NOT the
       // agent-chat surface (which still routes directly via agentId/agentKind).
       res = await send("agent.run", {
+        harnessId,
         approvalBinding: approvalBinding ?? null,
         task: text,
         id: String(Date.now()),
@@ -2684,6 +2643,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
       });
     } else {
       res = await send("agent.run", {
+        harnessId,
         approvalBinding: approvalBinding ?? null,
         task: text,
         id: String(Date.now()),

@@ -10,6 +10,7 @@ progress, a task thread list, and the agents you've created — each with its ow
 isolated OPFS memory, run history, skills, and avatar.
 
 ACP harness tools: [candidate architecture and explicit validation limits](docs/ACP-HARNESS-TOOLS.md).
+The candidate routes harness selections through durable CAP runs and offscreen I/O.
 The new tool path is not yet accepted; see bead `chrome-agent-platform-vl6c`.
 
 ## What it does

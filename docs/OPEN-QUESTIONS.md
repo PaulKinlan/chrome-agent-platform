@@ -113,3 +113,11 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
     be committed, an otherwise successful page result is discarded rather than published. Arguments
     that cannot be canonically digested fail before dispatch and therefore create no invocation audit
     row: no site work started.
+
+## ACP harness tool candidate: SW budget decision
+
+The unchanged store SW ceiling is 3,000,000 bytes. On the vl6c candidate the same
+worktree baseline measures 2,998,629 bytes, versus 3,003,397 with ACP I/O moved to
+the existing offscreen document. The coordinator is seeking an owner decision;
+no increase is authorized or applied. An unrelated architectural reduction would
+require separate scope. This does not change artifact-retention policy.

@@ -4,6 +4,7 @@
 - add candidate ACP tool transport and model backend (incomplete)
 
 ## Unreleased candidate
+- Route harness selections through durable CAP runs; move ACP I/O offscreen while retaining run-bound native permission cards. Still over the SW budget and unverified in a real harness (vl6c).
 - ACP backend and authenticated connection-owned tool plumbing; incomplete pending SW budget and real-harness acceptance (vl6c).
 
 ## [0.3.442] — 2026-09-21

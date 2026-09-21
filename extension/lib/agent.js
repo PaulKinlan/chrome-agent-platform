@@ -2008,7 +2008,7 @@ export function createOrchestrator({
   let currentRunIdentity = null;
   for (const w of workers) {
     const a = createAgent({
-      model,
+      model: model.fork?.() ?? model,
       id: w.origin,
       name: w.origin,
       system: w.system ?? system,
