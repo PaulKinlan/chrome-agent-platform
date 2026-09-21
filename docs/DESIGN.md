@@ -691,3 +691,19 @@ adding a tool-server settings product. Native operation cards name the requestin
 harness. Tool actions use the ordinary CAP run timeline. See
 [architecture and unverified acceptance](ACP-HARNESS-TOOLS.md); this is not a shipped
 behavior claim.
+
+### Harness command insertion (wp7y candidate)
+
+The shared `<agent-composer>` reuses its existing listbox for harness commands.
+A labelled **Harness commands** button opens a fresh discovery snapshot; leading
+`/` or `$` filters it. Harness scope takes precedence over CAP's slash namespaces,
+so `/skill:…` is not resolved through CAP skills. No invented skill grouping is
+added: exact advertised names, descriptions and argument hints remain visible.
+Arrow keys navigate, Enter/pointer insert with a trailing space for arguments,
+and Escape dismisses (including during loading). Selecting never sends a turn.
+Unsupported action metadata stays disabled with an explanation. Empty, missing
+and failed catalogues have distinct messages and an explicit retry button.
+Harness/thread changes clear the snapshot and invalidate pending responses.
+The picker says native execution is not yet connected and that discovery uses a
+separate session. Pi's CAP-tool execution limitation remains visible. At narrow
+widths the listbox can be wider than the composer but stays within the viewport.

@@ -48,6 +48,7 @@ import {
   COMMAND_NAMESPACES as ALL_COMMAND_NAMESPACES,
   loadComposerCommandItems,
   resolveComposerCommandSelection,
+  harnessCommandItems,
 } from "./composer-commands.js";
 // /files is progressive enhancement — absent where showDirectoryPicker is missing.
 export const COMMAND_NAMESPACES = ALL_COMMAND_NAMESPACES.filter(
@@ -7003,7 +7004,7 @@ class AgentComposer extends Component {
   }
 
   static shadow() { return false; }
-  static get observedAttributes() { return ["placeholder", "label", "description", "send-label", "agent-id", "agent-kind"]; }
+  static get observedAttributes() { return ["placeholder", "label", "description", "send-label", "agent-id", "agent-kind", "thread-id"]; }
   constructor() {
     super();
     this.attachments = [];
@@ -7023,6 +7024,18 @@ class AgentComposer extends Component {
   // you're talking to).
   get _currentAgentId() { return this.getAttribute("agent-id") || null; }
   get _currentAgentKind() { return this.getAttribute("agent-kind") || null; }
+  get _harnessId() {
+    if (this._selectedAgent) return this._selectedAgent.kind === "acp" ? this._selectedAgent.id : null;
+    return this._currentAgentKind === "acp" ? this._currentAgentId : null;
+  }
+  _resetHarnessCommands() {
+    this._harnessRequest = (this._harnessRequest || 0) + 1;
+    this._harnessCatalogue = null;
+    this._harnessLoading = false;
+    this._hidePopup();
+    const button = this.querySelector(".harness-commands");
+    if (button) button.hidden = !this._harnessId;
+  }
   _render() {
     const placeholder = this.getAttribute("placeholder") || "Ask anything, or @mention an agent…";
     const label = this.getAttribute("label") || "Message";
@@ -7040,6 +7053,7 @@ class AgentComposer extends Component {
         <div class="row">
           <mic-button id="${this.id ? `${this.id}-mic` : `mic-${this._uid}`}"></mic-button>
           <attach-button id="${this.id ? `${this.id}-attach` : `attach-${this._uid}`}"></attach-button>
+          <button class="harness-commands btn" type="button" aria-label="Browse harness commands and skills" ${this._harnessId ? "" : "hidden"}>Harness commands</button>
           <span class="spacer"></span>
           <button id="${this.id ? `${this.id}-send` : `cmp-send-${this._uid}`}" class="btn send" data-composer-send type="button">${escapeHtml(sendLabel)}</button>
         </div>
@@ -7073,6 +7087,13 @@ class AgentComposer extends Component {
       agent-composer .popup .item:hover, agent-composer .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
       agent-composer .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       agent-composer .popup .item .dsc { flex:1; text-align:right; font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      agent-composer .harness-commands { min-height:36px; background:transparent; color:var(--text,#1d1b18); border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:6px 10px; cursor:pointer; }
+      agent-composer .harness-commands[hidden] { display:none; }
+      agent-composer .harness-commands:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      agent-composer[agent-kind="acp"] .popup .item { min-height:44px; box-sizing:border-box; align-items:center; }
+      agent-composer[agent-kind="acp"] .popup .lbl { white-space:normal; overflow-wrap:anywhere; flex:1; }
+      agent-composer[agent-kind="acp"] .popup .dsc { white-space:normal; text-align:left; overflow-wrap:anywhere; }
+      agent-composer .popup .item[aria-disabled="true"] { cursor:default; }
       agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
       agent-composer .popup .group-label { padding:6px 10px 2px; font-size:11px; font-weight:700;
         color:var(--muted,#635e56); letter-spacing:.01em; }
@@ -7141,6 +7162,9 @@ class AgentComposer extends Component {
         agent-composer .composer textarea { min-width: 0; }
       }
     `, html);
+    this._harnessRequest = (this._harnessRequest || 0) + 1;
+    this._harnessCatalogue = null;
+    this._harnessLoading = false;
     this._input = this.querySelector("[data-composer-input]");
     this._mic = this.querySelector("mic-button");
     this._attach = this.querySelector("attach-button");
@@ -7190,9 +7214,14 @@ class AgentComposer extends Component {
     input.style.overflowY = natural > cap ? "auto" : "hidden";
   }
   _wire() {
+    this.querySelector(".harness-commands")?.addEventListener("click", () => {
+      this._harnessCatalogue = null;
+      this._openHarnessCommands(true);
+    });
     this._run?.addEventListener("click", () => this._send());
     this._input?.addEventListener("input", () => this._onComposerInput());
     this._input?.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
       // The /agent slash picker: the composer text is the query source, so the
       // navigation keys are FORWARDED to the shared <agent-picker> (its one
       // keyboard contract) while ordinary typing flows through the input event.
@@ -7209,7 +7238,11 @@ class AgentComposer extends Component {
         if (e.key === "Home") { e.preventDefault(); this._setSelectionIndex(0); return; }
         if (e.key === "End") { e.preventDefault(); this._setSelectionIndex(this._popupItems.length - 1); return; }
         if (e.key === "Enter") { e.preventDefault(); this._selectActive(); return; }
-        if (e.key === "Tab") { e.preventDefault(); this._selectActive(); return; }
+        if (e.key === "Tab") {
+          if (this._popupItems[this._popupActive]?.disabled) this._hidePopup();
+          else { e.preventDefault(); this._selectActive(); }
+          return;
+        }
         if (e.key === "Escape") { e.preventDefault(); this._hidePopup(); return; }
         return;
       }
@@ -7277,6 +7310,7 @@ class AgentComposer extends Component {
     });
     if (!selection) return;
     this._selectedAgent = selection;
+    this._resetHarnessCommands();
     this._renderAgentChip();
     this._emit("agent-change", { agent: { ...this._selectedAgent } });
   }
@@ -7286,6 +7320,7 @@ class AgentComposer extends Component {
   clearSelectedAgent(reason = "") {
     if (!this._selectedAgent) return;
     this._selectedAgent = null;
+    this._resetHarnessCommands();
     this._agentChip?.remove();
     this._agentChip = null;
     this._emit("agent-change", { agent: null, reason });
@@ -7818,6 +7853,15 @@ class AgentComposer extends Component {
     const text = input.value;
     const caret = input.selectionStart ?? text.length;
 
+    if (this._harnessId) {
+      // Harness command position belongs to the harness, never CAP /skill.
+      if (/^[/$][^\s]*$/u.test(text.slice(0, caret))) {
+        this._openHarnessCommands();
+        return;
+      }
+      this._hidePopup();
+      return;
+    }
     // / command — command position (shared/command-parser.js): a slash at the
     // start of the input, OR a slash typed immediately after a RESOLVED
     // COMMAND REFERENCE the composer inserted earlier (CAP-FB-20260831-MULTI-
@@ -7941,6 +7985,43 @@ class AgentComposer extends Component {
     this._hidePopup();
   }
 
+  async _openHarnessCommands(browse = false) {
+    const input = this._input;
+    if (!input || !this._harnessId) return;
+    const harnessId = this._harnessId;
+    const caret = input.selectionStart ?? input.value.length;
+    const prefix = /^[/$][^\s]*$/u.test(input.value.slice(0, caret)) ? input.value.slice(0, caret) : "";
+    if (!browse && !prefix) return;
+    const token = { type: "harness", start: prefix ? 0 : caret, end: caret };
+    const show = () => {
+      const catalogue = this._harnessCatalogue;
+      const items = harnessCommandItems(catalogue?.commands, prefix);
+      const message = this._harnessLoading ? "Loading harness commands…"
+        : catalogue?.error || (!catalogue?.received ? "No command catalogue arrived. Use Harness commands to try again."
+          : !catalogue.commands?.length ? "This harness advertised no commands."
+          : "No matching harness commands.");
+      this._showPopup(items.length ? items : [{ label: message, disabled: true }], token);
+      this._popup?.setAttribute("aria-label", `${harnessId} advertised commands — insert text only`);
+    };
+    show();
+    input.focus();
+    if (this._harnessCatalogue || this._harnessLoading) return;
+    const request = ++this._harnessRequest;
+    this._harnessLoading = true;
+    show();
+    let catalogue;
+    try {
+      catalogue = await RUNTIME_SEND?.("acp.commands", { harnessId }, 22000);
+      if (!catalogue?.ok) catalogue = { error: catalogue?.error || "Cannot load harness commands. Check the bridge and try again." };
+    } catch { catalogue = { error: "Cannot load harness commands. Check the bridge and try again." }; }
+    if (request !== this._harnessRequest || !this.isConnected || this._harnessId !== harnessId || this._input !== input) return;
+    this._harnessLoading = false;
+    this._harnessCatalogue = catalogue;
+    // Escape dismisses even while the connection is pending. A late reply may
+    // update this scope's snapshot, but never reopen a dismissed popup.
+    if (this._popupOpen && this._popupToken?.type === "harness") this._openHarnessCommands(browse);
+  }
+
   _showPopup(items, token) {
     this._popupItems = items || [];
     this._popupToken = token || null;
@@ -7960,13 +8041,27 @@ class AgentComposer extends Component {
       // native CSS anchor positioning (position-area) proved unreliable for the
       // bottom-anchored composer (the popup fell off-screen), so the JS path
       // wins: it sets position:fixed + the correct top/left, overriding the CSS.
-      placeFloating(this._root.querySelector(".composer"), this._popup, { fullWidth: true });
+      const anchor = this._root.querySelector(".composer");
+      if (token?.type === "harness") {
+        this._popup.style.width = `${Math.min(Math.max(anchor.getBoundingClientRect().width, 320), window.innerWidth - 16)}px`;
+      }
+      placeFloating(anchor, this._popup, { fullWidth: token?.type !== "harness" });
     }
   }
 
   _renderPopupItems() {
     if (!this._popup) return;
     this._popup.replaceChildren();
+    this._popup.removeAttribute("aria-describedby");
+    if (this._popupToken?.type === "harness") {
+      const note = document.createElement("div");
+      note.className = "empty";
+      note.id = `cmp-${this._uid}-harness-note`;
+      note.textContent = "Inserts text only. Native command execution is not connected yet. List from a separate discovery session.";
+      if (this._harnessId === "pi") note.textContent += " Pi cannot run CAP tools yet; choose Claude Code or Codex to run.";
+      this._popup.appendChild(note);
+      this._popup.setAttribute("aria-describedby", note.id);
+    } else this._popup.setAttribute("aria-label", "Agent and resource mentions");
     let lastGroup = null;
     this._popupItems.forEach((it, i) => {
       // Group headers (the /agent list is grouped Named / Background / Site —
@@ -7987,6 +8082,7 @@ class AgentComposer extends Component {
       item.dataset.index = String(i);
       item.dataset.active = String(i === this._popupActive);
       item.setAttribute("aria-selected", String(i === this._popupActive));
+      if (it.disabled) item.setAttribute("aria-disabled", "true");
       const lbl = document.createElement("span");
       lbl.className = "lbl";
       lbl.textContent = String(it.label);
@@ -8033,6 +8129,14 @@ class AgentComposer extends Component {
     const input = this._input;
     if (!item || !token || !input) { this._hidePopup(); return; }
 
+    if (item.disabled) return;
+    if (token.type === "harness") {
+      input.setRangeText(`${item.id} `, token.start, token.end, "end");
+      this._hidePopup();
+      this._autoGrow();
+      input.focus();
+      return;
+    }
     if (token.type === "command") {
       if (item.kind === "files-action") {
         input.setRangeText("", token.start, token.end, "end");
@@ -8205,10 +8309,12 @@ class AgentComposer extends Component {
     const agent = this._selectedAgent ? { ...this._selectedAgent } : null;
     this._selectedAgent = null;
     this._agentChip = null;
+    this._resetHarnessCommands();
     this._emit("send", { text, attachments: pending, agent });
   }
 
   disconnectedCallback() {
+    this._harnessRequest = (this._harnessRequest || 0) + 1;
     // No leak while the slash picker is open: the MutationObserver and the
     // document-level pointerdown listener must die with the element (the base
     // class clears _docListeners only — this element's picker mirror is tracked

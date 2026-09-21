@@ -430,8 +430,10 @@
 
       <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;agent-composer&gt;</code> — mic + attach + input + send, one component</h3>
+        <p class="caption">Harness commands opens the advertised catalogue and inserts text, never sends. Native command execution is not connected yet. The standalone gallery has no extension connection and shows that limitation; the loaded extension discovers commands before any prompt.</p>
         <div class="stage column" style="max-width:640px">
           <agent-composer id="composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
+          <agent-composer id="harness-composer" agent-kind="acp" agent-id="codex" placeholder="Type / or $ to browse advertised commands" send-label="Run task"></agent-composer>
         </div>
         <p class="caption">the SAME component the NTP hub + chat use. Emits <code>send</code> (text + attachments). The textarea is a textbox-with-popup: while a <code>/</code> or <code>@</code> palette is open it carries <code>aria-haspopup="listbox"</code> + <code>aria-expanded="true"</code>, <code>aria-controls</code> naming the listbox, and <code>aria-activedescendant</code> naming the highlighted option (cleared on close); the multiline textarea keeps textbox semantics — never <code>role="combobox"</code>.</p>
       </div>

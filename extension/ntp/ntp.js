@@ -2254,6 +2254,7 @@ const runSurfaceOwner = createRunSurfaceOwner();
 // agent the user is currently talking to (they can't call the current agent).
 function syncComposerScope() {
   if (!threadComposer) return;
+  threadComposer.setAttribute("thread-id", currentThreadId || "");
   if (currentAgentId) {
     threadComposer.setAttribute("agent-id", currentAgentId);
     threadComposer.setAttribute("agent-kind", currentAgentKind || "");

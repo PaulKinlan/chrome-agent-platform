@@ -121,3 +121,9 @@ worktree baseline measures 2,998,629 bytes, versus 3,003,397 with ACP I/O moved 
 the existing offscreen document. The coordinator is seeking an owner decision;
 no increase is authorized or applied. An unrelated architectural reduction would
 require separate scope. This does not change artifact-retention policy.
+
+### ACP command picker scope (2026-09-21, wp7y)
+Supervisor-approved delivery is **insertion only**, dependent on harness-tools
+`430b76fa`; native dispatch must separately preserve protected CAP instructions
+(`6yfm`). Preprompt discovery is a temporary non-tool session, not a retained run
+session (`v05y`). These are implementation follow-ups, not new owner decisions.

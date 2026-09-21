@@ -488,3 +488,23 @@ Deno.test("AgentComposer._select correctly handles /command namespace selection 
     text: "Review $ARGUMENTS for safety and shipping readiness",
   });
 });
+
+Deno.test("harness picker inserts literal text without CAP resolution, sending, or losing arguments", () => {
+  const composer = new AgentComposer();
+  let text = "$pr existing arguments", focused = false, sent = false;
+  composer._input = {
+    setRangeText(value, start, end) { text = text.slice(0, start) + value + text.slice(end); },
+    focus() { focused = true; },
+  };
+  composer._hidePopup = () => {};
+  composer._autoGrow = () => {};
+  composer._emit = () => { sent = true; };
+  composer._popupToken = {type:"harness",start:0,end:3};
+  composer._popupItems = [{id:"$probe"}];
+  composer._select(0);
+  assertEquals(text, "$probe  existing arguments");
+  assert(focused); assertEquals(sent, false);
+  composer._popupItems = [{id:"/plan",disabled:true}];
+  composer._select(0);
+  assertEquals(text, "$probe  existing arguments");
+});
