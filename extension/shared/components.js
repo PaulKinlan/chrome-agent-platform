@@ -8057,7 +8057,7 @@ class AgentComposer extends Component {
       const note = document.createElement("div");
       note.className = "empty";
       note.id = `cmp-${this._uid}-harness-note`;
-      note.textContent = "Inserts text only. Native command execution is not connected yet. List from a separate discovery session.";
+      note.textContent = "Inserts text only. CAP cannot run these as harness commands yet. This list comes from a separate connection.";
       if (this._harnessId === "pi") note.textContent += " Pi cannot run CAP tools yet; choose Claude Code or Codex to run.";
       this._popup.appendChild(note);
       this._popup.setAttribute("aria-describedby", note.id);

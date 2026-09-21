@@ -1,13 +1,16 @@
 # Changelog
 
+## [0.3.444] — 2026-09-21
+- align command copy and route inventory with suite guards
+
 ## [0.3.443] — 2026-09-21
 - add candidate ACP tool transport and model backend (incomplete)
 
 ## Unreleased candidate
-- Show live harness commands/skills in the shared composer; preserve invocation sigils, insert without sending, and disclose native dispatch is not connected (wp7y).
-- Add session-fenced, no-prompt ACP command discovery for the composer (wp7y); native dispatch remains separate.
-- Harness agents can ask to use browser tools through CAP, with approval cards before permitted actions. This work is not released yet.
-- Harness connections retain their own tool requests and results. Further checks are needed before release.
+- Browse commands and skills from your external agent, then insert their text to add arguments. CAP cannot invoke them directly yet.
+- See what your external agent offers before sending a message, without starting a model response.
+- External agents can ask to use browser tools through CAP, with approval cards before permitted actions. This work is not released yet.
+- External agent connections retain their own tool requests and results. Further checks are needed before release.
 
 ## [0.3.442] — 2026-09-21
 - merge fix/astra-unex-9z37 (, 9z37)

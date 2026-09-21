@@ -27,6 +27,7 @@ import { kvSet } from "../extension/lib/kv.js";
 
 // Canonical baseline route list (the exact registered routes; grows only with a deliberate route addition)
 const BASELINE_ROUTES = [
+  "acp.commands",
   "cap:fetch",
   "capabilities.status",
   "notifications.list",
