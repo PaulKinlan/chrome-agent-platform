@@ -1,11 +1,11 @@
 // scripts/bundle-budget.mjs — the store-target bundle size gate
 // (CAP-FB-20260830-BUNDLE-BUDGET-01).
 //
-import { lstatSync, readlinkSync } from "node:fs";
+import { lstatSync, readlinkSync, statSync } from "node:fs";
 // The constitution watches the service-worker bundle (docs/CONSTITUTION.md):
 // unmeasured growth shipped 4.56 MB against a ~2.5 MB note in Aug 2026 because
 // nothing in the build failed when it grew. This module is the teeth: the
-// store build FAILS when the service-worker bundle exceeds the budget, and the
+// Store packaging FAILS when the service-worker bundle exceeds the budget, and the
 // error names the top contributor inputs so the fix direction is obvious.
 //
 // The budget measures the MINIFIED store bundle (the bytes the Store package
@@ -113,7 +113,7 @@ function dependencyRootNote(root) {
  * the actual size, the budget, and the top contributors (when a metafile is
  * available). Returns the measured size on pass.
  */
-export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null, root = process.cwd() }) {
+export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null, root = process.cwd(), enforceSize = true }) {
   const size = Number(bytes);
   if (!Number.isFinite(size) || size < 0) {
     throw new Error(`bundle budget: ${label} size is not measurable (${bytes})`);
@@ -141,7 +141,7 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
       );
     }
   }
-  if (size > budgetBytes) {
+  if (enforceSize && size > budgetBytes) {
     throw new Error(
       `bundle budget exceeded: ${label} is ${size} bytes; the store budget is ${budgetBytes}.\n` +
       `Top contributors:\n${formatContributors(metafile)}\n` +
@@ -150,4 +150,11 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
     );
   }
   return size;
+}
+
+/** Packaging checks the exact SW input; building/testing still checks dependency hygiene. */
+export function assertStorePackageBudget(inventory) {
+  const worker = inventory.find((entry) => entry.archivePath === "dist/background/service-worker.js");
+  if (!worker) throw new Error("store package has no service-worker bundle");
+  return assertBundleBudget({ label: worker.archivePath, bytes: statSync(worker.sourcePath).size });
 }

@@ -6740,6 +6740,8 @@ const handlers = mergeRouteMaps(
     // concurrency finding).
     let threadId = null;
     let threadHistory = m.history ?? [];
+    let harnessId = m.mention?.kind === "acp" ? m.mention.id : m.harnessId ?? null;
+    if (harnessId) await acpRunConfig(harnessId, async (key) => (await kvGet(key))?.[key]);
     // Continuation fidelity: the union of every skill this thread's terminal
     // rows journaled (only exists when the run continues an EXISTING thread).
     let threadJournaledSkills = null;
@@ -6750,7 +6752,7 @@ const handlers = mergeRouteMaps(
       // the run with an explicit, actionable error instead.
       let cont = null;
       try {
-        cont = await continueThread(m.threadId, m.task, m.attachments);
+        cont = await continueThread(m.threadId, m.task, m.attachments, harnessId);
       } catch (e) {
         cont = null;
         pushDiagnostic("error", `[thread] continueThread failed for ${m.threadId}: ${String(e?.message ?? e).slice(0, 200)}`);
@@ -6760,9 +6762,10 @@ const handlers = mergeRouteMaps(
       }
       threadId = cont.thread.id;
       threadHistory = cont.history;
+      harnessId ??= cont.thread.harnessId ?? null;
       threadJournaledSkills = cont?.skills ?? null;
     } else {
-      const thread = await createThread(m.task, m.attachments).catch((e) => {
+      const thread = await createThread(m.task, m.attachments, harnessId).catch((e) => {
         pushDiagnostic("error", `[thread] createThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
         return null;
       });
@@ -6824,7 +6827,7 @@ const handlers = mergeRouteMaps(
         }, routeContext);
       } else {
       result = await runTask({
-        harnessId: mention?.kind === "acp" ? mention.id : m.harnessId ?? null,
+        harnessId,
         id: m.id,
         task: m.task,
         attachments: bounded,

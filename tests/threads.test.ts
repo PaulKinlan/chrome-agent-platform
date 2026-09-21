@@ -10,6 +10,7 @@ import {
   commitThreadCancellation,
   commitThreadTerminal,
   createThread,
+  continueThread,
   deleteThread,
   generateThreadName,
   getThread,
@@ -298,4 +299,11 @@ Deno.test("the index preview never carries a bracketed model tag (USER-VOICE-COP
   const u = await createThread("[urgent] fix the build");
   const index2 = await listThreads();
   assertEquals(index2.find((r) => r.id === u.id).preview, "[urgent] fix the build");
+});
+
+Deno.test("ACP thread retains harness selection through reload and continuation", async () => {
+  const t = await createThread("list tabs", [], "codex");
+  assertEquals((await getThread(t.id)).harnessId, "codex");
+  assertEquals((await continueThread(t.id, "again")).thread.harnessId, "codex");
+  assertEquals((await continueThread(t.id, "switch", [], "claude-code")).thread.harnessId, "claude-code");
 });

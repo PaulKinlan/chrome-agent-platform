@@ -1882,7 +1882,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
   };
   const status = (s) => { if (!stale()) onStatus?.(s); };
 
-  const harnessId = mention?.kind === "acp" ? mention.id : agentKind === "acp" ? agentId : null;
+  let harnessId = mention?.kind === "acp" ? mention.id : agentKind === "acp" ? agentId : null;
+  if (threadId && !agentId && !mention) {
+    const saved = await send("thread.get", { id: threadId });
+    harnessId = saved?.thread?.harnessId ?? null;
+  }
   // A new turn starts with a fresh plan strip: clear the prior turn's checklist
   // so the strip rebuilds from THIS turn's steps (CAP-FB-20260830-PLAN-STRIP-
   // CHECKPOINTS-01).
@@ -2633,7 +2637,7 @@ export async function runConversationTurn(container, { text, attachments = [], h
         runId,
         attachments,
       });
-    } else if (agentId) {
+    } else if (agentId && !harnessId) {
       res = await send("named-agent.run", {
         approvalBinding: approvalBinding ?? null,
         id: agentId,

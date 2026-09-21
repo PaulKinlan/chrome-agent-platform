@@ -10,6 +10,7 @@
 // verification and atomic replacement. Store target checks do not transform
 // package bytes or replace that primary SHA authority.
 
+import { assertStorePackageBudget } from "./bundle-budget.mjs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -53,6 +54,7 @@ async function inventoryForTarget() {
     expectedTarget: target,
   });
   if (target === STORE_TARGET) {
+    assertStorePackageBudget(inventory);
     // Exact archivePath→executable authority from the bundled inventory —
     // without it every shipped CAS binary is correctly refused as
     // unmanifested. Covers the packaging precheck AND the validate-only path
