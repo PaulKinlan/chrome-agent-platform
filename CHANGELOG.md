@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.451] — 2026-09-22
+- sidebar-parity now addresses the composer by stable hooks; twenty of its checks execute where none did before; the wider composer-selector migration remains open in 27 files
+
 ## [0.3.450] — 2026-09-22
 - refuse tool servers that Pi cannot use
 
