@@ -120,11 +120,11 @@ Deno.test("background-agent.delete ROUTE: a teardown marking failure keeps the s
     for (const fn of [...listeners]) { try { fn(msg, sender, resolve); } catch { /* another listener's throw */ } }
   });
 
-  // 1. Duplicate a built-in recipe → a custom editable instance in masterMemory.
+  // 1. Duplicate a built-in skill → a custom editable instance in masterMemory.
   const dup = await dispatch({ type: "background-agent.duplicate", id: "tab-hygiene" });
   assertEquals(dup?.ok, true, "duplicate succeeds");
   const customId = dup?.skill?.id;
-  assert(typeof customId === "string" && customId, "a custom recipe id exists");
+  assert(typeof customId === "string" && customId, "a custom skill id exists");
 
   // 2. Give it a live schedule payload (so the teardown has something to mark).
   const seeded = await dispatch({ type: "kv.set", values: {
@@ -142,7 +142,7 @@ Deno.test("background-agent.delete ROUTE: a teardown marking failure keeps the s
     `the error names the durable-mark failure (got: ${failed?.error})`,
   );
   const afterFailure = await dispatch({ type: "background-agent.custom-list" });
-  const stillThere = (afterFailure?.recipes ?? []).some((r) => r.id === customId);
+  const stillThere = (afterFailure?.skills ?? []).some((r) => r.id === customId);
   assertEquals(stillThere, true, "the recipe REMAINS after a marking failure (retryable)");
 
   // 4. With the storage failure gone, the SAME delete succeeds and removes it.
@@ -151,8 +151,8 @@ Deno.test("background-agent.delete ROUTE: a teardown marking failure keeps the s
   assertEquals(retried?.ok, true, "the retry deletes once the teardown is durable");
   const afterSuccess = await dispatch({ type: "background-agent.custom-list" });
   assertEquals(
-    (afterSuccess?.recipes ?? []).some((r) => r.id === customId),
+    (afterSuccess?.skills ?? []).some((r) => r.id === customId),
     false,
-    "the successful delete removes the recipe",
+    "the successful delete removes the skill",
   );
 });

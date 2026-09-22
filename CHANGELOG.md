@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.451] — 2026-09-22
+- bgagent-delete-order test reads the renamed response shape (skills)
+
 ## [0.3.450] — 2026-09-22
 - the recipe.* routes retire — skill.run, background-agent.{custom-list,duplicate,update,delete}, recipe.list removed
 
