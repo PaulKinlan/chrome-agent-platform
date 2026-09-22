@@ -52,7 +52,7 @@ export const CENSUS_CATEGORIES = {
   OWNER_APPROVAL_DIRECT: new Set([
     "named-agent.update", "named-agent.delete", "named-agent.set-schedule", "named-agent.set-mcp-servers",
     "agent.delete", "asset.delete", "asset.restore", "script.create", "script.run",
-    "task.pause", "task.resume", "task.update", "recipe.delete",
+    "task.pause", "task.resume", "task.update", "background-agent.delete",
   ]),
   OWNER_APPROVAL_REQUIRED: new Set([
     "capability.revoke", "named-agent.create", "named-agent.set-provider", "agent.update",
@@ -71,7 +71,7 @@ export const CENSUS_CATEGORIES = {
   ]),
   EXECUTION_AND_WORKER_ORCHESTRATION: new Set([
     "agent.run", "named-agent.run", "named-agent.delegate", "agent.delegate",
-    "background-agent.run", "recipe.run", "register-task", "run-task", "task.retry",
+    "background-agent.run", "skill.run", "register-task", "run-task", "task.retry",
     "python.execute", "table.run", "agent-worker.alive", "agent-worker.progress",
     "agent-worker.result", "agent-worker.ensure", "agent-worker.run", "agent-worker.dispatch",
     "agent-worker.tool", "agent-worker.close", "agent-worker.steer", "agent-worker.journal-append",
@@ -89,7 +89,8 @@ export const CENSUS_CATEGORIES = {
   UNCLASSIFIED_MUTATIONS: new Set([
     "named-agent.set-tools", "named-agent.avatar", "named-agent.refine", "thread.delete",
     "thread.rename", "thread.name", "asset.create", "skill.import", "skill.delete",
-    "skill.importBatch", "command.delete", "recipe.duplicate", "recipe.update",
+    "skill.importBatch", "command.delete", "background-agent.duplicate",
+    "background-agent.update",
     "background-agent.set", "prompt.set", "prompt.reset", "prompt.keep",
     "prompt.rotateAttestationKey", "browser-control.set", "browser-control.revoke",
     "agent.create", "agent.enroll-origin", "agent.retry-cleanup", "agent.pending-cleanup",
@@ -111,8 +112,8 @@ export const CENSUS_CATEGORIES = {
     "named-agent.history", "named-agent.list", "named-agent.delegations", "observability.clearTrace",
     "observability.dumpTrace", "observability.page-measures", "observability.setVerbosity",
     "prompt.attest", "prompt.attestRun", "prompt.describe", "provider.models",
-    "provider.permission-summary", "provider.status", "provider.summary", "recipe.custom-list",
-    "recipe.list", "run-log.list", "run.dismissedFailed", "run.list", "schedules.list",
+    "provider.permission-summary", "provider.status", "provider.summary",
+    "background-agent.custom-list", "run-log.list", "run.dismissedFailed", "run.list", "schedules.list",
     "screenshots.get", "screenshots.list", "script.get", "script.list", "security.state",
     "sidepanel.getTarget", "sidepanel.getTools", "sidepanel.openPage", "site-skills.get",
     "skill.discover", "skill.list", "skills.all", "skills.get", "task.list", "task.nextRun",

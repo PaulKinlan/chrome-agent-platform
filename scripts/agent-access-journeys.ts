@@ -117,9 +117,9 @@ const EXPECTED = [
   "sidepanel: a task row opens its background agent's conversation",
   "sidepanel: deleting the task row cancels the schedule + disables the agent (live)",
   "sidepanel: rapid A→B selection renders only B's conversation (fenced history load)",
-  "lifecycle: recipe.duplicate broadcasts — the picker refreshes live (no reload); the disabled copy is a template, not a row",
-  "lifecycle: recipe.update renames the copy live in the registry; the picker refreshes and still lists no template",
-  "lifecycle: recipe.delete removes the copy live",
+  "lifecycle: background-agent.duplicate broadcasts — the picker refreshes live (no reload); the disabled copy is a template, not a row",
+  "lifecycle: background-agent.update renames the copy live in the registry; the picker refreshes and still lists no template",
+  "lifecycle: background-agent.delete removes the copy live",
   "lifecycle: a created named agent appears live (no reload)",
   "sidepanel: selecting opens the agent's conversation surface",
   "sidepanel: the selection persists per session (sessionStorage)",
@@ -750,37 +750,37 @@ async function main() {
     //    mutation must broadcast agent-registry-changed) ─────────────────
     await clickExpr(sp, `document.getElementById('agent-back')`);
     await sleep(400);
-    // CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01: a duplicated recipe is
+    // CAP-FB-20260830-FRESH-PROFILE-TEMPLATE-AGENTS-01: a duplicated skill is
     // DISABLED, so it is a template and never an agent row. The live-broadcast
     // property is measured on the picker's applied registry revision (it
     // re-fetched without a reload) and on the registry route itself.
     const revBeforeDup = await evl(sp, `${SP_PICK}._appliedRevision`);
-    const dupRes = await msg(sp, { type: "recipe.duplicate", id: bgFirst?.id });
-    const copyId = dupRes?.recipe?.id;
+    const dupRes = await msg(sp, { type: "background-agent.duplicate", id: bgFirst?.id });
+    const copyId = dupRes?.skill?.id;
     await sleep(1500); // broadcast → picker.refresh()
     const revAfterDup = await evl(sp, `${SP_PICK}._appliedRevision`);
     const spAfterDup = await evl(sp, `[...${SP_PICK}.shadowRoot.querySelectorAll('.opt .name')].map(n => n.textContent)`);
     const regAfterDup = await msg(sp, { type: "agent.registry" });
     const bgAfterDup = regAfterDup?.groups?.find((g) => g.id === "background")?.agents ?? [];
-    check("lifecycle: recipe.duplicate broadcasts — the picker refreshes live (no reload); the disabled copy is a template, not a row",
+    check("lifecycle: background-agent.duplicate broadcasts — the picker refreshes live (no reload); the disabled copy is a template, not a row",
       !!copyId && Number(revAfterDup) > Number(revBeforeDup) &&
       bgAfterDup.some((a) => a.id === copyId && a.name === `${bgName} (copy)` && a.enabled === false) &&
       !spAfterDup.includes(`${bgName} (copy)`), { copyId, revBeforeDup, revAfterDup, spAfterDup });
-    await msg(sp, { type: "recipe.update", id: copyId, name: "Renamed Copy" });
+    await msg(sp, { type: "background-agent.update", id: copyId, name: "Renamed Copy" });
     await sleep(1500);
     const revAfterRename = await evl(sp, `${SP_PICK}._appliedRevision`);
     const spAfterRename = await evl(sp, `[...${SP_PICK}.shadowRoot.querySelectorAll('.opt .name')].map(n => n.textContent)`);
     const regAfterRename = await msg(sp, { type: "agent.registry" });
     const bgAfterRename = regAfterRename?.groups?.find((g) => g.id === "background")?.agents ?? [];
-    check("lifecycle: recipe.update renames the copy live in the registry; the picker refreshes and still lists no template",
+    check("lifecycle: background-agent.update renames the copy live in the registry; the picker refreshes and still lists no template",
       Number(revAfterRename) > Number(revAfterDup) &&
       bgAfterRename.some((a) => a.id === copyId && a.name === "Renamed Copy") &&
       !spAfterRename.includes("Renamed Copy") && !spAfterRename.includes(`${bgName} (copy)`),
       { revAfterDup, revAfterRename, spAfterRename });
-    await msg(sp, { type: "recipe.delete", id: copyId });
+    await msg(sp, { type: "background-agent.delete", id: copyId });
     await sleep(1500);
     const spAfterDelete = await evl(sp, `[...${SP_PICK}.shadowRoot.querySelectorAll('.opt .name')].map(n => n.textContent)`);
-    check("lifecycle: recipe.delete removes the copy live",
+    check("lifecycle: background-agent.delete removes the copy live",
       !spAfterDelete.includes("Renamed Copy"), spAfterDelete);
 
     // live named create → the list updates without a reload.

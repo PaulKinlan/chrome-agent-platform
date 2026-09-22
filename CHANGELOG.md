@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.450] — 2026-09-22
+- the recipe.* routes retire — skill.run, background-agent.{custom-list,duplicate,update,delete}, recipe.list removed
+
 ## [0.3.449] — 2026-09-22
 - the built-in skill registry speaks the one vocabulary (module, exports, importers)
 

@@ -3,7 +3,7 @@
 // The REVISE blocker: tests/bgagent-delete.test.ts only regex-scanned source.
 // This journey proves the real behaviour end to end on the LOADED extension:
 //   1. seed a real CUSTOM background agent through the REAL message bus
-//      (recipe.duplicate → background-agent.set enable → the recipe:<id> task
+//      (background-agent.duplicate → background-agent.set enable → the recipe:<id> task
 //      exists in task.list),
 //   2. find its real capability-row on the NTP and click the REAL Delete
 //      button (shadow-root event → confirmActionDialog), accept the REAL
@@ -167,14 +167,14 @@ const seed = await ntp.ev(`(async () => {
   const msg = (m) => new Promise((res) => {
     chrome.runtime.sendMessage(m, (r) => { void chrome.runtime.lastError; res(r); });
   });
-  const dup = await msg({ type: "recipe.duplicate", id: "auto-group-by-domain" });
+  const dup = await msg({ type: "background-agent.duplicate", id: "auto-group-by-domain" });
   if (!dup?.ok) return { step: "duplicate", dup };
-  const en = await msg({ type: "background-agent.set", id: dup.recipe.id, enabled: true });
+  const en = await msg({ type: "background-agent.set", id: dup.skill.id, enabled: true });
   if (!en?.ok) return { step: "enable", en };
   const tasks = await msg({ type: "task.list" });
-  const scheduled = (tasks?.tasks ?? tasks ?? []).some?.((t) => t?.name === \`recipe:\${dup.recipe.id}\`)
-    ?? JSON.stringify(tasks ?? {}).includes(\`recipe:\${dup.recipe.id}\`);
-  return { step: "done", id: dup.recipe.id, name: dup.recipe.name, scheduled };
+  const scheduled = (tasks?.tasks ?? tasks ?? []).some?.((t) => t?.name === \`recipe:\${dup.skill.id}\`)
+    ?? JSON.stringify(tasks ?? {}).includes(\`recipe:\${dup.skill.id}\`);
+  return { step: "done", id: dup.skill.id, name: dup.skill.name, scheduled };
 })()`);
 check("journey: the custom background agent seeds + schedules for real", seed?.step === "done" && seed.scheduled === true, seed);
 const agentId = seed?.id;

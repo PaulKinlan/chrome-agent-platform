@@ -601,11 +601,11 @@ agentDeleteBtn?.addEventListener("click", async () => {
     // Background agents schedule deterministically as `recipe:<id>` — the
     // picker supplies the BARE recipe id, so the old task.cancel({name:id})
     // hit "no such task" and silently deleted nothing. DELETION routes
-    // through recipe.delete (removes the custom record + tears the schedule
+    // through background-agent.delete (removes the custom record + tears the schedule
     // down NON-BLOCKING — the instant-delete contract), and success is
     // asserted EXPLICITLY (ok === true); a real failure surfaces in status
     // instead of silently closing the detail view.
-    out = await send("recipe.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    out = await send("background-agent.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   }
   if (out?.ok === true) {
     closeAgentDetail();

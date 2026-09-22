@@ -66,14 +66,17 @@ Deno.test("skills-in-settings: renderSkillList groups by intent and hands use to
   // contract (the integration is covered by the browser KAT).
   const panel = await Deno.readTextFile("extension/skills/skills-panel.js");
   // chrome-agent-platform-8lxu: the pin watches the CONTRACT (the list renders from the
-  // live recipe.list record), not the spelling of the send binding — b9uh renamed it to
+  // live skill.list record), not the spelling of the send binding — b9uh renamed it to
   // sendFn and the old literal pin went red on a behaviourally-unchanged tree. A regex
   // over the call survives any binding name and still fails if the fetch is removed.
   assertMatch(
     panel,
-    /\bsend\w*\(\s*["'`]recipe\.list["'`]/,
-    "the list renders from the live recipe.list record",
+    /\bsend\w*\(\s*["'`]skill\.list["'`]/,
+    "the list renders from the live skill.list record",
   );
+  // l0r: the recipe.list fork is retired — the panel must not re-adopt it (or
+  // any second catalog route) or the surfaces can drift again.
+  assert(!panel.includes('"recipe.list"'), "the retired recipe.list route must not come back");
   // The only remaining occurrence of the old private filter is in a doc comment
   // (CAP-FB-20260831-SKILL-LIST-SYNC-01): executable code must not re-filter.
   const executable = panel.split(/\n/).filter((l) => {

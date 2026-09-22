@@ -167,13 +167,12 @@ Deno.test("kozg.4: mount — Discover renders the preview card; Import all batch
     }
     if (type === "command.delete") return { ok: true };
     if (type === "skill.delete") return { ok: true };
-    if (type === "recipe.list") {
-      return { recipes: [
+    if (type === "skill.list") {
+      return { skills: [
         { id: "r1", name: "existing", intent: "general", description: "d", refId: "r1" },
         { id: "imp1", name: "custom-imported", intent: "general", description: "imp", refId: "imp1", source: "imported" },
-      ] };
+      ], broken: [] };
     }
-    if (type === "skill.list") return { skills: [], broken: [] };
     return { ok: true };
   };
 

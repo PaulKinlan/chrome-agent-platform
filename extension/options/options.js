@@ -1899,7 +1899,7 @@ function backgroundAgentRow(a, hostRow = null) {
   duplicate.setAttribute("aria-label", `Duplicate ${a.name} into an editable copy`);
   duplicate.addEventListener("click", async () => {
     const out = await chrome.runtime
-      .sendMessage({ type: "recipe.duplicate", id: a.id })
+      .sendMessage({ type: "background-agent.duplicate", id: a.id })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     saveFlash(out?.ok ? `Duplicated ${a.name} — edit the copy below.` : `Could not duplicate: ${out?.error ?? "failed"}.`);
     renderBackgroundAgents();
@@ -1927,7 +1927,7 @@ function backgroundAgentRow(a, hostRow = null) {
     del.setAttribute("aria-label", `Delete ${a.name}`);
     del.addEventListener("click", async () => {
       const out = await chrome.runtime
-        .sendMessage({ type: "recipe.delete", id: a.id })
+        .sendMessage({ type: "background-agent.delete", id: a.id })
         .catch(() => ({ ok: false }));
       if (out?.ok === true) {
         saveFlash(`Deleted ${a.name}.`);
@@ -1982,7 +1982,7 @@ function editSkillPrompt(skill) {
   save.textContent = "Save";
   save.addEventListener("click", async () => {
     const out = await chrome.runtime
-      .sendMessage({ type: "recipe.update", id: skill.id, prompt: textarea.value })
+      .sendMessage({ type: "background-agent.update", id: skill.id, prompt: textarea.value })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     saveFlash(out?.ok ? `Updated ${skill.name}.` : `Could not update: ${out?.error ?? "failed"}.`);
     dialog.close();

@@ -138,7 +138,7 @@ export function createApplyAgentSchedule({
  * the deletion — the row survives, no orphan alarm. ONLY the `agent:` family
  * is touched: a `recipe:<slug>` schedule belongs to the recipe store, and an
  * independent recipe schedule that happens to share the slug must survive an
- * agent deletion (recipe teardown stays under recipe.delete).
+ * agent deletion (skill teardown stays under background-agent.delete).
  */
 export function createNamedAgentDeleteGate(context, {
   requireOwnerApproval,

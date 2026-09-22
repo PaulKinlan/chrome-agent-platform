@@ -9292,19 +9292,14 @@ const handlers = mergeRouteMaps(
     return { ok: true, name, stopping: handle.stopping === true };
   },
 
-  async "recipe.list"() {
-    // ONE catalog (CAP-FB-20260831-SKILL-LIST-SYNC-01): built-in on-demand
-    // recipes + healthy imported skills. Background recipes are scheduled
-    // agents (background-agent.list), never on-demand skills — Settings and
-    // every picker read this SAME query, so no surface can drift.
-    const { skillCatalog } = await import("../lib/skill-catalog.js");
-    const { skills } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
-    return { recipes: skills };
-  },
   async "skill.list"() {
-    // Same single catalog as recipe.list. `broken` carries the skills that
-    // failed to load so Settings can surface them honestly (never silently
-    // offered, never silently hidden).
+    // THE single catalog (CAP-FB-20260831-SKILL-LIST-SYNC-01; l0r retired the
+    // duplicate recipe.list route): built-in on-demand skills + healthy
+    // imported skills. Background skills are scheduled agents
+    // (background-agent.list), never on-demand skills — Settings and every
+    // picker read this SAME route, so no surface can drift. `broken` carries
+    // the skills that failed to load so Settings can surface them honestly
+    // (never silently offered, never silently hidden).
     const { skillCatalog } = await import("../lib/skill-catalog.js");
     const { skills, broken } = await skillCatalog({ memory: masterMemory(), fileStore: skillFileStore });
     return { skills, broken };
@@ -9380,14 +9375,14 @@ const handlers = mergeRouteMaps(
     if (!origin) return { ok: false, error: "no origin provided" };
     return { ok: true, notes: await getSiteNote(origin) };
   },
-  async "recipe.run"(m) {
-    const recipe = getSkill(m.id);
-    if (!recipe) return { ok: false, error: `no recipe ${m.id}` };
+  async "skill.run"(m) {
+    const skill = getSkill(m.id);
+    if (!skill) return { ok: false, error: `no skill ${m.id}` };
     return await runTask({
-      id: `recipe:${recipe.id}:${Date.now()}`,
-      task: recipe.prompt,
+      id: `recipe:${skill.id}:${Date.now()}`,
+      task: skill.prompt,
       runKind: "agent",
-      agentRole: `recipe:${recipe.id}`,
+      agentRole: `recipe:${skill.id}`,
       providerServerAgentId: null,
     });
   },
@@ -9472,12 +9467,12 @@ const handlers = mergeRouteMaps(
   // template stays pristine. A duplicated recipe is stored in masterMemory under
   // `customRecipes` and becomes a background recipe the user can edit (the system
   // prompt / constraints) + reference.
-  async "recipe.custom-list"() {
-    return { recipes: await getCustomSkills() };
+  async "background-agent.custom-list"() {
+    return { skills: await getCustomSkills() };
   },
-  async "recipe.duplicate"({ id }) {
+  async "background-agent.duplicate"({ id }) {
     const src = await resolveSkill(id);
-    if (!src) return { ok: false, error: `no recipe ${id}` };
+    if (!src) return { ok: false, error: `no skill ${id}` };
     const custom = await getCustomSkills();
     const customId = `${src.id}-custom-${Date.now()}`;
     const copy = {
@@ -9490,33 +9485,33 @@ const handlers = mergeRouteMaps(
     };
     custom.push(copy);
     await masterMemory().set("customRecipes", custom);
-    // A duplicated recipe ENTERS the live registry (a new background agent) —
+    // A duplicated skill ENTERS the live registry (a new background agent) —
     // broadcast so every picker/slash surface updates live.
     broadcastRegistryChanged();
-    return { ok: true, recipe: copy };
+    return { ok: true, skill: copy };
   },
-  async "recipe.update"({ id, prompt, name, description }) {
+  async "background-agent.update"({ id, prompt, name, description }) {
     const custom = await getCustomSkills();
     const idx = custom.findIndex((r) => r.id === id);
-    if (idx < 0) return { ok: false, error: `no custom recipe ${id}` };
+    if (idx < 0) return { ok: false, error: `no custom skill ${id}` };
     if (prompt !== undefined) custom[idx].prompt = String(prompt);
     if (name !== undefined) custom[idx].name = String(name);
     if (description !== undefined) custom[idx].description = String(description);
     await masterMemory().set("customRecipes", custom);
     // A rename/description edit mutates the live registry entry — broadcast.
     broadcastRegistryChanged();
-    return { ok: true, recipe: custom[idx] };
+    return { ok: true, skill: custom[idx] };
   },
-  async "recipe.delete"({ id }) {
+  async "background-agent.delete"({ id }) {
     // NON-BLOCKING schedule teardown FIRST (the instant-delete contract — the
     // same path background-agent disable uses): the payload is marked
     // cancelling (inert) DURABLY before this route responds, the live run
     // aborted now; only the alarm-clear + payload-delete + termination wait
     // finish async (reconciliation reaps residue). A MARKING FAILURE rejects
-    // `marked` — surface it honestly and REMOVE NOTHING: the recipe row
+    // `marked` — surface it honestly and REMOVE NOTHING: the skill row
     // survives so the owner can retry the delete (REVISE-5 P1: the removal
     // used to persist BEFORE the mark, so an honest {ok:false} still lost the
-    // recipe).
+    // skill).
     const teardown = cancelScheduledTaskBackground(`recipe:${id}`);
     try {
       await teardown.marked;
@@ -9532,7 +9527,7 @@ const handlers = mergeRouteMaps(
     const custom = await getCustomSkills();
     const next = custom.filter((r) => r.id !== id);
     await masterMemory().set("customRecipes", next);
-    // The deleted custom recipe LEAVES the live registry — broadcast so the
+    // The deleted custom skill LEAVES the live registry — broadcast so the
     // open pickers/conversations revalidate (a selected deleted agent is
     // rejected, never routed to a ghost).
     broadcastRegistryChanged();

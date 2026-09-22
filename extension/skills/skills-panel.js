@@ -63,20 +63,17 @@ function skillCard(r, onUse, onDelete, sendFn = send) {
 }
 
 /** Render the intent-grouped skill list into `listEl` from the live
- * recipe.list record. Exported for tests (a seeded store, no SW needed).
+ * skill.list record. Exported for tests (a seeded store, no SW needed).
  *
- * CAP-FB-20260831-SKILL-LIST-SYNC-01: the catalog (skill.list / recipe.list)
+ * CAP-FB-20260831-SKILL-LIST-SYNC-01: the ONE catalog route (skill.list)
  * is the SINGLE filter authority — the panel applies NO private filter (that
  * private `mode === "on-demand"` copy is what let Settings and /skill drift;
- * background recipes are excluded by the catalog, not by this panel). Skills
+ * background skills are excluded by the catalog, not by this panel). Skills
  * that failed to load surface in the broken-errors line, never silently. */
 export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = send } = {}) {
-  const [res, brokenRes] = await Promise.all([
-    sendFn("recipe.list").catch(() => ({ recipes: [] })),
-    sendFn("skill.list").catch(() => ({ skills: [], broken: [] })),
-  ]);
-  const recipes = Array.isArray(res.recipes) ? res.recipes : [];
-  const broken = Array.isArray(brokenRes?.broken) ? brokenRes.broken : [];
+  const res = await sendFn("skill.list").catch(() => ({ skills: [], broken: [] }));
+  const skills = Array.isArray(res.skills) ? res.skills : [];
+  const broken = Array.isArray(res.broken) ? res.broken : [];
   listEl.replaceChildren();
   if (broken.length > 0) {
     const brokenEl = document.createElement("div");
@@ -88,16 +85,16 @@ export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = 
       ". See the browser console for details.";
     listEl.append(brokenEl);
   }
-  if (!recipes.length) {
+  if (!skills.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
     empty.textContent = "No skills yet.";
     listEl.append(empty);
-    return recipes;
+    return skills;
   }
   const handleDelete = onDelete || (() => renderSkillList(listEl, { onUse, onDelete, send: sendFn }));
   const byIntent = {};
-  for (const r of recipes) (byIntent[r.intent] ??= []).push(r);
+  for (const r of skills) (byIntent[r.intent] ??= []).push(r);
   for (const [intent, list] of Object.entries(byIntent)) {
     const group = document.createElement("div");
     group.className = "intent-group";
@@ -108,7 +105,7 @@ export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = 
     for (const r of list) group.append(skillCard(r, onUse, handleDelete, sendFn));
     listEl.append(group);
   }
-  return recipes;
+  return skills;
 }
 
 /** Use a skill in a task: hand the reference to the hub composer. When the

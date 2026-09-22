@@ -263,7 +263,7 @@ Deno.test("P1-d: delete durably cancels agent:<slug> BEFORE the row/OPFS deletio
   assert(!payload || payload.cancelling === true, "the schedule is durably inert at deletion time");
 
   // 2. FAMILY CROSSING: an independent recipe:<slug> schedule sharing the slug
-  //    SURVIVES the agent deletion (recipe teardown is recipe.delete's job).
+  //    SURVIVES the agent deletion (skill teardown is background-agent.delete's job).
   const cross = await createNamedAgent({ name: "Crossing Agent" });
   const cslug = cross.agent.id;
   await scheduleTask({ task: "recipe-side schedule", delayMs: 60_000, periodInMinutes: 60, name: `recipe:${cslug}` });
