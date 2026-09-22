@@ -206,6 +206,23 @@ async function clickAt(cdp: CdpClient, session: string, expr: string): Promise<b
 const centerOf = (selector: string) =>
   `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`;
 
+/** Every path at which `key` is an OWN key of a decoded value. A redaction check
+ * that greps a stringified blob tests the blob's SHAPE; this walks the object the
+ * model actually received. Bounded depth, arrays indexed, cycles out. */
+function ownKeyPaths(value: unknown, key: string, prefix = "", depth = 0, out: string[] = []): string[] {
+  if (depth > 8 || value === null || typeof value !== "object") return out;
+  if (Array.isArray(value)) {
+    value.forEach((v, i) => ownKeyPaths(v, key, `${prefix}[${i}]`, depth + 1, out));
+    return out;
+  }
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    if (k === key) out.push(path);
+    ownKeyPaths(v, key, path, depth + 1, out);
+  }
+  return out;
+}
+
 async function main() {
   const attacker = await attackerServer();
   const fixture = fixtureHtml.replaceAll("__ATTACKER_URL__", attacker.url);
@@ -404,6 +421,12 @@ async function main() {
     });
     let cookiesEnv: any = null;
     let cookieModelContent = "";
+    let cookieSeeded: any = null;
+    // A synthetic value with no meaning outside this run. The fixture MUST carry
+    // one: on a fresh profile list_cookies for 127.0.0.1 returns ZERO rows, so
+    // "no value field" passed with nothing to redact, and mutating the production
+    // mapper to return value:c.value still scored 19/0 (bead nweh).
+    const COOKIE_SENTINEL = `nweh_synthetic_${Date.now().toString(36)}`;
     try {
       await sendFrom(cdp, opts.sessionId, { type: "provider.set", config: { provider: "openai-compatible", baseURL: cookieProvider.baseURL, apiKey: SCRIPTED_DUMMY_KEY, model: "scripted" } });
       await cdp.send("Target.activateTarget", { targetId: ntp.targetId }).catch(() => {});
@@ -414,6 +437,13 @@ async function main() {
       // consumed the final response or settled).
       const cookieRunsBefore = new Set((((await sendFrom(cdp, opts.sessionId, { type: "run.list" }).catch(() => null))?.runs ?? []).map((r: any) => r?.executionId).filter(Boolean)));
       let cookieComposer = false;
+      // Seed the probe cookie through the SAME API the tool reads (chrome.cookies),
+      // non-httpOnly so the mapper's `visible` filter keeps it, on the exact domain
+      // the scripted call asks for. Seeded before the run, asserted below.
+      cookieSeeded = await cdp.eval(
+        opts.sessionId,
+        `chrome.cookies.set({ url: "http://127.0.0.1/", name: "nweh_probe", value: ${JSON.stringify(COOKIE_SENTINEL)}, httpOnly: false, path: "/" }).then(c => c ? c.name : null, e => "err:" + String((e && e.message) || e))`,
+      ).catch((e: unknown) => `throw:${String((e as Error)?.message ?? e)}`);
       // Start a NEW task from the hub home view (check 6 left its thread open;
       // typing there would continue it). Genuine clicks + real input events.
       await cdp.eval(ntp.sessionId, `document.querySelector("#home")?.click(); "home"`).catch(() => null);
@@ -455,7 +485,14 @@ async function main() {
       }
       const lastCookieReq = cookieProvider.requests[cookieProvider.requests.length - 1];
       cookiesEnv = lastCookieReq ? executeEnvelope(lastCookieReq, "list_cookies") : null;
-      cookieModelContent = JSON.stringify((lastCookieReq?.messages ?? []).filter((m: any) => m?.role === "tool").map((m: any) => m.content));
+      // The model's own view of the tool result: the RAW tool-message content.
+      // The old line was JSON.stringify(messages.map(m => m.content)), and content
+      // is already a serialized string — so every inner quote came back escaped
+      // and /"value"/ could never match. That is why the mutated mapper passed.
+      cookieModelContent = (lastCookieReq?.messages ?? [])
+        .filter((m: any) => m?.role === "tool")
+        .map((m: any) => (typeof m?.content === "string" ? m.content : JSON.stringify(m?.content ?? "")))
+        .join("\n");
       check("cookies: the redaction probe run executed list_cookies for real (capability granted, envelope settled, run terminal)",
         cookiesGranted === true && cookieComposer === true && cookieRunClicked === true && cookieProvider.requests.length === 3 && cookieProvider.overflow === 0 &&
           cookieRunRecord?.phase === "terminal" && cookieRunRecord?.terminal?.ok === true &&
@@ -465,10 +502,45 @@ async function main() {
       await cookieProvider.close();
       await sendFrom(cdp, opts.sessionId, { type: "provider.set", config: { provider: "demo", apiKey: "" } }).catch(() => {});
     }
+    // Everything the provider received across the whole probe run, not just the
+    // last tool message: a value can leak in an earlier turn or a later summary.
+    const cookieTranscript = JSON.stringify(
+      cookieProvider.requests.flatMap((r: any) => r?.messages ?? []),
+    );
+    const decodedValueKeys = ownKeyPaths(cookiesEnv?.result, "value");
+    // Both spellings, because the model sees the tool result as serialized text:
+    // a bare "value" key and its escaped form inside a nested JSON string.
+    const textValueKeys = (cookieModelContent.match(/\\?"value\\?"\s*:/g) ?? []).length;
+    check(
+      "cookies: the probe fixture was NON-EMPTY — the seeded synthetic cookie reached list_cookies as metadata",
+      cookieSeeded === "nweh_probe" && Array.isArray(cookiesEnv?.result?.cookies) &&
+        cookiesEnv.result.cookies.length > 0 &&
+        cookiesEnv.result.cookies.some((c: any) => c?.name === "nweh_probe"),
+      {
+        seeded: cookieSeeded,
+        rows: cookiesEnv?.result?.cookies?.length ?? 0,
+        names: (cookiesEnv?.result?.cookies ?? []).map((c: any) => c?.name).slice(0, 8),
+      },
+    );
     check(
       "cookies: list_cookies returns no value field (metadata only) — in the model's own context",
-      cookiesEnv?.ok === true && !/"value"/.test(cookieModelContent),
-      { env: JSON.stringify(cookiesEnv)?.slice(0, 300) },
+      cookiesEnv?.ok === true && decodedValueKeys.length === 0 && textValueKeys === 0,
+      {
+        decodedValueKeys,
+        textValueKeys,
+        modelContentHead: cookieModelContent.slice(0, 300),
+        env: JSON.stringify(cookiesEnv)?.slice(0, 300),
+      },
+    );
+    check(
+      "cookies: the seeded synthetic value reaches NO message the provider received",
+      !cookieTranscript.includes(COOKIE_SENTINEL),
+      {
+        sentinel: COOKIE_SENTINEL,
+        // Never print the transcript: if this fires, the leak is in the evidence.
+        occurrences: cookieTranscript.split(COOKIE_SENTINEL).length - 1,
+        requests: cookieProvider.requests.length,
+      },
     );
 
     for (const id of createdScripts) await sendFrom(cdp, opts.sessionId, { type: "script.delete", origin: "master", id }).catch(() => {});

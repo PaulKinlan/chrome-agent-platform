@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.454] — 2026-09-22
+- the cookie-redaction check can now fail, and a real leak reddens it specifically
+
 ## [0.3.453] — 2026-09-22
 - the security gate runs its cookie-redaction checks again
 
