@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.455] — 2026-09-22
+- the security audit now accurately targets the composer and terminates cleanly, running all nineteen checks
+
 ## [0.3.454] — 2026-09-22
 - the accessibility audit now accurately checks the composer through stable hooks; the wider selector migration remains open across 26 other files
 
