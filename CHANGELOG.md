@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.447] — 2026-09-22
+- q264, qzae: two layout checks that could not fail
+
 ## [0.3.446] — 2026-09-22
 - the measurements behind the constrained-width fix
 

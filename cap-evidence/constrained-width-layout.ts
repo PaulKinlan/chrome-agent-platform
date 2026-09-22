@@ -250,8 +250,12 @@ for (const w of HUB_WIDTHS) {
   console.log(`  ${w}px  main-wrap ${d.clientWidth} client / ${d.scrollWidth} scroll  overflowBy=${d.overflowsBy}  doc=${d.scrollWidthDoc}`);
   console.log(`         grid=[${r.gridTemplateColumns}]  jobs min-content=${r.jobsSection?.minContent} shown=${r.jobsSection?.clientWidth}  agents.w=${r.agentsSection?.width} inside=${r.agentsSection?.insideViewport}  boardPad="${r.board?.padding}" headPad="${r.panelHeadPadding}"`);
   for (const o of (r.shrinkHolders || []).slice(0, 3)) {
-    console.log(`         HOLDS OPEN <${o.tag} class="${o.cls}"> minContent=${o.minContent} ws=${o.whiteSpace} wrap=${o.overflowWrap} "${o.text.slice(0, 44)}"`);
+    console.log(`         HOLDS OPEN (light DOM only) <${o.tag} class="${o.cls}"> minContent=${o.minContent} ws=${o.whiteSpace} wrap=${o.overflowWrap} "${o.text.slice(0, 44)}"`);
   }
+  // The walk above cannot see inside <jobs-board>; this one can, and names the
+  // element that refuses to shrink.
+  const jc = (r.children || []).find((c: any) => c.id === "jobs-section");
+  if (jc) console.log(`         DEEPEST min-content=${jc.deepMinContent} at="${jc.deepMinContentAt}"  jobs column=${r.jobsSection?.clientWidth}`);
 }
 
 // The invariants the owner reported.
@@ -278,9 +282,27 @@ const bodyLeft = parseFloat(String(pad1440.panelBodyPadding || "0").split(" ")[1
 const headLeft = parseFloat(String(pad1440.panelHeadPadding || "0").split(" ")[1] ?? "0");
 check("hub: the Jobs board's content is inset like its own panel header", Math.abs(bodyLeft - headLeft) <= 1,
   { bodyPadding: pad1440.panelBodyPadding, headPadding: pad1440.panelHeadPadding });
-check("hub: nothing inside the Jobs column holds the grid track open",
-  (pad1440.shrinkHolders || []).every((o: any) => o.minContent <= 320),
-  { shrinkHolders: (pad1440.shrinkHolders || []).slice(0, 4) });
+// THE INSTRUMENT THAT CROSSES THE SHADOW ROOT, and the guard that stops it
+// being vacuous. `shrinkHolders` is a plain descendant walk and <jobs-board>
+// renders its rows into a SHADOW ROOT, so that list is EMPTY here — and
+// `.every()` on an empty list is true however badly broken the layout is. The
+// vacuous form of this check passed on the base tree, where the defect is real,
+// which is the whole failure mode: a check that cannot fail reads as safety.
+// `deepMinContent` walks shadow children too, and names what it finds.
+const jobsChild = (pad1440.children || []).find((c: any) => c.id === "jobs-section");
+check("hub: the deep min-content probe reached inside the board (non-vacuity)",
+  !!jobsChild && jobsChild.deepMinContent > 0 && String(jobsChild.deepMinContentAt || "").length > 0,
+  { jobsChild: jobsChild ?? null,
+    children: (pad1440.children || []).map((c: any) => ({ id: c.id, deep: c.deepMinContent, at: c.deepMinContentAt })) });
+// The property itself: the column CONSTRAINS its widest content rather than
+// growing to fit it, measured as the column being narrower than the deepest
+// min-content inside it. That is only reachable through minmax(0, 1fr). On the
+// base the Jobs track was 689.844px against a 684px min-content — sized BY it.
+// A probe that found nothing gives 0, which fails this rather than passing it.
+check("hub: the Jobs column is not sized by its content's min-content",
+  !!jobsChild && !!pad1440.jobsSection && jobsChild.deepMinContent > pad1440.jobsSection.clientWidth,
+  { deepMinContent: jobsChild?.deepMinContent, deepMinContentAt: jobsChild?.deepMinContentAt,
+    jobsColumnClientWidth: pad1440.jobsSection?.clientWidth, grid: pad1440.gridTemplateColumns });
 // The companion rules, at the widths where the column is narrowest, and with a
 // guard that the board actually rendered rows.
 for (const w of [1100, 900]) {
@@ -385,7 +407,7 @@ for (const w of PANEL_WIDTHS) {
   if (r.error) { console.log(`  ${w}px  ${r.error}`); continue; }
   console.log(`  ${w}px  container=${r.containerWidth} scroll=${r.containerScrollWidth} overBy=${r.containerOverflowsBy}  buttons=${r.buttons.length}`);
   for (const b of r.buttons.slice(0, 5)) {
-    console.log(`         "${b.text}" w=${b.w} h=${b.h} textOver=${b.textOverflowsBy} wrapped=${b.wrappedToMultipleLines} shrink=${b.flexShrink} ws=${b.whiteSpace} mark=${b.hasMark}`);
+    console.log(`         "${b.text}" w=${b.w} h=${b.h} textOver=${b.textOverflowsBy} wrapped=${b.wrapped} clipped=${b.labelClipped} shrink=${b.flexShrink} ws=${b.whiteSpace} mark=${b.hasMark}`);
   }
 }
 
@@ -453,6 +475,17 @@ if (panelHasButtons) {
       r.buttons.every((b: any) => b.textOverflowsBy <= 1), { buttons: r.buttons });
     check(`panel ${w}px: no harness button wraps its label to more than one line`,
       r.buttons.every((b: any) => b.labelClipped || !b.wrapped), { buttons: r.buttons.map((b: any) => ({ t: b.text, h: b.h, singleLine: b.singleLine, wrapped: b.wrapped })) });
+    // WHETHER THE COLLAPSED RULE ACTUALLY FIRES. Everything above is satisfied by
+    // `white-space: nowrap` alone — with nowrap nothing ever wraps, so those
+    // checks stay green with the container context removed and the rule dead
+    // (measured: the chip grows 34px -> 54px and nothing goes red). This is the
+    // half that only the @container rule can produce, asserted in BOTH
+    // directions: hidden when the panel is collapsed, visible when it is not.
+    const expectClipped = w < 320;
+    check(`panel ${w}px: the collapsed rule ${expectClipped ? "hides the label" : "leaves the label visible"} (the container query ${expectClipped ? "fires" : "does not fire"})`,
+      r.buttons.every((b: any) => b.labelClipped === expectClipped),
+      { expectClipped, containerWidth: r.containerWidth,
+        buttons: r.buttons.map((b: any) => ({ t: b.text, labelClipped: b.labelClipped, w: b.w, h: b.h })) });
     check(`panel ${w}px: every harness button stays inside its container`,
       r.buttons.every((b: any) => !b.overflowsContainer), { containerWidth: r.containerWidth, buttons: r.buttons });
   }
