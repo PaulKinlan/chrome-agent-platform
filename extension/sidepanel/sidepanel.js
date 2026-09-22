@@ -33,6 +33,7 @@ import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shar
 import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
 import { findAgentByRef } from "../shared/agent-registry.js";
 import { deleteAgentDialog, renderAgentPermissionsPanel } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
+import { harnessMarkEl } from "../shared/harness-marks.js";
 import { capLog } from "../lib/cap-log.js";
 import { actionableRunsForSurface } from "../lib/run-scope.js";
 
@@ -83,7 +84,15 @@ async function renderHarnessQuick() {
       btn.type = "button";
       btn.className = "hq";
       btn.dataset.ref = ref;
-      btn.textContent = a.name || a.id;
+      // The MARK carries the identity wherever the label cannot fit — which is
+      // the whole collapsed-panel case. The label is its own element (not a bare
+      // text node) so it can be hidden at narrow widths while the button keeps
+      // the full harness name as its accessible name.
+      btn.append(harnessMarkEl(document, a.id, a.name));
+      const label = document.createElement("span");
+      label.className = "hq-label";
+      label.textContent = a.name || a.id;
+      btn.append(label);
       btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
       if (openAgent?.ref === ref) btn.setAttribute("aria-current", "true");
       btn.addEventListener("click", () => {

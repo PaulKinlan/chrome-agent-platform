@@ -11645,11 +11645,12 @@ class JobsBoard extends Component {
         .jb-head { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
           color:var(--muted,#635e56); padding:0 2px 5px; display:flex; align-items:baseline; gap:6px; }
         .jb-head .jb-n { font-weight:600; color:var(--muted,#635e56); }
-        .jb-row { display:flex; flex-direction:column; gap:3px; padding:8px 2px;
+        .jb-row { display:flex; flex-direction:column; gap:3px; padding:8px 0;
           border-bottom:1px solid var(--border,#e3e0d9); }
         .jb-row:last-child { border-bottom:0; }
         .jb-desc { font-size:13px; line-height:1.4; color:var(--text,#1d1b18);
-          overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+          overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
+          overflow-wrap:anywhere; }
         .jb-meta { font-size:11.5px; color:var(--muted,#635e56); display:flex; gap:6px 8px; align-items:baseline;
           flex-wrap:wrap; }
         /* The status WORD is a text badge — never colour alone. A left border in
@@ -11665,7 +11666,9 @@ class JobsBoard extends Component {
         .jb-badge.blocked::before { background:var(--danger,#b3261e); }
         .jb-badge.done::before { background:var(--accent,#0e6e63); }
         .jb-badge.fail::before { background:var(--danger,#b3261e); }
-        .jb-party { white-space:nowrap; }
+        /* One unbroken line by design, but bounded so it cannot hold the board's column
+           open or overflow the row now that the column is allowed to be narrow. */
+        .jb-party { white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
         .jb-outcome { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
         .jb-outcome.completed { color:var(--accent,#0e6e63); }
         .jb-outcome.failed { color:var(--danger,#b3261e); }
@@ -11673,21 +11676,21 @@ class JobsBoard extends Component {
            wrapper drops its own padding/border so the button carries them. */
         .jb-row--settled { padding:0; border-bottom:0; }
         .jb-settled-btn { display:flex; flex-direction:column; gap:3px; width:100%; text-align:left;
-          font:inherit; color:inherit; background:transparent; border:0; padding:8px 2px; cursor:pointer;
+          font:inherit; color:inherit; background:transparent; border:0; padding:8px 0; cursor:pointer;
           border-bottom:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px); }
         .jb-row--settled:last-child .jb-settled-btn { border-bottom:0; }
         .jb-settled-btn:hover { background:var(--hover,rgba(0,0,0,.04)); }
         .jb-settled-btn:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
         .jb-settled-btn[disabled] { cursor:default; opacity:.85; }
         .jb-excerpt { font-size:12px; color:var(--muted,#635e56); overflow:hidden;
-          text-overflow:ellipsis; white-space:nowrap; }
+          text-overflow:ellipsis; white-space:nowrap; min-width:0; max-width:100%; }
         .jb-full { font-size:12.5px; line-height:1.5; color:var(--text,#1d1b18); white-space:pre-wrap;
           word-break:break-word; margin:4px 0 2px; max-height:40vh; overflow:auto;
           background:var(--surface-2,#f5f2ec); border-radius:var(--radius-sm,6px); padding:8px 10px; }
         .jb-caret { font-size:11px; color:var(--muted,#635e56); }
         .jb-msg { font-size:12.5px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden;
-          display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
-        .jb-empty { font-size:13px; color:var(--muted,#635e56); padding:6px 2px; line-height:1.5; }
+          display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
+        .jb-empty { font-size:13px; color:var(--muted,#635e56); padding:6px 0; line-height:1.5; }
       </style>
       <div class="jb">
         <div class="jb-open" role="list" aria-label="Open jobs" aria-live="polite"></div>

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.445] — 2026-09-22
+- agent badges, and the constrained-width layout the owner reported
+
 ## [0.3.444] — 2026-09-21
 - name Node imports in the pre-bundle refusal
 
@@ -9,6 +12,8 @@
 ## Unreleased
 - Identify `node:` imports as Node builtins, with their importer, rather than remote script URLs in the pre-bundle scan (azlc review).
 - Remove Node process-launcher dependencies from browser bundles; reject builtin imports instead of shimming them (azlc).
+- Each one-click agent button now carries a badge, so a narrow side panel still shows which agent is which instead of squashing the names.
+- The Jobs board no longer pushes the Agents panel off the side, and its rows now sit on the same inset as its own heading.
 
 ## [0.3.442] — 2026-09-21
 - merge fix/astra-unex-9z37 (, 9z37)

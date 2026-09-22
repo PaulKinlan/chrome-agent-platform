@@ -65,13 +65,23 @@
   .open-row input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text); padding: 6px 10px; font: inherit; min-height: 36px; }
 
   /* ── the AGENTS view (CAP-FB-20260818-AGENT-ACCESS-01) ───────────────── */
-  #agents-view { flex:1; display:flex; flex-direction:column; min-height:0; }
+  #agents-view { flex:1; display:flex; flex-direction:column; min-height:0; container-type: inline-size; }
   #agents-view[hidden] { display:none; }
   #agents-list-pane { flex:1; overflow-y:auto; padding:12px 14px; }
   .harness-quick { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
-  .harness-quick .hq { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border,#e3e0d9);
+  /* The chip never wraps its label and never exceeds its container: the label is
+     the part that gives way, ellipsised on one line. Without white-space:nowrap
+     the label breaks inside the chip (measured before the fix: 222x51 with two
+     line boxes at a 260px panel); without max-width + min-width:0 a name longer
+     than the panel pushes the chip out of its container instead. */
+  .harness-quick .hq { display:inline-flex; align-items:center; gap:6px; flex:0 1 auto;
+    max-width:100%; white-space:nowrap; overflow:hidden;
+    border:1px solid var(--border,#e3e0d9);
     background:var(--panel,#fff); color:var(--text,#1d1b18); border-radius:999px; padding:5px 10px;
     font:inherit; font-size:12.5px; cursor:pointer; }
+  .harness-quick .hq .hq-mark { display:inline-flex; flex:0 0 auto; }
+  .harness-quick .hq .hq-mark svg { display:block; width:16px; height:16px; }
+  .harness-quick .hq .hq-label { min-width:0; overflow:hidden; text-overflow:ellipsis; }
   .harness-quick .hq:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
   .harness-quick .hq:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
   .harness-quick .hq[aria-current="true"] { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
@@ -116,6 +126,15 @@
   @container (max-width: 360px) {
     .open-row .go-label { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
     .open-row .btn { padding: 0 10px; }
+  }
+
+  /* Collapsed panel: the LABEL goes and the MARK carries the identity, so the
+     row stays a line of recognisable chips rather than wrapping text. The label
+     is hidden with the clip pattern (not display:none) and the button keeps the
+     full harness name as its accessible name, so the identity is never lost. */
+  @container (max-width: 320px) {
+    .harness-quick .hq-label { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+    .harness-quick .hq { padding: 5px 8px; }
   }
 </style>
 </head>
