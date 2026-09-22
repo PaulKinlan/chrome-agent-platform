@@ -148,14 +148,26 @@ Deno.test("a provider that cannot list tools fails the REQUEST, not the connecti
   assertEquals((await reply(s, req(2, "ping"))).result, {});
 });
 
-Deno.test("adapterHostsClientMcp: only the adapter that implements mcp/connect is advertised to", () => {
-  // codex-acp@1.12.0 defines the three method names and the {name, serverId}
-  // server type; claude-agent-acp@0.78.0 does not; pi-acp@0.0.33 never reads
-  // mcpServers at all.
-  assertEquals(adapterHostsClientMcp("codex"), true);
-  assertEquals(adapterHostsClientMcp("claude-code"), false);
+Deno.test("adapterHostsClientMcp: NO pinned adapter implements the client-hosted type, and a wrong true is the defect", () => {
+  // The protocol supports `{type:"acp"}` + mcp/connect, mcp/message,
+  // mcp/disconnect. Support in the SPEC is not support in the ADAPTER, and each
+  // pinned adapter was read rather than assumed:
+  //   pi-acp@0.0.33            stores params.mcpServers, never reads them
+  //   claude-agent-acp@0.78.0  threads mcpServers to the SDK (stdio/http/sse),
+  //                            but defines none of the mcp/* methods
+  //   codex-acp@1.12.0         declares zMcpServerAcp and the method-name
+  //                            constants, yet connectionId/serverId occur ONLY
+  //                            in those schemas, never in executing code
+  //
+  // So every one is false, and this test would rather assert an inconvenient
+  // false than a comfortable true: an advertised server the adapter ignores
+  // makes the session LOOK capable while the harness reaches for its own
+  // browser tooling — the exact failure this change exists to fix.
   assertEquals(adapterHostsClientMcp("pi"), false);
-  // Unknown adapters are NOT guessed at.
+  assertEquals(adapterHostsClientMcp("claude-code"), false);
+  assertEquals(adapterHostsClientMcp("codex"), false,
+    "codex-acp declares the schema but implements nothing; declaring it supported would advertise a server it silently ignores");
+  // Unknown adapters are not guessed at either — same reason, one import away.
   assertEquals(adapterHostsClientMcp("some-new-harness"), false);
   assertEquals(adapterHostsClientMcp(""), false);
   assertEquals(adapterHostsClientMcp(undefined), false);

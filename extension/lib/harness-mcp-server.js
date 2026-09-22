@@ -42,15 +42,42 @@ export const CAP_MCP_SERVER_ID = "cap-browser";
 
 /** Does this adapter host an MCP server the CLIENT provides?
  *
- * True only for the adapters that implement the ACP `mcp/connect` /
- * `mcp/message` / `mcp/disconnect` pair. Measured against the pinned adapters
- * 2026-09-22: codex-acp@1.12.0 defines `zMcpServerAcp` (`{name, serverId}`) and
- * the three method names; claude-agent-acp@0.78.0 defines none of them; and
- * pi-acp@0.0.33 never reads `mcpServers`. An unknown adapter is NOT guessed at:
- * advertising a server nobody reads makes a session look capable when it is
- * not. */
+ * MEASURED, and the answer for every adapter CAP pins today is NO. The protocol
+ * supports it — ACP defines `{type:"acp", name, serverId}` plus the methods
+ * `mcp/connect`, `mcp/message` and `mcp/disconnect` — but support in the spec is
+ * not support in the adapter, and the three pinned adapters were each read
+ * rather than assumed:
+ *
+ *   pi-acp@0.0.33         stores `params.mcpServers` on the session and never
+ *                         reads them anywhere. `mcpCapabilities` is even
+ *                         declared `{http:false, sse:false}`. No support.
+ *   claude-agent-acp@0.78.0  DOES thread `mcpServers` to the Claude Agent SDK
+ *                         (it sorts them into the session fingerprint and the
+ *                         SDK connects them), so stdio/http/sse servers work —
+ *                         but it defines none of the three mcp/* methods, so a
+ *                         CLIENT-HOSTED server has no channel. No support for
+ *                         this type.
+ *   codex-acp@1.12.0      declares the whole union including `zMcpServerAcp`
+ *                         (`{name, serverId}`) and the three method-name
+ *                         constants — but `connectionId` and `serverId` occur
+ *                         ONLY inside those schema definitions and nowhere in
+ *                         executing code. Schema-only: generated from the
+ *                         protocol package, not implemented. No support.
+ *
+ * So this returns false for all three, and it is not a placeholder for
+ * unfinished work — it is the honest answer, and returning true anywhere would
+ * be strictly worse than returning false. An advertised server that the adapter
+ * silently ignores makes a session LOOK capable while the harness reaches for
+ * its own browser tooling instead, which is the exact failure being fixed.
+ *
+ * The function stays because the assertion has to live somewhere the day an
+ * adapter does implement it, and because a wrong `true` here is the defect this
+ * whole change exists to prevent. When an adapter lands support, add it here
+ * WITH the evidence (the method it implements), not because its release notes
+ * mention MCP. */
 export function adapterHostsClientMcp(harness) {
-  return harness === "codex";
+  void harness;
+  return false;
 }
 
 /** The `mcpServers` entry CAP declares for an adapter that can host it. */
