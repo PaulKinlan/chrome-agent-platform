@@ -1144,6 +1144,85 @@ Deno.test("segmented-control moves value with ArrowRight/ArrowLeft and emits cha
   if (emitted.length !== before) throw new Error("selecting the already-current value must not emit change");
 });
 
+Deno.test("segmented-control scrolls the activated tab into view (chrome-agent-platform-diay)", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = globalThis.customElements.get("segmented-control");
+  if (!Klass) throw new Error("segmented-control must be registered");
+  // The host strip (Settings Providers .provider-tabs) scrolls horizontally at
+  // 360px and the ACTIVE tab can sit outside the viewport. Every activation —
+  // click, arrow/Home/End, and the host's programmatic initial selection —
+  // must scrollIntoView({block:'nearest', inline:'nearest'}) the selected tab.
+  const mkTab = (val: string) => {
+    const t: any = { dataset: { val }, calls: [] as any[] };
+    t.scrollIntoView = (o: unknown) => { t.calls.push(o); };
+    return t;
+  };
+  const tabs = [mkTab("Gemini"), mkTab("OpenAI-compatible"), mkTab("Anthropic"), mkTab("Local/Ollama")];
+  const el: any = Object.create(Klass.prototype);
+  el._value = "Gemini";
+  el._items = () => tabs.map((t) => t.dataset.val);
+  el._root = { querySelectorAll: (sel: string) => (sel === '[role="tab"]' ? tabs : []) };
+  el._sync = () => {};
+  el._focusSelected = () => {};
+  el._emit = () => {};
+  const expectNearest = (t: any, via: string) => {
+    if (t.calls.length !== 1) throw new Error(`${via}: the activated tab must be scrolled into view exactly once, got ${t.calls.length}`);
+    const o = t.calls[0] ?? {};
+    if (o.block !== "nearest" || o.inline !== "nearest") {
+      throw new Error(`${via}: scrollIntoView must be {block:'nearest', inline:'nearest'}, got ${JSON.stringify(o)}`);
+    }
+  };
+  // Click path.
+  el._select("Local/Ollama", { focus: true });
+  expectNearest(tabs[3], "click");
+  if (tabs.some((t, i) => i !== 3 && t.calls.length > 0)) throw new Error("non-selected tabs must not be scrolled");
+  // Keyboard path (End jumps to the last tab, already there; ArrowLeft moves).
+  el._onKey({ key: "ArrowLeft", preventDefault() {} });
+  expectNearest(tabs[2], "ArrowLeft");
+  // Programmatic initial selection (the options page sets tabs.value after
+  // connect) — the reported bug: the stored provider's tab sat off-screen.
+  el.value = "Gemini";
+  expectNearest(tabs[0], "programmatic value setter");
+});
+
+Deno.test("segmented-control scrolls the attribute-selected tab into view on render (chrome-agent-platform-diay)", async () => {
+  await import("../extension/shared/components.js");
+  const Klass = globalThis.customElements.get("segmented-control");
+  if (!Klass) throw new Error("segmented-control must be registered");
+  // The declarative path — <segmented-control value="Local/Ollama">: _render()
+  // reads the value ATTRIBUTE and marks the tab without ever running _select,
+  // so the scroll must happen at the end of _render(). This is the reported
+  // bug's load-state path (coord review 2026-09-22).
+  const restoreDoc = installFakeDocument();
+  const calls: any[] = [];
+  const origSIV = FakeNode.prototype.scrollIntoView;
+  FakeNode.prototype.scrollIntoView = function (this: any, o: unknown) { calls.push({ node: this, o }); };
+  try {
+    const el: any = new Klass();
+    const list: any = new FakeNode("div");
+    el._root = {
+      innerHTML: "",
+      querySelector: (sel: string) => (sel === ".tabs" ? list : null),
+      querySelectorAll: (sel: string) => (sel === '[role="tab"]' ? list.children : []),
+    };
+    el.setAttribute("items", "Gemini,OpenAI-compatible,Anthropic,Local/Ollama");
+    el.setAttribute("value", "Local/Ollama");
+    el._render();
+    const scrolled = calls.filter((c) => c.node.dataset?.val);
+    if (scrolled.length !== 1) throw new Error(`exactly one tab must be scrolled into view on render, got ${scrolled.length}`);
+    if (scrolled[0].node.dataset.val !== "Local/Ollama") {
+      throw new Error(`the attribute-selected tab must be the one scrolled, got ${scrolled[0].node.dataset.val}`);
+    }
+    const o = scrolled[0].o ?? {};
+    if (o.block !== "nearest" || o.inline !== "nearest") {
+      throw new Error(`scrollIntoView must be {block:'nearest', inline:'nearest'}, got ${JSON.stringify(o)}`);
+    }
+  } finally {
+    FakeNode.prototype.scrollIntoView = origSIV;
+    restoreDoc();
+  }
+});
+
 Deno.test("composer slash/@ palette is an accessible combobox (CAP-FB-20260830-SLASH-PALETTE-COMBOBOX-01)", async () => {
   await import("../extension/shared/components.js");
   // The popup renderer builds options with document.createElement + textContent

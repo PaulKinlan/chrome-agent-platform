@@ -13,7 +13,17 @@
 //   - switching tabs preserves UNSAVED input (panels toggle hidden, cards are
 //     not re-rendered);
 //   - ArrowLeft/Right move+select (roving tabindex), Home/End jump;
-//   - 360px: the strip scrolls, the document does NOT overflow;
+//   - 360px: the strip scrolls, the document does NOT overflow; an ACTIVATED
+//     off-screen tab scrolls into the strip's viewport (click + End); the
+//     stored default's tab LOADS already scrolled into view; and two SILENT
+//     re-activation checks pin the page-move property — a visible tab moves
+//     nothing, an off-screen tab is revealed with a MINIMAL page scroll
+//     (nearest, Δsy ≈ 108) rather than a full alignment (block:"start"
+//     mutant, Δsy = 629) — isolated from the browser's native focus scroll,
+//     which moves the page on click on EVERY tree
+//     (chrome-agent-platform-diay — the original bug was the load state, so
+//     ollama is saved as the default through the real Use flow and the page
+//     is reloaded at 360px);
 //   - embedded mode renders the same tablist.
 // Screenshots land in <out-dir>.
 //
@@ -174,12 +184,150 @@ await sleep(200);
 const ended = await ev(`document.querySelector('#provider-tabs segmented-control').value`);
 check("End jumps to the last family", ended === "Local/Ollama", { ended });
 
+// ---- Make Local/Ollama the stored default (the diay load-state setup) ------
+// The original diay report was a LOAD state — the stored provider's tab active
+// but off-screen on arrival. Set it through the real save flow: type a model
+// into the ollama card's picker (the Use flow commits typed-but-not-picked
+// text itself — CAP-FB-20260830-MODEL-FIELD-EMPTY-SAVE-01) and click its Use
+// button (a keyless local provider needs no connection test — useEnabled).
+await ev(`(() => {
+  const rail = document.querySelector('#provider-tabs segmented-control');
+  rail.shadowRoot.querySelector('[data-val="Local/Ollama"]').click();
+  return true;
+})()`);
+await sleep(300);
+const used = await ev(`(async () => {
+  const card = document.querySelector('#provider-family-panel-local-ollama .provider-card[data-provider="ollama"]');
+  if (!card) return { error: 'no ollama card' };
+  const picker = card.querySelector('model-picker');
+  const input = picker?.shadowRoot?.querySelector('input');
+  if (!input) return { error: 'no picker input' };
+  input.value = 'llama3.2';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  const btn = card.querySelector('.set-default');
+  if (btn.disabled) return { error: 'use button disabled' };
+  btn.click();
+  await new Promise((r) => setTimeout(r, 2500));
+  const cfg = await chrome.runtime.sendMessage({ type: 'provider.get' });
+  return { provider: cfg?.provider ?? null };
+})()`);
+check("ollama saved as the default provider through the real Use flow", used?.provider === "ollama", used);
+
 // ---- Narrow (360x800): the strip scrolls, the document does NOT ------------
 await send("Emulation.setDeviceMetricsOverride", { width: 360, height: 800, deviceScaleFactor: 1, mobile: true }, sessionId);
 await sleep(500);
 const narrow = await ev(`({ docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1 })`);
 check("at 360px the document never overflows horizontally", narrow?.docOverflow === false, narrow);
+
+// chrome-agent-platform-diay: at 360px the strip is a horizontal scroller and
+// an ACTIVATED tab may sit outside the viewport (the reported state: Local/
+// Ollama content while the visible row still showed Gemini). Activating a tab
+// must scroll it into the strip's visible rect — by click and by keyboard.
+const tabVisibility = `(() => {
+  const scroller = document.querySelector('#provider-tabs');
+  const rail = scroller?.querySelector('segmented-control');
+  const sel = rail?.shadowRoot?.querySelector('[role="tab"][aria-selected="true"]');
+  if (!scroller || !sel) return null;
+  const sr = scroller.getBoundingClientRect();
+  const tr = sel.getBoundingClientRect();
+  return { label: sel.textContent, scrollLeft: scroller.scrollLeft, sx: scrollX, sy: scrollY,
+    visible: tr.left >= sr.left - 1 && tr.right <= sr.right + 1,
+    tab: { left: tr.left, right: tr.right }, strip: { left: sr.left, right: sr.right } };
+})()`;
+// Start from a visible tab so the click below is a real off-screen activation.
+// NOTE (measured 2026-09-22 on base AND fixed trees): a CLICK also focuses,
+// and Chrome's native focus scroll moves the PAGE on this emulated mobile
+// viewport (sy 0 -> ~493 on every tree) — so a click-based "page does not
+// move" assertion cannot isolate the component's scroll from the browser's.
+// The page-move property is asserted on the SILENT path at load below.
+await ev(`(() => {
+  const rail = document.querySelector('#provider-tabs segmented-control');
+  rail.shadowRoot.querySelector('[data-val="Gemini"]').click();
+  return true;
+})()`);
+await sleep(300);
+const pageBefore = await ev(`({ sx: scrollX, sy: scrollY })`);
+await ev(`(() => {
+  const rail = document.querySelector('#provider-tabs segmented-control');
+  rail.shadowRoot.querySelector('[data-val="Local/Ollama"]').click();
+  return true;
+})()`);
+await sleep(300);
+const clicked = await ev(tabVisibility);
+check("at 360px a click-activated off-screen tab scrolls into the strip's viewport",
+  clicked?.label === "Local/Ollama" && clicked?.visible === true && clicked?.scrollLeft > 0, clicked);
+// Regression guard (passes on every tree via native focus scroll; the
+// discriminating page-move assertion is the silent re-activation at load).
+check("activating an off-screen tab scrolls only the strip, never the page",
+  clicked !== null && pageBefore !== null && clicked.scrollLeft > 0 &&
+  clicked.sx === pageBefore.sx && clicked.sy === pageBefore.sy,
+  { before: pageBefore, after: clicked && { sx: clicked.sx, sy: clicked.sy, scrollLeft: clicked.scrollLeft } });
 await shot(`${OUT}/tabs-360px.png`);
+// Keyboard: End jumps to the LAST tab, which is off-screen at 360px — this
+// discriminates, unlike a Home check (the first tab is already visible at
+// scrollLeft 0, so Home passed vacuously on the un-fixed tree).
+await ev(`(() => {
+  const rail = document.querySelector('#provider-tabs segmented-control');
+  const t = rail.shadowRoot.querySelector('[data-val="Gemini"]');
+  t.focus();
+  t.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }));
+  return true;
+})()`);
+await sleep(300);
+const endKeyed = await ev(tabVisibility);
+check("at 360px End scrolls the jumped-to tab into the strip's viewport",
+  endKeyed?.label === "Local/Ollama" && endKeyed?.visible === true && endKeyed?.scrollLeft > 0, endKeyed);
+
+// ---- Load state: the stored default's tab is visible WITHOUT interaction ----
+// The original diay manifestation: arriving at the panel with the stored
+// provider's tab active but off-screen. With ollama saved as default above,
+// reload at 360px and assert the active tab loads already scrolled into view.
+await send("Page.navigate", { url: `chrome-extension://${extId}/options/options.html` }, sessionId);
+await sleep(3000);
+await ev(openProviders);
+await sleep(700);
+const loaded = await ev(tabVisibility);
+check("at 360px the stored default's tab loads scrolled into view (the original bug)",
+  loaded?.label === "Local/Ollama" && loaded?.visible === true && loaded?.scrollLeft > 0, loaded);
+await shot(`${OUT}/tabs-360px-load.png`);
+// The page-move assertions, isolated from native focus scroll: a SILENT
+// re-activation (the property setter — exactly what options.js runs at load)
+// involves no focus, so only the component's scrollIntoView can scroll.
+// (a) tab vertically VISIBLE: nearest is a no-op — nothing may move. (A
+//     block:"start" mutant is ALSO a no-op on a visible element — measured
+//     2026-09-22: Chrome aligns only when scrolling is needed — so this pins
+//     the no-op property and, via scrollLeft, the INLINE axis.)
+// (b) tab vertically OFF-SCREEN: scrolling to reveal it is CORRECT, but
+//     nearest scrolls the MINIMUM — the tab peeks in at the viewport edge
+//     (measured Δsy = 108) — while a block:"start" mutant scrolls for full
+//     top-alignment (measured Δsy = 629, the document's max scroll). The 400
+//     threshold sits between the two measurements; on the un-fixed tree
+//     nothing scrolls and the tab stays off-screen.
+const silentState = `(() => {
+  const strip = document.querySelector('#provider-tabs');
+  const sel = document.querySelector('#provider-tabs segmented-control').shadowRoot.querySelector('[role="tab"][aria-selected="true"]');
+  const tr = sel.getBoundingClientRect();
+  return { sy: scrollY, sx: scrollX, sl: strip.scrollLeft,
+    tabVisible: tr.bottom > 0 && tr.top < innerHeight, label: sel.textContent };
+})()`;
+const beforeSilent = await ev(silentState);
+await ev(`document.querySelector('#provider-tabs segmented-control').value = "Local/Ollama"; true`);
+await sleep(300);
+const afterSilent = await ev(silentState);
+check("a silent re-activation with a visible tab scrolls nothing (nearest no-op)",
+  beforeSilent !== null && afterSilent !== null && beforeSilent.sl > 0 &&
+  afterSilent.sy === beforeSilent.sy && afterSilent.sx === beforeSilent.sx && afterSilent.sl === beforeSilent.sl,
+  { before: beforeSilent, after: afterSilent });
+await ev(`scrollTo(0, 0); true`);
+await sleep(300);
+const offBefore = await ev(silentState);
+await ev(`document.querySelector('#provider-tabs segmented-control').value = "Local/Ollama"; true`);
+await sleep(400);
+const offAfter = await ev(silentState);
+check("revealing a vertically off-screen tab scrolls the page MINIMALLY (nearest), never a full alignment (block-start)",
+  offBefore !== null && offAfter !== null && offBefore.tabVisible === false &&
+  offAfter.tabVisible === true && Math.abs(offAfter.sy - offBefore.sy) < 400,
+  { before: offBefore, after: offAfter });
 
 // ---- Embedded: the same tablist renders in the hub-embedded view ----------
 await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }, sessionId);

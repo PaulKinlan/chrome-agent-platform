@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.453] — 2026-09-22
+- the active Providers tab in Settings now scrolls into view when selected on narrow screens
+
 ## [0.3.452] — 2026-09-22
 - an agent's conversation header now updates immediately when you rename the agent, and keeps the new name after a reload
 
