@@ -1,19 +1,22 @@
 # Changelog
 
+## [0.3.450] — 2026-09-22
+- the What's New page now tells you what changed for you, rather than what we checked
+
 ## [0.3.449] — 2026-09-22
-- the agent buttons' badges and the narrow side panel are now checked in a real browser
+- the agent buttons now show a badge for each agent, and the side panel stops squashing them when it is narrow
 
 ## [0.3.448] — 2026-09-22
 - correct the F1 rationale to what was actually measured
 
 ## [0.3.447] — 2026-09-22
-- q264, qzae: two layout checks that could not fail
+- a broken side panel is now caught before it reaches you, instead of the check passing whatever the layout did
 
 ## [0.3.446] — 2026-09-22
 - the measurements behind the constrained-width fix
 
 ## [0.3.445] — 2026-09-22
-- agent badges, and the constrained-width layout the owner reported
+- each agent button carries a badge, and a narrow side panel no longer breaks the layout
 
 ## [0.3.444] — 2026-09-21
 - name Node imports in the pre-bundle refusal
