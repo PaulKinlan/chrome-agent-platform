@@ -12,7 +12,7 @@
 //
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
@@ -26,6 +26,7 @@ const FIXTURE_CWD = durableDir("acp-fixture");
 // All fixture knobs explicitly pinned off so ambient process environment
 // can never contaminate this run (chrome-agent-platform-tqfg).
 export const CLEAN_FIXTURE_ENV: Record<string, string> = {
+  CAP_ACP_FIXTURE_AGENT_NAME: "",
   CAP_ACP_FIXTURE_LOG: "",
   CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
   CAP_ACP_FIXTURE_SPAWN_COUNTER: "",
@@ -106,6 +107,70 @@ Deno.test("ACP End-to-End (fixture): drives a full turn through the loopback bri
   } finally {
     client.close();
     await bridge.shutdown();
+  }
+});
+
+Deno.test("ACP tool servers: Pi refuses new/load before the adapter; empty Pi and other adapters still work", async () => {
+  const servers = [
+    { name: "stdio-probe", command: "unused-command", args: [], env: [] },
+    { name: "http-probe", type: "http", url: "https://tools.invalid/secret-probe", headers: [] },
+    { name: "sse-probe", type: "sse", url: "https://tools.invalid/secret-probe", headers: [] },
+  ];
+  // Inverse control: labelling a fixed non-Pi adapter "pi" must not block it.
+  // This proves the decision follows the actual adapter, not a renamed URL key.
+  for (const [adapter, names] of [
+    ["pi-acp", ["pi", "Pi", "pi-acp", "not-a-harness", "claude-code"]],
+    ["claude-agent-acp", ["claude-code", "pi"]],
+    ["codex-acp", ["codex", "pi"]],
+  ] as const) {
+    const logPath = `${durableDir("acp-tool-server-refusal")}/frames-${crypto.randomUUID()}.jsonl`;
+    const bridge = createAcpServer(0, FAKE_ADAPTER, {
+      ...CLEAN_FIXTURE_ENV, CAP_ACP_FIXTURE_LOG: logPath, CAP_ACP_FIXTURE_AGENT_NAME: adapter,
+    });
+    let expectedForwards = 0;
+    try {
+    for (const harness of names) {
+      const client = new AcpClient({ url: `ws://127.0.0.1:${bridge.addr.port}/acp?harness=${harness}`, requestTimeoutMs: 5000 });
+      try {
+        await client.connect();
+        if (harness === "not-a-harness") {
+          await assertRejects(() => client.newSession({ mcpServers: servers }), Error,
+            "CAP cannot identify this custom adapter");
+        }
+        await client.initialize();
+        for (const server of servers) {
+          for (const method of ["session/new", "session/load"]) {
+            const params = { cwd: FIXTURE_CWD, sessionId: "ses_fake_1", mcpServers: [server] };
+            const request = () => method === "session/new" ? client.newSession(params) : client.loadSession(params);
+            if (adapter === "pi-acp") {
+              const err = await assertRejects(request, Error,
+                "Pi's ACP adapter does not mount supplied MCP servers");
+              assert(err.message.includes("Claude Code or Codex"), "refusal must name a supported alternative");
+              assert(err.message.includes("local tools only"), "empty-server remedy must disclose its limitation");
+              assert(!err.message.includes("secret-probe"), "do not echo server configuration into the error");
+              assertEquals(client.activeSessionId, null, "rejected requests must not activate a session");
+            } else {
+              await request();
+              expectedForwards++;
+            }
+          }
+        }
+        // A refusal does not kill the connection or silently strip the servers
+        // and retry. Deliberate empty-server sessions remain a valid choice.
+        const empty = await client.newSession({ cwd: FIXTURE_CWD, mcpServers: [] });
+        assertEquals(empty.sessionId, "ses_fake_1");
+        assertEquals((await client.loadSession({ sessionId: empty.sessionId, mcpServers: [] })).resumed, true);
+        const frames = Deno.readTextFileSync(logPath).trim().split("\n").map((line) => JSON.parse(line));
+        const forwarded = frames.filter((f) => f.dir === "in" && f.msg.params?.mcpServers?.length);
+        assertEquals(forwarded.length, expectedForwards,
+          "the adapter itself must see no rejected requests, but every supported request");
+        if (adapter !== "pi-acp") {
+          assertEquals(forwarded.slice(-6).map((f) => f.msg.params.mcpServers), servers.flatMap((s) => [[s], [s]]),
+            "supported adapters receive the original descriptors unchanged");
+        }
+      } finally { client.close(); }
+    }
+    } finally { await bridge.shutdown(); }
   }
 });
 

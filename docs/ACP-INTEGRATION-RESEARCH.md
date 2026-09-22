@@ -239,6 +239,34 @@ A Chrome Manifest V3 extension runs inside isolated browser processes (Service W
 - Driven test suite connecting CAP's `AcpClient` to the live `pi-acp` process.
 - Verifies initialize, session creation, streaming thoughts, tool discovery, and prompt completion with evidence capture.
 
+## Tool-server acceptance (2026-09-22, chrome-agent-platform-jjzm)
+
+CAP's WebSocket bridge and native host reject Pi `session/new` and
+`session/load` requests containing nonempty `mcpServers` with JSON-RPC error
+`-32602`, before forwarding the request to the adapter. The shared
+`toolServerError` rule explains the limitation and names the alternatives:
+Claude Code or Codex for MCP server tools, or an explicitly empty-server Pi
+session using local tools only. Server descriptors are not echoed in errors.
+
+This is a CAP acceptance check, not an upstream Pi fix: pi-acp 0.0.33 documents
+that MCP servers are accepted and stored but not wired through to Pi. The
+refusal follows the resolved adapter package, not the caller's `?harness=`
+label. With a custom path override, CAP learns the adapter's name from its
+matching `initialize` reply (`agentInfo.name`). A Pi adapter remains refused
+under labels such as `Pi`, `pi-acp`, or `not-a-harness`; a different adapter does
+not become Pi merely because the caller used that label. An unidentified
+custom adapter refuses nonempty server lists until it supplies its identity.
+A resolved Pi package cannot rename itself out of the refusal. Empty or
+omitted server lists still work. Other adapters retain their existing
+forwarding behavior; an identity or forwarded request alone does not prove
+that a tool executed.
+
+This does **not** supply CAP browser tools or stop an empty-server Pi session
+from using its own local tools. Browser-local tool binding is separate work
+(`qnd4`). Tests drive both transports with a deterministic adapter and observe
+its incoming frames: rejected requests never arrive, empty-server creation and
+resume succeed, and Claude/Codex receive their server descriptors unchanged.
+
 ## 7. Implementation Status (verified 2026-09-12)
 Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
 

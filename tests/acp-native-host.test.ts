@@ -44,6 +44,14 @@ Deno.test("acp native host: drives a full turn over Chrome's native framing (no 
     env: {
       ...Deno.env.toObject(),
       CAP_ACP_ADAPTER: FAKE_ADAPTER,
+      // An override is the same actual adapter regardless of this label.
+      CAP_ACP_HARNESS: "not-a-harness",
+      CAP_ACP_FIXTURE_AGENT_NAME: "pi-acp",
+      CAP_ACP_FIXTURE_DIE_ON_SPAWN: "0",
+      CAP_ACP_FIXTURE_SPAWN_COUNTER: "",
+      CAP_ACP_FIXTURE_HOLD_TEXT: "",
+      CAP_ACP_FIXTURE_ASK_PERMISSION: "0",
+      CAP_ACP_FIXTURE_IGNORE_CANCEL: "0",
       CAP_ACP_CWD: "/tmp",
       CAP_ACP_FIXTURE_LOG: logPath,
     },
@@ -89,8 +97,23 @@ Deno.test("acp native host: drives a full turn over Chrome's native framing (no 
   try {
     const init = await request("initialize", { protocolVersion: 1, clientCapabilities: {} });
     assertEquals(init.result.protocolVersion, 1);
-    assertEquals(init.result.agentInfo.name, "fake-acp-adapter");
+    assertEquals(init.result.agentInfo.name, "pi-acp");
 
+    for (const method of ["session/new", "session/load"]) {
+      for (const server of [
+        { name: "stdio-probe", command: "unused-command", args: [], env: [] },
+        { name: "http-probe", type: "http", url: "https://tools.invalid/secret-probe", headers: [] },
+        { name: "sse-probe", type: "sse", url: "https://tools.invalid/secret-probe", headers: [] },
+      ]) {
+        const refused = await request(method, { cwd: "", sessionId: "ses_fake_1", mcpServers: [server] });
+        assertEquals(refused.error?.code, -32602, "native Pi must refuse instead of accepting unavailable tools");
+        assert(refused.error.message.includes("does not mount supplied MCP servers"));
+        assert(refused.error.message.includes("Claude Code or Codex"), "name the supported alternative");
+        assert(refused.error.message.includes("local tools only"), "disclose the empty-server limitation");
+        assert(!refused.error.message.includes("secret-probe"), "do not echo server configuration");
+        assertEquals(refused.result, undefined, "a refusal is not an accepted session");
+      }
+    }
     const session = await request("session/new", { cwd: "", mcpServers: [] });
     const sessionId = session.result.sessionId;
     assertEquals(sessionId, "ses_fake_1");
@@ -101,6 +124,10 @@ Deno.test("acp native host: drives a full turn over Chrome's native framing (no 
       .map((l) => JSON.parse(l));
     const newFrame = frames.find((f: any) => f.dir === "in" && f.msg.method === "session/new");
     assertEquals(newFrame?.msg?.params?.cwd, "/tmp", "the host must fill the host-side cwd");
+    assertEquals(frames.filter((f: any) => f.dir === "in" && f.msg.params?.mcpServers?.length), [],
+      "rejected tool-server requests never reach the native adapter");
+    assertEquals((await request("session/load", { sessionId, mcpServers: [] })).result, {},
+      "empty-server native resume still succeeds");
 
     const turn = await request("session/prompt", { sessionId, prompt: [{ type: "text", text: "native hello" }] });
     assertEquals(turn.result.stopReason, "end_turn");

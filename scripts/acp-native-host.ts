@@ -14,7 +14,7 @@
 // $CAP_ACP_ADAPTER for overrides — the same table and host-default rules the
 // WebSocket bridge uses (imported, not duplicated).
 
-import { applyHostDefaults, resolveAdapter, HARNESS_ADAPTERS } from "./acp-bridge.ts";
+import { applyHostDefaults, resolveAdapter, HARNESS_ADAPTERS, toolServerError, adapterNameFromInitialize } from "./acp-bridge.ts";
 
 const HARNESS = Deno.env.get("CAP_ACP_HARNESS") || "pi";
 const ADAPTER_OVERRIDE = Deno.env.get("CAP_ACP_ADAPTER") || "";
@@ -51,6 +51,8 @@ export class NativeFrameDecoder {
 
 if (import.meta.main) {
   const resolved = resolveAdapter(HARNESS, ADAPTER_OVERRIDE);
+  let adapterName = resolved.adapterName;
+  let initializeId: unknown = null;
   if (resolved.cmd === "node" && !(() => { try { return Deno.statSync(resolved.args[0]).isFile; } catch { return false; } })()) {
     // Report through the native channel, then exit: Chrome surfaces nothing
     // itself, so the extension must be told why the harness is unavailable.
@@ -74,7 +76,14 @@ if (import.meta.main) {
         const { done, value } = await reader.read();
         if (done) break;
         for (const msg of decoder.push(value)) {
-          const framed = applyHostDefaults(JSON.stringify(msg), CWD_OVERRIDE || undefined);
+          const raw = JSON.stringify(msg);
+          if ((msg as any)?.method === "initialize") initializeId = (msg as any).id;
+          const refusal = toolServerError(raw, adapterName);
+          if (refusal) {
+            Deno.stdout.writeSync(encodeNativeMessage(refusal));
+            continue;
+          }
+          const framed = applyHostDefaults(raw, CWD_OVERRIDE || undefined);
           await childWriter.write(new TextEncoder().encode(framed + "\n"));
         }
       }
@@ -97,6 +106,7 @@ if (import.meta.main) {
           buffer = buffer.slice(nl + 1);
           if (!line.trim()) continue;
           try {
+            adapterName = adapterNameFromInitialize(line, initializeId, adapterName);
             Deno.stdout.writeSync(encodeNativeMessage(JSON.parse(line)));
           } catch { /* non-JSON adapter noise */ }
         }

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.450] — 2026-09-22
+- refuse tool servers that Pi cannot use
+
 ## [0.3.449] — 2026-09-22
 - the agent buttons' badges and the narrow side panel are now checked in a real browser
 
@@ -22,6 +25,7 @@
 - project browser agent runtime and reject Node imports
 
 ## Unreleased
+- Pi now refuses supplied tool servers it cannot use, explains the limitation, and names alternatives instead of accepting them silently. Sessions without tool servers still work.
 - Identify `node:` imports as Node builtins, with their importer, rather than remote script URLs in the pre-bundle scan (azlc review).
 - Remove Node process-launcher dependencies from browser bundles; reject builtin imports instead of shimming them (azlc).
 - Each one-click agent button now carries a badge, so a narrow side panel still shows which agent is which instead of squashing the names.

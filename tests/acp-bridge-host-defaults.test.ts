@@ -8,7 +8,7 @@
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { applyHostDefaults, childEnvForHarness, clipCloseReason, createAcpServer, harnessCliWarning, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS } from "../scripts/acp-bridge.ts";
+import { applyHostDefaults, childEnvForHarness, clipCloseReason, createAcpServer, harnessCliWarning, resolveAdapter, resolveCliOnPath, HARNESS_ADAPTERS, adapterNameFromInitialize, toolServerError } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const sessionNew = (params: Record<string, unknown>) => JSON.stringify({ jsonrpc: "2.0", id: 1, method: "session/new", params });
@@ -56,6 +56,7 @@ Deno.test("resolveAdapter: local install > absolute npx > loud refusal", () => {
   // the launcher's environment, and a launchd/Chrome-spawned bridge cannot see
   // the shell's PATH ("Failed to spawn 'npx': entity not found").
   const viaNpx = resolveAdapter("claude-code", "", binDir, { home: "/nonexistent-home" });
+  assertEquals(viaNpx.adapterName, "@agentclientprotocol/claude-agent-acp");
   assertEquals(viaNpx.cmd, npx);
   assertEquals(viaNpx.args, ["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]);
 
@@ -66,6 +67,7 @@ Deno.test("resolveAdapter: local install > absolute npx > loud refusal", () => {
     home: localHome,
     exists: (p) => p === localEntry,
   });
+  assertEquals(viaLocal.adapterName, "pi-acp");
   assertEquals(viaLocal.cmd, "node");
   assertEquals(viaLocal.args, [localEntry]);
 
@@ -79,6 +81,7 @@ Deno.test("resolveAdapter: local install > absolute npx > loud refusal", () => {
   // An explicit adapter wins and runs through node.
   const customPath = `${dir}/my-adapter.mjs`;
   const custom = resolveAdapter("pi", customPath);
+  assertEquals(custom.adapterName, null, "a path override cannot borrow the caller's pi label");
   assertEquals(custom.cmd, "node");
   assertEquals(custom.args, [customPath]);
 
@@ -87,6 +90,20 @@ Deno.test("resolveAdapter: local install > absolute npx > loud refusal", () => {
   try { resolveAdapter("not-a-harness", "", binDir); } catch (e) { unknown = String((e as Error)?.message ?? e); }
   assert(unknown.includes("unknown harness"), unknown);
   for (const known of Object.keys(HARNESS_ADAPTERS)) assert(unknown.includes(known), unknown);
+});
+
+Deno.test("adapter tool-server identity: resolve first, then only the matching initialize reply", () => {
+  const reply = (name: string) => JSON.stringify({ jsonrpc: "2.0", id: 7, result: { agentInfo: { name } } });
+  assertEquals(adapterNameFromInitialize(reply("pi-acp"), 7, null), "pi-acp");
+  assertEquals(adapterNameFromInitialize(reply("pi-acp"), 8, null), null, "unrelated response cannot set identity");
+  assertEquals(adapterNameFromInitialize(reply("codex-acp"), 7, "pi-acp"), "pi-acp", "resolved Pi cannot rename itself out of refusal");
+  assertEquals(adapterNameFromInitialize(reply(""), 7, null), null);
+  const request = sessionNew({ mcpServers: [{ name: "fixture", command: "unused" }] });
+  assertEquals(toolServerError(request, null)?.error.code, -32602, "unidentified custom adapter fails closed");
+  assertEquals(toolServerError(request, "pi-acp")?.error.code, -32602);
+  assertEquals(toolServerError(request, "codex-acp"), null);
+  assertEquals(toolServerError(sessionNew({ mcpServers: [] }), null), null, "empty lists need no tool support");
+  assertEquals(toolServerError(sessionNew({}), "pi-acp"), null, "omitted lists still work");
 });
 
 Deno.test("clipCloseReason: a WebSocket close reason is always <= 123 bytes", () => {

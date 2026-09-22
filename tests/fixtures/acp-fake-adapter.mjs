@@ -114,7 +114,7 @@ function handle(msg) {
         id: msg.id,
         result: {
           protocolVersion: 1,
-          agentInfo: { name: "fake-acp-adapter", title: "Deterministic ACP test adapter", version: "0.0.1" },
+          agentInfo: { name: process.env.CAP_ACP_FIXTURE_AGENT_NAME || "fake-acp-adapter", title: "Deterministic ACP test adapter", version: "0.0.1" },
           authMethods: [],
           agentCapabilities: { loadSession: true },
         },

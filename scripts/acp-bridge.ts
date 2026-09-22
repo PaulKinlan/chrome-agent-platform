@@ -161,8 +161,8 @@ export function resolveAdapter(
   adapterOverride = "",
   pathValue = "",
   opts: { home?: string; exists?: (p: string) => boolean } = {},
-): { cmd: string; args: string[]; describe: string } {
-  if (adapterOverride) return { cmd: "node", args: [adapterOverride], describe: adapterOverride };
+): { cmd: string; args: string[]; describe: string; adapterName: string | null } {
+  if (adapterOverride) return { cmd: "node", args: [adapterOverride], describe: adapterOverride, adapterName: null };
   const spec = HARNESS_ADAPTERS[harness];
   if (!spec) {
     throw new Error(
@@ -171,7 +171,7 @@ export function resolveAdapter(
     );
   }
   const local = localAdapterPath(spec.pkg, opts.home ?? HOME, opts.exists);
-  if (local) return { cmd: "node", args: [local], describe: `${local} (local install)` };
+  if (local) return { cmd: "node", args: [local], describe: `${local} (local install)`, adapterName: spec.pkg };
 
   const npx = resolveCliOnPath("npx", pathValue || (Deno.env.get("PATH") ?? ""));
   if (!npx) {
@@ -181,7 +181,7 @@ export function resolveAdapter(
         `--adapter <path to the ${spec.pkg} entry file>.`,
     );
   }
-  return { cmd: npx, args: ["-y", `${spec.pkg}@${spec.version}`], describe: `${spec.pkg}@${spec.version} via ${npx}` };
+  return { cmd: npx, args: ["-y", `${spec.pkg}@${spec.version}`], describe: `${spec.pkg}@${spec.version} via ${npx}`, adapterName: spec.pkg };
 }
 
 /** A WebSocket close reason must be ≤123 BYTES or the close throws. 
@@ -254,6 +254,42 @@ export function clientCwdWarning(
 
 /** Warn once per distinct line, so a repeating frame cannot flood the log. */
 const warnedClientCwdLines = new Set<string>();
+
+/** A custom adapter's identity comes from its initialize reply, never the URL
+ * label. A resolved Pi package stays Pi even if its reply omits/renames itself. */
+export function adapterNameFromInitialize(raw: string, initializeId: unknown, currentName: string | null) {
+  if (currentName === "pi-acp" || initializeId == null) return currentName;
+  try {
+    const msg = JSON.parse(raw);
+    const name = msg?.id === initializeId ? msg.result?.agentInfo?.name : null;
+    return typeof name === "string" && name.trim() ? name : currentName;
+  } catch { return currentName; }
+}
+
+/** CAP refuses a session it cannot provide as requested. pi-acp documents that
+ * mcpServers are stored, not mounted. This is the jjzm honesty fix, not qnd4's
+ * client-tool binding: empty-server Pi sessions can still use local tools.
+ * Keep this shared by the WebSocket bridge and native host. */
+export function toolServerError(raw: string, adapterName: string | null) {
+  if (adapterName !== null && adapterName !== "pi-acp") return null;
+  let msg;
+  try { msg = JSON.parse(raw); } catch { return null; }
+  if ((msg?.method !== "session/new" && msg?.method !== "session/load")
+    || !Array.isArray(msg.params?.mcpServers) || msg.params.mcpServers.length === 0) return null;
+  return {
+    jsonrpc: "2.0",
+    id: msg.id ?? null,
+    error: {
+      code: -32602,
+      message: adapterName === null
+        ? "CAP cannot identify this custom adapter, so it cannot accept supplied MCP servers. "
+          + "Use an adapter that reports agentInfo.name during initialize, or omit mcpServers (local tools only)."
+        : "CAP cannot supply these tools: Pi's ACP adapter does not mount supplied MCP servers. "
+          + "Use Claude Code or Codex for MCP server tools, or omit mcpServers to run Pi with local tools only. "
+          + "This path does not bind CAP's browser tools.",
+    },
+  };
+}
 
 export function applyHostDefaults(raw: string, hostCwd?: string): string {
   try {
@@ -390,11 +426,14 @@ export function createAcpServer(
     let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
     /** Tail of the adapter's stderr, for the exit reason when it dies. */
     let lastStderr = "";
+    let adapterName: string | null = null;
+    let initializeId: unknown = null;
 
     socket.onopen = async () => {
       console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"} (harness: ${connectionHarness})`);
       try {
         const resolved = resolveAdapter(connectionHarness, adapterPathOverride);
+        adapterName = resolved.adapterName;
         // An explicit adapter is a file: say so plainly instead of letting node
         // die with a module-not-found stack.
         if (resolved.cmd === "node" && !Deno.statSync(resolved.args[0]).isFile) {
@@ -447,6 +486,7 @@ export function createAcpServer(
                 const line = buffer.slice(0, nl);
                 buffer = buffer.slice(nl + 1);
                 if (line.trim() && socket.readyState === WebSocket.OPEN) {
+                  adapterName = adapterNameFromInitialize(line, initializeId, adapterName);
                   socket.send(line);
                 }
               }
@@ -489,6 +529,13 @@ export function createAcpServer(
             console.error(line);
             warnedClientCwdLines.add(line);
           }
+        }
+        const frame = JSON.parse(String(event.data));
+        if (frame?.method === "initialize") initializeId = frame.id;
+        const refusal = toolServerError(String(event.data), adapterName);
+        if (refusal) {
+          socket.send(JSON.stringify(refusal));
+          return;
         }
         const data = applyHostDefaults(String(event.data), hostCwdDefault || undefined);
         const encoder = new TextEncoder();
