@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.452] — 2026-09-22
+- an agent's conversation header now updates immediately when you rename the agent, and keeps the new name after a reload
+
 ## [0.3.451] — 2026-09-22
 - sidebar-parity now addresses the composer by stable hooks; twenty of its checks execute where none did before; the wider composer-selector migration remains open in 27 files
 
