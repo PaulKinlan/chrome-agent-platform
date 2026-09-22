@@ -136,8 +136,8 @@ export function createApplyAgentSchedule({
  * FIRST, then the durable cancelling mark + live-run abort for `agent:<slug>`,
  * and ONLY then may the row/OPFS deletion proceed. A marking failure aborts
  * the deletion — the row survives, no orphan alarm. ONLY the `agent:` family
- * is touched: a `recipe:<slug>` schedule belongs to the recipe store, and an
- * independent recipe schedule that happens to share the slug must survive an
+ * is touched: a `recipe:<slug>` schedule (persisted identity, e5oe) belongs to
+ * the skill store, and an independent schedule that happens to share the slug must survive an
  * agent deletion (skill teardown stays under background-agent.delete).
  */
 export function createNamedAgentDeleteGate(context, {

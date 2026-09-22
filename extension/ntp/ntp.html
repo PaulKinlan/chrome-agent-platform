@@ -767,7 +767,7 @@
       font-size: var(--text-sm);
     }
 
-    /* ── in-context view (settings / directory / recipes, no new tab) ── */
+    /* ── in-context view (settings / directory, no new tab) ── */
     .view-overlay {
       position: fixed;
       inset: 0;
@@ -874,7 +874,7 @@
     /* The task thread does NOT cover the sidebar: it fills the area to the
        RIGHT of the task sidebar so the sidebar (and its active-thread state)
        stays visible while inside a task (item 26). The settings/directory/
-       recipes overlay (#view) stays full-screen. */
+       in-context overlay (#view) stays full-screen. */
     #thread-view.view-overlay { top: 0; bottom: 0; right: 0; left: 240px; transition: left .18s ease, right .18s ease; }
     #side.collapsed ~ #thread-view.view-overlay { left: 60px; }
 

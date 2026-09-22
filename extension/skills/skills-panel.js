@@ -1,7 +1,7 @@
 // skills/skills-panel.js — the Skills manager as a REUSABLE panel module.
-// Formerly the standalone recipes/index.html page (the sidebar Skills button
+// Formerly the standalone pre-rename skills page (the sidebar Skills button
 // was folded into Settings — the owner wants skills managed as a Settings
-// panel), and formerly under extension/recipes/ — moved by
+// panel), and formerly under the pre-rename directory — moved by
 // CAP-FB-20260828-NOUN-DISCIPLINE-01 so the directory says what the UI says.
 // The options page mounts this natively in its #skills section; the
 // rendering (intent-grouped capability-rows + collapsed "how it works") is the

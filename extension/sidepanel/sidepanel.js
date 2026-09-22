@@ -598,8 +598,9 @@ agentDeleteBtn?.addEventListener("click", async () => {
   } else if (kind === "site") {
     out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   } else if (kind === "background") {
-    // Background agents schedule deterministically as `recipe:<id>` — the
-    // picker supplies the BARE recipe id, so the old task.cancel({name:id})
+    // Background agents schedule deterministically as `recipe:<id>` (a persisted
+    // identity, see e5oe) — the
+    // picker supplies the BARE skill id, so the old task.cancel({name:id})
     // hit "no such task" and silently deleted nothing. DELETION routes
     // through background-agent.delete (removes the custom record + tears the schedule
     // down NON-BLOCKING — the instant-delete contract), and success is
@@ -622,7 +623,8 @@ picker.addEventListener("agent-select", (e) => {
 
 // ── the TASK LIST (the Agents view's third surface: list / history / tasks) ──
 // The owner-visible scheduled-task list (task.list — active AND quarantined),
-// rendered with the shared <task-row> component. A recipe:<id> row opens the
+// rendered with the shared <task-row> component. A recipe:<id> row (persisted
+// identity, e5oe) opens the
 // matching background agent's conversation; the row's delete affordance is the
 // authoritative task.cancel (which also disables that background agent — the
 // SW broadcasts agent-registry-changed, so the picker + this list refresh).
@@ -696,7 +698,7 @@ async function renderTasks() {
       await renderTasks();
     });
     row.addEventListener("open", () => {
-      // A recipe task belongs to its background agent — open its conversation.
+      // A skill task belongs to its background agent — open its conversation.
       const m = /^recipe:(.+)$/.exec(String(t.name ?? ""));
       if (!m) return;
       openAgentByRef(`background:${m[1]}`);

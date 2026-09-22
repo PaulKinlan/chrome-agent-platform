@@ -28,7 +28,7 @@ What Grok exposes that is relevant:
 | Gemini **Gems** | named Gem, pre-prompted persona | knowledge uploads | (limited; no MCP) | link sharing |
 | GitHub **Copilot custom agents + MCP** | repo-scoped custom agents | per-agent tool allow-lists | first-class **MCP server config** per agent | repo-defined, shareable via repo |
 | Claude **subagents** | named subagent, own prompt + own tool allow-list, own context | per-agent tool selection | MCP servers available per agent | project-file defined |
-| **CAP today** | named agent: `role` free-text + avatar | `skills[]` (recipe ids) + `coreAssets[]` | WebMCP is runtime-discovered per *site*, not configured per *agent* | not shareable |
+| **CAP today** | named agent: `role` free-text + avatar | `skills[]` (skill ids) + `coreAssets[]` | WebMCP is runtime-discovered per *site*, not configured per *agent* | not shareable |
 
 The industry converges on: **name + persona prompt + per-agent tool allow-list + per-agent external-tool config + shareability**. CAP has the first three in embryo and lacks the last two.
 
@@ -40,11 +40,11 @@ The industry converges on: **name + persona prompt + per-agent tool allow-list +
 
 - **Named agents** (`extension/lib/named-agents.js`): `{id, name, role, avatar, skills[], coreAssets[], agentsMd, provider}`; per-agent provider + **per-agent memory** (`agentMemory(id)`, grep-able); max 200 agents; per-agent composer ("direct a task to this agent").
 - **Role is free text only** — there is no template concept; the `role` string is not wired into the system prompt builder as a structured persona.
-- **Skills = recipes** (`extension/lib/recipes.js`, 50+ skills): DATA (goal + steps + `requiredCapabilities`), never eval'd; modes: on-demand chips + background (scheduled); intent-grouped (tabs/bookmarks/reading/downloads/focus/summaries/context/monitor/analyze/organize/digest/capture).
+- **Skills** (`extension/lib/skill-registry.js`, 50+ skills; the retired internal name was "recipes"): DATA (goal + steps + `requiredCapabilities`), never eval'd; modes: on-demand chips + background (scheduled); intent-grouped (tabs/bookmarks/reading/downloads/focus/summaries/context/monitor/analyze/organize/digest/capture).
 - **Delegation**: `delegate_task` → `agent.delegate` (hub → named agent, with grant/redaction authority in the SW). Agents do not currently delegate to each other.
 - **WebMCP** (`webmcp-authority.js`): page-provided tools, runtime-discovered per site — a *site*-sub-agent concept, not a per-agent configured server.
 - **Bundled wasm capability tools**: jq, sed, htmlq, gzip, csvtool, numbat, xan, tokei, bttf, stat, tree (+ bounded python pending the runtime build).
-- **Background agents**: enabled recipes on schedules (alarms), pause/resume + per-agent alarm view landing 2026-08-28.
+- **Background agents**: enabled skills on schedules (alarms), pause/resume + per-agent alarm view landing 2026-08-28.
 
 ---
 
@@ -71,7 +71,7 @@ Legend: Grok = grok.com/bots (partial confidence); BITB = business-in-a-box (des
 
 ## 3. Agent template catalogue
 
-All templates are **shippable today** (marked ✅) using the existing agent record + skills, unless marked ⚠️ (needs a gap closed). Every skill id referenced exists in `recipes.js`.
+All templates are **shippable today** (marked ✅) using the existing agent record + skills, unless marked ⚠️ (needs a gap closed). Every skill id referenced exists in `skill-registry.js`.
 
 | Template | Role / prompt sketch | Default skills | First task | Status |
 |---|---|---|---|---|
@@ -92,7 +92,7 @@ All templates are **shippable today** (marked ✅) using the existing agent reco
 
 ## 4. Built-in collaboration skill catalogue
 
-Higher-level skills the recipes manager can ship as DATA, composing existing browser skills. Each: trigger → steps → output.
+Higher-level skills the skills manager can ship as DATA, composing existing browser skills. Each: trigger → steps → output.
 
 | Skill | Trigger | Steps (spec) | Output |
 |---|---|---|---|
@@ -109,7 +109,7 @@ Higher-level skills the recipes manager can ship as DATA, composing existing bro
 ## 5. Recommended roadmap (smallest path to the vision)
 
 1. **Wire `role` into the system prompt + ship the template picker** (G1+G2, S): agent-create gains a template gallery (the §3 catalogue as data); picking one pre-fills name/role/skills/agentsMd. Pure additive data + one render. *This alone delivers the Grok-shaped product feel.*
-2. **Ship the collaboration skill pack** (G10, S/M): add the §4 skills to `recipes.js` (they are DATA; `review-work`/`manager-check`/`handoff-brief` need no new mechanics).
+2. **Ship the collaboration skill pack** (G10, S/M): add the §4 skills to `skill-registry.js` (they are DATA; `review-work`/`manager-check`/`handoff-brief` need no new mechanics).
 3. ~~**Agent→agent delegation with loop guards** (G5, M)~~ **SHIPPED** (see [AGENT-DELEGATION.md](AGENT-DELEGATION.md)): `delegate_to_agent` inside named-agent runs, depth ≤2, cycle-detect, per-edge allow-list enforced in the SW, per-root descendant cap, budget-capped children, durable audit log. Unlocks Team Lead/Critic for real.
 4. **Per-agent tool config** (G4, M): WebMCP origin allow-list + bundled-wasm allow-list on the agent record, surfaced in the agent editor. The Grok-parity item.
 5. **Agent cards** (G7, S/M): export/import `{name, role, skills, agentsMd, coreAssets}` as JSON — shareable now, the honest bridge to multi-user later (G8 stays out of scope until the owner asks).
@@ -117,4 +117,4 @@ Higher-level skills the recipes manager can ship as DATA, composing existing bro
 
 **Owner decisions requested:** (a) point me at business-in-a-box (name/repo) so G6/G8 reflect it; (b) confirm the Grok bot surface in-product (auth-walled here) before copying its UX; (c) pick the first template batch for roadmap step 1.
 
-**2026-08-28 follow-on — the unified agent model (owner directive, landed with the template picker):** an agent is persona + skills + memory + an OPTIONAL schedule. One creation flow (the create dialog's schedule field), one agents list (schedule chip, no background segregation), one schedule code path (`named-agent.set-schedule` → `agent:<slug>` alarms → the fire path runs the agent's real persona/skills/memory). Background templates now just prefill the schedule field. **Documented follow-on:** the two underlying stores (`namedAgents` records + background-mode recipes) are NOT yet unified — built-in background recipes still live in the recipe registry under the same one-list UI. Merging the recipe-backed background agents into the agent store is the next step; the UI and the schedule path no longer depend on the split.
+**2026-08-28 follow-on — the unified agent model (owner directive, landed with the template picker):** an agent is persona + skills + memory + an OPTIONAL schedule. One creation flow (the create dialog's schedule field), one agents list (schedule chip, no background segregation), one schedule code path (`named-agent.set-schedule` → `agent:<slug>` alarms → the fire path runs the agent's real persona/skills/memory). Background templates now just prefill the schedule field. **Documented follow-on:** the two underlying stores (`namedAgents` records + background-mode skills) are NOT yet unified — built-in background skills still live in the skill registry under the same one-list UI. Merging the skill-backed background agents into the agent store is the next step; the UI and the schedule path no longer depend on the split.

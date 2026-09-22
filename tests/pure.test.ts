@@ -542,7 +542,12 @@ Deno.test("redactSecrets strips credential keys but keeps non-secret data", () =
   assert(!JSON.stringify(redacted).includes("sk-secret-123"), "apiKey must never survive");
 });
 
-Deno.test("parseOmniboxContent maps recipe/thread/run intents", () => {
+Deno.test("parseOmniboxContent maps skill/recipe/thread/run intents", () => {
+  assertEquals(parseOmniboxContent("skill:tab-hygiene"), {
+    kind: "skill",
+    id: "tab-hygiene",
+  });
+  // The legacy recipe: mint still parses (compat).
   assertEquals(parseOmniboxContent("recipe:tab-hygiene"), {
     kind: "recipe",
     id: "tab-hygiene",
@@ -560,7 +565,7 @@ Deno.test("parseOmniboxContent maps recipe/thread/run intents", () => {
   assertEquals(parseOmniboxContent(""), { kind: "none" });
   assertEquals(parseOmniboxContent(null), { kind: "none" });
   // A "recipe:" prefix with an empty id is a recipe intent with an empty id
-  // (the caller resolves it; an unknown recipe falls back to running the text).
+  // (the caller resolves it; an unknown skill falls back to running the text).
   assertEquals(parseOmniboxContent("recipe:"), { kind: "recipe", id: "" });
 });
 

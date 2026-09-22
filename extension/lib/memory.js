@@ -1038,12 +1038,12 @@ export function namedAgentMemory(id) {
   return memoryStoreAt(path, { isMaster: false, origin: `agent:${slug}` });
 }
 
-/** The OPFS sandbox for a BACKGROUND/SCHEDULED agent (a recipe like the
+/** The OPFS sandbox for a BACKGROUND/SCHEDULED agent (a scheduled skill like the
  * Sorting Hat, or a one-off scheduled task). Lives at `memory/background/<slug>/*`,
  * distinct from the named-agent store (`memory/agents/`) and the master store,
  * so a background agent has its own memory + run history + journal — one
  * background agent can never read/write another's or the master's. `id` is the
- * schedule name (e.g. `recipe:auto-group-by-domain`) or a recipe id; the `origin`
+ * schedule name (e.g. the persisted `recipe:auto-group-by-domain`) or a skill id; the `origin`
  * label is `background:<slug>` so journal/usage tagging never collides with a
  * real origin or a named agent. */
 export function backgroundAgentMemory(id) {

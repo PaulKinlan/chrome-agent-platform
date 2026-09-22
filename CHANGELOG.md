@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.453] — 2026-09-22
+- component-gallery smoke selects the stable composer ids ([data-composer-input]/[data-composer-send])
+
 ## [0.3.452] — 2026-09-22
 - re-anchor the census route-count pin 259 -> 258 (recipe.list fork deleted)
 

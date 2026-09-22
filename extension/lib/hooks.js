@@ -414,7 +414,10 @@ export async function checkHookAllowed(hookId) {
 
 // ---- subscriptions (the registry) ----
 
-/** All subscriptions: [{ hookId, recipeId|null, promptTemplate, enabled, at }]. */
+/** All subscriptions: [{ hookId, recipeId|null, promptTemplate, enabled, at }].
+ * `recipeId` is the PERSISTED field name in cap:hooks (the l0r rename stopped
+ * at code vocabulary; the stored field + the hooks.subscribe tool schema move
+ * together in chrome-agent-platform-e5oe's storage migration). */
 export async function getHookSubscriptions() {
   const stored = await kvGet(SUBSCRIPTIONS_KEY);
   const list = stored[SUBSCRIPTIONS_KEY];

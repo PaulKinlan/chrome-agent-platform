@@ -1848,7 +1848,7 @@ async function renderAgentProviders(list, projectedAgents, globalCfg) {
   }
 }
 
-// ── Background agents (scheduled recipes) ──
+// ── Background agents (scheduled skills) ──
 function backgroundAgentRow(a, hostRow = null) {
   const row = hostRow ?? document.createElement("div");
   row.classList.add("agent-settings-row", "background-agent-row");
@@ -2001,9 +2001,9 @@ function editSkillPrompt(skill) {
 
 // Settings offers the SAME scheduled catalogue as the hub's create flow,
 // through the SAME component (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01):
-// the disabled background recipes render as <agent-template-card>s inside an
+// the disabled background skills render as <agent-template-card>s inside an
 // <agent-template-gallery> filtered to Scheduled. Choosing a card selects it;
-// "Add" enables exactly ONE recipe through background-agent.set, and it then
+// "Add" enables exactly ONE skill through background-agent.set, and it then
 // appears in every agent list.
 function renderBackgroundAgentPicker(agents) {
   const host = $("#background-agent-add");

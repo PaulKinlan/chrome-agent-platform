@@ -950,7 +950,7 @@ export function cancelScheduledTaskBackground(name) {
     await marked;
     return await finalizeCancellation(name);
   })();
-  // Fire-and-forget callers (recipe teardown after delete, the disable path)
+  // Fire-and-forget callers (skill teardown after delete, the disable path)
   // never await these — mark both handled so a marking failure is not
   // reported as an unhandled rejection, while awaiters still receive it.
   marked.catch(() => {});

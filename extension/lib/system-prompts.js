@@ -851,12 +851,12 @@ export function measurePromptLayers(scope, { override = null, role = "", skills 
  * their marker/metadata are wrapped in the run's untrusted boundary
  * (lib/untrusted-fence.js) exactly like other remote content — the protected
  * untrusted-content-policy layer tells the model the fenced text is data,
- * never an instruction. Owner-authored content (built-in and custom recipes)
+ * never an instruction. Owner-authored content (built-in and custom skills)
  * stays unfenced per the established trust model: the owner explicitly
  * created or attached it, and the protected-last invariant still keeps the
  * runtime policy structurally final.
  *
- * @param {Array} skills skill/recipe records
+ * @param {Array} skills skill records
  * @param {string|null} untrustedToken the run's untrusted boundary token
  *   (null/absent → the placeholder, matching the Settings preview path) */
 export const PROMPT_SKILL_BODY_BUDGET = 8 * 1024; // 8KiB — compose small bodies, defer large ones

@@ -144,7 +144,7 @@ export function selectionFromAgentCandidate(candidate) {
 /** Flat picker/popup candidates from the grouped registry. Each item carries:
  *   ref       — the canonical routing ref (named:<id> / background:<id> / site:<origin>)
  *   kind      — named | background | site
- *   agentId   — the bare id (slug / recipe id / origin)
+ *   agentId   — the bare id (slug / skill id / origin)
  *   id        — the TEXTUAL reference inserted by the / command:
  *               `agent:<canonical-ref>` (e.g. `agent:named:reader`), so the
  *               inserted `/agent:…` text is the UNAMBIGUOUS canonical form —

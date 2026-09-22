@@ -425,7 +425,7 @@ export function managementToolset({ callRoute }) {
       execute: () => call("memory.overview", {}),
     }),
 
-    // ---- system hooks (subscribe agents/recipes to chrome.* events) ----
+    // ---- system hooks (subscribe agents/skills to chrome.* events) ----
     list_hooks: tool({
       description:
         "List every system hook (chrome.* event) an agent can listen to, with its required permission, denied state, and current subscribers. Denied hooks can never be used (the owner's deny-list is authoritative).",
@@ -434,17 +434,17 @@ export function managementToolset({ callRoute }) {
     }),
     subscribe_hook: tool({
       description:
-        "Subscribe a background recipe (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its install-granted permission cannot be verified. recipeId may be omitted to subscribe the master agent.",
+        "Subscribe a background skill (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its install-granted permission cannot be verified. recipeId may be omitted to subscribe the master agent.",
       inputSchema: z.object({
         hookId: z.string().describe("the hook id, e.g. tabs.onCreated"),
-        recipeId: z.string().optional().describe("a background recipe id, or omit for the master agent"),
+        recipeId: z.string().optional().describe("a background skill id, or omit for the master agent"),
         promptTemplate: z.string().optional().describe("a prompt template; {{payload}} is replaced with the event payload"),
       }),
       execute: ({ hookId, recipeId, promptTemplate }) =>
         call("hooks.subscribe", { hookId, recipeId, promptTemplate }),
     }),
     unsubscribe_hook: tool({
-      description: "Unsubscribe an agent/recipe from a system event.",
+      description: "Unsubscribe an agent/skill from a system event.",
       inputSchema: z.object({
         hookId: z.string(),
         recipeId: z.string().optional(),
