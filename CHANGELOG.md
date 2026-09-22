@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.453] — 2026-09-22
+- the security gate runs its cookie-redaction checks again
+
 ## [0.3.452] — 2026-09-22
 - the composer is addressed by a stable hook or it is not addressed at all
 

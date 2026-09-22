@@ -58,11 +58,19 @@ const EXEMPT = new Set([
 const INVENTORY: Record<string, number> = {
   // ── gates inside test:all ────────────────────────────────────────────────
   "scripts/chrome-journeys.ts": 44, // most route through boxOf()'s compat mapping; :2688 and :2721 do not
-  "scripts/security-suite.ts": 4, // :339,:347,:417,:426 via centerOf(), no fallback; the check at :361 puts `composer` in its own condition, so it fails LOUD
   "scripts/component-gallery-smoke.ts": 3, // :200,:216,:217
-  // scripts/a11y-audit.ts MIGRATED (was 3) — it was the red gate: four combobox
-  // checks read ARIA attributes off the absent element with ?., so attrs came
-  // back {} and the failure read as a product defect.
+  // MIGRATED, so pruned from the ledger (a clean file that stays listed fails the
+  // second test on purpose — the ledger must list only work that is left):
+  //   scripts/a11y-audit.ts (was 3) — it was the red gate: four combobox checks
+  //     read ARIA attributes off the absent element with ?., so attrs came back {}
+  //     and a missing element reported itself as a product ARIA defect.
+  //   scripts/security-suite.ts (was 4, at :339,:347,:417,:426) — the second red
+  //     gate. Measured on unmodified main c80b8abc: 16 PASS then
+  //     FAIL composer:false, providerRequests:[], then the suite burned its whole
+  //     120 s PRODUCTION_TIMEOUT_MS in polling loops waiting on a run that could
+  //     never start and was TERM'd (exit 124), so the two cookie-redaction checks
+  //     never ran at all. Repairing the four selectors: 19 passed / 0 failed in
+  //     15 s, exit 0. The hang was arithmetic, not a second bug.
   // ── KATs (npm run test:kat) ──────────────────────────────────────────────
   "scripts/kat-local-files.ts": 7,
   "scripts/kat-thinking-trace.ts": 4,

@@ -39,6 +39,11 @@ import { fileURLToPath } from "node:url";
 import { inspectExactProfile, verifyRunnerGuard } from "./security-suite-custody.mjs";
 import { launchChrome, openCdp, type CdpClient } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
+// The composer is addressed by host + stable hook, never by the retired fixed
+// ids and never document-wide: ntp.html carries TWO composers, so an unscoped
+// [data-composer-input] resolves to whichever comes first in document order —
+// the bug sndb removed the fixed ids to prevent (chrome-agent-platform-4vfj).
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -336,7 +341,7 @@ async function main() {
     await cdp.send("Page.bringToFront", {}, ntp.sessionId).catch(() => {});
     let composer = false;
     for (let i = 0; i < 20 && !composer; i++) {
-      composer = await clickAt(cdp, ntp.sessionId, centerOf("#task-input"));
+      composer = await clickAt(cdp, ntp.sessionId, centerOf(composerInput("hub")));
       if (!composer) await sleep(250);
     }
     if (composer) {
@@ -344,7 +349,7 @@ async function main() {
       for (const ch of "run the gate probe script") {
         await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch }, ntp.sessionId);
       }
-      await clickAt(cdp, ntp.sessionId, centerOf("#run-task"));
+      await clickAt(cdp, ntp.sessionId, centerOf(composerSend("hub")));
     }
     const readCard = () => cdp.eval(
       ntp.sessionId,
@@ -414,7 +419,7 @@ async function main() {
       await cdp.eval(ntp.sessionId, `document.querySelector("#home")?.click(); "home"`).catch(() => null);
       await sleep(700);
       for (let i = 0; i < 20 && !cookieComposer; i++) {
-        cookieComposer = await clickAt(cdp, ntp.sessionId, centerOf("#task-input"));
+        cookieComposer = await clickAt(cdp, ntp.sessionId, centerOf(composerInput("hub")));
         if (!cookieComposer) await sleep(250);
       }
       let cookieRunClicked = false;
@@ -423,7 +428,7 @@ async function main() {
           await cdp.send("Input.dispatchKeyEvent", { type: "char", text: ch, unmodifiedText: ch }, ntp.sessionId);
         }
         await sleep(300);
-        cookieRunClicked = await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("#run-task"); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+        cookieRunClicked = await clickAt(cdp, ntp.sessionId, `(() => { const b = document.querySelector("${composerSend("hub")}"); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
       }
       // The cookies capability was seeded into the profile before launch —
       // assert the grant is live, then the run's list_cookies executes with no
