@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.454] — 2026-09-22
+- the quiet-window gate counts COMPILING processes, not process names — parked esbuild service daemons no longer hold it closed
+
 ## [0.3.453] — 2026-09-22
 - the active Providers tab in Settings now scrolls into view when selected on narrow screens
 
