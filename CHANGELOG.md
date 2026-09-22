@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.455] — 2026-09-22
+- load-sensitive gates take turns — one declared fleet-wide slot, announced, refusing INCONCLUSIVE with the holder named
+
 ## [0.3.454] — 2026-09-22
 - the quiet-window gate counts COMPILING processes, not process names — parked esbuild service daemons no longer hold it closed
 

@@ -50,6 +50,7 @@ import {
   ENVIRONMENTAL_REFUSAL_MARKER,
   QuietWindowRefusedError,
 } from "./lib/quiet-window.ts";
+import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -129,6 +130,13 @@ function launchJourneyChrome(profile: string) {
     // declaration lives in scripts/lib/harness-registry.ts (`loadSensitive`)
     // and tests/quiet-window.test.ts keeps the two in step.
     requireQuiet: true,
+    // 0lj3: and it TAKES TURNS. On 2026-09-22 this suite started on a box the
+    // quiet predicate called quiet and reached 132/370 before a `cdp evaluate`
+    // blew its budget under fleet load — no threshold could have prevented that,
+    // so the load-sensitive gates serialise on one fleet-wide slot instead. A
+    // lane that cannot get the slot exits 75 with the holder named, and never
+    // starts a browser. Paired with requireQuiet by chrome-launch itself.
+    fleetSlot: { gate: "chrome-journeys", kind: "gate" },
     binary: CHROMIUM,
     args: [
       "--headless=new",
@@ -151,6 +159,14 @@ function launchJourneyChrome(profile: string) {
     if (e instanceof QuietWindowRefusedError) {
       console.error(e.message);
       console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(e.sample)}`);
+      Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+    }
+    // 0lj3: the fleet-wide gate slot is busy — another load-sensitive gate owns
+    // the machine. Same third verdict: environmental, holder named, no browser
+    // started, never a product red.
+    if (e instanceof HeavyGateSlotRefusedError) {
+      console.error(e.message);
+      console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateRefusalPayload(e))}`);
       Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
     }
     throw e;

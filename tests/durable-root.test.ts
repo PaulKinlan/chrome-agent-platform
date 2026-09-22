@@ -114,6 +114,8 @@ const DURABLE_ROUTED = /\bdurable(?:Dir|Root)\s*\(/;
 const ALLOWED_LITERALS = [
   "/tmp/cap-serialized-chrome-acceptance.lock", // canonical Chrome lock: tmpfs by design
   "/tmp/cap-chrome-slot-POISON",                // one-byte coordination marker: tmpfs by design
+  "/tmp/cap-heavy-gate.lock",                   // fleet-wide heavy-gate slot + its announcement sidecar:
+  "/tmp/cap-heavy-gate.holder.json",            // cross-process coordination only (0lj3), tmpfs by design
   "/tmp/hostile-runner.mjs",                    // negative fixture: security suite
   "/tmp/not-the-canonical-lock",                // negative fixture: security suite
 ];
@@ -206,6 +208,11 @@ const ALLOWED_CALLS_ONLY = new Set([
   "scripts/kat-mcp-agent-ui.ts",
   "scripts/kat-mcp-global-ui.ts",
   "scripts/kat-mcp-transport.ts",
+  // 0lj3: the heavy-gate slot's contention fixtures need PRIVATE slot paths (a
+  // test must never hold the fleet's own slot), created under a temp dir and
+  // removed in the same test. Call-only — no literal tmpfs path, no retained
+  // evidence.
+  "tests/heavy-gate-slot.test.ts",
 ]);
 
 function* walk(dir: string): Generator<string> {
