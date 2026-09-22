@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.450] — 2026-09-22
+- the active Providers tab scrolls into view at narrow widths
+
 ## [0.3.449] — 2026-09-22
 - the agent buttons' badges and the narrow side panel are now checked in a real browser
 
