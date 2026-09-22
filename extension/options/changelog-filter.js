@@ -23,6 +23,14 @@
 //     ("/folder work …", "(Beta) …", "…and") and stays.
 
 const ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
+// A bullet may DECLARE itself an internal note. Deliberate and explicit, never
+// inferred: some commits record work with no user-visible change at all (a
+// rationale corrected, measurements taken). 0.3.446 and 0.3.448 are those, and
+// before this marker the gate required every modern bullet to read as
+// user-facing — so the writer had to invent a sentence for a change no reader
+// could observe. Marked bullets are hidden from the readable list by
+// partitionChangelog and stay readable under Show all.
+const INTERNAL_MARKER_RE = /^internal:/i;
 const SHA_RE = /\b[0-9a-f]{7,40}\b/i;
 const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice/i;
 const GATE_STATE_RE = /\b(RED|GREEN)\b/;
@@ -31,8 +39,13 @@ const WORKFLOW_RE = /\blanded\b|in review|in progress|recorded as|\bclaimed\b/i;
 // a bullet still starting with one, followed by whitespace or nothing, is a leak.
 const LEAKED_JOINER_RE = /^[+&:;,./|—–-]+(?:\s|$)/;
 
+export function isInternalEntry(text) {
+  return INTERNAL_MARKER_RE.test(String(text).trim());
+}
+
 export function isUserFacingEntry(text) {
   const line = String(text).trim();
+  if (isInternalEntry(line)) return false;
   if (LEAKED_JOINER_RE.test(line)) return false;
   if (ENGINEERING_PREFIX_RE.test(line)) return false;
   if (SHA_RE.test(line)) return false;

@@ -8,6 +8,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
+  isInternalEntry,
   isUserFacingEntry,
   parseChangelog,
   partitionChangelog,
@@ -189,10 +190,15 @@ Deno.test("changelog: recent entries (last ten versions) are plain user language
   const offenders = [];
   for (const v of versions) {
     for (const b of v.bullets) {
-      if (!isUserFacingEntry(b)) offenders.push(`v${v.version}: ${b.slice(0, 80)}`);
+      // Changed 2026-09-22 alongside the 0.3.x test above, for the same reason:
+      // requiring every recent bullet to read as user-facing copy forces a
+      // sentence to be invented for a commit that had no user-visible change.
+      // A bullet may instead DECLARE itself internal (leading "internal:"), and
+      // stated-internal bullets are hidden from the readable list.
+      if (!isUserFacingEntry(b) && !isInternalEntry(b)) offenders.push(`v${v.version}: ${b.slice(0, 80)}`);
     }
   }
-  assert(!offenders.length, `recent changelog entries must be user-facing:\n${offenders.join("\n")}`);
+  assert(!offenders.length, `recent changelog entries must be user-facing or stated internal:\n${offenders.join("\n")}`);
   // The broad bans stay in force over the whole recent section (existing behaviour).
   const recentSection = changelog.split("## [0.2.208]")[0];
   assert(!recentSection.includes("CAP-FB-"), "must not contain internal task IDs (CAP-FB-...)");
@@ -216,7 +222,16 @@ Deno.test("changelog: no placeholder or boilerplate entries anywhere in the file
     `placeholder/boilerplate entries are banned — every entry must name what the user gets:\n${hits.map((h) => h[0]).join("\n")}`);
 });
 
-Deno.test("changelog: every modern (0.3.x) bullet passes the user-facing language filter", async () => {
+Deno.test("changelog: every modern (0.3.x) bullet is user-facing, or says it is internal", async () => {
+  // Changed 2026-09-22 (was: "every modern bullet passes the user-facing filter").
+  // That older guarantee was the cause of a defect, not a guard against one: a
+  // commit that recorded work with no user-visible change had no user-facing
+  // sentence available, so the rule forced one to be invented — 0.3.446 and
+  // 0.3.448 were both written that way and both read as a stretch. A bullet is
+  // now allowed to be internal PROVIDED IT SAYS SO, and stated-internal bullets
+  // are hidden from the readable list rather than reworded. What this test still
+  // forbids is an unclassifiable bullet: one that neither reads as user-facing
+  // copy nor declares itself internal.
   const changelog = await Deno.readTextFile(new URL("../CHANGELOG.md", import.meta.url));
   const versions = parseChangelog(changelog);
   const offenders: string[] = [];
@@ -224,11 +239,23 @@ Deno.test("changelog: every modern (0.3.x) bullet passes the user-facing languag
     const [major, minor] = v.version.split(".").map(Number);
     if (major === 0 && minor < 3) continue; // ancient history is frozen, not rewritten
     for (const b of v.bullets as string[]) {
-      if (!isUserFacingEntry(b)) offenders.push(`v${v.version}: ${b.slice(0, 80)}`);
+      if (!isUserFacingEntry(b) && !isInternalEntry(b)) {
+        offenders.push(`v${v.version}: ${b.slice(0, 80)}`);
+      }
     }
   }
   assertEquals(offenders, [],
-    `every modern changelog bullet must read as user-facing copy:\n${offenders.join("\n")}`);
+    `every modern changelog bullet must either read as user-facing copy or declare itself internal with a leading "internal:":\n${offenders.join("\n")}`);
+
+  // The other half of the old guarantee is kept: nothing a reader is shown may
+  // be an internal note. Asserted on the real partition the renderer uses, so a
+  // change that stopped hiding marked bullets would red here.
+  const { recent } = partitionChangelog(changelog, { limit: 5 });
+  const leaked = recent.flatMap((v) =>
+    v.bullets.filter((b: string) => isInternalEntry(b)).map((b: string) => `v${v.version}: ${b.slice(0, 80)}`)
+  );
+  assertEquals(leaked, [],
+    `stated-internal notes must be hidden from the readable list, never shown:\n${leaked.join("\n")}`);
 });
 
 Deno.test("changelog: the modern (0.3.x) series is contiguous — no consumed-but-missing versions", async () => {

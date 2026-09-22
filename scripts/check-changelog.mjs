@@ -6,7 +6,7 @@
 // unit tests pin (imported from extension/options/changelog-filter.js so the
 // three cannot drift).
 import { readFile } from "node:fs/promises";
-import { isUserFacingEntry } from "../extension/options/changelog-filter.js";
+import { isInternalEntry, isUserFacingEntry } from "../extension/options/changelog-filter.js";
 
 const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
 const pkgUrl = new URL("../package.json", import.meta.url);
@@ -41,12 +41,21 @@ if (fail.length) { console.error("CHANGELOG ORDER/UNIQUENESS FAIL:\n" + fail.joi
 // read as user-facing copy. A bullet that fails isUserFacingEntry (commit
 // prefixes, SHAs, internal vocab, workflow status words) fails the gate, so an
 // internal note can never ship in the user-visible recent entries.
+//
+// Amended 2026-09-22: a bullet may instead DECLARE itself internal with a
+// leading "internal:". Requiring every recent bullet to read as user-facing
+// copy forced a sentence to be invented for a commit that had no user-visible
+// change (0.3.446 and 0.3.448 were both written that way and both read as a
+// stretch — the rule caused the defect it existed to prevent). A
+// stated-internal bullet is hidden from the readable list by
+// partitionChangelog, so the guarantee this gate exists for is unchanged:
+// nothing a reader is shown is an internal note.
 const blocks = [...src.matchAll(/^## \[([^\]]+)\][^\n]*\n([\s\S]*?)(?=^## |\z)/gm)].slice(0, 10);
 const voiceFail = [];
 for (const m of blocks) {
   const bullets = m[2].split(/\r?\n/).filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim());
   for (const b of bullets) {
-    if (!isUserFacingEntry(b)) voiceFail.push(`v${m[1]}: ${b.slice(0, 80)}`);
+    if (!isUserFacingEntry(b) && !isInternalEntry(b)) voiceFail.push(`v${m[1]}: ${b.slice(0, 80)}`);
   }
 }
 // The broad bans stay in force over the whole recent section (mirror of the

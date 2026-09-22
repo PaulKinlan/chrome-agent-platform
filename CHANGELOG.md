@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.452] — 2026-09-22
+- internal: the changelog gate now allows a stated-internal note instead of forcing a user-facing sentence
+
 ## [0.3.451] — 2026-09-22
 - the side panel's release notes now read as what you get, not what we checked
 
@@ -10,13 +13,13 @@
 - the agent buttons now show a badge for each agent, and the side panel stops squashing them when it is narrow
 
 ## [0.3.448] — 2026-09-22
-- the recorded reason the side panel's layout broke now matches what was measured, so the fix stands on a true account
+- internal: corrected the account of why the side panel's layout broke, to what was actually measured
 
 ## [0.3.447] — 2026-09-22
 - a broken side panel is now caught before it reaches you, instead of the check passing whatever the layout did
 
 ## [0.3.446] — 2026-09-22
-- the side panel's layout fix is now backed by measurements rather than assumptions
+- internal: the measurements behind the side panel's constrained-width layout fix
 
 ## [0.3.445] — 2026-09-22
 - each agent button carries a badge, and a narrow side panel no longer breaks the layout
