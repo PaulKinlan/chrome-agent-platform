@@ -336,7 +336,9 @@ const chipRow = await ev(`(() => {
   const row = rows.find(r => (r.getAttribute('name') ?? '') === 'Tab Janitor');
   return row ? { lastRun: row.getAttribute('last-run') } : null;
 })()`);
-check("the agents list shows the schedule chip ('every 120 min') with no background segregation", chipRow?.lastRun === "every 120 min", chipRow);
+// The row's chip is the product's own schedule marker (lib/agent-display.js
+// agentScheduleMarker): a scheduled agent reads "Scheduled · every N min".
+check("the agents list shows the schedule chip ('Scheduled · every 120 min') with no background segregation", chipRow?.lastRun === "Scheduled · every 120 min", chipRow);
 
 // 6b. P1-b: REOPENING the scheduled agent's edit dialog shows the real
 //     schedule (named-agent.get shares the list's enrichment). The create
@@ -381,6 +383,25 @@ await ev(`(() => {
   (btns.find(b => /^save$/i.test((b.textContent ?? '').trim())) ?? btns.at(-1))?.click();
 })()`);
 await sleep(1200);
+// The save must COMPLETE, not merely start: the dialog closes on a successful
+// save and STAYS OPEN with its error line when the service worker rejects the
+// payload. Without this, the alarm check below passed while the persona half of
+// the same save failed — measured: sending the skill ROWS ({id,name,description})
+// instead of their ids made named-agent.update answer "named-agent.update payload
+// is not approvable", which the owner sees as a save that silently did not happen.
+const editSave = await ev(`(() => {
+  const errors = [...document.querySelectorAll('agent-dialog [aria-live="assertive"]')]
+    .map((el) => (el.textContent ?? '').trim()).filter(Boolean);
+  return { stillOpen: !!window.__openDialog(), errors };
+})()`);
+check("the edit save COMPLETES (the dialog closes; a rejected payload leaves it open with the error shown)",
+  editSave?.stillOpen === false && (editSave?.errors ?? []).length === 0, editSave);
+const afterEdit = await ev(`(async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'named-agent.get', id: 'my-chief-of-staff' }).catch(() => null);
+  return { ok: res?.ok === true, skills: (res?.agent?.skills ?? []).length, roleLen: (res?.agent?.role ?? '').length };
+})()`);
+check("the edit-save persisted the agent's skills and persona (the update route accepted the payload)",
+  afterEdit?.ok === true && afterEdit?.skills === 1 && afterEdit?.roleLen > 0, afterEdit);
 const afterAdd = (await alarms()).find((a: any) => a.name === "agent:my-chief-of-staff");
 check("adding a schedule to an existing on-demand agent mints the alarm", afterAdd?.periodInMinutes === 45, afterAdd);
 // Remove it again — the alarm goes, the agent stays.
@@ -430,7 +451,7 @@ const collision = await ev(`(() => {
 })()`);
 check("a same-id record in BOTH stores renders exactly ONCE in the main list", collision?.mainRows === 1, collision);
 check("the collision row is the NAMED agent (avatar + its own 60-min schedule chip beats the recipe's 360)",
-  collision?.mainHasAvatar === true && collision?.mainChip === "every 60 min", collision);
+  collision?.mainHasAvatar === true && collision?.mainChip === "Scheduled · every 60 min", collision);
 check("the sidebar renders the collision once, with no 'background' label",
   collision?.sideRows === 1 && collision?.sideHasBackgroundLabel === false, collision);
 const bothAlarms = (await alarms()).filter((a: any) => a.name === "agent:price-watcher" || a.name === "recipe:price-watcher");
