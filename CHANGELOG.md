@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.452] — 2026-09-22
+- re-anchor the census route-count pin 259 -> 258 (recipe.list fork deleted)
+
 ## [0.3.451] — 2026-09-22
 - bgagent-delete-order test reads the renamed response shape (skills)
 
