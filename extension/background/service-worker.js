@@ -11272,7 +11272,7 @@ chrome.commands?.onCommand?.addListener((command) => {
 
 // ---- omnibox (keyword → start a task) --------------------------------
 // The original plan's fast entry point: type "agent <task>" in the address bar
-// → suggestions (recipes + recent threads) → Enter opens the hub and runs the
+// → suggestions (skills + recent threads) → Enter opens the hub and runs the
 // task (or a skill, or opens a thread). The omnibox keyword needs NO optional
 // permission; the agent's actions go through the existing grant flow.
 const OMNIBOX_HUB = () => chrome.runtime.getURL("ntp/ntp.html");

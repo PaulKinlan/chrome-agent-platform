@@ -1,13 +1,13 @@
 // lib/hooks.js — the system-hooks layer.
 //
-// Agents (the master hub agent, or a background recipe like the "sorting hat")
+// Agents (the master hub agent, or a background skill like the "sorting hat")
 // can listen to a Chrome system event and be invoked when it fires. This module
 // is the single authority for:
 //
 //   1. The HOOKS CATALOG — the full surface of chrome.* `on*` events an agent
 //      could respond to, each with its required (OPTIONAL) permission and a
 //      candidate use. See docs/HOOKS.md for the prose catalog.
-//   2. THE SUBSCRIPTION REGISTRY — data (a hook + a recipe/agent + a prompt
+//   2. THE SUBSCRIPTION REGISTRY — data (a hook + a skill/agent + a prompt
 //      template), persisted under `cap:hooks`. A subscription is NEVER eval'd;
 //      it is looked up + its prompt built when the event fires.
 //   3. THE PERMISSIONS LAYER (Paul's hard requirement) — a DENY-LIST of hooks
@@ -39,7 +39,7 @@ function withHookLock(fn) {
 }
 
 // Fan-out SAFETY (the wider-goal review's unbounded-fan-out finding) is carried
-// by the KNOWN-recipe validation below — an arbitrary recipeId still cannot
+// by the KNOWN-skill validation below — an arbitrary recipeId still cannot
 // create a fan-out row. dptw: there are deliberately no subscription-count or
 // template-size caps; a single event enqueues one run per VALID subscription.
 
@@ -429,14 +429,14 @@ async function writeSubscriptions(list) {
 }
 
 /**
- * Subscribe an agent/recipe to a hook. Data only (never eval). The deny-list is
+ * Subscribe an agent/skill to a hook. Data only (never eval). The deny-list is
  * checked FIRST (fail-closed): a denied hook, or a hook whose optional
  * permission is absent, is refused.
  *
  * @param {string} hookId  the HOOKS catalog id
- * @param {string|null} recipeId  a recipe id, or null for the master hub agent
+ * @param {string|null} recipeId  a skill id, or null for the master hub agent
  * @param {string} promptTemplate  a prompt template; the event payload is
- *   serialized into `{{payload}}` when the hook fires (default: the recipe's
+ *   serialized into `{{payload}}` when the hook fires (default: the skill's
  *   own prompt + the payload appended)
  */
 export async function subscribeHook(
@@ -445,7 +445,7 @@ export async function subscribeHook(
 ) {
   const allowed = await checkHookAllowed(hookId);
   if (!allowed.ok) return allowed;
-  // VALIDATE the recipeId: null (the master hub agent) or a KNOWN recipe id.
+  // VALIDATE the recipeId: null (the master hub agent) or a KNOWN skill id.
   // An arbitrary/unknown recipeId must not create a distinct fan-out row that a
   // single event can enqueue.
   if (recipeId != null) {
@@ -453,7 +453,7 @@ export async function subscribeHook(
       return { ok: false, error: "invalid recipeId" };
     }
     if (!getSkill(recipeId)) {
-      return { ok: false, error: `unknown recipe: ${recipeId}` };
+      return { ok: false, error: `unknown skill: ${recipeId}` };
     }
   }
   const template = typeof promptTemplate === "string" ? promptTemplate : "";
@@ -462,7 +462,7 @@ export async function subscribeHook(
   // could last-write-wins one of them out).
   return withHookLock(async () => {
     const list = await getHookSubscriptions();
-    // Idempotent: re-subscribing the same (hook, recipe) replaces the entry.
+    // Idempotent: re-subscribing the same (hook, skill) replaces the entry.
     const existing = list.find(
       (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
     );

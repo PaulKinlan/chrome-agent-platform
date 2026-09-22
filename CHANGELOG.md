@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.454] — 2026-09-22
+- one vocabulary in the remaining comments, hooks error copy, docs, and omnibox intents
+
 ## [0.3.453] — 2026-09-22
 - component-gallery smoke selects the stable composer ids ([data-composer-input]/[data-composer-send])
 
