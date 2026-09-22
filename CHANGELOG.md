@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.456] — 2026-09-22
+- cookie redaction in security audits is now verified against seeded credentials, ensuring cookie values never leak to models
+
 ## [0.3.455] — 2026-09-22
 - the security audit now accurately targets the composer and terminates cleanly, running all nineteen checks
 
