@@ -112,6 +112,69 @@ export function childEnvForHarness(harness: string, pathValue = ""): Record<stri
   return resolved ? { [spec.envVar]: resolved } : {};
 }
 
+/** The env var pi's MCP adapter uses to STOP discovering the machine's own MCP
+ * config files. Its documented effect is that host/imported configs and agent
+ * plugins are skipped and only pi's own config remains
+ * (pi-mcp-adapter/dist/config.js: `isExclusiveConfigMode()` gates
+ * `getConfiguredHostConfigDiscovery` to "off" and short-circuits the import and
+ * plugin paths). */
+export const PI_MCP_EXCLUSIVE_ENV = "PI_MCP_CONFIG_MODE";
+
+/** Names a CAP-spawned harness session must never inherit, whatever the
+ * machine's MCP config says. Matched case-insensitively against the server
+ * KEY, because the key is the operator's label and the label is not the thing
+ * that launches. */
+const BROWSER_LAUNCHING_MCP_HINTS = ["chrome-devtools", "chrome_devtools", "puppeteer", "playwright", "selenium", "browser-mcp", "browser_use"];
+
+/** Does this MCP server key name something that launches its own browser?
+ *
+ * It exists because a CAP harness session must never be handed a second
+ * browser: the owner's stated architecture is that the tools live in the
+ * client, the harness asks, and the request routes BACK to the client, which
+ * executes it against the tab the owner is actually looking at
+ * (owner-reported 2026-09-22: a local process asking to run Google Chrome is
+ * "exactly NOT what I want"). A patched browser is not the owner's browser.
+ *
+ * This is a NAME check, not a proof, and it is honest about that: a server
+ * labelled oddly still gets through. It is the cheap half of the guard; the
+ * load-bearing half is that CAP injects only its OWN tool server (see
+ * `capMcpServerEntry`), so nothing else is ever offered by us. */
+export function isBrowserLaunchingMcpServer(name: string): boolean {
+  const key = String(name ?? "").trim().toLowerCase();
+  return BROWSER_LAUNCHING_MCP_HINTS.some((hint) => key.includes(hint));
+}
+
+/** Environment additions that make a CAP-spawned harness session load ONLY the
+ * MCP servers CAP intends it to have.
+ *
+ * WHY THIS EXISTS. `pi-mcp-adapter` discovers MCP servers from the machine's
+ * global config (`~/.config/mcp/mcp.json`, `~/.agents/mcp.json`, project
+ * `.mcp.json`, plus host imports and agent plugins). A machine that has ever
+ * configured a browser-automation server therefore hands one to EVERY harness
+ * session CAP starts, and that server launches its own headless Chrome: a
+ * local process asking to drive a browser the owner never opened. Measured on
+ * the owner's machine 2026-09-22 — `~/.config/mcp/mcp.json` carries
+ * `chrome-devtools-mcp` (node, `chrome-devtools-mcp.js --headless`), and a CAP
+ * harness turn showed the owner a prompt to let a local process run Chrome.
+ *
+ * THE COST, STATED RATHER THAN HIDDEN. Exclusive mode is all-or-nothing: it
+ * also stops the session inheriting any OTHER host MCP server the operator
+ * configured (on the same machine, `web-reader`). That is a real loss and it is
+ * the reason this is scoped to sessions CAP spawns rather than applied to the
+ * machine: pi outside CAP keeps its full config. Narrowing it to "drop only the
+ * browser-launching entries" needs a config-file override that pi-mcp-adapter
+ * does not expose (it reads `PI_MCP_CONFIG_MODE`, `PI_PACKAGE_DIR` and `HOME`,
+ * and no path override).
+ *
+ * Applied to pi only, because pi is the one adapter that both ignores the ACP
+ * `mcpServers` channel (pi-acp 0.0.33 stores `params.mcpServers` and never
+ * reads them) and reads a host config of its own. The claude-code and codex
+ * adapters take their servers from ACP instead, so CAP controls those by
+ * injection rather than by isolation. */
+export function harnessMcpIsolationEnv(harness: string): Record<string, string> {
+  return harness === "pi" ? { [PI_MCP_EXCLUSIVE_ENV]: "exclusive" } : {};
+}
+
 /** The startup lines for a harness CLI the bridge cannot see on ITS OWN PATH.
  * pi has no fallback: the adapter WILL fail with "executable not found", so
  * the warning names the fix. The claude-code/codex adapters bundle a CLI
@@ -409,6 +472,7 @@ export function createAcpServer(
             ...Deno.env.toObject(),
             ...childEnv,
             PI_ACP_HARNESS: connectionHarness,
+            ...harnessMcpIsolationEnv(connectionHarness),
             ...childEnvForHarness(connectionHarness, Deno.env.get("PATH") ?? ""),
             // Give the adapter a PATH that contains the binaries we resolved
             // (npx/CLI), because it spawns the harness CLI itself.
