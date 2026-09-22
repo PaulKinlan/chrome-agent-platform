@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.450] — 2026-09-22
+- Editing an agent that already has skills now saves your other changes too — adding a schedule no longer reports a failed save.
+
 ## [0.3.449] — 2026-09-22
 - the agent buttons' badges and the narrow side panel are now checked in a real browser
 
