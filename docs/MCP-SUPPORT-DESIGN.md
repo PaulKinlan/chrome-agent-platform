@@ -225,3 +225,86 @@ worker:
 The keyless end-to-end proof is `scripts/kat-mcp-tool-injection.ts` driving the
 demo marker `@demo-mcp <mcp__server__tool> [json-args]` through the real lazy
 protocol against `scripts/mcp-test-server.ts`.
+
+---
+
+## The other direction: CAP as a server FOR a harness (measured 2026-09-22, NOT built)
+
+Everything above is CAP as an MCP **client** — connecting OUT to remote servers.
+The owner reported the opposite gap: *"the skills and browser tooling doesn't
+work… we have all the tools on the client side, we should delegate back to the
+client and then back to the harness with the results… this looks like it's trying
+to use Chrome as an MCP server which is exactly NOT what I want."*
+
+Two separate things were wrong, and only one of them is about protocols.
+
+### 1. Where the browser prompt actually came from (FIXED)
+
+`pi-mcp-adapter` discovers MCP servers from the machine, and on this machine
+`~/.config/mcp/mcp.json` carries `chrome-devtools-mcp` — node running
+`chrome-devtools-mcp.js --channel=stable --headless`. Every pi session CAP
+spawned inherited it, so every harness turn launched a second, headless Chrome.
+The bridge now sets `PI_MCP_CONFIG_MODE=exclusive` for pi children, which is the
+adapter's own switch for skipping host/imported/plugin config discovery. Cost,
+stated rather than hidden: exclusive mode is all-or-nothing, so the session also
+stops inheriting the operator's other host servers (`web-reader` on the same
+machine). It is scoped to sessions CAP spawns; pi outside CAP is untouched.
+Evidence: `tests/acp-bridge-mcp-isolation.test.ts`.
+
+### 2. Handing the harness CAP's own tools — the channel does not exist yet
+
+ACP defines an MCP server the **client** hosts: declare
+`{type:"acp", name, serverId}` in `mcpServers` on `session/new`, after which the
+adapter tunnels MCP over the ACP methods `mcp/connect`, `mcp/message` and
+`mcp/disconnect`. On the wire, `mcp/message` carries a FLATTENED MCP request
+(`{connectionId, method, params}`) and `mcp/connect` answers `{connectionId}`.
+That would be the owner's architecture with no port, no bridge endpoint and
+nothing else to launch.
+
+**No adapter CAP pins implements it.** Read from the pinned sources, not assumed:
+
+| Adapter | `mcpServers` | Client-hosted `type:"acp"` |
+|---|---|---|
+| `pi-acp@0.0.33` | stores `params.mcpServers` and never reads them; declares `mcpCapabilities {http:false, sse:false}` | no |
+| `claude-agent-acp@0.78.0` | **consumes them** — sorts into the session fingerprint, hands them to the Claude Agent SDK, so stdio/http/sse genuinely work | no — defines none of the three `mcp/*` methods |
+| `codex-acp@1.12.0` | declares `zMcpServerAcp` and the method-name constants | no — `connectionId`/`serverId` occur ONLY inside those schemas and nowhere in executing code |
+
+So the client-hosted channel is schema-only in codex-acp, absent in
+claude-agent-acp, and ignored by pi-acp. **A server advertised to an adapter that
+cannot read it is worse than no server**, because the session then LOOKS capable
+while the harness reaches for its own browser tooling — the original failure, one
+layer up.
+
+### What is reachable, and what it needs
+
+- **Claude Code: yes**, via an `http` (or `stdio`) MCP server — `claude-agent-acp`
+  consumes the list. This needs a listening endpoint that routes back into the
+  extension, which MV3 cannot provide itself: the **bridge** is the only process
+  that can host one, and it already has the live WebSocket to the extension. That
+  is a real piece of work (a loopback MCP endpoint in the bridge, a tool-list and
+  tool-call channel over the existing socket, and the extension answering it).
+- **Codex: not until its adapter implements `mcp/connect`.**
+- **pi: nothing via ACP.** Its isolation (above) is the only control, and its MCP
+  servers come from its own config, so pi needs either an adapter that reads
+  `mcpServers` or a config path pi-mcp-adapter does not expose.
+
+### The safety shape any such server must have
+
+A harness toolset built from `browserToolset()` MUST wire all four of its gates.
+With them unwired, its Destructive class — closing a foreign tab, wiping data,
+setting a cookie — executes with **no owner approval**; the existing call site
+documents that as safe only because every live model run supplies the gates. A
+harness run is a new call site. The approval function must therefore be
+**required at construction**, not defaulted, so an ungated harness toolset cannot
+be built at all; and validation with the tool's own `safeParse` must run *before*
+approval (never ask the owner about a malformed call) and approval *before*
+execution (no path to a side effect that skips the card). A denial must surface
+as a readable result naming the capability, never as a thrown error, or the model
+reads a decision as a crash and retries.
+
+A first implementation of the client half (an MCP protocol handler and a gated
+tool provider, 23 tests) was written and then **removed**, because nothing
+reaches it: this repository's own `scripts/check-reachability.mjs` fails the
+build on a shipped module that no entry point imports, and it was right to. The
+protocol contract and the gate order are recorded here instead, so the next lane
+starts from the measurement rather than from the code.
