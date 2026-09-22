@@ -306,7 +306,7 @@ export async function createNamedAgent(
   if (roleText.length > MAX_ROLE_LEN) {
     return { ok: false, error: `role too long (${roleText.length} > ${MAX_ROLE_LEN}) — shorten the role; it was NOT saved` };
   }
-  const skillList = Array.isArray(skills) ? skills : [];
+  const skillList = Array.isArray(skills) ? skills.map((s) => typeof s === "string" ? s : (s?.id ?? s?.name ?? String(s))) : [];
   const assetList = normalizeCoreAssets(coreAssets);
 
   let cleanProfileGrants = [];

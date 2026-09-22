@@ -22,6 +22,7 @@
 - project browser agent runtime and reject Node imports
 
 ## Unreleased
+- Browsing starter templates during the first run now reliably opens the template gallery and creates your chosen agent.
 - Identify `node:` imports as Node builtins, with their importer, rather than remote script URLs in the pre-bundle scan (azlc review).
 - Remove Node process-launcher dependencies from browser bundles; reject builtin imports instead of shimming them (azlc).
 - Each one-click agent button now carries a badge, so a narrow side panel still shows which agent is which instead of squashing the names.

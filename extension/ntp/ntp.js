@@ -3680,7 +3680,7 @@ async function buildAgentConfigDialog(opts) {
     // RefId-keyed save (r4): collectChecked returns the source-qualified id
     // for every checked row, so a colliding imported skill saves as
     // `imported:<id>` and resolves to the imported row at run time.
-    const skills = skillSection.collectChecked();
+    const skills = skillSection.collectChecked().map((s) => s.id);
     const parsedSchedule = parseEnglishSchedule(
       scheduleField.el.value,
       // A background template carries its own recurring prompt; a manual

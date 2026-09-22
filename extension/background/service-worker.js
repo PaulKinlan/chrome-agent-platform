@@ -5389,7 +5389,7 @@ function normalizedNamedPatch({ name, role, avatar, skills, coreAssets, profileG
   patch.name = name === undefined ? undefined : String(name).trim();
   patch.role = role === undefined ? undefined : String(role).trim();
   patch.avatar = avatar === undefined ? undefined : (avatar ? String(avatar) : null);
-  patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, MAX_SKILLS) : []);
+  patch.skills = skills === undefined ? undefined : (Array.isArray(skills) ? skills.slice(0, MAX_SKILLS).map((s) => typeof s === "string" ? s : (s?.id ?? s?.name ?? String(s))) : []);
   patch.coreAssets = coreAssets === undefined ? undefined : normalizeCoreAssets(coreAssets);
   if (profileGrants !== undefined) {
     const validated = validateProfileGrants(profileGrants);
