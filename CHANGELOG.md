@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.451] — 2026-09-22
+- the side panel's release notes now read as what you get, not what we checked
+
 ## [0.3.450] — 2026-09-22
 - the What's New page now tells you what changed for you, rather than what we checked
 
@@ -7,13 +10,13 @@
 - the agent buttons now show a badge for each agent, and the side panel stops squashing them when it is narrow
 
 ## [0.3.448] — 2026-09-22
-- correct the F1 rationale to what was actually measured
+- the recorded reason the side panel's layout broke now matches what was measured, so the fix stands on a true account
 
 ## [0.3.447] — 2026-09-22
 - a broken side panel is now caught before it reaches you, instead of the check passing whatever the layout did
 
 ## [0.3.446] — 2026-09-22
-- the measurements behind the constrained-width fix
+- the side panel's layout fix is now backed by measurements rather than assumptions
 
 ## [0.3.445] — 2026-09-22
 - each agent button carries a badge, and a narrow side panel no longer breaks the layout
