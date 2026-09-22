@@ -2540,7 +2540,7 @@ async function openBackgroundAgentChat(id, name) {
 
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#agent=background:${encodeURIComponent(id)}`;
-    if (location.hash !== hash) {
+    if (location.hash !== hash || (name && window.history?.state?.name !== name)) {
       navigateNtpRoute(window, hash, { route: "agent", kind: "background", id, name });
     }
   }
@@ -2668,7 +2668,14 @@ async function openAgentSurface({ kind, id, name }) {
     send("named-agent.list").then((r) => {
       if (currentAgentId !== id) return;
       const a = (Array.isArray(r?.agents) ? r.agents : []).find((x) => x?.id === id);
-      if (a) threadConversation?.setIdentity?.({ name: a.name || name || id, avatar: a.avatar || initialAvatar(a.name || name || id) });
+      if (a) {
+        if (a.name && threadTitle.textContent !== a.name) {
+          threadTitle.textContent = a.name;
+          const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
+          navigateNtpRoute(window, hash, { route: "agent", kind, id, name: a.name });
+        }
+        threadConversation?.setIdentity?.({ name: a.name || name || id, avatar: a.avatar || initialAvatar(a.name || name || id) });
+      }
     }).catch(() => {});
   }
   setRunDebugOpen(false);
@@ -2677,7 +2684,7 @@ async function openAgentSurface({ kind, id, name }) {
 
   if (typeof window !== "undefined" && window.history?.pushState) {
     const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
-    if (location.hash !== hash) {
+    if (location.hash !== hash || (name && window.history?.state?.name !== name)) {
       navigateNtpRoute(window, hash, { route: "agent", kind, id, name });
     }
   }
@@ -2709,10 +2716,10 @@ async function openAgentSurface({ kind, id, name }) {
   renderRunStatus({ state: "idle" });
 }
 
-async function openAgentChat(id) {
+async function openAgentChat(id, options = {}) {
   const aRes = await send("named-agent.get", { id }).catch(() => ({ ok: false }));
   const agent = aRes.ok ? aRes.agent : null;
-  await openAgentSurface({ kind: "named", id, name: agent?.name || null });
+  await openAgentSurface({ kind: "named", id, name: agent?.name || null }, options);
 }
 
 /** The display name of a background agent (its registry row), or null. */
@@ -4257,7 +4264,7 @@ subscribeProgress((ev) => {
 
 /** If the agent the thread surface is scoped to was deleted (or a background
  * agent disabled), leave its conversation — chatting with a ghost must not be
- * possible. A rename just updates the title. */
+ * possible. A rename updates the title and synchronizes the navigation route state. */
 async function revalidateOpenAgent() {
   if (!currentAgentId) return;
   const kind = currentAgentKind; // capture — the surface may change mid-await
@@ -4274,6 +4281,8 @@ async function revalidateOpenAgent() {
   }
   if (found.name && threadTitle.textContent !== found.name) {
     threadTitle.textContent = found.name;
+    const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
+    navigateNtpRoute(window, hash, { route: "agent", kind, id, name: found.name });
   }
 }
 
@@ -4626,14 +4635,15 @@ async function applyCurrentHashRoute(isTraverse = false) {
       if (parsed.kind === "background") {
         if (currentAgentId !== parsed.id || currentAgentKind !== "background" || threadView?.hidden) {
           // A reload/deep link carries no name in history.state: resolve it
-          // from the registry so the header never reads the slug.
+          // from the registry so the header never reads the slug. Background
+          // agents have no rename flow, so their registry name is immutable at runtime.
           const name = meta.name ?? await resolveBackgroundAgentName(parsed.id);
           await openBackgroundAgentChat(parsed.id, name, { pushHistory: false });
         }
       } else {
         if (currentAgentId !== parsed.id || currentAgentKind !== parsed.kind || threadView?.hidden) {
-          if (parsed.kind === "named" && !meta.name) {
-            await openAgentChat(parsed.id); // resolves named-agent.get → the name
+          if (parsed.kind === "named") {
+            await openAgentChat(parsed.id, { pushHistory: false });
           } else {
             await openAgentSurface({ kind: parsed.kind, id: parsed.id, name: meta.name ?? null }, { pushHistory: false });
           }
