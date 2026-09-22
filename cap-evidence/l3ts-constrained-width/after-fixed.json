@@ -1,0 +1,942 @@
+{
+  "extId": "lfpinnmnjfidlkijmgekbgohkkfbjojn",
+  "hub": {
+    "900": {
+      "viewport": 900,
+      "mainWrap": {
+        "rect": {
+          "x": 240,
+          "right": 890,
+          "w": 650,
+          "h": 1380
+        },
+        "scrollWidth": 650,
+        "clientWidth": 650,
+        "overflowsBy": 0,
+        "scrollWidthDoc": 890
+      },
+      "jobsSection": {
+        "rect": {
+          "x": 264,
+          "right": 866,
+          "w": 602,
+          "h": 569
+        },
+        "minWidth": "auto",
+        "scrollWidth": 602,
+        "clientWidth": 602,
+        "minContent": 2
+      },
+      "agentsSection": {
+        "rect": {
+          "x": 264,
+          "right": 866,
+          "w": 602,
+          "h": 310
+        },
+        "minWidth": "auto",
+        "hidden": false,
+        "right": 866,
+        "width": 602,
+        "insideViewport": true
+      },
+      "board": {
+        "rect": {
+          "x": 265,
+          "right": 865,
+          "w": 600,
+          "h": 520
+        },
+        "padding": "12px 14px",
+        "overflowY": "auto",
+        "maxHeight": "520px",
+        "scrollHeight": 528,
+        "clientHeight": 520
+      },
+      "panelHeadPadding": "12px 14px",
+      "panelBodyPadding": "12px 14px",
+      "gridTemplateColumns": "602px",
+      "rowSpill": {
+        "worst": 0,
+        "worstAt": "",
+        "rows": 5
+      },
+      "padAlign": {
+        "contentLeft": 279,
+        "headLeft": 279,
+        "delta": 0
+      },
+      "bodyScrolls": true,
+      "children": [
+        {
+          "tag": "h1",
+          "id": "",
+          "cls": "visually-hidden",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 1,
+          "x": 263,
+          "deepMinContent": 142,
+          "deepMinContentAt": "h1.visually-hidden"
+        },
+        {
+          "tag": "agent-composer",
+          "id": "composer",
+          "cls": "",
+          "order": "-1",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 602,
+          "x": 264,
+          "deepMinContent": 385,
+          "deepMinContentAt": "span.spacer"
+        },
+        {
+          "tag": "site-agent-card",
+          "id": "site-offer",
+          "cls": "",
+          "order": "-2",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "example-chips",
+          "id": "example-chips",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 602,
+          "x": 264,
+          "deepMinContent": 92,
+          "deepMinContentAt": "example-chips."
+        },
+        {
+          "tag": "first-run-guide",
+          "id": "first-run-guide",
+          "cls": "",
+          "order": "-3",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 602,
+          "x": 264,
+          "deepMinContent": 218,
+          "deepMinContentAt": "first-run-guide."
+        },
+        {
+          "tag": "header",
+          "id": "",
+          "cls": "top",
+          "order": "-4",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 602,
+          "x": 264,
+          "deepMinContent": 270,
+          "deepMinContentAt": "button.provider-status"
+        },
+        {
+          "tag": "section",
+          "id": "timeline-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "section",
+          "id": "agents-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 602,
+          "x": 264,
+          "deepMinContent": 100,
+          "deepMinContentAt": "div.panel"
+        },
+        {
+          "tag": "section",
+          "id": "jobs-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 602,
+          "x": 264,
+          "deepMinContent": 684,
+          "deepMinContentAt": "span.jb-excerpt"
+        }
+      ],
+      "shrinkHolders": [],
+      "setup": "agents visible=true rows=5"
+    },
+    "1100": {
+      "viewport": 1100,
+      "mainWrap": {
+        "rect": {
+          "x": 240,
+          "right": 1090,
+          "w": 850,
+          "h": 1036
+        },
+        "scrollWidth": 850,
+        "clientWidth": 850,
+        "overflowsBy": 0,
+        "scrollWidthDoc": 1090
+      },
+      "jobsSection": {
+        "rect": {
+          "x": 677,
+          "right": 1066,
+          "w": 389,
+          "h": 569
+        },
+        "minWidth": "auto",
+        "scrollWidth": 389,
+        "clientWidth": 389,
+        "minContent": 2
+      },
+      "agentsSection": {
+        "rect": {
+          "x": 264,
+          "right": 653,
+          "w": 389,
+          "h": 310
+        },
+        "minWidth": "auto",
+        "hidden": false,
+        "right": 653,
+        "width": 389,
+        "insideViewport": true
+      },
+      "board": {
+        "rect": {
+          "x": 678,
+          "right": 1065,
+          "w": 387,
+          "h": 520
+        },
+        "padding": "12px 14px",
+        "overflowY": "auto",
+        "maxHeight": "520px",
+        "scrollHeight": 612,
+        "clientHeight": 520
+      },
+      "panelHeadPadding": "12px 14px",
+      "panelBodyPadding": "12px 14px",
+      "gridTemplateColumns": "389px 389px",
+      "rowSpill": {
+        "worst": 0,
+        "worstAt": "",
+        "rows": 5
+      },
+      "padAlign": {
+        "contentLeft": 692,
+        "headLeft": 692,
+        "delta": 0
+      },
+      "bodyScrolls": true,
+      "children": [
+        {
+          "tag": "h1",
+          "id": "",
+          "cls": "visually-hidden",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 1,
+          "x": 263,
+          "deepMinContent": 142,
+          "deepMinContentAt": "h1.visually-hidden"
+        },
+        {
+          "tag": "agent-composer",
+          "id": "composer",
+          "cls": "",
+          "order": "-1",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 802,
+          "x": 264,
+          "deepMinContent": 585,
+          "deepMinContentAt": "span.spacer"
+        },
+        {
+          "tag": "site-agent-card",
+          "id": "site-offer",
+          "cls": "",
+          "order": "-2",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "example-chips",
+          "id": "example-chips",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 802,
+          "x": 264,
+          "deepMinContent": 92,
+          "deepMinContentAt": "example-chips."
+        },
+        {
+          "tag": "first-run-guide",
+          "id": "first-run-guide",
+          "cls": "",
+          "order": "-3",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 802,
+          "x": 264,
+          "deepMinContent": 218,
+          "deepMinContentAt": "first-run-guide."
+        },
+        {
+          "tag": "header",
+          "id": "",
+          "cls": "top",
+          "order": "-4",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 802,
+          "x": 264,
+          "deepMinContent": 270,
+          "deepMinContentAt": "button.provider-status"
+        },
+        {
+          "tag": "section",
+          "id": "timeline-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "section",
+          "id": "agents-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 389,
+          "x": 264,
+          "deepMinContent": 100,
+          "deepMinContentAt": "div.panel"
+        },
+        {
+          "tag": "section",
+          "id": "jobs-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 389,
+          "x": 677,
+          "deepMinContent": 684,
+          "deepMinContentAt": "span.jb-excerpt"
+        }
+      ],
+      "shrinkHolders": [],
+      "setup": "agents visible=true rows=5"
+    },
+    "1280": {
+      "viewport": 1280,
+      "mainWrap": {
+        "rect": {
+          "x": 275,
+          "right": 1235,
+          "w": 960,
+          "h": 1036
+        },
+        "scrollWidth": 960,
+        "clientWidth": 960,
+        "overflowsBy": 0,
+        "scrollWidthDoc": 1270
+      },
+      "jobsSection": {
+        "rect": {
+          "x": 767,
+          "right": 1211,
+          "w": 444,
+          "h": 569
+        },
+        "minWidth": "auto",
+        "scrollWidth": 444,
+        "clientWidth": 444,
+        "minContent": 2
+      },
+      "agentsSection": {
+        "rect": {
+          "x": 299,
+          "right": 743,
+          "w": 444,
+          "h": 310
+        },
+        "minWidth": "auto",
+        "hidden": false,
+        "right": 743,
+        "width": 444,
+        "insideViewport": true
+      },
+      "board": {
+        "rect": {
+          "x": 768,
+          "right": 1210,
+          "w": 442,
+          "h": 520
+        },
+        "padding": "12px 14px",
+        "overflowY": "auto",
+        "maxHeight": "520px",
+        "scrollHeight": 546,
+        "clientHeight": 520
+      },
+      "panelHeadPadding": "12px 14px",
+      "panelBodyPadding": "12px 14px",
+      "gridTemplateColumns": "444px 444px",
+      "rowSpill": {
+        "worst": 0,
+        "worstAt": "",
+        "rows": 5
+      },
+      "padAlign": {
+        "contentLeft": 782,
+        "headLeft": 782,
+        "delta": 0
+      },
+      "bodyScrolls": true,
+      "children": [
+        {
+          "tag": "h1",
+          "id": "",
+          "cls": "visually-hidden",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 1,
+          "x": 298,
+          "deepMinContent": 142,
+          "deepMinContentAt": "h1.visually-hidden"
+        },
+        {
+          "tag": "agent-composer",
+          "id": "composer",
+          "cls": "",
+          "order": "-1",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 299,
+          "deepMinContent": 695,
+          "deepMinContentAt": "span.spacer"
+        },
+        {
+          "tag": "site-agent-card",
+          "id": "site-offer",
+          "cls": "",
+          "order": "-2",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "example-chips",
+          "id": "example-chips",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 299,
+          "deepMinContent": 92,
+          "deepMinContentAt": "example-chips."
+        },
+        {
+          "tag": "first-run-guide",
+          "id": "first-run-guide",
+          "cls": "",
+          "order": "-3",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 299,
+          "deepMinContent": 218,
+          "deepMinContentAt": "first-run-guide."
+        },
+        {
+          "tag": "header",
+          "id": "",
+          "cls": "top",
+          "order": "-4",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 299,
+          "deepMinContent": 270,
+          "deepMinContentAt": "button.provider-status"
+        },
+        {
+          "tag": "section",
+          "id": "timeline-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "section",
+          "id": "agents-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 444,
+          "x": 299,
+          "deepMinContent": 100,
+          "deepMinContentAt": "div.panel"
+        },
+        {
+          "tag": "section",
+          "id": "jobs-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 444,
+          "x": 767,
+          "deepMinContent": 684,
+          "deepMinContentAt": "span.jb-excerpt"
+        }
+      ],
+      "shrinkHolders": [],
+      "setup": "agents visible=true rows=5"
+    },
+    "1440": {
+      "viewport": 1440,
+      "mainWrap": {
+        "rect": {
+          "x": 355,
+          "right": 1315,
+          "w": 960,
+          "h": 1036
+        },
+        "scrollWidth": 960,
+        "clientWidth": 960,
+        "overflowsBy": 0,
+        "scrollWidthDoc": 1430
+      },
+      "jobsSection": {
+        "rect": {
+          "x": 847,
+          "right": 1291,
+          "w": 444,
+          "h": 569
+        },
+        "minWidth": "auto",
+        "scrollWidth": 444,
+        "clientWidth": 444,
+        "minContent": 2
+      },
+      "agentsSection": {
+        "rect": {
+          "x": 379,
+          "right": 823,
+          "w": 444,
+          "h": 310
+        },
+        "minWidth": "auto",
+        "hidden": false,
+        "right": 823,
+        "width": 444,
+        "insideViewport": true
+      },
+      "board": {
+        "rect": {
+          "x": 848,
+          "right": 1290,
+          "w": 442,
+          "h": 520
+        },
+        "padding": "12px 14px",
+        "overflowY": "auto",
+        "maxHeight": "520px",
+        "scrollHeight": 546,
+        "clientHeight": 520
+      },
+      "panelHeadPadding": "12px 14px",
+      "panelBodyPadding": "12px 14px",
+      "gridTemplateColumns": "444px 444px",
+      "rowSpill": {
+        "worst": 0,
+        "worstAt": "",
+        "rows": 5
+      },
+      "padAlign": {
+        "contentLeft": 862,
+        "headLeft": 862,
+        "delta": 0
+      },
+      "bodyScrolls": true,
+      "children": [
+        {
+          "tag": "h1",
+          "id": "",
+          "cls": "visually-hidden",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 1,
+          "x": 378,
+          "deepMinContent": 142,
+          "deepMinContentAt": "h1.visually-hidden"
+        },
+        {
+          "tag": "agent-composer",
+          "id": "composer",
+          "cls": "",
+          "order": "-1",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 379,
+          "deepMinContent": 695,
+          "deepMinContentAt": "span.spacer"
+        },
+        {
+          "tag": "site-agent-card",
+          "id": "site-offer",
+          "cls": "",
+          "order": "-2",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "example-chips",
+          "id": "example-chips",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 379,
+          "deepMinContent": 92,
+          "deepMinContentAt": "example-chips."
+        },
+        {
+          "tag": "first-run-guide",
+          "id": "first-run-guide",
+          "cls": "",
+          "order": "-3",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 379,
+          "deepMinContent": 218,
+          "deepMinContentAt": "first-run-guide."
+        },
+        {
+          "tag": "header",
+          "id": "",
+          "cls": "top",
+          "order": "-4",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 912,
+          "x": 379,
+          "deepMinContent": 270,
+          "deepMinContentAt": "button.provider-status"
+        },
+        {
+          "tag": "section",
+          "id": "timeline-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "1 / -1",
+          "gridRow": "auto",
+          "w": 0,
+          "x": 0,
+          "deepMinContent": 0,
+          "deepMinContentAt": ""
+        },
+        {
+          "tag": "section",
+          "id": "agents-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 444,
+          "x": 379,
+          "deepMinContent": 100,
+          "deepMinContentAt": "div.panel"
+        },
+        {
+          "tag": "section",
+          "id": "jobs-section",
+          "cls": "",
+          "order": "0",
+          "gridColumn": "auto",
+          "gridRow": "auto",
+          "w": 444,
+          "x": 847,
+          "deepMinContent": 684,
+          "deepMinContentAt": "span.jb-excerpt"
+        }
+      ],
+      "shrinkHolders": [],
+      "setup": "agents visible=true rows=5"
+    }
+  },
+  "panel": {
+    "260": {
+      "viewport": 260,
+      "containerVisible": true,
+      "containerWidth": 222,
+      "containerScrollWidth": 222,
+      "containerOverflowsBy": 0,
+      "buttons": [
+        {
+          "text": "πpi",
+          "w": 34,
+          "h": 28,
+          "scrollWidth": 32,
+          "clientWidth": 32,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 0,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": true,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the pi harness conversation"
+        },
+        {
+          "text": "CClaude Code",
+          "w": 34,
+          "h": 28,
+          "scrollWidth": 32,
+          "clientWidth": 32,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 0,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": true,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the Claude Code harness conversation"
+        },
+        {
+          "text": "XCodex",
+          "w": 34,
+          "h": 28,
+          "scrollWidth": 32,
+          "clientWidth": 32,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 0,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": true,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the Codex harness conversation"
+        }
+      ]
+    },
+    "300": {
+      "viewport": 300,
+      "containerVisible": true,
+      "containerWidth": 262,
+      "containerScrollWidth": 262,
+      "containerOverflowsBy": 0,
+      "buttons": [
+        {
+          "text": "πpi",
+          "w": 34,
+          "h": 28,
+          "scrollWidth": 32,
+          "clientWidth": 32,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 0,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": true,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the pi harness conversation"
+        },
+        {
+          "text": "CClaude Code",
+          "w": 34,
+          "h": 28,
+          "scrollWidth": 32,
+          "clientWidth": 32,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 0,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": true,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the Claude Code harness conversation"
+        },
+        {
+          "text": "XCodex",
+          "w": 34,
+          "h": 28,
+          "scrollWidth": 32,
+          "clientWidth": 32,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 0,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": true,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the Codex harness conversation"
+        }
+      ]
+    },
+    "400": {
+      "viewport": 400,
+      "containerVisible": true,
+      "containerWidth": 362,
+      "containerScrollWidth": 362,
+      "containerOverflowsBy": 0,
+      "buttons": [
+        {
+          "text": "πpi",
+          "w": 54,
+          "h": 31,
+          "scrollWidth": 52,
+          "clientWidth": 52,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 1,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": false,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the pi harness conversation"
+        },
+        {
+          "text": "CClaude Code",
+          "w": 117,
+          "h": 31,
+          "scrollWidth": 115,
+          "clientWidth": 115,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 1,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": false,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the Claude Code harness conversation"
+        },
+        {
+          "text": "XCodex",
+          "w": 80,
+          "h": 31,
+          "scrollWidth": 78,
+          "clientWidth": 78,
+          "textOverflowsBy": 0,
+          "flexShrink": "1",
+          "whiteSpace": "nowrap",
+          "lines": 1,
+          "singleLine": 31,
+          "wrapped": false,
+          "labelClipped": false,
+          "overflowsContainer": false,
+          "hasMark": true,
+          "markTag": "svg",
+          "markNS": "http://www.w3.org/2000/svg",
+          "markW": 16,
+          "labelVisible": true,
+          "ariaLabel": "Open the Codex harness conversation"
+        }
+      ]
+    }
+  },
+  "pass": 42,
+  "fail": 0,
+  "failures": []
+}

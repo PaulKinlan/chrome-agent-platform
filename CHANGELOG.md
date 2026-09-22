@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.446] — 2026-09-22
+- the measurements behind the constrained-width fix
+
 ## [0.3.445] — 2026-09-22
 - agent badges, and the constrained-width layout the owner reported
 
