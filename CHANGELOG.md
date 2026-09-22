@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.450] — 2026-09-22
+- sidebar-parity names a drifted selector instead of crashing past all 20 checks
+
 ## [0.3.449] — 2026-09-22
 - the agent buttons' badges and the narrow side panel are now checked in a real browser
 
