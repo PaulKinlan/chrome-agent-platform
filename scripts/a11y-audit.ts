@@ -17,6 +17,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { composerInput, composerPopup } from "./lib/composer-target.ts";
 import { makeChecker } from "./lib/expected-red.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -52,6 +53,15 @@ async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: numb
     (await client.send(method, params, sessionId)).result;
   const evl = async (s: string, expr: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
+    // A page-side throw is a RESULT, not a nothing. Returning undefined here is
+    // what let this audit report four red combobox checks that looked like a
+    // product ARIA defect while its own 'no composer textarea' guard at
+    // paletteCombobox() was being swallowed (chrome-agent-platform-4vfj).
+    if (r?.exceptionDetails) {
+      throw new Error(
+        `page expression threw: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}`,
+      );
+    }
     return r?.result?.value;
   };
   return { proc: chrome.proc, cdp: { send, evl }, port: chrome.port, close: client.close };
@@ -396,25 +406,35 @@ async function main() {
     // descendant. RED on the pre-fix tree (role/expanded/activedescendant all
     // null with the listbox open and /agent highlighted).
     async function paletteCombobox(trigger: string, label: string) {
-      await cdp.evl(page.sessionId, `(() => { const t = document.querySelector('agent-composer textarea#task-input'); if (!t) throw new Error('no composer textarea'); t.focus(); return true; })()`);
+      await cdp.evl(page.sessionId, `(() => { const t = document.querySelector(${JSON.stringify(composerInput("hub"))}); if (!t) throw new Error('composer input not found: ${composerInput("hub")}'); t.focus(); return true; })()`);
       await cdp.send("Input.insertText", { text: trigger }, page.sessionId);
       await sleep(250); // parser debounce opens the palette
       await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 }, page.sessionId);
       await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 }, page.sessionId);
       await sleep(150);
+      // Required elements THROW inside the page expression instead of being read
+      // with `?.`: a missing one is selector drift, and optional-chaining it into
+      // a null attribute is exactly what made this audit report four red ARIA
+      // checks that looked like a product defect (chrome-agent-platform-4vfj).
+      // evl() now surfaces a page-side throw rather than returning undefined.
       const state = await cdp.evl(page.sessionId, `(() => {
-        const t = document.querySelector('agent-composer textarea#task-input');
-        const pop = document.querySelector('agent-composer .popup');
-        const active = pop?.querySelector('[data-active="true"]');
+        const t = document.querySelector(${JSON.stringify(composerInput("hub"))});
+        if (!t) throw new Error('composer input not found: ${composerInput("hub")}');
+        const pop = document.querySelector(${JSON.stringify(composerPopup("hub"))});
+        if (!pop) throw new Error('composer popup not found: ${composerPopup("hub")}');
+        const active = pop.querySelector('[data-active="true"]');
         return {
-          role: t?.getAttribute('role'),
-          haspopup: t?.getAttribute('aria-haspopup'),
-          expanded: t?.getAttribute('aria-expanded'),
-          controls: t?.getAttribute('aria-controls'),
-          popupId: pop?.id ?? null,
-          descendant: t?.getAttribute('aria-activedescendant'),
-          activeId: active?.id ?? null,
-          popupHidden: pop?.hidden ?? null,
+          role: t.getAttribute('role'),
+          haspopup: t.getAttribute('aria-haspopup'),
+          expanded: t.getAttribute('aria-expanded'),
+          controls: t.getAttribute('aria-controls'),
+          popupId: pop.id,
+          descendant: t.getAttribute('aria-activedescendant'),
+          // No highlighted option is a legitimate STATE the second check must be
+          // able to observe (it requires descendant === activeId), so this one
+          // stays honest-null rather than throwing.
+          activeId: active ? active.id : null,
+          popupHidden: pop.hidden,
         };
       })()`);
       // Textbox-with-popup pattern: the multiline textarea keeps textbox
@@ -439,7 +459,10 @@ async function main() {
       } catch (e) { console.log(`${label} palette screenshot failed: ${String(e)}`); }
     }
     await paletteCombobox("/", "slash");
-    await cdp.evl(page.sessionId, `(() => { const t = document.querySelector('agent-composer textarea#task-input'); t.value=''; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    // Cleared between the two palette runs. This read the retired id, so on a
+    // null element it threw and the throw was swallowed: the '@' run measured a
+    // closed popup with no active option because the '/' was still in the box.
+    await cdp.evl(page.sessionId, `(() => { const t = document.querySelector(${JSON.stringify(composerInput("hub"))}); if (!t) throw new Error('composer input not found: ${composerInput("hub")}'); t.value=''; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
     await sleep(200);
     await paletteCombobox("@", "at");
 
@@ -548,6 +571,15 @@ async function main() {
         check(`gallery artifact-diff (${scheme}, ${mode}): contrast — no AA failures (${g?.contrastChecked ?? 0} checked)`, (g?.contrastFails || []).length === 0 && (g?.contrastChecked ?? 0) > 0, g?.contrastFails ?? g);
       }
     }
+  } catch (error) {
+    // An uncaught error used to skip the summary below, so a run that died early
+    // printed no verdict at all. Record it as a named failure instead: the reader
+    // always learns both what failed and how much of the audit never ran.
+    check(
+      "the audit reached its end without an uncaught error",
+      false,
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    );
   } finally {
     close();
     try { proc.kill("SIGKILL"); } catch { /* dead */ }

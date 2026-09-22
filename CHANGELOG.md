@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.454] — 2026-09-22
+- the accessibility audit now accurately checks the composer through stable hooks; the wider selector migration remains open across 26 other files
+
 ## [0.3.453] — 2026-09-22
 - the active Providers tab in Settings now scrolls into view when selected on narrow screens
 
