@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.449] — 2026-09-22
+- the hub's agent lists use the same row component as the rest of the product, so every agent row looks and behaves the same ()
+
 ## [0.3.448] — 2026-09-22
 - correct the F1 rationale to what was actually measured
 

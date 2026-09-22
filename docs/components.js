@@ -9243,8 +9243,17 @@ export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = n
  *   callable-only    — list only callable agents (a disabled background agent is hidden)
  *   label            — the visible label for the search combobox
  *   state / error    — "loading" | "error" (+ error message) overrides
+ *   summary          — LIST presentation: the SAME grouped rows, no search row
+ *                      and no combobox/listbox roles, so a host that summarises
+ *                      agents in place (the hub's Agents + Site Agents panels)
+ *                      renders the shared rows instead of hand-rolling its own
+ *   deletable        — summary rows of these kinds get a sibling Delete
+ *                      control (bare = every kind, else a space-separated kind
+ *                      list, e.g. deletable="background"); emits delete { ref,
+ *                      kind, id, name, agent } and never selects the row
  *
  * Events: agent-select { ref, kind, id, name, agent } · agent-cancel (Escape) ·
+ * delete { ref, kind, id, name, agent } (deletable rows) ·
  * the LEGACY select { origin } for site entries (backward compatibility).
  *
  * A11y contract: the search input is a combobox controlling a listbox
@@ -9255,7 +9264,7 @@ export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = n
  * reduced-motion via the shared tokens. No emoji — inline currentColor SVG. */
 class AgentPicker extends Component {
   static get observedAttributes() {
-    return ["agents", "selected", "current-agent-id", "exclude-current", "callable-only", "label", "state", "error"];
+    return ["agents", "selected", "current-agent-id", "exclude-current", "callable-only", "label", "state", "error", "summary", "deletable"];
   }
   constructor() {
     super();
@@ -9270,6 +9279,20 @@ class AgentPicker extends Component {
     this._appliedRevision = null; // last APPLIED registry revision (staleness fence)
   }
   get _auto() { return !this.hasAttribute("agents") && !!RUNTIME_SEND; }
+  /** LIST presentation (no search row, no combobox/listbox roles). */
+  get _summary() { return this.hasAttribute("summary"); }
+  /** The kinds whose rows carry a Delete control (null = none). The destructive
+   * control exists for the SUMMARY presentation: a row that IS a button may not
+   * contain one, so the two are siblings in `.optwrap`. */
+  get _deletableKinds() {
+    if (!this.hasAttribute("deletable") || !this._summary) return null;
+    const raw = (this.getAttribute("deletable") || "").trim();
+    return new Set(raw ? raw.split(/\s+/) : ["*"]);
+  }
+  _canDelete(kind) {
+    const kinds = this._deletableKinds;
+    return !!kinds && (kinds.has("*") || kinds.has(String(kind ?? "")));
+  }
   get _callableOnly() { return this.hasAttribute("callable-only"); }
   get _excludeCurrent() { return this.hasAttribute("exclude-current"); }
   get _currentAgentId() { return this.getAttribute("current-agent-id") || ""; }
@@ -9364,6 +9387,10 @@ class AgentPicker extends Component {
       .opt { display:flex; align-items:center; gap:10px; min-height:44px; padding:6px 10px; border-radius:8px;
         border:1px solid transparent; cursor:pointer; text-align:start; background:transparent; font:inherit;
         color:var(--text,#1d1b18); width:100%; }
+      /* A summary row that carries its own destructive control: the two are
+         SIBLINGS — a button may not contain a button. */
+      .optwrap { display:flex; align-items:center; gap:6px; }
+      .optwrap > .opt { flex:1 1 auto; width:auto; min-width:0; }
       .opt:hover, .opt[data-active="true"] { background:var(--panel-2,#efede8); }
       .opt[aria-selected="true"] { border-color:var(--accent,#0e6e63); }
       .opt:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
@@ -9375,6 +9402,12 @@ class AgentPicker extends Component {
       .who { flex:1; min-width:0; display:flex; flex-direction:column; }
       .name { font-weight:600; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .sub { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      /* The summary presentation keeps the hub's CLAMPED role line: a narrow
+         panel truncates a one-line ellipsis far too early, so the role gets two
+         lines and the FULL text stays in the DOM (the title reveals it on
+         hover) — the same rule capability-row's .desc enforces. */
+      .sub.clamped { white-space:normal; display:-webkit-box; -webkit-box-orient:vertical;
+        -webkit-line-clamp:2; line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
       .meta { flex:0 0 auto; display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted,#635e56); }
       .current-badge { border:1px solid var(--accent,#0e6e63); color:var(--accent,#0e6e63); border-radius:999px;
         padding:1px 8px; font-size:10px; font-weight:700; }
@@ -9384,6 +9417,11 @@ class AgentPicker extends Component {
       .retry { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
         border-radius:6px; padding:4px 10px; font:inherit; font-size:12px; cursor:pointer; min-height:28px; }
       .retry:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      .rowdel { flex:0 0 auto; border:1px solid var(--border,#e3e0d9); background:transparent;
+        color:var(--danger,#b3261e); border-radius:6px; padding:4px 10px; font:inherit; font-size:12px;
+        cursor:pointer; min-height:28px; }
+      .rowdel:hover { border-color:var(--danger,#b3261e); }
+      .rowdel:focus-visible { outline:2px solid var(--danger,#b3261e); outline-offset:2px; }
       .spin { width:14px; height:14px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%;
         animation: ap-spin 1s linear infinite; }
       @keyframes ap-spin { to { transform: rotate(360deg); } }
@@ -9394,14 +9432,18 @@ class AgentPicker extends Component {
       }
       .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
         clip:rect(0 0 0 0); white-space:nowrap; border:0; }
-    `, `<div class="picker">
+    `, `<div class="picker">${
+        this._summary ? "" : `
         <label class="lbl" for="ap-search">${escapeHtml(label)}</label>
         <div class="search-row">${ICONS.search}
           <input id="ap-search" class="search" type="text" role="combobox" aria-expanded="true"
             aria-controls="ap-list" aria-autocomplete="list" autocomplete="off"
             placeholder="Search agents…" value="${escapeHtml(this._query)}">
-        </div>
-        <div class="list" id="ap-list" role="listbox" aria-label="${escapeHtml(label)}"></div>
+        </div>`
+      }
+        <div class="list" id="ap-list"${
+          this._summary ? "" : ` role="listbox" aria-label="${escapeHtml(label)}"`
+        }></div>
         <div class="sr-only" role="status" aria-live="polite" id="ap-count"></div>
       </div>`);
     this._search = this._root.querySelector(".search");
@@ -9468,13 +9510,18 @@ class AgentPicker extends Component {
     for (const g of groups) {
       const group = document.createElement("div");
       group.className = "group";
-      group.setAttribute("role", "group");
-      group.setAttribute("aria-label", String(g.label ?? g.id));
-      const gHead = document.createElement("div");
-      gHead.className = "group-h";
-      gHead.id = `ap-gh-${String(g.id)}`;
-      gHead.textContent = String(g.label ?? g.id);
-      group.appendChild(gHead);
+      // A group with NO label is one un-headed list (the hub's panels): there is
+      // no heading to point role=group at, so it stays a plain container.
+      const groupLabel = String(g.label ?? g.id ?? "");
+      if (groupLabel) {
+        group.setAttribute("role", "group");
+        group.setAttribute("aria-label", groupLabel);
+        const gHead = document.createElement("div");
+        gHead.className = "group-h";
+        gHead.id = `ap-gh-${String(g.id)}`;
+        gHead.textContent = groupLabel;
+        group.appendChild(gHead);
+      }
       for (const a of g.agents) {
         const ref = a.ref ?? canonicalRef(a.kind, a.id);
         const isSelected = !!selected && ref === selected;
@@ -9486,11 +9533,19 @@ class AgentPicker extends Component {
         const opt = document.createElement("button");
         opt.type = "button";
         opt.className = "opt";
-        opt.setAttribute("role", "option");
-        opt.id = `ap-opt-${idx}`;
         opt.dataset.index = String(idx);
-        opt.dataset.active = String(idx === this._active);
-        opt.setAttribute("aria-selected", String(isSelected));
+        // The row's canonical ref, so a host that re-renders the list can find
+        // its successor row after a delete (no positional guessing).
+        opt.dataset.ref = String(ref);
+        // Combobox mode is a listbox of options; the summary presentation has no
+        // search input to own them, so the rows stay plain buttons (a role=option
+        // outside a listbox is the invalid half of the pair).
+        if (!this._summary) {
+          opt.setAttribute("role", "option");
+          opt.id = `ap-opt-${idx}`;
+          opt.dataset.active = String(idx === this._active);
+          opt.setAttribute("aria-selected", String(isSelected));
+        }
         // Avatar (owner-controlled URL → img.src property, never innerHTML).
         const avatar = document.createElement("span");
         avatar.className = "avatar";
@@ -9510,8 +9565,10 @@ class AgentPicker extends Component {
         name.className = "name";
         name.textContent = String(a.name || a.id);
         const sub = document.createElement("span");
-        sub.className = "sub";
-        sub.textContent = `${String(a.summary || "")}${skills}`;
+        sub.className = this._summary ? "sub clamped" : "sub";
+        const subText = `${String(a.summary || "")}${skills}`;
+        sub.textContent = subText;
+        if (this._summary && subText) sub.setAttribute("title", subText);
         who.append(name, sub);
         opt.appendChild(who);
         const meta = document.createElement("span");
@@ -9528,7 +9585,7 @@ class AgentPicker extends Component {
           badge.textContent = "Current";
           meta.appendChild(badge);
         }
-        if (isSelected) {
+        if (isSelected && !this._summary) {
           const sel = document.createElement("span");
           sel.className = "sel";
           sel.setAttribute("aria-hidden", "true");
@@ -9537,7 +9594,26 @@ class AgentPicker extends Component {
         }
         opt.appendChild(meta);
         opt.addEventListener("click", () => this._commit(Number(opt.dataset.index)));
-        group.appendChild(opt);
+        // The row's destructive action lives NEXT TO the row (a host that
+        // summarises agents in place has no detail pane to delete from). It
+        // must never read as a selection: the click is stopped here.
+        if (this._canDelete(a.kind)) {
+          const del = document.createElement("button");
+          del.type = "button";
+          del.className = "rowdel";
+          del.textContent = "Delete";
+          del.setAttribute("aria-label", `Delete ${String(a.name || a.id)}`);
+          del.addEventListener("click", (e) => {
+            e.stopPropagation();
+            this._emit("delete", { ref, kind: a.kind, id: a.id, name: a.name || a.id, agent: a });
+          });
+          const wrap = document.createElement("div");
+          wrap.className = "optwrap";
+          wrap.append(opt, del);
+          group.appendChild(wrap);
+        } else {
+          group.appendChild(opt);
+        }
         idx++;
       }
       this._list.appendChild(group);

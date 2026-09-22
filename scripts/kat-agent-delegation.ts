@@ -213,19 +213,26 @@ try {
 
   // ── 5. UI linkage: target the VISIBLE delegation result card itself ─────
   // Open a fresh hub, wait for its real agent list to hydrate, then drive the
-  // same capability-row `open` event as an owner click. Direct hash navigation
-  // can beat registry hydration and render an empty fallback.
+  // same action an owner click performs: the shared summary row is a real
+  // button, so a click on it emits agent-select (CAP-FB-20260825-AGENT-PICKER-
+  // HUB-ROWS-01). Direct hash navigation can beat registry hydration and
+  // render an empty fallback.
   const chat = await newView(`chrome-extension://${extId}/ntp/ntp.html`);
+  const delegationRow = (name: string) => `(() => {
+    const picker = document.querySelector("#named-agents agent-picker");
+    const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+    return rows.find((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(name)}) ?? null;
+  })()`;
   let agentRowReady = false;
   for (let i = 0; i < 60 && !agentRowReady; i++) {
     await sleep(250);
-    agentRowReady = await chat.ev(`(() => [...document.querySelectorAll("#named-agents capability-row")].some((row) => row.getAttribute("name") === "Delegator Prime"))()`);
+    agentRowReady = await chat.ev(`Boolean(${delegationRow("Delegator Prime")})`);
   }
   check("delegation UI probe: Delegator Prime row is visible", agentRowReady === true, agentRowReady);
   const openedAgentChat = await chat.ev(`(() => {
-    const row = [...document.querySelectorAll("#named-agents capability-row")].find((item) => item.getAttribute("name") === "Delegator Prime");
+    const row = ${delegationRow("Delegator Prime")};
     if (!row) return false;
-    row.dispatchEvent(new CustomEvent("open"));
+    row.click();
     return true;
   })()`);
   check("delegation UI probe: owner open action dispatched", openedAgentChat === true, openedAgentChat);

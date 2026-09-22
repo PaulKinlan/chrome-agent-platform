@@ -99,11 +99,44 @@ Deno.test("bgagent delete: the delete control is WIRED to a delete event (stopPr
   assertEquals(emitted.map((e) => e.type), ["delete"]);
 });
 
-Deno.test("bgagent delete: NTP row uses open-delete; delete goes through recipe.delete NON-BLOCKING with explicit success + focus restore", async () => {
+Deno.test("bgagent delete: NTP rows are the SHARED summary list; delete goes through recipe.delete NON-BLOCKING with explicit success + focus restore", async () => {
   const src = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  // the unified row builder gives recipe-store agents open-delete (the ONLY
-  // open-delete path), and no toggle primitive remains
-  assertMatch(src, /action", a\.kind === "named" \? "open" : "open-delete"/, "recipe-store rows get open-delete in the unified list");
+  // The hub's Named/Background rows are rendered by the shared <agent-picker>
+  // summary list — with the background Delete — instead of a hand-rolled row
+  // (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01). One row component, so the hub
+  // and the side panel cannot render two ideas of an agent row.
+  assertMatch(
+    src,
+    /agentSummaryList\(\{[\s\S]{0,300}?deletable: "background"/,
+    "the unified agents list gets the shared summary rows + the background Delete",
+  );
+  assertMatch(
+    src,
+    /onDelete: \(d\) => deleteBackgroundAgentFromHub\(d\?\.agent, el\)/,
+    "the shared row's delete event routes to the hub's delete flow",
+  );
+  // …and the hub's agent panels build NO row of their own. The remaining
+  // capability-rows in the hub are the discovered-pages banner and the tab
+  // picker (neither is an agent summary row).
+  const agentsPanel = src.slice(src.indexOf("async function renderNamedAgents"), src.indexOf("function renderSidebarAgents"));
+  assert(agentsPanel.length > 500, "the agents-panel region was located");
+  assertEquals(/createElement\("capability-row"\)/.test(agentsPanel), false, "no hand-rolled agent row remains in the hub's agents panel");
+  const sitePanel = src.slice(src.indexOf("async function renderSiteAgents"), src.indexOf("function renderSiteOffer"));
+  assert(sitePanel.length > 500, "the site-agents region was located");
+  assertMatch(
+    sitePanel,
+    /agentSummaryList\(\{[\s\S]{0,240}?agents: agents\.slice\(0, 6\)\.map/,
+    "the site agents are the shared summary rows",
+  );
+  // The TWO remaining hand-rolled rows in that region are TAB rows an owner can
+  // enrol — the discovered-offers banner and the tab-picker dialog — never an
+  // agent summary row. A third would be exactly the drift this guard exists for.
+  assertEquals(
+    [...sitePanel.matchAll(/createElement\("capability-row"\)/g)].length,
+    2,
+    "the site panel's remaining capability-rows are the two tab-enrolment rows",
+  );
+  assertMatch(sitePanel, /function openDiscoverPicker/, "the tab-picker row is still located in this region");
   assertEquals(/open-toggle/.test(src), false, "open-toggle must be fully removed");
   assertEquals(/action", "toggle"/.test(src), false, "the plain toggle action is gone from the hub");
   // the row's delete flow: confirm → recipe.delete (agent record + schedule
@@ -111,7 +144,7 @@ Deno.test("bgagent delete: NTP row uses open-delete; delete goes through recipe.
   // termination dance must never block the UI)
   assertMatch(
     src,
-    /addEventListener\("delete"[\s\S]{0,2000}?recipe\.delete", \{ id: a\.id \}/,
+    /async function deleteBackgroundAgentFromHub[\s\S]{0,900}?recipe\.delete", \{ id: a\.id \}/,
     "row delete must confirm then delete via the authoritative recipe.delete route",
   );
   // success is asserted EXPLICITLY (ok === true) — never "anything but false"
@@ -120,7 +153,7 @@ Deno.test("bgagent delete: NTP row uses open-delete; delete goes through recipe.
   // a successor must be focused (next/last row, else the Agents container)
   assertMatch(
     src,
-    /renderNamedAgents\(\);[\s\S]{0,900}?focusEl\?\.focus\?\.\(\{ preventScroll: true \}\)/,
+    /renderNamedAgents\(\);[\s\S]{0,900}?target\.focus\?\.\(\{ preventScroll: true \}\)/,
     "after re-render a focus successor must be placed",
   );
   // the header path has the SAME route + explicit success
@@ -208,11 +241,11 @@ if (CHROME_FOR_TESTING === null) {
   );
 }
 
-// The journey's own check count (11 `check()` calls in the harness at the time of
+// The journey's own check count (12 `check()` calls in the harness at the time of
 // writing). A FLOOR, not an equality: adding checks is fine, losing them is a coverage
 // regression that `out.success` cannot catch, because a harness that stopped issuing
 // checks after the third one still exits 0 when nothing it did issue failed.
-const JOURNEY_CHECK_FLOOR = 11;
+const JOURNEY_CHECK_FLOOR = 15;
 
 Deno.test({
   name: "bgagent delete: the real-browser delete journey (loaded extension, real clicks)",

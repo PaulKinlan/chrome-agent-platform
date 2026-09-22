@@ -28,7 +28,6 @@ import {
   wireHtmlFramePreference,
   currentFramePreference,
   deleteAgentDialog,
-  escapeHtml,
 } from "../shared/components.js";
 import { sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
@@ -642,19 +641,24 @@ async function renderSiteAgents() {
     : [];
 
   if (agents.length > 0) {
-    for (const a of agents.slice(0, 6)) {
-      const row = document.createElement("capability-row");
-      row.setAttribute("name", `@${shortOrigin(a.origin)}`);
-      row.setAttribute(
-        "description",
-        `${a.tools?.length ?? 0} tools` +
-          (a.name ? ` · ${a.name}` : ""),
-      );
-      row.setAttribute("icon", "");
-      row.setAttribute("action", "run");
-      row.addEventListener("run", () => openView("directory/directory.html", "Directory", row));
-      el.append(row);
-    }
+    // The rows ARE the shared <agent-picker> rows, in their summary
+    // presentation (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01): one row
+    // component for every agent list in the product, so the hub's Site Agents
+    // cannot drift from the side panel's agent list. The panel keeps its own
+    // filtering (a zero-tool origin is not an agent), its overflow line and
+    // the discovered-pages banner below.
+    const list = agentSummaryList({
+      agents: agents.slice(0, 6).map((a) => ({
+        ref: canonicalRef("site", a.origin),
+        id: a.origin,
+        kind: "site",
+        name: `@${shortOrigin(a.origin)}`,
+        summary: `${a.tools?.length ?? 0} tools` + (a.name ? ` · ${a.name}` : ""),
+        status: "enrolled",
+      })),
+      onSelect: () => openView("directory/directory.html", "Directory", list),
+    });
+    el.append(list);
     if (agents.length > 6) {
       const more = document.createElement("div");
       more.className = "empty";
@@ -1026,6 +1030,75 @@ siteOffer?.addEventListener("select", async (e) => {
 });
 
 // ── named agents (the persistent named agents) ──────────────────────────────
+
+/** One agent row for the hub's shared summary list: the SAME presentation the
+ * side panel's agent list renders (avatar/initial, name, role, status chip). */
+function agentSummaryEntry(a) {
+  return {
+    ref: canonicalRef(a.kind, a.id),
+    id: a.id,
+    kind: a.kind,
+    name: a.name || a.id,
+    summary: a.role || a.description || "an agent",
+    avatar: a.avatar || null,
+    // A scheduled agent carries its schedule chip — no other distinction from
+    // an on-demand agent (ONE agents list, owner directive).
+    status: a.schedule?.periodInMinutes ? agentScheduleMarker(a) : "",
+  };
+}
+
+/** A hub agent list rendered by the SHARED <agent-picker> component in its
+ * summary presentation (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01). The hub
+ * keeps its own data (its projection, its filtering, its empty states); the
+ * ROWS are the shared component's, so the hub and the side panel cannot render
+ * two different ideas of an agent row. `onSelect` receives the row detail (and
+ * the host element), `onDelete` the row detail for a `deletable` kind. */
+function agentSummaryList({ agents = [], deletable = "", onSelect, onDelete } = {}) {
+  const list = document.createElement("agent-picker");
+  list.setAttribute("summary", "");
+  list.setAttribute("agents", JSON.stringify([{ id: "agents", label: "", agents }]));
+  if (deletable) list.setAttribute("deletable", deletable);
+  if (onSelect) list.addEventListener("agent-select", (e) => onSelect(e.detail, list));
+  if (onDelete) list.addEventListener("delete", (e) => onDelete(e.detail, list));
+  return list;
+}
+
+/** Delete one background agent from the hub's unified list. DELETION goes
+ * through recipe.delete: it removes the custom agent record AND tears the
+ * schedule down NON-BLOCKING (the instant-delete contract — a RUNNING task's 5s
+ * termination dance must never block the UI; reconciliation reaps the inert
+ * payload). A built-in copy has no custom record — recipe.delete still cancels
+ * its schedule, which is what the row's existence derives from. */
+async function deleteBackgroundAgentFromHub(a, panel) {
+  if (!a) return;
+  const name = a.name || a.id;
+  const confirmed = await deleteAgentDialog({ name, kind: "background" });
+  if (!confirmed) return;
+  const removedIdx = [...(panel.querySelector("agent-picker")?.shadowRoot
+    ?.querySelectorAll(".opt") ?? [])]
+    .findIndex((row) => row.dataset?.ref === a.ref);
+  const r = await send("recipe.delete", { id: a.id })
+    .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  if (r?.ok === true) {
+    setStatus(`Deleted ${name}.`, true);
+  } else {
+    setStatus(`Could not delete ${name}: ${r?.error ?? "failed"}.`, false);
+  }
+  await renderNamedAgents();
+  // Focus successor (the re-render destroyed the focused Delete control): the
+  // row that TOOK the deleted row's index — else the last row — else the
+  // Agents panel itself, so keyboard flow survives.
+  const rows = [...(panel.querySelector("agent-picker")?.shadowRoot
+    ?.querySelectorAll(".opt") ?? [])];
+  const at = removedIdx >= 0 ? removedIdx : rows.length;
+  const target = rows[Math.min(at, rows.length - 1)] ?? null;
+  if (target) {
+    target.focus?.({ preventScroll: true });
+    return;
+  }
+  if (!panel.hasAttribute("tabindex")) panel.setAttribute("tabindex", "-1");
+  panel.focus?.({ preventScroll: true });
+}
 async function renderNamedAgents() {
   const span = perfSpan("ntp:agents-panel-hydrated");
   const el = document.getElementById("named-agents");
@@ -1073,68 +1146,22 @@ async function renderNamedAgents() {
       empty.append(document.createElement("br"), starterBtn);
       el.append(empty);
     } else {
-      for (const a of active) {
-        const row = document.createElement("capability-row");
-        row.setAttribute("name", a.name || a.id);
-        row.setAttribute("description", a.role || a.description || "an agent");
-        row.setAttribute(
-          "icon",
-          a.kind === "named"
-            ? `<img src="${escapeHtml(a.avatar || initialAvatar(a.name || a.id))}" alt="" style="width:28px;height:28px;border-radius:50%;object-fit:cover;display:block;" />`
-            : "",
-        );
-        // Item 55: the WHOLE row opens the agent's view (history + run log) +
-        // lets you talk to it — a chevron affordance, not a misleading "Run".
-        // A recipe-store-only agent additionally carries its Delete (the
-        // enable/disable toggle was the wrong primitive).
-        row.setAttribute("action", a.kind === "named" ? "open" : "open-delete");
-        // ONE agents list (owner directive): a scheduled agent carries a small
-        // schedule chip — no other distinction from an on-demand agent.
-        if (a.schedule?.periodInMinutes) {
-          row.setAttribute("last-run", agentScheduleMarker(a));
-        }
-        row.addEventListener("open", () => {
+      // ONE agents list (owner directive) rendered by the SHARED component: a
+      // scheduled agent carries its schedule chip, a background agent carries
+      // its Delete, and named agents open their chat — exactly as before, but
+      // from the same row component the side panel uses
+      // (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01).
+      el.append(agentSummaryList({
+        agents: active.map(agentSummaryEntry),
+        deletable: "background",
+        onSelect: (d) => {
+          const a = d?.agent;
+          if (!a) return;
           if (a.kind === "named") openAgentChat(a.id || a.name);
           else openBackgroundAgentChat(a.id, a.name);
-        });
-        if (a.kind !== "named") {
-          row.addEventListener("delete", async () => {
-          const name = a.name || a.id;
-          const confirmed = await deleteAgentDialog({ name, kind: "background" });
-          if (!confirmed) return;
-          // Background agents schedule deterministically as `recipe:<id>` — the
-          // enabled state DERIVES from the scheduled-task store, so the cancel
-          // name must be that scheduled name, not the raw recipe id. DELETION
-          // goes through recipe.delete: it removes the custom agent record AND
-          // tears the schedule down NON-BLOCKING (the instant-delete contract —
-          // a RUNNING task's 5s termination dance must never block the UI;
-          // reconciliation reaps the inert payload). A built-in copy has no
-          // custom record — recipe.delete still cancels its schedule, which is
-          // what the row's existence derives from.
-          const rows = [...document.querySelectorAll("#named-agents capability-row")];
-          const removedIdx = rows.indexOf(row);
-          const r = await send("recipe.delete", { id: a.id })
-            .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-          if (r?.ok === true) {
-            setStatus(`Deleted ${name}.`, true);
-          } else {
-            setStatus(`Could not delete ${name}: ${r?.error ?? "failed"}.`, false);
-          }
-          await renderNamedAgents();
-          // Focus successor (the re-render destroyed the focused Delete
-          // button): the row that TOOK the deleted row's index — else the last
-          // row — else the Agents container itself, so keyboard flow survives.
-          const after = [...document.querySelectorAll("#named-agents capability-row")];
-          const target = after[Math.min(removedIdx, after.length - 1)] ?? null;
-          const focusEl = target?.shadowRoot?.querySelector("button") ?? el;
-          if (focusEl === el && !el.hasAttribute("tabindex")) {
-            el.setAttribute("tabindex", "-1");
-          }
-          focusEl?.focus?.({ preventScroll: true });
-          });
-        }
-        el.append(row);
-      }
+        },
+        onDelete: (d) => deleteBackgroundAgentFromHub(d?.agent, el),
+      }));
     }
   }
   renderSidebarAgents(active);

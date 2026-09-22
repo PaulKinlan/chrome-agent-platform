@@ -467,6 +467,15 @@
       </div>
 
       <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — summary presentation (the hub's agent lists)</h3>
+        <div class="stage column" style="max-width:420px">
+          <agent-picker id="picker-summary" summary deletable="background"
+            agents='[{"id":"agents","label":"","agents":[{"ref":"named:reader","id":"reader","kind":"named","name":"Reading digest","summary":"reads articles aloud","avatar":null,"status":""},{"ref":"background:sorting-hat","id":"sorting-hat","kind":"background","name":"Sorting Hat","summary":"groups related tabs","avatar":null,"status":"every 15 min"}]}]'></agent-picker>
+        </div>
+        <p class="caption">the SAME rows without the search combobox (<code>summary</code>): a host that lists agents in place — the hub's Agents and Site Agents panels — renders the shared rows instead of hand-rolling its own. <code>deletable="background"</code> puts the row's destructive action inside the row and emits <code>delete</code> without ever selecting it. An unlabelled group renders no heading.</p>
+      </div>
+
+      <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;provider-select&gt;</code> — the shared provider picker</h3>
         <div class="stage column" style="max-width:420px">
           <provider-select id="provider-demo" label="Provider" placeholder="Use the global provider"
