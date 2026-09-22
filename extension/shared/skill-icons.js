@@ -1,8 +1,8 @@
 // shared/skill-icons.js — the line-art SVG icon map for skills/capabilities.
 // Single source of truth (the hub + the Settings Skills panel share these).
 // currentColor stroke icons — no emoji.
-// CAP-FB-20260828-NOUN-DISCIPLINE-01 (absorbing -RECIPES-SKILLS-RENAME-01):
-// renamed from shared/recipe-icons.js / RECIPE_ICON.
+// CAP-FB-20260828-NOUN-DISCIPLINE-01 (absorbing the skills-rename bead):
+// the pre-rename icon module's name is retired; these are the skill icons.
 
 export const SKILL_ICON = {
   broom:

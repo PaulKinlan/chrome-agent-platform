@@ -706,7 +706,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 }
 /* The prompt editor now renders inside <agent-dialog>, which owns the shell
    (panel, backdrop, sizing, overflow). Only the slotted content is styled here. */
-.recipe-edit-textarea {
+.skill-edit-textarea {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
@@ -719,7 +719,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   resize: vertical;
   margin-bottom: 8px;
 }
-.recipe-edit-actions {
+.skill-edit-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -1482,7 +1482,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 }
 .shortcut-list .unbound { font-style: italic; }
 
-/* ── Skills section (moved from the standalone recipes page) ─────────────── */
+/* ── Skills section ─────────────────────────────────────────────────────── */
 /* The same layout the standalone page had: intent-grouped capability-rows +
    a collapsed "how it works" details, now inside the Settings panel column. */
 #skills .skills-sub {
@@ -1520,16 +1520,16 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   margin-bottom: 8px;
   padding: 0 14px;
 }
-#skills .intent-group .recipe { border-bottom: 1px solid var(--border); }
-#skills .intent-group .recipe:last-child { border-bottom: 0; }
-#skills .recipe capability-row { display: block; }
-#skills .recipe capability-row::part(row) { border-bottom: 0; }
-#skills .recipe .how {
+#skills .intent-group .skill { border-bottom: 1px solid var(--border); }
+#skills .intent-group .skill:last-child { border-bottom: 0; }
+#skills .skill capability-row { display: block; }
+#skills .skill capability-row::part(row) { border-bottom: 0; }
+#skills .skill .how {
   padding: 0 14px 12px 54px; /* align with the row's label column (28px icon + 12px gap + 14px) */
   font-size: var(--text-xs);
   color: var(--muted);
 }
-#skills .recipe .how summary {
+#skills .skill .how summary {
   cursor: pointer;
   color: var(--text);
   font-weight: 600;
@@ -1537,13 +1537,13 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   margin-bottom: 6px;
   user-select: none;
 }
-#skills .recipe .how summary:hover { color: var(--accent); }
-#skills .recipe .how p {
+#skills .skill .how summary:hover { color: var(--accent); }
+#skills .skill .how p {
   margin: 0 0 8px;
   line-height: 1.5;
   max-width: 70ch;
 }
-#skills .recipe .how .hint {
+#skills .skill .how .hint {
   font-size: var(--text-xs);
   border: 1px solid var(--border);
   border-radius: 999px;

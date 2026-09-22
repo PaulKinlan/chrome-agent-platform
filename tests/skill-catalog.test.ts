@@ -11,9 +11,9 @@
 //   5. no surface keeps a private list: the panel source must not re-filter
 //      (covered here by grepping the shipped panel for a private mode filter)
 //   6. COLLISION-PROOF IDENTITY (r2 review P1): an imported skill whose id
-//      collides with a built-in recipe id (background or on-demand) is
+//      collides with a built-in skill id (background or on-demand) is
 //      offered under a source-qualified refId (imported:<id>) so the /skill
-//      offering can NEVER resolve to a built-in BACKGROUND recipe — both rows
+//      offering can NEVER resolve to a built-in BACKGROUND skill — both rows
 //      appear correctly labeled, and the offering references the on-demand one.
 // RED→GREEN: revert skill-catalog.js's exclusion of migration-failed rows and
 // test 3 fails; re-introduce the background-mode exclusion and test 1 fails;
@@ -21,7 +21,7 @@
 // would be offered as the raw colliding id).
 // @ts-nocheck — memory/skill-files doubles are intentionally dynamic.
 import { assertEquals, assert } from "jsr:@std/assert@1";
-import { mergeRunSkills, skillRowChecked, templateSkillMatches, skillResolutionOrder, getRecipe } from "../extension/lib/recipes.js";
+import { mergeRunSkills, skillRowChecked, templateSkillMatches, skillResolutionOrder, getSkill } from "../extension/lib/skill-registry.js";
 import { resolveSkillRef } from "../extension/lib/skill-resolve.js";
 
 function fakeMemory() {
@@ -78,17 +78,17 @@ function healthyRow(id, extra = {}) {
   };
 }
 
-Deno.test("catalog: on-demand built-ins + healthy imported skills, background recipes excluded", async () => {
+Deno.test("catalog: on-demand built-ins + healthy imported skills, background skills excluded", async () => {
   const memory = fakeMemory();
   const files = fakeSkillFiles();
   seedImported(memory, [healthyRow("photo-resizer")]);
   const { skills, broken } = await skillCatalog({ memory, fileStore: files });
 
   assert(skills.some((s) => s.id === "photo-resizer"), "imported skill is in the catalog");
-  assert(skills.some((s) => s.id === "tab-hygiene"), "built-in on-demand recipe is in the catalog");
+  assert(skills.some((s) => s.id === "tab-hygiene"), "built-in on-demand skill is in the catalog");
   // The owner-reported mismatch: the Sorting Hat is auto-group-by-domain, a
-  // BACKGROUND (scheduled) recipe. It must NOT be offered as an on-demand skill.
-  assert(!skills.some((s) => s.id === "auto-group-by-domain"), "background recipe (sorting hat) is NOT in the skill catalog");
+  // BACKGROUND (scheduled) skill. It must NOT be offered as an on-demand skill.
+  assert(!skills.some((s) => s.id === "auto-group-by-domain"), "background skill (sorting hat) is NOT in the skill catalog");
   assert(!skills.some((s) => s.mode === "background"), "no background-mode skill in the catalog");
   assertEquals(broken.length, 0, "no broken skills for a healthy store");
 });
@@ -144,9 +144,9 @@ Deno.test("catalog: no surface keeps a private skill list (source-level guard)",
 });
 
 // ── r2 review P1: collision-proof identity ─────────────────────────────────
-// The owner bug: the Sorting Hat (auto-group-by-domain, a BACKGROUND recipe)
+// The owner bug: the Sorting Hat (auto-group-by-domain, a BACKGROUND skill)
 // was offered via /skill. The r2 hole: an IMPORTED skill whose id collides
-// with a built-in recipe id would be offered under the raw id, and the
+// with a built-in skill id would be offered under the raw id, and the
 // run-time resolver (built-in FIRST) would land on the built-in — for a
 // background collider, that is the owner bug returning through a different
 // door. The catalog must namespace identity per source.
@@ -154,7 +154,7 @@ Deno.test("catalog: no surface keeps a private skill list (source-level guard)",
 Deno.test("catalog: a colliding imported skill is offered under imported:<id>, both rows correctly labeled", async () => {
   const memory = fakeMemory();
   const files = fakeSkillFiles();
-  // An imported skill whose id collides with the built-in BACKGROUND recipe
+  // An imported skill whose id collides with the built-in BACKGROUND skill
   // auto-group-by-domain (the Sorting Hat).
   seedImported(memory, [{ ...healthyRow("auto-group-by-domain", { name: "Imported Domain Grouper" }) }]);
   const { skills } = await skillCatalog({ memory, fileStore: files });
@@ -197,7 +197,7 @@ Deno.test("catalog: a built-in on-demand row carries builtin:<id> refId", async 
 
 // ── resolution contract (r2): source-qualified refs are source-locked ────
 Deno.test("resolution: parseSkillRef locks a reference to its source", async () => {
-  const { parseSkillRef, getRecipe } = await import("../extension/lib/recipes.js");
+  const { parseSkillRef, getSkill } = await import("../extension/lib/skill-registry.js");
   assertEquals(parseSkillRef("imported:auto-group-by-domain"), { source: "imported", id: "auto-group-by-domain" });
   assertEquals(parseSkillRef("builtin:tab-hygiene"), { source: "builtin", id: "tab-hygiene" });
   assertEquals(parseSkillRef("custom:my-agent"), { source: "custom", id: "my-agent" });
@@ -206,23 +206,23 @@ Deno.test("resolution: parseSkillRef locks a reference to its source", async () 
 });
 
 Deno.test("resolution: an unprefixed colliding id still resolves the built-in first (background-agent.set contract, unchanged)", async () => {
-  const { getRecipe, parseSkillRef } = await import("../extension/lib/recipes.js");
-  // Raw id → built-in first → the BACKGROUND Sorting Hat (resolveRecipe keeps
+  const { getSkill, parseSkillRef } = await import("../extension/lib/skill-registry.js");
+  // Raw id → built-in first → the BACKGROUND Sorting Hat (resolveSkill keeps
   // this order for raw refs so background-agent.set can enable it).
   assertEquals(parseSkillRef("auto-group-by-domain").source, "raw");
-  assert(getRecipe("auto-group-by-domain"), "built-in background recipe resolvable by raw id");
-  assert(getRecipe("auto-group-by-domain").mode === "background");
+  assert(getSkill("auto-group-by-domain"), "built-in background skill resolvable by raw id");
+  assert(getSkill("auto-group-by-domain").mode === "background");
 });
 
 Deno.test("resolution: a builtin: ref maps to the built-in table only", async () => {
-  const { getRecipe, parseSkillRef } = await import("../extension/lib/recipes.js");
+  const { getSkill, parseSkillRef } = await import("../extension/lib/skill-registry.js");
   const p = parseSkillRef("builtin:auto-group-by-domain");
   assertEquals(p, { source: "builtin", id: "auto-group-by-domain" });
-  // resolveRecipe(builtin:x) returns the built-in if present — here the
+  // resolveSkill(builtin:x) returns the built-in if present — here the
   // background built-in EXISTS but is only reachable via the explicit
   // builtin: prefix or the raw id (never via /skill offering, which excludes
   // background rows).
-  assert(getRecipe("auto-group-by-domain"), "builtin table has the row");
+  assert(getSkill("auto-group-by-domain"), "builtin table has the row");
 });
 
 // ── r3 review: dialog checkbox collision + custom source-locking ──────────
@@ -231,7 +231,7 @@ Deno.test("r3: skillRowChecked selects EXACTLY ONE row of a colliding pair for a
     { id: "tab-hygiene", refId: "builtin:tab-hygiene", source: "builtin", name: "Tab hygiene" },
     { id: "tab-hygiene", refId: "imported:tab-hygiene", source: "imported", name: "Imported Tab Hygiene" },
   ];
-  // Legacy raw saved id → built-in wins (resolveRecipe raw order) — exactly one.
+  // Legacy raw saved id → built-in wins (resolveSkill raw order) — exactly one.
   assertEquals(skillRowChecked(available, ["tab-hygiene"], available[0]), true);
   assertEquals(skillRowChecked(available, ["tab-hygiene"], available[1]), false);
   // A refId save matches only its own row.
@@ -262,20 +262,20 @@ Deno.test("r3: templateSkillMatches toggles exactly one row of a colliding pair"
 });
 
 Deno.test("r3: skillResolutionOrder source-locks custom/imported/builtin; raw keeps historical order", async () => {
-  const { skillResolutionOrder } = await import("../extension/lib/recipes.js");
+  const { skillResolutionOrder } = await import("../extension/lib/skill-registry.js");
   assertEquals(skillResolutionOrder("custom"), ["custom"], "custom:<id> consults ONLY the custom store (never built-in/imported)");
   assertEquals(skillResolutionOrder("imported"), ["imported"], "imported:<id> consults ONLY the imported store");
   assertEquals(skillResolutionOrder("builtin"), ["builtin"], "builtin:<id> consults ONLY the built-in table");
   assertEquals(skillResolutionOrder("raw"), ["builtin", "custom", "imported"], "raw id keeps built-in → custom → imported (background-agent.set on duplicated agents)");
 });
 
-Deno.test("r3: a raw id that only a custom recipe owns still resolves to it (background-agent.set duplicated-agent contract)", async () => {
+Deno.test("r3: a raw id that only a custom skill owns still resolves to it (background-agent.set duplicated-agent contract)", async () => {
   // background-agent.set resolves a duplicated background agent by its raw id;
-  // the duplicated copy lives in the custom store (recipe.duplicate writes
+  // the duplicated copy lives in the custom store (background-agent.duplicate writes
   // customRecipes) and has no built-in/imported counterpart — the raw path
   // MUST reach custom for that to work. The order contract pins it.
-  const { getRecipe, skillResolutionOrder } = await import("../extension/lib/recipes.js");
-  assert(!getRecipe("auto-group-by-domain-custom-123"), "no built-in holds the duplicated id");
+  const { getSkill, skillResolutionOrder } = await import("../extension/lib/skill-registry.js");
+  assert(!getSkill("auto-group-by-domain-custom-123"), "no built-in holds the duplicated id");
   assertEquals(skillResolutionOrder("raw"), ["builtin", "custom", "imported"], "raw order reaches custom after built-in misses");
 });
 
@@ -406,13 +406,13 @@ Deno.test("r4 DIALOG: a refId-keyed saved selection renders the correct initial 
 // ── r4: REAL-resolver tests (lib/skill-resolve.js) with real + faked stores ──
 // The reviewer's r3 P2: the source-lock tests must exercise the ACTUAL
 // resolver against real (faked-OPFS) stores, not helpers. resolveSkillRef is
-// the real resolver the service worker calls; getRecipe is the real built-in
+// the real resolver the service worker calls; getSkill is the real built-in
 // table; custom/imported stores are faked (memory rows + OPFS file bodies).
 
 function fakeResolverStores({ custom = [], imported = [], files = {} } = {}) {
   return {
-    getRecipe: (id) => getRecipe(id), // the REAL built-in table (recipes.js)
-    getCustomRecipes: async () => custom,
+    getSkill: (id) => getSkill(id), // the REAL built-in table (skill-registry.js)
+    getCustomSkills: async () => custom,
     loadAllImported: async () => imported,
     readSkillFile: async (id, path) => {
       const f = files[id]?.[path];
@@ -424,14 +424,14 @@ function fakeResolverStores({ custom = [], imported = [], files = {} } = {}) {
 
 Deno.test("r4 resolver: custom:<id> resolves ONLY in the custom store — a colliding built-in id is ignored", async () => {
   const stores = fakeResolverStores({
-    // A custom recipe whose id collides with the built-in auto-group-by-domain.
+    // A custom skill whose id collides with the built-in auto-group-by-domain.
     custom: [{ id: "auto-group-by-domain", name: "Duplicated Sorting Hat", mode: "background", schedule: { periodInMinutes: 7 } }],
   });
   const r = await resolveSkillRef({ ref: "custom:auto-group-by-domain", stores });
   assert(r, "custom ref resolves");
   assertEquals(r.name, "Duplicated Sorting Hat", "the CUSTOM row wins, never the built-in");
   assertEquals(r.refId, "custom:auto-group-by-domain");
-  // The raw id still resolves to the BUILT-IN background recipe (unchanged contract).
+  // The raw id still resolves to the BUILT-IN background skill (unchanged contract).
   const raw = await resolveSkillRef({ ref: "auto-group-by-domain", stores });
   assert(raw, "raw id resolves");
   assertEquals(raw.mode, "background");
@@ -473,13 +473,13 @@ Deno.test("r4 resolver: builtin:<id> resolves ONLY in the built-in table", async
   assertEquals(r.name, "Tab hygiene");
 });
 
-Deno.test("r4 resolver: a raw id held only by a custom recipe still resolves to it (background-agent.set duplicated-agent contract)", async () => {
+Deno.test("r4 resolver: a raw id held only by a custom skill still resolves to it (background-agent.set duplicated-agent contract)", async () => {
   const stores = fakeResolverStores({
     custom: [{ id: "auto-group-by-domain-custom-123", name: "My Sorting Hat", mode: "background", schedule: { periodInMinutes: 30 } }],
   });
-  assert(!getRecipe("auto-group-by-domain-custom-123"), "no built-in holds the duplicated id");
+  assert(!getSkill("auto-group-by-domain-custom-123"), "no built-in holds the duplicated id");
   const r = await resolveSkillRef({ ref: "auto-group-by-domain-custom-123", stores });
-  assert(r, "raw id resolves to the custom recipe");
+  assert(r, "raw id resolves to the custom skill");
   assertEquals(r.name, "My Sorting Hat");
   assertEquals(r.refId, "custom:auto-group-by-domain-custom-123");
 });

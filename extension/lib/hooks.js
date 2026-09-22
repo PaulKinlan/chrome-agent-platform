@@ -20,7 +20,7 @@
 
 import { kvGet, kvSet } from "./kv.js";
 import { hasPermission } from "./capabilities.js";
-import { getRecipe } from "./recipes.js";
+import { getSkill } from "./skill-registry.js";
 
 const SUBSCRIPTIONS_KEY = "cap:hooks";
 const DENY_KEY = "cap:hooksDeny";
@@ -449,7 +449,7 @@ export async function subscribeHook(
     if (typeof recipeId !== "string" || !recipeId || recipeId.length > 128) {
       return { ok: false, error: "invalid recipeId" };
     }
-    if (!getRecipe(recipeId)) {
+    if (!getSkill(recipeId)) {
       return { ok: false, error: `unknown recipe: ${recipeId}` };
     }
   }

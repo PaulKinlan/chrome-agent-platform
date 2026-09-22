@@ -376,7 +376,7 @@ import {
   setGlobalBrowserControlGrant,
   setOriginBrowserControlGrant,
 } from "../lib/browser-tools.js";
-import { getRecipe, RECIPES, backgroundRecipes, intentOf, agentSkillIds, mergeRunSkills } from "../lib/recipes.js";
+import { getSkill, SKILLS, backgroundSkills, intentOf, agentSkillIds, mergeRunSkills } from "../lib/skill-registry.js";
 import { skillMatchesUrl } from "../shared/match-patterns.js";
 import { resolveSkillRef } from "../lib/skill-resolve.js";
 import {
@@ -803,8 +803,8 @@ async function runScriptSandboxed(source) {
 // ── editable/duplicable background agents (item 56) ──────────────────────
 // Custom recipe copies live in masterMemory under `customRecipes` (a built-in
 // template stays pristine; enabling/duplicating makes an editable instance).
-// `resolveRecipe` checks the built-ins FIRST, then the custom copies.
-async function getCustomRecipes() {
+// `resolveSkill` checks the built-ins FIRST, then the custom copies.
+async function getCustomSkills() {
   const v = await masterMemory().get("customRecipes");
   return Array.isArray(v) ? v : [];
 }
@@ -835,7 +835,7 @@ const loadAllImported = async () => {
   return rows;
 };
 
-async function resolveRecipe(id) {
+async function resolveSkill(id) {
   // The REAL resolver lives in lib/skill-resolve.js (CAP-FB-20260831-SKILL-
   // LIST-SYNC-01 r4) so tests exercise the actual resolution logic against
   // real (faked-OPFS) stores. Source-locking: imported:<id> only the imported
@@ -844,7 +844,7 @@ async function resolveRecipe(id) {
   // duplicated agents).
   return await resolveSkillRef({
     ref: id,
-    stores: { getRecipe, getCustomRecipes, loadAllImported, readSkillFile },
+    stores: { getSkill, getCustomSkills, loadAllImported, readSkillFile },
     bodyBudget: PROMPT_SKILL_BODY_BUDGET,
   });
 }
@@ -871,7 +871,7 @@ async function resolveSkillRefs(task) {
   const ids = skillRefIds(task);
   const out = [];
   for (const id of ids) {
-    const skill = await resolveRecipe(id);
+    const skill = await resolveSkill(id);
     if (skill) out.push(skill);
   }
   return out;
@@ -885,7 +885,7 @@ async function resolveSkillRefs(task) {
 async function resolveAgentSkills(agent) {
   const out = [];
   for (const id of agentSkillIds(agent)) {
-    const skill = await resolveRecipe(id);
+    const skill = await resolveSkill(id);
     if (skill) out.push(skill);
   }
   return out;
@@ -3965,12 +3965,12 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // every skill referenced by this thread's earlier terminal rows) re-applies
       // those skills on resume — a continuation that does not re-mention
       // /skill:x still runs with it. Deleted skills resolve to nothing and are
-      // silently skipped (resolveRecipe returns null).
+      // silently skipped (resolveSkill returns null).
       let runSkills = mergeRunSkills(agentSkills, await resolveSkillRefs(task));
       if (Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0) {
         const journaled = [];
         for (const skillId of journaledSkillIds) {
-          const recipe = await resolveRecipe(skillId);
+          const recipe = await resolveSkill(skillId);
           if (recipe) journaled.push(recipe);
         }
         runSkills = mergeRunSkills(agentSkills, journaled, await resolveSkillRefs(task));
@@ -4005,7 +4005,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           }
         }
         if (activeOrigin) {
-          const bound = RECIPES.filter(
+          const bound = SKILLS.filter(
             (r) => Array.isArray(r.origins) && r.origins.length > 0 && skillMatchesUrl(r, activeOrigin),
           );
           if (bound.length > 0) runSkills = mergeRunSkills(runSkills, bound);
@@ -7351,7 +7351,7 @@ const handlers = mergeRouteMaps(
       if (!agent) return { ok: false, error: `no agent ${id}` };
       agentId = `named:${slugifyAgentId(id)}`;
     } else if (kind === "background") {
-      const recipe = await resolveRecipe(id);
+      const recipe = await resolveSkill(id);
       if (!recipe) return { ok: false, error: `no background agent ${id}` };
       agentId = `background:${recipe.id}`;
     } else {
@@ -7721,7 +7721,7 @@ const handlers = mergeRouteMaps(
     const [named, tasks, custom, origins] = await Promise.all([
       listNamedAgents().catch(() => []),
       listScheduledTasks().catch(() => []),
-      getCustomRecipes().catch(() => []),
+      getCustomSkills().catch(() => []),
       listOrigins().catch(() => []),
     ]);
     const enabled = new Set(
@@ -7730,7 +7730,7 @@ const handlers = mergeRouteMaps(
         .filter((n) => n.startsWith("recipe:")),
     );
     const bgAll = [
-      ...backgroundRecipes(),
+      ...backgroundSkills(),
       ...(Array.isArray(custom) ? custom : []).filter((r) => r.mode !== "on-demand"),
     ];
     const site = [];
@@ -9206,7 +9206,7 @@ const handlers = mergeRouteMaps(
     // agent is gone, the alarm must go too. Cancels every orphan and reports
     // exactly what was cancelled.
     const tasks = await listScheduledTasks().catch(() => null);
-    const custom = await getCustomRecipes().catch(() => null);
+    const custom = await getCustomSkills().catch(() => null);
     // FAIL CLOSED (review P1-a): an unreadable registry means a live custom
     // recipe is INDISTINGUISHABLE from an orphan — refuse to cancel anything
     // rather than risk cancelling a live agent's schedule.
@@ -9214,7 +9214,7 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: "the recipe/schedule registry could not be read — refusing to cancel anything", cancelled: [], count: 0 };
     }
     const known = new Set([
-      ...backgroundRecipes().map((r) => `recipe:${r.id}`),
+      ...backgroundSkills().map((r) => `recipe:${r.id}`),
       ...custom.map((r) => `recipe:${r.id}`),
     ]);
     const cancelled = [];
@@ -9381,7 +9381,7 @@ const handlers = mergeRouteMaps(
     return { ok: true, notes: await getSiteNote(origin) };
   },
   async "recipe.run"(m) {
-    const recipe = getRecipe(m.id);
+    const recipe = getSkill(m.id);
     if (!recipe) return { ok: false, error: `no recipe ${m.id}` };
     return await runTask({
       id: `recipe:${recipe.id}:${Date.now()}`,
@@ -9401,8 +9401,8 @@ const handlers = mergeRouteMaps(
         .map((t) => t.name)
         .filter((n) => n.startsWith("recipe:")),
     );
-    const custom = await getCustomRecipes();
-    const all = [...backgroundRecipes(), ...custom.filter((r) => r.mode !== "on-demand")];
+    const custom = await getCustomSkills();
+    const all = [...backgroundSkills(), ...custom.filter((r) => r.mode !== "on-demand")];
     return {
       agents: all.map((r) => ({
         ...r,
@@ -9416,7 +9416,7 @@ const handlers = mergeRouteMaps(
     // periodInMinutes. Disable authoritatively cancels it. This routes through
     // the SAME atomic scheduleTask/cancelScheduledTask paths as schedule_task /
     // task.cancel (fenced, crash-safe, quarantined-on-unknown-state).
-    const recipe = await resolveRecipe(m?.id);
+    const recipe = await resolveSkill(m?.id);
     if (!recipe || recipe.mode !== "background") {
       return { ok: false, error: `no background recipe ${m?.id}` };
     }
@@ -9473,12 +9473,12 @@ const handlers = mergeRouteMaps(
   // `customRecipes` and becomes a background recipe the user can edit (the system
   // prompt / constraints) + reference.
   async "recipe.custom-list"() {
-    return { recipes: await getCustomRecipes() };
+    return { recipes: await getCustomSkills() };
   },
   async "recipe.duplicate"({ id }) {
-    const src = await resolveRecipe(id);
+    const src = await resolveSkill(id);
     if (!src) return { ok: false, error: `no recipe ${id}` };
-    const custom = await getCustomRecipes();
+    const custom = await getCustomSkills();
     const customId = `${src.id}-custom-${Date.now()}`;
     const copy = {
       ...src,
@@ -9496,7 +9496,7 @@ const handlers = mergeRouteMaps(
     return { ok: true, recipe: copy };
   },
   async "recipe.update"({ id, prompt, name, description }) {
-    const custom = await getCustomRecipes();
+    const custom = await getCustomSkills();
     const idx = custom.findIndex((r) => r.id === id);
     if (idx < 0) return { ok: false, error: `no custom recipe ${id}` };
     if (prompt !== undefined) custom[idx].prompt = String(prompt);
@@ -9529,7 +9529,7 @@ const handlers = mergeRouteMaps(
     }
     // Read AFTER the durable mark so the removal cannot clobber a concurrent
     // edit that landed while the mark was in flight.
-    const custom = await getCustomRecipes();
+    const custom = await getCustomSkills();
     const next = custom.filter((r) => r.id !== id);
     await masterMemory().set("customRecipes", next);
     // The deleted custom recipe LEAVES the live registry — broadcast so the
@@ -9670,7 +9670,7 @@ const handlers = mergeRouteMaps(
   // its memory). Mirrors the named-agent routes so the two agent kinds behave
   // consistently.
   async "background-agent.history"({ id }) {
-    const recipe = await resolveRecipe(id);
+    const recipe = await resolveSkill(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
     const journal = (await mem.get("journal").catch(() => null)) ?? [];
@@ -9678,7 +9678,7 @@ const handlers = mergeRouteMaps(
     return { entries, count: entries.length };
   },
   async "background-agent.run"({ id, task, attachments, runId, threadId = null, _executionId = null, _permissionResume = false, _resumeToken = null, _allowProviderChange = false, approvalBinding = null, history = null, journaledSkillIds = null }, routeContext) {
-    const recipe = await resolveRecipe(id);
+    const recipe = await resolveSkill(id);
     if (!recipe) return { ok: false, error: `no background agent ${id}` };
     const mem = backgroundAgentMemory(`recipe:${recipe.id}`);
     const runTag = runId ?? `background:${recipe.id}:${Date.now()}`;
@@ -10958,7 +10958,7 @@ async function dispatchHook(hookId, payload) {
       securityEvent("denied-hook", `hook ${hookId} refused: ${allowed.error}`);
       continue;
     }
-    const recipe = sub.recipeId ? getRecipe(sub.recipeId) : null;
+    const recipe = sub.recipeId ? getSkill(sub.recipeId) : null;
     // The payload is UNTRUSTED browser data (a tab title, a download filename,
     // a storage change, ...). It must be delimited as DATA, never instructions:
     // a malicious title must not prompt-inject the management-capable hub model.
@@ -11308,7 +11308,7 @@ async function omniboxInputChanged(text, suggest) {
     }
   } catch { /* no threads yet */ }
   // Recipes matching the query (name or description).
-  for (const r of RECIPES) {
+  for (const r of SKILLS) {
     const hay = `${r.name} ${r.description}`.toLowerCase();
     if (q && !hay.includes(q)) continue;
     out.push({
@@ -11332,7 +11332,7 @@ async function omniboxInputChanged(text, suggest) {
 async function omniboxInputEntered(content, disposition) {
   const intent = parseOmniboxContent(content);
   if (intent.kind === "recipe") {
-    const recipe = getRecipe(intent.id);
+    const recipe = getSkill(intent.id);
     if (recipe?.prompt) {
       omniboxOpen(`[Recipe: ${recipe.name}] ${recipe.prompt}`, "run");
       return;

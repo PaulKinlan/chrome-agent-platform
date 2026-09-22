@@ -6,7 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
-import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
+import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
@@ -2995,12 +2995,12 @@ async function buildAgentConfigDialog(opts) {
     send("skill.list").catch(() => ({ skills: [] })),
     // The 22 background recipes are scheduled TEMPLATES in the create flow
     // (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01) — fetched only when the
-    // gallery is shown, projected through recipeAsTemplate (no data copy).
+    // gallery is shown, projected through skillAsTemplate (no data copy).
     opts.showTemplates ? send("background-agent.list").catch(() => ({ agents: [] })) : Promise.resolve({ agents: [] }),
   ]);
   const available = Array.isArray(skillsRes.skills) ? skillsRes.skills : [];
   const backgroundTemplates = (Array.isArray(bgRes?.agents) ? bgRes.agents : [])
-    .map(recipeAsTemplate).filter(Boolean);
+    .map(skillAsTemplate).filter(Boolean);
   const agentSkillIds = new Set((opts.initialSkills ?? []).map((s) => (typeof s === "string" ? s : s?.id ?? s?.name)));
 
   const dialog = document.createElement("agent-dialog");

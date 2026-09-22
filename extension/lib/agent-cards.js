@@ -3,7 +3,7 @@
 // An agent card is a portable JSON document representing an agent's configuration:
 //   - identity: name + avatar
 //   - persona / role: instructions and behavioral prompt
-//   - skills: attached skill/recipe IDs (validated against RECIPES)
+//   - skills: attached skill IDs (validated against SKILLS)
 //   - schedule: optional periodic or one-shot schedule configuration
 //   - coreAssets: attached reference documents/files
 //   - createdFrom: optional starting template ID
@@ -17,7 +17,7 @@
 //   - Deduplicated counting: omitted skills/dropped counters increment per distinct ID.
 //   - Structured credentials (API keys, session tokens, instance IDs) are NEVER exported in cards.
 
-import { RECIPES } from "./recipes.js";
+import { SKILLS } from "./skill-registry.js";
 
 export const AGENT_CARD_VERSION = 1;
 // dptw: no card name/role length, skill count, raw-skills input, core-asset
@@ -84,7 +84,7 @@ export function normalizeCardCoreAssets(assets) {
 function getKnownSkillSet(customKnown) {
   if (customKnown instanceof Set) return customKnown;
   if (Array.isArray(customKnown)) return new Set(customKnown);
-  return new Set(RECIPES.map((r) => r.id));
+  return new Set(SKILLS.map((r) => r.id));
 }
 
 /**
@@ -408,7 +408,7 @@ export function validateAgentCard(card, options = {}) {
       ? roleText.slice(0, MAX_CARD_ROLE_LEN)
       : roleText;
 
-    // Skills validation & filtering against RECIPES
+    // Skills validation & filtering against SKILLS
     const rawSkills = Object.hasOwn(card, "skills") ? card.skills : undefined;
     if (rawSkills !== undefined && rawSkills !== null && !Array.isArray(rawSkills)) {
       return { ok: false, error: "skills must be an array of skill ids" };

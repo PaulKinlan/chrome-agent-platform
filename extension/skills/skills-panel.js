@@ -13,9 +13,9 @@ import { SKILL_ICON } from "../shared/skill-icons.js";
 /** A skill = the shared capability-row (consistent layout) + a collapsed
  * "how it works" details for the documentation. The action is "Use in a task"
  * (a skill is included in a task, not run in isolation). */
-function recipeCard(r, onUse, onDelete, sendFn = send) {
+function skillCard(r, onUse, onDelete, sendFn = send) {
   const wrap = document.createElement("div");
-  wrap.className = "recipe";
+  wrap.className = "skill";
 
   const needs = (r.requiredCapabilities ?? []).length
     ? `needs ${r.requiredCapabilities.join(", ")}`
@@ -105,7 +105,7 @@ export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = 
     head.className = "intent-head";
     head.textContent = intent;
     group.append(head);
-    for (const r of list) group.append(recipeCard(r, onUse, handleDelete, sendFn));
+    for (const r of list) group.append(skillCard(r, onUse, handleDelete, sendFn));
     listEl.append(group);
   }
   return recipes;
@@ -303,7 +303,7 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
     for (const cmd of commands) {
       const view = commandView(cmd);
       const wrap = document.createElement("div");
-      wrap.className = "recipe";
+      wrap.className = "skill";
       const row = document.createElement("capability-row");
       row.setAttribute("name", view.name);
       row.setAttribute("description", view.description || "imported command");

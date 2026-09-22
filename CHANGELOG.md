@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.449] — 2026-09-22
+- the built-in skill registry speaks the one vocabulary (module, exports, importers)
+
 ## [0.3.448] — 2026-09-22
 - correct the F1 rationale to what was actually measured
 

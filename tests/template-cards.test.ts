@@ -65,7 +65,7 @@ Deno.test("create-agent dialog composes the template SELECT; the gallery grid is
     "the dialog's gallery is the select the builder returned, not a separately built element",
   );
   assertStringIncludes(ntp, "blankLabel: \"Custom agent — start from a blank agent.\"");
-  assertStringIncludes(ntp, "recipeAsTemplate");
+  assertStringIncludes(ntp, "skillAsTemplate");
   // The gallery grid is no longer composed in the CREATE dialog (Settings'
   // scheduled gallery still uses it — a different surface, same catalogue).
   assert(!ntp.includes('document.createElement("agent-template-gallery")'), "the create dialog no longer builds the gallery grid");
