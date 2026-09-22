@@ -49,6 +49,22 @@ rounding, not a stable property; **the load-bearing quantities are the ones that
 move by hundreds of pixels** — the 690 → 389 column, the 198 → 444 Agents box,
 and the 4px → 0px overflow which is the reported defect itself.
 
+**A hypothesis for the 4px, recorded as a hypothesis and not as established.** The
+arithmetic closes on a single quantity. Both box totals are exactly 888px, and the
+Jobs track is the deepest min-content plus 5.844px: this box's `689.844` implies a
+`684.000px` min-content, and the reviewer's `685.844` implies `680.000px` — one 4px
+difference in a text measurement, redistributed to the other track. The reviewer's
+suggested cause is that `span.jb-excerpt` **declares no `font-family`**: its rule
+(`extension/shared/components.js:11685`) sets `font-size:12px` and nothing else
+about the face, and no `font-family` appears anywhere in `<jobs-board>`'s own
+styles, so the computed face is inherited and the advance width of the same string
+can differ between boxes by exactly this order. **That is consistent with the
+measurements and is NOT proven by them** — it was measured on one box, and
+confirming it would take the same page on two boxes with the face pinned versus
+inherited. It does not need resolving to land the fix: the direction and the
+hundreds-of-pixels quantities are stable, and this is a 4px ambiguity inside a
+defect that was 300px wide.
+
 **The culprit, named by measurement.** A grid child's automatic minimum size is
 its content, so one long single-line element in a board row — `span.jb-excerpt`,
 684px of min-content — held the Jobs track at 690px no matter how little room was
@@ -87,13 +103,32 @@ What was wrong was inferring that the element therefore needed changing. The
 defect was in the grid track rule, and the element was only its victim.
 
 A fifth, and the one that mattered most: **a check that could not fail.** The
-check `"nothing inside the Jobs column holds the grid track open"` was written on
+check `"hub: nothing inside the Jobs column holds the grid track open"` was
+`(pad1440.shrinkHolders || []).every((o) => o.minContent <= 320)`, written on
 `shrinkHolders`, a plain `jobs.querySelectorAll('*')` walk. `<jobs-board>` renders
-its rows into a **shadow root**, so that walk never saw the rows — the list was
-empty in every state, and `.every()` on an empty list is `true`. It passed on the
-base tree, where the defect is real and reproduced by twelve other checks. The
-instrument that *does* cross the shadow root (`deepMinContent`) was already in the
-file, computed and printed, and **asserted on by nothing**. Both halves of that
+its rows into a **shadow root**, so that walk never saw the rows. It passed on the
+base tree, where the defect is real and reproduced by twelve other checks.
+
+**It failed to fail for two different reasons, and the distinction is worth
+keeping because the wrong version gets reused.** An earlier draft of this file
+said the list was "empty in every state". That is wrong, and this branch's own
+artifact contradicts it: in `before-baseline.json`, taken on the base at all four
+hub widths, `shrinkHolders` holds **2 entries, both at 178px** — `div#jobs-board-host`
+and `<jobs-board>`, neither of them a row. So:
+
+- on the **base**, the list was *not* empty: 2 entries, and `178 <= 320` satisfied
+  the assertion, so the check passed with the defect reproducing in twelve others;
+- on the **fixed tree**, the list is `[]`, and `.every()` on an empty list is `true`.
+
+A non-emptiness guard alone would **not** have fixed this check. Such a guard is
+satisfied by those 2 entries, and the assertion is satisfied by their 178px. The
+emptiness is a *symptom* of the same root cause: the walk cannot cross the shadow
+root, so the 684px element that actually holds the track open was never in the
+list at all. The guard is still worth having — it names the failure loudly instead
+of silently — but the property had to move to an instrument that can see the rows.
+
+The instrument that *does* cross the shadow root (`deepMinContent`) was already in
+the file, computed and printed, and **asserted on by nothing**. Both halves of that
 are now fixed and pinned: the check asserts containment through the shadow-crossing
 instrument, and a non-vacuity guard fails loudly if the probe finds nothing.
 

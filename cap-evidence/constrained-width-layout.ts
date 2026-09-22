@@ -284,11 +284,19 @@ check("hub: the Jobs board's content is inset like its own panel header", Math.a
   { bodyPadding: pad1440.panelBodyPadding, headPadding: pad1440.panelHeadPadding });
 // THE INSTRUMENT THAT CROSSES THE SHADOW ROOT, and the guard that stops it
 // being vacuous. `shrinkHolders` is a plain descendant walk and <jobs-board>
-// renders its rows into a SHADOW ROOT, so that list is EMPTY here — and
-// `.every()` on an empty list is true however badly broken the layout is. The
-// vacuous form of this check passed on the base tree, where the defect is real,
-// which is the whole failure mode: a check that cannot fail reads as safety.
-// `deepMinContent` walks shadow children too, and names what it finds.
+// renders its rows into a SHADOW ROOT, so it never sees a row. The old check
+// here was `shrinkHolders.every((o) => o.minContent <= 320)`, and it passed on
+// the base tree, where the defect is real, for TWO different reasons that are
+// worth keeping straight because a non-emptiness guard alone fixes neither:
+//   - on the base the list was NOT empty — `before-baseline.json` holds 2
+//     entries at 178px (div#jobs-board-host and <jobs-board>, neither a row),
+//     and 178 <= 320 satisfied the assertion;
+//   - on the fixed tree the list is `[]`, and `.every()` on an empty list is
+//     true however badly broken the layout is.
+// Both are the same root cause: the walk cannot reach the 684px element that
+// actually held the track open, so it was never in the list at all. The failure
+// mode is a check that cannot fail reading as safety. `deepMinContent` walks
+// shadow children too, and names what it finds.
 const jobsChild = (pad1440.children || []).find((c: any) => c.id === "jobs-section");
 check("hub: the deep min-content probe reached inside the board (non-vacuity)",
   !!jobsChild && jobsChild.deepMinContent > 0 && String(jobsChild.deepMinContentAt || "").length > 0,

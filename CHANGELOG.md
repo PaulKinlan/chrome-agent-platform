@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.448] — 2026-09-22
+- correct the F1 rationale to what was actually measured
+
 ## [0.3.447] — 2026-09-22
 - q264, qzae: two layout checks that could not fail
 
