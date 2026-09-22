@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.449] — 2026-09-22
+- the agent buttons' badges and the narrow side panel are now checked in a real browser
+
 ## [0.3.448] — 2026-09-22
 - correct the F1 rationale to what was actually measured
 

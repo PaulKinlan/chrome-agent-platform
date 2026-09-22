@@ -84,6 +84,15 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "read-page-host-grant-acceptance.ts": { class: "named", npm: "test:read-page-host-grant", reason: "11/11 at the re-inventory (14 s); run on demand — promotion is the owner's call" },
   "sidebar-parity.ts": { class: "named", npm: "test:sidebar", reason: "18/2 at the re-inventory (two sidebar parity checks red); promote once green" },
   "ui-integration.ts": { class: "named", npm: "test:ui", reason: "56/0 after the 5ht repair (hub moved #run-log → action-ledger; theme switching removed; durability contract now state-conditional; 6-min watchdog caps any hang; falsification: a rail-width break produces 4 failing checks); ~90s; run on demand — promotion is the owner's call" },
+  // The measured counterpart to tests/harness-marks.test.ts. That test pins the chips' CSS
+  // BY TEXT (a regex over sidepanel.html); this drives the real side panel in a real browser at
+  // 260/300/400px and asserts on GEOMETRY, so it fails when the behaviour goes and the text stays.
+  // Why it exists: the owner reported the harness buttons squashing when the panel collapses, and
+  // "the fix is on disk" and "the fix is in front of him" are different claims — the second is
+  // what this measures. Falsification (2026-09-22): deleting the mark append turns "every harness
+  // button carries a mark" red; removing the @container block turns the collapsed-rule check red
+  // (the chip grows 34px -> 54px and nothing else notices).
+  "constrained-width-layout.ts": { class: "named", npm: "test:width", reason: "46/0 measured against the canonical extension on 2026-09-22 (~40 s): the marks render, the collapsed container query fires, nothing wraps or overflows. Run on demand — promotion to test:all is the owner's call" },
   "webmcp-acceptance.ts": { class: "named", npm: "test:webmcp", reason: "82/0 at the re-inventory (after its stderr-reader crash was removed by the launcher migration); the WebMCP lane's acceptance, run on demand with its fresh-profile picker proof" },
   "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
 

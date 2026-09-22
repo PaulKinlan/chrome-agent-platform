@@ -11,11 +11,11 @@
 // computed padding to compare the board's inset with its own header's, and
 // bounding rects to test whether a sibling is still inside the viewport.
 //
-// Run: deno run -A cap-evidence/constrained-width-layout.ts
+// Run: npm run test:width   (set CAP_ACCEPTANCE_EXT to measure a tree other than this one)
 // @ts-nocheck — untyped CDP scripting in the house pattern.
 
-import { launchChrome } from "../scripts/lib/chrome-launch.ts";
-import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { launchChrome } from "./lib/chrome-launch.ts";
+import { durableDir } from "./lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -278,25 +278,30 @@ for (const w of [1440, 1280, 1100]) {
 }
 // Padding: the board's content inset vs its own panel header's inset.
 const pad1440 = hubResults["1440"];
-const bodyLeft = parseFloat(String(pad1440.panelBodyPadding || "0").split(" ")[1] ?? "0");
-const headLeft = parseFloat(String(pad1440.panelHeadPadding || "0").split(" ")[1] ?? "0");
-check("hub: the Jobs board's content is inset like its own panel header", Math.abs(bodyLeft - headLeft) <= 1,
-  { bodyPadding: pad1440.panelBodyPadding, headPadding: pad1440.panelHeadPadding });
+// cgei: this check used to compare 0 to 0 and pass. Each side was read with a default of
+// "0", so a MISSING element produced `parseFloat("0")` on both sides and |0-0| <= 1 held
+// while the thing being measured did not exist at all. It was DRIVEN: renaming
+// #jobs-board-host and the jobs-section .panel-head away gave undefined/undefined and the
+// check still passed while 8 others failed. The fix is to make absence a FAILURE rather than
+// a zero: an unparseable side yields null, and null fails. A second side inset is read from
+// the computed style, so a renamed element cannot silently substitute one.
+const padLeft = (value: unknown): number | null => {
+  const part = String(value ?? "").trim().split(/\s+/)[1];
+  return part === undefined ? null : parseFloat(part);
+};
+const bodyLeft = padLeft(pad1440.panelBodyPadding);
+const headLeft = padLeft(pad1440.panelHeadPadding);
+check("hub: the Jobs board's content is inset like its own panel header",
+  bodyLeft !== null && headLeft !== null && Number.isFinite(bodyLeft) && Number.isFinite(headLeft) &&
+    Math.abs(bodyLeft - headLeft) <= 1,
+  { bodyPadding: pad1440.panelBodyPadding, headPadding: pad1440.panelHeadPadding, bodyLeft, headLeft });
 // THE INSTRUMENT THAT CROSSES THE SHADOW ROOT, and the guard that stops it
 // being vacuous. `shrinkHolders` is a plain descendant walk and <jobs-board>
-// renders its rows into a SHADOW ROOT, so it never sees a row. The old check
-// here was `shrinkHolders.every((o) => o.minContent <= 320)`, and it passed on
-// the base tree, where the defect is real, for TWO different reasons that are
-// worth keeping straight because a non-emptiness guard alone fixes neither:
-//   - on the base the list was NOT empty — `before-baseline.json` holds 2
-//     entries at 178px (div#jobs-board-host and <jobs-board>, neither a row),
-//     and 178 <= 320 satisfied the assertion;
-//   - on the fixed tree the list is `[]`, and `.every()` on an empty list is
-//     true however badly broken the layout is.
-// Both are the same root cause: the walk cannot reach the 684px element that
-// actually held the track open, so it was never in the list at all. The failure
-// mode is a check that cannot fail reading as safety. `deepMinContent` walks
-// shadow children too, and names what it finds.
+// renders its rows into a SHADOW ROOT, so that list is EMPTY here — and
+// `.every()` on an empty list is true however badly broken the layout is. The
+// vacuous form of this check passed on the base tree, where the defect is real,
+// which is the whole failure mode: a check that cannot fail reads as safety.
+// `deepMinContent` walks shadow children too, and names what it finds.
 const jobsChild = (pad1440.children || []).find((c: any) => c.id === "jobs-section");
 check("hub: the deep min-content probe reached inside the board (non-vacuity)",
   !!jobsChild && jobsChild.deepMinContent > 0 && String(jobsChild.deepMinContentAt || "").length > 0,

@@ -1,7 +1,7 @@
 {
   "default_locale": "en",
   "name": "chrome-agent-platform",
-  "version": "0.3.448",
+  "version": "0.3.449",
   "private": true,
   "type": "module",
   "description": "Chrome as the agent platform — agent hub, WebMCP tool directory, sites-as-sub-agents, OPFS memory, alarms.",
@@ -39,6 +39,7 @@
     "version:major": "node scripts/bump-version.mjs major",
     "test:tools": "CAP_TEST_RUNNER=1 deno test -A --config deno.runner.jsonc tests/tools-*.test.ts",
     "test:ui": "deno run -A scripts/ui-integration.ts",
+    "test:width": "deno run -A scripts/constrained-width-layout.ts",
     "test:opfs": "deno run -A scripts/opfs-real-browser.ts",
     "test:webmcp": "deno run -A scripts/webmcp-acceptance.ts",
     "test:sidebar": "deno run -A scripts/sidebar-parity.ts",
