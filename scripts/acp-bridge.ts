@@ -120,30 +120,6 @@ export function childEnvForHarness(harness: string, pathValue = ""): Record<stri
  * plugin paths). */
 export const PI_MCP_EXCLUSIVE_ENV = "PI_MCP_CONFIG_MODE";
 
-/** Names a CAP-spawned harness session must never inherit, whatever the
- * machine's MCP config says. Matched case-insensitively against the server
- * KEY, because the key is the operator's label and the label is not the thing
- * that launches. */
-const BROWSER_LAUNCHING_MCP_HINTS = ["chrome-devtools", "chrome_devtools", "puppeteer", "playwright", "selenium", "browser-mcp", "browser_use"];
-
-/** Does this MCP server key name something that launches its own browser?
- *
- * It exists because a CAP harness session must never be handed a second
- * browser: the owner's stated architecture is that the tools live in the
- * client, the harness asks, and the request routes BACK to the client, which
- * executes it against the tab the owner is actually looking at
- * (owner-reported 2026-09-22: a local process asking to run Google Chrome is
- * "exactly NOT what I want"). A patched browser is not the owner's browser.
- *
- * This is a NAME check, not a proof, and it is honest about that: a server
- * labelled oddly still gets through. It is the cheap half of the guard; the
- * load-bearing half is that CAP injects only its OWN tool server (see
- * `capMcpServerEntry`), so nothing else is ever offered by us. */
-export function isBrowserLaunchingMcpServer(name: string): boolean {
-  const key = String(name ?? "").trim().toLowerCase();
-  return BROWSER_LAUNCHING_MCP_HINTS.some((hint) => key.includes(hint));
-}
-
 /** Environment additions that make a CAP-spawned harness session load ONLY the
  * MCP servers CAP intends it to have.
  *

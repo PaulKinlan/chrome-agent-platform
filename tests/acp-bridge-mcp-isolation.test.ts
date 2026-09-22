@@ -19,7 +19,6 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   createAcpServer,
   harnessMcpIsolationEnv,
-  isBrowserLaunchingMcpServer,
   PI_MCP_EXCLUSIVE_ENV,
 } from "../scripts/acp-bridge.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
@@ -40,24 +39,6 @@ Deno.test("harnessMcpIsolationEnv: pi is isolated, the ACP-injectable harnesses 
   assertEquals(harnessMcpIsolationEnv(""), {});
 });
 
-Deno.test("isBrowserLaunchingMcpServer: catches the launchers, spares the non-browsers", () => {
-  // The exact entry measured on the owner's machine 2026-09-22.
-  assert(isBrowserLaunchingMcpServer("chrome-devtools-mcp"), "the measured entry must be caught");
-  // Case and separator variants are the same server.
-  assert(isBrowserLaunchingMcpServer("Chrome-DevTools-MCP"));
-  assert(isBrowserLaunchingMcpServer("chrome_devtools"));
-  assert(isBrowserLaunchingMcpServer("puppeteer"));
-  assert(isBrowserLaunchingMcpServer("playwright-mcp"));
-  assert(isBrowserLaunchingMcpServer("my-browser-mcp"));
-
-  // The other server in the same machine config is NOT a browser launcher, and
-  // a false positive here would silently refuse a legitimate server.
-  assert(!isBrowserLaunchingMcpServer("web-reader"), "web-reader must not be caught");
-  assert(!isBrowserLaunchingMcpServer("deepwiki"));
-  assert(!isBrowserLaunchingMcpServer("context7"));
-  assert(!isBrowserLaunchingMcpServer("cap"));
-  assert(!isBrowserLaunchingMcpServer(""));
-});
 
 Deno.test("createAcpServer: the isolation env REACHES the pi adapter child, and only for pi", async () => {
   // A mock adapter that records the environment it was actually spawned with.

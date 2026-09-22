@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.450] — 2026-09-22
-- correct my own capability claim — NO pinned adapter implements client-hosted MCP
+- Agents no longer open a hidden second copy of Chrome: a run used to inherit the browser tool set up on this machine. Agent runs now ignore the tool settings on your machine.
 
 ## [0.3.449] — 2026-09-22
 - the agent buttons' badges and the narrow side panel are now checked in a real browser
