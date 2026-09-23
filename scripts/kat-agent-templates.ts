@@ -66,6 +66,15 @@ const shot = async (path: string) => {
 await Deno.mkdir(OUT, { recursive: true });
 await sleep(3200); // first-run surfaces settle
 
+// The create/edit dialogs PERSIST as light DOM in the page, so after several
+// opens (this harness opens one per seeded starter plus the edit dialog)
+// `${D}?.querySelector('#agent-schedule')` can return a field belonging to a
+// CLOSED dialog — measured: the price-watcher prefill read the previous edit
+// dialog's stale 'every 45 minutes'. Every dialog query goes through the OPEN
+// dialog instead.
+await ev(`(() => { window.__openDialog = () => [...document.querySelectorAll('agent-dialog')].filter((d) => d.open).at(-1) ?? null; return true; })()`);
+const D = `window.__openDialog()`;
+
 // Attach to the SERVICE WORKER too — the real-alarm assertions (a schedule
 // must mint a live chrome.alarms entry, not just a store row) evaluate
 // chrome.alarms in the SW context.
@@ -74,29 +83,65 @@ await send("Runtime.enable", {}, swSession);
 const evSw = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, swSession)).result?.result?.value;
 const alarms = async () => (await evSw(`chrome.alarms.getAll().then(a => a.map(x => ({ name: x.name, periodInMinutes: x.periodInMinutes ?? null })))`)) ?? [];
 
-// 0. FIRST-RUN OFFER (owner directive): a fresh profile with zero agents shows
-//    the one-click starter action in the empty state. Clicking it creates the
-//    curated six as REAL agents (never automatic — the owner clicked).
+// 0. FIRST-RUN OFFER (owner directive): a fresh profile with zero agents offers
+//    the TEMPLATE GALLERY in the empty state. One click OPENS it and creates
+//    NOTHING until the owner presses Create — the silent one-click seed was
+//    removed by CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01, so this harness
+//    seeds the curated starters the way an owner does: gallery → Use → Create.
 const emptyOffer = await ev(`(() => {
   const btn = document.getElementById('add-starter-agents');
   return { present: !!btn, label: btn?.textContent ?? null };
 })()`);
-check("first-run empty state offers Add starter agents (one click, not automatic)", emptyOffer?.present === true && /starter agents/i.test(emptyOffer.label ?? ""), emptyOffer);
+check("first-run empty state offers the template gallery (one click, not automatic)", emptyOffer?.present === true && /starter templates/i.test(emptyOffer.label ?? ""), emptyOffer);
+const STARTERS = ["chief-of-staff", "research-analyst", "site-auditor", "critic", "webapp-test-pilot", "skill-smith"];
+const agentCount = async () => await ev(`(async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'named-agent.list' }).catch(() => null);
+  return (res?.agents ?? []).length;
+})()`);
+const countBeforeCreate = await agentCount();
 await ev(`document.getElementById('add-starter-agents')?.click()`);
-await sleep(4000); // six creates + avatar follow-ups settle
+await sleep(900);
+const offerOpened = await ev(`(() => {
+  const select = ${D}?.querySelector('#agent-template-select');
+  return { select: !!select, value: select?.value ?? null, dialog: !!document.querySelector('agent-dialog') };
+})()`);
+check("opening the offer shows the picker and creates nothing until Create is pressed",
+  offerOpened?.dialog === true && offerOpened?.select === true && offerOpened.value === "" && countBeforeCreate === 0,
+  { ...offerOpened, countBeforeCreate });
+
+// Seed the curated six through the REAL create flow: choose the template in the
+// picker, press Create agent (the dialog's own onSaved opens the new agent, so
+// come back to the hub before the next one).
+const seedOne = async (tplId: string) => {
+  await ev(`(() => { const sel = ${D}?.querySelector('#agent-template-select');
+    if (sel) { sel.value = ${JSON.stringify(tplId)}; sel.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
+  await sleep(300);
+  await ev(`(() => {
+    const btns = [...(${D}?.querySelectorAll('button') ?? [])];
+    (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
+  })()`);
+  await sleep(1400);
+  await ev(`document.getElementById('thread-back')?.click()`);
+  await sleep(500);
+  await ev(`document.getElementById('new-agent')?.click()`);
+  await sleep(700);
+};
+for (const tplId of STARTERS) await seedOne(tplId);
+await ev(`(() => { const btns = [...(${D}?.querySelectorAll('button') ?? [])];
+  (btns.find(b => /^cancel$/i.test((b.textContent ?? '').trim())) ?? btns.at(-1))?.click(); })()`);
+await sleep(400);
 const starters = await ev(`(async () => {
   const res = await chrome.runtime.sendMessage({ type: 'named-agent.list' }).catch(() => null);
   return (res?.agents ?? []).map(a => ({ id: a.id, name: a.name }));
 })()`);
-const STARTERS = ["chief-of-staff", "research-analyst", "site-auditor", "critic", "webapp-test-pilot", "skill-smith"];
 // Agent ids derive from the template NAME (e.g. "Skill Smith (Recipe Author)"
 // → skill-smith-recipe-author) — assert by name against the catalogue.
 const starterNames = await ev(`(async () => {
   const { AGENT_TEMPLATES } = await import(chrome.runtime.getURL('lib/agent-templates.js'));
   return AGENT_TEMPLATES.filter(t => ${JSON.stringify(STARTERS)}.includes(t.id)).map(t => t.name);
 })()`);
-check("Add starter agents creates the curated six as real agents",
-  (starterNames ?? []).every((n: string) => (starters ?? []).some((a: any) => a.name === n)), starters);
+check("creating each curated starter through the gallery makes it a real agent",
+  (starterNames ?? []).length === 6 && (starterNames ?? []).every((n: string) => (starters ?? []).some((a: any) => a.name === n)), starters);
 // None of the six starters is scheduled — no agent:<id> alarms may exist.
 const starterAlarms = (await alarms()).filter((a: any) => STARTERS.some((s) => a.name === `agent:${s}`));
 check("starter agents are on-demand (no schedule alarms minted)", starterAlarms.length === 0, starterAlarms);
@@ -108,61 +153,97 @@ check("the agents list shows the seeded agents (empty state replaced)", (rowsAft
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
 
-// 1. The subtle shared base-select offers every template while the blank form
-// remains the custom-agent default.
+// 1. The dialog's template picker: the owner-requested NATIVE searchable
+//    <select> (CAP-FB-20260831-TEMPLATE-CUSTOM-SELECT-01) — #agent-template-select
+//    IS the select (not a component host), grouped Starter / Other / Scheduled
+//    with the blank "Custom agent" option and a labelled search filter.
 const picker = await ev(`(() => {
-  const host = document.getElementById('agent-template-select');
-  const select = host?.shadowRoot?.querySelector('select');
+  const select = ${D}?.querySelector('#agent-template-select');
   const options = [...(select?.options ?? [])];
+  const filter = [...(${D}?.querySelectorAll('input') ?? [])].find((i) => i.getAttribute('aria-label') === 'Search templates');
   return { count: options.length - 1, labelled: select?.getAttribute('aria-label') ?? '',
-    names: options.slice(1).map((option) => option.textContent ?? ''),
-    blankName: [...document.querySelectorAll('.agent-config-scroll label')].find((label) => label.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '',
+    ids: options.filter((o) => o.value).map((option) => option.value),
+    names: options.filter((o) => o.value).map((option) => option.textContent ?? ''),
+    groups: [...new Set([...(select?.querySelectorAll('optgroup') ?? [])].map((g) => g.label))],
+    filterLabelled: !!filter, filterPlaceholder: filter?.placeholder ?? '',
+    blankName: [...(${D}?.querySelectorAll('.agent-config-scroll label') ?? [])].find((label) => label.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '',
     appearance: select ? getComputedStyle(select).appearance : '' };
 })()`);
-check("template select is labelled for assistive tech and uses the shared select control", picker?.labelled === 'Start from a template' && !!picker?.appearance, picker);
+console.log(`NOTE: template picker: ${JSON.stringify({ count: picker?.count, groups: picker?.groups, labelled: picker?.labelled, appearance: picker?.appearance })}`);
+check("the template picker is a labelled native select (the shared control)", picker?.labelled === 'Agent template' && !!picker?.appearance, picker);
 check("the untouched form remains the custom-agent blank default", picker?.blankName === '', picker?.blankName);
-check("picker offers the 21 shipped templates", picker?.count === 21, picker?.count);
+check("the picker offers every shipped template", picker?.count === 42, picker?.count);
+check("the catalogue is grouped Starter / Other / Scheduled and searchable",
+  ["Starter", "Other", "Scheduled"].every((g) => (picker?.groups ?? []).includes(g)) && picker?.filterLabelled === true, picker);
 check("catalogue includes Chief of Staff / Research Analyst / Advanced Web Developer / Site Auditor",
-  !!picker && ["Chief of Staff", "Research Analyst", "Advanced Web Developer", "Site Auditor"].every((n) => picker.names.includes(n)),
-  picker?.names);
+  !!picker && ["chief-of-staff", "research-analyst", "advanced-web-developer", "site-auditor"].every((id) => picker.ids.includes(id)),
+  picker?.ids);
 
 // 2. Choose Chief of Staff → prefill (a starting point).
-await ev(`(() => { const select = document.getElementById('agent-template-select')?.shadowRoot?.querySelector('select');
+await ev(`(() => { const select = ${D}?.querySelector('#agent-template-select');
   if (select) { select.value = 'chief-of-staff'; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
 await sleep(200);
 const prefill = await ev(`(() => {
-  const name = [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '';
-  const role = [...document.querySelectorAll('.agent-config-scroll textarea')][0]?.value ?? '';
-  return { name, roleStart: role.slice(0, 40), roleLen: role.length, roleHasCoS: role.includes('Chief of Staff Persona'), checks: [...document.querySelectorAll('.skills-list input[type=checkbox]')].filter(c => c.checked).length };
+  const name = [...(${D}?.querySelectorAll('.agent-config-scroll label') ?? [])].find(l => l.textContent.startsWith('Name'))?.querySelector('input')?.value ?? '';
+  const role = [...(${D}?.querySelectorAll('.agent-config-scroll textarea') ?? [])][0]?.value ?? '';
+  return { name, roleStart: role.slice(0, 40), roleLen: role.length, roleHasCoS: role.includes('Chief of Staff Persona'), checks: [...(${D}?.querySelectorAll('.skills-list input[type=checkbox]') ?? [])].filter(c => c.checked).length };
 })()`);
 check("pick prefills the name", prefill?.name === "Chief of Staff", prefill?.name);
 check("pick prefills the persona (role textarea)", !!prefill && prefill.roleLen > 300 && prefill.roleHasCoS === true, prefill?.roleStart);
-check("pick checks the suggested skills (5 for chief-of-staff)", prefill?.checks === 5, prefill?.checks);
+// The skills section can only CHECK a suggested id whose ROW exists in this
+// profile's `skill.list` — the expectation is computed with the PRODUCT's own
+// matcher (lib/recipes.js templateSkillMatches), so this is a mechanism check,
+// not a magic number. Three of chief-of-staff's five suggestions
+// (daily-summary, weekly-digest, meeting-prep) are BACKGROUND recipes, not
+// skills, so they can never be checked: tracked as chrome-agent-platform-xiln.
+const skillDump = await ev(`(async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'skill.list' }).catch(() => null);
+  const available = res?.skills ?? [];
+  const { agentTemplateById } = await import(chrome.runtime.getURL('lib/agent-templates.js'));
+  const { templateSkillMatches } = await import(chrome.runtime.getURL('lib/recipes.js'));
+  const suggested = agentTemplateById('chief-of-staff')?.skills ?? [];
+  const checkable = suggested.filter((id) => available.some((row) => templateSkillMatches(available, [id], row)));
+  const rows = [...(${D}?.querySelectorAll('.skills-list label.skill-row') ?? [])].map((l) => ({ t: (l.textContent ?? '').split(' — ')[0].trim(), on: !!l.querySelector('input')?.checked }));
+  const checked = rows.filter((r) => r.on).map((r) => r.t);
+  const availableIds = available.filter((s) => checked.includes(String(s.name ?? '').trim())).map((s) => s.refId ?? s.id);
+  return { available: available.length, suggested, checkable, rows: rows.length, checked, checkedIds: availableIds };
+})()`);
+console.log(`NOTE: chief-of-staff skills: ${JSON.stringify(skillDump)}`);
+check("pick checks exactly the suggested skills whose row exists in this profile",
+  (skillDump?.checkable ?? []).length > 0 && prefill?.checks === (skillDump?.checkable ?? []).length,
+  { checked: prefill?.checks, skillDump });
 await shot(`${OUT}/01-picker-prefilled.png`);
 
 // 3. SPECIALIZE: rewrite part of the persona, remove one suggested skill,
 //    rename. The template is a starting point — the owner's edits must win.
 await ev(`(() => {
-  const roleTa = [...document.querySelectorAll('.agent-config-scroll textarea')][0];
+  const roleTa = [...(${D}?.querySelectorAll('.agent-config-scroll textarea') ?? [])][0];
   roleTa.value = roleTa.value + "\\n\\n## Owner override\\nAlways answer in British English.";
   roleTa.dispatchEvent(new Event('input', { bubbles: true }));
-  const nameInput = [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input');
+  const nameInput = [...(${D}?.querySelectorAll('.agent-config-scroll label') ?? [])].find(l => l.textContent.startsWith('Name'))?.querySelector('input');
   nameInput.value = 'My Chief of Staff';
   nameInput.dispatchEvent(new Event('input', { bubbles: true }));
-  const boxes = [...document.querySelectorAll('.skills-list input[type=checkbox]')].filter(c => c.checked);
+  const boxes = [...(${D}?.querySelectorAll('.skills-list input[type=checkbox]') ?? [])].filter(c => c.checked);
   boxes[0].click(); // remove the first suggested skill
 })()`);
 await sleep(200);
-const customized = await ev(`(() => ({
-  name: [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input')?.value,
-  checked: [...document.querySelectorAll('.skills-list input[type=checkbox]')].filter(c => c.checked).length,
-}))()`);
+const customized = await ev(`(async () => {
+  const rows = [...(${D}?.querySelectorAll('.skills-list label.skill-row') ?? [])];
+  const checkedRows = rows.filter((l) => l.querySelector('input')?.checked);
+  const res = await chrome.runtime.sendMessage({ type: 'skill.list' }).catch(() => null);
+  const names = checkedRows.map((l) => (l.textContent ?? '').split(' — ')[0].trim());
+  const ids = (res?.skills ?? []).filter((s) => names.includes(String(s.name ?? '').trim())).map((s) => s.refId ?? s.id);
+  const nameField = [...(${D}?.querySelectorAll('.agent-config-scroll label') ?? [])].find((l) => l.textContent.startsWith('Name'))?.querySelector('input')?.value;
+  return { name: nameField, checked: checkedRows.length, checkedIds: ids };
+})()`);
 check("owner renamed the agent", customized?.name === "My Chief of Staff", customized?.name);
-check("owner removed a suggested skill (5 → 4)", customized?.checked === 4, customized?.checked);
+check("owner removed a suggested skill (one fewer row stays checked)",
+  (skillDump?.checkable ?? []).length > 1 && customized?.checked === (skillDump?.checkable ?? []).length - 1,
+  { checked: customized?.checked, checkable: skillDump?.checkable });
 
 // 4. Create and read the SAVED record — it must reflect the CUSTOMIZED state.
 await ev(`(() => {
-  const btns = [...document.querySelectorAll('button')];
+  const btns = [...(${D}?.querySelectorAll('button') ?? [])];
   (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
 })()`);
 await sleep(1500);
@@ -176,8 +257,9 @@ check("saved record carries the CUSTOMIZED role (owner override present)",
   !!record && /Owner override/.test(record.role), record?.role?.slice(-60));
 check("saved record keeps the template persona beneath the override",
   !!record && record.role.includes("Chief of Staff Persona"), !!record);
-check("saved record reflects the REMOVED skill (4 skills, not the template's 5)",
-  !!record && record.skills.length === 4, record?.skills);
+check("saved record reflects the REMOVED skill (the skill still checked, not the template's whole list)",
+  !!record && record.skills.length === customized?.checked && record.skills[0] === customized?.checkedIds?.[0],
+  { record: record?.skills, customized });
 await shot(`${OUT}/02-after-create.png`);
 
 // 5. P1-a: the first-task suggestion lands in the VISIBLE composer (the opened
@@ -224,13 +306,13 @@ await ev(`document.getElementById('thread-back')?.click()`);
 await sleep(400);
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
-await ev(`(() => { const select = document.getElementById('agent-template-select')?.shadowRoot?.querySelector('select');
+await ev(`(() => { const select = ${D}?.querySelector('#agent-template-select');
   if (select) { select.value = 'tab-janitor'; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
 await sleep(200);
-const schedPrefill = await ev(`document.getElementById('agent-schedule')?.value ?? null`);
+const schedPrefill = await ev(`${D}?.querySelector('#agent-schedule')?.value ?? null`);
 check("a background template prefills the English schedule (120 min for tab-janitor)", schedPrefill === "every 120 minutes", schedPrefill);
 await ev(`(() => {
-  const btns = [...document.querySelectorAll('button')];
+  const btns = [...(${D}?.querySelectorAll('button') ?? [])];
   (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
 })()`);
 await sleep(1500);
@@ -254,7 +336,9 @@ const chipRow = await ev(`(() => {
   const row = rows.find(r => (r.getAttribute('name') ?? '') === 'Tab Janitor');
   return row ? { lastRun: row.getAttribute('last-run') } : null;
 })()`);
-check("the agents list shows the schedule chip ('every 120 min') with no background segregation", chipRow?.lastRun === "every 120 min", chipRow);
+// The row's chip is the product's own schedule marker (lib/agent-display.js
+// agentScheduleMarker): a scheduled agent reads "Scheduled · every N min".
+check("the agents list shows the schedule chip ('Scheduled · every 120 min') with no background segregation", chipRow?.lastRun === "Scheduled · every 120 min", chipRow);
 
 // 6b. P1-b: REOPENING the scheduled agent's edit dialog shows the real
 //     schedule (named-agent.get shares the list's enrichment). The create
@@ -262,12 +346,12 @@ check("the agents list shows the schedule chip ('every 120 min') with no backgro
 await ev(`document.getElementById('edit-agent')?.click()`);
 await sleep(700);
 const reopen = await ev(`(() => {
-  const f = document.getElementById('agent-schedule');
+  const f = ${D}?.querySelector('#agent-schedule');
   return { field: f?.value ?? null };
 })()`);
 check("reopening a SCHEDULED agent's edit dialog shows the real schedule (120)", reopen?.field === "every 120 minutes", reopen);
 // Close without saving (Cancel) — the schedule must remain untouched.
-await ev(`(() => { const b = [...document.querySelectorAll('agent-dialog button')].find(x => /^cancel$/i.test((x.textContent ?? '').trim())); b?.click(); })()`);
+await ev(`(() => { const b = [...(${D}?.querySelectorAll('button') ?? [])].find(x => /^cancel$/i.test((x.textContent ?? '').trim())); b?.click(); })()`);
 await sleep(400);
 const janitorAfterCancel = (await alarms()).find((a: any) => a.name === "agent:tab-janitor");
 check("Cancel leaves the schedule untouched", janitorAfterCancel?.periodInMinutes === 120, janitorAfterCancel);
@@ -286,19 +370,38 @@ await sleep(800);
 await ev(`document.getElementById('edit-agent')?.click()`);
 await sleep(600);
 const editDialogOpen = await ev(`(() => {
-  const f = document.getElementById('agent-schedule');
+  const f = ${D}?.querySelector('#agent-schedule');
   return { open: !!f, initial: f?.value ?? null };
 })()`);
 check("the edit dialog shows the schedule field, empty for an on-demand agent", editDialogOpen?.open === true && editDialogOpen.initial === "", editDialogOpen);
 await ev(`(() => {
-  const f = document.getElementById('agent-schedule');
+  const f = ${D}?.querySelector('#agent-schedule');
   f.value = 'every 45 minutes'; f.dispatchEvent(new Event('input', { bubbles: true }));
 })()`);
 await ev(`(() => {
-  const btns = [...document.querySelectorAll('agent-dialog button')];
+  const btns = [...(${D}?.querySelectorAll('button') ?? [])];
   (btns.find(b => /^save$/i.test((b.textContent ?? '').trim())) ?? btns.at(-1))?.click();
 })()`);
 await sleep(1200);
+// The save must COMPLETE, not merely start: the dialog closes on a successful
+// save and STAYS OPEN with its error line when the service worker rejects the
+// payload. Without this, the alarm check below passed while the persona half of
+// the same save failed — measured: sending the skill ROWS ({id,name,description})
+// instead of their ids made named-agent.update answer "named-agent.update payload
+// is not approvable", which the owner sees as a save that silently did not happen.
+const editSave = await ev(`(() => {
+  const errors = [...document.querySelectorAll('agent-dialog [aria-live="assertive"]')]
+    .map((el) => (el.textContent ?? '').trim()).filter(Boolean);
+  return { stillOpen: !!window.__openDialog(), errors };
+})()`);
+check("the edit save COMPLETES (the dialog closes; a rejected payload leaves it open with the error shown)",
+  editSave?.stillOpen === false && (editSave?.errors ?? []).length === 0, editSave);
+const afterEdit = await ev(`(async () => {
+  const res = await chrome.runtime.sendMessage({ type: 'named-agent.get', id: 'my-chief-of-staff' }).catch(() => null);
+  return { ok: res?.ok === true, skills: (res?.agent?.skills ?? []).length, roleLen: (res?.agent?.role ?? '').length };
+})()`);
+check("the edit-save persisted the agent's skills and persona (the update route accepted the payload)",
+  afterEdit?.ok === true && afterEdit?.skills === 1 && afterEdit?.roleLen > 0, afterEdit);
 const afterAdd = (await alarms()).find((a: any) => a.name === "agent:my-chief-of-staff");
 check("adding a schedule to an existing on-demand agent mints the alarm", afterAdd?.periodInMinutes === 45, afterAdd);
 // Remove it again — the alarm goes, the agent stays.
@@ -322,20 +425,20 @@ await ev(`(async () => { await chrome.runtime.sendMessage({ type: 'background-ag
 await sleep(600);
 await ev(`document.getElementById('new-agent')?.click()`);
 await sleep(700);
-await ev(`(() => { const select = document.getElementById('agent-template-select')?.shadowRoot?.querySelector('select');
+await ev(`(() => { const select = ${D}?.querySelector('#agent-template-select');
   if (select) { select.value = 'price-watcher'; select.dispatchEvent(new Event('change', { bubbles: true })); } })()`);
 await sleep(200);
-const pwPrefill = await ev(`document.getElementById('agent-schedule')?.value ?? null`);
+const pwPrefill = await ev(`${D}?.querySelector('#agent-schedule')?.value ?? null`);
 check("the price-watcher template prefills its schedule (60 min)", pwPrefill === "every 60 minutes", pwPrefill);
 // Force the REAL collision: the agent's id derives from its NAME — rename to
 // the recipe's exact name ("Price watcher") so the agent id IS the recipe id.
 await ev(`(() => {
-  const nameInput = [...document.querySelectorAll('.agent-config-scroll label')].find(l => l.textContent.startsWith('Name'))?.querySelector('input');
+  const nameInput = [...(${D}?.querySelectorAll('.agent-config-scroll label') ?? [])].find(l => l.textContent.startsWith('Name'))?.querySelector('input');
   nameInput.value = 'Price watcher';
   nameInput.dispatchEvent(new Event('input', { bubbles: true }));
 })()`);
 await ev(`(() => {
-  const btns = [...document.querySelectorAll('button')];
+  const btns = [...(${D}?.querySelectorAll('button') ?? [])];
   (btns.find(b => /create agent/i.test(b.textContent ?? "")) ?? btns.at(-1))?.click();
 })()`);
 await sleep(1500);
@@ -348,7 +451,7 @@ const collision = await ev(`(() => {
 })()`);
 check("a same-id record in BOTH stores renders exactly ONCE in the main list", collision?.mainRows === 1, collision);
 check("the collision row is the NAMED agent (avatar + its own 60-min schedule chip beats the recipe's 360)",
-  collision?.mainHasAvatar === true && collision?.mainChip === "every 60 min", collision);
+  collision?.mainHasAvatar === true && collision?.mainChip === "Scheduled · every 60 min", collision);
 check("the sidebar renders the collision once, with no 'background' label",
   collision?.sideRows === 1 && collision?.sideHasBackgroundLabel === false, collision);
 const bothAlarms = (await alarms()).filter((a: any) => a.name === "agent:price-watcher" || a.name === "recipe:price-watcher");

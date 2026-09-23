@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.460] — 2026-09-23
+- editing an agent that already has skills now saves your other changes too — adding a schedule no longer reports a failed save
+
 ## [0.3.459] — 2026-09-23
 - internal: load-sensitive fleet gate lock hardens error paths against leaks and derives private sidecar paths
 

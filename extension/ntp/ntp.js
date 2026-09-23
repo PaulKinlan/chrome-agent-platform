@@ -3687,7 +3687,14 @@ async function buildAgentConfigDialog(opts) {
     // RefId-keyed save (r4): collectChecked returns the source-qualified id
     // for every checked row, so a colliding imported skill saves as
     // `imported:<id>` and resolves to the imported row at run time.
-    const skills = skillSection.collectChecked();
+    //
+    // IDs, not the row OBJECTS: the approval payload binds a string array (the
+    // service worker's payloadStringArray rejects anything else with "<action>
+    // payload is not approvable"), so sending {id,name,description} rows made
+    // every edit-save of an agent WITH skills fail — the owner could not add a
+    // schedule or change anything else on such an agent. The gate is right: an
+    // approval must bind exact ids, so the caller maps.
+    const skills = skillSection.collectChecked().map((s) => s.id);
     const parsedSchedule = parseEnglishSchedule(
       scheduleField.el.value,
       // A background template carries its own recurring prompt; a manual
