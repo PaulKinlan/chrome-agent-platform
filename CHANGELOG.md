@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.475] — 2026-09-23
+- agent icons in the closed sidebar are no longer cut off
+
 ## [0.3.474] — 2026-09-23
 - the Settings, new-tab and side-panel bundles are checked to stay free of WebAssembly code
 
