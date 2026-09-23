@@ -1992,7 +1992,17 @@ Deno.test("guard: the attributed population and its documented exclusions", () =
   // Owner ruling 2026-09-07: generated output is skipped because a guard whose verdict
   // depends on whether someone ran `build:production` is not a guard. Two presence pins
   // in build-debug-mode.test.ts read the generated service-worker bundle under dist.
-  assertEquals(stats.skippedBuildArtifact, 2,
+  // cc18 (2026-09-23) added THREE more, declared here rather than absorbed into a floor:
+  // the wasm tree-shaking guard asserts `source.includes("WebAssembly")` against each of
+  // the three built page bundles (options/ntp/sidepanel). That pin is a deliberate shape
+  // check — those bundles carry the WORD five times as UI copy, and the guard counts API
+  // CALLS via scripts/lib/wasm-call-scan.mjs — so it is exactly the class this ruling
+  // skips: its verdict would otherwise depend on whether a build had run. 2 + 3 = 5.
+  // (Its filename is deliberately NOT written here: the partition guard treats a
+  // `tests/*.ts` mention as a driver reference and would make THIS file inherit that
+  // file's reads-dist hazard, which is the same exemption-by-assembly reason the dist
+  // path above is built rather than spelled.)
+  assertEquals(stats.skippedBuildArtifact, 5,
     "build-artifact pins are skipped by owner ruling; a change here means dist is being judged");
   // The executable half of that ruling, and the proof behind this file's partition
   // exemption-by-assembly: no generated output is ever loaded and judged.

@@ -37,6 +37,10 @@ export const SERIAL_REASONS = {
   // 76hu: the guard's reads-extension/dist class pins these two (previously
   // parallel; both consume the built diff-core bundle, a shared artifact).
   "tests/diff-core.test.ts": "imports/reads the built extension/dist diff-core bundle (shared build artifact)",
+  // cc18: reads the three built page bundles to assert they ship zero
+  // WebAssembly API calls (the j6au tree-shaking property) — a rebuild mid-read
+  // is exactly the race this phase exists to prevent.
+  "tests/wasm-tree-shaking.test.ts": "reads the built extension/dist page bundles (shared build artifacts)",
   "tests/emscripten-abi-loaded-harness.test.ts": "requires current Store dist artifacts and prepares the live extension, briefly creating/removing its reserved probe directory",
   "tests/owner-approval-security.test.ts": "imports the built extension/dist diff-core bundle (shared build artifact)",
   "tests/chrome-launch-lock.test.ts": "tests process-global Chrome canonical lock and mutates CAP_CHROME_LOCK_PATH (races with other lock tests)",

@@ -289,6 +289,33 @@ chrome-agent-platform-3khn lands there are TWO ways to name it in `scripts/` (th
 resolver and seven literals), and a lane adding a harness will copy a neighbour, i.e.
 the literal.
 
+## 18. tests/wasm-tree-shaking.test.ts + the built page bundles (added by cc18)
+
+- **Watches:** the three BUILT page bundles — `extension/dist/options.bundle.js`,
+  `ntp.bundle.js`, `sidepanel.bundle.js` — for any `WebAssembly.{instantiate,
+  instantiateStreaming,compile,compileStreaming,validate,Module,Instance}` call site.
+  Wasm executes in the workers (`extension/lib/wasm-execution-worker.js`,
+  `wasm-stream-worker.js`); a page bundle carrying a call means the j6au tree-shaking
+  stopped holding. The subject is a BUILT ARTIFACT, not a source file, so the test is in
+  SERIAL (`scripts/test-partition.mjs`) and fails closed when `extension/dist` is absent
+  rather than skipping.
+- **The trap it exists around:** each page bundle contains the bare word `WebAssembly`
+  five times and every one is UI copy ("Add a WebAssembly file"). A bare-word grep counts
+  5 and means nothing; `scripts/lib/wasm-call-scan.mjs` counts API calls and returns 0.
+  Never re-anchor this to a word count.
+- **Owed by a re-anchor:** adding any `import` to `extension/options/options.js`,
+  `ntp/ntp.js` or `sidepanel/sidepanel.js` that transitively reaches a wasm runtime; the
+  guard names the offending bundle and the call site. The POSITIVE CONTROL
+  (`wasm-tools/python/pyodide.asm.js`, tracked, 21 real calls) must keep reporting > 0 —
+  if it ever reports 0 the scanner is broken and a clean result proves nothing.
+- **Detection drill, run 2026-09-23:** a static
+  `import { runWorkerJob } from "../lib/wasm-execution-worker.js"` in the options entry
+  took `options.bundle.js` from 0 to 1 call site and reddened the property assertion by
+  name; removing it restored 4/4. (A first mutant attempt using a `globalThis.__cap…`
+  keep-alive was REFUSED by build.mjs's shipped-code scan as a test oracle — the build
+  exited 1 and wrote no bundles, so the stale zeros it left behind were not a result.)
+- **Subject moves:** LOUD naming the bundle and the call site.
+
 ---
 
 ## The four book rules

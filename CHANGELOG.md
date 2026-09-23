@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.474] — 2026-09-23
+- the Settings, new-tab and side-panel bundles are checked to stay free of WebAssembly code
+
 ## [0.3.473] — 2026-09-23
 - Deny ambient script sandbox connection requests and remote images in CSP
 
