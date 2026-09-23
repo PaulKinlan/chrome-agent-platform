@@ -61,12 +61,18 @@ export function buildAgentSkillRows({ available, savedIds, countEl = null, onCou
       unavailableHost.append(item);
     }
   };
+  // ONE source for the count copy. A caller that formats its own string will
+  // overwrite the disclosure suffix (the dialog did exactly that, and the
+  // browser-driven check caught it while the unit test passed) — so the label is
+  // exposed as well as applied.
+  const countLabel = () => {
+    const n = rows.filter((r) => r.checkbox.checked).length;
+    return (n > 0 ? `${n} selected` : `${list.length} available`) +
+      (unavailable.length ? ` \u00b7 ${unavailable.length} suggested but unavailable` : "");
+  };
   const updateCount = () => {
     const n = rows.filter((r) => r.checkbox.checked).length;
-    if (countEl) {
-      countEl.textContent = (n > 0 ? `${n} selected` : `${list.length} available`) +
-        (unavailable.length ? ` \u00b7 ${unavailable.length} suggested but unavailable` : "");
-    }
+    if (countEl) countEl.textContent = countLabel();
     onCount?.(n);
   };
   for (const s of list) {
@@ -113,6 +119,9 @@ export function buildAgentSkillRows({ available, savedIds, countEl = null, onCou
     },
     /** The suggested ids with no row in this profile (evidence for the caller). */
     unavailableSuggestions: () => [...unavailable],
+    /** The honest count label, including the disclosure suffix. Use THIS rather
+     *  than formatting a count in the caller (see the comment on countLabel). */
+    countLabel,
     collectChecked() {
       return rows.filter((r) => r.checkbox.checked).map((r) => ({
         id: r.skill?.refId ?? r.skill?.id ?? r.skill?.name ?? r.id,

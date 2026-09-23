@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.467] — 2026-09-23
+- one source for the skills count label (the dialog was overwriting the disclosure suffix) + the browser-driven disclosure checks
+
 ## [0.3.466] — 2026-09-23
 - a template suggestion that has no skill row is DISCLOSED, not silently dropped
 

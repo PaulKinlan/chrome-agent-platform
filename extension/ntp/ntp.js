@@ -3137,8 +3137,14 @@ async function buildAgentConfigDialog(opts) {
     const updateSkillCount = () => {
       const countEl = skillCountEl;
       if (!countEl) return;
-      const count = skillSection.count();
-      countEl.textContent = count > 0 ? `${count} selected` : `${available.length} available`;
+      // xiln: the LABEL comes from the skills section, so its disclosure suffix
+      // ("· N suggested but unavailable") cannot be overwritten by a second
+      // formatter here. That is exactly what happened before: this dialog
+      // re-formatted the count and dropped the suffix, and the browser-driven
+      // check caught it while the unit test passed.
+      countEl.textContent = typeof skillSection.countLabel === "function"
+        ? skillSection.countLabel()
+        : (() => { const c = skillSection.count(); return c > 0 ? `${c} selected` : `${available.length} available`; })();
     };
     const applyTemplate = (t) => {
       if (!t) {

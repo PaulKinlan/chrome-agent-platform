@@ -213,6 +213,29 @@ console.log(`NOTE: chief-of-staff skills: ${JSON.stringify(skillDump)}`);
 check("pick checks exactly the suggested skills whose row exists in this profile",
   (skillDump?.checkable ?? []).length > 0 && prefill?.checks === (skillDump?.checkable ?? []).length,
   { checked: prefill?.checks, skillDump });
+
+// xiln: the suggestions this profile CANNOT check are DISCLOSED in the dialog, not
+// silently dropped — the owner is told which ones were unavailable rather than
+// seeing a count that does not add up. Driven on the real dialog, in the loaded
+// extension, because a disclosure that renders only under a fake DOM is not a
+// disclosure the owner ever sees.
+const unavailable = await ev(`(() => {
+  const el = ${D}?.querySelector('.skills-unavailable');
+  return {
+    present: !!el,
+    hidden: el ? el.hidden === true : null,
+    text: (el?.textContent ?? '').trim().slice(0, 220),
+    count: ${D}?.querySelector('.skill-count')?.textContent ?? '',
+  };
+})()`);
+const missing = (skillDump?.suggested ?? []).filter((id) => !(skillDump?.checkable ?? []).includes(id));
+check("a template suggestion with no row is disclosed in the dialog, naming the ids",
+  unavailable?.present === true && unavailable?.hidden === false &&
+    missing.length > 0 && missing.every((id) => String(unavailable?.text ?? '').includes(String(id))),
+  { unavailable, missing });
+check("the skills count says how many suggestions were unavailable",
+  String(unavailable?.count ?? '').includes(`${missing.length} suggested but unavailable`),
+  { count: unavailable?.count, missing });
 await shot(`${OUT}/01-picker-prefilled.png`);
 
 // 3. SPECIALIZE: rewrite part of the persona, remove one suggested skill,
