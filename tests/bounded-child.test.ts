@@ -40,18 +40,62 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
   const s = await sample("node", ["-e", FUTEX_WAIT]);
   const report = JSON.stringify(s);
   assert(!s.ok, `a futex-waiting child must raise the named error; sample=${report}`);
+  // fnmr discriminator: the message now carries the child's captured output
+  // tails AFTER the named sentence. The original pin stays exact on LINE 1;
+  // the appended lines are the shutdown-vs-work classifier.
+  const [firstLine, ...restLines] = (s.message ?? "").split("\n");
   const m = /^futex probe HUNG: no exit within 2s \(pid=(\d+) state=(\S+) threads=(\d+) wchan=(\S+)\); its process group was killed\. This is a hang, not slow work — chrome-agent-platform-fnmr\.$/
-    .exec(s.message ?? "");
+    .exec(firstLine ?? "");
   assert(m, `the SPECIFIC named sentence with pid/state/threads/wchan must be present; sample=${report}`);
   const [, pid, state, threads, wchan] = m;
   assert(Number(pid) > 0, `pid must be sampled from the live child; sample=${report}`);
   assert(state === "S", `state must be the live child's (S), got ${state}; sample=${report}`);
   assert(Number(threads) > 0, `threads must be sampled, got ${threads}; sample=${report}`);
   assert(/futex/.test(wchan), `wchan must show the futex wait, got ${wchan}; sample=${report}`);
+  // The FUTEX_WAIT probe prints nothing before hanging: the discriminator must
+  // say so explicitly, so "empty" is decidable rather than ambiguous.
+  assert(restLines.some((l) => /fnmr discriminator — stdout: <empty/.test(l)),
+    `an outputless hang must say its stdout was empty; sample=${report}`);
   // The stopwatch is part of the assertion: a child that failed to start would
   // raise in milliseconds, so the bound must actually have elapsed.
   assert(s.ms >= TIMEOUT_MS - 250, `the bound must elapse (>= ${TIMEOUT_MS - 250}ms), got ${s.ms}ms; sample=${report}`);
   assert(s.ms < TIMEOUT_MS + 10_000, `the bound must fire promptly, got ${s.ms}ms; sample=${report}`);
+});
+
+Deno.test("fnmr discriminator: a child that PRINTS ITS RESULT and then hangs classifies as shutdown", async () => {
+  // The exact discriminator the bead asks for: "VERIFY OK" printed, THEN a
+  // never-exiting shutdown — the HUNG error must carry the tail so the next
+  // occurrence self-classifies as a shutdown hang, not an in-work hang.
+  const s = await sample(
+    "node",
+    ["-e", `console.log("VERIFY OK: 141 generated files byte-identical to the committed tree"); setTimeout(() => {}, 60000);`],
+    700,
+  );
+  const report = JSON.stringify(s);
+  assert(!s.ok, `the blocking child must raise the named error; sample=${report}`);
+  assert(/HUNG: no exit within 1s/.test(s.message ?? ""), s.message);
+  assert(/fnmr discriminator — stdout tail \(last 1200B\): VERIFY OK: 141 generated files/.test(s.message ?? ""),
+    `the printed result must survive into the HUNG error: ${s.message}`);
+});
+
+Deno.test("fnmr discriminator: an inherit-stdio caller says the output was not captured", async () => {
+  // stdio inherit means there is nothing to read — the error must SAY that, so
+  // "was the result printed?" is answerable (rerun with pipes) instead of
+  // silently unclassifiable.
+  const started = Date.now();
+  let message = "";
+  try {
+    await runBoundedChild("node", ["-e", "setTimeout(() => {}, 60000);"], {
+      stdio: "inherit",
+      timeoutMs: 700,
+      label: "inherit probe",
+    });
+  } catch (e) {
+    message = (e as Error).message;
+  }
+  assert(/HUNG/.test(message), `the bound must fire; got: ${message}`);
+  assert(/fnmr discriminator — stdout: NOT CAPTURED \(stdio: inherit\)/.test(message), message);
+  assert(Date.now() - started >= 450, "the bound must still elapse");
 });
 
 Deno.test("bounded child: a fast, successful child raises nothing", async () => {

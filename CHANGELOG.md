@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.472] — 2026-09-23
+- the hung verify child now carries its own stdout/stderr tails, and the generator's throw paths exit explicitly
+
 ## [0.3.471] — 2026-09-23
 - an agent template whose suggestions cannot all be checked in this profile now names the missing skills in the dialog
 

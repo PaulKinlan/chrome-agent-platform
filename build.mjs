@@ -89,15 +89,21 @@ if (process.platform === "win32") {
 // and never exit, and an unbounded execFileSync here wedged a worktree's build
 // for 3h37m. The bound names the hang instead and takes the group down.
 try {
+  // fnmr discriminator: this call site used stdio "inherit", so a hung verify
+  // child's own output was unrecorded and the shutdown-vs-work question could
+  // never be answered from the failure. Pipes + forwarding keep the operator
+  // output AND leave the captured tails in the HUNG error.
   const generator = await runBoundedChild(process.execPath, [
     path.join(ROOT, "scripts/build-bundled-tool-packages.mjs"),
     ...(REGEN_TOOLS ? [] : ["--verify"]),
   ], {
     cwd: ROOT,
-    stdio: "inherit",
+    stdio: ["ignore", "pipe", "pipe"],
     label: "bundled-tool generator",
     timeoutMs: Number(process.env.CAP_BUNDLED_TOOL_TIMEOUT_MS ?? 120_000),
   });
+  if (generator.stdout) process.stdout.write(generator.stdout);
+  if (generator.stderr) process.stderr.write(generator.stderr);
   if (generator.status !== 0) {
     // execFileSync used to throw here; the bounded runner reports the status
     // instead, so the fail-closed contract has to be explicit.

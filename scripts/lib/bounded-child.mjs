@@ -75,9 +75,22 @@ export async function runBoundedChild(command, args, {
     throw new Error(`${label} FAILED TO START: ${spawnError.message}`);
   }
   if (timedOut || status === null) {
+    // fnmr discriminator: a hung child's OWN OUTPUT distinguishes the two
+    // candidate mechanisms — a printed result (e.g. "VERIFY OK") means the work
+    // finished and the process hung at SHUTDOWN (the Node v24 futex race this
+    // file exists to bound); no output means it hung IN the work and a JS stack
+    // is what is needed. The capture already existed for piped callers; dropping
+    // it on the hang was the missing half of the evidence.
+    const tail = (buf, what) => {
+      if (!capture) return `${what}: NOT CAPTURED (stdio: inherit) — rerun with stdio pipes to classify shutdown-vs-work`;
+      const text = Buffer.concat(buf).toString("utf8").trim();
+      return text ? `${what} tail (last 1200B): ${text.slice(-1200)}` : `${what}: <empty — nothing printed before the hang>`;
+    };
     throw new Error(
       `${label} HUNG: no exit within ${(timeoutMs / 1000).toFixed(0)}s (${at}); its process group was killed. ` +
-      `This is a hang, not slow work — chrome-agent-platform-fnmr.`,
+      `This is a hang, not slow work — chrome-agent-platform-fnmr.\n` +
+      `fnmr discriminator — ${tail(outChunks, "stdout")}\n` +
+      `fnmr discriminator — ${tail(errChunks, "stderr")}`,
     );
   }
   return {
