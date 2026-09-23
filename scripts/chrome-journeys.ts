@@ -886,7 +886,7 @@ const EXPECTED = [
   "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
   "skill sync: retained the /skill popup screenshot",
   "skill sync: an imported skill appears in /skill AND Settings — one catalog (skill.list)",
-  "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+  "skill sync: the background Sorting Hat is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
   "skill sync: skill.list returns the IDENTICAL set on both reads (one route, no drift fork)",
   "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
   "skill sync: a colliding import lands in the imported store under the built-in's id",
