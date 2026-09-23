@@ -63,6 +63,19 @@ const shot = async (path: string) => {
   const { result } = await send("Page.captureScreenshot", { format: "png" }, sessionId);
   await Deno.writeFile(path, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));
 };
+// WHICH BUILD IS UNDER TEST, named up front. A bundle-dependent run that loaded a
+// STALE dist and a fix that did not work are indistinguishable from the outside —
+// that cost a re-run while adding the xiln disclosure checks (the harness reads
+// extension/dist/*, and the last edit had not been built), so this harness now says
+// which commit its bundles came from instead of leaving a reader to infer it.
+// (chrome-agent-platform-xiln.)
+try {
+  const marker = JSON.parse(await Deno.readTextFile(`${EXT}/dist/dist.complete`));
+  console.log(`NOTE: extension under test: ${EXT} — dist.complete commit ${String(marker.commit ?? "?").slice(0, 12)} (target ${marker.target ?? "?"})`);
+} catch {
+  console.log(`NOTE: extension under test: ${EXT} — NO dist.complete marker (unbuilt or foreign tree; a stale-bundle run and a failed fix look identical)`);
+}
+
 await Deno.mkdir(OUT, { recursive: true });
 await sleep(3200); // first-run surfaces settle
 

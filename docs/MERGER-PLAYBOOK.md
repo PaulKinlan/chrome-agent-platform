@@ -156,5 +156,9 @@ When landing a branch that changes DOM structure, element selectors, or shared c
    - For every shared file touched by the branch (e.g. `extension/shared/components.js`), perform a `git log -S'<added-string>'` across recent commits on `origin/main` to ensure that additions from recent landings (e.g. `diay`'s `_scrollSelectedIntoView()`) are NOT silently dropped during union resolution.
 3. **Pristine Attribution Discipline**:
    - If a candidate or suite fails against a merged tree, verify the failure against a pristine worktree of `origin/main` before assuming it is local to the candidate branch.
+4. **Per-Commit Ingestion Sweep**:
+   - When a landing incorporates or squashes commits from an author's branch, verify every single commit:
+     `for c in $(git log --format=%H origin/X ^origin/main); do git show --stat $c; done`
+     Confirm that each commit's distinctive behavior, helpers, or notes are present on main rather than dropped during union authoring.
 
 
