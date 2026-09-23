@@ -19,12 +19,15 @@ import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   awaitQuietWindow,
   classifyActiveBuilders,
+  classifyEvaluateTimeout,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
   environmentLine,
+  evaluateTimeoutReport,
   HEAVY_PROCESS_NAMES,
   isCdpEvaluateTimeout,
   isQuiet,
+  measureEvaluateTimeout,
   parseProcStatCpu,
   QuietWindowRefusedError,
   quietReasons,
@@ -651,6 +654,180 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
     }
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
+});
+
+// ── 9t1p: an evaluate timeout has THREE causes, and only one is the box ──────
+// qk7p mapped every evaluate timeout to "fleet load" WITHOUT reading the
+// machine. Measured on the run that filed 9t1p: load/core 0.11, zero active
+// compilers, three parked esbuild daemons — an idle box reported as fleet load,
+// while the real cause was a service worker that never answered an in-page
+// round trip. Every lane that read "fleet load" re-ran and wasted a run.
+
+Deno.test("9t1p: a LOADED box keeps the environmental verdict and names the numbers", () => {
+  const v = classifyEvaluateTimeout(sample({ load1: 30, loadPerCore: 30 / 32 }), resolveSpec(SPEC));
+  assertEquals(v.cause, "loaded");
+  assertEquals(v.environmental, true, "a genuinely loaded box is still a re-run verdict");
+  assert(/WAS loaded/.test(v.reason), v.reason);
+  assert(/load\/core 0\.94 > 0\.35/.test(v.reason), `the threshold breach is named: ${v.reason}`);
+  assert(/load1=30\.00/.test(v.environment), `the reading is carried: ${v.environment}`);
+});
+
+Deno.test("9t1p: an IDLE box is NOT fleet load — it is a product red that says what it is", () => {
+  // The exact shape of the filing run: quiet load, parked-but-not-compiling
+  // esbuild daemons. This must not be reported as load, and must not exit 75.
+  const idle = sample({
+    load1: 3.5, loadPerCore: 0.11,
+    compilers: 3, compilerNames: ["esbuild"],
+    activeCompilers: 0, activeCompilerNames: [],
+  });
+  const v = classifyEvaluateTimeout(idle, resolveSpec(SPEC));
+  assertEquals(v.cause, "idle-never-settled");
+  assertEquals(v.environmental, false, "an idle box must never take the environmental re-run verdict");
+  assert(/never settled/.test(v.reason), v.reason);
+  assert(/NOT fleet load/.test(v.reason), `it must say what it is not: ${v.reason}`);
+  assert(!/WAS loaded/.test(v.reason));
+});
+
+Deno.test("9t1p: an UNMEASURABLE box fails CLOSED to environmental, but never claims load", () => {
+  for (
+    const s of [
+      null,
+      sample({ measurable: false, error: "proc scan: permission denied", loadPerCore: Infinity }),
+    ]
+  ) {
+    const v = classifyEvaluateTimeout(s, resolveSpec(SPEC));
+    assertEquals(v.cause, "unmeasurable");
+    assertEquals(v.environmental, true, "fail closed: an unmeasurable box is never assumed idle");
+    assert(/could not be measured/.test(v.reason), v.reason);
+    assert(!/WAS loaded/.test(v.reason), `a fail-closed verdict must not fabricate a load claim: ${v.reason}`);
+  }
+});
+
+Deno.test("9t1p: the measurement takes TWO samples, so parked daemons are not counted as a build", async () => {
+  // classifyActiveBuilders treats an unseen process as active (fail closed,
+  // right for an admission gate). A single sample therefore reports three
+  // PARKED esbuild daemons as three live builds — the dnop bug, and exactly the
+  // misattribution this measurement exists to end. The second sample, taken
+  // with the first's CPU map, is what makes "idle" measurable.
+  const parked = new Map([
+    ["101", { name: "esbuild", startTicks: "1", cpuTicks: 500 }],
+    ["102", { name: "esbuild", startTicks: "2", cpuTicks: 900 }],
+    ["103", { name: "esbuild", startTicks: "3", cpuTicks: 700 }],
+  ]);
+  const reads: Array<Map<string, unknown> | null | undefined> = [];
+  const waits: number[] = [];
+  const v = await measureEvaluateTimeout(SPEC, {
+    read: (prev) => {
+      reads.push(prev ?? null);
+      // The REAL sampler's arithmetic decides activity: same cpuTicks across
+      // both samples = nothing advanced = nothing compiling.
+      const active = classifyActiveBuilders(prev ?? null, parked);
+      return Promise.resolve(sample({
+        load1: 3.5, loadPerCore: 0.11,
+        compilers: 3, compilerNames: ["esbuild"],
+        activeCompilers: active.length,
+        activeCompilerNames: active.length ? ["esbuild"] : [],
+        cpu: parked,
+      }));
+    },
+    wait: (ms) => {
+      waits.push(ms);
+      return Promise.resolve();
+    },
+  });
+  assertEquals(reads.length, 2, "two samples, or a parked daemon reads as a build");
+  assertEquals(reads[0], null, "the first sample has no predecessor");
+  assertEquals(reads[1], parked, "the second sample is compared against the first's CPU map");
+  assertEquals(waits, [SPEC.sampleMs], "it waits one sample interval between the two reads");
+  assertEquals(v.cause, "idle-never-settled", "three PARKED esbuilds are not a loaded box");
+  assertEquals(v.environmental, false);
+});
+
+Deno.test("9t1p: a single-sample reading would have called that same idle box loaded", () => {
+  // The control for the test above: with no predecessor, the same three parked
+  // daemons classify as active and the verdict flips to `loaded`. This is why
+  // the two-sample shape is the fix and not an optimisation.
+  const firstOnly = classifyActiveBuilders(null, new Map([
+    ["101", { name: "esbuild", startTicks: "1", cpuTicks: 500 }],
+    ["102", { name: "esbuild", startTicks: "2", cpuTicks: 900 }],
+    ["103", { name: "esbuild", startTicks: "3", cpuTicks: 700 }],
+  ]));
+  assertEquals(firstOnly.length, 3, "unseen processes fail closed to active");
+  const v = classifyEvaluateTimeout(
+    sample({
+      load1: 3.5, loadPerCore: 0.11,
+      compilers: 3, compilerNames: ["esbuild"],
+      activeCompilers: firstOnly.length, activeCompilerNames: ["esbuild"],
+    }),
+    resolveSpec(SPEC),
+  );
+  assertEquals(v.cause, "loaded", "one sample misreads parked daemons as load — the bug being fixed");
+});
+
+Deno.test("9t1p: the exit decision — 75 carries the marker, a product red must NOT", () => {
+  // This is the site the bead is about: the harness printed the refusal marker
+  // and exited 75 for EVERY evaluate timeout. An aggregator greps that marker,
+  // so a product red wearing it is re-run forever and never fixed.
+  const loaded = classifyEvaluateTimeout(sample({ load1: 30, loadPerCore: 30 / 32 }), resolveSpec(SPEC));
+  const env = evaluateTimeoutReport(loaded);
+  assertEquals(env.exitCode, ENVIRONMENTAL_REFUSAL_EXIT);
+  assert(env.line.startsWith(ENVIRONMENTAL_REFUSAL_MARKER), env.line);
+  // The marker payload is machine-readable AND carries the reading, so the
+  // "it was load" claim can be checked rather than taken on faith.
+  const payload = JSON.parse(env.line.slice(ENVIRONMENTAL_REFUSAL_MARKER.length));
+  assertEquals(payload.cause, "loaded");
+  assert(/load1=30\.00/.test(payload.environment), payload.environment);
+
+  const idle = classifyEvaluateTimeout(
+    sample({ load1: 3.5, loadPerCore: 0.11, compilers: 3, compilerNames: ["esbuild"], activeCompilers: 0, activeCompilerNames: [] }),
+    resolveSpec(SPEC),
+  );
+  const red = evaluateTimeoutReport(idle);
+  assertEquals(red.exitCode, 1, "an idle box that never settled is a product red, not a re-run");
+  assertEquals(red.line.includes(ENVIRONMENTAL_REFUSAL_MARKER), false,
+    `a product red must not wear the environmental marker: ${red.line}`);
+  assert(/PRODUCT RED/.test(red.line), red.line);
+  assert(/load1=3\.50/.test(red.line), `the reading that justified it is printed: ${red.line}`);
+
+  // Fail-closed stays a re-run verdict, and still never claims load.
+  const unmeasured = evaluateTimeoutReport(classifyEvaluateTimeout(null, resolveSpec(SPEC)));
+  assertEquals(unmeasured.exitCode, ENVIRONMENTAL_REFUSAL_EXIT);
+  assertEquals(JSON.parse(unmeasured.line.slice(ENVIRONMENTAL_REFUSAL_MARKER.length)).cause, "unmeasurable");
+
+  // The three exit codes stay distinct — 0/1/75, the contract this file opens with.
+  assertEquals(new Set([0, red.exitCode, env.exitCode]).size, 3);
+});
+
+Deno.test("9t1p: the REAL harness routes its evaluate-timeout exit through the measured report", async () => {
+  // A source pin would pass with the wiring removed, so this asserts the
+  // STRUCTURE the harness must have: it measures at the catch, and its exit
+  // site is the shared report rather than a hand-written marker line.
+  const harness = await Deno.readTextFile(`${ROOT}scripts/chrome-journeys.ts`);
+  const catchSite = harness.slice(harness.indexOf("if (isCdpEvaluateTimeout(String(e?.message ?? e)))"));
+  assert(/measureEvaluateTimeout\(\)/.test(catchSite.slice(0, 1200)),
+    "the catch must MEASURE the box, not assume load");
+  assert(/evaluateTimeoutReport\(evaluateTimeoutVerdict\)/.test(harness),
+    "the exit site must use the shared, tested decision");
+  // The old fixed claim must be gone from the exit path entirely.
+  assertEquals(harness.includes('{"reason":"cdp evaluate exceeded the budget under fleet load"}'), false,
+    "the unconditional 'under fleet load' marker payload must not survive");
+  // And the environmental exit must no longer be reachable without a verdict.
+  assertEquals(/environmentalAbort/.test(harness), false,
+    "the boolean that could not tell load from a hang is gone");
+});
+
+Deno.test("9t1p: the measurement stops at an unmeasurable FIRST sample (no second read)", async () => {
+  let reads = 0;
+  const v = await measureEvaluateTimeout(SPEC, {
+    read: () => {
+      reads++;
+      return Promise.resolve(sample({ measurable: false, error: "/proc unreadable", loadPerCore: Infinity }));
+    },
+    wait: () => Promise.reject(new Error("must not wait after an unmeasurable read")),
+  });
+  assertEquals(reads, 1);
+  assertEquals(v.cause, "unmeasurable");
+  assertEquals(v.environmental, true);
 });
 
 Deno.test("qk7p: the journeys' CDP evaluate timeout is classified environmental", () => {

@@ -416,6 +416,39 @@ read in run 2.
   then 250/370, then 370/370 only in a quiet window) were machine load from
   other lanes' builds. The serialized-Chrome lock never prevented them, because
   exclusivity excludes other CAP browsers, not other lanes' compilers.
+- **An evaluate timeout is CLASSIFIED BY MEASUREMENT, never assumed
+  (chrome-agent-platform-9t1p).** qk7p mapped every `cdp timeout:
+  Runtime.evaluate` to the environmental verdict with a fixed marker payload —
+  `"cdp evaluate exceeded the budget under fleet load"` — without reading the
+  machine at all. That classification rule is right; applying it with no reading
+  is what made it wrong as a conclusion. Measured on the run that filed 9t1p:
+  load/core 0.11, zero active compilers, three PARKED esbuild daemons, and the
+  real cause an in-page `chrome.runtime.sendMessage` round trip the service
+  worker never answered. The verdict read "under fleet load" on an idle box, so
+  every lane that read it re-ran and the defect stayed hidden.
+  The harness now calls `measureEvaluateTimeout()` AT THE CATCH (before the
+  shutdown spends seconds) and `evaluateTimeoutReport()` decides the exit, with
+  three causes:
+  `loaded` (over threshold → exit 75, and the marker payload now carries the
+  numbers that justify it), `idle-never-settled` (measurably quiet → **exit 1, a
+  product red**, and the line must NOT carry `CAP_ENVIRONMENTAL_REFUSAL`, or an
+  aggregator re-runs a real defect forever), and `unmeasurable` (fails CLOSED to
+  75, but never claims load). The reading takes TWO samples on purpose:
+  `classifyActiveBuilders` treats an unseen process as active, so a single
+  sample counts parked daemons as live builds and reports an idle box as loaded
+  — the dnop bug, reproducing the exact misattribution the measurement exists to
+  end. Never widen `isCdpEvaluateTimeout` into a verdict again: it says an
+  evaluate blew its budget, not why.
+- **A probe asserts its own expectation (chrome-agent-platform-9t1p).** Three
+  outcomes, not two: it happened and passed, it happened and did not pass, or IT
+  DID NOT HAPPEN. `runScriptedToolProbe`'s wait loop used to exit silently on
+  timeout and hand back a partial result, so the caller's check failed on a
+  confusing payload and the real failure surfaced one step later as a generic
+  CDP timeout about something else. A probe that finds nothing now FAILS WHERE
+  IT HAPPENS, naming what it got, what it expected, how long it waited and the
+  phase the run reached — and if the diagnostic read itself times out, it says
+  the service worker did not answer rather than letting the generic timeout
+  carry the story.
 - **Bounded concurrency, per-instance isolation (chrome-agent-platform-uzik).**
   `launchChrome()` takes ONE SLOT of a bounded-concurrency semaphore
   (`scripts/lib/chrome-slots.ts`; `CAP_CHROME_MAX_CONCURRENT`, default 4) for the
