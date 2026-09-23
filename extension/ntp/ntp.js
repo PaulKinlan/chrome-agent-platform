@@ -6,6 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
+import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
@@ -1536,7 +1537,21 @@ async function renderSidebarHarnessRows() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.dataset.ref = a.ref ?? `acp:${a.id}`;
-    btn.textContent = a.name || a.id;
+    // THE OWNER ASKED FOR ICONS AND THE ROWS WERE PLAIN TEXT (Paul, 2026-09-23:
+    // "you haven't landed my icons for the harnesses in the ntp sidepanel").
+    // The rows were reachable and unmarked. This is the mark: one glyph per
+    // harness, the same shape the site-agent buttons use, so a harness is
+    // recognisable at a glance in a list of them.
+    // THE SAME SVG MARK THE SIDE PANEL'S QUICK LIST USES (Paul, 2026-09-23:
+    // "you haven't landed my icons for the harnesses in the ntp sidepanel").
+    // The module and its test already existed; these rows were the surface that
+    // never called them, so a harness was recognisable in one list and plain
+    // text in the other.
+    const mark = harnessMarkEl(document, a.id, a.name || a.id);
+    const label = document.createElement("span");
+    label.className = "hq-label";
+    label.textContent = a.name || a.id;
+    btn.replaceChildren(mark, label);
     btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
     if (currentAgentKind === "acp" && currentAgentId === a.id) btn.setAttribute("aria-current", "true");
     btn.addEventListener("click", () => {

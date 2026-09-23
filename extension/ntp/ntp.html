@@ -151,6 +151,13 @@
       color: var(--text,#1d1b18); border-radius: 999px; padding: 4px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
     .harness-list button:hover, .harness-list button[aria-current="true"] { border-color: var(--accent,#0e6e63); color: var(--accent,#0e6e63); }
     .harness-list button:focus-visible { outline: 2px solid var(--accent,#0e6e63); outline-offset: 2px; }
+    /* The harness rows carry the SAME SVG mark the side panel's quick list uses
+       (extension/shared/harness-marks.js) — same shape, same 16px, so a harness
+       is recognisable in both surfaces rather than only one. */
+    .harness-list button { display: inline-flex; align-items: center; gap: 6px; }
+    .harness-list .hq-mark { display: inline-flex; flex: 0 0 auto; }
+    .harness-list .hq-mark svg { display: block; width: 16px; height: 16px; }
+    .harness-list .hq-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .side-activity[hidden] { display: none; }
     .side-label-row { display: flex; align-items: center; gap: 4px; min-inline-size: 0; }
     .side-label-row .side-label { flex: 1 1 auto; min-inline-size: 0; }
