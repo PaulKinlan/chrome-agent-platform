@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.456] — 2026-09-23
+- make the two real-compiler tests portable — calibrate the burner's duration instead of tuning it to one box
+
 ## [0.3.455] — 2026-09-22
 - load-sensitive gates take turns — one declared fleet-wide slot, announced, refusing INCONCLUSIVE with the holder named
 

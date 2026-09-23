@@ -63,11 +63,59 @@ export async function realEsbuildBinary(): Promise<string> {
   throw new Error("no esbuild binary under node_modules/@esbuild/*/bin — the real-compiler fixtures cannot run");
 }
 
-/** A big synthetic module for a real compile to burn CPU on. */
-async function writeBurnerInput(path: string, lines = 400_000): Promise<void> {
+/** A synthetic module for a real compile to burn CPU on. */
+async function writeBurnerInput(path: string, lines: number): Promise<void> {
   const parts: string[] = [];
   for (let i = 0; i < lines; i++) parts.push(`export const v${i} = ${i} * 3 + Math.sqrt(${i}); // padding padding padding padding\n`);
   await Deno.writeTextFile(path, parts.join(""));
+}
+
+/** A burner input SIZED ON THIS BOX so that ONE compile outlasts `targetMs`.
+ *
+ *  Why calibration instead of a constant: the first version of these tests used
+ *  a fixed ~35 MB input, which takes ~1.7 s on the author's machine and would
+ *  finish inside a single sample on a faster one — so the sampler test asserted
+ *  about a process that had already exited and the journey-gate test found a
+ *  quiet window between two short compiles. Both failed ON THE REVIEWER'S BOX
+ *  and passed on mine, with no difference in intention: the tests were measuring
+ *  the machine as well as the code. The workload is now measured first and
+ *  scaled until it covers the bound, so the fixture no longer depends on how
+ *  fast the box compiles. Do NOT replace this with a constant size.
+ *
+ *  Returns the input path and one measured compile duration at that size. */
+async function calibratedBurner(dir: string, targetMs: number): Promise<{ input: string; compileMs: number; lines: number }> {
+  const bin = await realEsbuildBinary();
+  const input = `${dir}/burner.js`;
+  let lines = 100_000; // ~9 MB: a cheap first probe
+  let compileMs = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await writeBurnerInput(input, lines);
+    const t0 = Date.now();
+    const probe = new Deno.Command(bin, {
+      args: [input, "--minify", `--outfile=${dir}/burner.min.js`, "--log-level=error"],
+      stdout: "null", stderr: "null",
+    }).spawn();
+    await probe.status;
+    compileMs = Date.now() - t0;
+    if (compileMs >= targetMs) break;
+    // Scale by the measured shortfall, bounded so a pathologically fast box
+    // cannot ask for an input it cannot write.
+    const scale = Math.min(10, Math.max(2, targetMs / Math.max(1, compileMs)));
+    lines = Math.min(3_000_000, Math.round(lines * scale));
+  }
+  return { input, compileMs, lines };
+}
+
+/** Start ONE real compile of a calibrated input — a single long-lived pid, which
+ *  is what lets the sampler test assert about the pid IT created. */
+async function startCalibratedCompiler(dir: string, targetMs: number): Promise<{ proc: Deno.ChildProcess; pid: number; input: string; compileMs: number }> {
+  const { input, compileMs } = await calibratedBurner(dir, targetMs);
+  const bin = await realEsbuildBinary();
+  const proc = new Deno.Command(bin, {
+    args: [input, "--minify", `--outfile=${dir}/burner.run.min.js`, "--log-level=error"],
+    stdout: "null", stderr: "null",
+  }).spawn();
+  return { proc, pid: proc.pid, input, compileMs };
 }
 
 Deno.test("dnop: a PARKED heavy-named daemon is not a build; a COMPILING one still is", async () => {
@@ -147,23 +195,34 @@ Deno.test("dnop: the REAL sampler counts this test's compiling process and not i
     const parkedActive = classifyActiveBuilders(first.cpu, second.cpu).filter((pid) => parkedPids.has(pid));
     assertEquals(parkedActive, [], "the parked daemons this test started must NOT count as compiling");
 
-    // Now a REAL compile: the actual esbuild binary, burning CPU on a generated
-    // input, one long-lived pid — the shape the gate must keep refusing.
-    const bin = await realEsbuildBinary();
-    const input = `${dir}/burner.js`;
-    await writeBurnerInput(input);
-    compiler = new Deno.Command(bin, {
-      args: [input, "--minify", "--sourcemap=inline", `--outfile=${dir}/burner.min.js`, "--log-level=error"],
-      stdout: "null", stderr: "null",
-    }).spawn();
-    await new Promise((r) => setTimeout(r, 400));
+    // Now a REAL compile, and the only process this test asserts about is the one
+    // it started: a calibrated input keeps it running for SECONDS on any box, so
+    // both samples below land inside the compile whatever the machine's speed.
+    // (The previous fixed-size version was tuned to one box — see
+    // calibratedBurner's comment; do not reintroduce a constant here.)
+    const started = await startCalibratedCompiler(dir, 4000);
+    compiler = started.proc;
+    // Portability is ASSERTED, not assumed: the fixture proves on this box that
+    // its workload outlasts the window the test needs, so a fast machine widens
+    // the input instead of shrinking the measurement.
+    assert(
+      started.compileMs >= 4000,
+      `the burner must outlast the sampling window on THIS box (calibrated to ${started.compileMs} ms); if this fails, the calibration could not scale the input far enough`,
+    );
+    await new Promise((r) => setTimeout(r, 250));
     const before = await readLoadSample(second.cpu ?? null);
     await new Promise((r) => setTimeout(r, 400));
     const after = await readLoadSample(before.cpu ?? null);
-    const compilingPid = String(compiler.pid);
+    const compilingPid = String(started.pid);
     assert(
       classifyActiveBuilders(before.cpu, after.cpu).includes(compilingPid),
-      `a genuinely compiling process is active via CPU advance: ${JSON.stringify({ pid: compilingPid, active: classifyActiveBuilders(before.cpu, after.cpu), names: after.activeCompilerNames })}`,
+      `a genuinely compiling process is active via CPU advance: ${JSON.stringify({ pid: compilingPid, compileMs: started.compileMs, active: classifyActiveBuilders(before.cpu, after.cpu), names: after.activeCompilerNames })}`,
+    );
+    // The name match is evidence about the box, so it is asserted only as a
+    // LOWER bound over what this test created — never as an exact count.
+    assert(
+      second.compilerNames.includes("esbuild") && after.compilerNames.includes("esbuild"),
+      `the park this test created is visible as a name match: ${JSON.stringify({ s2: second.compilerNames, after: after.compilerNames })}`,
     );
   } finally {
     for (const p of [...parked, compiler]) {
@@ -521,19 +580,24 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
   const burners: Deno.ChildProcess[] = [];
   try {
     const bin = await realEsbuildBinary();
-    const input = `${dir}/burner.js`;
-    await writeBurnerInput(input);
-    // REAL compiles, back to back and staggered: a single build (~2 s) finishes
-    // before the gate has even finished starting up, which is how the first
-    // version of this test ended up starting a full journey run instead of
-    // producing a refusal. Two overlapping loops keep genuine compilation in
-    // progress for the whole bound; the output goes to /dev/null so a long loop
-    // does not write a gigabyte of bundle.
-    const startBurner = (delayS: number) => new Deno.Command("/bin/bash", {
-      args: ["-c", `sleep ${delayS}; for i in $(seq 1 120); do "${bin}" "${input}" --minify --outfile=/dev/null --log-level=error >/dev/null 2>&1; done`],
+    // REAL compiles, back to back and staggered, sized on THIS box so each lasts
+    // seconds (calibratedBurner explains why a constant size cannot be used): a
+    // single short compile finishes before the gate has finished starting up —
+    // which is how the first version of this test started a whole journey run
+    // instead of producing a refusal, and, on a faster reviewer box, how it
+    // produced a quiet window BETWEEN two compiles. Other lanes' parked daemons
+    // are deliberately part of the ambient environment: the property is that a
+    // genuinely COMPILING process holds the gate, whatever else the box runs.
+    const calibration = await calibratedBurner(dir, 3000);
+    assert(
+      calibration.compileMs >= 3000,
+      `the burner must outlast the gate's bound on THIS box (calibrated to ${calibration.compileMs} ms)`,
+    );
+    const burn = (delayS: number) => new Deno.Command("/bin/bash", {
+      args: ["-c", `sleep ${delayS}; for i in $(seq 1 40); do "${bin}" "${calibration.input}" --minify --outfile=/dev/null --log-level=error >/dev/null 2>&1; done`],
       stdout: "null", stderr: "null",
     }).spawn();
-    burners.push(startBurner(0), startBurner(1));
+    burners.push(burn(0), burn(1));
     await new Promise((r) => setTimeout(r, 1500));
     const run = await new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "--no-check", `${ROOT}scripts/chrome-journeys.ts`],
