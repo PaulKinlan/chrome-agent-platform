@@ -14,6 +14,7 @@
 // Run: npm run test:width   (set CAP_ACCEPTANCE_EXT to measure a tree other than this one)
 // @ts-nocheck — untyped CDP scripting in the house pattern.
 
+import { leftInsetFromPaddingShorthand } from "./lib/css-padding.ts";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
@@ -285,10 +286,11 @@ const pad1440 = hubResults["1440"];
 // check still passed while 8 others failed. The fix is to make absence a FAILURE rather than
 // a zero: an unparseable side yields null, and null fails. A second side inset is read from
 // the computed style, so a renamed element cannot silently substitute one.
-const padLeft = (value: unknown): number | null => {
-  const part = String(value ?? "").trim().split(/\s+/)[1];
-  return part === undefined ? null : parseFloat(part);
-};
+// rshb: the shorthand rule now lives in scripts/lib/css-padding.ts, where a unit
+// test gates it — this driver is registered as a NAMED harness, so a rule that
+// exists only here has no regression guard (the cgei fix was wrong in two ways
+// and only a driven run could see either of them).
+const padLeft = leftInsetFromPaddingShorthand;
 const bodyLeft = padLeft(pad1440.panelBodyPadding);
 const headLeft = padLeft(pad1440.panelHeadPadding);
 check("hub: the Jobs board's content is inset like its own panel header",

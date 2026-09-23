@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.461] — 2026-09-23
+- the constrained-width padding check reads the CSS shorthand correctly — no false red on a uniform padding, and no false green on a four-value one
+
 ## [0.3.460] — 2026-09-23
 - editing an agent that already has skills now saves your other changes too — adding a schedule no longer reports a failed save
 
