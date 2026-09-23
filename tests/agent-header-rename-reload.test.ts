@@ -125,9 +125,17 @@ Deno.test({
       await new Promise((r) => setTimeout(r, 1500));
 
       const opened = await ev(`(() => {
-        const row = document.querySelector("#named-agents capability-row");
+        // muc moved the hub's agent rows into the shared agent-picker summary list
+        // (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01): the row is the .opt button in
+        // that component's shadow root and a real click emits agent-select, which is
+        // the path the other five drivers were moved to. This test landed while muc
+        // was in flight and was missed, leaving main red with "Agent row must be
+        // found and opened". (No backticks in this template literal.)
+        const picker = document.querySelector("#named-agents agent-picker");
+        const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+        const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === "ZZZ Original Name");
         if (!row) return false;
-        row.dispatchEvent(new CustomEvent("open"));
+        row.click();
         return true;
       })()`);
       assertEquals(opened, true, "Agent row must be found and opened");

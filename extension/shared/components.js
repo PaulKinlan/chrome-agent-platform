@@ -4087,6 +4087,12 @@ class SegmentedControl extends Component {
       b.textContent = item;
       list.appendChild(b);
     }
+    // chrome-agent-platform-diay: the attribute-driven selection (connect-time
+    // `value`, post-connect attribute changes) never passes through _select,
+    // so it must scroll here — this was the reported bug's load-state path.
+    // RESTORED (chrome-agent-platform-muc's landing dropped diay's change when
+    // union-resolving this file; the tests that pin it were left red on main).
+    this._scrollSelectedIntoView();
   }
   _wire() {
     const list = this._root.querySelector(".tabs");
@@ -4118,7 +4124,19 @@ class SegmentedControl extends Component {
     this._value = value;
     this._sync();
     if (focus) this._focusSelected();
+    this._scrollSelectedIntoView();
     if (changed && !silent) this._emit("change", { value });
+  }
+  _scrollSelectedIntoView() {
+    // chrome-agent-platform-diay: the host strip scrolls horizontally on
+    // narrow widths (Settings Providers at 360px) and the active tab can sit
+    // outside the viewport. Keep it visible on every activation — click,
+    // arrow/Home/End, and the host's programmatic initial selection.
+    // "nearest" on both axes never scrolls an already-visible tab.
+    const value = this.value;
+    for (const b of this._root?.querySelectorAll?.('[role="tab"]') ?? []) {
+      if (b.dataset.val === value) { b.scrollIntoView?.({ block: "nearest", inline: "nearest" }); break; }
+    }
   }
   _sync() {
     const value = this.value;
