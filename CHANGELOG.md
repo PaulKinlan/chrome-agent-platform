@@ -4,10 +4,10 @@
 - the Settings, new-tab and side-panel bundles are checked to stay free of WebAssembly code
 
 ## [0.3.473] — 2026-09-23
-- Deny ambient script sandbox connection requests and remote images in CSP
+- the script sandbox now denies ambient connection requests and remote images while preserving local preview images and the controlled host bridge
 
 ## [0.3.472] — 2026-09-23
-- The script sandbox now denies ambient connection requests and remote images while preserving local preview images and the controlled host bridge
+- the new-tab sidebar rows now display badge icons alongside agent names, matching the side panel
 
 ## [0.3.471] — 2026-09-23
 - an agent template whose suggestions cannot all be checked in this profile now names the missing skills in the dialog
