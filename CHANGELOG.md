@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.468] — 2026-09-23
+- the serial-phase resilience test records its test pid at module boot, preventing false timeouts under load
+
 ## [0.3.467] — 2026-09-23
 - the quiet-window gate treats a truncated process scan as unmeasurable rather than quiet, preventing gates from opening under a build
 
