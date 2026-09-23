@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.455] — 2026-09-23
+- the multi-slash check reads the composer input by its stable id
+
 ## [0.3.454] — 2026-09-22
 - one vocabulary in the remaining comments, hooks error copy, docs, and omnibox intents
 

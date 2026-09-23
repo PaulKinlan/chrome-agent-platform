@@ -2685,7 +2685,10 @@ async function main() {
     await sleep(800);
     const afterSkill = await evalIn(cdp, ntpSession, `(() => {
       const comp = document.querySelector('agent-composer');
-      const inp = comp?.querySelector('#task-input');
+      // b5q4 stable IDs: the composer input is [data-composer-input] (the old
+      // light-DOM #task-input id is gone; boxOf() has the fallback, this raw
+      // read did not — it made this assertion fail deterministically).
+      const inp = comp?.querySelector('[data-composer-input]');
       const pop = comp?.querySelector('.popup');
       return JSON.stringify({ value: inp?.value ?? '', popupHidden: pop ? pop.hidden : true });
     })()`);
@@ -2718,7 +2721,7 @@ async function main() {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await sleep(800);
-    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('agent-composer #task-input')?.value ?? ''`);
+    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('agent-composer [data-composer-input]')?.value ?? ''`);
     check("multi-slash: the final input holds BOTH the skill and the tab reference",
       /\/skill:(?:builtin:)?page-summary/.test(multiValue) && /\/tabs:/.test(multiValue));
     check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
