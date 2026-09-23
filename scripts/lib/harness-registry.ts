@@ -51,7 +51,23 @@ export interface HarnessEntry {
    *  `launchChrome({ requireQuiet })` disagree: a declaration nobody honours is
    *  worse than none. */
   loadSensitive?: string;
+  /** WHO OWNS THIS HARNESS'S CONTINUED EXISTENCE — a live bead id (e.g.
+   *  "chrome-agent-platform-76qp"). REQUIRED for a load-sensitive gate, because
+   *  an unowned one is an unowned gate: chrome-agent-platform-35o1 found the
+   *  370-check journey gate with no owning issue at all — its beads (gsyp,
+   *  xqhz) had closed and nothing noticed, so a lifecycle defect sat behind a
+   *  harness whose failures were classified environmental.
+   *  The guard is live, not decorative: tests/harness-registry.test.ts resolves
+   *  the bead through `bd` and FAILS when it is closed, so closing an owner
+   *  without re-pointing this field is not a way to drop the responsibility
+   *  silently. A gate-class entry without `loadSensitive` may carry one too
+   *  (see chrome-agent-platform-ryrr for the rest of the gate class). */
+  owner?: string;
 }
+
+/** The owner-of-record bead for the journey gate. Kept beside the entry so the
+ *  guard and the declaration cannot drift apart. */
+export const JOURNEY_GATE_OWNER = "chrome-agent-platform-76qp";
 
 const RED = (tally: string, mode: string, owner = "unassigned (a fix or a retirement decision is the next action)") => ({
   expectedRed: owner,
@@ -64,6 +80,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
     class: "gate",
     npm: "test:chrome",
     loadSensitive: "eo4d.1: 370 sequential CDP round-trips over minutes; r1 died at 59/370 and r3 at 250/370 on `cdp timeout: Runtime.evaluate` with machine load >7 (other lanes' imageops/esbuild + Rust/Wasm builds); r4 passed 370/370 only in an uninterrupted quiet window",
+    owner: JOURNEY_GATE_OWNER,
   },
   "security-suite.ts": { class: "gate", npm: "test:security", via: "scripts/security-suite-supervisor.sh" },
   "security-injection.ts": { class: "gate", npm: "test:security:injection" },
