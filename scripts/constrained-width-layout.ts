@@ -382,6 +382,13 @@ const PANEL_PROBE = `(() => {
         singleLine,
         wrapped,
         labelClipped,
+        // qdjn(2): an ABSENT .hq-label used to be indistinguishable from an
+        // un-clipped one, because labelClipped falls back to false when the label
+        // is missing — and false is exactly what the 400px direction expects, so a
+        // missing label passed as "leaves the label visible". It failed closed at
+        // 260/300px and open at 400px: single-direction only. Carry presence
+        // explicitly so absence is RED in BOTH directions.
+        hasLabel: !!label,
         overflowsContainer: r.right > el.getBoundingClientRect().right + 1,
         hasMark: !!mark,
         markTag: mark ? mark.tagName.toLowerCase() : null,
@@ -486,6 +493,16 @@ for (const w of PANEL_WIDTHS) {
 if (panelHasButtons) {
   for (const w of PANEL_WIDTHS) {
     const r = panelResults[String(w)];
+    // PER-WIDTH non-vacuity guard (qdjn(1)). `panelHasButtons` above is sampled
+    // from panelResults["300"] ONLY, so buttons: [] at 260 or 400 left every
+    // .every() below passing on an empty array — three (now four) vacuous passes
+    // at a width the guard never looked at. The guard read as covering the loop;
+    // it did not. Take it per width, on this width's own buttons, and stop rather
+    // than record passes that measured nothing.
+    const widthHasButtons = !r?.error && Array.isArray(r?.buttons) && r.buttons.length > 0;
+    check(`panel ${w}px: the harness buttons rendered (per-width non-vacuity guard)`,
+      widthHasButtons, { count: r?.buttons?.length ?? null, error: r?.error ?? null });
+    if (!widthHasButtons) continue;
     check(`panel ${w}px: no harness button's text overflows its own box`,
       r.buttons.every((b: any) => b.textOverflowsBy <= 1), { buttons: r.buttons });
     check(`panel ${w}px: no harness button wraps its label to more than one line`,
@@ -498,18 +515,25 @@ if (panelHasButtons) {
     // directions: hidden when the panel is collapsed, visible when it is not.
     const expectClipped = w < 320;
     check(`panel ${w}px: the collapsed rule ${expectClipped ? "hides the label" : "leaves the label visible"} (the container query ${expectClipped ? "fires" : "does not fire"})`,
-      r.buttons.every((b: any) => b.labelClipped === expectClipped),
+      // hasLabel is required alongside the comparison: without it a MISSING label
+      // satisfies the 400px direction, because labelClipped falls back to false
+      // and expectClipped is false there (qdjn(2)).
+      r.buttons.every((b: any) => b.hasLabel && b.labelClipped === expectClipped),
       { expectClipped, containerWidth: r.containerWidth,
-        buttons: r.buttons.map((b: any) => ({ t: b.text, labelClipped: b.labelClipped, w: b.w, h: b.h })) });
+        buttons: r.buttons.map((b: any) => ({ t: b.text, hasLabel: b.hasLabel, labelClipped: b.labelClipped, w: b.w, h: b.h })) });
     check(`panel ${w}px: every harness button stays inside its container`,
       r.buttons.every((b: any) => !b.overflowsContainer), { containerWidth: r.containerWidth, buttons: r.buttons });
   }
-  // At the collapsed width the mark must carry the identity.
+  // At the collapsed width the mark must carry the identity. Both of these read
+  // collapsed.buttons unguarded, so an empty list at 260px passed them vacuously
+  // too — same defect as the loop above, outside it (qdjn(1)).
   const collapsed = panelResults["260"];
-  check("panel 260px: every harness button carries a mark", collapsed.buttons.every((b: any) => b.hasMark && b.markW >= 12),
-    { buttons: collapsed.buttons.map((b: any) => ({ t: b.text, hasMark: b.hasMark, markW: b.markW, tag: b.markTag, ns: b.markNS })) });
+  const collapsedHasButtons = !collapsed?.error && Array.isArray(collapsed?.buttons) && collapsed.buttons.length > 0;
+  check("panel 260px: every harness button carries a mark",
+    collapsedHasButtons && collapsed.buttons.every((b: any) => b.hasMark && b.markW >= 12),
+    { count: collapsed?.buttons?.length ?? null, buttons: (collapsed?.buttons ?? []).map((b: any) => ({ t: b.text, hasMark: b.hasMark, markW: b.markW, tag: b.markTag, ns: b.markNS })) });
   check("panel 260px: the accessible name still states the full harness name",
-    collapsed.buttons.every((b: any) => (b.ariaLabel || "").length > 4), { buttons: collapsed.buttons.map((b: any) => b.ariaLabel) });
+    collapsedHasButtons && collapsed.buttons.every((b: any) => (b.ariaLabel || "").length > 4), { buttons: (collapsed?.buttons ?? []).map((b: any) => b.ariaLabel) });
 }
 
 await Deno.writeTextFile(`${EVIDENCE_DIR}/geometry.json`,
