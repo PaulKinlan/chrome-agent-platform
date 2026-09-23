@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.466] — 2026-09-23
+- the fleet turn and the canonical lock cannot be taken in the wrong order, and every gate-class entry now says whether it takes the turn
+
 ## [0.3.465] — 2026-09-23
 - internal: load-sensitive gates must name a live owning issue, checked against the task tracker
 

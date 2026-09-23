@@ -358,6 +358,25 @@ export async function launchChrome(opts: {
    *  environmental verdict (exit 75 + the holder named), never a product red. */
   fleetSlot?: boolean | { gate?: string; kind?: string; boundMs?: number };
 }): Promise<LaunchedChrome> {
+  // chrome-agent-platform-ryrr: NEVER take the fleet turn while this process
+  // already holds the canonical serialized-Chrome lock. The custody supervisor
+  // (scripts/security-suite-supervisor.sh) holds that lock on fd 9 for its whole
+  // run and launches its harnesses as children, so a child that also asked for
+  // the fleet turn would invert the fleet-wide order (turn -> canonical) and
+  // wait for a gate that is itself waiting for the canonical lock — a deadlock
+  // neither lock can see. The custodial exclusivity already serialises that
+  // suite, so the correct answer is to refuse, loudly, rather than queue.
+  // `acquireChromeLock` bypasses on exactly these two markers, which is what
+  // makes the holder detectable here.
+  if (opts.fleetSlot && (Deno.env.get("CAP_SECURITY_NONCE") || Deno.env.get("CAP_CHROME_LOCK_HELD") === "1")) {
+    throw new Error(
+      "launchChrome: refusing fleetSlot while this process already holds the canonical serialized-Chrome lock " +
+        "(CAP_SECURITY_NONCE / CAP_CHROME_LOCK_HELD is set — the custody supervisor holds it on fd 9 for its whole " +
+        "run). Taking the fleet turn here would invert the fleet-wide acquisition order and can deadlock against " +
+        "another gate that holds the turn and wants the canonical lock; the custody chain's own exclusivity already " +
+        "serialises this suite, so it must not also take the turn (chrome-agent-platform-ryrr).",
+    );
+  }
   if (opts.fleetSlot && !opts.requireQuiet) {
     throw new Error(
       "launchChrome: fleetSlot is the load-sensitive gate's declared turn — pass requireQuiet too " +

@@ -479,3 +479,46 @@ console.log(JSON.stringify({ event: "released" }));
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("ryrr: fleetSlot is REFUSED while this process already holds the canonical lock", async () => {
+  // The inverted-order deadlock, made impossible in code: the custody supervisor
+  // (scripts/security-suite-supervisor.sh) holds the canonical serialized-Chrome
+  // lock on fd 9 for its whole run and launches its harnesses as children, so a
+  // child that asked for the fleet turn would queue behind a gate that is itself
+  // waiting for the canonical lock — a deadlock neither lock can see. The
+  // acquisition call must refuse instead. Driven in a CHILD process so the marker
+  // cannot leak into this runner process (m3a2), and asserted on the MESSAGE, so a
+  // build that merely fails later (no DevTools endpoint) does not read as this
+  // refusal.
+  const dir = await Deno.makeTempDir({ prefix: "cap-ryrr-" });
+  const script = `${dir}/order.mjs`;
+  await Deno.writeTextFile(script, `
+import { launchChrome } from ${JSON.stringify(`${ROOT}scripts/lib/chrome-launch.ts`)};
+try {
+  await launchChrome({
+    requireQuiet: { maxLoadPerCore: 100, maxCompilers: 100, maxWaitMs: 500, sampleMs: 100, sustainedSamples: 1 },
+    fleetSlot: { gate: "order-drill", boundMs: 1000 },
+    binary: "/bin/true", args: [], timeoutMs: 500,
+  });
+  console.log(JSON.stringify({ event: "no-throw" }));
+} catch (e) {
+  console.log(JSON.stringify({ event: "threw", message: String(e?.message ?? e).slice(0, 220) }));
+}
+`);
+  try {
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script],
+      cwd: ROOT, stdout: "piped", stderr: "piped",
+      env: { CAP_CHROME_LOCK_HELD: "1", CAP_HEAVY_GATE_SLOT: `${dir}/gate.lock` },
+    }).spawn();
+    const out = new TextDecoder().decode((await child.output()).stdout);
+    assert(out.includes('"event":"threw"'), `the combination must be refused: ${out.slice(0, 300)}`);
+    assert(
+      out.includes("refusing fleetSlot while this process already holds the canonical"),
+      `the refusal must NAME the inverted order, not fail later for another reason: ${out.slice(0, 300)}`,
+    );
+    assertEquals(out.includes("no-throw"), false, "it must never acquire a turn in this state");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
