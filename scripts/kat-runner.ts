@@ -27,6 +27,8 @@ import { fileURLToPath } from "node:url";
 import { HARNESSES, isKat, KAT_VERDICTS_PATH, readKatVerdicts } from "./lib/harness-registry.ts";
 import { makeChecker } from "./lib/expected-red.ts";
 import { runLockAware } from "./lib/lock-aware-command.ts";
+import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
+import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./lib/quiet-window.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
 
@@ -83,6 +85,22 @@ if (pruned.removed > 0 || pruned.errors.length > 0) {
 }
 
 console.log(`kat-runner: ${kats.length} KATs (${Object.keys(expectedRed).length} owned reds) — logs in ${LOG_DIR}`);
+// 0lj3: a KAT batch is a load-sensitive gate in its own right — 40-odd real
+// browsers, one after another — so it takes the SAME fleet-wide turn the journey
+// suite takes. Without this, a journey could start mid-batch, which is the
+// arrangement that took one to 132/370 on 2026-09-22. One slot for the whole
+// batch (the KATs are serial within a run), released when the process ends.
+let fleetLease;
+try {
+  fleetLease = await acquireHeavyGateSlot({ gate: "kat-runner", kind: "gate" });
+} catch (e) {
+  if (e instanceof HeavyGateSlotRefusedError) {
+    console.error(e.message);
+    console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateRefusalPayload(e))}`);
+    Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+  }
+  throw e;
+}
 for (const [file, entry] of kats) {
   const budget = entry.budgetMs ?? (entry.expectedRed ? RED_BUDGET_MS : GREEN_BUDGET_MS);
   const r = await runOne(file, budget);
@@ -102,4 +120,5 @@ for (const [file, entry] of kats) {
   }
 }
 console.log(`\n${checker.summary()}`);
+fleetLease.release();
 Deno.exit(checker.exitCode());

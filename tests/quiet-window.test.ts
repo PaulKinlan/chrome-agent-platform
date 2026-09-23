@@ -18,12 +18,14 @@ import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   awaitQuietWindow,
+  classifyActiveBuilders,
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
   environmentLine,
   HEAVY_PROCESS_NAMES,
   isCdpEvaluateTimeout,
   isQuiet,
+  parseProcStatCpu,
   QuietWindowRefusedError,
   quietReasons,
   readLoadSample,
@@ -45,6 +47,192 @@ function sample(over: Partial<LoadSample> = {}): LoadSample {
 }
 
 const SPEC = { maxLoadPerCore: 0.35, maxCompilers: 1, maxWaitMs: 1000, sampleMs: 50, sustainedSamples: 3 };
+
+/** The real esbuild binary (not the .bin shim), so a spawned burner is a REAL
+ *  compiler whose /proc comm is `esbuild`. Discovered rather than pinned to one
+ *  platform directory: a pin names one machine's layout (chrome-agent-platform-icf1). */
+export async function realEsbuildBinary(): Promise<string> {
+  for await (const entry of Deno.readDir(`${ROOT}node_modules/@esbuild`)) {
+    if (!entry.isDirectory) continue;
+    const candidate = `${ROOT}node_modules/@esbuild/${entry.name}/bin/esbuild`;
+    try {
+      await Deno.stat(candidate);
+      return candidate;
+    } catch { /* try the next platform */ }
+  }
+  throw new Error("no esbuild binary under node_modules/@esbuild/*/bin — the real-compiler fixtures cannot run");
+}
+
+/** A synthetic module for a real compile to burn CPU on. */
+async function writeBurnerInput(path: string, lines: number): Promise<void> {
+  const parts: string[] = [];
+  for (let i = 0; i < lines; i++) parts.push(`export const v${i} = ${i} * 3 + Math.sqrt(${i}); // padding padding padding padding\n`);
+  await Deno.writeTextFile(path, parts.join(""));
+}
+
+/** A burner input SIZED ON THIS BOX so that ONE compile outlasts `targetMs`.
+ *
+ *  Why calibration instead of a constant: the first version of these tests used
+ *  a fixed ~35 MB input, which takes ~1.7 s on the author's machine and would
+ *  finish inside a single sample on a faster one — so the sampler test asserted
+ *  about a process that had already exited and the journey-gate test found a
+ *  quiet window between two short compiles. Both failed ON THE REVIEWER'S BOX
+ *  and passed on mine, with no difference in intention: the tests were measuring
+ *  the machine as well as the code. The workload is now measured first and
+ *  scaled until it covers the bound, so the fixture no longer depends on how
+ *  fast the box compiles. Do NOT replace this with a constant size.
+ *
+ *  Returns the input path and one measured compile duration at that size. */
+async function calibratedBurner(dir: string, targetMs: number): Promise<{ input: string; compileMs: number; lines: number }> {
+  const bin = await realEsbuildBinary();
+  const input = `${dir}/burner.js`;
+  let lines = 100_000; // ~9 MB: a cheap first probe
+  let compileMs = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    await writeBurnerInput(input, lines);
+    const t0 = Date.now();
+    const probe = new Deno.Command(bin, {
+      args: [input, "--minify", `--outfile=${dir}/burner.min.js`, "--log-level=error"],
+      stdout: "null", stderr: "null",
+    }).spawn();
+    await probe.status;
+    compileMs = Date.now() - t0;
+    if (compileMs >= targetMs) break;
+    // Scale by the measured shortfall, bounded so a pathologically fast box
+    // cannot ask for an input it cannot write.
+    const scale = Math.min(10, Math.max(2, targetMs / Math.max(1, compileMs)));
+    lines = Math.min(3_000_000, Math.round(lines * scale));
+  }
+  return { input, compileMs, lines };
+}
+
+/** Start ONE real compile of a calibrated input — a single long-lived pid, which
+ *  is what lets the sampler test assert about the pid IT created. */
+async function startCalibratedCompiler(dir: string, targetMs: number): Promise<{ proc: Deno.ChildProcess; pid: number; input: string; compileMs: number }> {
+  const { input, compileMs } = await calibratedBurner(dir, targetMs);
+  const bin = await realEsbuildBinary();
+  const proc = new Deno.Command(bin, {
+    args: [input, "--minify", `--outfile=${dir}/burner.run.min.js`, "--log-level=error"],
+    stdout: "null", stderr: "null",
+  }).spawn();
+  return { proc, pid: proc.pid, input, compileMs };
+}
+
+Deno.test("dnop: a PARKED heavy-named daemon is not a build; a COMPILING one still is", async () => {
+  // The measured defect: three esbuild SERVICE daemons (ages 1d14h, 2d00h,
+  // 3d02h, CPU flat across a 10 s sample while load/core sat at 0.056) held the
+  // journey gate closed on an idle box. The name match stays as evidence; the
+  // THRESHOLD counts activity.
+  const parked = sample({ compilers: 3, compilerNames: ["esbuild"], activeCompilers: 0, activeCompilerNames: [] });
+  assertEquals(isQuiet(parked, resolveSpec(SPEC)), true, "three parked daemons are not a reason to wait");
+  const parkedLine = environmentLine(parked, resolveSpec(SPEC));
+  assert(parkedLine.includes("heavy-builders=3 active=0"), parkedLine);
+
+  const compiling = sample({ compilers: 2, compilerNames: ["esbuild"], activeCompilers: 2, activeCompilerNames: ["esbuild"] });
+  const reasons = quietReasons(compiling, resolveSpec(SPEC));
+  assertEquals(reasons.length, 1, JSON.stringify(reasons));
+  assert(reasons[0].includes("active heavy-builders 2"), reasons[0]);
+  assert(reasons[0].includes("compiling: esbuild"), reasons[0]);
+  const verdict = await awaitQuietWindow(
+    { ...SPEC, maxWaitMs: 120 },
+    { sample: async () => compiling, sleep: async () => {}, notice: () => {} },
+  );
+  assertEquals(verdict.ok, false, "a compiling process still refuses the gate inside its bound");
+
+  // Fail closed: a sample that cannot say whether the name matches are compiling
+  // (hand-built, or an older caller) falls back to the name match.
+  assertEquals(isQuiet(sample({ compilers: 4, compilerNames: ["rustc"] }), resolveSpec(SPEC)), false);
+});
+
+Deno.test("dnop: activity is decided by CPU advance, and an unknown process fails closed", () => {
+  const mk = (name: string, startTicks: string, cpuTicks: number) => ({ name, startTicks, cpuTicks });
+  const prev = new Map([
+    ["11", mk("esbuild", "100", 500)],   // will advance → active
+    ["12", mk("rustc", "200", 40)],      // flat → idle
+    ["13", mk("cargo", "300", 7)],       // pid reused (new start time) → active
+  ]);
+  const curr = new Map([
+    ["11", mk("esbuild", "100", 520)],
+    ["12", mk("rustc", "200", 40)],
+    ["13", mk("cargo", "999", 9000)],
+    ["14", mk("ninja", "400", 0)],       // never seen before → active (fail closed)
+  ]);
+  assertEquals(classifyActiveBuilders(prev, curr).sort(), ["11", "13", "14"]);
+  // A first sample (no previous reading) treats every name match as active.
+  assertEquals(classifyActiveBuilders(null, curr).sort(), ["11", "12", "13", "14"]);
+});
+
+Deno.test("dnop: /proc/<pid>/stat parsing survives a comm with spaces and parentheses", () => {
+  // The bracketed comm may contain anything, so the parse starts after the LAST
+  // ')': field 3 is then index 0 and utime/stime/starttime are 11/12/19. A
+  // misparse here would classify every build as idle — the same defect again,
+  // in the arithmetic instead of the name.
+  const stat = "4242 (esbuild (vite)) S 1 4242 4242 0 -1 4194304 0 0 0 0 120 40 0 0 20 0 1 0 98765 0 0";
+  const parsed = parseProcStatCpu(stat, "esbuild");
+  assertEquals(parsed?.cpuTicks, 160);
+  assertEquals(parsed?.startTicks, "98765");
+  assertEquals(parsed?.name, "esbuild");
+  assertEquals(parseProcStatCpu("garbage"), null);
+});
+
+Deno.test("dnop: the REAL sampler counts this test's compiling process and not its parked ones", async () => {
+  // Ambient state is never assumed: every assertion names a pid THIS test
+  // created, so another lane's build cannot make it pass or fail (p15i).
+  const dir = await Deno.makeTempDir({ prefix: "cap-dnop-procs-" });
+  const parked: Deno.ChildProcess[] = [];
+  let compiler: Deno.ChildProcess | null = null;
+  try {
+    for (const n of ["rustc", "esbuild", "cargo"]) {
+      await Deno.copyFile("/bin/sleep", `${dir}/${n}`);
+      parked.push(new Deno.Command(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }).spawn());
+    }
+    await new Promise((r) => setTimeout(r, 500));
+    const first = await readLoadSample();
+    await new Promise((r) => setTimeout(r, 400));
+    const second = await readLoadSample(first.cpu ?? null);
+    assert(second.compilers >= 3, `the parked name matches are still counted as evidence: ${JSON.stringify(second.compilerNames)}`);
+    const parkedPids = new Set(parked.map((p) => String(p.pid)));
+    const parkedActive = classifyActiveBuilders(first.cpu, second.cpu).filter((pid) => parkedPids.has(pid));
+    assertEquals(parkedActive, [], "the parked daemons this test started must NOT count as compiling");
+
+    // Now a REAL compile, and the only process this test asserts about is the one
+    // it started: a calibrated input keeps it running for SECONDS on any box, so
+    // both samples below land inside the compile whatever the machine's speed.
+    // (The previous fixed-size version was tuned to one box — see
+    // calibratedBurner's comment; do not reintroduce a constant here.)
+    const started = await startCalibratedCompiler(dir, 4000);
+    compiler = started.proc;
+    // Portability is ASSERTED, not assumed: the fixture proves on this box that
+    // its workload outlasts the window the test needs, so a fast machine widens
+    // the input instead of shrinking the measurement.
+    assert(
+      started.compileMs >= 4000,
+      `the burner must outlast the sampling window on THIS box (calibrated to ${started.compileMs} ms); if this fails, the calibration could not scale the input far enough`,
+    );
+    await new Promise((r) => setTimeout(r, 250));
+    const before = await readLoadSample(second.cpu ?? null);
+    await new Promise((r) => setTimeout(r, 400));
+    const after = await readLoadSample(before.cpu ?? null);
+    const compilingPid = String(started.pid);
+    assert(
+      classifyActiveBuilders(before.cpu, after.cpu).includes(compilingPid),
+      `a genuinely compiling process is active via CPU advance: ${JSON.stringify({ pid: compilingPid, compileMs: started.compileMs, active: classifyActiveBuilders(before.cpu, after.cpu), names: after.activeCompilerNames })}`,
+    );
+    // The name match is evidence about the box, so it is asserted only as a
+    // LOWER bound over what this test created — never as an exact count.
+    assert(
+      second.compilerNames.includes("esbuild") && after.compilerNames.includes("esbuild"),
+      `the park this test created is visible as a name match: ${JSON.stringify({ s2: second.compilerNames, after: after.compilerNames })}`,
+    );
+  } finally {
+    for (const p of [...parked, compiler]) {
+      if (!p) continue;
+      try { p.kill("SIGKILL"); } catch { /* gone */ }
+      try { await p.status; } catch { /* reaped */ }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
 
 Deno.test("mkax: a quiet box starts the gate immediately", async () => {
   const notices: string[] = [];
@@ -370,35 +558,55 @@ Deno.test("mkax: no harness may quiet the box by interfering with other lanes", 
   }
 });
 
-Deno.test("mkax: the REAL journey gate refuses with exit 75 under artificial load", async () => {
+Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compiler is compiling (dnop)", async () => {
   // End-to-end pin of the third verdict. Static source checks cannot prove the
   // handler is live (falsification: `if (e instanceof QuietWindowRefusedError)`
   // rewritten to `if (false)` left every textual assertion green), so drive the
-  // actual harness: three processes named after real builders, a 1.5 s bound,
-  // and the exit code plus the marker line it produces.
+  // actual harness.
   //
-  // Cost and blast radius, stated honestly: the burners live for a few seconds
-  // and are named rustc/esbuild/cargo, so another lane's quiet-window gate
-  // running in exactly that window waits a few seconds longer. It cannot fail
-  // one: the wait is bounded and the refusal only happens at the END of a
-  // bound, and this test's own bound is 1.5 s.
+  // dnop: the burner is a REAL compile, not a name. Before this the test copied
+  // /bin/sleep to rustc/esbuild/cargo — name-only load, which is the defect's
+  // own shape, so it could not distinguish "a build is running" from "a process
+  // is named esbuild". The real binary burns CPU on a generated input and the
+  // gate must STILL refuse: an implementation that stopped counting genuine
+  // builds would let the journey run under exactly the condition the declaration
+  // exists to exclude.
+  //
+  // Blast radius, stated: the compile lives for a couple of seconds, so another
+  // lane's quiet-window gate running in that window waits a little longer. It
+  // cannot fail one — that wait is bounded and only ever ends in a refusal at
+  // the END of a bound, and this test's own bound is 800 ms.
   const dir = await Deno.makeTempDir({ prefix: "cap-mkax-load-" });
-  const names = ["rustc", "esbuild", "cargo"];
   const burners: Deno.ChildProcess[] = [];
   try {
-    for (const n of names) {
-      await Deno.copyFile("/bin/sleep", `${dir}/${n}`);
-      burners.push(new Deno.Command(`${dir}/${n}`, { args: ["30"], stdout: "null", stderr: "null" }).spawn());
-    }
-    await new Promise((r) => setTimeout(r, 300));
+    const bin = await realEsbuildBinary();
+    // REAL compiles, back to back and staggered, sized on THIS box so each lasts
+    // seconds (calibratedBurner explains why a constant size cannot be used): a
+    // single short compile finishes before the gate has finished starting up —
+    // which is how the first version of this test started a whole journey run
+    // instead of producing a refusal, and, on a faster reviewer box, how it
+    // produced a quiet window BETWEEN two compiles. Other lanes' parked daemons
+    // are deliberately part of the ambient environment: the property is that a
+    // genuinely COMPILING process holds the gate, whatever else the box runs.
+    const calibration = await calibratedBurner(dir, 3000);
+    assert(
+      calibration.compileMs >= 3000,
+      `the burner must outlast the gate's bound on THIS box (calibrated to ${calibration.compileMs} ms)`,
+    );
+    const burn = (delayS: number) => new Deno.Command("/bin/bash", {
+      args: ["-c", `sleep ${delayS}; for i in $(seq 1 40); do "${bin}" "${calibration.input}" --minify --outfile=/dev/null --log-level=error >/dev/null 2>&1; done`],
+      stdout: "null", stderr: "null",
+    }).spawn();
+    burners.push(burn(0), burn(1));
+    await new Promise((r) => setTimeout(r, 1500));
     const run = await new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "--no-check", `${ROOT}scripts/chrome-journeys.ts`],
       cwd: ROOT,
       stdout: "piped",
       stderr: "piped",
       env: {
-        CAP_QUIET_WAIT_MS: "1500",
-        CAP_QUIET_SAMPLE_MS: "200",
+        CAP_QUIET_WAIT_MS: "800",
+        CAP_QUIET_SAMPLE_MS: "150",
         CAP_QUIET_MAX_COMPILERS: "1",
         CAP_QUIET_SUSTAINED: "2",
       },
@@ -409,9 +617,13 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 under artificial loa
     assert(out.includes(ENVIRONMENTAL_REFUSAL_MARKER), "the greppable marker is printed");
     assert(out.includes("not a failure of the tree"), "it refuses to read as a product red");
     const marker = out.split("\n").find((l) => l.startsWith(ENVIRONMENTAL_REFUSAL_MARKER));
-    const sample = JSON.parse(marker!.slice(ENVIRONMENTAL_REFUSAL_MARKER.length).trim());
-    assert(sample.compilers >= 3, `the refusal carries the measured builders: ${JSON.stringify(sample)}`);
-    assertEquals(sample.measurable, true);
+    const refusal = JSON.parse(marker!.slice(ENVIRONMENTAL_REFUSAL_MARKER.length).trim());
+    assert(refusal.compilers >= 1, `the refusal carries the name match: ${JSON.stringify(refusal)}`);
+    assert(
+      refusal.activeCompilers >= 1,
+      `the refusal is due to a COMPILING process, not a parked name: ${JSON.stringify(refusal)}`,
+    );
+    assertEquals(refusal.measurable, true);
     assert(out.includes("quiet-window: waiting"), "the wait was printed while it lasted");
     // It never got as far as a browser: no DevTools endpoint, no journey checks.
     assertEquals(out.includes("DevTools listening"), false, "no browser was started");

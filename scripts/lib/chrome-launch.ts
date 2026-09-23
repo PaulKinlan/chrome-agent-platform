@@ -27,6 +27,7 @@
 import { crypto } from "jsr:@std/crypto@1";
 import { acquireChromeSlot } from "./chrome-slots.ts";
 import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
+import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -48,6 +49,9 @@ export interface LaunchedChrome {
    *  harness did not ask for one, or the box was already quiet).
    *  chrome-agent-platform-mkax. */
   quietWaitMs: number;
+  /** How long this launch waited for the FLEET-WIDE heavy-gate slot (0 when it
+   *  did not ask for one, or the slot was free). chrome-agent-platform-0lj3. */
+  fleetSlotWaitMs?: number;
 }
 
 const TAIL_LIMIT = 8192;
@@ -342,12 +346,49 @@ export async function launchChrome(opts: {
    *  lock is not a substitute for this: exclusivity excludes other CAP
    *  browsers, never another lane's rustc or esbuild. */
   requireQuiet?: boolean | QuietSpec;
+  /** Take the fleet-wide heavy-gate slot for this launch (chrome-agent-platform-0lj3).
+   *  A load-sensitive gate and the KAT batch must not share the machine: measured
+   *  2026-09-22, a box the quiet predicate called quiet (load/core 0.13) took a
+   *  journey to 132/370 before a `cdp evaluate` blew its budget under fleet load.
+   *  PAIRED WITH `requireQuiet` on purpose — the same declaration that says "this
+   *  gate's reds are environmental" is the one that says "this gate takes turns",
+   *  and passing one without the other is a caller bug (below). The slot is
+   *  released when the browser exits, and by the kernel if this process dies.
+   *  Refusal THROWS HeavyGateSlotRefusedError: the harness turns it into its
+   *  environmental verdict (exit 75 + the holder named), never a product red. */
+  fleetSlot?: boolean | { gate?: string; kind?: string; boundMs?: number };
 }): Promise<LaunchedChrome> {
+  if (opts.fleetSlot && !opts.requireQuiet) {
+    throw new Error(
+      "launchChrome: fleetSlot is the load-sensitive gate's declared turn — pass requireQuiet too " +
+        "(a non-load-sensitive launch must not hold the fleet-wide slot; chrome-agent-platform-0lj3)",
+    );
+  }
+  // ORDER MATTERS: take the turn BEFORE measuring. Holding the slot means no other
+  // heavy gate can start while we wait for quiet, so the predicate then measures
+  // the rest of the box rather than racing another gate that is starting up.
+  let fleetLease: HeavyGateLease | null = null;
+  let fleetSlotWaitMs = 0;
+  if (opts.fleetSlot) {
+    const spec = opts.fleetSlot === true ? {} : opts.fleetSlot;
+    fleetLease = await acquireHeavyGateSlot({
+      gate: spec.gate ?? "gate",
+      kind: spec.kind ?? "gate",
+      boundMs: spec.boundMs,
+    });
+    fleetSlotWaitMs = fleetLease.waitedMs;
+  }
   let quietWaitMs = 0;
   if (opts.requireQuiet) {
-    quietWaitMs = (await requireQuietWindow(
-      opts.requireQuiet === true ? {} : opts.requireQuiet,
-    )).waitedMs;
+    try {
+      quietWaitMs = (await requireQuietWindow(
+        opts.requireQuiet === true ? {} : opts.requireQuiet,
+      )).waitedMs;
+    } catch (e) {
+      // A refusal here means we never start a browser: give the turn straight back.
+      fleetLease?.release();
+      throw e;
+    }
   }
   if (Array.isArray(opts.grantPermissions) && opts.grantPermissions.length && opts.profile && opts.extension) {
     await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
@@ -434,6 +475,13 @@ export async function launchChrome(opts: {
     } catch { /* the process went away; nothing to drain */ }
   })();
 
+  // The turn ends when the browser does. If a harness never kills its browser,
+  // this process dying drops the flock anyway (the holder's stdin closes).
+  if (fleetLease) {
+    const lease = fleetLease;
+    proc.status.then(() => lease.release(), () => lease.release());
+  }
+
   return {
     proc,
     wsUrl,
@@ -442,6 +490,7 @@ export async function launchChrome(opts: {
     lockWaitMs: lock.waitedMs,
     chromeSlot: lock.slot,
     quietWaitMs,
+    fleetSlotWaitMs,
   };
 }
 

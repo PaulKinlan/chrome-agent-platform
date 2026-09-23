@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.3.457] — 2026-09-23
+- the quiet-window gate now measures active compiling processes rather than process names, preventing parked background build daemons from keeping browser gates closed
+- load-sensitive browser gates now take declared turns through an announced fleet-wide slot
+- real-compiler test calibration now dynamically scales to machine speed for portable execution
+
 ## [0.3.456] — 2026-09-22
 - cookie redaction in security audits is now verified against seeded credentials, ensuring cookie values never leak to models
 

@@ -17,6 +17,29 @@
 // Contract:
 //   - MEASURE: 1-minute loadavg per core, plus a count of heavy compiler/build
 //     processes. Both from /proc, no dependencies.
+//
+//     chrome-agent-platform-dnop: the compiler count is a count of COMPILING
+//     processes, not of process names. A name-only match counted the long-lived
+//     esbuild SERVICE that Vite keeps open for its dev server as a build, so
+//     three parked daemons (measured aged 1d14h, 2d00h, 3d02h, owned by other
+//     lanes' `vite`/`isocan serve`, CPU time flat across a 10 s sample while
+//     load/core sat at 0.056) held the journey gate closed on a completely idle
+//     machine — for as long as those dev servers live, which can be days. That
+//     is not what this file is for: line 42's own rule is that a heavy process
+//     is one that STARVES CDP, and a daemon that is not compiling starves
+//     nothing. Browsers and test workers are already excluded for exactly that
+//     reason; a parked compiler now joins them.
+//     The threshold therefore applies to `activeCompilers` — heavy-named
+//     processes whose accumulated CPU ADVANCED since the previous sample, or
+//     which we have never seen before (fail closed: a build already running
+//     when the gate starts must still block it). `compilers`/`compilerNames`
+//     stay as the name-match evidence, so a refusal line still names what is on
+//     the box.
+//     Honest limit, stated: a build that is I/O-blocked for a whole sample
+//     shows no CPU in that sample and would not count as active for it — but
+//     the quiet still has to SUSTAIN across consecutive samples, so a run can
+//     only start after several seconds in which the build consumed no CPU at
+//     all, which is not a build starving a CDP run.
 //   - WAIT: bounded (CAP_QUIET_WAIT_MS), sampled (CAP_QUIET_SAMPLE_MS), and the
 //     quiet has to be SUSTAINED (CAP_QUIET_SUSTAINED consecutive samples) — a
 //     one-sample dip must not start a ten-minute run that then starves.
@@ -60,14 +83,75 @@ export interface LoadSample {
   load15: number;
   cores: number;
   loadPerCore: number;
-  /** Count of HEAVY_PROCESS_NAMES processes (excluding this process's pid). */
+  /** Count of HEAVY_PROCESS_NAMES processes (excluding this process's pid) —
+   *  the NAME MATCH. Evidence, and the conservative superset of the builders
+   *  below: it includes parked services that are not compiling anything. */
   compilers: number;
   /** The names seen, de-duplicated and bounded — evidence, not a process list. */
   compilerNames: string[];
+  /** Of the name matches, the ones actually COMPILING: their accumulated CPU
+   *  advanced since the previous sample, or this is the first time we have seen
+   *  them (fail closed). THIS is what the threshold counts. `undefined` means
+   *  the sample carries no activity information — callers that build a sample
+   *  by hand get the fail-closed reading (see `quietReasons`). */
+  activeCompilers?: number;
+  /** Names of the active builders (bounded, de-duplicated). */
+  activeCompilerNames?: string[];
+  /** Per-pid CPU snapshot, for the next sample's activity comparison. */
+  cpu?: ProcCpuMap;
   /** True when the sample could not be read; a refusal follows, never a pass. */
   measurable: boolean;
   /** Why it was not measurable. */
   error?: string;
+}
+
+/** One heavy-named process's identity and accumulated CPU, from /proc/<pid>/stat.
+ *  `startTicks` (field 22) is what makes the reading safe across pid reuse: a
+ *  pid whose start time changed is a DIFFERENT process, never a huge delta. */
+export interface ProcCpu {
+  name: string;
+  startTicks: string;
+  cpuTicks: number;
+}
+
+/** utime+stime and starttime from /proc/<pid>/stat (fields 14, 15 and 22).
+ *  The comm is bracketed and may itself contain spaces and parentheses, so the
+ *  parse starts after the LAST ')': field 3 is then index 0, making utime 11,
+ *  stime 12 and starttime 19. Exported for the unit tests — a misparse here
+ *  would silently classify every build as idle, which is the dnop bug again
+ *  with the arithmetic instead of the name. */
+export function parseProcStatCpu(stat: string, name = ""): ProcCpu | null {
+  const close = stat.lastIndexOf(")");
+  if (close < 0) return null;
+  const rest = stat.slice(close + 1).trim().split(/\s+/u);
+  const utime = Number(rest[11]);
+  const stime = Number(rest[12]);
+  if (!Number.isFinite(utime) || !Number.isFinite(stime)) return null;
+  return { name, startTicks: String(rest[19] ?? ""), cpuTicks: utime + stime };
+}
+
+export type ProcCpuMap = Map<string, ProcCpu>;
+
+/** Pure: which heavy-named pids are COMPILING?
+ *
+ *  A process is active when its accumulated CPU (utime+stime) advanced since the
+ *  previous sample. With no previous reading for a pid — the gate's first
+ *  sample, or a process that just appeared — it is active: fail closed, because
+ *  a build already running when the gate starts must still hold it shut. A pid
+ *  whose start time changed is a different process and is active for the same
+ *  reason. Pids that vanished are simply absent from `curr`.
+ *
+ *  Exported so the rule is unit-testable without manufacturing machine load. */
+export function classifyActiveBuilders(prev: ProcCpuMap | null | undefined, curr: ProcCpuMap | null | undefined): string[] {
+  if (!curr) return []; // no reading at all: nothing to call active (unmeasurable samples refuse separately)
+  const active: string[] = [];
+  for (const [pid, now] of curr) {
+    const before = prev?.get(pid);
+    if (!before || before.startTicks !== now.startTicks || now.cpuTicks > before.cpuTicks) {
+      active.push(pid);
+    }
+  }
+  return active;
 }
 
 export interface QuietSpec {
@@ -168,6 +252,7 @@ export function environmentLine(sample: LoadSample | null, spec?: ResolvedSpec):
   const base = `load1=${sample.load1.toFixed(2)} load5=${sample.load5.toFixed(2)} ` +
     `cores=${sample.cores} load/core=${sample.loadPerCore.toFixed(2)} ` +
     `heavy-builders=${sample.compilers}` +
+    (sample.activeCompilers !== undefined ? ` active=${sample.activeCompilers}` : "") +
     (sample.compilerNames.length ? `[${sample.compilerNames.join(",")}]` : "");
   return spec ? `${base} (threshold ${formatSpec(spec)})` : base;
 }
@@ -178,7 +263,7 @@ function describe(sample: LoadSample | null, spec: ResolvedSpec): string {
 
 /** Read one sample. Never throws: an unreadable /proc becomes
  *  `measurable: false`, which fails closed downstream. */
-export async function readLoadSample(): Promise<LoadSample> {
+export async function readLoadSample(prev?: ProcCpuMap | null): Promise<LoadSample> {
   const at = Date.now();
   const cores = Math.max(1, navigator.hardwareConcurrency || 1);
   let load1 = NaN, load5 = NaN, load15 = NaN;
@@ -199,9 +284,12 @@ export async function readLoadSample(): Promise<LoadSample> {
     };
   }
   // Heavy builders: a bounded /proc walk. Names only (never arguments), so this
-  // is not a process inventory of other lanes' work — just a count.
+  // is not a process inventory of other lanes' work — just a count. For a name
+  // match we also read the accumulated CPU, so the threshold can count what is
+  // COMPILING rather than what is merely named (dnop).
   let compilers = 0;
   const names = new Set<string>();
+  const cpu: ProcCpuMap = new Map();
   const selfPid = String(Deno.pid);
   try {
     let seen = 0;
@@ -215,6 +303,8 @@ export async function readLoadSample(): Promise<LoadSample> {
         if (HEAVY_PROCESS_NAMES.has(comm)) {
           compilers++;
           if (names.size < 8) names.add(comm);
+          const parsed = parseProcStatCpu(await Deno.readTextFile(`/proc/${entry.name}/stat`), comm);
+          if (parsed) cpu.set(entry.name, parsed);
         }
       } catch { /* a process that exited mid-scan is not an error */ }
     }
@@ -225,9 +315,14 @@ export async function readLoadSample(): Promise<LoadSample> {
       error: `proc scan: ${String((e as Error)?.message ?? e)}`,
     };
   }
+  const activePids = classifyActiveBuilders(prev ?? null, cpu);
+  const activeNames = [...new Set(activePids.map((pid) => cpu.get(pid)?.name ?? "").filter(Boolean))];
   return {
     at, load1, load5, load15, cores, loadPerCore: load1 / cores,
     compilers, compilerNames: [...names], measurable: true,
+    activeCompilers: activePids.length,
+    activeCompilerNames: activeNames.slice(0, 8),
+    cpu,
   };
 }
 
@@ -239,9 +334,19 @@ export function quietReasons(sample: LoadSample, spec: ResolvedSpec): string[] {
   if (sample.loadPerCore > spec.maxLoadPerCore) {
     reasons.push(`load/core ${sample.loadPerCore.toFixed(2)} > ${spec.maxLoadPerCore}`);
   }
-  if (sample.compilers > spec.maxCompilers) {
-    reasons.push(`heavy-builders ${sample.compilers} > ${spec.maxCompilers}` +
-      (sample.compilerNames.length ? ` (${sample.compilerNames.join(",")})` : ""));
+  // dnop: the threshold counts COMPILING processes. A sample that carries no
+  // activity information (hand-built, or an older caller) is read fail-closed
+  // against its name match — an unknown must never be treated as quiet.
+  const active = sample.activeCompilers ?? sample.compilers;
+  const activityKnown = sample.activeCompilers !== undefined;
+  if (active > spec.maxCompilers) {
+    reasons.push(`active heavy-builders ${active} > ${spec.maxCompilers}` +
+      (sample.compilerNames.length
+        ? ` (named: ${sample.compilerNames.join(",")}` +
+          (activityKnown
+            ? (sample.activeCompilerNames?.length ? `; compiling: ${sample.activeCompilerNames.join(",")}` : "; none compiling")
+            : "; activity unknown — counted fail-closed") + ")"
+        : ""));
   }
   return reasons;
 }
@@ -257,14 +362,23 @@ export function isQuiet(sample: LoadSample, spec: ResolvedSpec): boolean {
 export async function awaitQuietWindow(
   spec: QuietSpec = {},
   hooks: {
-    sample?: () => Promise<LoadSample>;
+    // The sampler receives the previous sample's CPU snapshot so it can tell a
+    // compiling process from a parked service (dnop). Injectable for tests.
+    sample?: (prev?: ProcCpuMap | null) => Promise<LoadSample>;
     notice?: (line: string) => void;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
   } = {},
 ): Promise<QuietVerdict> {
   const resolved = resolveSpec(spec);
-  const take = hooks.sample ?? readLoadSample;
+  let prevCpu: ProcCpuMap | null = null;
+  const take = async (): Promise<LoadSample> => {
+    const s = hooks.sample ? await hooks.sample(prevCpu) : await readLoadSample(prevCpu);
+    // Carry the CPU snapshot forward: the NEXT sample's activity comparison
+    // needs it, and the injected sampler (tests) may not supply one.
+    if (s.cpu) prevCpu = s.cpu;
+    return s;
+  };
   const sleep = hooks.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const now = hooks.now ?? (() => Date.now());
   const say = hooks.notice ?? ((line: string) => console.error(line));
