@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.465] — 2026-09-23
+- fix/main-red-after-muc-landing: sync the generated gallery copy (docs/components.js) for the restored segmented-control scroll
+
 ## [0.3.464] — 2026-09-23
 - fix/main-red-after-muc-landing: restore diay's segmented-control scroll (dropped by the muc landing merge) and move the hub test that still drove the old rows
 
