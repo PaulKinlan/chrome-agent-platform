@@ -5,9 +5,9 @@
 // forbids (the extension CSP blocks inline scripts in srcdoc iframes). The host
 // (the offscreen doc / NTP hub) loads this page in an iframe, sends the source +
 // a one-time nonce over postMessage, bridges the controlled fetch, and receives
-// the result back. The script's ONLY capabilities are `fetch(url, opts)` (the
+// the result back. CAP exposes controlled `fetch(url, opts)` (the
 // HOST fetches on the extension's behalf — URL-validated + size-bounded) and
-// `log(...)` — no DOM of the host, no extension APIs, no direct network.
+// `log(...)` without host DOM or extension APIs.
 
 window.addEventListener("message", (event) => {
   if (event.source !== window.parent) return;
@@ -189,8 +189,9 @@ function runScript(source, runId, nonce, rawModules = []) {
     post("cap:script-call", { callId, kind, payload: payload || {} });
   });
 
-  // The controlled api as globals (shadow the natives — the page has no network
-  // of its own, so this is the script's only fetch + log).
+  // The controlled api as globals (shadow the natives; connect-src 'none'
+  // blocks ambient connection APIs, and img-src data: blob: blocks remote image loads;
+  // controlled fetch runs through the host bridge).
   window.fetch = (url, opts) => call("fetch", { url: String(url ?? ""), opts: opts || {} });
   window.log = (...args) => post("cap:script-log", { text: args.map((x) => String(x)).join(" ") });
 

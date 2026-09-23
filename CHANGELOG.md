@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.472] — 2026-09-23
+- The script sandbox now denies ambient connection requests and remote images while preserving local preview images and the controlled host bridge
+
 ## [0.3.471] — 2026-09-23
 - an agent template whose suggestions cannot all be checked in this profile now names the missing skills in the dialog
 
