@@ -25,6 +25,16 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
+// ONE source of truth for what counts as a user-facing bullet. This file used to
+// carry its own copy of the six filter regexes plus isUserFacingEntry, justified
+// as "so the standalone script functions in scratch temporary test mirrors". The
+// copies agreed only until the real filter gained the `internal:` marker
+// (chrome-agent-platform-whatsnew-449): the duplicate did not know it, scored a
+// marked note user-facing, and the post-commit hook therefore PUBLISHED three
+// `internal:` notes as release entries and burned a version on one of them. The
+// mirrors now copy the module too, so the standalone rationale no longer applies —
+// a second copy of a rule is how two gates drift apart.
+import { isUserFacingEntry } from "../extension/options/changelog-filter.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -85,28 +95,6 @@ const sanitizeEntry = (note) => String(note)
   .replace(/^(?:[+&:;,./|—–-]+(?:\s+|$))+/, "")
   .trim();
 const cleanNote = finalNote ? sanitizeEntry(finalNote) : null;
-
-// Validate that the note satisfies user-facing entry standards before writing.
-// The filter regexes mirror extension/options/changelog-filter.js so the
-// standalone script functions in scratch temporary test mirrors without
-// relying on outside module resolution.
-const FILTER_ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
-const FILTER_SHA_RE = /\b[0-9a-f]{7,40}\b/i;
-const FILTER_JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice/i;
-const FILTER_GATE_STATE_RE = /\b(RED|GREEN)\b/;
-const FILTER_WORKFLOW_RE = /\blanded\b|in review|in progress|recorded as|\bclaimed\b/i;
-const FILTER_LEAKED_JOINER_RE = /^[+&:;,./|—–-]+(?:\s|$)/;
-
-function isUserFacingEntry(text) {
-  const line = String(text).trim();
-  if (FILTER_LEAKED_JOINER_RE.test(line)) return false;
-  if (FILTER_ENGINEERING_PREFIX_RE.test(line)) return false;
-  if (FILTER_SHA_RE.test(line)) return false;
-  if (FILTER_JARGON_RE.test(line)) return false;
-  if (FILTER_GATE_STATE_RE.test(line)) return false;
-  if (FILTER_WORKFLOW_RE.test(line)) return false;
-  return true;
-}
 
 if (cleanNote && !isUserFacingEntry(cleanNote)) {
   if (skipIfNoNote) {

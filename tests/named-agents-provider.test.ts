@@ -302,7 +302,14 @@ Deno.test("bump-version: unmodified script in a complete scratch mirror (--messa
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
     }
-    await fsp.mkdir(path.join(dir, "extension"), { recursive: true });
+    // bump-version.mjs is no longer standalone — it imports the changelog
+    // filter — so a "complete mirror" must carry that module or the run dies on
+    // module resolution and reads as a bump failure.
+    await fsp.mkdir(path.join(dir, "extension", "options"), { recursive: true });
+    await fsp.copyFile(
+      path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "extension", "options", "changelog-filter.js"),
+      path.join(dir, "extension", "options", "changelog-filter.js"),
+    );
     await fsp.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
     await fsp.writeFile(path.join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
     await fsp.writeFile(path.join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3", version_name: "1.2.3" }, null, 2));
@@ -344,7 +351,14 @@ Deno.test("bump-version: the changelog entry is sanitized (prefix, SHA and track
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
     }
-    await fsp.mkdir(path.join(dir, "extension"), { recursive: true });
+    // bump-version.mjs is no longer standalone — it imports the changelog
+    // filter — so a "complete mirror" must carry that module or the run dies on
+    // module resolution and reads as a bump failure.
+    await fsp.mkdir(path.join(dir, "extension", "options"), { recursive: true });
+    await fsp.copyFile(
+      path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "extension", "options", "changelog-filter.js"),
+      path.join(dir, "extension", "options", "changelog-filter.js"),
+    );
     await fsp.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
     await fsp.writeFile(path.join(dir, "package-lock.json"), JSON.stringify({ name: "t", version: "1.2.3", packages: { "": { name: "t", version: "1.2.3" } } }, null, 2));
     await fsp.writeFile(path.join(dir, "extension", "manifest.json"), JSON.stringify({ manifest_version: 3, version: "1.2.3", version_name: "1.2.3" }, null, 2));
@@ -375,7 +389,14 @@ Deno.test("bump-version: controlled failure leaves NO partial write (atomicity)"
     for (const f of ["bump-version.mjs", "sync-changelog.mjs"]) {
       await fsp.copyFile(path.join(repoScripts, f), path.join(dir, "scripts", f));
     }
-    await fsp.mkdir(path.join(dir, "extension"), { recursive: true });
+    // bump-version.mjs is no longer standalone — it imports the changelog
+    // filter — so a "complete mirror" must carry that module or the run dies on
+    // module resolution and reads as a bump failure.
+    await fsp.mkdir(path.join(dir, "extension", "options"), { recursive: true });
+    await fsp.copyFile(
+      path.join(path.dirname(fileURLToPath(new URL(import.meta.url))), "..", "extension", "options", "changelog-filter.js"),
+      path.join(dir, "extension", "options", "changelog-filter.js"),
+    );
     await fsp.writeFile(path.join(dir, "package.json"), JSON.stringify({ name: "t", version: "1.2.3" }, null, 2));
     // NO package-lock, NO manifest, NO changelog → the bump must FAIL (readJson
     // of manifest throws) WITHOUT having bumped package.json (write ordering:

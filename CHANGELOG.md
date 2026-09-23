@@ -1,8 +1,5 @@
 # Changelog
 
-## [0.3.452] — 2026-09-22
-- internal: the changelog gate now allows a stated-internal note instead of forcing a user-facing sentence
-
 ## [0.3.451] — 2026-09-22
 - the side panel's release notes now read as what you get, not what we checked
 
