@@ -3137,8 +3137,14 @@ async function buildAgentConfigDialog(opts) {
     const updateSkillCount = () => {
       const countEl = skillCountEl;
       if (!countEl) return;
-      const count = skillSection.count();
-      countEl.textContent = count > 0 ? `${count} selected` : `${available.length} available`;
+      // xiln: the LABEL comes from the skills section, so its disclosure suffix
+      // ("· N suggested but unavailable") cannot be overwritten by a second
+      // formatter here. That is exactly what happened before: this dialog
+      // re-formatted the count and dropped the suffix, and the browser-driven
+      // check caught it while the unit test passed.
+      countEl.textContent = typeof skillSection.countLabel === "function"
+        ? skillSection.countLabel()
+        : (() => { const c = skillSection.count(); return c > 0 ? `${c} selected` : `${available.length} available`; })();
     };
     const applyTemplate = (t) => {
       if (!t) {
@@ -3329,13 +3335,28 @@ async function buildAgentConfigDialog(opts) {
   skillsList.style.gap = "6px";
   skillsList.style.borderTop = "1px solid var(--border,#e3e0d9)";
 
+  // chrome-agent-platform-xiln: the disclosure line for a template suggestion
+  // that has no row in this profile. role=status so the owner is TOLD when a
+  // template's suggestion could not be offered, instead of seeing a count that
+  // silently does not add up. It stays hidden until a template actually suggests
+  // something this profile cannot check.
+  const skillsUnavailable = document.createElement("p");
+  skillsUnavailable.className = "skills-unavailable";
+  skillsUnavailable.setAttribute("role", "status");
+  skillsUnavailable.style.cssText =
+    "display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;margin:6px 0 0;" +
+    "font-size:12px;line-height:1.4;color:var(--muted,#635e56);";
+  skillsUnavailable.hidden = true;
+
   // The REAL skills-section render path (lib/agent-skill-rows.js): rows keyed
-  // by refId, collision-proof restore/count, template apply/undo, and
-  // refId-keyed save collection.
+  // by refId, collision-proof restore/count, template apply/undo,
+  // refId-keyed save collection, and the xiln disclosure of uncheckable
+  // suggestions.
   const skillSection = buildAgentSkillRows({
     available,
     savedIds: [...agentSkillIds],
     countEl: skillCountEl,
+    unavailableHost: skillsUnavailable,
   });
   if (!skillSection.rows.length) {
     const none = document.createElement("p");
@@ -3347,7 +3368,7 @@ async function buildAgentConfigDialog(opts) {
   } else {
     for (const r of skillSection.rows) skillsList.append(r.row);
   }
-  skillsDetails.append(skillsList);
+  skillsDetails.append(skillsList, skillsUnavailable);
   advancedBody.append(skillsDetails);
 
   // Optional interval schedule, entered in the owner's language. The parser is
