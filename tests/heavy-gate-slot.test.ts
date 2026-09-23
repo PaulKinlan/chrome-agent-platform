@@ -423,9 +423,12 @@ Deno.test("0lj3 drill: the announcement is written where the READER looks (defec
   // was announced somewhere the handy reader never looked. (b) a live round trip
   // on a private slot, to prove writer and reader agree in practice too.
   assertEquals(heavyGateHolderPathFor(HEAVY_GATE_SLOT_PATH), HEAVY_GATE_HOLDER_PATH);
-  assertEquals(heavyGateHolderPathFor("/tmp/elsewhere/gate.lock"), "/tmp/elsewhere/gate.lock.holder.json");
-
+  // The private-slot derivation is asserted against a path this test creates,
+  // never a literal tmpfs path (the durable-root guard rightly refuses those, and
+  // a hardcoded /tmp literal in a test is exactly the ambient-state coupling the
+  // 2026-09-23 review was about).
   const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-sidecar-" });
+  assertEquals(heavyGateHolderPathFor(`${dir}/gate.lock`), `${dir}/gate.lock.holder.json`);
   const slotPath = `${dir}/gate.lock`;
   try {
     const lease = await acquireHeavyGateSlot({ gate: "sidecar-drill", kind: "gate", boundMs: 2000, slot: { slotPath }, onAcquired: () => {} });
