@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.462] — 2026-09-23
+- the two contention tests stop assuming the fleet's own gate slot is free (and the compiler test stops letting ambient load decide its refusal)
+
 ## [0.3.461] — 2026-09-23
 - the constrained-width padding check reads the CSS shorthand correctly — no false red on a uniform padding, and no false green on a four-value one
 
