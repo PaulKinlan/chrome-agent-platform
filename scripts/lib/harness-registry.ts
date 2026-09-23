@@ -122,14 +122,23 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-browser-grant-persistence.ts": { class: "kat" },
   "kat-agent-templates.ts": { class: "kat" },
   "kat-artifact-library-capacity.ts": { class: "kat" },
-  "kat-artifact-preview.ts": { class: "kat", ...RED("4/2", "the chat no longer renders the restricted artifact-preview host iframe the KAT expects") },
+  // CLEARED 2026-09-23 (chrome-agent-platform-l3ts family, by the lane that measured it):
+  // the runner's own ledger saw this KAT GREEN twice tonight (kat-verdicts.json, 22:32Z) while
+  // the entry below still declared an owned red, so `tests/harness-registry.test.ts` failed the
+  // whole suite for every lane. The xiln/4h2x sandbox work is what made it pass — the chat renders
+  // the artifact-preview host iframe again. If it goes red again, re-declare the red with the new
+  // measured verdict rather than restoring this line.
+  "kat-artifact-preview.ts": { class: "kat" },
   "kat-background-run-transcript.ts": { class: "kat" },
   "kat-back-stack.ts": { class: "kat" },
   "kat-bgagent-delete.ts": { class: "kat" },
   "kat-composer-grow.ts": { class: "kat" },
   "kat-composer-slash-commands.ts": { class: "kat", ...RED("4/5", "the /tabs picker lists '(untitled)' rows and selecting one inserts no reference") },
   "kat-dark-scheme.ts": { class: "kat", ...RED("33/4", "options/dark and sidepanel/dark .btn contrast 2.88 and the artifact-noid light probe samples too few styles", "CAP-FB-20260827-SETTINGS-MONOLITH-01 (the accent-on-fill ink token)") },
-  "kat-dialog-consolidation.ts": { class: "kat", ...RED("hang", "never finishes — killed at the 400 s inventory cap; the runner caps it at 90 s") },
+  // CLEARED 2026-09-23 with kat-artifact-preview above, same evidence and reason: the runner saw
+  // it green at 22:33Z. The "hang" red it declared was a 400 s inventory cap the runner already
+  // enforces at 90 s, so a hang here is caught by the runner's own budget rather than by a pin.
+  "kat-dialog-consolidation.ts": { class: "kat" },
   "kat-exec-build-flag.ts": { class: "kat", ...RED("29/1", "'flag on: all thirteen nav items are visible' — the nav now has fourteen entries") },
   "kat-failed-runs.ts": { class: "kat" },
   "kat-generated-image-strip.ts": { class: "kat" },
