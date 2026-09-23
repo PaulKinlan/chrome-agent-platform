@@ -12,7 +12,9 @@ import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   acquireHeavyGateSlot,
+  heavyGateHolderPathFor,
   heavyGateRefusalPayload,
+  heavyGateSetupFailurePayload,
   HEAVY_GATE_HOLDER_PATH,
   HEAVY_GATE_SLOT_PATH,
   readHeavyGateHolder,
@@ -73,6 +75,29 @@ async function spawnHolder(dir: string, args: string[], env: Record<string, stri
   };
   return { child, waitForHeld, output: () => buffer };
 }
+
+/** A child that takes the fleet turn through launchChrome and then makes the
+ *  BROWSER fail to start (/bin/false never prints a DevTools endpoint). It reports
+ *  whether the call threw, so the parent can check the slot was handed back. */
+const STARTUP_FAILURE_SOURCE = `
+import { launchChrome } from ${JSON.stringify(`${ROOT}scripts/lib/chrome-launch.ts`)};
+try {
+  await launchChrome({
+    requireQuiet: { maxLoadPerCore: 100, maxCompilers: 100, maxWaitMs: 1000, sampleMs: 100, sustainedSamples: 1 },
+    fleetSlot: { gate: "startup-failure-drill", kind: "gate", boundMs: 5000 },
+    binary: "/bin/false",
+    args: [],
+    timeoutMs: 1500,
+  });
+  console.log(JSON.stringify({ event: "no-throw" }));
+} catch (e) {
+  console.log(JSON.stringify({ event: "threw", message: String(e?.message ?? e).slice(0, 160) }));
+}
+// STAY ALIVE on purpose: a leaked slot only hurts while the holder lives, and the
+// pre-fix defect kept the turn held by exactly this live, browser-less process.
+console.log(JSON.stringify({ event: "alive" }));
+await new Promise((r) => setTimeout(r, Number(Deno.args[0] ?? 6000)));
+`;
 
 async function reap(child: Deno.ChildProcess, signal: Deno.Signal = "SIGKILL") {
   try { child.kill(signal); } catch { /* gone */ }
@@ -293,5 +318,156 @@ Deno.test("0lj3: the module never interferes with another lane's processes", asy
   assert(signals.length >= 1, "the liveness probe is present");
   for (const args of signals) {
     assert(/,\s*0$/.test(args), `every Deno.kill in this module must be the signal-0 existence probe, saw: Deno.kill(${args})`);
+  }
+});
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * FAILURE-INJECTION DRILLS (review 2026-09-23, chrome-agent-platform-0lj3).
+ *
+ * The review's finding about the evidence was exact: every defect it reproduced
+ * was in an ERROR path, and the tests that existed proved the lock working "in
+ * the case where nothing goes wrong". A lock is most dangerous when something
+ * upstream fails, so each defect below gets an injection that FAILS something on
+ * purpose and checks two things: that nothing stays held, and that what a lane is
+ * told matches what actually happened.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+Deno.test("0lj3 drill: a Chrome that never starts hands the fleet slot back (defect 1)", async () => {
+  // The injection: the real launcher, a real fleet turn, a browser that cannot
+  // come up. Before the fix the turn stayed held by a LIVE process owning no
+  // browser — the one leak the stdin-close pattern cannot cover.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-startup-" });
+  const script = `${dir}/startup-failure.mjs`;
+  await Deno.writeTextFile(script, STARTUP_FAILURE_SOURCE);
+  // Bounded on purpose: an UNRELEASED lease keeps the holder's own event loop
+  // alive (an open child stdin is a live resource), so the pre-fix defect did not
+  // red an assertion — it HUNG. That is the defect's real shape, and the drill
+  // must be able to fail deterministically, so the child runs under a timeout and
+  // its clean exit is part of the assertion.
+  const child = new Deno.Command("/usr/bin/timeout", {
+    args: ["20", Deno.execPath(), "run", "-A", "--no-check", script, "6000"],
+    cwd: ROOT,
+    stdout: "piped", stderr: "piped",
+    env: { CAP_HEAVY_GATE_SLOT: `${dir}/gate.lock` },
+  }).spawn();
+  try {
+    // Read the child's report WHILE IT IS STILL RUNNING: the property is that a
+    // live holder that owns no browser does not own the machine. (Asserting after
+    // it exits would test nothing — its death drops the lock either way, which is
+    // how the first version of this drill stayed green against a mutant.)
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    let out = "";
+    const deadline = Date.now() + 8000;
+    while (!out.includes('"event":"alive"') && Date.now() < deadline) {
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true; value: undefined }>((r) => setTimeout(() => r({ done: true, value: undefined }), Math.max(1, deadline - Date.now()))),
+      ]);
+      if (chunk.value) out += decoder.decode(chunk.value, { stream: true });
+      if (chunk.done) break;
+    }
+    assert(out.includes('"event":"threw"'), `the launcher reported the startup failure: ${out.slice(0, 300)}`);
+    assert(out.includes("never printed a DevTools endpoint"), out.slice(0, 300));
+    assert(out.includes('"event":"alive"'), `the child is still running (the leak only matters while the holder lives): ${out.slice(0, 300)}`);
+    // THE ASSERTION: the slot is free even though the failed holder is alive.
+    const lease = await acquireHeavyGateSlot({
+      gate: "during-failed-holder", kind: "gate", boundMs: 2500,
+      slot: { slotPath: `${dir}/gate.lock` },
+      onWait: () => {},
+    });
+    assertEquals(lease.disabled, false, "the startup failure gave the fleet turn back while its process is still alive");
+    lease.release();
+    try { reader.releaseLock(); } catch { /* released */ }
+    // `child.output()` cannot be used here — we took stdout with a reader — so the
+    // exit code comes from the status the runtime already tracks.
+    const status = await child.status;
+    assertEquals(status.code, 0, "the failed launcher exited cleanly");
+  } finally {
+    await reap(child);
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("0lj3 drill: a setup fault is reported as SETUP, never as contention (defect 3)", async () => {
+  // The injection: a lock path that cannot be opened. flock exits 66 with
+  // 'cannot open lock file' — measured, not assumed. The first version reported
+  // this as 'the slot is busy, held by an unnamed holder', which sends a lane to
+  // wait for a holder that does not exist.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-setup-" });
+  try {
+    const err = await assertRejects(
+      () => acquireHeavyGateSlot({
+        gate: "setup-drill", kind: "gate", boundMs: 1500,
+        slot: { slotPath: `${dir}/missing-dir/gate.lock` },
+        onWait: () => {},
+      }),
+      Error,
+    );
+    assertEquals(err.name, "HeavyGateSlotSetupError");
+    assert(err.message.includes("could not be SET UP"), err.message);
+    assert(err.message.includes("NOT contention"), err.message);
+    assert(!err.message.includes("busy"), `a setup fault must not read as busy: ${err.message}`);
+    const payload = heavyGateSetupFailurePayload(err as never);
+    assertEquals(payload.reason, "heavy-gate-slot-unavailable");
+    assert(String(payload.detail).includes("cannot open lock file"), String(payload.detail));
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("0lj3 drill: the announcement is written where the READER looks (defect 4)", async () => {
+  // Two halves. (a) the pure derivation: the documented default slot's sidecar IS
+  // the reader's default path — the first version derived `${slotPath}.holder.json`
+  // while the exported reader default was a different literal, so a holding lane
+  // was announced somewhere the handy reader never looked. (b) a live round trip
+  // on a private slot, to prove writer and reader agree in practice too.
+  assertEquals(heavyGateHolderPathFor(HEAVY_GATE_SLOT_PATH), HEAVY_GATE_HOLDER_PATH);
+  // The private-slot derivation is asserted against a path this test creates,
+  // never a literal tmpfs path (the durable-root guard rightly refuses those, and
+  // a hardcoded /tmp literal in a test is exactly the ambient-state coupling the
+  // 2026-09-23 review was about).
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-sidecar-" });
+  assertEquals(heavyGateHolderPathFor(`${dir}/gate.lock`), `${dir}/gate.lock.holder.json`);
+  const slotPath = `${dir}/gate.lock`;
+  try {
+    const lease = await acquireHeavyGateSlot({ gate: "sidecar-drill", kind: "gate", boundMs: 2000, slot: { slotPath }, onAcquired: () => {} });
+    // The reader with NO argument reads the DEFAULT path; the derivation for this
+    // private slot must therefore be the path the writer used, and the reader for
+    // the private path must see it too.
+    assertEquals(readHeavyGateHolder(heavyGateHolderPathFor(slotPath)).holder?.gate, "sidecar-drill");
+    lease.release();
+    assertEquals(readHeavyGateHolder(heavyGateHolderPathFor(slotPath)).holder, null, "the release clears it");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("0lj3 drill: acquire+release does not delay process exit (defect 2)", async () => {
+  // The injection: a child that takes the slot with a LONG bound, releases at
+  // once and exits. The first version left a pending setTimeout of up to the
+  // whole bound behind every read, so the process stayed alive after releasing.
+  // The child must exit promptly; the bound is 60 s, so a 10 s ceiling is a
+  // generous tell.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-exit-" });
+  const script = `${dir}/exit-drill.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+const lease = await acquireHeavyGateSlot({ gate: "exit-drill", kind: "gate", boundMs: 60000, slot: { slotPath: Deno.args[0] }, onAcquired: () => {}, onWait: () => {} });
+lease.release();
+console.log(JSON.stringify({ event: "released" }));
+`);
+  const t0 = Date.now();
+  try {
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, `${dir}/gate.lock`],
+      cwd: ROOT, stdout: "piped", stderr: "piped",
+    }).spawn();
+    const { code } = await child.status;
+    const elapsed = Date.now() - t0;
+    assertEquals(code, 0, "the child exited cleanly");
+    assert(elapsed < 10_000, `the child exited in ${elapsed} ms despite a 60 s bound — the timer must not outlive the release`);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });

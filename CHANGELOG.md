@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.459] — 2026-09-23
+- internal: load-sensitive fleet gate lock hardens error paths against leaks and derives private sidecar paths
+
 ## [0.3.458] — 2026-09-23
 - the What's New and side panel release notes now describe what changed for you, and the changelog gate permits stated-internal notes
 - internal: the post-commit version hook imports the unified changelog filter instead of carrying a duplicate copy

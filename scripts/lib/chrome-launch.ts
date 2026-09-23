@@ -379,6 +379,14 @@ export async function launchChrome(opts: {
     fleetSlotWaitMs = fleetLease.waitedMs;
   }
   let quietWaitMs = 0;
+  // ANY failure between taking the fleet turn and handing back a live browser
+  // gives the turn back. The stdin-close pattern covers this process DYING; it
+  // cannot cover this process LIVING while holding a slot for a browser that
+  // never started — which is a lock leak nobody sees until the next gate waits
+  // its whole bound for a holder that owns nothing (review 2026-09-23, defect 1).
+  // Written out at each site rather than via a helper: the release has to be
+  // visible next to the failure it guards, and TypeScript cannot narrow a thrown
+  // value through a call.
   if (opts.requireQuiet) {
     try {
       quietWaitMs = (await requireQuietWindow(
@@ -391,11 +399,17 @@ export async function launchChrome(opts: {
     }
   }
   if (Array.isArray(opts.grantPermissions) && opts.grantPermissions.length && opts.profile && opts.extension) {
-    await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
+    try {
+      await seedGrantedPermissions(opts.profile, opts.extension, opts.grantPermissions);
+    } catch (e) {
+      fleetLease?.release();
+      throw e;
+    }
   }
   const extras = opts.args ?? [];
   const fixed = extras.find((a) => a.startsWith("--remote-debugging-port"));
   if (fixed) {
+    fleetLease?.release();
     throw new Error(
       `launchChrome: refusing a caller-chosen debugging port (${fixed}). ` +
         "The port is assigned by the kernel and read back from Chrome's own stderr.",
@@ -409,14 +423,27 @@ export async function launchChrome(opts: {
     ]
     : extras;
 
-  const lock = await acquireLaunchScope(opts);
-  const proc = new Deno.Command(opts.binary ?? CHROMIUM, {
-    args: [...args, "--remote-debugging-port=0"],
-    stdout: opts.stdout ?? "null",
-    stderr: "piped",
-    ...(opts.clearEnv ? { clearEnv: true } : {}),
-    ...(opts.env ? { env: opts.env } : {}),
-  }).spawn();
+  let lock: { waitedMs: number; release: () => void; slot: number };
+  try {
+    lock = await acquireLaunchScope(opts);
+  } catch (e) {
+    fleetLease?.release();
+    throw e;
+  }
+  let proc: Deno.ChildProcess;
+  try {
+    proc = new Deno.Command(opts.binary ?? CHROMIUM, {
+      args: [...args, "--remote-debugging-port=0"],
+      stdout: opts.stdout ?? "null",
+      stderr: "piped",
+      ...(opts.clearEnv ? { clearEnv: true } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
+    }).spawn();
+  } catch (e) {
+    lock.release();
+    fleetLease?.release();
+    throw e;
+  }
   // The slot (or exclusive lock) lives exactly as long as this browser does.
   // When Chrome exits, cancel the stderr drain reader so orphaned grandchild
   // processes never keep the pipe open and hang the event loop in do_epoll_wait.
@@ -458,6 +485,11 @@ export async function launchChrome(opts: {
     try { proc.kill("SIGKILL"); } catch { /* already dead */ }
     try { await proc.status; } catch { /* already reaped */ }
     lock.release();
+    fleetLease?.release();
+    // The browser never came up: give the FLEET turn back too. Without this, a
+    // startup failure kept the fleet-wide slot held by a live process that owns
+    // no browser — the one leak the crash-safe stdin pattern cannot cover, since
+    // the holder is still alive (review 2026-09-23, defect 1).
     throw new Error(
       `launchChrome: Chrome never printed a DevTools endpoint (${opts.binary}). stderr tail: ${tail.slice(-600)}`,
     );

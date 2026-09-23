@@ -92,7 +92,47 @@ function boundMs(opts: AcquireHeavyGateOptions): number {
 
 function slotPaths(opts: AcquireHeavyGateOptions): HeavyGateSlot {
   const slotPath = opts.slot?.slotPath ?? Deno.env.get("CAP_HEAVY_GATE_SLOT") ?? HEAVY_GATE_SLOT_PATH;
-  return { slotPath, holderPath: opts.slot?.holderPath ?? `${slotPath}.holder.json` };
+  return { slotPath, holderPath: opts.slot?.holderPath ?? heavyGateHolderPathFor(slotPath) };
+}
+
+/** Where the announcement for `slotPath` lives. ONE derivation, used by the
+ *  writer and by every reader — the first version derived the writer's path as
+ *  `${slotPath}.holder.json` while the exported reader default was a DIFFERENT
+ *  literal, so a lane holding the fleet slot was announced somewhere the handy
+ *  reader never looked (review 2026-09-23: 'a sidecar written where the reader
+ *  does not look'). The documented default keeps its stable name; a private slot
+ *  gets its announcement beside it. */
+export function heavyGateHolderPathFor(slotPath: string): string {
+  return slotPath === HEAVY_GATE_SLOT_PATH ? HEAVY_GATE_HOLDER_PATH : `${slotPath}.holder.json`;
+}
+
+/** A lock that could not be SET UP (a path that cannot be opened, a missing
+ *  `flock`, an unwritable directory) is NOT a lock that is busy. The first
+ *  version reported both as contention, which sends a lane to wait for a holder
+ *  that does not exist — the same class as blaming a dead holder instead of
+ *  showing it as stale. Same third verdict (environmental, exit 75), distinct
+ *  reason so a reader can tell the two apart. */
+export class HeavyGateSlotSetupError extends Error {
+  readonly gate: string;
+  readonly slotPath: string;
+  readonly detail: string;
+  constructor(gate: string, slotPath: string, detail: string) {
+    super(
+      `ENVIRONMENT: the fleet-wide heavy-gate slot could not be SET UP at ${slotPath} — ${detail}. ` +
+        `This is NOT contention: no holder is implied and waiting will not help. ` +
+        `The gate did not start (exit ${ENVIRONMENTAL_REFUSAL_EXIT}); report it as an environment fault, ` +
+        `never as a product red and never as another lane holding the machine (chrome-agent-platform-0lj3).`,
+    );
+    this.name = "HeavyGateSlotSetupError";
+    this.gate = gate;
+    this.slotPath = slotPath;
+    this.detail = detail;
+  }
+}
+
+/** The JSON a harness prints after the environmental marker for a SETUP fault. */
+export function heavyGateSetupFailurePayload(err: HeavyGateSlotSetupError): Record<string, unknown> {
+  return { reason: "heavy-gate-slot-unavailable", gate: err.gate, slotPath: err.slotPath, detail: err.detail };
 }
 
 /** Read the announced holder. `alive` distinguishes a live holder from a sidecar
@@ -205,17 +245,32 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
   const say = opts.onWait ?? ((line: string) => console.error(line));
   const sayAcquired = opts.onAcquired ?? ((line: string) => console.error(line));
 
-  const child = new Deno.Command("flock", {
-    args: [
-      "-w", String(Math.max(1, Math.ceil(waitMs / 1000))),
-      slotPath,
-      "sh", "-c",
-      "echo CAP_HEAVY_GATE_ACQUIRED; exec cat >/dev/null",
-    ],
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "null",
-  }).spawn();
+  let child: Deno.ChildProcess;
+  try {
+    child = new Deno.Command("flock", {
+      args: [
+        "-w", String(Math.max(1, Math.ceil(waitMs / 1000))),
+        slotPath,
+        "sh", "-c",
+        "echo CAP_HEAVY_GATE_ACQUIRED; exec cat >/dev/null",
+      ],
+      stdin: "piped",
+      stdout: "piped",
+      // stderr is CAPTURED, not discarded: it is how a setup failure (exit 66,
+      // 'cannot open lock file') is told apart from contention (exit 1, silent,
+      // after the whole bound). Reporting both as 'busy' sends a lane to wait for
+      // a holder that does not exist.
+      stderr: "piped",
+    }).spawn();
+  } catch (e) {
+    throw new HeavyGateSlotSetupError(opts.gate, slotPath, `the flock helper could not start (${String((e as Error)?.message ?? e)})`);
+  }
+  // NOT unref'd. `child.unref()` was tried as insurance against the helper pinning
+  // our event loop, and the exit drill was run against its removal: it stayed
+  // GREEN, i.e. the unref is not what makes exit prompt — the cleared timer is.
+  // An unpinned guard is worse than none (it reads as protection that no test
+  // exercises), so it is not carried. If a future change makes the helper outlive
+  // a release, pin it with a test FIRST and then add the unref.
 
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
@@ -232,34 +287,77 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
             `${describeHolder(holderAtStart.holder, holderAtStart.alive)}`,
         );
       }
+      // ONE timer per read, CLEARED in the same breath. The first version left a
+      // `setTimeout` of up to the whole bound pending on every iteration, so a
+      // process that acquired and released promptly still could not exit until the
+      // timer fired (review 2026-09-23: 'the acquisition timer survives release').
+      let timer: ReturnType<typeof setTimeout> | undefined;
       let chunk: ReadableStreamReadResult<Uint8Array>;
       try {
         chunk = await Promise.race([
           reader.read(),
-          new Promise<ReadableStreamReadResult<Uint8Array>>((_, reject) => setTimeout(() => reject(new Error("slot wait bound")), Math.max(1, deadline - Date.now()))),
+          new Promise<{ done: true; value: undefined }>((r) => {
+            timer = setTimeout(() => r({ done: true, value: undefined }), Math.max(1, deadline - Date.now()));
+          }),
         ]);
       } catch {
         break;
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
+      if (chunk.value) seen += decoder.decode(chunk.value, { stream: true });
       if (chunk.done) break;
-      seen += decoder.decode(chunk.value, { stream: true });
     }
     acquired = seen.includes("CAP_HEAVY_GATE_ACQUIRED");
   } finally {
     if (!acquired) {
       try { child.stdin.close(); } catch { /* already gone */ }
-      try { await child.status; } catch { /* reaped */ }
       try { reader.releaseLock(); } catch { /* released */ }
     }
   }
 
   if (!acquired) {
     const waitedMs = Date.now() - t0;
+    // Why did we not get it? Wait for the helper's own verdict and read what it
+    // said: 66 + 'cannot open lock file' is a SETUP fault; 1 (or still running
+    // when our backstop deadline passed) is genuine contention.
+    let exitCode: number | null = null;
+    try {
+      const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 1500);
+      const status = await child.status;
+      clearTimeout(timer);
+      exitCode = status.code;
+    } catch { /* reaped */ }
+    let errText = "";
+    try {
+      errText = (await new Response(child.stderr).text()).trim();
+    } catch { /* no stderr to read */ }
+    const setupFailure = /cannot open lock file|Permission denied|No such file or directory/iu.test(errText) || exitCode === 66;
+    if (setupFailure) {
+      throw new HeavyGateSlotSetupError(opts.gate, slotPath, errText || `the locking helper exited ${exitCode}`);
+    }
     const now = readHeavyGateHolder(holderPath);
     throw new HeavyGateSlotRefusedError(opts.gate, now.holder ?? holderAtStart.holder, now.alive, waitedMs, slotPath);
   }
 
   const waitedMs = Date.now() - t0;
+  // DRAIN the helper's stderr for the rest of its life. It is piped so a setup
+  // fault can be diagnosed, but an unread pipe is a LIVE RESOURCE: leaving it
+  // open kept the holder's own event loop alive after release, so a process that
+  // acquired and released could not exit (found by the defect-1 drill, which hung
+  // for exactly that reason). The buffer is bounded and only kept for diagnostics.
+  (async () => {
+    if (Deno.env.get("CAP_DIAG_NO_DRAIN") === "1") return;
+    try {
+      const errReader = child.stderr.getReader();
+      const dec = new TextDecoder();
+      for (;;) {
+        const { value, done } = await errReader.read();
+        if (done) break;
+        if (value) dec.decode(value, { stream: true });
+      }
+    } catch { /* the helper went away; nothing to drain */ }
+  })();
   announceHolder(holderPath, holder);
   sayAcquired(`heavy-gate: ${opts.gate} holds the fleet-wide gate slot [${slotPath}] (waited ${waitedMs} ms)`);
   let released = false;

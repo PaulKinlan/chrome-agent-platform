@@ -51,6 +51,7 @@ import {
   QuietWindowRefusedError,
 } from "./lib/quiet-window.ts";
 import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
+import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -167,6 +168,15 @@ function launchJourneyChrome(profile: string) {
     if (e instanceof HeavyGateSlotRefusedError) {
       console.error(e.message);
       console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateRefusalPayload(e))}`);
+      Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+    }
+    // 0lj3: the slot could not be SET UP (unopenable path, missing helper). Also
+    // environmental, and deliberately a DIFFERENT reason: no holder is implied,
+    // so waiting would be pointless — a reader must be able to tell a broken lock
+    // from a busy one.
+    if (e instanceof HeavyGateSlotSetupError) {
+      console.error(e.message);
+      console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateSetupFailurePayload(e))}`);
       Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
     }
     throw e;
