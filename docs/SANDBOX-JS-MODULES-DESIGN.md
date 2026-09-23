@@ -94,10 +94,10 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
   ```json
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:",
-    "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self';"
+    "sandbox": "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self'; connect-src 'none'; img-src data: blob:;"
   }
   ```
-  *Security containment analysis:* Permitting `blob:` in a sandboxed page's `script-src` widens what can load as script, but the threat is contained: the sandbox is an opaque origin (`null`) with zero `chrome.*` APIs, no storage access, and shadowed `window.fetch` with SSRF denial and host allowlists enforced by the Service Worker in `extension/lib/fetch-policy.js` (ambient network containment via un-shadowed APIs remains an ovfm.4 verification question). A `blob:`-URL script is therefore contained by the sandbox isolation boundary rather than by CSP script-source restrictions.
+  *Security containment analysis:* Permitting `blob:` in a sandboxed page's `script-src` widens what can load as script, but the threat is contained: the sandbox is an opaque origin (`null`) with zero `chrome.*` APIs, no storage access, and shadowed `window.fetch` with SSRF denial and host allowlists enforced by the Service Worker in `extension/lib/fetch-policy.js` (ambient network containment via un-shadowed APIs remains an ovfm.4 verification question). A `blob:`-URL script is contained by the sandbox isolation boundary rather than by CSP script-source restrictions, while ambient connection APIs (`connect-src 'none'`) and remote images (`img-src data: blob:`) are denied by the manifest sandbox CSP. Media-src (audio/video) and form-action navigation remain unmanaged by this sandbox policy.
 
 ### Option C: `data:` URLs + Import Map
 - **Mechanism:** Same as Option B, but converting modules to `data:text/javascript;base64,...` strings instead of `blob:` URLs.
