@@ -57,7 +57,17 @@ const EXEMPT = new Set([
 // named harnesses, then one-off evidence, then unit tests that mention the ids.
 const INVENTORY: Record<string, number> = {
   // ── gates inside test:all ────────────────────────────────────────────────
-  "scripts/chrome-journeys.ts": 44, // most route through boxOf()'s compat mapping; :2688 and :2721 do not
+  "scripts/chrome-journeys.ts": 38, // was 44. COUNTING CAVEAT, corrected on review:
+  // this is a count of matching LINES, not of call sites, and it is NOT a measure
+  // of what still works. The criterion that matters is whether a read routes
+  // through boxOf (:367-380), which carries the compat mapping
+  // #task-input -> [data-composer-input] / #run-task -> [data-composer-send].
+  // Most do (via typeInto -> clickSel -> boxOf, verified by reading all three),
+  // but NOT ALL: :6263 read '#thread-composer #task-input' directly for a debug
+  // line, so it logged on every call and said nothing about why. Migrated sites:
+  // :2688 and :2721 (the two that fed real assertions), the sendTask trio at
+  // :6262-6264, and the multi-slash Run-task click. What remains is unverified
+  // line-by-line against boxOf coverage — treat it as unmigrated until read.
   "scripts/component-gallery-smoke.ts": 3, // :200,:216,:217
   // MIGRATED, so pruned from the ledger (a clean file that stays listed fails the
   // second test on purpose — the ledger must list only work that is left):

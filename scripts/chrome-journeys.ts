@@ -52,6 +52,11 @@ import {
 } from "./lib/quiet-window.ts";
 import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
+// The composer is addressed by host + stable hook, never by the retired fixed ids
+// (bead sndb removed them; bead 4vfj finished the harness half). Host-scoped
+// because ntp.html carries TWO composers, so an unscoped [data-composer-input]
+// resolves to whichever comes first in document order.
+import { composerInput, composerPopup, composerSend } from "./lib/composer-target.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -555,7 +560,7 @@ const ran = new Set();
 // assertion was re-pinned to the post-dptw truth (unlimited retention) and
 // PASSES live. The mechanism stays for future honest ownership.
 const EXPECTED_RED = new Map<string, string>([]);
-function check(name, cond) {
+function check(name, cond, detail?: unknown) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   ran.add(name);
   const owner = EXPECTED_RED.get(name);
@@ -570,7 +575,26 @@ function check(name, cond) {
     return;
   }
   results.push({ name, pass: !!cond });
-  console.log(`${cond ? "PASS" : "FAIL"}: ${name}`);
+  // Detail is printed ONLY on failure, and only when the caller supplied one. A
+  // check whose failure line carries no measured values sends the next lane to
+  // guess; this is the channel that stops that (bead ady6 — nine pre-existing call
+  // sites handed this function a detail it had no parameter for).
+  // A diagnostics path must never be able to throw and take the suite with it:
+  // JSON.stringify rejects on a cyclic detail, so String() is the fallback.
+  let shown = "";
+  if (!cond && detail !== undefined) {
+    // No type annotation here on purpose: tests/journey-check-detail.test.ts
+    // extracts this function body and compiles it with new Function(), which is
+    // JavaScript — an annotation would break the regression test that guards it.
+    let text;
+    try {
+      text = JSON.stringify(detail) ?? String(detail);
+    } catch {
+      text = String(detail);
+    }
+    shown = ` — ${text.slice(0, 400)}`;
+  }
+  console.log(`${cond ? "PASS" : "FAIL"}: ${name}${shown}`);
 }
 
 /** The exact, ordered set of assertions this suite must run. */
@@ -2700,14 +2724,23 @@ async function main() {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await sleep(800);
     const afterSkill = await evalIn(cdp, ntpSession, `(() => {
-      const comp = document.querySelector('agent-composer');
-      const inp = comp?.querySelector('#task-input');
-      const pop = comp?.querySelector('.popup');
-      return JSON.stringify({ value: inp?.value ?? '', popupHidden: pop ? pop.hidden : true });
+      const inp = document.querySelector(${JSON.stringify(composerInput("hub"))});
+      const pop = document.querySelector(${JSON.stringify(composerPopup("hub"))});
+      // No ?. and no ?? '': coercing an absent input to an empty string made this
+      // check fail on "" with nothing naming the cause, and evalIn() does not
+      // surface a page-side throw (it returns r?.result?.result?.value and never
+      // reads exceptionDetails). Report the absence IN the payload instead, so
+      // the failure names the selector rather than reading as a product defect.
+      if (!inp) return JSON.stringify({ error: "composer input not found: ${composerInput("hub")}" });
+      return JSON.stringify({ value: inp.value, popupHidden: pop ? pop.hidden : true });
     })()`);
     const skillResolved = JSON.parse(afterSkill ?? "{}");
     check("multi-slash: the skill reference is inserted and the popup closes",
-      /\/skill:(?:builtin:)?page-summary/.test(skillResolved?.value ?? "") && skillResolved?.popupHidden === true);
+      /\/skill:(?:builtin:)?page-summary/.test(skillResolved?.value ?? "") && skillResolved?.popupHidden === true,
+      // Carries the page-side {error: "composer input not found: <selector>"}
+      // payload when the input is absent, so the failure names the selector
+      // instead of reading as a multi-slash parser regression.
+      skillResolved);
     // The SECOND command: append a space + /tabs: to the resolved text. On the
     // pre-fix code the /tabs token is mid-input and NEVER opens the picker.
     await typeText(cdp, ntpSession, " /tabs:");
@@ -2734,10 +2767,17 @@ async function main() {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await sleep(800);
-    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('agent-composer #task-input')?.value ?? ''`);
+    const multiValue = await evalIn(cdp, ntpSession, `(() => {
+      const inp = document.querySelector(${JSON.stringify(composerInput("hub"))});
+      // A sentinel rather than '' so an absent composer is legible in the check's
+      // detail instead of failing as an empty string that looks like a product
+      // regression in the multi-slash parser.
+      return inp ? inp.value : "COMPOSER-INPUT-NOT-FOUND";
+    })()`);
     check("multi-slash: the final input holds BOTH the skill and the tab reference",
-      /\/skill:(?:builtin:)?page-summary/.test(multiValue) && /\/tabs:/.test(multiValue));
-    check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
+      /\/skill:(?:builtin:)?page-summary/.test(multiValue) && /\/tabs:/.test(multiValue),
+      { multiValue });
+    check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, composerSend("hub")));
     // Wait for the run to FULLY settle (the demo model streams; the journal
     // entry lands at run START, so a journal poll is not enough — the run-end
     // UI re-render clears the composer and must be done before the NTP block
@@ -6258,10 +6298,13 @@ async function main() {
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
       await cdp.send("Page.bringToFront", {}, ntpSession);
       await sleep(300);
-      if (!(await typeInto(cdp, ntpSession, "#thread-composer #task-input", task))) return false;
-      const typed = await evalIn(cdp, ntpSession, `document.querySelector('#thread-composer #task-input')?.value ?? null`);
+      if (!(await typeInto(cdp, ntpSession, composerInput("thread"), task))) return false;
+      // Was a direct read of the retired id with ?. and ?? null, so it logged its
+      // debug line on EVERY call (typed was always null) and said nothing about
+      // why. boxOf's compat mapping covered the typeInto above but not this.
+      const typed = await evalIn(cdp, ntpSession, `(() => { const el = document.querySelector(${JSON.stringify(composerInput("thread"))}); return el ? el.value : "COMPOSER-INPUT-NOT-FOUND"; })()`);
       if (typed !== task) console.log(`[debug] sendTask typed=${JSON.stringify(typed)}`);
-      return await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+      return await clickSel(cdp, ntpSession, composerSend("thread"));
     };
     // Once the decision settles and the run finishes, the thread re-projects
     // its transcript from the durable log (the decision row "[tool] DENIED by
