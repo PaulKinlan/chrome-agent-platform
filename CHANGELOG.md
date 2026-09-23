@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.469] — 2026-09-23
+- the fleet turn and the canonical lock cannot be taken in the wrong order, and every gate-class entry now says whether it takes the turn
+
 ## [0.3.468] — 2026-09-23
 - the serial-phase resilience test records its test pid at module boot, preventing false timeouts under load
 

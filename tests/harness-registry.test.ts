@@ -221,3 +221,27 @@ Deno.test("35o1: the named owners RESOLVE to beads that are not closed", async (
     console.log(`35o1: INCONCLUSIVE for ${inconclusive.length} owner(s) — the tracker was not reachable, so liveness was NOT checked: ${inconclusive.join("; ")}`);
   }
 });
+
+Deno.test("ryrr: every gate-class harness either TAKES the fleet turn or says why it does not", async () => {
+  // The fleet-wide turn (chrome-agent-platform-0lj3) is taken by a load-sensitive
+  // gate through launchChrome's `fleetSlot`, or batch-wise by the KAT runner
+  // through acquireHeavyGateSlot. A gate-class entry that does neither must SAY
+  // SO, in the registry, because the alternative — a gate silently outside the
+  // turn rule — is how the journey gate ended up unowned and how the custody
+  // chain could have had a second lock layered onto it (chrome-agent-platform-ryrr).
+  const TAKES = /fleetSlot:\s*(true|\{)/u;
+  const TAKES_BATCHWISE = /acquireHeavyGateSlot\(/u;
+  const silent: string[] = [];
+  const mismatched: string[] = [];
+  for (const [file, entry] of Object.entries(HARNESSES)) {
+    if (entry.class !== "gate") continue;
+    const src = await Deno.readTextFile(`${ROOT}scripts/${file}`).catch(() => "");
+    const takes = TAKES.test(src) || TAKES_BATCHWISE.test(src);
+    const reason = (entry.reason ?? "").trim();
+    if (!takes && !reason) silent.push(file);
+    // A recorded reason and the source must agree in both directions.
+    if (reason && takes) mismatched.push(file);
+  }
+  assertEquals(silent, [], "gate-class entries must take the fleet turn or record why they do not (HarnessEntry.reason)");
+  assertEquals(mismatched, [], "a gate-class entry with a 'does not take the turn' reason must NOT pass fleetSlot/acquireHeavyGateSlot in its source");
+});
