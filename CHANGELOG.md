@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.460] — 2026-09-23
+- a TRUNCATED /proc walk in the quiet-window sampler is a refusal, never a quiet box
+
 ## [0.3.459] — 2026-09-23
 - internal: load-sensitive fleet gate lock hardens error paths against leaks and derives private sidecar paths
 

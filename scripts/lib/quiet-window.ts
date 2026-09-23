@@ -71,9 +71,23 @@ export const HEAVY_PROCESS_NAMES = new Set([
 ]);
 
 /** How many /proc entries one sample will inspect, and for how long. A sample
- *  must stay cheap: it runs every CAP_QUIET_SAMPLE_MS while a gate waits. */
+ *  must stay cheap: it runs every CAP_QUIET_SAMPLE_MS while a gate waits.
+ *  Env-overridable so a TRUNCATED walk can be driven in a test
+ *  (chrome-agent-platform-1io9) and so an operator can raise the bound
+ *  deliberately on a box that really has thousands of processes. */
 const MAX_PROC_SCAN = 4096;
 const MAX_PROC_SCAN_MS = 400;
+
+/** The per-sample /proc budget, read per call (same rule as the other tunables:
+ *  no module-reload order trap). */
+function procScanBudget(): { entries: number; ms: number } {
+  const entries = Number(Deno.env.get("CAP_QUIET_MAX_PROC_SCAN"));
+  const ms = Number(Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS"));
+  return {
+    entries: Number.isFinite(entries) && entries > 0 ? entries : MAX_PROC_SCAN,
+    ms: Number.isFinite(ms) && ms >= 0 ? ms : MAX_PROC_SCAN_MS,
+  };
+}
 
 export interface LoadSample {
   /** Epoch ms. */
@@ -293,9 +307,21 @@ export async function readLoadSample(prev?: ProcCpuMap | null): Promise<LoadSamp
   const selfPid = String(Deno.pid);
   try {
     let seen = 0;
+    // 1io9: a TRUNCATED walk must not read as a quiet box. The first version
+    // returned the partial count, so a real compiler the walk never reached was
+    // reported as zero builders and the gate opened under a build — the exact
+    // defect class this file exists to prevent, one level down. Truncation is
+    // therefore carried out of the loop and turned into an UNMEASURABLE sample
+    // (the module's contract: an unmeasurable box is a refusal, never an
+    // assumed quiet one).
+    let truncated = false;
     const startedAt = Date.now();
+    const budget = procScanBudget();
     for await (const entry of Deno.readDir("/proc")) {
-      if (seen >= MAX_PROC_SCAN || Date.now() - startedAt > MAX_PROC_SCAN_MS) break;
+      if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
+        truncated = true;
+        break;
+      }
       if (!entry.isDirectory || !/^\d+$/u.test(entry.name) || entry.name === selfPid) continue;
       seen++;
       try {
@@ -307,6 +333,18 @@ export async function readLoadSample(prev?: ProcCpuMap | null): Promise<LoadSamp
           if (parsed) cpu.set(entry.name, parsed);
         }
       } catch { /* a process that exited mid-scan is not an error */ }
+    }
+    if (truncated) {
+      return {
+        at, load1, load5, load15, cores, loadPerCore: load1 / cores,
+        // The partial counts stay as evidence: a reader can see what the walk did
+        // reach before it was cut off.
+        compilers, compilerNames: [...names], measurable: false,
+        error: `proc scan truncated after ${seen} entries in ${Date.now() - startedAt} ms ` +
+          `(budget ${budget.entries} entries / ${budget.ms} ms) — the builder count is INCOMPLETE, ` +
+          `so this sample is NOT a quiet verdict; raise CAP_QUIET_MAX_PROC_SCAN(_MS) deliberately ` +
+          `if this box really has that many processes (chrome-agent-platform-1io9)`,
+      };
     }
   } catch (e) {
     return {
