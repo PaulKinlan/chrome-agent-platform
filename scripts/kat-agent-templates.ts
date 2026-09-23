@@ -145,8 +145,9 @@ check("creating each curated starter through the gallery makes it a real agent",
 // None of the six starters is scheduled — no agent:<id> alarms may exist.
 const starterAlarms = (await alarms()).filter((a: any) => STARTERS.some((s) => a.name === `agent:${s}`));
 check("starter agents are on-demand (no schedule alarms minted)", starterAlarms.length === 0, starterAlarms);
-// The empty state is gone — the agents list shows rows now.
-const rowsAfterSeed = await ev(`document.querySelectorAll('#named-agents capability-row').length`);
+// The empty state is gone — the agents list shows rows now. The rows are the
+// shared <agent-picker> summary rows (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01).
+const rowsAfterSeed = await ev(`(() => { const p = document.querySelector('#named-agents agent-picker'); return p ? (p.shadowRoot?.querySelectorAll('.opt').length ?? 0) : 0; })()`);
 check("the agents list shows the seeded agents (empty state replaced)", (rowsAfterSeed ?? 0) >= 6, rowsAfterSeed);
 
 // Open the create-agent dialog.
@@ -332,13 +333,14 @@ check("a REAL scheduled task exists (agent:tab-janitor, 120 min, recurring promp
 const janitorAlarm = (await alarms()).find((a: any) => a.name === "agent:tab-janitor");
 check("a LIVE chrome.alarms entry backs the schedule (not just a store row)", janitorAlarm?.periodInMinutes === 120, janitorAlarm);
 const chipRow = await ev(`(() => {
-  const rows = [...document.querySelectorAll('#named-agents capability-row')];
-  const row = rows.find(r => (r.getAttribute('name') ?? '') === 'Tab Janitor');
-  return row ? { lastRun: row.getAttribute('last-run') } : null;
+  const picker = document.querySelector('#named-agents agent-picker');
+  const rows = [...(picker?.shadowRoot?.querySelectorAll('.opt') ?? [])];
+  const row = rows.find(r => (r.querySelector('.name')?.textContent ?? '') === 'Tab Janitor');
+  return row ? { status: row.querySelector('.status')?.textContent ?? '' } : null;
 })()`);
 // The row's chip is the product's own schedule marker (lib/agent-display.js
 // agentScheduleMarker): a scheduled agent reads "Scheduled · every N min".
-check("the agents list shows the schedule chip ('Scheduled · every 120 min') with no background segregation", chipRow?.lastRun === "Scheduled · every 120 min", chipRow);
+check("the agents list shows the schedule chip ('Scheduled · every 120 min') with no background segregation", chipRow?.status === "Scheduled · every 120 min", chipRow);
 
 // 6b. P1-b: REOPENING the scheduled agent's edit dialog shows the real
 //     schedule (named-agent.get shares the list's enrichment). The create
@@ -362,9 +364,9 @@ await ev(`document.getElementById('thread-back')?.click()`);
 await sleep(300);
 // Open My Chief of Staff's agent view from the list, then its Edit dialog.
 await ev(`(() => {
-  const rows = [...document.querySelectorAll('#named-agents capability-row')];
-  const row = rows.find(r => (r.getAttribute('name') ?? '') === 'My Chief of Staff');
-  row?.dispatchEvent(new CustomEvent('open'));
+  const picker = document.querySelector('#named-agents agent-picker');
+  const rows = [...(picker?.shadowRoot?.querySelectorAll('.opt') ?? [])];
+  rows.find(r => (r.querySelector('.name')?.textContent ?? '') === 'My Chief of Staff')?.click();
 })()`);
 await sleep(800);
 await ev(`document.getElementById('edit-agent')?.click()`);
@@ -443,10 +445,11 @@ await ev(`(() => {
 })()`);
 await sleep(1500);
 const collision = await ev(`(() => {
-  const main = [...document.querySelectorAll('#named-agents capability-row')].filter(r => (r.getAttribute('name') ?? '') === 'Price watcher');
+  const picker = document.querySelector('#named-agents agent-picker');
+  const main = [...(picker?.shadowRoot?.querySelectorAll('.opt') ?? [])].filter(r => (r.querySelector('.name')?.textContent ?? '') === 'Price watcher');
   const side = [...document.querySelectorAll('#side-agents .agent-item')].filter(b => (b.textContent ?? '').includes('Price watcher'));
-  return { mainRows: main.length, mainChip: main[0]?.getAttribute('last-run') ?? null,
-           mainHasAvatar: !!main[0]?.getAttribute('icon'), sideRows: side.length,
+  return { mainRows: main.length, mainChip: main[0]?.querySelector('.status')?.textContent ?? null,
+           mainHasAvatar: !!main[0]?.querySelector('.avatar img'), sideRows: side.length,
            sideHasBackgroundLabel: side.some(b => (b.textContent ?? '').includes('background')) };
 })()`);
 check("a same-id record in BOTH stores renders exactly ONCE in the main list", collision?.mainRows === 1, collision);

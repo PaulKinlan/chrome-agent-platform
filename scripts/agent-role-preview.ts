@@ -60,41 +60,43 @@ try {
   await sleep(3000);
 
   await evaluate(`chrome.runtime.sendMessage({ type: "named-agent.create", name: "Role Clamp", role: ${JSON.stringify(LONG_ROLE)} })`);
-  // The hub re-renders on the registry broadcast; no reload needed.
-  let present = false;
-  for (let i = 0; i < 40 && !present; i++) {
-    await sleep(250);
-    present = await evaluate(
-      `[...document.querySelectorAll('#named-agents capability-row')].some((r) => (r.getAttribute('name') || '').includes('Role Clamp'))`,
-    ) === true;
-  }
-  check("the new named agent appears in the hub list", present === true);
-
-  const row = await evaluate(`(() => {
-    const r = [...document.querySelectorAll('#named-agents capability-row')]
-      .find((x) => (x.getAttribute('name') || '').includes('Role Clamp'));
-    if (!r) return { found: false };
-    const desc = r.shadowRoot?.querySelector('.desc');
+  // The hub re-renders on the registry broadcast; no reload needed. The rows
+  // are the SHARED <agent-picker> summary rows (CAP-FB-20260825-AGENT-PICKER-
+  // HUB-ROWS-01): the row is `.opt` in the picker's shadow root and the role
+  // lives in its two-line clamped `.sub`.
+  const rowProbe = `(() => {
+    const picker = document.querySelector('#named-agents agent-picker');
+    const rows = [...(picker?.shadowRoot?.querySelectorAll('.opt') ?? [])];
+    const r = rows.find((x) => (x.querySelector('.name')?.textContent || '').includes('Role Clamp'));
+    if (!r) return { found: false, names: rows.map((x) => x.querySelector('.name')?.textContent ?? '') };
+    const desc = r.querySelector('.sub');
     if (!desc) return { found: true, desc: false };
     const lh = parseFloat(getComputedStyle(desc).lineHeight) || 16;
     return {
       found: true, desc: true,
-      attrLen: (r.getAttribute('description') || '').length,
       domLen: (desc.textContent || '').length,
       titleLen: (desc.getAttribute('title') || '').length,
       lines: Math.round(desc.getBoundingClientRect().height / lh),
       rowHeight: Math.round(r.getBoundingClientRect().height),
       clipped: desc.scrollHeight > desc.clientHeight + 1,
     };
-  })()`);
+  })()`;
+  let present = false;
+  for (let i = 0; i < 40 && !present; i++) {
+    await sleep(250);
+    present = (await evaluate(rowProbe))?.found === true;
+  }
+  check("the new named agent appears in the hub list", present === true);
+
+  const row = await evaluate(rowProbe);
 
   check("a long role renders at most two lines", row?.found === true && row?.lines <= 2, row);
   check("a long role does not inflate the row past 90px", typeof row?.rowHeight === "number" && row.rowHeight <= 90, { rowHeight: row?.rowHeight });
   check("the clamp is actually clipping the overflow", row?.clipped === true, { clipped: row?.clipped });
   // Clamped, never truncated away: the full role must remain in the DOM so a
   // screen reader still reads it, and be reachable on hover.
-  check("the FULL role stays in the DOM", row?.domLen === row?.attrLen && row?.attrLen > 200, { attrLen: row?.attrLen, domLen: row?.domLen });
-  check("the full role is available on hover", row?.titleLen === row?.attrLen, { titleLen: row?.titleLen, attrLen: row?.attrLen });
+  check("the FULL role stays in the DOM", row?.domLen === LONG_ROLE.length && LONG_ROLE.length > 200, { roleLen: LONG_ROLE.length, domLen: row?.domLen });
+  check("the full role is available on hover", row?.titleLen === LONG_ROLE.length, { titleLen: row?.titleLen, roleLen: LONG_ROLE.length });
 
   // The sidebar list keeps its own (already-correct) short preview.
   const sidebar = await evaluate(`(() => {

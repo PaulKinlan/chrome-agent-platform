@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.463] — 2026-09-23
+- the hub's agent lists use the same row component as the rest of the product, so every agent row looks and behaves the same
+
 ## [0.3.462] — 2026-09-23
 - the two contention tests stop assuming the fleet's own gate slot is free (and the compiler test stops letting ambient load decide its refusal)
 

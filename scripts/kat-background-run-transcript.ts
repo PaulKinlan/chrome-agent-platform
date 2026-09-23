@@ -219,14 +219,14 @@ try {
     fired,
   );
 
-  await sleep(500); // registry broadcast updates the real capability row
+  await sleep(500); // registry broadcast updates the real agent rows
   const rowPoint = await ntp.evaluate(`(() => {
-    const row = [...document.querySelectorAll('#named-agents capability-row')]
-      .find(el => el.getAttribute('name') === ${JSON.stringify(seeded.name)});
-    const open = row?.shadowRoot?.querySelector('.row.clickable');
-    if (!open) return null;
-    open.scrollIntoView({ block: 'center' });
-    const r = open.getBoundingClientRect();
+    const picker = document.querySelector('#named-agents agent-picker');
+    const rows = [...(picker?.shadowRoot?.querySelectorAll('.opt') ?? [])];
+    const row = rows.find(r => (r.querySelector('.name')?.textContent ?? '') === ${JSON.stringify(seeded.name)});
+    if (!row) return null;
+    row.scrollIntoView({ block: 'center' });
+    const r = row.getBoundingClientRect();
     return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
   })()`);
   check(

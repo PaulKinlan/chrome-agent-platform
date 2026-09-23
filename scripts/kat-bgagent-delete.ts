@@ -5,9 +5,9 @@
 //   1. seed a real CUSTOM background agent through the REAL message bus
 //      (recipe.duplicate → background-agent.set enable → the recipe:<id> task
 //      exists in task.list),
-//   2. find its real capability-row on the NTP and click the REAL Delete
-//      button (shadow-root event → confirmActionDialog), accept the REAL
-//      confirm dialog,
+//   2. find its real summary row on the NTP and click the REAL Delete
+//      control (shared <agent-picker> row + its sibling Delete →
+//      confirmActionDialog), accept the REAL confirm dialog,
 //   3. assert the deletion is real and COMPLETE: the recipe:<id> task is GONE
 //      from the task store, the custom recipe is gone from the registry, the
 //      row is gone from the DOM, and a focus successor is placed,
@@ -183,25 +183,73 @@ await ntp.shot(`${OUT}/01-seeded-enabled.png`);
 
 // ── 2. The REAL Delete button on the agent's REAL row ─────────────────────
 // The registry broadcast re-renders the list; give it a beat, then find the
-// row whose name matches the seeded agent (its Delete lives in the shadow root).
+// row whose name matches the seeded agent. The rows are the SHARED
+// <agent-picker> summary rows (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01): the
+// row is `.opt` inside the picker's shadow root and its destructive control is
+// a SIBLING `.rowdel` (a button may not contain a button).
+const findRow = (name) => `(() => {
+  const picker = document.querySelector("#named-agents agent-picker");
+  const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+  const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(name)});
+  if (!row) return { found: false, names: rows.map((r) => r.querySelector(".name")?.textContent ?? "") };
+  const del = row.closest(".optwrap")?.querySelector(".rowdel") ?? null;
+  return { found: true, hasDelete: !!del, summary: picker.hasAttribute("summary"), search: !!picker.shadowRoot.querySelector(".search") };
+})()`;
 await sleep(1200);
-const rowFound = await ntp.ev(`(() => {
-  const rows = [...document.querySelectorAll("#named-agents capability-row")];
-  const row = rows.find((r) => (r.getAttribute("name") || "") === ${JSON.stringify(agentName)});
-  if (!row) return { found: false, names: rows.map((r) => r.getAttribute("name")) };
-  const del = row.shadowRoot.querySelector('button.delete, button[part="delete"]');
-  return { found: true, hasDelete: !!del };
-})()`);
+const rowFound = await ntp.ev(findRow(agentName));
 check("journey: the seeded agent's row renders with a real Delete button", rowFound?.found === true && rowFound.hasDelete === true, rowFound);
+check(
+  "journey: the hub lists its agents through the SHARED summary picker (no search combobox)",
+  rowFound?.summary === true && rowFound.search === false,
+  rowFound,
+);
+
+// ── 2a. The row still OPENS the agent: the surface is unchanged ──────────
+// The row IS the click target (a plain button in the summary list), so the
+// trusted click that used to land on capability-row.open lands here.
+const rowRect = await ntp.ev(`(() => {
+  const picker = document.querySelector("#named-agents agent-picker");
+  const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+  const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(agentName)});
+  if (!row) return null;
+  row.scrollIntoView({ block: "center" });
+  const r = row.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+})()`);
+const rowClicked = await ntp.clickXY(rowRect);
+check("journey: the shared row received a trusted pointer click", rowClicked === true, { rowRect });
+await sleep(900);
+const threadOpen = await ntp.ev(`(() => {
+  const view = document.getElementById("thread-view");
+  return { open: !!view && !view.hidden, title: document.getElementById("thread-title")?.textContent ?? "" };
+})()`);
+check(
+  "journey: clicking the row opens the agent's thread (the surface the row always opened)",
+  threadOpen?.open === true && threadOpen.title === agentName,
+  { ...threadOpen, agentName },
+);
+await ntp.shot(`${OUT}/02-row-opens-thread.png`);
+const backClicked = await ntp.clickSel("#thread-back");
+await sleep(600);
+const backHome = await ntp.ev(`(() => {
+  const view = document.getElementById("thread-view");
+  return { hidden: !!view?.hidden, panel: !!document.querySelector("#named-agents agent-picker") };
+})()`);
+check(
+  "journey: back returns to the hub's agent list",
+  backClicked === true && backHome?.hidden === true && backHome.panel === true,
+  backHome,
+);
 
 // Click the real Delete with a TRUSTED CDP pointer gesture — the button lives
-// in capability-row's shadow root, so resolve its box through the shadow path
+// in the picker's shadow root, so resolve its box through the shadow path
 // and dispatch real Input events (element.click() from evaluate is NOT
 // trusted; the delete must prove it works for a real user).
 const delRect = await ntp.ev(`(() => {
-  const rows = [...document.querySelectorAll("#named-agents capability-row")];
-  const row = rows.find((r) => (r.getAttribute("name") || "") === ${JSON.stringify(agentName)});
-  const del = row?.shadowRoot?.querySelector('button.delete, button[part="delete"]');
+  const picker = document.querySelector("#named-agents agent-picker");
+  const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+  const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(agentName)});
+  const del = row?.closest(".optwrap")?.querySelector(".rowdel") ?? null;
   if (!del) return null;
   del.scrollIntoView({ block: "center" });
   const r = del.getBoundingClientRect();
@@ -229,8 +277,9 @@ let rowGoneMs = -1;
 for (let i = 0; i < 60 && rowGoneMs < 0; i++) {
   await sleep(250);
   const gone = await ntp.ev(`(() => {
-    const rows = [...document.querySelectorAll("#named-agents capability-row")];
-    return !rows.some((r) => (r.getAttribute("name") || "") === ${JSON.stringify(agentName)});
+    const picker = document.querySelector("#named-agents agent-picker");
+    const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+    return !rows.some((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(agentName)});
   })()`);
   if (gone === true) rowGoneMs = Date.now() - t0;
 }

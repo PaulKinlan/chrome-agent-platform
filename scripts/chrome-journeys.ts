@@ -1424,7 +1424,9 @@ async function main() {
         const sidebarRows = await evalIn(cdp, hub, `document.querySelectorAll('#side-agents .agent-item').length`);
         const sidebarEmpty = await evalIn(cdp, hub, `document.querySelector('#side-agents .thread-empty')?.textContent ?? ''`);
         const panelCount = await evalIn(cdp, hub, `document.getElementById('agent-count')?.textContent ?? ''`);
-        const panelRows = await evalIn(cdp, hub, `document.querySelectorAll('#named-agents capability-row').length`);
+        // The hub's agent rows are the shared <agent-picker> summary rows
+        // (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01): count its `.opt` rows.
+        const panelRows = await evalIn(cdp, hub, `(() => { const p = document.querySelector('#named-agents agent-picker'); return p ? (p.shadowRoot?.querySelectorAll('.opt').length ?? 0) : 0; })()`);
         const settingsRows = await evalIn(cdp, opts, `document.querySelectorAll('#unified-agent-list .agent-settings-row').length`);
         const settingsText = await evalIn(cdp, opts, `document.getElementById('unified-agent-list')?.textContent?.trim().slice(0, 60) ?? ''`);
         const sidepanelRows = await evalIn(cdp, sp, `document.getElementById('agents-picker')?.shadowRoot?.querySelectorAll('.opt').length ?? -1`);
