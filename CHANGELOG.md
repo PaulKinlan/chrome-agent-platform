@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.457] — 2026-09-23
+- the fleet-gate lock's four ERROR paths — leak on startup failure, outliving timer, setup-as-contention, and a sidecar the reader never read
+
 ## [0.3.456] — 2026-09-23
 - make the two real-compiler tests portable — calibrate the burner's duration instead of tuning it to one box
 

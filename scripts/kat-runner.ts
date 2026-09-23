@@ -28,6 +28,7 @@ import { HARNESSES, isKat, KAT_VERDICTS_PATH, readKatVerdicts } from "./lib/harn
 import { makeChecker } from "./lib/expected-red.ts";
 import { runLockAware } from "./lib/lock-aware-command.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
+import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./lib/quiet-window.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
@@ -97,6 +98,13 @@ try {
   if (e instanceof HeavyGateSlotRefusedError) {
     console.error(e.message);
     console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateRefusalPayload(e))}`);
+    Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+  }
+  // A lock that could not be set up is not a lock that is busy — same verdict,
+  // different reason, so nobody waits for a holder that does not exist.
+  if (e instanceof HeavyGateSlotSetupError) {
+    console.error(e.message);
+    console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(heavyGateSetupFailurePayload(e))}`);
     Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
   }
   throw e;
