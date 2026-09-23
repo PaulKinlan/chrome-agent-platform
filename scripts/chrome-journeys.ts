@@ -48,6 +48,9 @@ import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
   ENVIRONMENTAL_REFUSAL_MARKER,
+  type EvaluateTimeoutVerdict,
+  evaluateTimeoutReport,
+  measureEvaluateTimeout,
   QuietWindowRefusedError,
 } from "./lib/quiet-window.ts";
 import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
@@ -531,6 +534,34 @@ async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, e
   while (provider.requests.length < expectRequests && Date.now() - t0 < 120000) {
     if (onPause) await onPause().catch(() => false);
     await sleep(250);
+  }
+  // chrome-agent-platform-9t1p: this loop used to exit SILENTLY on timeout and
+  // hand the caller a partial result. The caller's check then failed on a
+  // confusing payload, and the REAL failure — a run that never settled because
+  // the service worker never answered — surfaced one step later as a generic
+  // `cdp timeout: Runtime.evaluate`, which the harness then blamed on the box.
+  // Three outcomes, not two: it happened and passed, it happened and did not
+  // pass, or IT DID NOT HAPPEN. This is the third, and it is named here, at the
+  // point where the expectation was actually broken.
+  if (provider.requests.length < expectRequests) {
+    // Diagnose cheaply. A bounded read answers two different questions: what
+    // phase the run reached, and — if the read itself times out — whether the
+    // service worker is answering AT ALL, which is the known cause and must be
+    // reported as itself rather than as a CDP timeout about something else.
+    let phase;
+    try {
+      const record = await awaitNewRunTerminal(cdp, optsSession, beforeIds, task, 3000);
+      phase = record?.phase ? String(record.phase) : "no durable run record";
+    } catch (e) {
+      const message = String(e?.message ?? e);
+      phase = isCdpEvaluateTimeout(message)
+        ? "UNREADABLE — the service worker did not answer run.list (an unanswered round trip, NOT fleet load)"
+        : `unreadable (${message})`;
+    }
+    throw new Error(
+      `scripted probe "${task}": the scripted provider received ${provider.requests.length} of ` +
+        `${expectRequests} requests after ${Math.round((Date.now() - t0) / 1000)}s and the run reached phase ${phase}`,
+    );
   }
   const run = await awaitNewRunTerminal(cdp, optsSession, beforeIds, task);
   return { provider, run };
@@ -1082,7 +1113,10 @@ async function main() {
   let port;
   let ws;
   let cdp;
-  let environmentalAbort = false; // qk7p: a CDP evaluate timeout under fleet load is environmental, not a product red
+  // qk7p flagged a CDP evaluate timeout as environmental. 9t1p: that verdict is
+  // only true when the BOX says so, so the abort now carries the reading that
+  // decided it (null until an evaluate timeout is actually classified).
+  let evaluateTimeoutVerdict: EvaluateTimeoutVerdict | null = null;
 
   // A local HTTP fixture server (red page + wrong-origin page) for a REAL
   // screenshot target that isn't a chrome-extension:// page.
@@ -8250,9 +8284,26 @@ async function main() {
     // chrome-agent-platform-qk7p: a CDP evaluate that exceeds the budget under
     // concurrent-lane load is an ENVIRONMENTAL verdict (measured: healthy calls
     // <1 s; abort runs show one >30 s call at a varying position), not a
-    // product red. Flag it here; the owner-clean shutdown below runs first and
-    // the run then exits 75 with the refusal marker.
-    if (isCdpEvaluateTimeout(String(e?.message ?? e))) environmentalAbort = true;
+    // product red.
+    //
+    // chrome-agent-platform-9t1p: that is a claim about the MACHINE, and it was
+    // being made without reading it — so a run that died because the service
+    // worker never answered an in-page round trip was reported as fleet load on
+    // an idle box (measured: load/core 0.11, zero active compilers). MEASURE
+    // HERE, at the moment of the timeout and BEFORE the shutdown below spends
+    // seconds, so the numbers describe the failure rather than its aftermath.
+    // A loaded box still exits 75; an idle one is a product red and says so.
+    if (isCdpEvaluateTimeout(String(e?.message ?? e))) {
+      evaluateTimeoutVerdict = await measureEvaluateTimeout().catch((me) => ({
+        cause: "unmeasurable" as const,
+        environmental: true,
+        reason: `cdp evaluate exceeded the budget; measuring the box failed (${String(me?.message ?? me)}) — failing closed to environmental, NOT a load claim`,
+        environment: "environment: no sample",
+        sample: null,
+      }));
+      console.error(`ENVIRONMENT: ${evaluateTimeoutVerdict.environment}`);
+      console.error(`evaluate-timeout cause: ${evaluateTimeoutVerdict.cause} — ${evaluateTimeoutVerdict.reason}`);
+    }
     console.error("journey failure:", String(e?.message ?? e));
     try {
       await withTimeout(fixture.shutdown(), 8000, "fixture.shutdown").catch(
@@ -8424,11 +8475,17 @@ async function main() {
     // exceeded the budget under concurrent-lane load) is the THIRD verdict —
     // never a product red. The owner-clean shutdown above has run; exit 75
     // with the refusal marker so the aggregate reads "re-run", not "defect".
-    if (environmentalAbort) {
-      console.error(
-        `${ENVIRONMENTAL_REFUSAL_MARKER} {"reason":"cdp evaluate exceeded the budget under fleet load"}`,
-      );
-      Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+    //
+    // chrome-agent-platform-9t1p: THREE outcomes, not two — and which one this
+    // is was measured at the catch above, not assumed. A loaded (or
+    // unmeasurable, fail-closed) box keeps the exit-75 re-run verdict and now
+    // carries the numbers that justify it; an IDLE box means something never
+    // settled, which is a product red and falls through to exit 1. An idle box
+    // must never be reported as fleet load again.
+    if (evaluateTimeoutVerdict) {
+      const report = evaluateTimeoutReport(evaluateTimeoutVerdict);
+      console.error(report.line);
+      Deno.exit(report.exitCode);
     }
     Deno.exit(
       failed > 0 || !removed || !clean || !tempEvidenceGone || !manifestOk ||

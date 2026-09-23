@@ -172,11 +172,35 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   load-sensitive (`loadSensitive` in `scripts/lib/harness-registry.ts`) and the set that
   actually honour it — a declaration nobody honours cannot survive; the guard fails if
   the two sets disagree.
+  **Also watches `scripts/chrome-journeys.ts` FROM the test file (9t1p):** its
+  evaluate-timeout catch must call `measureEvaluateTimeout()` and its exit site must go
+  through `evaluateTimeoutReport()`, with the retired `environmentalAbort` boolean and
+  the fixed `"under fleet load"` marker payload both absent. That is a cross-file
+  watcher: the subject lives in the harness, the assertion lives in the test.
 - **Owed by a re-anchor:** a gate that reddens under machine load gets
   `launchChrome({ requireQuiet: true })` + a `loadSensitive` reason in the registry in
   the same commit, and maps its refusal to exit 75 + an `ENVIRONMENT:` line — never
   relabelled EXPECTED-RED, never manufactured by killing another lane's processes.
+  Anything that moves the journeys' abort path owes `git grep -n "measureEvaluateTimeout\\|evaluateTimeoutReport\\|environmentalAbort"`: an evaluate timeout is classified by
+  MEASUREMENT (`loaded` / `idle-never-settled` / `unmeasurable`), and only the first and
+  last are environmental — an idle box that never settled is a product red and its line
+  must not carry `CAP_ENVIRONMENTAL_REFUSAL`.
 - **Subject moves:** LOUD naming the harness.
+
+## 10b. tests/journey-scripted-probe.test.ts + `runScriptedToolProbe` in scripts/chrome-journeys.ts
+
+- **Watches:** the probe's own expectation (9t1p). It SOURCE-EXTRACTS
+  `runScriptedToolProbe` (from `async function runScriptedToolProbe(` to the
+  `/** Capture a PNG screenshot` comment) and executes it with every collaborator and
+  the clock injected — importing the harness would launch browsers, and a substring pin
+  on the shortfall throw would pass with the throw deleted.
+- **Owed by a re-anchor:** renaming the function, or moving the `captureShot` comment
+  that bounds the slice, breaks the extraction LOUDLY (`the real runScriptedToolProbe
+  must be found`). Changing the shortfall message means updating the assertions that
+  name the count, the elapsed time, the run phase, and the unanswered-round-trip case.
+  The probe must keep failing where the expectation breaks rather than returning a
+  partial result.
+- **Subject moves:** LOUD at import time.
 
 ## 11. tests/harness-debug-port.test.ts
 

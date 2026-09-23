@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.470] — 2026-09-23
+- an unanswered service-worker round trip is no longer reported as fleet load
+
 ## [0.3.469] — 2026-09-23
 - the fleet turn and the canonical lock cannot be taken in the wrong order, and every gate-class entry now says whether it takes the turn
 

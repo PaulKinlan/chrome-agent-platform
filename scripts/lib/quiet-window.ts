@@ -523,3 +523,141 @@ export function isCdpEvaluateTimeout(message: string): boolean {
 
 /** The marker line an aggregator can grep to classify a refusal. */
 export const ENVIRONMENTAL_REFUSAL_MARKER = "CAP_ENVIRONMENTAL_REFUSAL";
+
+/**
+ * chrome-agent-platform-9t1p: `isCdpEvaluateTimeout` says an evaluate blew its
+ * budget. It does NOT say WHY, and the harness used to answer that question
+ * with a fixed string — "cdp evaluate exceeded the budget under fleet load" —
+ * without reading the machine at all. Measured on the run that filed this bead:
+ * load/core 0.11, zero active compilers, three PARKED esbuild daemons, the
+ * fleet-wide gate slot held — an idle box, reported as fleet load, while the
+ * real cause was an in-page `chrome.runtime.sendMessage` round trip the service
+ * worker never answered. Every lane that read "fleet load" and re-ran wasted a
+ * run, and the defect stayed hidden.
+ *
+ * So the verdict now has three causes, and only one of them is environmental:
+ *   - `loaded`             the box WAS over threshold. Environmental (exit 75),
+ *                          re-running is the right response.
+ *   - `idle-never-settled` the box was measurably quiet. NOT environmental: a
+ *                          round trip never settled, which is a product red
+ *                          (exit 1). Never call this fleet load.
+ *   - `unmeasurable`       /proc could not be read. Fails CLOSED to
+ *                          environmental, per this file's contract: an
+ *                          unmeasurable box is never assumed quiet — but the
+ *                          reason says "unmeasurable", never "load".
+ */
+export type EvaluateTimeoutCause = "loaded" | "idle-never-settled" | "unmeasurable";
+
+export interface EvaluateTimeoutVerdict {
+  cause: EvaluateTimeoutCause;
+  /** True only when the machine reading justifies a re-run verdict. */
+  environmental: boolean;
+  /** One sentence naming what the reading showed. Goes in the marker payload. */
+  reason: string;
+  /** The numbers behind it (`environmentLine`), so the claim is checkable. */
+  environment: string;
+  sample: LoadSample | null;
+}
+
+/** Classify ONE reading. Pure, so the three causes are unit-testable without
+ *  manufacturing machine load. */
+export function classifyEvaluateTimeout(
+  sample: LoadSample | null,
+  spec: ResolvedSpec = resolveSpec(),
+): EvaluateTimeoutVerdict {
+  const environment = environmentLine(sample, spec);
+  if (!sample || !sample.measurable) {
+    return {
+      cause: "unmeasurable",
+      environmental: true,
+      reason: `cdp evaluate exceeded the budget; the box could not be measured (${
+        sample?.error ?? "no sample"
+      }) — failing closed to environmental, NOT a load claim`,
+      environment,
+      sample: sample ?? null,
+    };
+  }
+  const reasons = quietReasons(sample, spec);
+  if (reasons.length > 0) {
+    return {
+      cause: "loaded",
+      environmental: true,
+      reason: `cdp evaluate exceeded the budget and the box WAS loaded (${reasons.join("; ")})`,
+      environment,
+      sample,
+    };
+  }
+  return {
+    cause: "idle-never-settled",
+    environmental: false,
+    reason:
+      "cdp evaluate exceeded the budget while the box was measurably IDLE — " +
+      "something never settled (an unanswered service-worker round trip is the known cause); " +
+      "this is NOT fleet load and must not be re-run as one",
+    environment,
+    sample,
+  };
+}
+
+/**
+ * The harness's decision, as data: which exit code an evaluate timeout takes
+ * and what it prints. Separated from `chrome-journeys.ts` so it can be executed
+ * in a unit test — the misattribution this bead fixes lived at the exit site,
+ * where a fixed "under fleet load" string was printed with the environmental
+ * exit code no matter what the machine was doing, and nothing could test it
+ * without driving a 370-round-trip browser suite.
+ *
+ * `75` keeps its meaning (re-run, the box was at fault). `1` means the TREE is
+ * at fault — and that line MUST NOT carry the refusal marker, or an aggregator
+ * would classify the product red as environmental all over again.
+ */
+export function evaluateTimeoutReport(
+  verdict: EvaluateTimeoutVerdict,
+): { exitCode: number; line: string } {
+  if (verdict.environmental) {
+    return {
+      exitCode: ENVIRONMENTAL_REFUSAL_EXIT,
+      line: `${ENVIRONMENTAL_REFUSAL_MARKER} ${
+        JSON.stringify({
+          reason: verdict.reason,
+          cause: verdict.cause,
+          environment: verdict.environment,
+        })
+      }`,
+    };
+  }
+  return {
+    exitCode: 1,
+    line: `PRODUCT RED (not environmental): ${verdict.reason} [${verdict.environment}]`,
+  };
+}
+
+/**
+ * Read the machine AT THE MOMENT of an evaluate timeout and classify it.
+ *
+ * Two samples, deliberately: `classifyActiveBuilders` treats a process it has
+ * never seen as active (fail closed, correct for an admission gate), so a
+ * SINGLE sample counts every parked esbuild daemon as a live build and reports
+ * an idle box as loaded — which is the dnop bug, and would reproduce the exact
+ * misattribution this function exists to end. The second sample, taken one
+ * interval later with the first's CPU map, is what makes "idle" measurable.
+ *
+ * `read` and `wait` are injectable so the two-sample behaviour itself can be
+ * tested without a real /proc or a real delay.
+ */
+export async function measureEvaluateTimeout(
+  spec: QuietSpec = {},
+  hooks: {
+    read?: (prev?: ProcCpuMap | null) => Promise<LoadSample>;
+    wait?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<EvaluateTimeoutVerdict> {
+  const resolved = resolveSpec(spec);
+  const read = hooks.read ?? readLoadSample;
+  const wait = hooks.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const first = await read(null);
+  if (!first.measurable) return classifyEvaluateTimeout(first, resolved);
+  await wait(resolved.sampleMs);
+  const second = await read(first.cpu ?? null);
+  return classifyEvaluateTimeout(second, resolved);
+}
