@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.3.458] — 2026-09-23
+- the What's New and side panel release notes now describe what changed for you, and the changelog gate permits stated-internal notes
+- internal: the post-commit version hook imports the unified changelog filter instead of carrying a duplicate copy
+
 ## [0.3.457] — 2026-09-23
 - the quiet-window gate now measures active compiling processes rather than process names, preventing parked background build daemons from keeping browser gates closed
 - load-sensitive browser gates now take declared turns through an announced fleet-wide slot
@@ -27,19 +31,19 @@
 - refuse tool servers that Pi cannot use
 
 ## [0.3.449] — 2026-09-22
-- the agent buttons' badges and the narrow side panel are now checked in a real browser
+- the agent buttons now show a badge for each agent, and the side panel stops squashing them when it is narrow
 
 ## [0.3.448] — 2026-09-22
-- correct the F1 rationale to what was actually measured
+- internal: corrected the account of why the side panel's layout broke, to what was actually measured
 
 ## [0.3.447] — 2026-09-22
-- q264, qzae: two layout checks that could not fail
+- a broken side panel is now caught before it reaches you, instead of the check passing whatever the layout did
 
 ## [0.3.446] — 2026-09-22
-- the measurements behind the constrained-width fix
+- internal: the measurements behind the side panel's constrained-width layout fix
 
 ## [0.3.445] — 2026-09-22
-- agent badges, and the constrained-width layout the owner reported
+- each agent button carries a badge, and a narrow side panel no longer breaks the layout
 
 ## [0.3.444] — 2026-09-21
 - name Node imports in the pre-bundle refusal

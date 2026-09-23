@@ -23,6 +23,26 @@
 //     ("/folder work …", "(Beta) …", "…and") and stays.
 
 const ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
+// A bullet may DECLARE itself an internal note. Deliberate and explicit, never
+// inferred: some commits record work with no user-visible change at all (a
+// rationale corrected, measurements taken). 0.3.446 and 0.3.448 are those, and
+// before this marker the gate required every modern bullet to read as
+// user-facing — so the writer had to invent a sentence for a change no reader
+// could observe. Marked bullets are hidden from the readable list by
+// partitionChangelog and stay readable under Show all.
+//
+// TWO RESIDUAL RISKS, stated because the marker is a trust decision and not a
+// verification, and neither is caught by anything in this repo:
+//   1. A bullet that SHOULD be marked and is not still passes the filter if it
+//      reads as user-facing. The marker suppresses; its absence never accuses.
+//      An engineering note phrased in plain words ships to readers.
+//   2. The marker can hide real user-facing copy, and nothing notices. `internal:`
+//      on a bullet describing a genuine change removes it from the readable five
+//      with no gate objecting — the failure is silent by construction, because
+//      the point of the marker is that nobody has to justify it.
+// Both are the accepted cost of not inferring intent. If either starts biting, the
+// fix is a review convention or a second signal, not a guess at the writer's meaning.
+const INTERNAL_MARKER_RE = /^internal:/i;
 const SHA_RE = /\b[0-9a-f]{7,40}\b/i;
 const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice/i;
 const GATE_STATE_RE = /\b(RED|GREEN)\b/;
@@ -31,8 +51,13 @@ const WORKFLOW_RE = /\blanded\b|in review|in progress|recorded as|\bclaimed\b/i;
 // a bullet still starting with one, followed by whitespace or nothing, is a leak.
 const LEAKED_JOINER_RE = /^[+&:;,./|—–-]+(?:\s|$)/;
 
+export function isInternalEntry(text) {
+  return INTERNAL_MARKER_RE.test(String(text).trim());
+}
+
 export function isUserFacingEntry(text) {
   const line = String(text).trim();
+  if (isInternalEntry(line)) return false;
   if (LEAKED_JOINER_RE.test(line)) return false;
   if (ENGINEERING_PREFIX_RE.test(line)) return false;
   if (SHA_RE.test(line)) return false;
@@ -66,8 +91,9 @@ export function parseChangelog(md) {
  * Partition a changelog into the up-front "recent" entries and the "rest".
  *
  * recent: the first `limit` versions that have at least one user-facing bullet,
- * each carrying ONLY its user-facing bullets (plus how many internal bullets it
- * hides).
+ * each carrying ONLY its user-facing bullets. Internal bullets are dropped from
+ * `recent` and are NOT counted anywhere in the returned shape — a version whose
+ * bullets are all internal falls through to `rest` with its full unfiltered text.
  *
  * rest (the Show-all complement): EXACTLY the entries that were NOT shown up
  * front — a version that made the visible five never reappears here, even for
