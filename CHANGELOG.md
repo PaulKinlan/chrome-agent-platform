@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.463] — 2026-09-23
+- the grandchild fixture records its pid before the bound can kill the child, instead of assuming Deno boots in 1.5s
+
 ## [0.3.462] — 2026-09-23
 - the two contention tests stop assuming the fleet's own gate slot is free (and the compiler test stops letting ambient load decide its refusal)
 

@@ -78,12 +78,17 @@ Deno.test("pozs: timed-out serial file leaves no descendant processes behind (pr
   const tempDir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-grandchild-probe-" });
   const pidFile = `${tempDir}/grandchild.pid`;
   const tempTest = `${tempDir}/grandchild-hang.test.ts`;
+  // htl8: the grandchild is created and RECORDED at MODULE TOP LEVEL — the
+  // earliest point in this child's life — so the pid file cannot race the
+  // runner's timeout. The red this fixes ("grandchild pid must have been
+  // recorded", load1 20.9) was the fixture giving Deno's boot + module load +
+  // test registration 1500 ms, an assumption about the BOX rather than about the
+  // runner's process-group kill.
   await Deno.writeTextFile(
     tempTest,
-    `import { assert } from "jsr:@std/assert@1";
+    `const p = new Deno.Command("sleep", { args: ["300"], stdout: "null", stderr: "null" }).spawn();
+await Deno.writeTextFile("${pidFile}", String(p.pid));
 Deno.test("spawns grandchild and hangs", async () => {
-  const p = new Deno.Command("sleep", { args: ["300"], stdout: "null", stderr: "null" }).spawn();
-  await Deno.writeTextFile("${pidFile}", String(p.pid));
   await new Promise(() => {});
 });
 `,
@@ -92,7 +97,12 @@ Deno.test("spawns grandchild and hangs", async () => {
   let grandchildPid = 0;
   try {
     const res = runSerialFile(tempTest, {
-      timeoutMs: 1500,
+      // The property is "a TIMED-OUT serial file leaves no descendant behind", so
+      // the bound only has to sit far below the grandchild's 300 s sleep: 10 s
+      // leaves a loaded box room to boot Deno and stays 30x smaller than the
+      // sleeper. Deliberately NOT a boot-time assertion (htl8); boundedness at a
+      // tight bound is the sibling 6yrq test's subject, not this one's.
+      timeoutMs: 10_000,
       stdio: "pipe",
       cwd: ROOT,
     });
@@ -101,7 +111,14 @@ Deno.test("spawns grandchild and hangs", async () => {
 
     const pidText = await Deno.readTextFile(pidFile).catch(() => "");
     grandchildPid = Number(pidText.trim());
-    assert(grandchildPid > 0, "grandchild pid must have been recorded");
+    assert(
+      grandchildPid > 0,
+      `grandchild pid must have been recorded — if this fires, the CHILD never reached its first ` +
+        `action (a boot/module-load failure under load, NOT a surviving descendant): ` +
+        `pidFile=${pidFile} ` +
+        `load1=${(() => { try { return Deno.readTextFileSync("/proc/loadavg").split(" ")[0]; } catch { return "?"; } })()} ` +
+        `bound=10000ms`,
+    );
 
     // Wait briefly and assert the grandchild was reaped with the process group
     let alive = true;
