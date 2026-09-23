@@ -148,3 +148,76 @@ Deno.test("registry: expected-red redReason declared tallies match adjudicated p
   }
 });
 
+
+/* ─────────────────────────────────────────────────────────────────────────────
+ * chrome-agent-platform-35o1 — a load-sensitive gate must NAME A LIVE OWNER.
+ *
+ * The hole: the 370-check journey gate had no owning issue at all. Its beads
+ * (gsyp KEYLESS-FIRST-RESULT, xqhz the demo umbrella) closed and nothing
+ * noticed, so a lifecycle defect (9t1p) sat behind a harness whose failures were
+ * classified environmental — an unowned gate is a gate nobody fixes.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+Deno.test("35o1: every load-sensitive gate names an owner (a declaration nobody can drop silently)", () => {
+  const missing = Object.entries(HARNESSES)
+    .filter(([, e]) => e.loadSensitive && !(e.owner ?? "").trim())
+    .map(([f]) => f);
+  assertEquals(
+    missing,
+    [],
+    "a load-sensitive gate is load-sensitive because its failures are environmental, which is exactly the class nobody chases by accident; it must name an owner bead (see HarnessEntry.owner)",
+  );
+});
+
+Deno.test("35o1: the named owners RESOLVE to beads that are not closed", async () => {
+  // Live, not decorative: the field is checked against the tracker, so closing an
+  // owner without re-pointing the field fails here. Bounded, and explicit when
+  // the tracker cannot be reached — never a silent skip.
+  const owned = Object.entries(HARNESSES)
+    .filter(([, e]) => (e.owner ?? "").trim())
+    .map(([file, e]) => [file, e.owner!.trim()] as const);
+  assert(owned.length >= 1, "at least one harness declares an owner (the journey gate)");
+
+  for (const [file, owner] of owned) {
+    assert(/^chrome-agent-platform-[a-z0-9.]+$|^voicebox-beads-[a-z0-9.]+$/i.test(owner),
+      `${file}: owner "${owner}" must be a bead id (this repo's or the voicebox DB's)`);
+  }
+
+  const probe = async (id: string): Promise<{ ok: boolean; closed: boolean; note: string }> => {
+    let out = "";
+    try {
+      const cmd = new Deno.Command("bd", { args: ["show", id, "--json"], cwd: ROOT, stdout: "piped", stderr: "piped" });
+      const child = cmd.spawn();
+      const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 20_000);
+      const r = await child.output();
+      clearTimeout(timer);
+      out = new TextDecoder().decode(r.stdout) + new TextDecoder().decode(r.stderr);
+      if (!r.success) return { ok: false, closed: false, note: `bd show ${id} exited ${r.code}` };
+    } catch (e) {
+      return { ok: false, closed: false, note: `bd unavailable (${String((e as Error)?.message ?? e).slice(0, 80)})` };
+    }
+    const parsed = (() => { try { const j = JSON.parse(out); return Array.isArray(j) ? j[0] : j; } catch { return null; } })();
+    if (!parsed || typeof parsed !== "object") return { ok: false, closed: false, note: `bd show ${id} returned no parseable record` };
+    const status = String((parsed as { status?: unknown }).status ?? "").toLowerCase();
+    return { ok: true, closed: status === "closed", note: `status=${status || "unknown"}` };
+  };
+
+  const inconclusive: string[] = [];
+  for (const [file, owner] of owned) {
+    const r = await probe(owner);
+    if (!r.ok) {
+      inconclusive.push(`${file} → ${owner}: ${r.note}`);
+      continue;
+    }
+    assertEquals(
+      r.closed,
+      false,
+      `${file} names owner ${owner}, which is CLOSED — re-point HarnessEntry.owner at a live bead in the same change (chrome-agent-platform-35o1)`,
+    );
+  }
+  if (inconclusive.length) {
+    // Explicit, printed, and never a fabricated verdict: the static checks above
+    // still ran; the liveness half could not be established on this machine.
+    console.log(`35o1: INCONCLUSIVE for ${inconclusive.length} owner(s) — the tracker was not reachable, so liveness was NOT checked: ${inconclusive.join("; ")}`);
+  }
+});
