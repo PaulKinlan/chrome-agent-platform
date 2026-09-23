@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.466] — 2026-09-23
+- a template suggestion that has no skill row is DISCLOSED, not silently dropped
+
 ## [0.3.465] — 2026-09-23
 - internal: load-sensitive gates must name a live owning issue, checked against the task tracker
 

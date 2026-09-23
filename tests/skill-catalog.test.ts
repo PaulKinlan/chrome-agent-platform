@@ -304,6 +304,13 @@ function installFakeDoc() {
         }
         return this;
       },
+      hidden: false,
+      // xiln: the disclosure host is cleared and re-filled on every template apply.
+      replaceChildren(...kids) {
+        this.children = [];
+        this.textContent = "";
+        return this.append(...kids);
+      },
       addEventListener(type, fn) { (this._listeners[type] ??= []).push(fn); },
       dispatchEvent() {
         for (const fn of (this._listeners.change ?? [])) fn({ target: this });
@@ -492,4 +499,48 @@ Deno.test("r4 resolver: a raw id held by a built-in wins over custom/imported (h
   const r = await resolveSkillRef({ ref: "page-summary", stores });
   assert(r, "raw id resolves");
   assertEquals(r.refId, "builtin:page-summary", "built-in first for raw ids");
+});
+
+Deno.test("xiln: a template suggestion with no row is DISCLOSED, never silently dropped", async () => {
+  const restoreDoc = installFakeDoc();
+  try {
+    const available = [
+      { id: "tab-hygiene", refId: "builtin:tab-hygiene", source: "builtin", name: "Tab hygiene", description: "builtin" },
+      { id: "link-collector", refId: "builtin:link-collector", source: "builtin", name: "Collect links", description: "builtin" },
+    ];
+    const host = document.createElement("p");
+    const count = document.createElement("span");
+    const section = buildAgentSkillRows({ available, savedIds: [], countEl: count, unavailableHost: host });
+    // Hidden until a template actually suggests something uncheckable.
+    assert(host.hidden === true, "the disclosure is hidden before any template is applied");
+
+    // The curated chief-of-staff template's five suggestions: two exist in this
+    // profile, three are background recipes with no skill row (the data question
+    // is chrome-agent-platform-xiln's, and is NOT fixed by this disclosure).
+    section.checkTemplate(["daily-summary", "weekly-digest", "tab-hygiene", "link-collector", "meeting-prep"]);
+    const shown = host.children.map((c) => c.textContent);
+    assertEquals(host.hidden, false, "the disclosure is shown when a suggestion could not be checked");
+    assertEquals(section.count(), 2, "exactly the two checkable suggestions are checked");
+    for (const id of ["daily-summary", "weekly-digest", "meeting-prep"]) {
+      assert(shown.includes(id), `the uncheckable suggestion ${id} is named in the disclosure: ${JSON.stringify(shown)}`);
+    }
+    assertEquals(shown.some((t) => t.includes("not available in this profile")), true, `the disclosure explains itself: ${JSON.stringify(shown)}`);
+    assertEquals(section.unavailableSuggestions(), ["daily-summary", "weekly-digest", "meeting-prep"]);
+    assert(String(count.textContent).includes("3 suggested but unavailable"), `the count copy names the gap: ${count.textContent}`);
+
+    // All-available template: nothing to disclose, and no count suffix.
+    section.checkTemplate(["tab-hygiene", "link-collector"]);
+    assertEquals(host.hidden, true, "no disclosure when every suggestion has a row");
+    assertEquals(section.unavailableSuggestions(), []);
+    assertEquals(String(count.textContent).includes("unavailable"), false, `no suffix when nothing is missing: ${count.textContent}`);
+
+    // Undoing the template (the dialog's blank path) clears the disclosure.
+    section.checkTemplate(["meeting-prep"]);
+    assertEquals(host.hidden, false);
+    section.uncheckTemplate(["meeting-prep"]);
+    assertEquals(host.hidden, true, "uncheckTemplate clears the disclosure with the template");
+    assertEquals(section.unavailableSuggestions(), []);
+  } finally {
+    restoreDoc();
+  }
 });

@@ -30,13 +30,43 @@ import { skillRowChecked, templateSkillMatches } from "./recipes.js";
  *   collectChecked: () => Array<{ id: string, name: string, description: string }>
  * }}
  */
-export function buildAgentSkillRows({ available, savedIds, countEl = null, onCount = null }) {
+export function buildAgentSkillRows({ available, savedIds, countEl = null, onCount = null, unavailableHost = null }) {
   const list = Array.isArray(available) ? available : [];
   const saved = Array.isArray(savedIds) ? savedIds : [];
   const rows = [];
+  // chrome-agent-platform-xiln: a template may SUGGEST an id that has no row in
+  // this profile (the curated templates name background recipes that are not
+  // skills in the catalog). Those used to vanish silently — the owner saw a
+  // template suggest five skills and two get checked, with nothing saying why.
+  // They are DISCLOSED here instead. This does NOT fix the underlying data
+  // question (whether a template should name background recipes as skills at
+  // all); it makes the gap visible rather than passing for agreement.
+  let unavailable = [];
+  const renderUnavailable = () => {
+    if (!unavailableHost) return;
+    unavailableHost.replaceChildren();
+    if (!unavailable.length) {
+      unavailableHost.hidden = true;
+      return;
+    }
+    unavailableHost.hidden = false;
+    const lead = document.createElement("span");
+    lead.className = "unavailable-label";
+    lead.textContent = "Suggested by this template, not available in this profile:";
+    unavailableHost.append(lead);
+    for (const id of unavailable) {
+      const item = document.createElement("span");
+      item.className = "unavailable-skill";
+      item.textContent = String(id);
+      unavailableHost.append(item);
+    }
+  };
   const updateCount = () => {
     const n = rows.filter((r) => r.checkbox.checked).length;
-    if (countEl) countEl.textContent = n > 0 ? `${n} selected` : `${list.length} available`;
+    if (countEl) {
+      countEl.textContent = (n > 0 ? `${n} selected` : `${list.length} available`) +
+        (unavailable.length ? ` \u00b7 ${unavailable.length} suggested but unavailable` : "");
+    }
     onCount?.(n);
   };
   for (const s of list) {
@@ -52,6 +82,10 @@ export function buildAgentSkillRows({ available, savedIds, countEl = null, onCou
     row.append(cb, text);
     rows.push({ id, skill: s, checkbox: cb, row });
   }
+  // Establish the host's initial state here rather than trusting the caller to
+  // hide it: the LIBRARY owns the disclosure, so a host that forgot would
+  // otherwise render an empty status line from the start.
+  renderUnavailable();
   updateCount();
   return {
     rows,
@@ -61,6 +95,11 @@ export function buildAgentSkillRows({ available, savedIds, countEl = null, onCou
       for (const r of rows) {
         if (templateSkillMatches(list, t, r.skill)) r.checkbox.checked = true;
       }
+      // Which of the template's suggestions has NO row here? Computed with the
+      // same matcher the checking uses, so the disclosure and the checkboxes can
+      // never disagree about what exists.
+      unavailable = t.filter((id) => !rows.some((r) => templateSkillMatches(list, [id], r.skill)));
+      renderUnavailable();
       updateCount();
     },
     uncheckTemplate(ids) {
@@ -68,8 +107,12 @@ export function buildAgentSkillRows({ available, savedIds, countEl = null, onCou
       for (const r of rows) {
         if (templateSkillMatches(list, t, r.skill)) r.checkbox.checked = false;
       }
+      unavailable = [];
+      renderUnavailable();
       updateCount();
     },
+    /** The suggested ids with no row in this profile (evidence for the caller). */
+    unavailableSuggestions: () => [...unavailable],
     collectChecked() {
       return rows.filter((r) => r.checkbox.checked).map((r) => ({
         id: r.skill?.refId ?? r.skill?.id ?? r.skill?.name ?? r.id,
