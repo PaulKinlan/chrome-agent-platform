@@ -609,6 +609,23 @@ Deno.test("mkax: the REAL journey gate refuses with exit 75 while a REAL compile
         CAP_QUIET_SAMPLE_MS: "150",
         CAP_QUIET_MAX_COMPILERS: "1",
         CAP_QUIET_SUSTAINED: "2",
+        // zeew — TWO ambient assumptions removed, and the FIRST is the real one:
+        //
+        // 1. A PRIVATE fleet slot. The spawned gate takes the fleet-wide slot
+        //    BEFORE it measures anything, so with the default path it queued
+        //    behind whatever real gate another lane was running: measured 7m29s
+        //    inside this test, by which time its own burners (40 × 3 s compiles)
+        //    had exited — the refusal then came from the loaded box with
+        //    activeCompilers 0, and the assertion says it wants a compiling
+        //    process. The recorded payload: {"load1":25.39,"loadPerCore":0.79,
+        //    "compilers":12,"activeCompilers":0}. A test about the quiet-window
+        //    condition must not wait on the gate-slot condition.
+        // 2. The LOAD ceiling, pinned out of the way, so the only condition that
+        //    can cause this refusal is the test's own compiler (the
+        //    startup-failure drill above pins it the same way).
+        CAP_HEAVY_GATE_SLOT: `${dir}/gate.lock`,
+        CAP_HEAVY_GATE_BOUND_MS: "1200",
+        CAP_QUIET_MAX_LOAD_PER_CORE: "100",
       },
     }).output();
     const out = new TextDecoder().decode(run.stdout) + new TextDecoder().decode(run.stderr);

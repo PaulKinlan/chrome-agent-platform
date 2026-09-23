@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.460] — 2026-09-23
+- the two contention tests stop assuming the fleet's own gate slot is free (and the compiler test stops letting ambient load decide its refusal)
+
 ## [0.3.459] — 2026-09-23
 - internal: load-sensitive fleet gate lock hardens error paths against leaks and derives private sidecar paths
 

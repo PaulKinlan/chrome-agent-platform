@@ -277,18 +277,25 @@ Deno.test("0lj3: fleetSlot without requireQuiet is a caller bug, refused at the 
 Deno.test("0lj3: a HELD fleet slot makes the REAL journey gate refuse, naming the holder, and start no browser", async () => {
   // The end-to-end proof of the wiring: the journey harness takes the fleet-wide
   // turn through launchChrome, so while another process holds it the gate must
-  // exit 75 with the holder named — and never start a browser. This test holds
-  // the REAL fleet path for a few seconds (blast radius: a real gate starting in
-  // exactly that window waits a few seconds or refuses; it cannot be misread as a
-  // product red, and the wait is bounded).
-  const lease = await acquireHeavyGateSlot({ gate: "fixture-holds-fleet-slot", kind: "gate", boundMs: 2000 });
+  // exit 75 with the holder named — and never start a browser.
+  //
+  // zeew: on a PRIVATE slot path, NOT the fleet's own. The first version held the
+  // real /tmp/cap-heavy-gate.lock, so it collided with any lane running the real
+  // journey gate (measured: HeavyGateSlotRefusedError naming chrome-journeys pid
+  // 3128320, which red-ed this test while the mechanism was behaving correctly) —
+  // and it also BLOCKED real gates for its duration. A test whose subject is
+  // contention must not create contention to test it: the hold and the spawned
+  // gate both use one private path, and then nothing outside this test is involved.
+  const dir = await Deno.makeTempDir({ prefix: "cap-zeew-slot-" });
+  const slotPath = `${dir}/gate.lock`;
+  const lease = await acquireHeavyGateSlot({ gate: "fixture-holds-fleet-slot", kind: "gate", boundMs: 2000, slot: { slotPath }, onAcquired: () => {}, onWait: () => {} });
   try {
     const run = await new Deno.Command(Deno.execPath(), {
       args: ["run", "-A", "--no-check", `${ROOT}scripts/chrome-journeys.ts`],
       cwd: ROOT,
       stdout: "piped",
       stderr: "piped",
-      env: { CAP_HEAVY_GATE_BOUND_MS: "1200" },
+      env: { CAP_HEAVY_GATE_BOUND_MS: "1200", CAP_HEAVY_GATE_SLOT: slotPath },
     }).output();
     const out = new TextDecoder().decode(run.stdout) + new TextDecoder().decode(run.stderr);
     assertEquals(run.code, 75, `the gate refused environmentally: ${out.slice(-600)}`);
@@ -299,6 +306,7 @@ Deno.test("0lj3: a HELD fleet slot makes the REAL journey gate refuse, naming th
     assertEquals(out.includes("DevTools listening"), false, "no browser was started");
   } finally {
     lease.release();
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
 
