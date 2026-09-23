@@ -144,3 +144,17 @@ When work is divided into a base capability branch and one or more dependent fea
 4. **Independent Numbering**: The dependent branch receives its own sequential version bump and its own distinct changelog bullet upon landing.
 5. **Full Gates on the Stacked Tip**: Run the full two-phase suite (`npm test`) on the final landed tree. Never assume that because the base was green and the dependent was green on its local parent, the union on main is green.
 
+---
+
+## 6. DOM Migration & Mid-Flight Conflict Guard
+
+When landing a branch that changes DOM structure, element selectors, or shared component implementations (such as `muc` migrating hub rows to `<agent-picker>`):
+
+1. **Sweep Changed Selectors Across the Merged Tree**:
+   - Grep the entire repository for the old selectors (e.g. `capability-row`) to detect tests or harnesses that landed while the branch was in flight. Moving only the drivers present at a branch's base misses drivers added by concurrent landings (e.g. `agent-header-rename-reload.test.ts` landed with `7zf0` while `muc` was in flight).
+2. **The `-S` Addition Sweep**:
+   - For every shared file touched by the branch (e.g. `extension/shared/components.js`), perform a `git log -S'<added-string>'` across recent commits on `origin/main` to ensure that additions from recent landings (e.g. `diay`'s `_scrollSelectedIntoView()`) are NOT silently dropped during union resolution.
+3. **Pristine Attribution Discipline**:
+   - If a candidate or suite fails against a merged tree, verify the failure against a pristine worktree of `origin/main` before assuming it is local to the candidate branch.
+
+
