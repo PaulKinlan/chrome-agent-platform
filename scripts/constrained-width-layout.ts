@@ -536,8 +536,157 @@ if (panelHasButtons) {
     collapsedHasButtons && collapsed.buttons.every((b: any) => (b.ariaLabel || "").length > 4), { buttons: (collapsed?.buttons ?? []).map((b: any) => b.ariaLabel) });
 }
 
+// ---------------------------------------------------------------------------
+// 3. THE COLLAPSED SIDEBAR RAIL — an icon must not be CUT OFF when the sidebar
+//    closes. Owner, 2026-09-23: "icons are there however when that sidebar they
+//    are in is closed, they get cut off".
+//
+// WHY THE EXISTING CHECKS CANNOT SEE THIS: a clipped element still has a
+// bounding box, so "the mark is 16px wide" passes on a chip that is 117px wide
+// inside a 40px rail and clipped to 27px visible. The observable that was
+// missing is the intersection of every icon's box with its clipping ancestors:
+// visible ratio, and which side is cut. Measured before the fix: three harness
+// chips at 117x29, ratio 0.231, 90px cut off (the mark itself was intact at
+// ratio 1.0 — it was the chip, mark + label, that was truncated). After: every
+// icon ratio 1.0, chips 34x34 icon-only rows like the rest of the rail.
+// ---------------------------------------------------------------------------
+const RAIL_PROBE = `(() => {
+  const rect = (n) => { const r = n.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, w: r.width, h: r.height }; };
+  const sel = (n) => n.tagName.toLowerCase() + (n.id ? "#" + n.id : "") + (typeof n.className === "string" && n.className.trim() ? "." + n.className.trim().split(/\\s+/).join(".") : "");
+  const clippersOf = (node, stopAt) => {
+    const out = [];
+    for (let p = node.parentElement; p; p = p.parentElement) {
+      const s = getComputedStyle(p);
+      const x = s.overflowX !== "visible", y = s.overflowY !== "visible";
+      if (x || y) out.push({ sel: sel(p), x, y, r: rect(p), overflow: s.overflow });
+      if (p === stopAt) break;
+    }
+    return out;
+  };
+  // The observable: a box is only VISIBLE where it survives every clipper.
+  const visibilityOf = (node, stopAt) => {
+    const r = rect(node);
+    const clippers = clippersOf(node, stopAt);
+    let vis = { ...r };
+    for (const c of clippers) {
+      if (c.x) { vis.left = Math.max(vis.left, c.r.left); vis.right = Math.min(vis.right, c.r.right); }
+      if (c.y) { vis.top = Math.max(vis.top, c.r.top); vis.bottom = Math.min(vis.bottom, c.r.bottom); }
+    }
+    const vw = Math.max(0, vis.right - vis.left), vh = Math.max(0, vis.bottom - vis.top);
+    return {
+      w: Math.round(r.w), h: Math.round(r.h), left: Math.round(r.left), right: Math.round(r.right),
+      visibleW: Math.round(vw), visibleH: Math.round(vh),
+      ratio: (r.w * r.h) > 0 ? +((vw * vh) / (r.w * r.h)).toFixed(3) : null,
+      cutLeft: Math.round(Math.max(0, vis.left - r.left)),
+      cutRight: Math.round(Math.max(0, r.right - vis.right)),
+      clippers: clippers.map((c) => ({ sel: c.sel, overflow: c.overflow, left: Math.round(c.r.left), right: Math.round(c.r.right) })),
+    };
+  };
+  const side = document.getElementById("side");
+  if (!side) return { error: "no #side" };
+  const sr = rect(side), scomputed = getComputedStyle(side);
+  const contentRight = sr.right - parseFloat(scomputed.paddingRight);
+  // The NTP builds these as plain buttons inside #side-harness (the .hq- classes are on
+  // the CHILDREN: .hq-mark / .hq-label), so select the row and prove it has a mark below.
+  const chips = [...side.querySelectorAll("#side-harness button, #side-harness .hq")].map((b) => {
+    const markWrap = b.querySelector(".hq-mark");
+    const glyphEl = markWrap && markWrap.querySelector("svg text");
+    const label = b.querySelector(".hq-label");
+    return {
+      name: b.textContent.trim().slice(0, 30),
+      ariaLabel: b.getAttribute("aria-label"),
+      title: b.getAttribute("title"),
+      glyph: glyphEl && glyphEl.textContent ? glyphEl.textContent.trim() : null,
+      chip: visibilityOf(b, side),
+      mark: markWrap ? visibilityOf(markWrap, side) : null,
+      labelDisplay: label ? getComputedStyle(label).display : null,
+      labelW: label ? Math.round(rect(label).w) : null,
+      outsideRailBy: Math.round(Math.max(0, rect(b).right - contentRight)),
+    };
+  });
+  // Every other icon in the rail too, so a different row type cannot hide one.
+  const others = [...side.querySelectorAll("svg, img")].filter((n) => !n.closest("#side-harness")).map((n) => ({ sel: sel(n), ...visibilityOf(n, side) }));
+  return {
+    collapsed: side.classList.contains("collapsed"),
+    rail: { w: Math.round(sr.w), padding: scomputed.padding, contentRight: Math.round(contentRight) },
+    viewport: window.innerWidth,
+    chipCount: chips.length,
+    chips, others,
+  };
+})()`;
+
+const NTP_WIDTHS = [1400, 900];
+const railResults: Record<string, any> = {};
+const wsNtp = await openPage(`chrome-extension://${extId}/ntp/ntp.html`, 1400, 900);
+const collapseClick = await evaluate(wsNtp, `(() => {
+  const t = document.querySelector(".side-toggle");
+  if (!t) return "no .side-toggle";
+  t.click();
+  const side = document.getElementById("side");
+  return side && side.classList.contains("collapsed") ? "collapsed" : "did not collapse: " + (side ? side.className : "no #side");
+})()`);
+console.log(`  sidebar collapse: ${collapseClick}`);
+await sleep(500);
+for (const w of NTP_WIDTHS) {
+  await send("Emulation.setDeviceMetricsOverride", { width: w, height: 900, deviceScaleFactor: 1, mobile: false }, wsNtp);
+  await sleep(500);
+  railResults[String(w)] = await evaluate(wsNtp, RAIL_PROBE);
+}
+
+console.log("\n=== NTP SIDEBAR (collapsed): harness chips and their marks");
+for (const w of NTP_WIDTHS) {
+  const r = railResults[String(w)];
+  if (r.error) { console.log(`  ${w}px  ${r.error}`); continue; }
+  console.log(`  window ${w}px  rail=${r.rail.w}px padding=${r.rail.padding} collapsed=${r.collapsed} chips=${r.chipCount}`);
+  for (const c of r.chips) {
+    console.log(`      "${c.name}" glyph=${c.glyph} chip=${c.chip.w}x${c.chip.h} ratio=${c.chip.ratio} cutR=${c.chip.cutRight} mark=${c.mark ? `${c.mark.w}x${c.mark.h} ratio=${c.mark.ratio}` : "none"} label=${c.labelDisplay} title=${c.title ?? "(none)"}`);
+  }
+  for (const o of r.others) {
+    if (o.ratio !== null && o.ratio < 0.999) console.log(`      CUT ${o.sel} ratio=${o.ratio} cutL=${o.cutLeft} cutR=${o.cutRight}`);
+  }
+}
+
+for (const w of NTP_WIDTHS) {
+  const r = railResults[String(w)];
+  // NON-VACUITY FIRST: a rail that failed to collapse, or a harness section that
+  // rendered nothing, would satisfy every "nothing is cut" check below.
+  check(`rail ${w}px: the sidebar is collapsed and the harness chips rendered (non-vacuity guard)`,
+    r.collapsed === true && r.chipCount > 0 && r.chips.every((c: any) => c.chip.w > 0 && c.chip.h > 0),
+    { collapsed: r.collapsed, chipCount: r.chipCount, chips: r.chips.map((c: any) => ({ n: c.name, w: c.chip.w, h: c.chip.h })) });
+  if (r.collapsed !== true || r.chipCount === 0) continue;
+  // THE REPORTED DEFECT: a chip cut off inside the rail.
+  check(`rail ${w}px: no harness chip is cut off by the rail (every chip fully visible)`,
+    r.chips.every((c: any) => c.chip.ratio === 1),
+    { chips: r.chips.map((c: any) => ({ n: c.name, chip: `${c.chip.w}x${c.chip.h}`, ratio: c.chip.ratio, visible: `${c.chip.visibleW}x${c.chip.visibleH}`, cutLeft: c.chip.cutLeft, cutRight: c.chip.cutRight, clippers: c.chip.clippers })) });
+  check(`rail ${w}px: no harness chip sticks out past the rail's content box`,
+    r.chips.every((c: any) => c.outsideRailBy <= 1),
+    { chips: r.chips.map((c: any) => ({ n: c.name, outsideRailBy: c.outsideRailBy })) });
+  // THE MARK MUST CARRY THE IDENTITY once the label is gone: present, inside the
+  // rail, and fully visible (a mark cut in half identifies nothing).
+  check(`rail ${w}px: every harness chip keeps a visible mark (>= 12px, fully inside the rail)`,
+    r.chips.every((c: any) => c.mark && c.mark.ratio === 1 && c.mark.w >= 12),
+    { chips: r.chips.map((c: any) => ({ n: c.name, mark: c.mark })) });
+  check(`rail ${w}px: the collapsed rail hides the label rather than clipping it`,
+    r.chips.every((c: any) => c.labelDisplay === "none"),
+    { chips: r.chips.map((c: any) => ({ n: c.name, labelDisplay: c.labelDisplay, labelW: c.labelW })) });
+  // IDENTITY, not just geometry: marks must DIFFER between harnesses, and the full
+  // name must stay reachable (aria-label always; title is the hover affordance the
+  // rail's task rows use). Identical glyphs would satisfy every geometry check.
+  const glyphs = r.chips.map((c: any) => c.glyph).filter((g: any) => typeof g === "string" && g.length > 0);
+  check(`rail ${w}px: the marks distinguish the harnesses (not one repeated glyph)`,
+    glyphs.length === r.chipCount && new Set(glyphs).size > 1,
+    { glyphs, chipCount: r.chipCount });
+  check(`rail ${w}px: every collapsed chip still states its full harness name`,
+    r.chips.every((c: any) => (c.ariaLabel || "").length > 4 && (c.title || "").length > 0),
+    { chips: r.chips.map((c: any) => ({ n: c.name, ariaLabel: c.ariaLabel, title: c.title })) });
+  // Every OTHER icon in the rail, so a different row type cannot regress unseen.
+  check(`rail ${w}px: no other icon in the rail is cut off`,
+    r.others.every((o: any) => o.ratio === 1),
+    { cut: r.others.filter((o: any) => o.ratio !== 1) });
+}
+
 await Deno.writeTextFile(`${EVIDENCE_DIR}/geometry.json`,
-  JSON.stringify({ extId, hub: hubResults, panel: panelResults, pass, fail, failures }, null, 2));
+  JSON.stringify({ extId, hub: hubResults, panel: panelResults, rail: railResults, pass, fail, failures }, null, 2));
 console.log(`\n=== ${pass} passed / ${fail} failed`);
 if (failures.length) console.log(`FAILURES:\n  - ${failures.join("\n  - ")}`);
 console.log(`evidence: ${EVIDENCE_DIR}/geometry.json`);

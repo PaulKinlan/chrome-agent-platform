@@ -1553,6 +1553,10 @@ async function renderSidebarHarnessRows() {
     label.textContent = a.name || a.id;
     btn.replaceChildren(mark, label);
     btn.setAttribute("aria-label", `Open the ${a.name || a.id} harness conversation`);
+    // The collapsed rail hides the label (and clips nothing: the chip becomes an
+    // icon-only row), so the full harness name stays reachable on hover — the same
+    // convention the rail's task rows use for their own collapsed state.
+    btn.title = a.name || a.id;
     if (currentAgentKind === "acp" && currentAgentId === a.id) btn.setAttribute("aria-current", "true");
     btn.addEventListener("click", () => {
       openAgentSurface?.({ kind: "acp", id: a.id, name: a.name || a.id });

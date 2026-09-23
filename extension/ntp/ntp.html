@@ -277,6 +277,29 @@
     /* Every rail row centres its single remaining icon when collapsed. */
     .side.collapsed .side-label-row { justify-content: center; }
     .side.collapsed .new-task { inline-size: 34px; block-size: 34px; margin-inline-start: 0; }
+    /* The harness rows were the ONE rail row type with no collapsed treatment
+       (owner, 2026-09-23: "icons ... when that sidebar they are in is closed, they
+       get cut off"). Every sibling row is re-styled above; these stayed full-width
+       pills (mark + label, 117px measured) inside the rail's 40px content box, so
+       the container clipped each chip to 27px — 90px cut off, the identity carried
+       by the mark barely reachable at the edge. Collapsed, they are icon-only rows
+       like the rest of the rail: 34px, centred, label hidden, and the mark (the
+       glyph that tells one harness from another) fully inside the rail. */
+    .side.collapsed .harness-list {
+      flex-direction: column;
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0 8px;
+    }
+    .side.collapsed .harness-list button {
+      inline-size: 34px;
+      block-size: 34px;
+      padding: 0;
+      justify-content: center;
+      gap: 0;
+    }
+    .side.collapsed .harness-list .hq-label { display: none; }
     /* The live run status renders INLINE as the conversation's pinned bottom
        row (agent-conversation .live-status) — no separate banner element. */
     /* the provider-status strip (the user must know BEFORE a run whether a model
