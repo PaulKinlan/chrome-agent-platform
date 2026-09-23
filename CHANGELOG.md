@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.467] — 2026-09-23
+- the quiet-window gate treats a truncated process scan as unmeasurable rather than quiet, preventing gates from opening under a build
+
 ## [0.3.466] — 2026-09-23
 - the constrained-width panel checks can no longer pass on an empty button list or a missing label
 

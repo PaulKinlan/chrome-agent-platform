@@ -663,3 +663,39 @@ Deno.test("qk7p: the journeys' CDP evaluate timeout is classified environmental"
   assertEquals(isCdpEvaluateTimeout("tool.preview.run returned no offscreen response"), false);
   assertEquals(isCdpEvaluateTimeout(""), false);
 });
+
+Deno.test("1io9: a TRUNCATED /proc walk is a refusal, never a quiet box", async () => {
+  // The hole: the walk is bounded (MAX_PROC_SCAN entries / MAX_PROC_SCAN_MS) and
+  // its PARTIAL count used to be returned as the sample, so a real compiler the
+  // walk never reached was reported as zero builders and the gate opened under a
+  // build. Driven in a CHILD process so no other test in this runner process can
+  // observe the env override (m3a2), and via the budget itself rather than a
+  // hand-built sample, so the walk is what is under test.
+  const dir = await Deno.makeTempDir({ prefix: "cap-1io9-" });
+  const script = `${dir}/truncated.mjs`;
+  await Deno.writeTextFile(script, `
+import { readLoadSample, isQuiet, resolveSpec, environmentLine } from ${JSON.stringify(`${ROOT}scripts/lib/quiet-window.ts`)};
+const s = await readLoadSample();
+console.log(JSON.stringify({
+  measurable: s.measurable, error: s.error ?? null, compilers: s.compilers,
+  quiet: isQuiet(s, resolveSpec({})), line: environmentLine(s),
+}));
+`);
+  try {
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script],
+      cwd: ROOT, stdout: "piped", stderr: "piped",
+      env: { CAP_QUIET_MAX_PROC_SCAN: "1" },
+    }).spawn();
+    const out = new TextDecoder().decode((await child.output()).stdout).trim().split("\n").pop()!;
+    const sample = JSON.parse(out);
+    assertEquals(sample.measurable, false, `a truncated walk is unmeasurable: ${out}`);
+    assert(String(sample.error).includes("truncated after"), `the error names the truncation: ${sample.error}`);
+    assert(String(sample.error).includes("NOT a quiet verdict"), sample.error);
+    assertEquals(sample.quiet, false, "a truncated sample must never read as quiet");
+    assert(String(sample.line).includes("unmeasurable"), `the evidence line says unmeasurable: ${sample.line}`);
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
