@@ -53,6 +53,16 @@ export const SERIAL_REASONS = {
   // queueing thresholds (a 1500 ms skip bound against a 2000 ms marker window),
   // which is exactly what the 32-worker parallel phase makes flaky.
   "tests/chrome-slot-semaphore-honesty.test.ts": "mutates CAP_CHROME_SLOT_DIR and makes wall-clock queueing assertions (races/flakes with other lock tests under the parallel phase)",
+  // 4lc0: this file IMPORTS the bundled-tool generator for one constant
+  // (AGENT_DESCRIPTIONS). Importing it RUNS it — the generator's work is at module top
+  // level and its isMain flag gates only the final process.exit — so a run of this test
+  // rewrites all 38 files in extension/wasm/cas. Measured in isolation (per-file mtime
+  // fingerprint of the CAS dir changes), and in the nco2 subset that regeneration landed
+  // inside the parallel phase while tests/gzip-preview.test.ts was reading a CAS file,
+  // which failed NotFound: the false red this bead exists for. The spawn-based hazard
+  // scan could not see an import, which is why this entry and the IMPORT_BUILD_RE class
+  // in this file are the same fix.
+  "tests/tool-descriptions.test.ts": "imports scripts/build-bundled-tool-packages.mjs, whose import-time work regenerates extension/wasm/cas (38 files) — measured; readers race it",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
@@ -71,6 +81,13 @@ export const DRIVER_REF_RE = /tests\/[\w.-]+\.(?:mjs|ts)/g;
 
 const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
+// 4lc0: a test that IMPORTS a build module runs it — module side effects are the same
+// hazard as spawning it, and the SPAWN_RE rule above cannot see the shape that let
+// tests/tool-descriptions.test.ts join the parallel phase while regenerating
+// extension/wasm/cas on import. Matches the import statement itself (an import specifier),
+// not a mention in prose: the import must be on its own line and end in a from-clause.
+const IMPORT_BUILD_RE =
+  /(?:^|\n)\s*import\s[^;\n]*?from\s*["'][^"'\n]*(?:build\.mjs|build-bundled-tool-packages)[^"'\n]*["']/;
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
 const READ_RE = /readTextFile|readFile|readFileSync|readDir|readdir|import\s*\(|\bfrom\s*["']/i;
@@ -95,6 +112,7 @@ function writesTree(text) {
 export function classifyHazards(text) {
   const classes = [];
   if (SPAWN_RE.test(text) && BUILD_REF_RE.test(text)) classes.push("spawns build.mjs or the bundled-tool generator");
+  if (IMPORT_BUILD_RE.test(text)) classes.push("imports build.mjs or the bundled-tool generator (module side effects)");
   if (writesTree(text)) classes.push("writes under extension/ or packages/");
   if (READ_RE.test(text) && DIST_LITERAL_RE.test(text)) classes.push("reads extension/dist");
   return classes;
