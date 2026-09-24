@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.487] — 2026-09-24
+- external agents can call every browser tool, and the ones that need your approval still ask for it
+
 ## [0.3.486] — 2026-09-24
 - round 5: the syntax taxonomy is DELETED, and the delimiter class is proved by LOADING
 
