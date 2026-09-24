@@ -75,11 +75,13 @@ Storage APIs inside the sandbox are redefined to throw *teaching* errors
 contract instead of hitting a raw SecurityError
 (`extension/sandbox/script-sandbox.js:23-40`, chrome-agent-platform-np64).
 `extension/manifest.json` also explicitly configures `content_security_policy.sandbox`
-(`sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self'; connect-src 'none'; img-src data: blob:;`),
-allowing blob-URL module imports for installable JavaScript modules and local data/blob images while denying ambient connection APIs
-(`connect-src 'none'`: XMLHttpRequest, WebSocket, sendBeacon, EventSource, native fetch) and remote images (`img-src data: blob:`).
-Controlled network access is routed through the host bridge (`call("fetch", ...)`). Media-src (audio/video, tracked in `chrome-agent-platform-206v`)
-is not restricted by this sandbox CSP, and form-navigation with `allow-forms` remains unmeasured.
+(`sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self'; connect-src 'none'; img-src data: blob:; media-src data: blob:;`),
+allowing blob-URL module imports for installable JavaScript modules and local data/blob media while denying ambient connection APIs
+(`connect-src 'none'`: XMLHttpRequest, WebSocket, sendBeacon, EventSource, native fetch), remote images (`img-src data: blob:`),
+and ambient media fetches (`media-src data: blob:`: `<audio>`/`<video>`/`<source>`/`<track>` network loads are denied;
+generated-content playback from data:/blob: bytes stays permitted — chrome-agent-platform-206v).
+Controlled network access is routed through the host bridge (`call("fetch", ...)`). Form-navigation with `allow-forms` remains unmeasured
+(the last declared residual of the 4h2x/206v policy work).
 Module resolution is governed by `extension/lib/script-sandbox-modules.js`,
 which cryptographically re-verifies raw bytes against registered SHA-256 digests before
 minting Blob URLs and fails closed on digest mismatch (`docs/SANDBOX-JS-MODULES-DESIGN.md`).

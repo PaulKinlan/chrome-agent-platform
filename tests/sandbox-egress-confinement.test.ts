@@ -31,6 +31,11 @@ Deno.test("4h2x source pin: sandbox CSP declares connect-src 'none' and img-src 
 
   assert(csp.includes("connect-src 'none'"), "sandbox CSP must declare connect-src 'none'");
   assert(csp.includes("img-src data: blob:"), "sandbox CSP must declare img-src data: blob:");
+  // chrome-agent-platform-206v: ambient media is the same egress class as
+  // connect/img — generated-content playback (data:/blob:) stays permitted,
+  // network media fetches are denied. Same rationale as img-src, one directive
+  // down (media-src governs <audio>/<video>/<source>/<track>).
+  assert(csp.includes("media-src data: blob:"), "sandbox CSP must declare media-src data: blob:");
   assertEquals(csp, STORE_SANDBOX_CSP, "manifest sandbox CSP must match STORE_SANDBOX_CSP exactly");
 });
 
@@ -125,6 +130,40 @@ Deno.test({
             }
           });
 
+          // Test 3b (chrome-agent-platform-206v): generated-content AUDIO must
+          // SUCCEED under media-src data: blob: — a decoded local WAV proves
+          // the directive permits in-memory media while denying network fetches.
+          results.dataAudio = await new Promise((res) => {
+            try {
+              const a = new Audio();
+              a.onloadedmetadata = () => res("loaded:" + (a.duration > 0));
+              a.onerror = () => res("blocked");
+              a.src = "data:audio/wav;base64," +
+                "UklGRkQDAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YSADAAAAAOAP4R1YKAsuTC4TKf8eQRF4AYTxRuNt2EHSf9E81urfY+0P/RMNjRvEJmYtqi5pKiUh9RNpBFj0p+UU2v3SONH71NXdueoh+jkKHRkJJZQs2i6VKykjlRZVBzj3JOji2+bTINHm0+LbJOg491UHlRYpI5Ur2i6ULAklHRk5CiH6uerV3fvUONH90hTap+VY9GkE9RMlIWkqqi5mLcQmjRsTDQ/9Y+3q3zzWf9FB0m3YRuOE8XgBQRH/HhMpTC4LLlgo4R3gDwAAIPAf4qjX9dG00e3WAeG/7oj+fA66HJMnvy2BLsQpFiCdEvEC7fJz5DzZmtJW0ZfV294L7Jf7qAtZGuwlAy3ILgUrKyJHFd8Fx/Xj5vfabNMm0WvU19xr6av4yAjcFx4kGizgLhosHiTcF8gIq/hr6dfca9Qm0WzT99rj5sf13wVHFSsiBSvILgMt7CVZGqgLl/sL7Nvel9VW0ZrSPNlz5O3y8QKdEhYgxCmBLr8tkye6HHwOiP6/7gHh7da00fXRqNcf4iDwAADgD+EdWCgLLkwuEyn/HkEReAGE8UbjbdhB0n/RPNbq32PtD/0TDY0bxCZmLaouaSolIfUTaQRY9KflFNr90jjR+9TV3bnqIfo5Ch0ZCSWULNoulSspI5UWVQc49yTo4tvm0yDR5tPi2yToOPdVB5UWKSOVK9oulCwJJR0ZOQoh+rnq1d371DjR/dIU2qflWPRpBPUTJSFpKqouZi3EJo0bEw0P/WPt6t881n/RQdJt2EbjhPF4AUER/x4TKUwuCy5YKOEd4A8AACDwH+Ko1/XRtNHt1gHhv+6I/nwOuhyTJ78tgS7EKRYgnRLxAu3yc+Q82ZrSVtGX1dveC+yX+6gLWRrsJQMtyC4FKysiRxXfBcf14+b32mzTJtFr1Nfca+mr+MgI3BceJBos4C4aLB4k3BfICKv4a+nX3GvUJtFs0/fa4+bH9d8FRxUrIgUryC4DLewlWRqoC5f7C+zb3pfVVtGa0jzZc+Tt8vECnRIWIMQpgS6/LZMnuhx8Doj+v+4B4e3WtNH10ajXH+Ig8A==";
+              setTimeout(() => res("timeout"), 2000);
+            } catch (e) {
+              res("threw:" + e.message);
+            }
+          });
+
+          // Test 2b/2c (chrome-agent-platform-206v): ambient AUDIO and VIDEO
+          // network sources — the media-src residual. Endpoint-side arrival is
+          // the authority; the element event is secondary.
+          const mediaDeny = (tag) => new Promise((res) => {
+            try {
+              const el = document.createElement(tag);
+              el.onerror = () => res("blocked");
+              el.onloadedmetadata = () => res("arrived");
+              el.src = B + "/ambient-" + tag + "?t=" + Date.now();
+              el.preload = "auto";
+              setTimeout(() => res("timeout"), 2000);
+            } catch (e) {
+              res("threw:" + e.message);
+            }
+          });
+          results.ambientAudio = await mediaDeny("audio");
+          results.ambientVideo = await mediaDeny("video");
+
           // Test 4: Ambient sendBeacon (should be blocked by connect-src 'none')
           results.beacon = (() => {
             try {
@@ -177,10 +216,19 @@ Deno.test({
       // 3. Local data: image succeeded
       assertEquals(probeResults.dataImage, "loaded:20", "Local data: SVG image must be permitted by img-src data: blob:");
 
+      // 3b. Generated-content audio succeeded (206v: media-src data: blob:)
+      assertEquals(probeResults.dataAudio, "loaded:true", "Local data: WAV audio must be permitted by media-src data: blob:");
+
+      // 2b/2c. Ambient AUDIO and VIDEO were blocked (206v: media-src data: blob:)
+      assertEquals(probeResults.ambientAudio, "blocked", "Ambient audio must be blocked by media-src data: blob:");
+      assertEquals(probeResults.ambientVideo, "blocked", "Ambient video must be blocked by media-src data: blob:");
+
       // 4. No ambient requests arrived at the HTTP server
       assertEquals(seenPaths.includes("/ambient-xhr"), false, "Ambient XHR must not reach the wire");
       assertEquals(seenPaths.includes("/ambient-img"), false, "Ambient remote Image must not reach the wire");
       assertEquals(seenPaths.includes("/ambient-beacon"), false, "Ambient sendBeacon must not reach the wire");
+      assertEquals(seenPaths.includes("/ambient-audio"), false, "Ambient audio must not reach the wire (206v)");
+      assertEquals(seenPaths.includes("/ambient-video"), false, "Ambient video must not reach the wire (206v)");
 
       // 5. Host-bridged fetch: verify real bridge dispatch and refusal
       // If window.fetch = call("fetch") is deleted, calls is [] and bridgedFetch is "Failed to fetch" (kills mutant).

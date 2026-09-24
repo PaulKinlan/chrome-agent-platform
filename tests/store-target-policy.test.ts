@@ -266,7 +266,7 @@ Deno.test("store target (Pillar 4): CWS compliance and provenance authority inva
   assertEquals(manifest.content_security_policy.extension_pages, STORE_EXTENSION_CSP);
   assertEquals(manifest.content_security_policy.sandbox, STORE_SANDBOX_CSP);
   assertEquals(STORE_EXTENSION_CSP, "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:");
-  assertEquals(STORE_SANDBOX_CSP, "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self'; connect-src 'none'; img-src data: blob:;");
+  assertEquals(STORE_SANDBOX_CSP, "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self'; connect-src 'none'; img-src data: blob:; media-src data: blob:;");
   assertEquals(STORE_WASM_LANE, "bundled-reviewed-only");
   assertEquals(STORE_ALLOWED_WORKER_LITERALS.length, 0);
   assertEquals(STORE_TARGET, "store");

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.476] — 2026-09-24
+- sandboxed scripts can no longer send ambient audio or video requests to the network
+
 ## [0.3.475] — 2026-09-23
 - agent icons in the closed sidebar are no longer cut off
 
