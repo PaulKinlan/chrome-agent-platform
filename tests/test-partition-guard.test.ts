@@ -224,6 +224,19 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
   // the word".
   assertEquals(classifyHazards(`// ${GEN} only`), []);
 
+  // SCALING, NOT JUST A CEILING (cap-astra, bounded-performance P2): their inert fixture at
+  // increasing slash runs. With the AMBIGUOUS line-comment arm the classifier took 1 ms at 8
+  // slash-pairs, 38 ms at 20, 1473 ms at 24 and more than 20 s at 48 — CPU-bound, not load. The
+  // arms are disjoint now (a line comment consumes its terminator), so every size is sub-millisecond.
+  // A ceiling rather than a per-size curve, with ~250x headroom over the measured 1 ms: enough to
+  // fail an exponential regression while tolerating a loaded box. A TRUE hang still cannot be caught
+  // here — that is the runner's per-file bound — which is why the structural argument matters more.
+  const slashFixture = (pairs: number) => `const snippet = "import(${"/".repeat(pairs * 2)}";`;
+  const scaleStart = Date.now();
+  for (const pairs of [8, 16, 24, 48, 96]) classifyHazards(slashFixture(pairs));
+  const scaleMs = Date.now() - scaleStart;
+  assert(scaleMs < 250, `five slash-run fixtures (up to 218 chars) took ${scaleMs} ms — the trivia arms must stay disjoint`);
+
   // PERF: the previous pattern-based attempt HUNG on this input (measured: killed at 60 s).
   // WHAT THIS ASSERTS AND WHAT IT DOES NOT: it catches a regression that is slow but still
   // finishes; a true hang never reaches the assertion, and is caught by the runner's per-file
@@ -235,6 +248,23 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
   classifyHazards(nasty + "x");
   const stripMs = Date.now() - t0;
   assert(stripMs < 2000, `two scans of a 6 kB comment run took ${stripMs} ms — the classifier must stay linear`);
+
+  // A RE-EXPORT IS A LOAD TOO — found by the author after the reviewer's point that "the rule rewrites
+  // nothing" does not prove "no false negatives". `export * from "<generator>"` and
+  // `export { x } from "<generator>"` evaluate the target module exactly as an import does; five
+  // forms missed until the export alternative existed, and each is pinned here.
+  const exportStar = `export * from "../${GEN}";`;
+  const exportNamed = `export { AGENT_DESCRIPTIONS } from "../${GEN}";`;
+  const exportAliased = `export { AGENT_DESCRIPTIONS as D } from "../${GEN}";`;
+  const exportDefault = `export { default } from "../${GEN}";`;
+  const exportMinified = `export*from"../${GEN}";`;
+  for (const [label, text] of Object.entries({ exportStar, exportNamed, exportAliased, exportDefault, exportMinified })) {
+    assertStringIncludes(
+      classifyHazards(text).join("|"), IMPORT_HAZARD,
+      `${label}: a re-export evaluates the module and must be a hazard`,
+    );
+  }
+  assertEquals(classifyHazards(`export * from "../${EXT}lib/pure.js";`), [], "re-exporting another module is not a hazard");
 
   // Negatives: importing something else, and merely NAMING the generator in prose.
   assertEquals(classifyHazards(`import { x } from "../${EXT}lib/pure.js";`), []);

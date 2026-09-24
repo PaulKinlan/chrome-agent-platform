@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.481] — 2026-09-24
+- revise 5: disjoint trivia arms (linear) and re-exports covered
+
 ## [0.3.480] — 2026-09-24
 - revise 4: the classifier MATCHES ACROSS trivia and never rewrites the input
 

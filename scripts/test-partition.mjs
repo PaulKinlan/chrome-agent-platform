@@ -130,11 +130,16 @@ const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-package
 // not just LF (cap-astra). The miss only bit the STRIPPER, which deleted the rest of the
 // "line" and took a following import with it; matching across trivia is immune for a comment
 // BEFORE the statement, and this class keeps it immune between tokens too.
-const TRIVIA = String.raw`(?:\s|\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/|\/\/[^\n\r\u2028\u2029]*)*`;
+const TRIVIA = String.raw`(?:\s|\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/|\/\/[^\n\r\u2028\u2029]*(?:\r\n|[\n\r\u2028\u2029]|$))*`;
+// A RE-EXPORT IS A LOAD TOO (found by the author, prompted by the reviewer's point that "the rule
+// rewrites nothing" does NOT prove "no false negatives"): `export * from "<generator>"` and
+// `export { x } from "<generator>"` evaluate the target module exactly as an import does, and none
+// of the alternatives mentioned `export` — five forms missed until this line existed.
 const IMPORT_BUILD_RE = new RegExp(
   `\\bimport\\b[\\s\\S]{0,400}?from${TRIVIA}${BUILD_MODULE_SPEC}` + // static: any trivia, wrapped or minified
     `|\\bimport${TRIVIA}\\(${TRIVIA}${BUILD_MODULE_SPEC}` + // dynamic import, literal specifier
     `|\\brequire${TRIVIA}\\(${TRIVIA}${BUILD_MODULE_SPEC}` + // CJS require, literal specifier
+    `|\\bexport\\b[\\s\\S]{0,400}?from${TRIVIA}${BUILD_MODULE_SPEC}` + // RE-EXPORT: evaluates the module like an import
     `|\\bimport${TRIVIA}${BUILD_MODULE_SPEC}`, // bare side-effect import, not line-anchored
 );
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
