@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.484] — 2026-09-24
+- external agent runs now run and display browser tool calls in the conversation
+
 ## [0.3.483] — 2026-09-24
 - external agents can now use your browser tools directly to inspect and organize tabs
 
