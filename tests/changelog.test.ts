@@ -296,11 +296,21 @@ Deno.test("smxw: the rejection diagnostic names the matching rule and token (har
     ["fix(core): thing", "ENGINEERING_PREFIX_RE"],
     ["merged 3a1b2c4d into the splice", "SHA_RE"],
     ["the fix landed early", "WORKFLOW_RE"],
+    // smxw review nit (cap-astra): the three unpinned rules are the most
+    // quietly-breakable — the joiner is the only start-anchored one (its
+    // position before jargon is what makes "+ harness" report the joiner),
+    // and gate-state is the only case-SENSITIVE rule.
+    ["+ harness port fixed", "LEAKED_JOINER_RE"],
+    ["the run was RED today", "GATE_STATE_RE"],
+    ["internal: measurements only, no user-facing change", "INTERNAL_MARKER_RE"],
   ] as const) {
     const d = explainUserFacingEntry(line);
     if (d.ok) throw new Error(`expected a rejection for: ${line}`);
     assertEquals(d.rule, rule, `${line}: ${JSON.stringify(d)}`);
   }
+  // Gate-state is case-sensitive: lowercase "red"/"green" is ordinary copy.
+  assertEquals(explainUserFacingEntry("a red highlight indicates removal").ok, true,
+    "lowercase red must not trip the case-sensitive gate-state rule");
   // User-facing copy carries no rejection.
   assertEquals(explainUserFacingEntry("agent icons in the closed sidebar are no longer cut off").ok, true);
   // And the boolean wrapper stays exactly consistent with the explanation.

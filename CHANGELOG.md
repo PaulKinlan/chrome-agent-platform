@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.486] — 2026-09-24
+- pin the three unpinned rejection rules by name (astra review nit)
+
 ## [0.3.485] — 2026-09-24
 - external agent runs now run and display browser tool calls in the conversation
 
