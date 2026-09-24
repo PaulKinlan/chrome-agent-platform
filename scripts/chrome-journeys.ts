@@ -528,8 +528,43 @@ async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, e
   const beforeIds = await listRunIds(cdp, optsSession);
   await clickSel(cdp, ntpSession, "#home").catch(() => false);
   await sleep(600);
-  await typeInto(cdp, ntpSession, "#task-input", task);
-  await clickSel(cdp, ntpSession, "#run-task");
+  // chrome-agent-platform-jnwb: the run never enqueued on some trees (0 of 5
+  // requests, no durable run record, SW responsive). The start sequence used to
+  // swallow every signal: clickSel/typeInto returns discarded, no composer
+  // state, no send-acknowledgement check. Instrument the WHOLE start chain so
+  // the failure names its own link.
+  const startState = await evalIn(cdp, ntpSession, `(() => {
+    const comp = document.querySelector('agent-composer');
+    const inp = document.querySelector('#task-input') || document.querySelector('[data-composer-input]');
+    const send = document.querySelector('#run-task') || document.querySelector('[data-composer-send]');
+    const flash = document.querySelector('.flash, [role="alert"], .composer-error, .error-chip');
+    return {
+      url: location.href.split('#')[0],
+      view: document.querySelector('main')?.getAttribute('data-view') ?? document.body.getAttribute('data-view') ?? null,
+      hasInput: !!inp, hasSend: !!send,
+      inputTag: inp?.tagName ?? null, inputValue: inp ? String(inp.value ?? '').slice(0, 60) : null,
+      sendDisabled: send ? send.disabled ?? false : null,
+      flashText: flash ? String(flash.textContent ?? '').slice(0, 120) : null,
+      composerTag: comp?.tagName ?? null,
+      selectedAgentChip: comp?.querySelector('.agent-chip, [data-agent-chip]')?.textContent?.slice(0, 60) ?? null,
+      selectedAgent: (comp && comp._selectedAgent) ? { id: comp._selectedAgent.id, name: comp._selectedAgent.name } : null,
+    };
+  })()`).catch((e) => ({ evalError: String(e?.message ?? e) }));
+  console.log(`jnwb probe start state: ${JSON.stringify(startState)}`);
+  const typed = await typeInto(cdp, ntpSession, "#task-input", task);
+  const runClicked = await clickSel(cdp, ntpSession, "#run-task");
+  console.log(`jnwb probe start: typed=${JSON.stringify(typed)} runClicked=${JSON.stringify(runClicked)}`);
+  await sleep(2500);
+  const afterClick = await evalIn(cdp, ntpSession, `(() => {
+    const comp = document.querySelector('agent-composer');
+    const inp = document.querySelector('#task-input') || document.querySelector('[data-composer-input]');
+    const flash = document.querySelector('.flash, [role="alert"], .composer-error, .error-chip');
+    return { inputValue: inp ? String(inp.value ?? '').slice(0, 60) : null, flashText: flash ? String(flash.textContent ?? '').slice(0, 160) : null,
+      stillSelected: (comp && comp._selectedAgent) ? { id: comp._selectedAgent.id } : null };
+  })()`).catch((e) => ({ evalError: String(e?.message ?? e) }));
+  const afterClickRuns = await listRunIds(cdp, optsSession);
+  const newRuns = [...afterClickRuns].filter((id) => !beforeIds.has(id));
+  console.log(`jnwb probe after Run click: postState=${JSON.stringify(afterClick)} newRuns=${newRuns.length} (${newRuns.slice(0, 3).join(",")})`);
   const t0 = Date.now();
   while (provider.requests.length < expectRequests && Date.now() - t0 < 120000) {
     if (onPause) await onPause().catch(() => false);
