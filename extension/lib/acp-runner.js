@@ -275,6 +275,203 @@ const threadSessions = new Map();
 const activeTurns = new Map();
 
 /**
+ * In-memory map of retained active ACP sessions across turns and discovery (chrome-agent-platform-v05y).
+ * Unifies pre-prompt command discovery and turn execution onto a single retained session lifecycle.
+ * Map<sessionKey, {
+ *   client: AcpClient,
+ *   sessionId: string,
+ *   harnessId: string,
+ *   endpoint: string,
+ *   cwd: string,
+ *   availableCommands: any[],
+ *   agentInfo: any,
+ *   nativeTransport: any,
+ *   createdAt: number,
+ *   lastActiveAt: number,
+ * }>
+ */
+const retainedSessions = new Map();
+
+/** Get active retained session record if connected and valid. Pure. */
+export function getRetainedAcpSession(sessionKey) {
+  const rec = retainedSessions.get(sessionKey);
+  if (!rec) return null;
+  if (!rec.client?.connected) {
+    retainedSessions.delete(sessionKey);
+    return null;
+  }
+  return rec;
+}
+
+/** Close and prune a retained ACP session. */
+export function closeRetainedAcpSession(sessionKey, { closeClient = true } = {}) {
+  const rec = retainedSessions.get(sessionKey);
+  if (rec) {
+    retainedSessions.delete(sessionKey);
+    if (closeClient && rec.client) {
+      try { rec.client.close(); } catch {}
+      try { rec.nativeTransport?.close(); } catch {}
+    }
+  }
+}
+
+/** Close all retained ACP sessions. */
+export function clearAllRetainedAcpSessions() {
+  for (const [key] of retainedSessions) {
+    closeRetainedAcpSession(key);
+  }
+  retainedSessions.clear();
+}
+
+/** Total active retained sessions count. */
+export function retainedSessionsCount() {
+  for (const [key, rec] of retainedSessions) {
+    if (!rec?.client?.connected) retainedSessions.delete(key);
+  }
+  return retainedSessions.size;
+}
+
+/**
+ * Discover harness capabilities/commands or retrieve an existing retained session (chrome-agent-platform-v05y).
+ * If an active retained session exists for this conversation, reuses it without re-opening.
+ * Otherwise, establishes connection, initializes, creates session/new or loads session,
+ * and retains it so subsequent prompt turns reuse the exact same session with 0 startup cost.
+ *
+ * @param {Object} options
+ * @param {string|null} [options.threadId]
+ * @param {string} [options.harnessId]
+ * @param {string} [options.endpoint]
+ * @param {string} [options.cwd]
+ * @param {{get: (k: string) => Promise<string|null>}} [options.settings]
+ * @param {{get: (k: string) => Promise<string|null>, set: (k: string, v: string) => Promise<void>}} [options.sessionStore]
+ * @param {Function} [options.clientFactory]
+ * @param {Function} [options.onCommands]
+ * @returns {Promise<{sessionId: string, availableCommands: any[], agentInfo: any, resumed: boolean}>}
+ */
+export async function getOrDiscoverAcpSession(options = {}) {
+  const {
+    threadId = null,
+    harnessId = "pi",
+    endpoint = DEFAULT_ACP_ENDPOINT,
+    cwd = DEFAULT_ACP_CWD,
+    settings = null,
+    sessionStore = null,
+    onCommands = null,
+  } = options;
+
+  const sessionKey = acpSessionKey(threadId, harnessId);
+
+  // Check if an existing connected session can be reused
+  const existing = getRetainedAcpSession(sessionKey);
+  if (existing && existing.harnessId === harnessId) {
+    onCommands?.(existing.availableCommands ?? []);
+    return {
+      sessionId: existing.sessionId,
+      availableCommands: existing.availableCommands ?? [],
+      agentInfo: existing.agentInfo ?? null,
+      resumed: true,
+      client: existing.client,
+    };
+  }
+
+  let effectiveEndpoint = endpoint;
+  let effectiveCwd = cwd;
+  if (typeof settings?.get === "function") {
+    try {
+      const configuredEndpoint = await settings.get("acp.endpoint");
+      if (typeof configuredEndpoint === "string" && configuredEndpoint.trim()) effectiveEndpoint = configuredEndpoint.trim();
+      const token = await settings.get("acp.token");
+      effectiveEndpoint = acpEndpointWithToken(effectiveEndpoint, token);
+      const configuredCwd = await settings.get("acp.cwd");
+      if (!effectiveCwd && typeof configuredCwd === "string" && configuredCwd.trim()) effectiveCwd = configuredCwd.trim();
+    } catch {}
+  }
+  effectiveEndpoint = acpEndpointWithHarness(effectiveEndpoint, harnessId);
+
+  let transportMode = "";
+  if (typeof settings?.get === "function") {
+    try { transportMode = String(await settings.get("acp.transport") || ""); } catch { transportMode = ""; }
+  }
+  let nativeTransport = null;
+  if (transportMode !== "ws") {
+    nativeTransport = new AcpNativeTransport({ hostName: DEFAULT_NATIVE_HOST });
+    try {
+      await nativeTransport.connect();
+    } catch {
+      nativeTransport = null;
+    }
+  }
+
+  const client = (typeof options.clientFactory === "function")
+    ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: effectiveCwd, transport: nativeTransport || null })
+    : new AcpClient({
+      url: effectiveEndpoint,
+      defaultCwd: effectiveCwd,
+      transport: nativeTransport || null,
+      onCommands,
+    });
+
+  if (nativeTransport) {
+    nativeTransport.onMessage = (raw) => client._receiveRaw(raw);
+    nativeTransport.onClose = (reason) => { client.connected = false; client._abortPending(new Error(reason)); };
+  }
+
+  await client.connect();
+  const initRes = await client.initialize();
+
+  let sessionId = threadSessions.get(sessionKey) ?? null;
+  if (!sessionId && typeof sessionStore?.get === "function") {
+    try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
+  }
+
+  let resumed = false;
+  let availableCommands = [];
+  if (sessionId) {
+    try {
+      await client.loadSession({ sessionId, cwd: effectiveCwd });
+      resumed = true;
+      availableCommands = client.availableCommands ?? [];
+    } catch {
+      sessionId = null;
+    }
+  }
+
+  if (!sessionId) {
+    const sess = await client.newSession({ cwd: effectiveCwd });
+    sessionId = sess.sessionId;
+    availableCommands = sess.availableCommands ?? client.availableCommands ?? [];
+  }
+
+  threadSessions.set(sessionKey, sessionId);
+  if (typeof sessionStore?.set === "function") {
+    try { await sessionStore.set(sessionKey, sessionId); } catch {}
+  }
+
+  const rec = {
+    client,
+    sessionId,
+    harnessId,
+    endpoint: effectiveEndpoint,
+    cwd: effectiveCwd,
+    availableCommands,
+    agentInfo: initRes?.agentInfo ?? client.agentInfo ?? null,
+    nativeTransport,
+    createdAt: Date.now(),
+    lastActiveAt: Date.now(),
+  };
+  retainedSessions.set(sessionKey, rec);
+  onCommands?.(availableCommands);
+
+  return {
+    sessionId,
+    availableCommands,
+    agentInfo: rec.agentInfo,
+    resumed,
+    client,
+  };
+}
+
+/**
  * Cancel an in-flight ACP turn for a conversation.
  * Sends `session/cancel` with the active sessionId over the wire to the harness,
  * marks the turn as stopped by the owner, and settles the turn.
@@ -485,36 +682,10 @@ export async function runAcpTaskTurn(options) {
     try { transportMode = String(await settings.get("acp.transport") || ""); } catch { transportMode = ""; }
     try { permissionsMode = acpPermissionMode(await settings.get("acp.permissions")); } catch { permissionsMode = "ask"; }
   }
-  const nativeHost = DEFAULT_NATIVE_HOST;
-  let nativeTransport = null;
-  let nativeError = "";
-  if (transportMode !== "ws") {
-    nativeTransport = new AcpNativeTransport({ hostName: nativeHost });
-    try {
-      await nativeTransport.connect();
-    } catch (err) {
-      nativeError = String(err?.message ?? err);
-      nativeTransport = null; // not installed — the WebSocket bridge may be
-    }
-  }
-
-  if (nativeTransport) {
-    status({ state: "running", activity: `Connecting to the local ${harnessId} host…` });
-  }
-
-  // THE OWNER GATE: in "ask" (the default) every harness permission request is
-  // rendered as an inline Allow/Deny card and the turn waits for the click, so
-  // the harness runs shell/file commands with the owner's consent or not at all.
-  // "auto" keeps the auto-grant and must be set deliberately in kv. The
-  // cancellation check is late-bound: the claim it reads is created below.
   let permissionCancelled = () => false;
-  // permissionPrompter is injectable for tests (the real one renders the card).
   const permissionPrompter = options.permissionPrompter ?? requestAcpPermission;
   const permissionHandler = permissionsMode === "auto"
     ? null
-    // The client's contract is an OPTION ID (a string) — a prompter that
-    // resolves to a richer decision object must never put that object on the
-    // wire (the fixture caught exactly that: "permission: [object Object]").
     : async (request) => {
         const decision = await permissionPrompter(request, {
           container,
@@ -524,129 +695,162 @@ export async function runAcpTaskTurn(options) {
         return typeof decision?.optionId === "string" && decision.optionId ? decision.optionId : null;
       };
 
-  const client = (typeof options.clientFactory === "function")
-    ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: cwd, transport: nativeTransport || null })
-    : new AcpClient({
-      url: effectiveEndpoint,
-      defaultCwd: cwd,
-      transport: nativeTransport || null,
-      ...(permissionHandler ? { permissionHandler } : {}),
-    });
+  // chrome-agent-platform-v05y: check for active retained session across turns/discovery
+  const retained = getRetainedAcpSession(sessionKey);
+  let client = null;
+  let nativeTransport = null;
+  let nativeError = "";
+  let sessionId = null;
+  let resumed = false;
+  let fromRetained = false;
+  let resumeFailed = false;
+  let resumeError = null;
 
-  // CLAIM the conversation BEFORE ANY await — synchronously. A second (or
-  // third) send while this turn is still connecting has to SEE this turn and
-  // supersede it; if the claim were installed after `await prior.cancel(...)`,
-  // a third send would still read the OLD claim and overwrite the second one,
-  // leaving two turns unnotified and both prompting. `cancelled` makes the
-  // newer turn's intent visible even before this turn reaches the wire.
-  const claim = { client: null, sessionId: null, cancelled: false, stoppedByOwner: false };
+  if (retained && retained.harnessId === harnessId && (!options.endpoint || retained.endpoint === effectiveEndpoint)) {
+    client = retained.client;
+    sessionId = retained.sessionId;
+    nativeTransport = retained.nativeTransport;
+    resumed = true;
+    fromRetained = true;
+  }
+
+  const claim = { client, sessionId, cancelled: false, stoppedByOwner: false };
   const prior = activeTurns.get(sessionKey);
   if (prior) prior.cancelled = true;
   activeTurns.set(sessionKey, claim);
   const releaseClaim = () => { if (activeTurns.get(sessionKey) === claim) activeTurns.delete(sessionKey); };
   /** This turn no longer owns the conversation (superseded, or its surface left). */
   const superseded = () => claim.cancelled || stale();
-  // The gate above was built before this turn's claim existed; from here on it
-  // can see whether this turn still owns the conversation.
   permissionCancelled = superseded;
 
-  // The prior turn's host prompt is stopped after the claim is installed (the
-  // claim is what makes a LATER send able to stop US).
-  if (prior?.client) {
-    try { await prior.client.cancel(prior.sessionId); } catch { /* best effort */ }
-    try { prior.client.close(); } catch { /* best effort */ }
-  }
-
-  if (nativeTransport) {
-    nativeTransport.onMessage = (raw) => client._receiveRaw(raw);
-    nativeTransport.onClose = (reason) => { client.connected = false; client._abortPending(new Error(reason)); };
-  }
-
-  try {
-    await client.connect();
-  } catch (err) {
-    releaseClaim();
-    const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${effectiveEndpoint}.`;
-    // Name EVERY transport that was unavailable, so the fix is one command away
-    // whichever way the operator wants to run it.
-    const fixes = [];
-    if (nativeError) fixes.push("install the local host: npm run acp:native:install");
-    else if (nativeTransport) fixes.push("the local host is not answering: npm run acp:native:install");
-    fixes.push("or run the bridge: npm run acp:bridge");
-    const actionMsg = `${fixes.join(" — ")} (both in the CAP repo)`;
-    if (!stale()) {
-      if (typeof container.appendError === "function") {
-        container.appendError(errorMsg, {
-          reason: String(err?.message ?? err),
-          action: actionMsg,
-          category: "harness-connection",
-          requestedHarness: harnessId,
-        });
-      } else if (typeof container.appendSystem === "function") {
-        container.appendSystem(`${errorMsg} ${actionMsg}`);
+  if (!fromRetained) {
+    const nativeHost = DEFAULT_NATIVE_HOST;
+    if (transportMode !== "ws") {
+      nativeTransport = new AcpNativeTransport({ hostName: nativeHost });
+      try {
+        await nativeTransport.connect();
+      } catch (err) {
+        nativeError = String(err?.message ?? err);
+        nativeTransport = null; // not installed — the WebSocket bridge may be
       }
-      status({ state: "failed", errorReason: errorMsg, errorAction: actionMsg });
     }
-    return { ok: false, error: `${errorMsg} ${actionMsg}`, requestedHarness: harnessId };
+
+    if (nativeTransport) {
+      status({ state: "running", activity: `Connecting to the local ${harnessId} host…` });
+    }
+
+    client = (typeof options.clientFactory === "function")
+      ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: cwd, transport: nativeTransport || null })
+      : new AcpClient({
+        url: effectiveEndpoint,
+        defaultCwd: cwd,
+        transport: nativeTransport || null,
+        ...(permissionHandler ? { permissionHandler } : {}),
+      });
+
+    claim.client = client;
+
+    // The prior turn's host prompt is stopped after the claim is installed (the
+    // claim is what makes a LATER send able to stop US).
+    if (prior?.client && prior.client !== client) {
+      try { await prior.client.cancel(prior.sessionId); } catch { /* best effort */ }
+      try { prior.client.close(); } catch { /* best effort */ }
+    }
+
+    if (nativeTransport) {
+      nativeTransport.onMessage = (raw) => client._receiveRaw(raw);
+      nativeTransport.onClose = (reason) => { client.connected = false; client._abortPending(new Error(reason)); };
+    }
+
+    try {
+      await client.connect();
+    } catch (err) {
+      releaseClaim();
+      if (superseded()) {
+        return { ok: false, error: "Task was superseded" };
+      }
+      const errorMsg = `Cannot connect to ACP harness (${harnessId}) at ${effectiveEndpoint}.`;
+      const fixes = [];
+      if (nativeError) fixes.push("install the local host: npm run acp:native:install");
+      else if (nativeTransport) fixes.push("the local host is not answering: npm run acp:native:install");
+      fixes.push("or run the bridge: npm run acp:bridge");
+      const actionMsg = `${fixes.join(" — ")} (both in the CAP repo)`;
+      if (!stale()) {
+        if (typeof container.appendError === "function") {
+          container.appendError(errorMsg, {
+            reason: String(err?.message ?? err),
+            action: actionMsg,
+            category: "harness-connection",
+            requestedHarness: harnessId,
+          });
+        } else if (typeof container.appendSystem === "function") {
+          container.appendSystem(`${errorMsg} ${actionMsg}`);
+        }
+        status({ state: "failed", errorReason: errorMsg, errorAction: actionMsg });
+      }
+      return { ok: false, error: `${errorMsg} ${actionMsg}`, requestedHarness: harnessId };
+    }
   }
 
   if (superseded()) {
     releaseClaim();
-    client.close();
+    if (!fromRetained) client.close();
     return { ok: false, error: "Task was superseded" };
   }
 
-  // Resume bookkeeping lives OUTSIDE the try: the turn's catch has to report
-  // whether this turn already fell back to a fresh session (u0cc).
-  let resumed = false;
-  // A failed session/load falls back to a fresh session — a dead adapter must
-  // not block the turn — but the fallback is NEVER silent: the user is told the
-  // previous conversation could not be restored (and why), and the result marks
-  // it so a surface can tell a restored conversation from a new one.
-  // `resumeFailed` stays false when there was nothing to resume: a first turn is
-  // not a failure.
-  let resumeFailed = false;
-  let resumeError = null;
-
   try {
-    status({ state: "running", activity: `Initializing ${harnessId}…` });
-    await client.initialize();
-    if (superseded()) {
-      return { ok: false, error: "Task was superseded" };
-    }
-
-    // Session resolution: resume the conversation this surface/harness owns.
-    // Keyed by threadId+harness inside a persisted thread, else by harness
-    // identity — the pi surface and hub @pi delegations are one continuous
-    // conversation. A reload recovers the session id from the caller's
-    // sessionStore (kv), so continuity survives the page.
-    let sessionId = threadSessions.get(sessionKey) ?? null;
-    if (!sessionId && typeof sessionStore?.get === "function") {
-      try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
-    }
-
-    if (sessionId) {
-      try {
-        await client.loadSession({ sessionId, cwd: effectiveCwd });
-        resumed = true;
-      } catch (err) {
-        // Fall back to new session if resume fails
-        sessionId = null;
-        resumeFailed = true;
-        resumeError = String(err?.message ?? err).replace(/\s+/gu, " ").trim().slice(0, 240)
-          || "the harness did not say why";
+    if (!fromRetained) {
+      status({ state: "running", activity: `Initializing ${harnessId}…` });
+      await client.initialize();
+      if (superseded()) {
+        return { ok: false, error: "Task was superseded" };
       }
-    }
 
-    if (!sessionId) {
-      const sess = await client.newSession({ cwd: effectiveCwd });
-      sessionId = sess.sessionId;
-    }
-    threadSessions.set(sessionKey, sessionId);
-    claim.client = client;
-    claim.sessionId = sessionId;
-    if (typeof sessionStore?.set === "function") {
-      try { await sessionStore.set(sessionKey, sessionId); } catch { /* resume hint only */ }
+      sessionId = threadSessions.get(sessionKey) ?? null;
+      if (!sessionId && typeof sessionStore?.get === "function") {
+        try { sessionId = await sessionStore.get(sessionKey) ?? null; } catch { sessionId = null; }
+      }
+
+      if (sessionId) {
+        try {
+          await client.loadSession({ sessionId, cwd: effectiveCwd });
+          resumed = true;
+        } catch (err) {
+          sessionId = null;
+          resumeFailed = true;
+          resumeError = String(err?.message ?? err).replace(/\s+/gu, " ").trim().slice(0, 240)
+            || "the harness did not say why";
+        }
+      }
+
+      if (!sessionId) {
+        const sess = await client.newSession({ cwd: effectiveCwd });
+        sessionId = sess.sessionId;
+      }
+      threadSessions.set(sessionKey, sessionId);
+      claim.sessionId = sessionId;
+      if (typeof sessionStore?.set === "function") {
+        try { await sessionStore.set(sessionKey, sessionId); } catch { /* resume hint only */ }
+      }
+
+      if (options.retainSession === true) {
+        const rec = {
+          client,
+          sessionId,
+          harnessId,
+          endpoint: effectiveEndpoint,
+          cwd: effectiveCwd,
+          availableCommands: client.availableCommands ?? [],
+          agentInfo: client.agentInfo ?? null,
+          nativeTransport,
+          createdAt: Date.now(),
+          lastActiveAt: Date.now(),
+        };
+        retainedSessions.set(sessionKey, rec);
+      }
+    } else {
+      claim.sessionId = sessionId;
+      threadSessions.set(sessionKey, sessionId);
     }
 
     // Tell the surface BEFORE this fresh conversation streams: the owner must
@@ -921,7 +1125,17 @@ export async function runAcpTaskTurn(options) {
     // This turn is no longer the active one for the key (a newer turn may own
     // it already — never clear a successor's registration).
     releaseClaim();
-    client.close();
-    try { nativeTransport?.close(); } catch { /* already gone */ }
+    const shouldRetain = (options.retainSession === true || fromRetained === true)
+      && !claim.stoppedByOwner
+      && client?.connected === true;
+
+    if (!shouldRetain) {
+      closeRetainedAcpSession(sessionKey);
+      client?.close();
+      try { nativeTransport?.close(); } catch { /* already gone */ }
+    } else {
+      const rec = retainedSessions.get(sessionKey);
+      if (rec) rec.lastActiveAt = Date.now();
+    }
   }
 }

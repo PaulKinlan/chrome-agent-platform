@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.486] — 2026-09-24
+- retain active agent session identity across command discovery and subsequent prompt turns
+
 ## [0.3.485] — 2026-09-24
 - external agent runs now run and display browser tool calls in the conversation
 
