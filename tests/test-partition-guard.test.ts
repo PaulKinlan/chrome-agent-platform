@@ -175,6 +175,27 @@ Deno.test("partition guard: the detectors classify the known hazards", async () 
       `${label}: naming the generator is a hazard whatever the syntax carries it (over-declaring is the safe direction)`,
     );
   }
+
+  // DOCUMENTED RESIDUE, PINNED AS TESTS (cap-astra round 6, filed with the PASS at d999feeb): text
+  // detection cannot see a name that is never CONTIGUOUS. Two escapes survive the presence rule, and
+  // they are asserted here as NOT caught so the limit is a test result a reader can check rather than
+  // prose they have to trust — every round of this chain died because prose about a limit was read as
+  // coverage.
+  //
+  // CONTRAST, because it is the useful half: a name that IS contiguous is caught even when the
+  // SPECIFIER is built at runtime — `join(ROOT, "scripts", "build-bundled-tool-packages.mjs")` and
+  // `import(P)` are both flagged, which the reviewer verified by planting them. There is no
+  // computed-specifier exemption any more; only the non-contiguous ones below remain.
+  const concatenatedName = `import("build-bundled" + "-tool-packages.mjs");`;
+  assertEquals(
+    classifyHazards(concatenatedName), [],
+    "a name split across a concatenation is NOT detectable from text — pinned residue, not coverage",
+  );
+  const assembledName = `const parts = ["build", "bundled", "tool", "packages"]; await import(parts.join("-") + ".mjs");`;
+  assertEquals(
+    classifyHazards(assembledName), [],
+    "a name assembled with no contiguous literal is NOT detectable from text — pinned residue, not coverage",
+  );
   // Negatives: another module's name, and a path that merely LOOKS like a build file.
   assertEquals(classifyHazards(`import { x } from "../extension/lib/pure.js";`), []);
   assertEquals(classifyHazards(`import { x } from "../scripts/other-packages.mjs";`), []);

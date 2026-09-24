@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.487] — 2026-09-24
+- the residue is a test, the dead prose is gone, and the exemption names every class
+
 ## [0.3.486] — 2026-09-24
 - round 5: the syntax taxonomy is DELETED, and the delimiter class is proved by LOADING
 

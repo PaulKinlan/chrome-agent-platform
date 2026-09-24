@@ -76,7 +76,11 @@ export const EXEMPTIONS = {
   // and walks it. The write-hazard heuristic sees a write call near an `extension/` literal (the SAFE
   // fixture string it plants) and correctly flags the text — but every write goes to the scratch tree,
   // never to repo extension/ or packages/, and the file it writes is not in the real census at all.
-  "tests/test-partition-guard.test.ts": "plants fixtures in a makeTempDir scratch tree; the extension/ literal is a fixture string, not a write target",
+  // An exemption is the only place a reviewer reads WHY a hazard is allowed, so the reason names every
+  // class this file now falls into (spawns / names / writes), not just the one that first triggered it:
+  // it plants fixtures in a scratch tree, spawns deno children to LOAD marker modules, and writes only
+  // into that scratch tree — the extension/ literal is a fixture string, never a write target.
+  "tests/test-partition-guard.test.ts": "plants fixtures in a makeTempDir scratch tree and spawns deno to load marker modules; writes only into that scratch tree, and the extension/ literal is a fixture string, not a write target",
   // 4lc0 round 5: the rule is now "naming the generator at all is a hazard", so these five are the
   // OVER-DECLARATION it costs. Each was read before being exempted: none of them loads or executes
   // anything — they read the build script's TEXT, list it as a path to scan, assert that package
@@ -96,32 +100,10 @@ export const DRIVER_REF_RE = /tests\/[\w.-]+\.(?:mjs|ts)/g;
 
 const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
-// 4lc0: a test that IMPORTS a build module runs it — module side effects are the same hazard
-// as spawning it, and the SPAWN_RE rule above cannot see the shape that let
-// tests/tool-descriptions.test.ts join the parallel phase while regenerating
-// extension/wasm/cas on import.
-//
-// THE FIRST VERSION OF THIS RULE MATCHED ONE LINE SHAPE and was evadable: an independent review
-// (cap-astra, 2026-09-24, ~/cap-evidence/4lc0-astra-review-20260924/REVIEW.md) took the SAME live
-// import, split it over three lines, and the guard went 5/0 while the real partition put that
-// file in the parallel phase and reproduced 8 CAS NotFound failures — the known writer stayed
-// correctly serial throughout, so the containment held and only the DETECTOR was blind. So the
-// rule is written against the SPECIFIER, not against a line shape:
-//   import … from "<build module>"   (any wrapping between the clause and `from`)
-//   import "<build module>"          (bare side-effect import)
-//   import("<build module>")         (dynamic import, literal specifier)
-//   require("<build module>")        (CJS)
-// RESIDUE, stated so it is not implied away: a specifier built at RUNTIME (`import(someVar)`) is
-// not visible to any text detector, and a COMMENTED-OUT import DOES match (fail-closed: the cost
-// is a declaration the lane did not need, never a silent parallel writer — a bare mention in
-// prose does not match). The bounded
-// `[\s\S]{0,400}?` window keeps the match linear and local to one statement region.
-// SPACING IS NOT A RULE EITHER (cap-astra re-review, 2026-09-24): the first version required
-// whitespace after `import`, so a MINIFIED import — `import{AGENT_DESCRIPTIONS}from"…"` — went
-// undetected (guard 6/0) while a fresh instance of it ran in the parallel phase and reproduced 8
-// CAS NotFound failures. `\\bimport\\b` plus `from\\s*` covers every spacing including none, and the
-// bare form is no longer line-anchored for the same reason (a minifier puts it mid-line).
-const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-packages)[^"'\n]*["']`;
+// (The BUILD_MODULE_SPEC constant and the quote/spacing/400-window comments that used to sit
+// here are DELETED with the taxonomy they described — cap-astra round 6: prose about a rule that
+// no longer exists is worse than no prose, because the next reader trusts it. What replaced them is
+// the presence rule below, and the shapes it must cover are pinned in tests/test-partition-guard.test.ts.)
 // A STRING NAMING THE GENERATOR IS A HAZARD, WHATEVER SYNTAX CARRIES IT (cap-astra round 5, coord-
 // endorsed). Every earlier version of this rule modelled WHICH syntax could load the generator — the
 // line shape, then spacing, then comments, then quote delimiters — and each round found the shape
