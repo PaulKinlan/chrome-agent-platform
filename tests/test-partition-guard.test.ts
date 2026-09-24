@@ -24,6 +24,7 @@ import {
   partition,
   SERIAL,
   SERIAL_REASONS,
+  unserialisedHazards,
 } from "../scripts/test-partition.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -64,15 +65,10 @@ async function contentWithDrivers(rel: string): Promise<string> {
 Deno.test("partition guard: every build-artifact hazard test is serial (or reviewed-exempt with a reason)", async () => {
   const files = await allTestFiles();
   assert(files.length > 100, "the walk must see the real suite");
-  const violations: string[] = [];
-  for (const rel of files) {
-    const classes = classifyHazards(await contentWithDrivers(rel));
-    if (!classes.length) continue; // safe → defaults to the parallel phase
-    if (SERIAL.has(rel)) continue;
-    const reason = (EXEMPTIONS as Record<string, string>)[rel];
-    if (reason && reason.trim().length > 0) continue;
-    violations.push(`${rel} — ${classes.join("; ")}`);
-  }
+  // The SAME invariant the fresh-instance gate applies to its scratch tree, so the two cannot drift.
+  const violations = unserialisedHazards(
+    await Promise.all(files.map(async (rel) => [rel, await contentWithDrivers(rel)] as [string, string])),
+  );
   assertEquals(
     violations,
     [],
@@ -152,7 +148,17 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
   const dynamicLiteral = `const m = await import("../${GEN}");`;
   const requireLiteral = `const m = require("../${GEN}");`;
   const multilineBuild = `import {\n  meta,\n} from "../${BUILD}";`;
-  for (const [label, text] of Object.entries({ single, multiline, multilineWithComment, bareSideEffect, dynamicLiteral, requireLiteral, multilineBuild })) {
+  // SPACING IS NOT A RULE EITHER (cap-astra re-review): a MINIFIED import went undetected while a
+  // fresh instance of it ran in the parallel phase and reproduced 8 CAS NotFound failures. One
+  // bypass per review round is one too many, so every spacing the language allows is pinned here:
+  // none between `import` and the clause, none around `from`, and a bare import mid-line.
+  const minifiedStatic = `import{AGENT_DESCRIPTIONS}from"../${GEN}";`;
+  const minifiedNoSpaces = `import{A}from"../${GEN}";`;
+  const minifiedMidLine = `const x=1;import{A}from"../${GEN}";console.log(x);`;
+  const bareNoSpace = `import"../${GEN}";`;
+  const bareMidLine = `const x=1;import"../${GEN}";`;
+  const tabbed = `import\t{\n\tA,\n}\tfrom\t"../${GEN}";`;
+  for (const [label, text] of Object.entries({ single, multiline, multilineWithComment, bareSideEffect, dynamicLiteral, requireLiteral, multilineBuild, minifiedStatic, minifiedNoSpaces, minifiedMidLine, bareNoSpace, bareMidLine, tabbed })) {
     assertStringIncludes(
       classifyHazards(text).join("|"), IMPORT_HAZARD,
       `${label}: the import of a build module must classify as a hazard, whatever its line shape`,
@@ -167,27 +173,42 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
   assertEquals(classifyHazards(`const m = await import(somePath);`), []);
 });
 
-Deno.test("4lc0 fresh-instance gate: a NEW file using the evasive import shape is detected on disk", async () => {
-  // The review's finding was about a NEW instance, so this plants one: the same live import over
-  // three lines, written to disk under tests/ (not a *.test.ts name, so the guard's own walk never
-  // picks it up as a test), classified through the same predicate the guard uses, then removed.
-  const ROOT_PATH = new URL("..", import.meta.url);
-  const probe = new URL("./tmp-4lc0-fresh-instance-probe.ts", ROOT_PATH);
+Deno.test("4lc0 fresh-instance gate: a NEW file that would bypass the census is caught by the census RULE", async () => {
+  // The reviews were about NEW instances, and the first version of this gate only proved the
+  // CLASSIFIER on a path it claimed: with census enforcement bypassed, all six guard tests stayed
+  // green (cap-astra, 2026-09-24). So this plants REAL files in a scratch tree, walks it the way the
+  // census walks tests/, and applies the SAME exported invariant the census applies — a scratch tree
+  // rather than the repo because a transient `*.test.ts` importer in the real tree could be selected
+  // by a concurrent run and regenerate the CAS dir inside its parallel phase, which is the very
+  // hazard this whole bead is about.
+  const { durableDir } = await import("../scripts/lib/durable-root.mjs");
   const GEN_NAME = "scripts/build-bundled" + "-tool-packages.mjs";
-  const rel = "tests/tmp-4lc0-fresh-instance-probe.ts";
+  const scratch = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-4lc0-census-" });
   try {
-    await Deno.writeTextFile(probe, `import {\n  AGENT_DESCRIPTIONS,\n} from "../${GEN_NAME}";\n`);
-    const text = await Deno.readTextFile(probe);
-    assertStringIncludes(
-      classifyHazards(text).join("|"), "imports " + "build" + ".mjs",
-      "a fresh file with the wrapped import must be classified as a build-module hazard",
+    await Deno.mkdir(`${scratch}/tests`, { recursive: true });
+    const planted: Record<string, string> = {
+      "tests/fresh-compact.test.ts": `import{AGENT_DESCRIPTIONS}from"../${GEN_NAME}";\nDeno.test("x", () => {});\n`,
+      "tests/fresh-wrapped.test.ts": `import {\n  AGENT_DESCRIPTIONS,\n} from "../${GEN_NAME}";\nDeno.test("x", () => {});\n`,
+      "tests/fresh-safe.test.ts": `import { x } from "../extension/lib/pure.js";\nDeno.test("x", () => {});\n`,
+    };
+    for (const [rel, body] of Object.entries(planted)) await Deno.writeTextFile(`${scratch}/${rel}`, body);
+    // Walk the scratch tree exactly as the census walks the real one (files ending in .test.ts).
+    const walked: Array<[string, string]> = [];
+    for await (const entry of Deno.readDir(`${scratch}/tests`)) {
+      if (!entry.name.endsWith(".test.ts")) continue;
+      walked.push([`tests/${entry.name}`, await Deno.readTextFile(`${scratch}/tests/${entry.name}`)]);
+    }
+    assertEquals(walked.length, 3, "the walk must see every planted file, or this gate is measuring nothing");
+    const violations = unserialisedHazards(walked);
+    // BOTH importers are violations, by name — and the safe file is not, so the rule is not just
+    // "everything in this tree is a hazard".
+    assertEquals(
+      violations.map((v) => v.split(" — ")[0]).sort(),
+      ["tests/fresh-compact.test.ts", "tests/fresh-wrapped.test.ts"],
+      `a fresh build-module importer must be a census violation: ${violations.join(" | ")}`,
     );
-    // AND it must not be able to sit in the parallel phase: the guard's invariant is
-    // hazard ⇒ SERIAL (or a reviewed EXEMPTIONS entry), and a new file is in neither.
-    assertEquals(SERIAL.has(rel), false, "the probe is not declared serial — so the guard must red for it");
-    const { parallel } = partition([rel]);
-    assertEquals(parallel, [rel], "partition alone would run it in the parallel phase, which is why the guard is the check");
+    for (const v of violations) assertStringIncludes(v, "imports " + "build" + ".mjs");
   } finally {
-    await Deno.remove(probe).catch(() => {});
+    await Deno.remove(scratch, { recursive: true }).catch(() => {});
   }
 });

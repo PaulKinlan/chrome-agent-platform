@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.478] — 2026-09-24
+- revise 2: spacing is not a rule, and the gate now tests the CENSUS rule
+
 ## [0.3.477] — 2026-09-24
 - revise: the import detector matches the SPECIFIER, not one line shape
 

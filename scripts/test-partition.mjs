@@ -72,6 +72,11 @@ export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
   "tests/evidence-durable.test.ts": "spawns the bundled-tool generator ONLY inside a pristine makeTempDir checkout materialization; every write goes to the temp dir, never to repo extension/ or packages/",
+  // 4lc0 re-review: the fresh-instance gate plants `tests/*.test.ts` files in a makeTempDir scratch tree
+  // and walks it. The write-hazard heuristic sees a write call near an `extension/` literal (the SAFE
+  // fixture string it plants) and correctly flags the text — but every write goes to the scratch tree,
+  // never to repo extension/ or packages/, and the file it writes is not in the real census at all.
+  "tests/test-partition-guard.test.ts": "plants fixtures in a makeTempDir scratch tree; the extension/ literal is a fixture string, not a write target",
   "tests/durable-root.test.ts": "scans test file paths including serial build tests for tmpdir literals; executes no build or extension writes",
 };
 
@@ -101,12 +106,17 @@ const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
 // is a declaration the lane did not need, never a silent parallel writer — a bare mention in
 // prose does not match). The bounded
 // `[\s\S]{0,400}?` window keeps the match linear and local to one statement region.
+// SPACING IS NOT A RULE EITHER (cap-astra re-review, 2026-09-24): the first version required
+// whitespace after `import`, so a MINIFIED import — `import{AGENT_DESCRIPTIONS}from"…"` — went
+// undetected (guard 6/0) while a fresh instance of it ran in the parallel phase and reproduced 8
+// CAS NotFound failures. `\\bimport\\b` plus `from\\s*` covers every spacing including none, and the
+// bare form is no longer line-anchored for the same reason (a minifier puts it mid-line).
 const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-packages)[^"'\n]*["']`;
 const IMPORT_BUILD_RE = new RegExp(
-  `\\bimport\\s[\\s\\S]{0,400}?from\\s*${BUILD_MODULE_SPEC}` + // static import, single or wrapped
+  `\\bimport\\b[\\s\\S]{0,400}?from\\s*${BUILD_MODULE_SPEC}` + // static: any spacing, wrapped or minified
     `|\\bimport\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // dynamic import, literal
     `|\\brequire\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // CJS require, literal
-    `|(?:^|\\n)[ \\t]*import\\s*${BUILD_MODULE_SPEC}`, // bare side-effect import
+    `|\\bimport\\s*${BUILD_MODULE_SPEC}`, // bare side-effect import, not line-anchored
 );
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
@@ -136,6 +146,27 @@ export function classifyHazards(text) {
   if (writesTree(text)) classes.push("writes under extension/ or packages/");
   if (READ_RE.test(text) && DIST_LITERAL_RE.test(text)) classes.push("reads extension/dist");
   return classes;
+}
+
+/**
+ * THE GUARD'S INVARIANT, as a pure function (4lc0 re-review): every content hazard must be in SERIAL
+ * or carry a reviewed EXEMPTIONS reason. Extracted so the real census check and the fresh-instance
+ * gate test the SAME rule — the first version of the gate proved the classifier on a path it only
+ * claimed, and bypassing the census left all six guard tests green (cap-astra, 2026-09-24).
+ * `entries` are [repoRelativePath, content] pairs; the result is the hazard files that would run in
+ * the PARALLEL phase, so an empty result is the safe answer.
+ */
+export function unserialisedHazards(entries) {
+  const violations = [];
+  for (const [rel, text] of entries) {
+    const classes = classifyHazards(text);
+    if (!classes.length) continue; // safe → defaults to the parallel phase
+    if (SERIAL.has(rel)) continue;
+    const reason = EXEMPTIONS[rel];
+    if (typeof reason === "string" && reason.trim().length > 0) continue;
+    violations.push(`${rel} — ${classes.join("; ")}`);
+  }
+  return violations;
 }
 
 // Split a list of test files (repo-relative) into the two phases, preserving
