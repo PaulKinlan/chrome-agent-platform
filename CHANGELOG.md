@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.477] — 2026-09-24
+- agent-opened pages can now open side-by-side with your tab (Tabs Split View, Chrome 155+)
+
 ## [0.3.476] — 2026-09-24
 - test real page reload in agent header rename regression
 

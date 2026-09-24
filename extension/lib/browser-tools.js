@@ -11,6 +11,7 @@ import { canonicalOrigin, masterMemory, saveScreenshot } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 import { currentRunContext } from "./run-context.js";
+import { createSplitAware } from "./split-view.js";
 import {
   listFsGrants,
   getFsGrant,
@@ -2422,9 +2423,13 @@ export function browserToolset(readOnly = false, {
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring). " +
         "Pass keep:true when this tab IS the task's result and you intend it to stay open for the user " +
         "(a default-off run-end auto-close then leaves it alone). " +
+        "Pass split:true to open it SIDE-BY-SIDE with the user's active tab via the Tabs Split View API " +
+        "(Chrome 155+) — the right choice when the owner should watch the page you are opening for a " +
+        "Web MCP tool call or context reading. Falls back to a plain tab (with splitFallbackReason set) " +
+        "on Chrome <155, headless environments, or unpairable tabs; the page opens either way. " +
         cleanupGuidanceFor("open_tab"),
-      inputSchema: z.object({ url: z.string().url(), keep: z.boolean().optional() }),
-      execute: async ({ url, keep }) => {
+      inputSchema: z.object({ url: z.string().url(), keep: z.boolean().optional(), split: z.boolean().optional() }),
+      execute: async ({ url, keep, split }) => {
         // Scheme guard FIRST: a chrome:/file:/about:/data: destination can
         // never be authorized, so it is refused before any permission check.
         const dest = webDestination(url);
@@ -2449,7 +2454,24 @@ export function browserToolset(readOnly = false, {
           } catch {
             return { error: "run aborted — tab not opened" };
           }
-          const tab = await chrome.tabs.create({ url });
+          // chrome-agent-platform-gin2: split:true asks for the Tabs Split View
+          // API (Chrome 155+) — the new tab opens SIDE-BY-SIDE with the user's
+          // active tab instead of a background tab, so an owner can watch the
+          // page the agent is working on. Every unsupported/refused pairing
+          // falls back to a plain create; the reason travels to the model.
+          let tab;
+          let splitInfo = {};
+          if (split === true) {
+            const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+            const alongside = (activeTabs ?? []).find((t) => typeof t?.id === "number");
+            const r = await createSplitAware({ url, alongsideTabId: alongside?.id });
+            tab = r.tab;
+            splitInfo = r.split
+              ? { splitView: true }
+              : { splitView: false, ...(r.reason ? { splitFallbackReason: r.reason } : {}) };
+          } else {
+            tab = await chrome.tabs.create({ url });
+          }
           // Re-check the fence AFTER the await, before returning success: an
           // abort/ownership loss during tabs.create must NOT report a committed
           // open. Compensate (close the just-opened tab) + return aborted (the
@@ -2466,7 +2488,7 @@ export function browserToolset(readOnly = false, {
           // the Act class (no destructive card); a tab the run did NOT open is
           // Destructive (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
           if (typeof tab?.id === "number") openedTabIds.add(tab.id);
-          return { ok: true, tabId: tab.id, url, ...(keep === true ? { keep: true } : {}) };
+          return { ok: true, tabId: tab.id, url, ...splitInfo, ...(keep === true ? { keep: true } : {}) };
         });
       },
     }),
