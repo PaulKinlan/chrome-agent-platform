@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.482] — 2026-09-24
+- skills you reference in the composer now travel with the task to external agent runs
+
 ## [0.3.481] — 2026-09-24
 - the changelog jargon filter catches the vocabulary that actually leaks
 
