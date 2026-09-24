@@ -53,6 +53,16 @@ export const SERIAL_REASONS = {
   // queueing thresholds (a 1500 ms skip bound against a 2000 ms marker window),
   // which is exactly what the 32-worker parallel phase makes flaky.
   "tests/chrome-slot-semaphore-honesty.test.ts": "mutates CAP_CHROME_SLOT_DIR and makes wall-clock queueing assertions (races/flakes with other lock tests under the parallel phase)",
+  // 4lc0: this file IMPORTS the bundled-tool generator for one constant
+  // (AGENT_DESCRIPTIONS). Importing it RUNS it — the generator's work is at module top
+  // level and its isMain flag gates only the final process.exit — so a run of this test
+  // rewrites all 38 files in extension/wasm/cas. Measured in isolation (per-file mtime
+  // fingerprint of the CAS dir changes), and in the nco2 subset that regeneration landed
+  // inside the parallel phase while tests/gzip-preview.test.ts was reading a CAS file,
+  // which failed NotFound: the false red this bead exists for. The spawn-based hazard
+  // scan could not see an import, which is why this entry and the IMPORT_BUILD_RE class
+  // in this file are the same fix.
+  "tests/tool-descriptions.test.ts": "imports scripts/build-bundled-tool-packages.mjs, whose import-time work regenerates extension/wasm/cas (38 files) — measured; readers race it",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
@@ -62,6 +72,21 @@ export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 // membership is a review-time decision, never a default.
 export const EXEMPTIONS = {
   "tests/evidence-durable.test.ts": "spawns the bundled-tool generator ONLY inside a pristine makeTempDir checkout materialization; every write goes to the temp dir, never to repo extension/ or packages/",
+  // 4lc0 re-review: the fresh-instance gate plants `tests/*.test.ts` files in a makeTempDir scratch tree
+  // and walks it. The write-hazard heuristic sees a write call near an `extension/` literal (the SAFE
+  // fixture string it plants) and correctly flags the text — but every write goes to the scratch tree,
+  // never to repo extension/ or packages/, and the file it writes is not in the real census at all.
+  "tests/test-partition-guard.test.ts": "plants fixtures in a makeTempDir scratch tree; the extension/ literal is a fixture string, not a write target",
+  // 4lc0 round 5: the rule is now "naming the generator at all is a hazard", so these five are the
+  // OVER-DECLARATION it costs. Each was read before being exempted: none of them loads or executes
+  // anything — they read the build script's TEXT, list it as a path to scan, assert that package
+  // scripts or documents MENTION it, or say its name in a comment. Reading build.mjs is not loading
+  // it (the script is source, not generated output), and executing the generator is the hazard.
+  "tests/changelog-shipping.test.ts": "reads ../build.mjs as TEXT to check what the changelog ships; never loads or runs it",
+  "tests/file-url-root-guard.test.ts": "lists ROOT/build.mjs as a path to scan and pins the generator path as a STRING; no import, require or execution",
+  "tests/package-scripts-exist.test.ts": "asserts a package.json script REFERENCE to build.mjs resolves; it never imports the generator",
+  "tests/risk-register-contract.test.ts": "asserts the risk register CITES build.mjs for the bundle budget; documentation text only",
+  "tests/zod-jitless-fallback.test.ts": "mentions build.mjs in a comment describing how the pipeline scrubs; no load",
   "tests/durable-root.test.ts": "scans test file paths including serial build tests for tmpdir literals; executes no build or extension writes",
 };
 
@@ -71,6 +96,45 @@ export const DRIVER_REF_RE = /tests\/[\w.-]+\.(?:mjs|ts)/g;
 
 const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
+// 4lc0: a test that IMPORTS a build module runs it — module side effects are the same hazard
+// as spawning it, and the SPAWN_RE rule above cannot see the shape that let
+// tests/tool-descriptions.test.ts join the parallel phase while regenerating
+// extension/wasm/cas on import.
+//
+// THE FIRST VERSION OF THIS RULE MATCHED ONE LINE SHAPE and was evadable: an independent review
+// (cap-astra, 2026-09-24, ~/cap-evidence/4lc0-astra-review-20260924/REVIEW.md) took the SAME live
+// import, split it over three lines, and the guard went 5/0 while the real partition put that
+// file in the parallel phase and reproduced 8 CAS NotFound failures — the known writer stayed
+// correctly serial throughout, so the containment held and only the DETECTOR was blind. So the
+// rule is written against the SPECIFIER, not against a line shape:
+//   import … from "<build module>"   (any wrapping between the clause and `from`)
+//   import "<build module>"          (bare side-effect import)
+//   import("<build module>")         (dynamic import, literal specifier)
+//   require("<build module>")        (CJS)
+// RESIDUE, stated so it is not implied away: a specifier built at RUNTIME (`import(someVar)`) is
+// not visible to any text detector, and a COMMENTED-OUT import DOES match (fail-closed: the cost
+// is a declaration the lane did not need, never a silent parallel writer — a bare mention in
+// prose does not match). The bounded
+// `[\s\S]{0,400}?` window keeps the match linear and local to one statement region.
+// SPACING IS NOT A RULE EITHER (cap-astra re-review, 2026-09-24): the first version required
+// whitespace after `import`, so a MINIFIED import — `import{AGENT_DESCRIPTIONS}from"…"` — went
+// undetected (guard 6/0) while a fresh instance of it ran in the parallel phase and reproduced 8
+// CAS NotFound failures. `\\bimport\\b` plus `from\\s*` covers every spacing including none, and the
+// bare form is no longer line-anchored for the same reason (a minifier puts it mid-line).
+const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-packages)[^"'\n]*["']`;
+// A STRING NAMING THE GENERATOR IS A HAZARD, WHATEVER SYNTAX CARRIES IT (cap-astra round 5, coord-
+// endorsed). Every earlier version of this rule modelled WHICH syntax could load the generator — the
+// line shape, then spacing, then comments, then quote delimiters — and each round found the shape
+// that was not modelled. Round 5's was a NO-SUBSTITUTION TEMPLATE: `import(`build-…`)` loads the
+// module exactly like a quoted string, the quote-only class called it safe, and the reviewer planted
+// one that reproduced EIGHT CAS NotFound in the parallel phase while this census reported 6/0.
+//
+// The taxonomy is therefore GONE rather than extended. If the file names the generator or build.mjs
+// at all — in an import, a require, a re-export, a bare string, a template, a comment, docs prose —
+// it is a hazard and must be declared SERIAL or exempted with a reason. That over-declares, which is
+// the correct direction: the cost is a declaration a lane did not need; the alternative is a
+// generator running in the parallel phase.
+const GENERATOR_NAME_RE = /(?:build\.mjs|build-bundled-tool-packages)/;
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
 const READ_RE = /readTextFile|readFile|readFileSync|readDir|readdir|import\s*\(|\bfrom\s*["']/i;
@@ -95,9 +159,31 @@ function writesTree(text) {
 export function classifyHazards(text) {
   const classes = [];
   if (SPAWN_RE.test(text) && BUILD_REF_RE.test(text)) classes.push("spawns build.mjs or the bundled-tool generator");
+  if (GENERATOR_NAME_RE.test(text)) classes.push("names build.mjs or the bundled-tool generator (a load hazard whatever the syntax)");
   if (writesTree(text)) classes.push("writes under extension/ or packages/");
   if (READ_RE.test(text) && DIST_LITERAL_RE.test(text)) classes.push("reads extension/dist");
   return classes;
+}
+
+/**
+ * THE GUARD'S INVARIANT, as a pure function (4lc0 re-review): every content hazard must be in SERIAL
+ * or carry a reviewed EXEMPTIONS reason. Extracted so the real census check and the fresh-instance
+ * gate test the SAME rule — the first version of the gate proved the classifier on a path it only
+ * claimed, and bypassing the census left all six guard tests green (cap-astra, 2026-09-24).
+ * `entries` are [repoRelativePath, content] pairs; the result is the hazard files that would run in
+ * the PARALLEL phase, so an empty result is the safe answer.
+ */
+export function unserialisedHazards(entries) {
+  const violations = [];
+  for (const [rel, text] of entries) {
+    const classes = classifyHazards(text);
+    if (!classes.length) continue; // safe → defaults to the parallel phase
+    if (SERIAL.has(rel)) continue;
+    const reason = EXEMPTIONS[rel];
+    if (typeof reason === "string" && reason.trim().length > 0) continue;
+    violations.push(`${rel} — ${classes.join("; ")}`);
+  }
+  return violations;
 }
 
 // Split a list of test files (repo-relative) into the two phases, preserving

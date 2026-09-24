@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.486] — 2026-09-24
+- round 5: the syntax taxonomy is DELETED, and the delimiter class is proved by LOADING
+
 ## [0.3.485] — 2026-09-24
 - external agent runs now run and display browser tool calls in the conversation
 
