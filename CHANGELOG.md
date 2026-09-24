@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.476] — 2026-09-24
+- test real page reload in agent header rename regression
+
 ## [0.3.475] — 2026-09-23
 - agent icons in the closed sidebar are no longer cut off
 

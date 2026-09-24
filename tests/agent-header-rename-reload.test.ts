@@ -155,8 +155,12 @@ Deno.test({
       }, resolve))`);
       assertEquals(updated?.ok, true, "Named agent update must succeed");
 
-      // 4. Reload page on the agent hash route (the exact 7zf0 defect trigger where stale history.state was preserved)
-      await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html#agent=named:agent-7zf0-browser` }, sessionId);
+      // Assert stale-name state remains the reload precondition
+      const stateBeforeReload = await ev("window.history?.state?.name");
+      assertEquals(stateBeforeReload, "ZZZ Original Name", "Stale name must remain in history.state prior to reload");
+
+      // 4. Real reload of the page (preserving session history with the stale history.state precondition)
+      await send("Page.reload", {}, sessionId);
       await new Promise((r) => setTimeout(r, 2000));
 
       const titleAfter = await ev("document.getElementById('thread-title')?.textContent");
