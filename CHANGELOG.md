@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.479] — 2026-09-24
+- a truncated /proc walk is retried with room, and still refuses if that fails
+
 ## [0.3.478] — 2026-09-24
 - the a11y audit uses the house profile API, and removes its profile
 
