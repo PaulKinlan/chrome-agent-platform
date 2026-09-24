@@ -120,8 +120,10 @@ Deno.test("2amt: the dispatcher refuses unknown tools and bad arguments as JSON 
   stubChrome();
   const { runBrowserToolCall } = await import("../extension/lib/browser-tools.js");
   const unknown = await runBrowserToolCall("no_such_tool", {});
-  assertStringIncludes(String(unknown.error), "unknown browser tool");
+  assertStringIncludes(String(unknown.error), 'tool "no_such_tool" is not permitted for harness execution');
   assert(Array.isArray(unknown.available), "and it lists what IS available, so the harness can retry");
+  const undeclared = await runBrowserToolCall("open_tab", { url: "https://example.com" });
+  assertStringIncludes(String(undeclared.error), 'tool "open_tab" is not permitted for harness execution');
   const badArgs = await runBrowserToolCall("group_tabs", { tabIds: [] }); // schema says min 1
   assertStringIncludes(String(badArgs.error), "invalid arguments");
   assert(badArgs.details !== undefined, "the zod issues are passed back for the caller to fix");

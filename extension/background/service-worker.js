@@ -6156,13 +6156,13 @@ function isOwnerPrincipal(ctx) {
 }
 
 const handlers = mergeRouteMaps(
-  // THE ACP HARNESS'S BROWSER-TOOL CALLS (chrome-agent-platform-2amt). The client that receives
-  // browser/call_tool is a page-context module, and page context must NOT import browser-tools.js
-  // — agent-loop.js states the rule ("those are SW authority") — so it messages the SW, which owns
-  // the toolset AND its grants. The harness's reach is therefore exactly the SW's authority: no new
-  // authority is created by proxying, it is only reached from one more caller.
+  // THE ACP HARNESS'S BROWSER-TOOL CALLS (chrome-agent-platform-2amt). Fenced with isOwnerPrincipal
+  // (OWNER_EXTENSION_FENCED): callable by extension surfaces (hub, sidepanel), but rejected for pages.
   {
-    "browser.callTool": async (message) => runBrowserToolCall(message?.name, message?.args ?? {}),
+    "browser.callTool": async (message, context) => {
+      if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+      return runBrowserToolCall(message?.name, message?.args ?? {});
+    },
   },
   activityRoutes,
   schedulerRoutes,

@@ -2209,14 +2209,23 @@ async function resolveFsTarget(grantId) {
  * Unknown tool and invalid arguments return `{ error }` rather than throwing, because a harness sees
  * a JSON result and a thrown exception would arrive as a protocol error with no way to correct it.
  */
+export const HARNESS_PERMITTED_BROWSER_TOOLS = new Set([
+  "list_tabs",
+  "group_tabs",
+  "ungroup_tabs",
+]);
+
 export async function runBrowserToolCall(name, args = {}) {
   if (typeof name !== "string" || name.length === 0) {
-    return { error: "browser/call_tool needs a tool name", available: Object.keys(browserToolset()) };
+    return { error: "browser/call_tool needs a tool name", available: [...HARNESS_PERMITTED_BROWSER_TOOLS].sort() };
+  }
+  if (!HARNESS_PERMITTED_BROWSER_TOOLS.has(name)) {
+    return { error: `tool "${name}" is not permitted for harness execution`, available: [...HARNESS_PERMITTED_BROWSER_TOOLS].sort() };
   }
   const tools = browserToolset();
   const tool = tools[name];
   if (!tool) {
-    return { error: `unknown browser tool: ${name}`, available: Object.keys(tools).sort() };
+    return { error: `unknown browser tool: ${name}`, available: [...HARNESS_PERMITTED_BROWSER_TOOLS].sort() };
   }
   let parsed = args;
   if (tool.inputSchema && typeof tool.inputSchema.safeParse === "function") {
