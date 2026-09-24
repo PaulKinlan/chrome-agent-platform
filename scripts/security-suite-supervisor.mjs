@@ -423,6 +423,17 @@ if (interruptedSignal) {
 if (termination.survived) exitCode = 72;
 if (residue.length > 0) exitCode = 70;
 if (!cleanup.ok) exitCode = 71;
+// A teardown that THREW is a genuine custody refusal (EPERM, an identity change),
+// not one of the two benign races. Before 8ixk it escaped as an uncaught rejection:
+// the supervisor exited 1 and wrote no receipt. terminateAttestedGroupSafely now
+// keeps the receipt, so the non-zero exit has to be restored explicitly — otherwise
+// a real refusal becomes a pass-with-a-note, which is a LOOSENING of a fail-closed
+// path that no reviewer or owner approved. Prior behaviour is preserved verbatim
+// rather than re-decided here; whether a dedicated code in the 70/71/72 family is
+// better than 1 is a desk/owner decision, not an inference from this change.
+// Only applied when the run would otherwise have passed, so a runner's own failure
+// code is never masked.
+if (termination.teardownThrew && exitCode === 0) exitCode = 1;
 
 const receipt = {
   schemaVersion: 1,

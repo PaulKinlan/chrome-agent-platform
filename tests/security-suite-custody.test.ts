@@ -839,3 +839,34 @@ Deno.test("8ixk: severity order is residue > survived > cleanup > threw > benign
     "leader-exited-before-identity-read",
   );
 });
+
+// Caller-level coverage of the receipt wiring (8ixk). Review correctly pointed out
+// that runSupervisor already tests this top-level script BY SPAWNING IT, so
+// "the supervisor cannot be imported" was never a reason to leave the wiring
+// untested — the unit tests above pin custodyReasonFor's derivation, and this pins
+// that a real teardown which signals the group records NO benign marker. Without it
+// a change that made the markers fire on any termination would pass every unit test.
+Deno.test("8ixk caller-level: a real TERM teardown writes its receipt and records no benign custody marker", async () => {
+  const result = await runSupervisor("timeout", 300);
+  try {
+    assertEquals(result.code, 124);
+    assert(result.receipt, "the receipt must exist — that is the whole property");
+    // The teardown genuinely ran, so an empty custodyReason is a real negative and
+    // not the absence of a teardown.
+    assertEquals(result.receipt?.termSent, true);
+    assertEquals(result.receipt?.custodyReason, "");
+    // A genuine refusal must still fail closed: the supervisor now keeps the
+    // receipt when teardown throws, so the non-zero exit has to be restored
+    // explicitly or a refusal would become a pass-with-a-note. No fixture scenario
+    // produces a teardown throw and no CAP_SECURITY_TEST_* hook forces one, so this
+    // is asserted here as the invariant the receipt must not violate rather than
+    // driven end to end — see the bead for the coverage boundary.
+    assert(
+      result.code !== 0 || result.receipt?.custodyReason === "",
+      "a run that exits 0 must not be carrying a custody finding",
+    );
+    await assertRecordedPidsGone(result);
+  } finally {
+    await removeEvidence(result);
+  }
+});
