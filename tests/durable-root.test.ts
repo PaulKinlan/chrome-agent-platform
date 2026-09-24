@@ -125,7 +125,11 @@ const ALLOWED_FILES = new Set([
   // Ephemeral Chrome profiles / per-run artifact dirs owned by acceptance and
   // KAT runners — script-lived scratch, never retained evidence (each file's
   // RETAINED evidence dir is durableDir-routed).
-  "scripts/a11y-audit.ts",
+  // tuw7: the a11y audit was REMOVED from this allowance — it used to make an uncleaned temporary
+  // profile (thirteen directories, 71 MB of residue). It now uses the house profile API under the
+  // durable root and removes it in its own teardown, so this guard catches a regression here rather
+  // than permitting it. (Writing that sentence with the old path literal tripped this very guard,
+  // which is the behaviour we want from a text scan.)
   "scripts/agent-directory-ui.ts",
   "scripts/agent-provider-picker.ts",
   "scripts/agent-role-preview.ts",

@@ -17,6 +17,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { chromeProfileDir, pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
 import { composerInput, composerPopup } from "./lib/composer-target.ts";
 import { makeChecker } from "./lib/expected-red.ts";
 
@@ -45,9 +46,15 @@ type Cdp = {
 
 // Launch Chrome with the extension through the shared launcher (the port is
 // kernel-assigned and read back from this child's own stderr) + connect.
-async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: number; close: () => void }> {
-  const tmp = await Deno.makeTempDir({ prefix: "cap-a11y-" });
-  const chrome = await launchChrome({ extension: EXT, profile: tmp, windowSize: "1440,900" });
+async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: number; close: () => Promise<void> }> {
+  // THE HOUSE PROFILE API, NOT a system temp directory (chrome-agent-platform-tuw7): this used to
+  // create an uncleaned temporary profile and never remove it — thirteen directories, 71 MB of
+  // residue, on a machine whose temp filesystem is a 46 GB RAM-backed mount that suites have already
+  // exhausted once (bead chp). A Chrome profile is exactly the scratch that does not belong there.
+  // chromeProfileDir() puts it under the durable root, outside the repo, attributed to "a11y", and
+  // refuses a RAM-backed or in-repo location outright.
+  const profile = chromeProfileDir("a11y");
+  const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1440,900" });
   const client = await openCdp(chrome.wsUrl);
   const send = async (method: string, params: unknown, sessionId?: string): Promise<any> =>
     (await client.send(method, params, sessionId)).result;
@@ -64,7 +71,31 @@ async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; port: numb
     }
     return r?.result?.value;
   };
-  return { proc: chrome.proc, cdp: { send, evl }, port: chrome.port, close: client.close };
+  return {
+    proc: chrome.proc,
+    cdp: { send, evl },
+    port: chrome.port,
+    // The profile goes with the client. `close()` is the audit's own teardown and every exit path
+    // runs it (the finally in main), so this is where the directory stops existing; a run that is
+    // KILLED instead leaves it for pruneChromeProfileDirs(), whose 6 h threshold means a live
+    // profile is never touched.
+    close: async () => {
+      try { client.close(); } catch { /* already closed */ }
+      // Reports only whether it went: the caller killed the browser first, so a failure here is a
+      // real leftover rather than a race with Chrome — and saying so beats swallowing it.
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        try { await Deno.remove(profile, { recursive: true }); return; } catch (e) {
+          const code = (e as Deno.errors.NotFound)?.name;
+          if (code === "NotFound") return; // gone: nothing to report
+          if (attempt === 5) {
+            console.log(`a11y-audit: could not remove the profile ${profile} after 5 attempts: ${String((e as Error)?.message ?? e)} — pruneChromeProfileDirs() removes it later; this line exists so the next reader knows why it is there.`);
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 200 * attempt)); // a helper may still be closing files
+        }
+      }
+    },
+  };
 }
 
 async function extId(cdp: Cdp): Promise<string> {
@@ -334,6 +365,10 @@ function serveDocs(): Promise<{ url: string; close: () => Promise<void> }> {
 }
 
 async function main() {
+  // The backstop for a run that was killed rather than finished: older profiles in the shared root
+  // are pruned, exactly as scripts/kat-runner.ts does once per run. Cheap, and never touches a live
+  // browser because a live profile is newer than the threshold.
+  await pruneChromeProfileDirs().catch(() => { /* hygiene, never a gate */ });
   const { proc, cdp, port, close } = await launch();
   (cdp as any).port = port;
   const docs = await serveDocs();
@@ -581,8 +616,19 @@ async function main() {
       error instanceof Error ? (error.stack ?? error.message) : String(error),
     );
   } finally {
-    close();
-    try { proc.kill("SIGKILL"); } catch { /* dead */ }
+    // ORDER AND SCOPE BOTH MATTER, and the first two versions of this fix got one wrong each:
+    // removing the profile while the browser held it left it half-deleted, and killing only the
+    // DIRECT child left Chrome's helper processes writing into it — `Deno.remove(recursive)` then
+    // failed with "Directory not empty (os error 39)" and the directory survived (observed twice in
+    // the durable root after green runs). So: kill the PROCESS GROUP (pozs: a helper outliving the
+    // parent is exactly how a profile keeps being written), wait, then remove with a bounded retry —
+    // and if it still will not go, say so, because pruneChromeProfileDirs() takes it later and a
+    // silent failure is how this bead started.
+    if (proc.pid) {
+      try { process.kill(-proc.pid, "SIGKILL"); } catch { try { proc.kill("SIGKILL"); } catch { /* dead */ } }
+    }
+    await proc.status.catch(() => { /* already reaped */ });
+    await close();
     await docs.close();
   }
 

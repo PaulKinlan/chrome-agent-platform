@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.478] — 2026-09-24
+- the a11y audit uses the house profile API, and removes its profile
+
 ## [0.3.477] — 2026-09-24
 - agent-opened pages can now open side-by-side with your tab (Tabs Split View, Chrome 155+)
 
