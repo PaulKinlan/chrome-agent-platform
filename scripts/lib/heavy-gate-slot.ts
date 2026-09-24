@@ -323,13 +323,21 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
     // when our backstop deadline passed) is genuine contention.
     let exitCode: number | null = null;
     let exitSignal: string | null = null;
+    // CLEARED IN A finally (k9i3): the clear used to sit on the success line after `await
+    // child.status`, so a rejection on that await (the helper already reaped, ECHILD) left a
+    // 1.5 s timer pending — the same shape as the acquisition timer this bead is about, and the
+    // acceptance asks for the clear on success AND error. The acquisition timer above has been
+    // cleared in a finally since the original 0lj3 landing (9811e07c); this is the one that was
+    // still on the success path.
+    let backstop: ReturnType<typeof setTimeout> | undefined;
     try {
-      const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 1500);
+      backstop = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 1500);
       const status = await child.status;
-      clearTimeout(timer);
       exitCode = status.code;
       exitSignal = status.signal;
-    } catch { /* reaped */ }
+    } catch { /* reaped */ } finally {
+      if (backstop !== undefined) clearTimeout(backstop);
+    }
     let errText = "";
     try {
       errText = (await new Response(child.stderr).text()).trim();

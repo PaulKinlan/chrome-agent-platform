@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.477] — 2026-09-24
+- clear every timer the acquisition creates, on success and on error
+
 ## [0.3.476] — 2026-09-24
 - SETUP vs CONTENTION is decided by flock's status pair, not by scanning its message
 

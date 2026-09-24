@@ -652,3 +652,90 @@ console.log(JSON.stringify(out));
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+// ── k9i3: nothing the acquisition creates may outlive it ──────────────────────
+// The cited defect (an acquisition timer keeping a standalone subprocess alive for the whole
+// bound) is already cleared in a `finally` since the original 0lj3 landing, and the drill above
+// ("does not delay process exit") asserts exactly that — measured: a child with a 60 s bound
+// acquires, releases and the whole process exits in 0.041 s. What was NOT covered is the same
+// property on the two ERROR paths, where a leaked timer would hang a gate that never even
+// started. These two children hold a long bound and must still exit on their own.
+
+Deno.test("k9i3 drill: a REFUSED acquisition exits promptly, without an outer kill", async () => {
+  // The refusal path is where the helper's status is awaited under a backstop timer, and where a
+  // caller with a 20-minute bound would sit if anything were left pending. The child is refused
+  // by a holder in THIS process, then must exit by itself.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-refused-" });
+  const slotPath = `${dir}/gate.lock`;
+  const holder = await acquireHeavyGateSlot({ gate: "k9i3-holder", kind: "gate", boundMs: 3000, slot: { slotPath }, onWait: () => {}, onAcquired: () => {} });
+  const script = `${dir}/refused.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+const t0 = Date.now();
+let verdict = "acquired";
+try {
+  const lease = await acquireHeavyGateSlot({ gate: "k9i3-refused", kind: "gate", boundMs: 800, slot: { slotPath: Deno.args[0] }, onWait: () => {}, onAcquired: () => {} });
+  lease.release();
+} catch (e) { verdict = e?.name ?? "?"; }
+console.log(JSON.stringify({ verdict, ms: Date.now() - t0 }));
+`);
+  try {
+    const t0 = Date.now();
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, slotPath],
+      cwd: ROOT, stdout: "piped", stderr: "piped",
+    }).spawn();
+    const { code, stdout } = await child.output();
+    const elapsed = Date.now() - t0;
+    assertEquals(code, 0, "the refused child exited cleanly");
+    const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
+    assertEquals(out.verdict, "HeavyGateSlotRefusedError", `the child must report refusal, got ${JSON.stringify(out)}`);
+    assert(elapsed < 10_000, `the refused child took ${elapsed} ms to exit (${JSON.stringify(out)}) — a leaked timer must not hold it`);
+  } finally {
+    holder.release();
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("k9i3 drill: a SETUP-FAILED acquisition with a LONG bound exits promptly", async () => {
+  // The sharpest version: a 60 s bound that is never used (the helper fails immediately), so any
+  // timer created for the read would hold the process for a minute. The failure is a lock path
+  // whose parent is missing — a setup fault, not contention.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-k9i3-setup-" });
+  const script = `${dir}/setup-fail.mjs`;
+  await Deno.writeTextFile(script, `
+import { acquireHeavyGateSlot } from ${JSON.stringify(`${ROOT}scripts/lib/heavy-gate-slot.ts`)};
+const t0 = Date.now();
+let verdict = "acquired";
+try {
+  const lease = await acquireHeavyGateSlot({ gate: "k9i3-setup", kind: "gate", boundMs: 60000, slot: { slotPath: Deno.args[0] }, onWait: () => {}, onAcquired: () => {} });
+  lease.release();
+} catch (e) { verdict = e?.name ?? "?"; }
+console.log(JSON.stringify({ verdict, ms: Date.now() - t0 }));
+`);
+  try {
+    const t0 = Date.now();
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", "--no-check", script, `${dir}/missing/gate.lock`],
+      cwd: ROOT, stdout: "piped", stderr: "piped",
+    }).spawn();
+    const { code, stdout } = await child.output();
+    const elapsed = Date.now() - t0;
+    assertEquals(code, 0, "the setup-failed child exited cleanly");
+    const out = JSON.parse(new TextDecoder().decode(stdout).trim().split("\n").pop() ?? "{}");
+    assertEquals(out.verdict, "HeavyGateSlotSetupError", `the child must report a setup fault, got ${JSON.stringify(out)}`);
+    assert(
+      elapsed < 10_000,
+      `the setup-failed child took ${elapsed} ms with a 60 s bound (${JSON.stringify(out)}) — anything it created must be cleared before it exits`,
+    );
+    // WHAT THIS DOES AND DOES NOT PIN, stated so nobody reads more into it than it delivers:
+    // measured 72 ms here, so it catches a timer that holds the process for a *long* time on this
+    // path (the cited 20-minute shape), which is the point. It does NOT pin the helper's 1500 ms
+    // backstop watchdog: that one is only left pending if `await child.status` REJECTS (already
+    // reaped), which no fixture here could stage — so that fix is defensive, and this drill is not
+    // its proof. The sharp drill for the cited defect is the success-path one above, where removing
+    // the acquisition timer's clear makes it hang for the whole 60 s bound (measured: RED at 62 s).
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
