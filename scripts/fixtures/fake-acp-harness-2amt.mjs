@@ -11,6 +11,22 @@
 //   4. call group_tabs with a title and colour, and record the answer;
 //   5. answer the prompt.
 //
+// chrome-agent-platform-wfo5 EXTENDS the drive past those two tools. Before wfo5 only THREE of 135
+// browser tools were callable by a harness, so steps 2-4 above proved the proxy works for the three
+// that already worked and said nothing about the other 132. The drive now also calls:
+//   open_tab            — a MUTATION previously refused by the allow-list; the tab is then asserted
+//                         through Chrome's own tabs.query in the service worker, not from this
+//                         fixture's own say-so;
+//   read_page           — a READ through chrome.scripting on that tab;
+//   capture_screenshot  — a large/binary payload over the same JSON-RPC channel (list_tabs never
+//                         exercised one);
+//   get_system_memory   — needs NO browser-control grant, so a failure there isolates the PROXY
+//                         from the permission machinery;
+//   close_tab           — a GATED tool, asserted to come back as a bounded approval refusal rather
+//                         than a silent mutation. That is the safety half of wfo5 and it needs
+//                         browser evidence too, not only a unit test.
+// Every one of those is recorded verbatim so the drive can assert on the REAL reply.
+//
 // NODE APIs ONLY, deliberately: the bridge spawns adapters with node (an earlier version of this
 // fixture used Deno.stdin/stdout and died instantly with "adapter for harness \"pi\" exited").
 import { writeFileSync } from "node:fs";
@@ -19,7 +35,14 @@ const send = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 // The drive passes the path through the bridge's environment (the bridge spawns `node <adapter>`,
 // so there is no argv slot for it).
 const reportPath = process.env.CAP_2AMT_REPORT || process.argv[2] || "./fake-acp-harness-2amt.report.json";
-const report = { sawDeclaration: false, listTabs: null, groupTabs: null, events: [] };
+const report = {
+  sawDeclaration: false,
+  listTabs: null,
+  groupTabs: null,
+  events: [],
+  // wfo5: the newly-permitted calls, each recorded whole.
+  wfo5: { declaredCount: 0, openTab: null, readPage: null, screenshot: null, systemMemory: null, closeForeignTab: null },
+};
 const pending = new Map(); // id -> resolve
 let promptId = null;
 let sessionId = null;
@@ -61,6 +84,10 @@ process.stdin.on("data", async (chunk) => {
       promptId = msg.id;
       const text = (msg.params?.prompt ?? []).map((b) => (b && b.text) || "").join("\n");
       report.sawDeclaration = /browser\/call_tool/.test(text) && /list_tabs/.test(text) && /group_tabs/.test(text);
+      // wfo5: how many tools the harness was actually TOLD about. Before wfo5 this was 3; the
+      // drive asserts it is now the whole toolset, because a tool the harness is never told about
+      // is not available to it in any useful sense.
+      report.wfo5.declaredCount = (text.match(/^- [a-z_]+\(/gm) || []).length;
       const callTool = (name, args) =>
         new Promise((resolve) => {
           const id = "tool-" + name + "-" + Math.random().toString(16).slice(2);
@@ -77,6 +104,65 @@ process.stdin.on("data", async (chunk) => {
       const ids = (report.listTabs.ids || []).slice(-2);
       const grouped = await callTool("group_tabs", { tabIds: ids, title: "2amt drive", color: "blue" });
       report.groupTabs = { requested: ids, result: grouped || null };
+
+      // ── wfo5: the newly-permitted tools, in a real browser, over the real proxy ──────────────
+      // The property every one of these asserts is the SAME: the reply must not be
+      // 'is not permitted for harness execution'. That string was the only answer 132 of these
+      // tools could give before this change, so its absence is the thing being proven.
+      const OPENED = "https://example.com/?wfo5=opened";
+      report.wfo5.openTab = await callTool("open_tab", { url: OPENED });
+      const openedTabId = report.wfo5.openTab && report.wfo5.openTab.tabId;
+
+      // WAIT FOR THE NAVIGATION TO COMMIT before reading the page.
+      //
+      // MEASURED (first run of this drive: 19 passed / 2 failed): open_tab returns as soon as the
+      // tab EXISTS, and a brand-new tab has an empty `url` until the navigation commits. read_page
+      // and capture_screenshot both derive the origin from that url, so they refused with
+      // "cannot read the page: the tab's address could not be read" and "only available on http(s)
+      // pages" — the tools behaving correctly on a tab that had no address yet. That was MY drive's
+      // bug, not a product defect, and the fix is to wait rather than to weaken the assertion.
+      //
+      // Polled through list_tabs — the proxy itself — rather than slept: a fixed sleep is a race on
+      // a loaded box, and polling additionally proves the tool chain answers repeatedly within one
+      // turn. Bounded at ~10s so a genuinely broken navigation still fails the drive instead of
+      // hanging it.
+      let openedUrl = null;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const tabs = await callTool("list_tabs", {});
+        const mine = (Array.isArray(tabs && tabs.tabs) ? tabs.tabs : [])
+          .find((t) => t && (openedTabId ? t.id === openedTabId : String(t.url ?? "").includes("wfo5=opened")));
+        if (mine && String(mine.url ?? "").startsWith("http")) { openedUrl = mine.url; break; }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      report.wfo5.openedUrlSettled = openedUrl;
+
+      // Read THAT tab (the one this run opened), not an arbitrary one.
+      report.wfo5.readPage = await callTool("read_page", openedTabId ? { tabId: openedTabId } : {});
+      const shot = await callTool("capture_screenshot", openedTabId ? { tabId: openedTabId } : {});
+      // The data URL is megabytes; keep the SHAPE, not the bytes — the drive asserts on width/
+      // height/bytes, and carrying the payload through a JSON report file would prove nothing extra.
+      report.wfo5.screenshot = shot && typeof shot === "object"
+        ? {
+          ok: shot.ok === true,
+          error: shot.error || null,
+          width: shot.width ?? null,
+          height: shot.height ?? null,
+          bytes: shot.bytes ?? null,
+          hasImage: typeof shot.screenshot === "string" && shot.screenshot.startsWith("data:image/"),
+        }
+        : { error: "no reply" };
+
+      // No grant, no host permission: this one isolates the PROXY from the permission machinery.
+      report.wfo5.systemMemory = await callTool("get_system_memory", {});
+
+      // A GATED tool. The tab below was opened by the DRIVE, not by this run's toolset, so it is
+      // "foreign" and must take the destructive approval path — which, for a harness principal,
+      // is a bounded refusal rather than a mutation.
+      const foreign = (report.listTabs.ids || [])[0];
+      report.wfo5.closeForeignTab = foreign
+        ? { tabId: foreign, result: await callTool("close_tab", { tabId: foreign }) }
+        : { tabId: null, result: { error: "no foreign tab to try" } };
+
       try {
         writeFileSync(reportPath, JSON.stringify(report, null, 2));
       } catch {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.487] — 2026-09-24
+- the canonical browser drive now exercises newly-permitted tools, and proves a gated one still refuses
+
 ## [0.3.486] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 

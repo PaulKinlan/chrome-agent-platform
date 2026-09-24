@@ -48,7 +48,11 @@ const variantDir = durableDir("cap-2amt-variant");
 const { dir: extDir } = await buildVariant({
   srcDir: `${ROOT}extension`,
   outDir: variantDir,
-  permissions: ["tabs", "tabGroups"],
+  // wfo5: `scripting` for read_page and `system.memory` for get_system_memory — the two
+  // newly-permitted tools whose OWN Chrome permission the drive must hold for the PROXY to be the
+  // thing under test. Without them a refusal would be Chrome's, not the allow-list's, and the drive
+  // would prove nothing either way. tabs/tabGroups were already here for list_tabs/group_tabs.
+  permissions: ["tabs", "tabGroups", "scripting", "system.memory"],
 });
 
 const profile = durableDir("cap-chrome-profiles", `2amt-drive-${Deno.pid}-${Date.now()}`);
@@ -124,25 +128,45 @@ const drive = await evl(`(async () => {
 // THE GROUP IS READ IN THE SERVICE WORKER: chrome.tabGroups is not on the page's global (the page
 // threw "Cannot read properties of undefined (reading 'query')" — measured), and the SW is where the
 // extension's own tab code runs, so this is also the assertion the product would make.
+// The harness's own report is read FIRST because the wfo5 assertions below need the tab ids it
+// chose in order to ask Chrome about them.
+const report = await Deno.readTextFile(REPORTS).then((t) => JSON.parse(t)).catch(() => null);
+
 const swTarget = (await cdp("Target.getTargets")).targetInfos.find((t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"));
 let swGroup: any = null;
+let swOpened: any = null;
+let swForeign: any = null;
 if (swTarget) {
   const { sessionId: swSession } = await cdp("Target.attachToTarget", { targetId: swTarget.targetId, flatten: true });
   await cdp("Runtime.enable", {}, swSession);
-  swGroup = await cdp("Runtime.evaluate", {
-    expression: `(async () => {
+  const inWorker = (expression: string) =>
+    cdp("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, swSession)
+      .then((r: any) => r.result?.value ?? r.result?.result?.value ?? null, () => null);
+  swGroup = await inWorker(`(async () => {
       const groups = await chrome.tabGroups.query({});
       const mine = groups.find((g) => g.title === "2amt drive");
       if (!mine) return null;
       const members = (await chrome.tabs.query({ groupId: mine.id })).map((t) => t.id);
       return { id: mine.id, title: mine.title, color: mine.color, members };
-    })()`,
-    returnByValue: true, awaitPromise: true,
-  }, swSession).then((r: any) => r.result?.value ?? r.result?.result?.value ?? null, () => null);
+    })()`);
+  // wfo5: did open_tab actually open a tab? Asked of CHROME, not of the harness — a harness that
+  // reports { ok: true } having done nothing must not be able to pass this.
+  swOpened = await inWorker(`(async () => {
+      const tabs = await chrome.tabs.query({});
+      const mine = tabs.find((t) => String(t.url ?? "").includes("wfo5=opened"));
+      return { found: !!mine, id: mine?.id ?? null, url: mine?.url ?? null, total: tabs.length };
+    })()`);
+  // wfo5: and is the tab the harness tried to CLOSE still open? The refusal has to be a real
+  // non-event in the browser, not just a string in a JSON reply.
+  const foreignId = report?.wfo5?.closeForeignTab?.tabId;
+  swForeign = typeof foreignId === "number"
+    ? await inWorker(`(async () => {
+        const tab = await chrome.tabs.get(${JSON.stringify(foreignId)}).catch(() => null);
+        return { stillOpen: !!tab, id: tab?.id ?? null, url: tab?.url ?? null };
+      })()`)
+    : { stillOpen: null, reason: "the harness had no foreign tab to try" };
 }
 if (drive && typeof drive === "object") drive.group = swGroup;
-
-const report = await Deno.readTextFile(REPORTS).then((t) => JSON.parse(t)).catch(() => null);
 console.log(`  bridge log tail: ${JSON.stringify(bridgeLog.join("").slice(-800))}`);
 check("the extension page drove the real client without throwing", !drive.driveError, drive);
 check("the harness was TOLD the browser tools in its prompt", report?.sawDeclaration === true, { report });
@@ -163,6 +187,71 @@ check("chrome.tabGroups.query shows the group the harness asked for", drive?.gro
 check("the group has the colour the harness asked for", drive?.group?.color === "blue", { group: drive?.group });
 check("the group CONTAINS the tabs the harness chose", JSON.stringify([...(drive?.group?.members ?? [])].sort()) === JSON.stringify([...(report?.groupTabs?.requested ?? [])].sort()), { members: drive?.group?.members, requested: report?.groupTabs?.requested });
 check("the browser tool calls were visible to the UI as tool activity", (drive?.events ?? []).some((d: string) => /list_tabs|group_tabs/.test(String(d))), { events: drive?.events });
+
+// ── chrome-agent-platform-wfo5: the NEWLY-PERMITTED tools, driven for real ─────────────────────
+//
+// Everything above exercises list_tabs + group_tabs — the two tools that were ALREADY callable
+// before wfo5. They prove the proxy still works; they say nothing about the 132 the allow-list
+// used to refuse. These are the functional verification for the widening (merge desk, under the
+// repo's Functional Verification Mandate).
+//
+// `is not permitted for harness execution` is the exact answer every one of these gave before the
+// change, so its ABSENCE is the property under test — and for the mutating ones, Chrome's own
+// answer is the evidence, not the harness's.
+const w = report?.wfo5 ?? {};
+const refusedByAllowList = (r: unknown) =>
+  /is not permitted for harness execution/.test(String((r as { error?: string })?.error ?? ""));
+
+check("the harness is TOLD the whole toolset, not a three-tool sample", (w.declaredCount ?? 0) > 100, { declaredCount: w.declaredCount });
+
+check("open_tab is no longer refused by the allow-list", !refusedByAllowList(w.openTab), { openTab: w.openTab });
+check("CHROME ITSELF shows the tab the harness opened", swOpened?.found === true, { swOpened, harnessSaid: w.openTab });
+
+// The navigation must have COMMITTED before the two page-reading tools run. Asserted separately so
+// a future failure here says "the tab never loaded" instead of looking like a read_page defect —
+// which is exactly how the first run of this drive read (19/21).
+check(
+  "the tab the harness opened reached a real http(s) address before it was read",
+  String(w.openedUrlSettled ?? "").includes("wfo5=opened"),
+  { openedUrlSettled: w.openedUrlSettled },
+);
+
+check("read_page is no longer refused by the allow-list", !refusedByAllowList(w.readPage), { readPage: w.readPage });
+check(
+  "read_page returned the REAL page, tagged untrusted",
+  w.readPage?.untrusted === true && String(w.readPage?.url ?? "").includes("wfo5=opened"),
+  { untrusted: w.readPage?.untrusted, url: w.readPage?.url, title: w.readPage?.title, textLen: String(w.readPage?.text ?? "").length, error: w.readPage?.error },
+);
+
+check("capture_screenshot is no longer refused by the allow-list", !refusedByAllowList(w.screenshot), { screenshot: w.screenshot });
+check(
+  "capture_screenshot returned real PNG bytes with real dimensions",
+  w.screenshot?.ok === true && w.screenshot?.hasImage === true &&
+    (w.screenshot?.bytes ?? 0) > 1000 && (w.screenshot?.width ?? 0) > 0 && (w.screenshot?.height ?? 0) > 0,
+  { screenshot: w.screenshot },
+);
+
+// No grant, no host permission: this one isolates the PROXY from the permission machinery.
+check("get_system_memory is no longer refused by the allow-list", !refusedByAllowList(w.systemMemory), { systemMemory: w.systemMemory });
+check(
+  "get_system_memory returned real numbers (a tool needing no browser-control grant)",
+  typeof w.systemMemory?.capacityBytes === "number" && w.systemMemory.capacityBytes > 0,
+  { systemMemory: w.systemMemory },
+);
+
+// THE SAFETY HALF of wfo5. close_tab on a tab this run did NOT open is the Destructive class, and a
+// harness caller cannot raise an approval card (principal "extension"; these action names are not
+// owner-direct). The only acceptable outcomes are a refusal — never a closed tab.
+check(
+  "a GATED tool does not silently mutate — close_tab on a foreign tab was REFUSED",
+  typeof w.closeForeignTab?.result?.error === "string" && w.closeForeignTab?.result?.ok !== true,
+  { closeForeignTab: w.closeForeignTab },
+);
+check(
+  "CHROME ITSELF shows the foreign tab still open after the refused close",
+  swForeign?.stillOpen === true,
+  { swForeign, attempted: w.closeForeignTab?.tabId },
+);
 }
 
 console.log(`\n=== ${pass} passed / ${fail} failed`);
