@@ -9,6 +9,7 @@ import { lstat as nodeLstat } from "node:fs/promises";
 import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 import {
   cleanupExactProfile,
+  isVanishedGroupError,
   isVanishedProcError,
   pidAlive,
   PROFILE_ROOT,
@@ -655,5 +656,102 @@ Deno.test("8ixk: an identity CHANGE is still an identity change, not a vanished 
       }),
     Error,
     "owned process-group identity changed",
+  );
+});
+
+// ── chrome-agent-platform-8ixk, second race ────────────────────────────────
+// Found by cap-astra's independent review with a LIVE owned fixture, at the
+// unchanged candidate: both kernel identity reads complete, the own child then
+// dies before completion is delivered, and process.kill(-pgid, SIGTERM) throws
+// killESRCH — which escaped uncaught, Node exited 1, and NO receipt was written.
+// A pre-existing sibling of the ENOENT race, not newly introduced, but the
+// acceptance is "an early exit leaves a receipt", which one guarded read does not
+// deliver on its own. `kill` is injected so no test ever signals a real group:
+// an impossible pgid is inside the pid range on some kernels, and guessing is not
+// acceptable in a file that owns signalling.
+const esrch = () => Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+const eperm = () => Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+const liveIdentity = {
+  pid: DEAD_PID,
+  state: "S",
+  ppid: 1,
+  pgid: DEAD_PGID,
+  sid: DEAD_PID,
+  starttime: "12345", // matches the attestation, so the identity check passes
+  uid: 0,
+};
+
+Deno.test("8ixk: isVanishedGroupError accepts ONLY ESRCH", () => {
+  assertEquals(isVanishedGroupError(esrch()), true);
+  assertEquals(isVanishedGroupError(eperm()), false);
+  assertEquals(isVanishedGroupError(coded("ENOENT")), false);
+  assertEquals(isVanishedGroupError(new Error("kill EINVAL")), false);
+  assertEquals(isVanishedGroupError(null), false);
+});
+
+Deno.test("8ixk: a group that dies before SIGTERM reaches it is benign and recorded, not an uncaught ESRCH", async () => {
+  const result = await terminateAttestedGroup({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.resolve(liveIdentity),
+    isAlive: () => true, // alive at the entry check, so the kill is reached
+    kill: () => {
+      throw esrch();
+    },
+  });
+  assertEquals(result, {
+    termSent: false,
+    killSent: false,
+    survived: false,
+    groupGoneBeforeSignal: true,
+  });
+});
+
+Deno.test("8ixk: a group that dies during the SIGTERM wait is benign at the SIGKILL escalation too", async () => {
+  let calls = 0;
+  const result = await terminateAttestedGroup({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 20,
+    killWaitMs: 20,
+    readIdentity: () => Promise.resolve(liveIdentity),
+    isAlive: () => true, // never reports gone, so the escalation is reached
+    // @types/node declares process.kill as returning the literal `true` (it either
+    // returns true or throws), so an injected stand-in has to match that signature.
+    kill: (): true => {
+      calls += 1;
+      if (calls === 1) return true; // SIGTERM "succeeds"
+      throw esrch(); // SIGKILL finds nothing
+    },
+  });
+  assertEquals(result, {
+    termSent: true,
+    killSent: false,
+    survived: false,
+    groupGoneBeforeSignal: true,
+  });
+  assertEquals(calls, 2);
+});
+
+Deno.test("8ixk: a REFUSAL to signal (EPERM) still propagates — only ESRCH is benign", async () => {
+  // The fail-closed boundary for this race: not being allowed to touch a group is
+  // a real custody finding and must not be laundered into "it already exited".
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 20,
+        killWaitMs: 20,
+        readIdentity: () => Promise.resolve(liveIdentity),
+        isAlive: () => true,
+        kill: () => {
+          throw eperm();
+        },
+      }),
+    Error,
+    "EPERM",
   );
 });

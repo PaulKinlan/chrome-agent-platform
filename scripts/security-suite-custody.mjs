@@ -74,6 +74,15 @@ export function isVanishedProcError(error) {
   return error?.code === "ENOENT";
 }
 
+/** True only when a signal found NO SUCH PROCESS GROUP — the group finished dying
+ *  between the alive check and the kill. Distinguished from every other kill
+ *  failure (EPERM, EINVAL), which must still propagate: refusing to signal a group
+ *  we are not allowed to touch is a real custody finding, not a benign exit.
+ *  chrome-agent-platform-8ixk. */
+export function isVanishedGroupError(error) {
+  return error?.code === "ESRCH";
+}
+
 export async function sha256File(file) {
   return createHash("sha256").update(await readFile(file)).digest("hex");
 }
@@ -327,6 +336,7 @@ export async function terminateAttestedGroup({
   killWaitMs,
   readIdentity = readProcIdentity,
   isAlive = groupAlive,
+  kill = process.kill,
 }) {
   const pgid = attestation.identity.pgid;
   const leaderStart = attestation.identity.starttime;
@@ -373,11 +383,39 @@ export async function terminateAttestedGroup({
     ) throw error;
   }
 
-  process.kill(-pgid, "SIGTERM");
-  const termGone = await waitUntil(() => groupAlive(pgid), termWaitMs);
+  // The group can vanish between the alive check above and this signal — which is
+  // the outcome termination WANTED, not an error. ESRCH here used to escape as an
+  // uncaught rejection, so the run left NO receipt at all and its death read as
+  // environmental (8ixk; reproduced independently in review with a live owned
+  // fixture: both identity reads complete, the child then dies before completion
+  // is delivered, process.kill throws killESRCH, Node exits 1, no result).
+  try {
+    kill(-pgid, "SIGTERM");
+  } catch (error) {
+    if (!isVanishedGroupError(error)) throw error;
+    return {
+      termSent: false,
+      killSent: false,
+      survived: false,
+      groupGoneBeforeSignal: true,
+    };
+  }
+  const termGone = await waitUntil(() => isAlive(pgid), termWaitMs);
   if (termGone) return { termSent: true, killSent: false, survived: false };
-  process.kill(-pgid, "SIGKILL");
-  const killGone = await waitUntil(() => groupAlive(pgid), killWaitMs);
+  // Same race on the escalation: the group can finish dying during the SIGTERM
+  // wait, so SIGKILL can also find nothing to signal.
+  try {
+    kill(-pgid, "SIGKILL");
+  } catch (error) {
+    if (!isVanishedGroupError(error)) throw error;
+    return {
+      termSent: true,
+      killSent: false,
+      survived: false,
+      groupGoneBeforeSignal: true,
+    };
+  }
+  const killGone = await waitUntil(() => isAlive(pgid), killWaitMs);
   return { termSent: true, killSent: true, survived: !killGone };
 }
 

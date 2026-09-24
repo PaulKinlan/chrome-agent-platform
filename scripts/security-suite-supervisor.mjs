@@ -320,9 +320,31 @@ const trigger = await Promise.race([
 ]);
 const timedOut = trigger.kind === "timeout";
 let outcome = trigger;
-let termination = { termSent: false, killSent: false, survived: false, leaderExited: false };
+let termination = { termSent: false, killSent: false, survived: false, leaderExited: false, groupGoneBeforeSignal: false, teardownThrew: "" };
+
+// A teardown that throws must NOT take the receipt with it. The whole point of the
+// custody chain is that every run leaves an attested verdict; an uncaught rejection
+// from here leaves an evidence directory with no CAP_SECURITY_RESULT, and a death
+// with no receipt gets attributed to the environment because there is nothing left
+// to read (8ixk). The known races are now handled inside terminateAttestedGroup, but
+// the guarantee is structural rather than an enumeration: whatever throws, the
+// receipt is still written and says what happened. This does NOT change any exit
+// code — a non-ESRCH teardown throw is a genuine attestation refusal and the desk
+// owns whether it should also fail the run; today it is at least visible.
+const terminateAttestedGroupSafely = async (args) => {
+  try {
+    return await terminateAttestedGroup(args);
+  } catch (error) {
+    return {
+      termSent: false,
+      killSent: false,
+      survived: false,
+      teardownThrew: String(error?.message ?? error).slice(0, 200),
+    };
+  }
+};
 if (trigger.kind === "timeout" || trigger.kind === "supervisor-signal") {
-  termination = await terminateAttestedGroup({
+  termination = await terminateAttestedGroupSafely({
     attestation,
     observed,
     termWaitMs: config.termWaitMs,
@@ -341,7 +363,7 @@ clearInterval(monitor);
 while (sampling) await new Promise((resolve) => setTimeout(resolve, 5));
 
 if (groupAlive(attestation.identity.pgid)) {
-  const extra = await terminateAttestedGroup({
+  const extra = await terminateAttestedGroupSafely({
     attestation,
     observed,
     termWaitMs: config.termWaitMs,
@@ -352,6 +374,9 @@ if (groupAlive(attestation.identity.pgid)) {
     killSent: termination.killSent || extra.killSent,
     survived: termination.survived || extra.survived,
     leaderExited: termination.leaderExited || extra.leaderExited === true,
+    groupGoneBeforeSignal:
+      termination.groupGoneBeforeSignal || extra.groupGoneBeforeSignal === true,
+    teardownThrew: termination.teardownThrew || extra.teardownThrew || "",
   };
 }
 
@@ -370,6 +395,16 @@ if (residue.length > 0) custodyReason = "descendant-residue";
 // Without it the run used to leave no receipt at all (8ixk).
 if (termination.leaderExited) {
   custodyReason ||= "leader-exited-before-identity-read";
+}
+// The group finished dying before a signal reached it: benign, and recorded so the
+// receipt distinguishes "nothing needed signalling" from "we signalled it".
+if (termination.groupGoneBeforeSignal) {
+  custodyReason ||= "group-gone-before-signal";
+}
+// Last because it is the least specific: something in teardown threw. The receipt
+// still exists, which is the property this file exists for.
+if (termination.teardownThrew) {
+  custodyReason ||= `teardown-threw:${termination.teardownThrew}`;
 }
 
 const cleanup = await cleanupExactProfile({ profile, root: PROFILE_ROOT });
