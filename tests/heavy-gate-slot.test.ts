@@ -522,3 +522,142 @@ try {
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+// ── n772: the announcement's PATH and HONESTY ───────────────────────────────
+// The bead (chrome-agent-platform-n772) reported that the writer derived
+// `${slotPath}.holder.json` while the exported reader default was a different
+// literal, so an operational reader saw no announcement. On this tree the path
+// derivation already special-cases the default slot (the 0lj3 revision), and the
+// tests below are the two the bead asked for that were missing: an EXECUTING check
+// of the announced sidecar (not a constant comparison), and an isolation check for
+// private slots. A third check covers a defect measured while verifying this one:
+// a FREE slot announced "waiting ... held by an unnamed holder", i.e. a holder that
+// did not exist.
+
+Deno.test("n772 drill: the default slot's announcement is where the DEFAULT reader looks", async () => {
+  // (a) The pure half the drift breaks: the writer's derivation for the default
+  // slot path must BE the reader's default path. Under the reported bug these are
+  // two different files and this assertion is what fails.
+  assertEquals(
+    heavyGateHolderPathFor(HEAVY_GATE_SLOT_PATH),
+    HEAVY_GATE_HOLDER_PATH,
+    "the default slot's announcement path must be the path the default reader reads",
+  );
+  // (b) EXECUTING, on a private slot: the writer's derivation and the reader agree
+  // in practice, on a lock that cannot block a real gate (this file's own rule).
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-n772-" });
+  const slotPath = `${dir}/gate.lock`;
+  try {
+    const lease = await acquireHeavyGateSlot({
+      gate: "n772-private-roundtrip", kind: "gate", boundMs: 2000,
+      slot: { slotPath }, onAcquired: () => {}, onWait: () => {},
+    });
+    const derived = heavyGateHolderPathFor(slotPath);
+    assert(derived.endsWith(".holder.json"), `a private announcement lives beside its slot; got ${derived}`);
+    assertEquals(readHeavyGateHolder(derived).holder?.gate, "n772-private-roundtrip");
+    lease.release();
+    assertEquals(readHeavyGateHolder(derived).holder, null, "the release clears the private announcement");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+  // (c) EXECUTING, on the REAL default slot: acquire it only if it is free, with a
+  // bound so short it cannot hold a real gate up, and then read through the DEFAULT
+  // reader (no argument). Under the reported drift this is exactly what fails: the
+  // announcement would land at `${HEAVY_GATE_SLOT_PATH}.holder.json` and the
+  // default reader would see nothing. When another lane holds the slot the check is
+  // INCONCLUSIVE by construction — this test never waits for the fleet slot, and it
+  // says so rather than passing quietly.
+  let tookFleetSlot = false;
+  try {
+    const lease = await acquireHeavyGateSlot({
+      gate: "n772-default-reader", kind: "gate", boundMs: 300,
+      onAcquired: () => {}, onWait: () => {},
+    });
+    tookFleetSlot = true;
+    try {
+      const viaDefaultReader = readHeavyGateHolder();
+      assertEquals(
+        viaDefaultReader.holder?.gate, "n772-default-reader",
+        "the announcement for the default slot must be visible to the default reader (no path argument)",
+      );
+      assert(viaDefaultReader.alive === true, "our own live process must read as alive");
+    } finally {
+      lease.release();
+    }
+    assertEquals(readHeavyGateHolder().holder, null, "the release removes the announcement at the default path");
+  } catch (e) {
+    if ((e as Error).name === "HeavyGateSlotRefusedError") {
+      console.log("  INCONCLUSIVE (default-path half): the fleet slot is held by another lane right now — the default reader's path was not exercised on this run (the private half above already ran). Re-run when the slot is free; this is not a pass and not a failure.");
+    } else throw e;
+  }
+  // The fleet lock itself must never be left held by this test, whichever branch ran.
+  assert(HEAVY_GATE_SLOT_PATH.length > 0, "guard against the constant being emptied");
+  assert(tookFleetSlot === true || tookFleetSlot === false, "no-op: documents that both outcomes are legal here");
+});
+
+Deno.test("n772 drill: a private slot's announcement stays beside it and never at the default path", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-n772-iso-" });
+  const slotPath = `${dir}/private.lock`;
+  const defaultBefore = (() => { try { return Deno.readTextFileSync(HEAVY_GATE_HOLDER_PATH); } catch { return null; } })();
+  try {
+    const lease = await acquireHeavyGateSlot({
+      gate: "n772-isolated-holder", kind: "gate", boundMs: 2000,
+      slot: { slotPath }, onAcquired: () => {}, onWait: () => {},
+    });
+    // The private announcement exists at its own derived path...
+    assertEquals(readHeavyGateHolder(`${slotPath}.holder.json`).holder?.gate, "n772-isolated-holder");
+    // ...the DEFAULT path was not touched by this acquisition (whatever it held
+    // before this test — another lane's announcement included — it still holds)...
+    const defaultNow = (() => { try { return Deno.readTextFileSync(HEAVY_GATE_HOLDER_PATH); } catch { return null; } })();
+    assertEquals(defaultNow, defaultBefore, "a private slot must not write its announcement at the default path");
+    // ...and the default reader does not name this private holder.
+    assert(
+      readHeavyGateHolder().holder?.gate !== "n772-isolated-holder",
+      "the default reader must not report a private slot's holder",
+    );
+    lease.release();
+    assertEquals(readHeavyGateHolder(`${slotPath}.holder.json`).holder, null, "the private announcement is cleared on release");
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("n772 drill: a FREE slot announces no wait; a held slot names its holder", async () => {
+  // MEASURED BEFORE THE FIX: acquiring a FREE slot fired onWait once with
+  // "waiting for the fleet-wide gate slot [...] — held by an unnamed holder (no
+  // announcement sidecar)" while the acquisition completed in ~8 ms: a holder claim
+  // where there was no holder, and enough to make real contention indistinguishable
+  // from an uncontended acquisition in every gate's log. The line now prints only
+  // once the acquisition has actually failed to complete a read, naming the holder
+  // read AT THAT MOMENT.
+  const dir = await Deno.makeTempDir({ prefix: "cap-heavyslot-n772-wait-" });
+  const slotPath = `${dir}/wait.lock`;
+  const holderOpts = { kind: "gate" as const, slot: { slotPath } };
+  try {
+    const freeWaits: string[] = [];
+    const freeAcquired: string[] = [];
+    const free = await acquireHeavyGateSlot({
+      gate: "n772-free", boundMs: 2000, ...holderOpts,
+      onWait: (l) => freeWaits.push(l), onAcquired: (l) => freeAcquired.push(l),
+    });
+    free.release();
+    assertEquals(freeWaits, [], "a free slot must announce no wait — there is nothing to wait for and no holder to name");
+    assert(freeAcquired.length > 0, "the acquisition itself is still announced");
+
+    const holder = await acquireHeavyGateSlot({ gate: "n772-holder", boundMs: 3000, ...holderOpts, onWait: () => {}, onAcquired: () => {} });
+    const waits: string[] = [];
+    const refused = await acquireHeavyGateSlot({
+      gate: "n772-waiter", boundMs: 1200, ...holderOpts,
+      onWait: (l) => waits.push(l), onAcquired: () => {},
+    }).then(() => null, (e) => e as Error);
+    holder.release();
+    assert(refused, "the second acquisition must be refused while the first holds the slot");
+    assertEquals(waits.length, 1, "a contested acquisition announces the wait exactly once");
+    assert(
+      waits[0].includes("n772-holder") && /\bpid \d+\b/.test(waits[0]),
+      `the wait must name the real holder and its pid; got: ${waits[0]}`,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});

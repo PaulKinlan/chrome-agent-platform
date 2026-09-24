@@ -276,28 +276,39 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
   const decoder = new TextDecoder();
   let seen = "";
   let announcedWait = false;
+  // HOW LONG WE WAIT BEFORE SAYING WE ARE WAITING. The announce used to sit at the
+  // top of the first loop iteration, before any read, so a FREE slot (acquired in
+  // ~8 ms) still logged "waiting … held by an unnamed holder (no announcement
+  // sidecar)" — a holder claim with no holder, which made real contention
+  // indistinguishable from a free slot in every gate's log (measured 2026-09-24).
+  // Announcing only after this grace period is what makes the line true, and the
+  // short poll below is what lets the loop reach it: a read that blocks until the
+  // whole deadline never gives the loop a second chance to say anything.
+  const ANNOUNCE_WAIT_AFTER_MS = 200;
+  const POLL_MS = 250;
   const deadline = t0 + waitMs + 2000;
   let acquired = false;
   try {
     while (!seen.includes("CAP_HEAVY_GATE_ACQUIRED") && Date.now() < deadline) {
-      if (!announcedWait) {
-        announcedWait = true;
-        say(
-          `heavy-gate: ${opts.gate} waiting for the fleet-wide gate slot [${slotPath}] (bound ${waitMs} ms) — held by ` +
-            `${describeHolder(holderAtStart.holder, holderAtStart.alive)}`,
-        );
-      }
       // ONE timer per read, CLEARED in the same breath. The first version left a
       // `setTimeout` of up to the whole bound pending on every iteration, so a
       // process that acquired and released promptly still could not exit until the
       // timer fired (review 2026-09-23: 'the acquisition timer survives release').
       let timer: ReturnType<typeof setTimeout> | undefined;
-      let chunk: ReadableStreamReadResult<Uint8Array>;
+      // A discriminated poll result: "nothing yet" (our own short timer) is NOT the
+      // same event as the stream ending, and only the phone the loop can speak on. A
+      // synthetic `{ done: true }` for the timeout would be indistinguishable from a
+      // closed stream (and is not even assignable to ReadableStreamReadResult).
+      type Poll = { kind: "chunk"; chunk: ReadableStreamReadResult<Uint8Array> } | { kind: "timeout" };
+      let polled: Poll;
       try {
-        chunk = await Promise.race([
-          reader.read(),
-          new Promise<{ done: true; value: undefined }>((r) => {
-            timer = setTimeout(() => r({ done: true, value: undefined }), Math.max(1, deadline - Date.now()));
+        polled = await Promise.race([
+          reader.read().then((chunk) => ({ kind: "chunk" as const, chunk })),
+          new Promise<Poll>((r) => {
+            // A SHORT POLL, not the whole remaining deadline: the loop keeps waiting
+            // and can therefore say that it is waiting. The bound is enforced by the
+            // loop condition against `deadline`, not by this timer.
+            timer = setTimeout(() => r({ kind: "timeout" }), Math.max(1, Math.min(deadline - Date.now(), POLL_MS)));
           }),
         ]);
       } catch {
@@ -305,8 +316,29 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
       } finally {
         if (timer !== undefined) clearTimeout(timer);
       }
-      if (chunk.value) seen += decoder.decode(chunk.value, { stream: true });
-      if (chunk.done) break;
+      if (polled.kind === "chunk") {
+        if (polled.chunk.value) seen += decoder.decode(polled.chunk.value, { stream: true });
+        if (polled.chunk.done) break;
+      }
+      // ANNOUNCE ONLY WHEN WE HAVE ACTUALLY BEEN WAITING, and name who holds it NOW.
+      // This used to sit at the TOP of the first iteration, before any read: a FREE
+      // slot acquired on the first read still logged "waiting for the fleet-wide
+      // gate slot ... — held by an unnamed holder (no announcement sidecar)", i.e. it
+      // claimed a holder that did not exist, and real contention became
+      // indistinguishable from a free slot in every gate's log (measured 2026-09-24:
+      // onWait fired 1x on a free slot). The holder is read FRESH here rather than
+      // reusing the start-of-acquisition snapshot, so a lane that appeared while we
+      // waited is named instead of the one (if any) that held the slot when we began.
+      // The refusal path below still falls back to `holderAtStart` when the fresh read
+      // is empty — that is a genuine contention case and belongs there.
+      if (!announcedWait && Date.now() - t0 >= ANNOUNCE_WAIT_AFTER_MS && !seen.includes("CAP_HEAVY_GATE_ACQUIRED")) {
+        announcedWait = true;
+        const announced = readHeavyGateHolder(holderPath);
+        say(
+          `heavy-gate: ${opts.gate} waiting for the fleet-wide gate slot [${slotPath}] (bound ${waitMs} ms) — held by ` +
+            `${describeHolder(announced.holder, announced.alive)}`,
+        );
+      }
     }
     acquired = seen.includes("CAP_HEAVY_GATE_ACQUIRED");
   } finally {
