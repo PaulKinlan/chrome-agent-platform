@@ -7,6 +7,63 @@
 import { AcpClient, acpAllowOptionId, acpDenyOptionId } from "./acp-client.js";
 import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
 
+
+// ── CAP skill context on the harness turn (chrome-agent-platform-etdn) ──────
+// Paul's directive: skills defined in CAP must reach the harness when a
+// prompt calls them, and the composer's /skill: and @ pickers must be the
+// entry. The composer inserts `/skill:<refId>` references; a harness run
+// receives the raw text only — the harness has no idea what the skill says.
+// So the turn payload carries a delimited skill-context block built from the
+// Chrome skill store (skill.list rows are the FULL records: prompt body
+// included), while the conversation keeps showing the owner's own text.
+
+const SKILL_REF_RE = /\/skill:(builtin|imported|custom)?:?([A-Za-z0-9_-]+)/g;
+
+/** The /skill:<refId> references in a prompt, deduped, in first-appearance
+ *  order. Pure. */
+export function extractSkillRefs(text) {
+  const out = [];
+  for (const m of String(text ?? "").matchAll(SKILL_REF_RE)) {
+    const refId = `${m[1] ? m[1] + ":" : ""}${m[2]}`;
+    if (!out.includes(refId)) out.push(refId);
+  }
+  return out;
+}
+
+/** Resolve /skill: references against the Chrome skill store (ONE skill.list
+ *  read; rows are the full records — prompt body included). Unknown refs are
+ *  skipped. `runtimeSend` is injectable for tests. */
+export async function resolveSkillContext(text, { runtimeSend = null } = {}) {
+  const refs = extractSkillRefs(text);
+  if (!refs.length) return [];
+  const send = runtimeSend ?? ((type, body) =>
+    globalThis.chrome?.runtime?.sendMessage?.({ type, ...body }));
+  const res = await send("skill.list", {}).catch(() => null);
+  const rows = Array.isArray(res?.skills) ? res.skills : [];
+  return refs
+    .map((refId) => {
+      const id = refId.includes(":") ? refId.split(":").slice(1).join(":") : refId;
+      return rows.find((r) => r.refId === refId || r.id === id) ?? null;
+    })
+    .filter(Boolean)
+    .map((r) => ({ refId: r.refId ?? r.id, name: r.name ?? r.id, description: r.description ?? "", prompt: r.prompt ?? "" }));
+}
+
+/** The harness turn payload: the skill context block, then the owner's own
+ *  text. Unchanged when there is nothing to inject. Pure. */
+export function buildPromptWithSkillContext(task, skills) {
+  const list = Array.isArray(skills) ? skills.filter((s) => s && (s.prompt || s.description)) : [];
+  if (!list.length) return String(task ?? "");
+  const block = list.map((s) =>
+    `<cap-skill ref="${s.refId}" name="${s.name}">\n` +
+    (s.description ? `<description>${s.description}</description>\n` : "") +
+    `<instructions>\n${s.prompt}\n</instructions>\n` +
+    `</cap-skill>`
+  ).join("\n");
+  return `<cap-skills>\n${block}\n\n${String(task ?? "")}`;
+}
+
+
 /** Default loopback WebSocket endpoint for the ACP bridge */
 export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
 
@@ -257,6 +314,12 @@ export async function runAcpTaskTurn(options) {
     sessionStore = null,
     settings = null,
     executionId = null,
+    /** chrome-agent-platform-etdn: pre-resolved CAP skill definitions to
+     *  inject into the harness turn (tests / callers that already resolved).
+     *  When absent, /skill: references in the task are resolved against the
+     *  Chrome skill store via runtimeSend. */
+    skills = null,
+    runtimeSend = null,
     onEvent = null,
   } = options;
 
@@ -342,12 +405,14 @@ export async function runAcpTaskTurn(options) {
         return typeof decision?.optionId === "string" && decision.optionId ? decision.optionId : null;
       };
 
-  const client = new AcpClient({
-    url: effectiveEndpoint,
-    defaultCwd: cwd,
-    transport: nativeTransport || null,
-    ...(permissionHandler ? { permissionHandler } : {}),
-  });
+  const client = (typeof options.clientFactory === "function")
+    ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: cwd, transport: nativeTransport || null })
+    : new AcpClient({
+      url: effectiveEndpoint,
+      defaultCwd: cwd,
+      transport: nativeTransport || null,
+      ...(permissionHandler ? { permissionHandler } : {}),
+    });
 
   // CLAIM the conversation BEFORE ANY await — synchronously. A second (or
   // third) send while this turn is still connecting has to SEE this turn and
@@ -486,9 +551,20 @@ export async function runAcpTaskTurn(options) {
      * of appending a second permanently-running card per update. */
     const toolCards = new Map();
 
+    // chrome-agent-platform-etdn: forward CAP skill context. The owner's own
+    // text stays the conversation surface; the harness payload carries the
+    // skill definitions the prompt references (or the caller supplied).
+    let harnessPrompt = task;
+    try {
+      const ctx = Array.isArray(skills) && skills.length
+        ? skills
+        : await resolveSkillContext(task, { runtimeSend });
+      harnessPrompt = buildPromptWithSkillContext(task, ctx);
+    } catch { /* a context failure never blocks the turn */ }
+
     const turn = await client.prompt(
       sessionId,
-      task,
+      harnessPrompt,
       (ev) => {
         if (superseded()) return;
         try { onEvent?.(ev); } catch { /* a consumer's error never fails the turn */ }
