@@ -35,6 +35,7 @@ import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { partition } from "./test-partition.mjs";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
+import { mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -77,8 +78,25 @@ function git(args, cwd = ROOT) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
+// chrome-agent-platform-nco2 (mechanism 3): compare against the MERGE-BASE, not
+// the tip. `git diff --name-only origin/main` lists every file that differs
+// between your tree and the tip — including files ANOTHER LANE landed after you
+// branched. Measured live in the canonical checkout at 78dddba6: origin/main had
+// advanced to 1a50cf3e and a direct diff attributed 17 foreign files to the
+// working tree, one of which (cap-evidence/constrained-width-layout.ts, bead
+// cgei's landing) forced a full suite on a lane that had not touched it.
+// Falls back to the raw ref when no merge-base exists (a detached or unrelated
+// history), because refusing to compute a changed set is worse than a wide one.
+export function mergeBaseOf(base, runGit = git) {
+  try {
+    return runGit(["merge-base", "HEAD", base]).trim() || base;
+  } catch {
+    return base; // unrelated histories / missing ref: diff against it directly
+  }
+}
+
 function changedFiles(base) {
-  const tracked = git(["diff", "--name-only", base]).split("\n").filter(Boolean);
+  const tracked = git(["diff", "--name-only", mergeBaseOf(base)]).split("\n").filter(Boolean);
   const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
   return [...new Set([...tracked, ...untracked])]
     .map((f) => normalize(f))
@@ -191,8 +209,26 @@ function reachableTestFrom(startAbs, reverse, isTest) {
   return false;
 }
 
-export function selectTestFiles(changed, reverse) {
+/** Read a path at `ref` and at the working tree, and ask whether the difference
+ *  is confined to version fields. Any git failure is `false` (fail closed). */
+export function versionOnlyAgainst(ref, rel) {
+  try {
+    const before = git(["show", `${ref}:${rel}`]);
+    const abs = join(ROOT, rel);
+    if (!existsSync(abs)) return false;
+    return versionOnlyJsonChange(before, readFileSync(abs, "utf8"));
+  } catch {
+    return false; // new file, unreadable ref, anything unexpected: fail closed
+  }
+}
+
+export function selectTestFiles(changed, reverse, mapped = []) {
   const selected = new Set(ALWAYS_ON.filter((c) => existsSync(join(ROOT, c))));
+  // nco2: the guards that cover an import-unreachable changed file. Added before
+  // the graph walk so they survive it, and existence-checked like the core.
+  for (const m of mapped) {
+    for (const t of m.tests) if (existsSync(join(ROOT, t))) selected.add(t);
+  }
   const changedAbs = [];
   for (const c of changed) {
     const abs = resolve(ROOT, c);
@@ -312,15 +348,30 @@ function main() {
   if (!changed.length) console.error(`select-tests: no files changed vs ${base} — running always-on core.`);
   const reverse = changed.length ? buildReverseGraph() : null;
   const uncovered = changed.length ? changedWithoutCoverage(changed, reverse) : [];
-  if (uncovered.length) {
+
+  // nco2: an uncovered file is not automatically unmappable. Two classes have no
+  // import edges by construction and are covered by tests that read them as DATA;
+  // map those to their guards. Everything else still fails closed — and now the
+  // message names WHICH file and WHICH mechanism forced the full suite, because
+  // "no reachable test" read identically for a harness nobody imports, a version
+  // bump, and another lane's landing.
+  const { mapped, unmappable } = uncovered.length
+    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(mergeBaseOf(base), rel))
+    : { mapped: [], unmappable: [] };
+
+  if (unmappable.length) {
+    const why = unmappable.map((u) => `  ${u.file}\n      → ${u.mechanism}`).join("\n");
     console.error(
-      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:\n  ${uncovered.join("\n  ")}\nRunning the FULL suite (npm test) instead.`,
+      `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:\n${why}\nRunning the FULL suite (npm test) instead.`,
     );
     if (list) console.log("FULL_SUITE");
     else runFullSuite();
     return;
   }
-  const files = selectTestFiles(changed, reverse);
+  for (const m of mapped) {
+    console.error(`select-tests: ${m.file} has no importer — ${m.mechanism}; selecting its ${m.tests.length} inspecting guard(s).`);
+  }
+  const files = selectTestFiles(changed, reverse, mapped);
   if (list) console.log(files.join("\n"));
   else runDeno(files);
 }

@@ -276,10 +276,36 @@ read in run 2.
   1. `npm run test:file -- tests/<name>.test.ts` — the one file you are
      working in (seconds).
   2. `npm run test:changed` — every test that transitively imports what you
-     changed vs `origin/main`, plus the always-on security/vocabulary core
-     (typically 4-10 s). It fails CLOSED to the full suite when a changed
-     executable/config file has no reachable test, so a green subset is
-     never a silent skip. `--base <ref>` compares against another ref.
+     changed vs the MERGE-BASE with `origin/main`, plus the always-on
+     security/vocabulary core (typically 4-10 s). It fails CLOSED to the full
+     suite when a changed executable/config file has no reachable test, so a
+     green subset is never a silent skip. `--base <ref>` compares against
+     another ref.
+     **A fail-closed run now NAMES the file and the mechanism**
+     (chrome-agent-platform-nco2), because "no reachable test" read identically
+     for three different causes and the answer was usually "not your change":
+     - *unimported `scripts/**` harness* — the import graph cannot reach a
+       harness nothing imports (`scripts/a11y-audit.ts`, `sidebar-parity.ts`,
+       `constrained-width-layout.ts`); what covers it is the tree-walking guards,
+       which enumerate `scripts/` at RUNTIME and so have no import edge. Those
+       guards are now selected instead of the whole suite. This is not "any
+       `scripts/**` change": `scripts/lib/composer-target.ts` and `css-padding.ts`
+       are COVERED, because a test imports them.
+     - *version-only bookkeeping JSON* — the post-commit hook rewrites
+       `package.json`, `package-lock.json` and `extension/manifest.json` on every
+       commit, and JSON has no importers. A diff confined to version fields maps
+       to the tests that read those files as data. **Only a version-only diff.**
+       A new dependency, a new script, an added permission or a weakened CSP
+       still fails closed — decided by PARSING BOTH SIDES and comparing key
+       paths, never by grepping for lines containing `"version"` (that filter
+       passes a nested dependency bump exactly as cleanly as a project bump;
+       proven in chrome-agent-platform-mo2f.3).
+     - *anything else* — genuinely unmappable, still the full suite, now with the
+       file named.
+     The changed set is scoped to the **merge-base**, not the tip: a direct
+     `git diff origin/main` attributes every file another lane landed since you
+     branched (measured live: 17 foreign files in the canonical checkout), and
+     one of those can force a full suite on a change that never touched it.
   3. `npm test` — the full unit suite, once, before you push or report done.
      It is the only way to run the whole suite: a raw `deno test tests/` is
      refused, and a raw single-file run finds no modules.
