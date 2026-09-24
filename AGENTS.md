@@ -287,10 +287,22 @@ read in run 2.
      - *unimported `scripts/**` harness* — the import graph cannot reach a
        harness nothing imports (`scripts/a11y-audit.ts`, `sidebar-parity.ts`,
        `constrained-width-layout.ts`); what covers it is the tree-walking guards,
-       which enumerate `scripts/` at RUNTIME and so have no import edge. Those
+       which enumerate the tree at RUNTIME and so have no import edge. Those
        guards are now selected instead of the whole suite. This is not "any
        `scripts/**` change": `scripts/lib/composer-target.ts` and `css-padding.ts`
        are COVERED, because a test imports them.
+       **The enumeration is `scripts/*.ts` ONLY — top level, `.ts` extension —
+       because that is what `harnessFiles()` in `scripts/lib/harness-registry.ts`
+       scans.** A `.mjs` helper or anything in a subdirectory is NOT inspected by
+       those guards, so mapping it to them would be a weakening rather than a
+       mapping. Measured (chrome-agent-platform-nco2 review): restoring an old
+       unsupported default in `scripts/acp-service.mjs` took
+       `tests/acp-service-harness-default.test.ts` from 5/0 to 1 passed / 4
+       failed — a real executed regression — while `test:changed` returned exit 0
+       over 28 files WITHOUT selecting it. Such a file therefore maps only to
+       tests that NAME it (a spawned `join(ROOT, "scripts", "…")` path is a
+       string literal even though it is not an import), and FAILS CLOSED when
+       nothing names it.
      - *version-only bookkeeping JSON* — the post-commit hook rewrites
        `package.json`, `package-lock.json` and `extension/manifest.json` on every
        commit, and JSON has no importers. A diff confined to version fields maps

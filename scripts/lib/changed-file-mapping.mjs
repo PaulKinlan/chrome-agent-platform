@@ -84,25 +84,59 @@ export const BOOKKEEPING_FILES = Object.freeze([
   "extension/manifest.json",
 ]);
 
-/** Key paths whose change is "just a version bump". Exact paths, not a token
- *  match: `packages..version` is package-lock's root self-entry (its own
- *  version mirror), and nothing else in the lockfile may move. */
-const VERSION_KEY_PATHS = Object.freeze(new Set([
-  "version",           // package.json, package-lock.json, manifest.json
-  "version_name",      // extension/manifest.json
-  "packages..version", // package-lock.json root self-entry
-]));
+/** The fields a version bump is allowed to move. ROOT ONLY, plus package-lock's
+ *  root self-entry (`packages[""].version`, its own version mirror). A nested
+ *  dependency's `version` is deliberately NOT here — that is a real change. */
+export const VERSION_FIELDS = Object.freeze(["version", "version_name", "release"]);
 
-/** Flatten an object to `path -> primitive`. */
-function flatten(value, prefix = "", out = {}) {
-  if (Array.isArray(value)) {
-    value.forEach((v, i) => flatten(v, `${prefix}[${i}]`, out));
-  } else if (value && typeof value === "object") {
-    for (const [k, v] of Object.entries(value)) flatten(v, prefix ? `${prefix}.${k}` : k, out);
-  } else {
-    out[prefix] = value;
+/**
+ * Strip the approved version fields and return a STRUCTURE-PRESERVING canonical
+ * form. Everything else — object vs array, empty containers, key identity — must
+ * survive, because the only safe `true` is "nothing outside those fields moved".
+ *
+ * WHY NOT A FLATTENED KEY MAP (the defect this replaces, found by cap-astra's
+ * independent review of 39314910): flattening to `path -> primitive` loses two
+ * things, and both produced FALSE POSITIVES on real repository files —
+ *   • EMPTY CONTAINERS VANISH. Adding `overrides: {}` to package.json, or
+ *     `web_accessible_resources: []` to the manifest, changed nothing in the
+ *     flattened map, so a genuine structural edit mapped as "version-only".
+ *     `{}` → `[]` was likewise invisible.
+ *   • KEY PATHS COLLIDE. `dependencies.foo` and a literal top-level key named
+ *     `"dependencies.foo"` flatten identically, as do `permissions[0]` and a
+ *     key named `"permissions[0]"`. So MOVING a real dependency or permission
+ *     out of its container and into a dotted/bracketed top-level key — a
+ *     materially different manifest — compared equal.
+ * A deep structural comparison after narrowly deleting the approved fields has
+ * neither hole, and is simpler than any leaf encoding that tries to escape them.
+ */
+function strippedCanonical(value) {
+  const clone = structuredClone(value);
+  if (clone && typeof clone === "object" && !Array.isArray(clone)) {
+    // Root release fields, deleted by EXACT key — never by a name match at
+    // arbitrary depth (a nested dependency's `version` must still count).
+    delete clone.version;
+    delete clone.version_name;
+    delete clone.release;
+    // package-lock's root self-entry mirrors the project's own version.
+    const rootEntry = clone.packages && typeof clone.packages === "object" && !Array.isArray(clone.packages)
+      ? clone.packages[""]
+      : null;
+    if (rootEntry && typeof rootEntry === "object" && !Array.isArray(rootEntry)) delete rootEntry.version;
   }
-  return out;
+  return canonicalJson(clone);
+}
+
+/** Deterministic JSON with object keys sorted, so key ORDER is not a difference
+ *  while structure and identity still are. Arrays keep their order (it is
+ *  meaningful); objects and arrays stay distinguishable; empty containers are
+ *  represented explicitly. */
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
 }
 
 /**
@@ -122,21 +156,61 @@ export function versionOnlyJsonChange(beforeText, afterText) {
   } catch {
     return false; // unparseable: never claim it is only a version bump
   }
-  const fa = flatten(before);
-  const fb = flatten(after);
-  const keys = new Set([...Object.keys(fa), ...Object.keys(fb)]);
-  let differing = 0;
-  for (const k of keys) {
-    if (fa[k] === fb[k]) continue;
-    if (!VERSION_KEY_PATHS.has(k)) return false; // a real change hides here
-    differing++;
-  }
-  return differing > 0; // identical files are not a "version-only change"
+  // Everything OUTSIDE the approved fields must be structurally identical.
+  if (strippedCanonical(before) !== strippedCanonical(after)) return false;
+  // …and at least one approved field must actually have moved: two identical
+  // files are not a "version-only CHANGE".
+  return canonicalJson(before) !== canonicalJson(after);
 }
 
 /** A harness under scripts/ that no test imports (the mechanism-1 shape). */
 export function isScriptsHarness(rel) {
   return /^scripts[\\/].+\.(ts|mjs|js)$/.test(rel);
+}
+
+/**
+ * Is this script ENUMERATED by the tree-walking guards?
+ *
+ * R1, from cap-astra's independent review of 39314910: the first version mapped
+ * EVERY import-unreachable file under `scripts/` to the eleven generic guards,
+ * on the theory that those guards scan the tree. They do — but
+ * `harnessFiles()` in scripts/lib/harness-registry.ts enumerates
+ * `scripts/*.ts` ONLY: top level, `.ts` extension. So a `.mjs` helper, or
+ * anything in a subdirectory, was being mapped to guards that never look at it.
+ *
+ * The measured counterexample: `tests/acp-service-harness-default.test.ts`
+ * builds `join(ROOT, "scripts", "acp-service.mjs")` and SPAWNS it with
+ * `install --dry-run`. Restoring the old unsupported `harness || "pi"` default
+ * took that file from 5/0 to 1 passed / 4 failed — a real executed regression —
+ * while `test:changed` returned exit 0 over 28 files WITHOUT selecting it.
+ * A mapping that drops a test the full suite would have run is a weakening,
+ * which is exactly what this helper exists to prevent.
+ */
+export function isGuardEnumeratedScript(rel) {
+  return /^scripts[\\/][^\\/]+\.ts$/.test(rel.replace(/\\/g, "/"));
+}
+
+/**
+ * Tests that name this script LITERALLY — the coverage a static import graph
+ * cannot see. `testFiles` is `[{ rel, text }]`, injected so this stays pure.
+ *
+ * A computed path (`join(ROOT, "scripts", "acp-service.mjs")`) still contains
+ * the basename as a string literal, so matching the basename finds it. The
+ * basename is matched rather than the full path because that is how these tests
+ * actually spell it.
+ */
+export function referencingTests(rel, testFiles = []) {
+  const path = rel.replace(/\\/g, "/");
+  const base = path.split("/").pop() ?? path;
+  if (!base) return [];
+  const out = [];
+  for (const entry of testFiles) {
+    const text = entry?.text ?? "";
+    if (text.includes(path) || text.includes(`"${base}"`) || text.includes(`'${base}'`)) {
+      out.push(entry.rel);
+    }
+  }
+  return out.sort();
 }
 
 export function isBookkeepingFile(rel) {
@@ -153,7 +227,7 @@ export function isBookkeepingFile(rel) {
  * Returns `{ mechanism, tests }`; `tests` empty means FAIL CLOSED and the
  * mechanism is the reason to print.
  */
-export function classifyUncovered(rel, { versionOnly = false } = {}) {
+export function classifyUncovered(rel, { versionOnly = false, testFiles = [] } = {}) {
   const path = rel.replace(/\\/g, "/");
   if (isBookkeepingFile(path)) {
     return versionOnly
@@ -169,10 +243,32 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
       };
   }
   if (isScriptsHarness(path)) {
-    return {
-      mechanism: "harness under scripts/ that no test imports (covered by the tree-walking guards)",
-      tests: [...HARNESS_TREE_GUARDS],
-    };
+    // Any test that NAMES this script literally is its real coverage — a
+    // spawned dry-run has no import edge but is the strongest check it has.
+    const named = referencingTests(path, testFiles);
+    if (isGuardEnumeratedScript(path)) {
+      return {
+        mechanism: named.length
+          ? `top-level scripts/*.ts enumerated by the tree-walking guards, plus ${named.length} test(s) naming it directly`
+          : "top-level scripts/*.ts enumerated by the tree-walking guards (harnessFiles scans scripts/*.ts)",
+        tests: [...new Set([...HARNESS_TREE_GUARDS, ...named])],
+      };
+    }
+    // NOT guard-enumerated: harnessFiles() scans scripts/*.ts only, so a .mjs
+    // helper or a subdirectory file is NOT inspected by those guards. Map it
+    // only to tests that genuinely name it; with none, FAIL CLOSED rather than
+    // claim coverage that does not exist.
+    return named.length
+      ? {
+        mechanism: `scripts/ file the tree-walking guards do NOT enumerate (they scan scripts/*.ts), covered by ${named.length} test(s) naming it directly`,
+        tests: named,
+      }
+      : {
+        mechanism:
+          "scripts/ file with no importer, not enumerated by the tree-walking guards " +
+          "(harnessFiles scans scripts/*.ts), and no test names it — nothing proves it covered",
+        tests: [],
+      };
   }
   return {
     mechanism: "no reachable test and no declared mapping — genuinely unmappable statically",
@@ -188,11 +284,11 @@ export function classifyUncovered(rel, { versionOnly = false } = {}) {
  * with no tests, and its presence means the caller must run the full suite and
  * print every entry — a full-suite run that says why it ran.
  */
-export function mapUncovered(uncovered, versionOnlyFor = () => false) {
+export function mapUncovered(uncovered, versionOnlyFor = () => false, testFiles = []) {
   const mapped = [];
   const unmappable = [];
   for (const file of uncovered) {
-    const verdict = classifyUncovered(file, { versionOnly: versionOnlyFor(file) });
+    const verdict = classifyUncovered(file, { versionOnly: versionOnlyFor(file), testFiles });
     (verdict.tests.length ? mapped : unmappable).push({ file, ...verdict });
   }
   return { mapped, unmappable };

@@ -209,6 +209,28 @@ function reachableTestFrom(startAbs, reverse, isTest) {
   return false;
 }
 
+/**
+ * Every test file's text, for the literal-reference search.
+ *
+ * nco2/R1: a test can EXECUTE a script through a computed path
+ * (`join(ROOT, "scripts", "acp-service.mjs")` + spawn) with no static import
+ * edge, so the reverse graph cannot see it — but the basename is still a string
+ * literal in the file. Reading the corpus is what lets an uncovered script map
+ * to the test that actually runs it instead of to guards that never look at it.
+ */
+function testCorpus() {
+  const dir = join(ROOT, "tests");
+  if (!existsSync(dir)) return [];
+  const out = [];
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    if (!ent.isFile() || !/\.(test\.ts|test\.js|mjs|ts)$/.test(ent.name)) continue;
+    try {
+      out.push({ rel: `tests/${ent.name}`, text: readFileSync(join(dir, ent.name), "utf8") });
+    } catch { /* unreadable file: not a reference */ }
+  }
+  return out;
+}
+
 /** Read a path at `ref` and at the working tree, and ask whether the difference
  *  is confined to version fields. Any git failure is `false` (fail closed). */
 export function versionOnlyAgainst(ref, rel) {
@@ -356,7 +378,7 @@ function main() {
   // "no reachable test" read identically for a harness nobody imports, a version
   // bump, and another lane's landing.
   const { mapped, unmappable } = uncovered.length
-    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(mergeBaseOf(base), rel))
+    ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(mergeBaseOf(base), rel), testCorpus())
     : { mapped: [], unmappable: [] };
 
   if (unmappable.length) {
