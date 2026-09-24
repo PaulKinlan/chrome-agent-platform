@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.477] — 2026-09-24
+- a script is covered only by a test that runs it, the selector never maps its own machinery, and version fields are per file
+
 ## [0.3.476] — 2026-09-24
 - only map a changed file to tests that genuinely cover it, and compare JSON by structure
 

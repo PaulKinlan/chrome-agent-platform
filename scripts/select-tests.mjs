@@ -35,7 +35,7 @@ import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { partition } from "./test-partition.mjs";
 import { runSerialFiles } from "./lib/serial-phase.mjs";
-import { mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
+import { isSelectorInfrastructure, mapUncovered, versionOnlyJsonChange } from "./lib/changed-file-mapping.mjs";
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -238,7 +238,10 @@ export function versionOnlyAgainst(ref, rel) {
     const before = git(["show", `${ref}:${rel}`]);
     const abs = join(ROOT, rel);
     if (!existsSync(abs)) return false;
-    return versionOnlyJsonChange(before, readFileSync(abs, "utf8"));
+    // R2b: the predicate is FILE-SPECIFIC — package.json's bump writes `version`,
+    // the lock's also writes packages[""].version, the manifest's also writes
+    // version_name, and none of them writes `release`. Pass the path.
+    return versionOnlyJsonChange(before, readFileSync(abs, "utf8"), rel);
   } catch {
     return false; // new file, unreadable ref, anything unexpected: fail closed
   }
@@ -380,6 +383,32 @@ function main() {
   const { mapped, unmappable } = uncovered.length
     ? mapUncovered(uncovered, (rel) => versionOnlyAgainst(mergeBaseOf(base), rel), testCorpus())
     : { mapped: [], unmappable: [] };
+
+  // nco2/R1b: the selector's OWN machinery always runs the FULL suite, and this
+  // check is over the CHANGED set rather than the uncovered set on purpose.
+  //
+  // Measured on the real graph: of the five infrastructure files, only
+  // run-tests.mjs is import-unreachable. select-tests.mjs is imported by two
+  // tests and the other three are reached transitively through it, so the graph
+  // calls them COVERED and they never reach classifyUncovered at all. A check
+  // that lived only in the mapping would therefore miss four of five.
+  //
+  // Why at all (cap-astra's re-review of 014177de): a subset chosen BY the thing
+  // under test cannot validate that thing. Pointing run-tests.mjs's readdir at a
+  // missing directory kills `npm test` instantly with ENOENT while
+  // `npm run test:changed` stayed green over a 21-file subset — the selector
+  // cheerfully certified a suite runner that cannot run.
+  const selfChanged = changed.filter((f) => isSelectorInfrastructure(f));
+  if (selfChanged.length) {
+    console.error(
+      `select-tests: FAIL CLOSED — this change edits the test selector's own machinery ` +
+        `(${selfChanged.join(", ")}), so a subset it chooses cannot validate it.\n` +
+        `Running the FULL suite (npm test) instead.`,
+    );
+    if (list) console.log("FULL_SUITE");
+    else runFullSuite();
+    return;
+  }
 
   if (unmappable.length) {
     const why = unmappable.map((u) => `  ${u.file}\n      → ${u.mechanism}`).join("\n");

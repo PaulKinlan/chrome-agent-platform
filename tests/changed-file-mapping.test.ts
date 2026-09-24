@@ -29,10 +29,14 @@ import {
   BOOKKEEPING_FILES,
   BOOKKEEPING_GUARDS,
   classifyUncovered,
+  executingTests,
   HARNESS_TREE_GUARDS,
   isGuardEnumeratedScript,
+  isSelectorInfrastructure,
   mapUncovered,
   referencingTests,
+  SELECTOR_INFRASTRUCTURE,
+  VERSION_FIELDS_BY_FILE,
   versionOnlyJsonChange,
 } from "../scripts/lib/changed-file-mapping.mjs";
 import { mergeBaseOf } from "../scripts/select-tests.mjs";
@@ -50,26 +54,33 @@ const withBase = (mutate: (o: any) => void) => {
   return JSON.stringify(o);
 };
 
+// R2b: the approved fields are a property of the FILE, so every call names one.
+// A call WITHOUT a path fails closed by design, which means an assertion that
+// omits it would pass for the wrong reason — see the dedicated block below.
+const PKG = "package.json";
+const MAN = "extension/manifest.json";
+const LOCK = "package-lock.json";
+
 Deno.test("nco2: a pure version bump is mappable", () => {
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.version = "0.3.475")), true);
+  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.version = "0.3.475"), PKG), true);
   // manifest carries a second version field.
   const man = JSON.stringify({ version: "1.0", version_name: "1.0", permissions: ["storage"] });
   const bumped = JSON.stringify({ version: "1.1", version_name: "1.1", permissions: ["storage"] });
-  assertEquals(versionOnlyJsonChange(man, bumped), true);
+  assertEquals(versionOnlyJsonChange(man, bumped, MAN), true);
   // package-lock's root self-entry mirrors the project version.
   const lock = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" }, "node_modules/ai": { version: "7.0.66" } } });
   const lockBumped = JSON.stringify({ version: "1.1", packages: { "": { version: "1.1" }, "node_modules/ai": { version: "7.0.66" } } });
-  assertEquals(versionOnlyJsonChange(lock, lockBumped), true);
+  assertEquals(versionOnlyJsonChange(lock, lockBumped, LOCK), true);
 });
 
 Deno.test("nco2: a NESTED dependency bump is NOT mappable (the line-grep trap)", () => {
   // mo2f.3 proved a line filter on `"version"` passes a dependency bump exactly
   // as cleanly as a project bump. Parsing both sides is what closes that hole,
   // so this is the assertion that must never be relaxed into a token match.
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.dependencies.ai = "9.9.9")), false);
+  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.dependencies.ai = "9.9.9"), PKG), false);
   const lock = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" }, "node_modules/ai": { version: "7.0.66" } } });
   const sneaky = JSON.stringify({ version: "1.1", packages: { "": { version: "1.1" }, "node_modules/ai": { version: "9.9.9" } } });
-  assertEquals(versionOnlyJsonChange(lock, sneaky), false, "a nested dependency bump hidden behind a real version bump");
+  assertEquals(versionOnlyJsonChange(lock, sneaky, LOCK), false, "a nested dependency bump hidden behind a real version bump");
 });
 
 Deno.test("nco2: security-relevant manifest edits are NOT mappable", () => {
@@ -93,8 +104,8 @@ Deno.test("nco2: security-relevant manifest edits are NOT mappable", () => {
     permissions: ["storage", "debugger"],
     content_security_policy: { extension_pages: "script-src 'self' 'wasm-unsafe-eval'" },
   });
-  assertEquals(versionOnlyJsonChange(man, weakenedCsp), false, "a weakened CSP must force the full suite");
-  assertEquals(versionOnlyJsonChange(man, newPermission), false, "a new permission must force the full suite");
+  assertEquals(versionOnlyJsonChange(man, weakenedCsp, MAN), false, "a weakened CSP must force the full suite");
+  assertEquals(versionOnlyJsonChange(man, newPermission, MAN), false, "a new permission must force the full suite");
 });
 
 Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity are real changes", () => {
@@ -111,7 +122,7 @@ Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity ar
 
   // (a) EMPTY CONTAINERS VANISHED when flattened — they have no leaves.
   assertEquals(
-    versionOnlyJsonChange(BASE, withBase((o) => { o.version = "0.3.999"; o.overrides = {}; })),
+    versionOnlyJsonChange(BASE, withBase((o) => { o.version = "0.3.999"; o.overrides = {}; }), PKG),
     false,
     "adding an empty `overrides: {}` is a structural change, not a version bump",
   );
@@ -120,6 +131,7 @@ Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity ar
     versionOnlyJsonChange(
       manifest,
       JSON.stringify({ version: "1.1", version_name: "1.1", permissions: ["storage"], web_accessible_resources: [] }),
+      MAN,
     ),
     false,
     "adding an empty `web_accessible_resources: []` is a structural change",
@@ -129,6 +141,7 @@ Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity ar
     versionOnlyJsonChange(
       JSON.stringify({ version: "1.0", overrides: {} }),
       JSON.stringify({ version: "1.1", overrides: [] }),
+      PKG,
     ),
     false,
     "`{}` becoming `[]` is a structural change — a flattened map cannot see it",
@@ -145,6 +158,7 @@ Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity ar
         o["dependencies.ai"] = o.dependencies.ai;
         delete o.dependencies.ai;
       }),
+      PKG,
     ),
     false,
     "moving a dependency to a dotted top-level key is a real change, not a bump",
@@ -154,6 +168,7 @@ Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity ar
     versionOnlyJsonChange(
       manifest,
       JSON.stringify({ version: "1.1", version_name: "1.1", "permissions[0]": "storage" }),
+      MAN,
     ),
     false,
     "replacing an array with same-valued indexed keys is a real change",
@@ -164,19 +179,100 @@ Deno.test("nco2: STRUCTURE is preserved — empty containers and key identity ar
     versionOnlyJsonChange(
       JSON.stringify({ name: "x", version: "1.0", dependencies: { ai: "7.0.66" } }),
       JSON.stringify({ dependencies: { ai: "7.0.66" }, version: "1.1", name: "x" }),
+      PKG,
     ),
     true,
     "reordered keys with only the version moved is still a version-only change",
   );
 });
 
+Deno.test("nco2/R2b: the approved fields are PER FILE — `release` is not one of them anywhere", () => {
+  // R2b, from cap-astra's re-review of 014177de, and a defect in the R2 fix
+  // itself: that fix deleted a GENERIC ["version", "version_name", "release"]
+  // from every bookkeeping file. Both extra names were wrong.
+  //
+  // The authority is what the hook ACTUALLY writes (scripts/bump-version.mjs):
+  //   :145      pkg.version = next                          → package.json
+  //   :147-148  lock.version + lock.packages[""].version    → package-lock.json
+  //   :150-151  manifest.version + manifest.version_name    → extension/manifest.json
+  //   :178-192  a `release` MIRROR into extension/lib/bundled-inventory-data.js,
+  //             so the bundled-tool-packages guard can assert
+  //             inventory.release === manifest.version.
+  //             (Named WITHOUT its tests/ path on purpose: the partition guard's
+  //             DRIVER_REF_RE treats any `tests/<name>.test.ts` literal as a
+  //             SPAWNED DRIVER and merges that file's text into this one's
+  //             hazard classification. That guard spawns the bundled-tool
+  //             generator, so a prose mention of it made this pure-unit file
+  //             classify as a build-artifact hazard and fail the partition
+  //             guard. Filed as chrome-agent-platform-f94p; this is its first
+  //             live case.)
+  // `release` therefore never appears in any of the three JSON files, and
+  // `version_name` only in the manifest. Deleting them anyway ERASED real edits:
+  // measured through the actual CLI, adding a release CONFIG object to any of
+  // the three selected a 21-file subset instead of the full suite.
+  assertEquals(VERSION_FIELDS_BY_FILE[PKG], ["version"]);
+  assertEquals(VERSION_FIELDS_BY_FILE[LOCK], ["version"]);
+  assertEquals(VERSION_FIELDS_BY_FILE[MAN], ["version", "version_name"]);
+  for (const [file, fields] of Object.entries(VERSION_FIELDS_BY_FILE)) {
+    assert(!fields.includes("release"), `${file} must not approve \`release\` — the hook never writes it there`);
+  }
+
+  // A release CONFIG object is a real change in all three, with no version moved.
+  const rel = (o: any) => { o.release = { branches: ["preview"], plugins: ["x"] }; };
+  assertEquals(versionOnlyJsonChange(BASE, withBase(rel), PKG), false, "package.json release config");
+  const man = JSON.stringify({ version: "1.0", version_name: "1.0", permissions: ["storage"] });
+  assertEquals(
+    versionOnlyJsonChange(man, JSON.stringify({ version: "1.0", version_name: "1.0", permissions: ["storage"], release: { permissions: ["debugger"] } }), MAN),
+    false,
+    "a manifest `release` object is not a manifest version field",
+  );
+  const lock = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" } } });
+  assertEquals(
+    versionOnlyJsonChange(lock, JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" } }, release: { enabled: false } }), LOCK),
+    false,
+    "a lock `release` object is not a lock version field",
+  );
+
+  // package.json has no `version_name`, so writing one is a real change there…
+  assertEquals(
+    versionOnlyJsonChange(BASE, withBase((o) => { o.version_name = "not-a-package-version"; }), PKG),
+    false,
+    "package.json does not carry version_name — writing one is a real change",
+  );
+  // …while the manifest's IS approved, because the hook writes it.
+  assertEquals(
+    versionOnlyJsonChange(man, JSON.stringify({ version: "1.1", version_name: "1.1", permissions: ["storage"] }), MAN),
+    true,
+    "the manifest's version_name moves with its version",
+  );
+
+  // packages[""] is stripped for the LOCK ONLY. The same shape elsewhere is not
+  // a version mirror, and treating it as one would erase a real change.
+  const shaped = JSON.stringify({ version: "1.0", packages: { "": { version: "1.0" } } });
+  const shapedMoved = JSON.stringify({ version: "1.1", packages: { "": { version: "9.9.9" } } });
+  assertEquals(versionOnlyJsonChange(shaped, shapedMoved, LOCK), true, "the lock's self-mirror moves with the version");
+  assertEquals(
+    versionOnlyJsonChange(shaped, shapedMoved, PKG),
+    false,
+    "the same shape in package.json is NOT a version mirror",
+  );
+});
+
 Deno.test("nco2: anything unprovable is NOT mappable (fails closed)", () => {
-  assertEquals(versionOnlyJsonChange(BASE, "{not json"), false, "unparseable after");
-  assertEquals(versionOnlyJsonChange("{not json", BASE), false, "unparseable before");
-  assertEquals(versionOnlyJsonChange(BASE, BASE), false, "identical files are not a version-only CHANGE");
-  assertEquals(versionOnlyJsonChange(undefined, BASE), false, "missing side");
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.scripts.evil = "rm -rf /")), false, "an added script");
-  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => delete o.dependencies.zod)), false, "a removed dependency");
+  assertEquals(versionOnlyJsonChange(BASE, "{not json", PKG), false, "unparseable after");
+  assertEquals(versionOnlyJsonChange("{not json", BASE, PKG), false, "unparseable before");
+  assertEquals(versionOnlyJsonChange(BASE, BASE, PKG), false, "identical files are not a version-only CHANGE");
+  assertEquals(versionOnlyJsonChange(undefined, BASE, PKG), false, "missing side");
+  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => o.scripts.evil = "rm -rf /"), PKG), false, "an added script");
+  assertEquals(versionOnlyJsonChange(BASE, withBase((o) => delete o.dependencies.zod), PKG), false, "a removed dependency");
+  // R2b: a call that does not name a file cannot know which fields are approved,
+  // so it FAILS CLOSED rather than falling back to a generic list. That fallback
+  // is exactly what shipped the release/version_name defect, and this assertion
+  // is what stops a future caller from reintroducing it by dropping the argument.
+  const realBump = withBase((o) => o.version = "0.3.999");
+  assertEquals(versionOnlyJsonChange(BASE, realBump, PKG), true, "control: WITH a path this is version-only");
+  assertEquals(versionOnlyJsonChange(BASE, realBump), false, "the same change with NO path fails closed");
+  assertEquals(versionOnlyJsonChange(BASE, realBump, "some/other.json"), false, "an undeclared path fails closed");
 });
 
 Deno.test("nco2: classification names the mechanism, and only maps what it can justify", () => {
@@ -284,31 +380,193 @@ Deno.test("nco2/R1: a script the guards do NOT enumerate maps to the tests that 
 
   // A literal reference is found even when the path is COMPUTED at runtime.
   // That is why the reverse graph misses these: there is no import edge, but
-  // the basename is still a string literal in the test's source.
+  // the basename is still a string literal in the test's source. The fixture
+  // mirrors the real shape — bind the path, then put the identifier in argv.
+  const SPAWNS_IT = [
+    'const SCRIPT = join(ROOT, "scripts", "acp-service.mjs");',
+    'const args = [SCRIPT, "install", "--dry-run"];',
+    'const res = new Deno.Command("node", { args }).outputSync();',
+  ].join("\n");
   const corpus = [
-    { rel: "tests/acp-service-harness-default.test.ts", text: 'const SCRIPT = join(ROOT, "scripts", "acp-service.mjs");' },
+    { rel: "tests/acp-service-harness-default.test.ts", text: SPAWNS_IT },
     { rel: "tests/unrelated.test.ts", text: "const x = 1;" },
   ];
   assertEquals(referencingTests("scripts/acp-service.mjs", corpus), ["tests/acp-service-harness-default.test.ts"]);
 
-  // THE FIX: an unenumerated script maps to the tests that name it...
+  // THE FIX: an unenumerated script maps to the tests that EXECUTE it...
   const acp = classifyUncovered("scripts/acp-service.mjs", { testFiles: corpus });
   assertEquals(acp.tests, ["tests/acp-service-harness-default.test.ts"], "the spawning test is selected");
   assert(/do NOT enumerate/.test(acp.mechanism), acp.mechanism);
 
-  // ...and FAILS CLOSED when nothing names it, rather than claiming guard
+  // ...and FAILS CLOSED when nothing runs it, rather than claiming guard
   // coverage that does not exist. This assertion is what would have caught the
   // original defect.
   const orphan = classifyUncovered("scripts/lib/no-such-helper.mjs", { testFiles: corpus });
-  assertEquals(orphan.tests, [], "an unenumerated script with no naming test must fail closed");
+  assertEquals(orphan.tests, [], "an unenumerated script no test executes must fail closed");
   assert(/no test names it/.test(orphan.mechanism), orphan.mechanism);
 
-  // An enumerated script keeps its guards AND gains any naming tests.
+  // An enumerated script keeps its guards AND gains any executing tests.
   const enumerated = classifyUncovered("scripts/a11y-audit.ts", {
-    testFiles: [{ rel: "tests/names-it.test.ts", text: '"a11y-audit.ts"' }],
+    testFiles: [{
+      rel: "tests/runs-it.test.ts",
+      text: 'const res = new Deno.Command("deno", { args: ["run", "-A", "scripts/a11y-audit.ts"] });',
+    }],
   });
-  assert(enumerated.tests.includes("tests/names-it.test.ts"), "a naming test is added to the guards");
+  assert(enumerated.tests.includes("tests/runs-it.test.ts"), "an executing test is added to the guards");
   for (const g of HARNESS_TREE_GUARDS) assert(enumerated.tests.includes(g), `${g} is still selected`);
+});
+
+Deno.test("nco2/R1b: a MENTION is not coverage — only a test that EXECUTES the script counts", () => {
+  // R1b, from cap-astra's re-review of 014177de, and the more serious of that
+  // review's two findings. The R1 fix treated any literal mention as coverage,
+  // so changing scripts/run-tests.mjs — the SUITE RUNNER — mapped to two tests
+  // that never run it:
+  //   tests/00-use-npm-test_test.ts names it inside `await Deno.readTextFile(…)`
+  //     + assertStringIncludes. It inspects SOURCE for two marker strings. It
+  //     does spawn a subprocess, but it spawns Deno.execPath() against a
+  //     throwaway temp repo — which is why "the file contains a spawn" is not
+  //     the rule (cap-astra's constraint: an unrelated spawn must not bind an
+  //     unrelated mention).
+  //   tests/changed-file-mapping.test.ts names it in SYNTHETIC package data.
+  // Measured: readdirSync("tests") → a missing directory makes `npm test` die
+  // instantly with ENOENT while `npm run test:changed` exited 0 over a 21-file
+  // subset.
+
+  const inspectsSource = [
+    'for (const runner of ["scripts/run-tests.mjs", "scripts/select-tests.mjs"]) {',
+    "  const src = await Deno.readTextFile(`${ROOT}${runner}`);",
+    '  assertStringIncludes(src, "deno.runner.jsonc");',
+    "}",
+    'const out = await new Deno.Command(Deno.execPath(), { args, cwd: dir }).output();',
+  ].join("\n");
+  const syntheticData = 'const pkg = { scripts: { test: "node scripts/run-tests.mjs" } };\nnew Deno.Command("x", { args: [] });';
+  const corpus = [
+    { rel: "tests/00-use-npm-test_test.ts", text: inspectsSource },
+    { rel: "tests/changed-file-mapping.test.ts", text: syntheticData },
+  ];
+
+  // Both MENTION it — that was the old, too-weak signal…
+  assertEquals(referencingTests("scripts/run-tests.mjs", corpus).length, 2);
+  // …and NEITHER executes it, which is the signal that decides coverage.
+  assertEquals(executingTests("scripts/run-tests.mjs", corpus), [], "a read + a synthetic string are not execution");
+
+  // THE BINDING ASSERTION. Testing the two helpers apart from the classifier is
+  // not enough — that is the R3 mistake repeated: swapping the call site back to
+  // `referencingTests(path, testFiles)` left every other assertion in this file
+  // green (measured: 16 passed / 0 failed with the mutant in place). So this
+  // drives classifyUncovered on a NON-infrastructure script with a corpus where
+  // the two helpers DISAGREE, which is the only shape that can detect the swap.
+  const inspectsOnly = [{
+    rel: "tests/inspects.test.ts",
+    text: 'const src = await Deno.readTextFile("scripts/acp-service.mjs");\nnew Deno.Command(Deno.execPath(), { args: ["unrelated"] });',
+  }];
+  assertEquals(
+    referencingTests("scripts/acp-service.mjs", inspectsOnly),
+    ["tests/inspects.test.ts"],
+    "the helpers must genuinely disagree here, or this assertion proves nothing",
+  );
+  assertEquals(executingTests("scripts/acp-service.mjs", inspectsOnly), []);
+  assertEquals(
+    classifyUncovered("scripts/acp-service.mjs", { testFiles: inspectsOnly }).tests,
+    [],
+    "classifyUncovered must consult EXECUTION, not mention — a source-inspecting test is not coverage",
+  );
+
+  // A read of the file must never count even when it is the whole line.
+  assertEquals(
+    executingTests("scripts/run-tests.mjs", [
+      { rel: "tests/a.test.ts", text: 'const src = readFileSync("scripts/run-tests.mjs");\nnew Deno.Command("x", { args: [] });' },
+    ]),
+    [],
+    "readFileSync(script) is inspection, not execution",
+  );
+  // Executed DIRECTLY in an argv array — coverage.
+  assertEquals(
+    executingTests("scripts/run-tests.mjs", [
+      { rel: "tests/b.test.ts", text: 'new Deno.Command("node", { args: ["scripts/run-tests.mjs"] });' },
+    ]),
+    ["tests/b.test.ts"],
+    "a literal in an argv array is execution",
+  );
+  // Bound to an identifier that reaches argv — coverage (the real ACP shape).
+  assertEquals(
+    executingTests("scripts/run-tests.mjs", [{
+      rel: "tests/c.test.ts",
+      text: 'const S = join(ROOT, "run-tests.mjs");\nconst args = [S];\nnew Deno.Command("node", { args });',
+    }]),
+    ["tests/c.test.ts"],
+    "a bound path reaching an argv position is execution",
+  );
+
+  // AGAINST THE REAL TREE, which is what the selector actually reads: the two
+  // ACP tests really do spawn acp-service.mjs, and nothing runs the runners.
+  const real: Array<{ rel: string; text: string }> = [];
+  for (const ent of Deno.readDirSync(`${ROOT}tests`)) {
+    if (!ent.isFile || !/\.(test\.ts|mjs|ts)$/.test(ent.name)) continue;
+    real.push({ rel: `tests/${ent.name}`, text: Deno.readTextFileSync(`${ROOT}tests/${ent.name}`) });
+  }
+  assert(referencingTests("scripts/run-tests.mjs", real).length >= 2, "the runner IS mentioned in the real tree");
+  // The two REAL spawners of acp-service.mjs are found.
+  for (const t of ["tests/acp-service-doctor.test.ts", "tests/acp-service-harness-default.test.ts"]) {
+    assert(executingTests("scripts/acp-service.mjs", real).includes(t), `${t} really spawns acp-service.mjs`);
+  }
+
+  // A KNOWN LIMIT, asserted rather than hidden. On the real tree
+  // executingTests() also returns THIS FILE for run-tests.mjs, acp-service.mjs
+  // and a11y-audit.ts — because the fixtures above contain argv-shaped literals
+  // like `args: ["scripts/run-tests.mjs"]` as DATA. No text heuristic can
+  // separate a fixture string from real code; a test file can bless a script by
+  // describing how one would run it.
+  //
+  // Two reasons that is acceptable, and both are asserted rather than asserted-
+  // about:
+  //   1. For the files where a wrong answer would be dangerous — the selector's
+  //      own machinery — SELECTOR_INFRASTRUCTURE fails closed BY NAME before
+  //      coverage is ever consulted, so the self-blessing is inert. Asserted
+  //      immediately below, and again in the next test.
+  //   2. For every other script the error direction is OVER-selection: a test
+  //      that mentions a script in an argv-shaped literal gets run and proves
+  //      nothing. That wastes time. It never DROPS a test, which is the failure
+  //      this whole mapping exists to prevent.
+  assert(
+    executingTests("scripts/run-tests.mjs", real).includes("tests/changed-file-mapping.test.ts"),
+    "this file's own fixture data reads as execution — the heuristic cannot see intent",
+  );
+  assertEquals(
+    classifyUncovered("scripts/run-tests.mjs", { testFiles: real }).tests,
+    [],
+    "…and it is INERT: the infrastructure rule fails closed before coverage is consulted",
+  );
+});
+
+Deno.test("nco2/R1b: the selector's OWN machinery can never be subset-mapped", () => {
+  // A subset chosen BY the thing under test cannot validate that thing. Every
+  // entry must fail closed with a mechanism that says so — including when a
+  // test would otherwise look like coverage.
+  for (const rel of SELECTOR_INFRASTRUCTURE) {
+    assert(isSelectorInfrastructure(rel), `${rel} is declared infrastructure`);
+    const v = classifyUncovered(rel, {
+      testFiles: [{ rel: "tests/pretend.test.ts", text: `new Deno.Command("node", { args: ["${rel}"] });` }],
+    });
+    assertEquals(v.tests, [], `${rel} must never map to a subset, even with an executing test`);
+    assert(/OWN machinery/.test(v.mechanism), v.mechanism);
+  }
+  // Declared-but-absent would be a rule that silently covers nothing.
+  for (const rel of SELECTOR_INFRASTRUCTURE) {
+    assert(Deno.statSync(`${ROOT}${rel}`).isFile, `${rel} must exist`);
+  }
+  // The list must name the runner and the picker — the two the mutant proved.
+  assert(SELECTOR_INFRASTRUCTURE.includes("scripts/run-tests.mjs"));
+  assert(SELECTOR_INFRASTRUCTURE.includes("scripts/select-tests.mjs"));
+
+  // And the CALLER enforces it over the CHANGED set, not the uncovered set:
+  // measured, only run-tests.mjs is import-unreachable, so a check living only
+  // in classifyUncovered would miss the other four entirely.
+  const src = Deno.readTextFileSync(`${ROOT}scripts/select-tests.mjs`);
+  assert(
+    /changed\.filter\(\(f\) => isSelectorInfrastructure\(f\)\)/.test(src),
+    "select-tests.mjs must test the CHANGED set for infrastructure, not the uncovered set",
+  );
 });
 
 Deno.test("nco2/R1: the REAL repository's spawned-script test is selected for its script", () => {

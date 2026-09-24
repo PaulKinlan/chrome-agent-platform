@@ -84,10 +84,38 @@ export const BOOKKEEPING_FILES = Object.freeze([
   "extension/manifest.json",
 ]);
 
-/** The fields a version bump is allowed to move. ROOT ONLY, plus package-lock's
- *  root self-entry (`packages[""].version`, its own version mirror). A nested
- *  dependency's `version` is deliberately NOT here — that is a real change. */
-export const VERSION_FIELDS = Object.freeze(["version", "version_name", "release"]);
+/**
+ * The root fields a version bump is allowed to move, PER FILE.
+ *
+ * R2b, from cap-astra's re-review of 014177de, and a defect I shipped in the R2
+ * fix itself. That fix deleted a GENERIC ["version", "version_name", "release"]
+ * from every bookkeeping file, which was wrong in two directions at once:
+ *
+ *   • `release` is written to NONE of the three. scripts/bump-version.mjs writes
+ *     a `release` mirror into extension/lib/bundled-inventory-data.js (:178-192)
+ *     so tests/bundled-tool-packages.test.ts can assert inventory.release ===
+ *     manifest.version. The three JSON files never carry the key. So deleting a
+ *     root `release` ERASED a real edit: adding a release CONFIG object to
+ *     package.json, with no version touched at all, mapped as "version-only"
+ *     and the CLI selected a 21-file subset (measured, all three files).
+ *   • `version_name` is written ONLY to extension/manifest.json (:150-151), so
+ *     ignoring it in package.json erased a real edit there the same way.
+ *
+ * The authority is what the hook ACTUALLY writes, not what the word "version"
+ * suggests (scripts/bump-version.mjs:145-155):
+ *   package.json            → root `version`
+ *   package-lock.json       → root `version` AND `packages[""].version` (mirror)
+ *   extension/manifest.json → root `version` AND `version_name`
+ *
+ * A path not listed here has NO approved fields, so every difference counts and
+ * the predicate fails closed. A nested dependency's `version` is deliberately
+ * not approved anywhere — that is a real change.
+ */
+export const VERSION_FIELDS_BY_FILE = Object.freeze({
+  "package.json": Object.freeze(["version"]),
+  "package-lock.json": Object.freeze(["version"]),
+  "extension/manifest.json": Object.freeze(["version", "version_name"]),
+});
 
 /**
  * Strip the approved version fields and return a STRUCTURE-PRESERVING canonical
@@ -109,19 +137,24 @@ export const VERSION_FIELDS = Object.freeze(["version", "version_name", "release
  * A deep structural comparison after narrowly deleting the approved fields has
  * neither hole, and is simpler than any leaf encoding that tries to escape them.
  */
-function strippedCanonical(value) {
+function strippedCanonical(value, rel) {
+  const path = String(rel ?? "").replace(/\\/g, "/");
+  const fields = VERSION_FIELDS_BY_FILE[path] ?? [];
   const clone = structuredClone(value);
   if (clone && typeof clone === "object" && !Array.isArray(clone)) {
-    // Root release fields, deleted by EXACT key — never by a name match at
-    // arbitrary depth (a nested dependency's `version` must still count).
-    delete clone.version;
-    delete clone.version_name;
-    delete clone.release;
-    // package-lock's root self-entry mirrors the project's own version.
-    const rootEntry = clone.packages && typeof clone.packages === "object" && !Array.isArray(clone.packages)
-      ? clone.packages[""]
-      : null;
-    if (rootEntry && typeof rootEntry === "object" && !Array.isArray(rootEntry)) delete rootEntry.version;
+    // Deleted by EXACT ROOT key — never by a name match at arbitrary depth (a
+    // nested dependency's `version` must still count as a real change), and
+    // never a key this file's bump does not write (R2b).
+    for (const field of fields) delete clone[field];
+    // package-lock's root self-entry mirrors the project's own version, and the
+    // hook writes both. LOCK ONLY: a `packages[""]` shape in any other file is
+    // not a version mirror and deleting from it would erase a real change.
+    if (path === "package-lock.json") {
+      const rootEntry = clone.packages && typeof clone.packages === "object" && !Array.isArray(clone.packages)
+        ? clone.packages[""]
+        : null;
+      if (rootEntry && typeof rootEntry === "object" && !Array.isArray(rootEntry)) delete rootEntry.version;
+    }
   }
   return canonicalJson(clone);
 }
@@ -147,8 +180,14 @@ function canonicalJson(value) {
  * the only `true` is "parsed both sides and every differing key path is a
  * declared version field".
  */
-export function versionOnlyJsonChange(beforeText, afterText) {
+export function versionOnlyJsonChange(beforeText, afterText, rel) {
   if (typeof beforeText !== "string" || typeof afterText !== "string") return false;
+  const path = String(rel ?? "").replace(/\\/g, "/");
+  // R2b: the approved fields are a property of the FILE, so a predicate without
+  // a path cannot answer. No declared fields means nothing is approved to move,
+  // which means nothing can be version-only. Fail closed rather than fall back
+  // to a generic field list — that fallback is exactly what shipped the defect.
+  if (!VERSION_FIELDS_BY_FILE[path]) return false;
   let before, after;
   try {
     before = JSON.parse(beforeText);
@@ -156,8 +195,8 @@ export function versionOnlyJsonChange(beforeText, afterText) {
   } catch {
     return false; // unparseable: never claim it is only a version bump
   }
-  // Everything OUTSIDE the approved fields must be structurally identical.
-  if (strippedCanonical(before) !== strippedCanonical(after)) return false;
+  // Everything OUTSIDE this file's approved fields must be structurally identical.
+  if (strippedCanonical(before, path) !== strippedCanonical(after, path)) return false;
   // …and at least one approved field must actually have moved: two identical
   // files are not a "version-only CHANGE".
   return canonicalJson(before) !== canonicalJson(after);
@@ -191,13 +230,15 @@ export function isGuardEnumeratedScript(rel) {
 }
 
 /**
- * Tests that name this script LITERALLY — the coverage a static import graph
- * cannot see. `testFiles` is `[{ rel, text }]`, injected so this stays pure.
+ * Tests that MENTION this script literally — a NECESSARY condition for the
+ * coverage a static import graph cannot see, and on its own NOT SUFFICIENT.
+ * `executingTests` is the one that answers coverage; this stays exported
+ * because it is the honest name for "mentions it", and a test asserts the two
+ * genuinely differ on the real corpus.
  *
- * A computed path (`join(ROOT, "scripts", "acp-service.mjs")`) still contains
- * the basename as a string literal, so matching the basename finds it. The
- * basename is matched rather than the full path because that is how these tests
- * actually spell it.
+ * `testFiles` is `[{ rel, text }]`, injected so this stays pure. A computed
+ * path (`join(ROOT, "scripts", "acp-service.mjs")`) still contains the basename
+ * as a string literal, which is how these tests actually spell it.
  */
 export function referencingTests(rel, testFiles = []) {
   const path = rel.replace(/\\/g, "/");
@@ -211,6 +252,112 @@ export function referencingTests(rel, testFiles = []) {
     }
   }
   return out.sort();
+}
+
+/** A line that starts a subprocess. */
+const SPAWN_CALL = /Deno\.Command|spawnSync|execSync|execFileSync|child_process|\.spawn\(/;
+/** A line that places a value into a subprocess ARGUMENT position. */
+const ARGV_POSITION = /\bargs\b|Deno\.Command|spawnSync|execSync|execFileSync/;
+/** A line that merely READS a file — the shape that must never count. */
+const READ_CALL = /readTextFile|readFileSync|readTextFileSync|Deno\.readFile|readFile\(/;
+
+/**
+ * Tests that EXECUTE this script — the only naming evidence that is coverage.
+ *
+ * R1b, from cap-astra's re-review of 014177de, and the more serious of the two
+ * findings there. The first version treated any literal MENTION as coverage, so
+ * a change to `scripts/run-tests.mjs` — the suite runner itself — mapped to
+ * `tests/00-use-npm-test_test.ts` and `tests/changed-file-mapping.test.ts`.
+ * NEITHER runs it:
+ *   • 00-use-npm-test_test.ts names it inside `await Deno.readTextFile(...)` +
+ *     assertStringIncludes — it INSPECTS SOURCE for two marker strings. It does
+ *     spawn a subprocess, but it spawns `Deno.execPath()` against a throwaway
+ *     temp repo, never the runner.
+ *   • changed-file-mapping.test.ts names it in SYNTHETIC package data
+ *     (`scripts: { test: "node scripts/run-tests.mjs" }`).
+ * Measured: `readdirSync("tests")` pointed at a missing directory makes
+ * `npm test` die instantly with ENOENT, while `npm run test:changed` exited 0
+ * over a 21-file subset. A subset that cannot see a broken test runner is worse
+ * than no subset.
+ *
+ * The rule is deliberately NARROW, and is specifically NOT "this test file
+ * contains a subprocess somewhere" — an unrelated spawn must not bind an
+ * unrelated mention (cap-astra's constraint, and the reason the whole-file
+ * check below is only a cheap pre-filter). The NAMED REFERENCE ITSELF must
+ * reach an argument position, one of two ways:
+ *   1. the literal sits on a spawn/argv line directly, or
+ *   2. the literal is bound to an identifier (`const SCRIPT = join(ROOT, …)`)
+ *      and THAT identifier later appears in an argv position.
+ * A matching line that also reads a file is rejected, because
+ * `readTextFile(runner)` is the exact shape this exists to exclude.
+ *
+ * Verified against the real corpus (7 cases, 0 wrong), including the
+ * discriminations that matter: acp-service.mjs IS executed by both ACP tests;
+ * acp-bridge.ts IS executed by acp-service-harness-default.test.ts but only
+ * MENTIONED (inside a plist string) by acp-service-doctor.test.ts; run-tests.mjs
+ * and select-tests.mjs are executed by nobody.
+ *
+ * Anything this cannot prove is not coverage, and the caller fails closed.
+ */
+export function executingTests(rel, testFiles = []) {
+  const path = rel.replace(/\\/g, "/");
+  const base = path.split("/").pop() ?? path;
+  if (!base) return [];
+  const out = [];
+  for (const entry of testFiles) {
+    const text = entry?.text ?? "";
+    if (!SPAWN_CALL.test(text)) continue; // cheap pre-filter: nothing here runs anything
+    const lines = text.split("\n");
+    const names = (line) =>
+      line.includes(path) || line.includes(`"${base}"`) || line.includes(`'${base}'`);
+    let executes = false;
+    for (let i = 0; i < lines.length && !executes; i++) {
+      if (!names(lines[i])) continue;
+      // (1) the literal is itself on a spawn/argv line.
+      if (!READ_CALL.test(lines[i]) && (SPAWN_CALL.test(lines[i]) || ARGV_POSITION.test(lines[i]))) {
+        executes = true;
+        break;
+      }
+      // (2) the literal is bound to an identifier that reaches an argv position.
+      const bound = lines[i].match(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/);
+      if (!bound) continue;
+      const ident = new RegExp(`\\b${bound[1]}\\b`);
+      for (let j = 0; j < lines.length; j++) {
+        if (j === i || !ident.test(lines[j])) continue;
+        if (ARGV_POSITION.test(lines[j]) && !READ_CALL.test(lines[j])) {
+          executes = true;
+          break;
+        }
+      }
+    }
+    if (executes) out.push(entry.rel);
+  }
+  return out.sort();
+}
+
+/**
+ * The selector's OWN machinery. A change here invalidates the selector's
+ * authority to narrow anything, so it always runs the full suite — whether or
+ * not the import graph happens to reach the file.
+ *
+ * R1b: a subset produced BY the thing under test cannot validate that thing.
+ * The check at the CALLER is the load-bearing one, and this branch is the
+ * backstop. MEASURED on the real graph: of these five, only `run-tests.mjs` is
+ * import-unreachable and so only IT ever arrives at `classifyUncovered` —
+ * `select-tests.mjs` is imported by two tests, and the other three are reached
+ * transitively through it, so the graph calls them "covered" and they never hit
+ * this function at all. Coverage is not the question here; self-reference is.
+ */
+export const SELECTOR_INFRASTRUCTURE = Object.freeze([
+  "scripts/run-tests.mjs", // the full-suite runner (readdir + two-phase execution)
+  "scripts/select-tests.mjs", // the subset picker itself
+  "scripts/test-partition.mjs", // decides serial vs parallel for both runners
+  "scripts/lib/serial-phase.mjs", // executes the serial phase for both runners
+  "scripts/lib/changed-file-mapping.mjs", // this file: the mapping the subset trusts
+]);
+
+export function isSelectorInfrastructure(rel) {
+  return SELECTOR_INFRASTRUCTURE.includes(rel.replace(/\\/g, "/"));
 }
 
 export function isBookkeepingFile(rel) {
@@ -229,6 +376,18 @@ export function isBookkeepingFile(rel) {
  */
 export function classifyUncovered(rel, { versionOnly = false, testFiles = [] } = {}) {
   const path = rel.replace(/\\/g, "/");
+  // R1b: the selector's own machinery is never subset-mappable. Checked FIRST so
+  // no later branch can bless it, and duplicated at the caller because an
+  // import-reachable infrastructure file never arrives here at all.
+  if (isSelectorInfrastructure(path)) {
+    return {
+      mechanism:
+        "the test selector's OWN machinery — a subset chosen by the thing under test " +
+        "cannot validate it (measured: a broken readdir in run-tests.mjs kills `npm test` " +
+        "instantly while test:changed stayed green over a 21-file subset)",
+      tests: [],
+    };
+  }
   if (isBookkeepingFile(path)) {
     return versionOnly
       ? {
@@ -243,9 +402,11 @@ export function classifyUncovered(rel, { versionOnly = false, testFiles = [] } =
       };
   }
   if (isScriptsHarness(path)) {
-    // Any test that NAMES this script literally is its real coverage — a
-    // spawned dry-run has no import edge but is the strongest check it has.
-    const named = referencingTests(path, testFiles);
+    // A test that EXECUTES this script is its real coverage — a spawned dry-run
+    // has no import edge but is the strongest check it has. A test that merely
+    // NAMES it is NOT (R1b): source-inspecting guards and synthetic fixture data
+    // both mention scripts they never run.
+    const named = executingTests(path, testFiles);
     if (isGuardEnumeratedScript(path)) {
       return {
         mechanism: named.length
