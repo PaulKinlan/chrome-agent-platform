@@ -112,10 +112,62 @@ const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
 // CAS NotFound failures. `\\bimport\\b` plus `from\\s*` covers every spacing including none, and the
 // bare form is no longer line-anchored for the same reason (a minifier puts it mid-line).
 const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-packages)[^"'\n]*["']`;
+// A COMMENT IS NOT A TOKEN BARRIER EITHER (cap-astra, 2026-09-24): `import(/* fixed local path */
+// "../scripts/build-bundled-tool-packages.mjs")` was a known predicate miss the static-spacing
+// tolerance could not address — it is the DYNAMIC alternative, with the comment between the paren
+// and the specifier. The first attempt put whitespace-or-comment runs INTO the regex, and that hung
+// the classifier on a pathological comment run (catastrophic backtracking: a `*`-quantified
+// `[\s\S]*?` has no ceiling). A hang in a shared gate is worse than a miss, so comments are now
+// removed by a LINEAR, string-aware scan and the patterns stay whitespace-only:
+//   * `stripComments` replaces each comment with a single space, so tokens do not merge and the
+//     existing whitespace tolerance does the rest;
+//   * it respects `'`, `"` and `` ` `` strings, so a `//` inside a URL does not swallow the rest of
+//     the line — a naive stripper would MISS a hazard after such a string;
+//   * a specifier inside a STRING still matches (fail-closed for generated code), while a
+//     commented-out import does NOT (it is dead code, not a hazard — this reverses the earlier
+//     note, deliberately, now that stripping is in place).
+export function stripComments(text) {
+  let out = "";
+  let i = 0;
+  const n = text.length;
+  while (i < n) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === "/" && next === "/") {
+      while (i < n && text[i] !== "\n") i++;
+      out += " ";
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      i += 2;
+      while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      i = Math.min(n, i + 2);
+      out += " ";
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      const quote = c;
+      out += c;
+      i++;
+      while (i < n) {
+        const ch = text[i];
+        if (ch === "\\") { out += ch + (text[i + 1] ?? ""); i += 2; continue; }
+        out += ch;
+        i++;
+        if (ch === quote) break;
+      }
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 const IMPORT_BUILD_RE = new RegExp(
   `\\bimport\\b[\\s\\S]{0,400}?from\\s*${BUILD_MODULE_SPEC}` + // static: any spacing, wrapped or minified
-    `|\\bimport\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // dynamic import, literal
-    `|\\brequire\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // CJS require, literal
+    `|\\bimport\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // dynamic import, literal specifier
+    `|\\brequire\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // CJS require, literal specifier
     `|\\bimport\\s*${BUILD_MODULE_SPEC}`, // bare side-effect import, not line-anchored
 );
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
@@ -142,7 +194,7 @@ function writesTree(text) {
 export function classifyHazards(text) {
   const classes = [];
   if (SPAWN_RE.test(text) && BUILD_REF_RE.test(text)) classes.push("spawns build.mjs or the bundled-tool generator");
-  if (IMPORT_BUILD_RE.test(text)) classes.push("imports build.mjs or the bundled-tool generator (module side effects)");
+  if (IMPORT_BUILD_RE.test(stripComments(text))) classes.push("imports build.mjs or the bundled-tool generator (module side effects)");
   if (writesTree(text)) classes.push("writes under extension/ or packages/");
   if (READ_RE.test(text) && DIST_LITERAL_RE.test(text)) classes.push("reads extension/dist");
   return classes;

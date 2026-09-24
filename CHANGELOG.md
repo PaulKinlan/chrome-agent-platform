@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.479] — 2026-09-24
+- revise 3: comments are stripped linearly, not matched by a comment-run regex
+
 ## [0.3.478] — 2026-09-24
 - revise 2: spacing is not a rule, and the gate now tests the CENSUS rule
 

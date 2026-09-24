@@ -164,6 +164,43 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
       `${label}: the import of a build module must classify as a hazard, whatever its line shape`,
     );
   }
+  // COMMENTS ARE TOKENS TOO (cap-astra, 2026-09-24): `import(/* fixed local path */ "…")` was a
+  // known predicate miss the static-spacing tolerance could not address — it is the dynamic form,
+  // where the comment sits between the paren and the specifier. The first fix put comment runs INTO
+  // the regex and hung the classifier on a pathological comment run (catastrophic backtracking), so
+  // comments are stripped by a linear scan first. These pin the case, its variants, and the two
+  // ways a stripper can be wrong: not respecting strings, and being quadratic.
+  const c1 = `import(/* fixed local path */ "../${GEN}")`;
+  const c2 = `const m = await import( // why\n  "../${GEN}")`;
+  const c3 = `import { A } /* x */ from "../${GEN}";`;
+  const c4 = `import { A } from /* x */ "../${GEN}";`;
+  const c5 = `import /* x */ "../${GEN}";`;
+  const c6 = `const m = require(/* x */ "../${GEN}")`;
+  for (const [label, text] of Object.entries({ c1, c2, c3, c4, c5, c6 })) {
+    assertStringIncludes(
+      classifyHazards(text).join("|"), IMPORT_HAZARD,
+      `${label}: a comment between the tokens must not hide a build-module import`,
+    );
+  }
+  // The string trap: a naive stripper treats the `//` inside this URL as a line comment and would
+  // MISS the import on the same line — the stripper must respect string literals.
+  const urlThenImport = `const u = "https://example.com/x"; import("${"../" + GEN}");`;
+  assertStringIncludes(
+    classifyHazards(urlThenImport).join("|"), IMPORT_HAZARD,
+    "a // inside a string must not swallow the rest of the line (the stripper respects strings)",
+  );
+  // And stripping means a COMMENTED-OUT import is dead code, not a hazard — the deliberate
+  // reversal of the earlier fail-closed note, pinned so the change is visible rather than implicit.
+  assertEquals(classifyHazards(`// import { A } from "../${GEN}";`), []);
+  // PERF: the previous pattern-based attempt hung here. A generous ceiling that a quadratic
+  // pattern cannot meet, so a regression is a red test rather than a wedged gate.
+  const nasty = `import(${("/* a */".repeat(400) + " ".repeat(2000))}`;
+  const t0 = Date.now();
+  classifyHazards(nasty);
+  classifyHazards(nasty + "x");
+  const stripMs = Date.now() - t0;
+  assert(stripMs < 2000, `two scans of a 6 kB comment run took ${stripMs} ms — the classifier must stay linear`);
+
   // Negatives: importing something else, and merely NAMING the generator in prose.
   assertEquals(classifyHazards(`import { x } from "../${EXT}lib/pure.js";`), []);
   assertEquals(classifyHazards(`// the bundles are made by ${GEN}, see it for the details`), []);
