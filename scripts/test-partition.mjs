@@ -81,13 +81,33 @@ export const DRIVER_REF_RE = /tests\/[\w.-]+\.(?:mjs|ts)/g;
 
 const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
-// 4lc0: a test that IMPORTS a build module runs it — module side effects are the same
-// hazard as spawning it, and the SPAWN_RE rule above cannot see the shape that let
+// 4lc0: a test that IMPORTS a build module runs it — module side effects are the same hazard
+// as spawning it, and the SPAWN_RE rule above cannot see the shape that let
 // tests/tool-descriptions.test.ts join the parallel phase while regenerating
-// extension/wasm/cas on import. Matches the import statement itself (an import specifier),
-// not a mention in prose: the import must be on its own line and end in a from-clause.
-const IMPORT_BUILD_RE =
-  /(?:^|\n)\s*import\s[^;\n]*?from\s*["'][^"'\n]*(?:build\.mjs|build-bundled-tool-packages)[^"'\n]*["']/;
+// extension/wasm/cas on import.
+//
+// THE FIRST VERSION OF THIS RULE MATCHED ONE LINE SHAPE and was evadable: an independent review
+// (cap-astra, 2026-09-24, ~/cap-evidence/4lc0-astra-review-20260924/REVIEW.md) took the SAME live
+// import, split it over three lines, and the guard went 5/0 while the real partition put that
+// file in the parallel phase and reproduced 8 CAS NotFound failures — the known writer stayed
+// correctly serial throughout, so the containment held and only the DETECTOR was blind. So the
+// rule is written against the SPECIFIER, not against a line shape:
+//   import … from "<build module>"   (any wrapping between the clause and `from`)
+//   import "<build module>"          (bare side-effect import)
+//   import("<build module>")         (dynamic import, literal specifier)
+//   require("<build module>")        (CJS)
+// RESIDUE, stated so it is not implied away: a specifier built at RUNTIME (`import(someVar)`) is
+// not visible to any text detector, and a COMMENTED-OUT import DOES match (fail-closed: the cost
+// is a declaration the lane did not need, never a silent parallel writer — a bare mention in
+// prose does not match). The bounded
+// `[\s\S]{0,400}?` window keeps the match linear and local to one statement region.
+const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-packages)[^"'\n]*["']`;
+const IMPORT_BUILD_RE = new RegExp(
+  `\\bimport\\s[\\s\\S]{0,400}?from\\s*${BUILD_MODULE_SPEC}` + // static import, single or wrapped
+    `|\\bimport\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // dynamic import, literal
+    `|\\brequire\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // CJS require, literal
+    `|(?:^|\\n)[ \\t]*import\\s*${BUILD_MODULE_SPEC}`, // bare side-effect import
+);
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
 const READ_RE = /readTextFile|readFile|readFileSync|readDir|readdir|import\s*\(|\bfrom\s*["']/i;

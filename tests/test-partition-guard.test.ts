@@ -139,4 +139,55 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
   assertEquals(classifyHazards(`import { x } from "../${EXT}lib/pure.js";`), []);
   // No spawn primitive → reading build-source text is not a spawn hazard.
   assertEquals(classifyHazards(`const src = await Deno.readTextFile("${BUILD}");`), []);
+
+  // 4lc0 detector coverage: an independent review (cap-astra, 2026-09-24) split the SAME live
+  // import over three lines and the guard went 5/0 while the real partition ran it in the
+  // parallel phase, reproducing 8 CAS NotFound failures. One line shape is not a rule, so each
+  // normal form below is pinned — and the negatives, so the fix cannot pass by matching anything.
+  const IMPORT_HAZARD = "imports " + BUILD;
+  const single = `import { A } from "../${GEN}";`;
+  const multiline = `import {\n  AGENT_DESCRIPTIONS,\n} from "../${GEN}";`;
+  const multilineWithComment = `import {\n  // the constant\n  A,\n} from "../${GEN}";`;
+  const bareSideEffect = `import "../${GEN}";`;
+  const dynamicLiteral = `const m = await import("../${GEN}");`;
+  const requireLiteral = `const m = require("../${GEN}");`;
+  const multilineBuild = `import {\n  meta,\n} from "../${BUILD}";`;
+  for (const [label, text] of Object.entries({ single, multiline, multilineWithComment, bareSideEffect, dynamicLiteral, requireLiteral, multilineBuild })) {
+    assertStringIncludes(
+      classifyHazards(text).join("|"), IMPORT_HAZARD,
+      `${label}: the import of a build module must classify as a hazard, whatever its line shape`,
+    );
+  }
+  // Negatives: importing something else, and merely NAMING the generator in prose.
+  assertEquals(classifyHazards(`import { x } from "../${EXT}lib/pure.js";`), []);
+  assertEquals(classifyHazards(`// the bundles are made by ${GEN}, see it for the details`), []);
+  // DOCUMENTED RESIDUE, pinned so a future detector that closes it fails this line and updates
+  // the note rather than silently changing coverage: a specifier built at RUNTIME is invisible to
+  // a text scan. This is a limit, not an invariant being asserted as desirable.
+  assertEquals(classifyHazards(`const m = await import(somePath);`), []);
+});
+
+Deno.test("4lc0 fresh-instance gate: a NEW file using the evasive import shape is detected on disk", async () => {
+  // The review's finding was about a NEW instance, so this plants one: the same live import over
+  // three lines, written to disk under tests/ (not a *.test.ts name, so the guard's own walk never
+  // picks it up as a test), classified through the same predicate the guard uses, then removed.
+  const ROOT_PATH = new URL("..", import.meta.url);
+  const probe = new URL("./tmp-4lc0-fresh-instance-probe.ts", ROOT_PATH);
+  const GEN_NAME = "scripts/build-bundled" + "-tool-packages.mjs";
+  const rel = "tests/tmp-4lc0-fresh-instance-probe.ts";
+  try {
+    await Deno.writeTextFile(probe, `import {\n  AGENT_DESCRIPTIONS,\n} from "../${GEN_NAME}";\n`);
+    const text = await Deno.readTextFile(probe);
+    assertStringIncludes(
+      classifyHazards(text).join("|"), "imports " + "build" + ".mjs",
+      "a fresh file with the wrapped import must be classified as a build-module hazard",
+    );
+    // AND it must not be able to sit in the parallel phase: the guard's invariant is
+    // hazard ⇒ SERIAL (or a reviewed EXEMPTIONS entry), and a new file is in neither.
+    assertEquals(SERIAL.has(rel), false, "the probe is not declared serial — so the guard must red for it");
+    const { parallel } = partition([rel]);
+    assertEquals(parallel, [rel], "partition alone would run it in the parallel phase, which is why the guard is the check");
+  } finally {
+    await Deno.remove(probe).catch(() => {});
+  }
 });

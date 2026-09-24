@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.477] — 2026-09-24
+- revise: the import detector matches the SPECIFIER, not one line shape
+
 ## [0.3.476] — 2026-09-24
 - name the CAS rewriter and order it before parallel readers
 
