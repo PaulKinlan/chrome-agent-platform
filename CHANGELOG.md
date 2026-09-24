@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.483] — 2026-09-24
+- external agents can now use your browser tools directly to inspect and organize tabs
+
 ## [0.3.482] — 2026-09-24
 - skills you reference in the composer now travel with the task to external agent runs
 

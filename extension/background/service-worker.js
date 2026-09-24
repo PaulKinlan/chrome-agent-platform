@@ -365,6 +365,7 @@ import {
 import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
+  runBrowserToolCall,
   captureTabScreenshot,
   getBrowserControlGrantIdentity,
   isBrowserControlGranted,
@@ -6155,6 +6156,14 @@ function isOwnerPrincipal(ctx) {
 }
 
 const handlers = mergeRouteMaps(
+  // THE ACP HARNESS'S BROWSER-TOOL CALLS (chrome-agent-platform-2amt). Fenced with isOwnerPrincipal
+  // (OWNER_EXTENSION_FENCED): callable by extension surfaces (hub, sidepanel), but rejected for pages.
+  {
+    "browser.callTool": async (message, context) => {
+      if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
+      return runBrowserToolCall(message?.name, message?.args ?? {});
+    },
+  },
   activityRoutes,
   schedulerRoutes,
   fsGrantRoutes,

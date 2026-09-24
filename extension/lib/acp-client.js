@@ -362,6 +362,27 @@ export class AcpClient {
    * @private
    */
   async _handleAgentRequest(msg) {
+    // CAP's browser tools, called BY THE HARNESS over this same connection (2amt). The harness is
+    // told the catalogue in its opening prompt by scripts/acp-bridge.ts, and calls back with
+    // {"method":"browser/call_tool","params":{"name":…,"args":…}}. Everything the tool decides —
+    // permissions, the browser-control grant, the consent card — is decided inside the tool, so this
+    // is a transport, not a new source of authority.
+    if (msg.method === "browser/call_tool") {
+      let result;
+      try {
+        const name = typeof msg.params?.name === "string" ? msg.params.name : "";
+        this.activeTurnListener?.({ kind: "tool", detail: `browser:${name || "(unnamed)"}`, raw: msg.params });
+        // THE SERVICE WORKER RUNS THE TOOL. This module is page context and must not import
+        // browser-tools.js (agent-loop.js: "those are SW authority"), which is also why the tools'
+        // grants stay where they are — the SW checks them, not this transport.
+        const reply = await chrome.runtime.sendMessage({ type: "browser.callTool", name, args: msg.params?.args ?? {} });
+        result = reply && reply.ok === false && reply.error !== undefined ? { error: reply.error } : reply;
+      } catch (error) {
+        result = { error: `browser tool dispatch failed: ${String((error && error.message) || error)}` };
+      }
+      this._send({ jsonrpc: "2.0", id: msg.id, result });
+      return;
+    }
     if (msg.method === "session/request_permission") {
       const options = Array.isArray(msg.params?.options) ? msg.params.options : [];
       let selectedOptionId = null;

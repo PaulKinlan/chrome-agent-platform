@@ -2,13 +2,13 @@
 
 **Status:** Authoritative Census (chrome-agent-platform-ygvt / CAP-FB-20260908-OWNER-DISPATCH-CENSUS-01)  
 **Seams:** `extension/background/service-worker.js`, `extension/background/routes/`, `extension/lib/owner-approval.js`, `extension/lib/pure.js`  
-**Population:** 259 total registered routes derived from executable composition (`mergeRouteMaps`).
+**Population:** 260 total registered routes derived from executable composition (`mergeRouteMaps`).
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-This document provides a total, honest census of all 259 message routes registered in the Chrome Agent Platform Service Worker.
+This document provides a total, honest census of all 260 message routes registered in the Chrome Agent Platform Service Worker.
 
 Prior audits (such as 18ug) focused narrowly on call sites of `requireOwnerApproval`, identifying 31 approval sites. However, `requireOwnerApproval` is only one of multiple gating layers in the extension. A route that does not call `requireOwnerApproval` is not necessarily insecure, but a mutation that reaches state modification without an explicit policy decision represents an unclassified authority boundary.
 
@@ -39,7 +39,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (259 registered routes)                 │
+│ - look up type in handlers map (260 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -71,7 +71,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (259 Routes)
+## 3. High-Level Population Summary (260 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
@@ -79,13 +79,13 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 36 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 16 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
-| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 22 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
+| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 23 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
 | **Execution & Worker Orchestration** | 22 | `extension`, `model`, worker | `runControl`, `activeExecutions`, worker RPC |
 | **Agent Task Board (`AGENT_BOARD`)** | 13 | `extension`, `model` | Board state machine, role fences |
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 31 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 88 | `owner-options`, `extension` | Read-only; no state mutation |
-| **Total** | **259** | | |
+| **Total** | **260** | | |
 
 ---
 
@@ -198,11 +198,12 @@ Actions that require an explicit owner approval card with a payload digest befor
 
 ---
 
-### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 22 routes)
+### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 23 routes)
 Fenced with `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`). Callable by extension surfaces (hub, side panel, options), but rejected for pages.
 
 | Route Name | Owning Module | Description |
 |---|---|---|
+| `browser.callTool` | `service-worker.js` | Invokes a browser tool (ACP in-app protocol) |
 | `actions.undo` | `service-worker.js` | Undoes a user action recorded in ledger |
 | `notifications.list` | `service-worker.js` | Lists pending extension notifications |
 | `notification.get` | `service-worker.js` | Reads a single notification |
