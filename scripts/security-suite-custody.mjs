@@ -65,6 +65,15 @@ export async function readProcIdentity(pid) {
   return { ...parseProcStat(raw), uid: procInfo.uid };
 }
 
+/** True only when the error is a /proc entry DISAPPEARING, i.e. the process
+ *  exited between the group-alive check and the identity read. Distinguished
+ *  from every other read failure, which must stay fail-closed: an unreadable
+ *  /proc for a process that still exists is not the same fact as a vanished one.
+ *  chrome-agent-platform-8ixk. */
+export function isVanishedProcError(error) {
+  return error?.code === "ENOENT";
+}
+
 export async function sha256File(file) {
   return createHash("sha256").update(await readFile(file)).digest("hex");
 }
@@ -316,20 +325,41 @@ export async function terminateAttestedGroup({
   observed,
   termWaitMs,
   killWaitMs,
+  readIdentity = readProcIdentity,
+  isAlive = groupAlive,
 }) {
   const pgid = attestation.identity.pgid;
   const leaderStart = attestation.identity.starttime;
-  if (!groupAlive(pgid)) {
+  if (!isAlive(pgid)) {
     return { termSent: false, killSent: false, survived: false };
   }
   try {
-    const current = await readProcIdentity(attestation.identity.pid);
+    const current = await readIdentity(attestation.identity.pid);
     if (
       current.starttime !== leaderStart || current.pgid !== pgid ||
       current.sid !== attestation.identity.sid ||
       current.uid !== attestation.identity.uid
     ) throw new Error("owned process-group identity changed");
   } catch (error) {
+    // A leader whose /proc entry has VANISHED while the group is also gone is the
+    // BENIGN case, not an attestation failure: termination wanted the process
+    // gone, and an absent /proc/<pid> plus a dead group is the strongest evidence
+    // that it is. Rethrowing this ENOENT used to escape the supervisor as an
+    // uncaught rejection, so the run wrote NO receipt at all — no
+    // CAP_SECURITY_RESULT, no verdict — and a death this way got attributed to the
+    // environment because there was nothing left to read (8ixk).
+    // BOTH conditions are required, and that is the fail-closed boundary: an
+    // unreadable /proc for a group that is STILL ALIVE falls through to the
+    // ownership check below and can still throw. Only ENOENT qualifies, and the
+    // only ENOENT source inside this try is the /proc read.
+    if (isVanishedProcError(error) && !isAlive(pgid)) {
+      return {
+        termSent: false,
+        killSent: false,
+        survived: false,
+        leaderExited: true,
+      };
+    }
     // The leader may exit while owned descendants remain. In that case every
     // currently live group member must have been observed as this runner's
     // exact pid/starttime/uid descendant before any negative-PGID signal.

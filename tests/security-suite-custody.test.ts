@@ -9,11 +9,13 @@ import { lstat as nodeLstat } from "node:fs/promises";
 import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 import {
   cleanupExactProfile,
+  isVanishedProcError,
   pidAlive,
   PROFILE_ROOT,
   readProcIdentity,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
+  terminateAttestedGroup,
   waitUntil,
 } from "../scripts/security-suite-custody.mjs";
 
@@ -528,3 +530,130 @@ Deno.test(
     }
   },
 );
+
+// ── chrome-agent-platform-8ixk ─────────────────────────────────────────────
+// The runner child can exit between terminateAttestedGroup's group-alive check
+// and its readProcIdentity call. That ENOENT used to be rethrown out of the
+// supervisor as an uncaught rejection, so the run wrote NO receipt at all — no
+// CAP_SECURITY_RESULT, no verdict — and a death this way read as environmental
+// because there was nothing left to read. Observed for real: killing the runner
+// mid-run produced `ENOENT: no such file or directory, open '/proc/<pid>/stat'`
+// at readProcIdentity <- terminateAttestedGroup, and an evidence directory with
+// no receipt in it.
+//
+// The race is INJECTED, not timed: readIdentity and isAlive are options on
+// terminateAttestedGroup, the same pattern attestOwnedGroup already uses for
+// readIdentity. A test that waits for a real process to die at the right instant
+// would be flaky, and a flaky test of a teardown race is worse than none.
+// The pgid/pid are deliberately impossible so no path can reach process.kill.
+const DEAD_PGID = 999999;
+const DEAD_PID = 999998;
+const fakeAttestation = {
+  identity: {
+    pid: DEAD_PID,
+    pgid: DEAD_PGID,
+    sid: DEAD_PID,
+    starttime: "12345",
+    uid: 0,
+  },
+};
+const coded = (code: string) => Object.assign(new Error(code), { code });
+
+Deno.test("8ixk: isVanishedProcError accepts ONLY a disappeared /proc entry", () => {
+  assertEquals(isVanishedProcError(coded("ENOENT")), true);
+  // An unreadable /proc for a process that still exists is a DIFFERENT fact and
+  // must not be laundered into "it exited".
+  assertEquals(isVanishedProcError(coded("EACCES")), false);
+  assertEquals(isVanishedProcError(coded("ENOTDIR")), false);
+  assertEquals(isVanishedProcError(new Error("owned process-group identity changed")), false);
+  assertEquals(isVanishedProcError(null), false);
+  assertEquals(isVanishedProcError(undefined), false);
+});
+
+Deno.test("8ixk: a leader that vanished while its group also died is benign, returned and RECORDED — not rethrown", async () => {
+  let aliveCalls = 0;
+  const result = await terminateAttestedGroup({
+    attestation: fakeAttestation,
+    observed: new Map(),
+    termWaitMs: 50,
+    killWaitMs: 50,
+    readIdentity: () => Promise.reject(coded("ENOENT")),
+    // true at the entry check, false when the catch re-checks: the race, made
+    // deterministic instead of timed.
+    isAlive: () => aliveCalls++ === 0,
+  });
+  // leaderExited is what the supervisor turns into a custodyReason, so the
+  // receipt says the child exited before the identity read instead of saying
+  // nothing at all.
+  assertEquals(result, {
+    termSent: false,
+    killSent: false,
+    survived: false,
+    leaderExited: true,
+  });
+});
+
+Deno.test("8ixk: a vanished leader with the group STILL ALIVE keeps failing closed", async () => {
+  // The benign path requires BOTH facts. A dead leader inside a live group still
+  // has to pass the observed-descendant ownership check, and an unobserved group
+  // must throw rather than be signalled.
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 50,
+        killWaitMs: 50,
+        readIdentity: () => Promise.reject(coded("ENOENT")),
+        isAlive: () => true,
+      }),
+    Error,
+    "ENOENT",
+  );
+});
+
+Deno.test("8ixk: a non-ENOENT read failure stays fail-closed even with a dead group", async () => {
+  // Proves the benign path is gated on the ERROR KIND and not merely on the group
+  // being gone: same alive sequence as the benign case, different error.
+  let aliveCalls = 0;
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 50,
+        killWaitMs: 50,
+        readIdentity: () => Promise.reject(coded("EACCES")),
+        isAlive: () => aliveCalls++ === 0,
+      }),
+    Error,
+    "EACCES",
+  );
+});
+
+Deno.test("8ixk: an identity CHANGE is still an identity change, not a vanished leader", async () => {
+  // The pre-existing ownership check must survive the new early return: a leader
+  // that exists but no longer matches the attestation is the dangerous case.
+  await assertRejects(
+    () =>
+      terminateAttestedGroup({
+        attestation: fakeAttestation,
+        observed: new Map(),
+        termWaitMs: 50,
+        killWaitMs: 50,
+        readIdentity: () =>
+          Promise.resolve({
+            pid: DEAD_PID,
+            state: "S",
+            ppid: 1,
+            pgid: DEAD_PGID,
+            sid: DEAD_PID,
+            starttime: "99999", // differs from the attested 12345
+            uid: 0,
+          }),
+        isAlive: () => true,
+      }),
+    Error,
+    "owned process-group identity changed",
+  );
+});

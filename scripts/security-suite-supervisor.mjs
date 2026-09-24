@@ -320,7 +320,7 @@ const trigger = await Promise.race([
 ]);
 const timedOut = trigger.kind === "timeout";
 let outcome = trigger;
-let termination = { termSent: false, killSent: false, survived: false };
+let termination = { termSent: false, killSent: false, survived: false, leaderExited: false };
 if (trigger.kind === "timeout" || trigger.kind === "supervisor-signal") {
   termination = await terminateAttestedGroup({
     attestation,
@@ -351,6 +351,7 @@ if (groupAlive(attestation.identity.pgid)) {
     termSent: termination.termSent || extra.termSent,
     killSent: termination.killSent || extra.killSent,
     survived: termination.survived || extra.survived,
+    leaderExited: termination.leaderExited || extra.leaderExited === true,
   };
 }
 
@@ -361,6 +362,15 @@ const residue = await liveObservedResidue(observed);
 let custodyReason = "";
 if (termination.survived) custodyReason = "owned-group-survived";
 if (residue.length > 0) custodyReason = "descendant-residue";
+// Benign, and recorded rather than swallowed: the runner exited between the
+// group-alive check and the identity read, so there was nothing left to signal.
+// `||=` on purpose — this must never displace a real custody finding, and it
+// deliberately does NOT touch the exit code (70/71/72 are gated on survived,
+// residue and cleanup alone), so a benign teardown cannot fail a passing run.
+// Without it the run used to leave no receipt at all (8ixk).
+if (termination.leaderExited) {
+  custodyReason ||= "leader-exited-before-identity-read";
+}
 
 const cleanup = await cleanupExactProfile({ profile, root: PROFILE_ROOT });
 if (!cleanup.ok) custodyReason ||= `cleanup-refused:${cleanup.reason}`;
