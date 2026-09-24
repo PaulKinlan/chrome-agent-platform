@@ -20,6 +20,7 @@ import {
   observeDescendants,
   pidAlive,
   PROFILE_ROOT,
+  custodyReasonFor,
   readProcIdentity,
   resolveSupervisorConfig,
   SELF_TEST_TOKEN,
@@ -384,31 +385,23 @@ const residue = await liveObservedResidue(observed);
 // This run's own custody finding. It is NOT written to a shared marker any
 // more (uzik): the exit code and the receipt carry it, so a residue escape
 // fails THIS run loudly without poisoning the next lane's browser gate.
-let custodyReason = "";
-if (termination.survived) custodyReason = "owned-group-survived";
-if (residue.length > 0) custodyReason = "descendant-residue";
-// Benign, and recorded rather than swallowed: the runner exited between the
-// group-alive check and the identity read, so there was nothing left to signal.
-// `||=` on purpose — this must never displace a real custody finding, and it
-// deliberately does NOT touch the exit code (70/71/72 are gated on survived,
-// residue and cleanup alone), so a benign teardown cannot fail a passing run.
-// Without it the run used to leave no receipt at all (8ixk).
-if (termination.leaderExited) {
-  custodyReason ||= "leader-exited-before-identity-read";
-}
-// The group finished dying before a signal reached it: benign, and recorded so the
-// receipt distinguishes "nothing needed signalling" from "we signalled it".
-if (termination.groupGoneBeforeSignal) {
-  custodyReason ||= "group-gone-before-signal";
-}
-// Last because it is the least specific: something in teardown threw. The receipt
-// still exists, which is the property this file exists for.
-if (termination.teardownThrew) {
-  custodyReason ||= `teardown-threw:${termination.teardownThrew}`;
-}
-
 const cleanup = await cleanupExactProfile({ profile, root: PROFILE_ROOT });
-if (!cleanup.ok) custodyReason ||= `cleanup-refused:${cleanup.reason}`;
+// Derived by one pure, unit-tested function rather than by ordered mutations of a
+// local, because the ORDER is the semantics. Assigning the benign teardown markers
+// BEFORE the cleanup check made `||=` unable to replace them, so a run with both a
+// benign leader exit and a cleanup refusal reported the benign reason while the exit
+// code correctly failed closed at 71 — found in review by cap-astra with a live
+// owned fixture (receipt b21e2e6180fb0ca9 against control d09361b8bf36e32c, which
+// reported the proper cleanup-refused:profile is not an owned regular directory).
+const custodyReason = custodyReasonFor({
+  survived: termination.survived,
+  residueCount: residue.length,
+  cleanupOk: cleanup.ok,
+  cleanupReason: cleanup.reason ?? "",
+  leaderExited: termination.leaderExited === true,
+  groupGoneBeforeSignal: termination.groupGoneBeforeSignal === true,
+  teardownThrew: termination.teardownThrew || "",
+});
 
 let exitCode;
 let runnerSignal = null;

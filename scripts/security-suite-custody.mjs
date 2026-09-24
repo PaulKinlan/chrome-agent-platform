@@ -79,6 +79,33 @@ export function isVanishedProcError(error) {
  *  failure (EPERM, EINVAL), which must still propagate: refusing to signal a group
  *  we are not allowed to touch is a real custody finding, not a benign exit.
  *  chrome-agent-platform-8ixk. */
+/** The run's custody finding, derived in ONE place because the ORDER is the
+ *  semantics: severe findings displace benign ones, and a benign teardown marker
+ *  must never be the reason a receipt reports when something real went wrong.
+ *  Precedence, most severe first: descendant residue, then an owned group that
+ *  survived, then a cleanup refusal, then a teardown that threw, then the two
+ *  benign races. The first three match the supervisor's pre-8ixk behaviour exactly
+ *  (residue overwrote survived; cleanup only filled an empty reason); the benign
+ *  markers are new and go last. chrome-agent-platform-8ixk. */
+export function custodyReasonFor({
+  survived = false,
+  residueCount = 0,
+  cleanupOk = true,
+  cleanupReason = "",
+  leaderExited = false,
+  groupGoneBeforeSignal = false,
+  teardownThrew = "",
+} = {}) {
+  let reason = "";
+  if (survived) reason = "owned-group-survived";
+  if (residueCount > 0) reason = "descendant-residue";
+  if (!cleanupOk) reason ||= `cleanup-refused:${cleanupReason}`;
+  if (teardownThrew) reason ||= `teardown-threw:${teardownThrew}`;
+  if (leaderExited) reason ||= "leader-exited-before-identity-read";
+  if (groupGoneBeforeSignal) reason ||= "group-gone-before-signal";
+  return reason;
+}
+
 export function isVanishedGroupError(error) {
   return error?.code === "ESRCH";
 }

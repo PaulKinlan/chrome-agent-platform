@@ -9,6 +9,7 @@ import { lstat as nodeLstat } from "node:fs/promises";
 import { runLockAware } from "../scripts/lib/lock-aware-command.ts";
 import {
   cleanupExactProfile,
+  custodyReasonFor,
   isVanishedGroupError,
   isVanishedProcError,
   pidAlive,
@@ -753,5 +754,88 @@ Deno.test("8ixk: a REFUSAL to signal (EPERM) still propagates — only ESRCH is 
       }),
     Error,
     "EPERM",
+  );
+});
+
+// ── chrome-agent-platform-8ixk, receipt-level coverage ─────────────────────
+// Review found that a CALLER-ONLY mutant — `if (false && termination.leaderExited)`
+// in the supervisor — survived all 17 custody tests, because every test asserted
+// what the HELPER RETURNS and nothing asserted what the RECEIPT RECORDS. A live
+// owned-child probe confirmed it: the receipt was still emitted but custodyReason
+// came back empty where it should have said leader-exited-before-identity-read.
+// It also found a regression I introduced: the benign markers were assigned BEFORE
+// the cleanup check, so `||=` could no longer replace them and a run with both a
+// benign leader exit and a cleanup refusal reported the benign reason (receipt
+// b21e2e6180fb0ca9, exit 71, cleaned:false) where the control reported the proper
+// cleanup-refused:profile is not an owned regular directory (d09361b8bf36e32c).
+// The derivation is now one pure exported function so the ORDER — which is the
+// semantics — is testable without running a supervisor.
+Deno.test("8ixk: a clean run records no custody reason", () => {
+  assertEquals(custodyReasonFor({}), "");
+  assertEquals(
+    custodyReasonFor({ survived: false, residueCount: 0, cleanupOk: true }),
+    "",
+  );
+});
+
+Deno.test("8ixk: each finding records its own reason", () => {
+  assertEquals(custodyReasonFor({ survived: true }), "owned-group-survived");
+  assertEquals(custodyReasonFor({ residueCount: 2 }), "descendant-residue");
+  assertEquals(
+    custodyReasonFor({ cleanupOk: false, cleanupReason: "profile is not an owned regular directory" }),
+    "cleanup-refused:profile is not an owned regular directory",
+  );
+  assertEquals(custodyReasonFor({ leaderExited: true }), "leader-exited-before-identity-read");
+  assertEquals(custodyReasonFor({ groupGoneBeforeSignal: true }), "group-gone-before-signal");
+  assertEquals(custodyReasonFor({ teardownThrew: "kill EPERM" }), "teardown-threw:kill EPERM");
+});
+
+Deno.test("8ixk REGRESSION: a cleanup refusal outranks the benign teardown markers", () => {
+  // The exact case review reproduced live: benign leader exit AND a cleanup
+  // refusal. The receipt must name the real finding, not the benign one, even
+  // though the exit code was already correct at 71.
+  assertEquals(
+    custodyReasonFor({
+      leaderExited: true,
+      cleanupOk: false,
+      cleanupReason: "profile is not an owned regular directory",
+    }),
+    "cleanup-refused:profile is not an owned regular directory",
+  );
+  assertEquals(
+    custodyReasonFor({
+      groupGoneBeforeSignal: true,
+      cleanupOk: false,
+      cleanupReason: "not empty",
+    }),
+    "cleanup-refused:not empty",
+  );
+  assertEquals(
+    custodyReasonFor({ teardownThrew: "kill EPERM", cleanupOk: false, cleanupReason: "x" }),
+    "cleanup-refused:x",
+  );
+});
+
+Deno.test("8ixk: severity order is residue > survived > cleanup > threw > benign", () => {
+  // residue overwrites survived (pre-8ixk behaviour, preserved deliberately)
+  assertEquals(custodyReasonFor({ survived: true, residueCount: 1 }), "descendant-residue");
+  // survived is real, so a later ||= must not replace it
+  assertEquals(
+    custodyReasonFor({ survived: true, cleanupOk: false, cleanupReason: "x" }),
+    "owned-group-survived",
+  );
+  assertEquals(
+    custodyReasonFor({ survived: true, leaderExited: true }),
+    "owned-group-survived",
+  );
+  // a thrown teardown outranks the benign races
+  assertEquals(
+    custodyReasonFor({ teardownThrew: "boom", leaderExited: true, groupGoneBeforeSignal: true }),
+    "teardown-threw:boom",
+  );
+  // of the two benign races, the first recorded wins
+  assertEquals(
+    custodyReasonFor({ leaderExited: true, groupGoneBeforeSignal: true }),
+    "leader-exited-before-identity-read",
   );
 });
