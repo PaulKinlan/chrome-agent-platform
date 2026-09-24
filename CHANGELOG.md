@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.482] — 2026-09-24
+- revise 6: a genuinely enforced regression deadline, and the guard's real bound
+
 ## [0.3.481] — 2026-09-24
 - revise 5: disjoint trivia arms (linear) and re-exports covered
 

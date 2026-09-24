@@ -112,7 +112,7 @@ Deno.test("partition guard: Emscripten live preparation runs serially", () => {
   assertEquals(partition([file]), { serial: [file], parallel: [] });
 });
 
-Deno.test("partition guard: the detectors classify the known hazards", () => {
+Deno.test("partition guard: the detectors classify the known hazards", async () => {
   // Self-test of the classifier on synthetic content — pins the detector
   // semantics independently of whichever real files happen to match. Every
   // trigger substring is assembled here so the guard's own text stays inert.
@@ -209,6 +209,57 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
       `${label}: a regex literal or a template interpolation must not hide an import`,
     );
   }
+  // BOUNDED CLASSIFICATION (cap-astra): the perf ceiling above is evaluated AFTER a scan returns, so
+  // it cannot fail a hang — and the runner's bound for this file is the shared 600000 ms parallel
+  // phase timeout, so a hang here is a ten-minute stall for unrelated work. This spawns the same
+  // classification in a CHILD and kills it at a bound, turning "the pattern is exponential" into a
+  // failed assertion. It runs the reviewer's scaling fixture, which took 1473 ms at 24 slash-pairs
+  // and more than 20 s at 48 with the ambiguous line-comment arm, and 0-1 ms at every size after it.
+  const classifyBounded = async (texts: string[], boundMs = 5000): Promise<{ ms: number; classes: string[] } | "timed-out"> => {
+    const { durableDir } = await import("../scripts/lib/durable-root.mjs");
+    const dir = await Deno.makeTempDir({ dir: durableDir("scratch"), prefix: "cap-4lc0-bounded-" });
+    const script = `${dir}/classify.mjs`;
+    await Deno.writeTextFile(script, `import { classifyHazards } from ${JSON.stringify(new URL("../scripts/test-partition.mjs", import.meta.url).href)};
+const texts = JSON.parse(await new Response(Deno.stdin.readable).text());
+const t0 = Date.now();
+const classes = texts.map((t) => classifyHazards(t).join("|"));
+console.log(JSON.stringify({ ms: Date.now() - t0, classes }));
+`);
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", "-A", script], stdin: "piped", stdout: "piped", stderr: "piped", cwd: ROOT,
+    }).spawn();
+    const writer = child.stdin.getWriter();
+    await writer.write(new TextEncoder().encode(JSON.stringify(texts)));
+    await writer.close();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      child.output().then((o) => ({ kind: "done" as const, o })),
+      new Promise<{ kind: "timeout" }>((r) => { timer = setTimeout(() => r({ kind: "timeout" }), boundMs); }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (outcome.kind === "timeout") {
+      try { child.kill("SIGKILL"); } catch { /* gone */ }
+      try { await child.status; } catch { /* reaped */ }
+      await Deno.remove(dir, { recursive: true }).catch(() => {});
+      return "timed-out";
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+    const line = new TextDecoder().decode(outcome.o.stdout).trim().split("\n").pop() ?? "{}";
+    const parsed = JSON.parse(line) as { ms: number; classes: string[] };
+    return parsed;
+  };
+  const slashCases = [8, 16, 24, 48, 96].map((pairs) => `const snippet = "import(${"/".repeat(pairs * 2)}";`);
+  const boundedResult = await classifyBounded(slashCases, 5000);
+  assert(
+    boundedResult !== "timed-out",
+    "the classification of five slash-run fixtures (up to 218 chars) did not finish inside 5000 ms — a hang here must fail THIS assertion, not stall the shared parallel phase",
+  );
+  assert(boundedResult.ms < 5000, `the five fixtures took ${boundedResult.ms} ms; they are inert text and must be sub-millisecond`);
+  assertEquals(
+    boundedResult.classes.every((c) => c === ""), true,
+    `the slash-run fixtures contain no import, so no class: ${JSON.stringify(boundedResult.classes)}`,
+  );
+
   // LINE TERMINATORS (cap-astra): a JS line comment ends at CR, U+2028 and U+2029 as well as LF.
   // The reviewer's probe showed Node's VM reaching the generator specifier through all four, while
   // 2fd — whose STRIPPER deleted the rest of the "line" — saw only LF. Matching across trivia is
@@ -229,8 +280,12 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
   // slash-pairs, 38 ms at 20, 1473 ms at 24 and more than 20 s at 48 — CPU-bound, not load. The
   // arms are disjoint now (a line comment consumes its terminator), so every size is sub-millisecond.
   // A ceiling rather than a per-size curve, with ~250x headroom over the measured 1 ms: enough to
-  // fail an exponential regression while tolerating a loaded box. A TRUE hang still cannot be caught
-  // here — that is the runner's per-file bound — which is why the structural argument matters more.
+  // fail an exponential regression while tolerating a loaded box.
+  // CORRECTED (cap-astra): this file runs in the PARALLEL phase, so its bound is the SHARED
+  // CAP_PARALLEL_TEST_TIMEOUT_MS phase timeout (600000 ms), not a serial per-file 180 s. A hang here
+  // therefore burns ten minutes of the phase and can fail unrelated work — which is exactly why the
+  // in-process ceiling above is NOT the protection, and the BOUNDED CHILD below is: it caps the
+  // classification itself, so a hang is a RED assertion rather than a stalled phase.
   const slashFixture = (pairs: number) => `const snippet = "import(${"/".repeat(pairs * 2)}";`;
   const scaleStart = Date.now();
   for (const pairs of [8, 16, 24, 48, 96]) classifyHazards(slashFixture(pairs));
