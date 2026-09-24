@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.477] — 2026-09-24
+- the hang is bounded, and now it leaves a durable record of why
+
 ## [0.3.476] — 2026-09-24
 - test real page reload in agent header rename regression
 

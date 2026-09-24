@@ -90,6 +90,11 @@ if (process.platform === "win32") {
 // for 3h37m. The bound names the hang instead and takes the group down.
 try {
   const generator = await runBoundedChild(process.execPath, [
+    // --report-on-signal: a NON-futex hang (epoll/pipe) writes a full diagnostic report on SIGUSR2,
+    // which scripts/lib/bounded-child.mjs sends before it kills. A futex-blocked child cannot write
+    // one (measured), so the helper also samples per-thread wchan — see its comment (fnmr).
+    "--report-on-signal",
+    "--report-signal=SIGUSR2",
     path.join(ROOT, "scripts/build-bundled-tool-packages.mjs"),
     ...(REGEN_TOOLS ? [] : ["--verify"]),
   ], {

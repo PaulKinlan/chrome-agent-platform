@@ -40,7 +40,7 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
   const s = await sample("node", ["-e", FUTEX_WAIT]);
   const report = JSON.stringify(s);
   assert(!s.ok, `a futex-waiting child must raise the named error; sample=${report}`);
-  const m = /^futex probe HUNG: no exit within 2s \(pid=(\d+) state=(\S+) threads=(\d+) wchan=(\S+)\); its process group was killed\. This is a hang, not slow work — chrome-agent-platform-fnmr\.$/
+  const m = /^futex probe HUNG: no exit within 2s \(pid=(\d+) state=(\S+) threads=(\d+) wchan=(\S+) thread-wchan\[(.+)\]\); its process group was killed\. This is a hang, not slow work — chrome-agent-platform-fnmr\. (.*) A durable record was appended to \.cache\/bounded-child-hangs\.log in the child's cwd\.$/
     .exec(s.message ?? "");
   assert(m, `the SPECIFIC named sentence with pid/state/threads/wchan must be present; sample=${report}`);
   const [, pid, state, threads, wchan] = m;
@@ -52,6 +52,14 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
   // raise in milliseconds, so the bound must actually have elapsed.
   assert(s.ms >= TIMEOUT_MS - 250, `the bound must elapse (>= ${TIMEOUT_MS - 250}ms), got ${s.ms}ms; sample=${report}`);
   assert(s.ms < TIMEOUT_MS + 10_000, `the bound must fire promptly, got ${s.ms}ms; sample=${report}`);
+  // A FNM R HANG CANNOT WRITE A SIGNAL REPORT, so the thread table is the evidence (measured: a child
+  // blocked in Atomics.wait is TERMINATED by SIGUSR2 with no report, while an epoll-idle child writes
+  // a full one). Per-thread wchan shows which threads are in the futex, which the process-wide field
+  // cannot. The trailing clause must say a report is missing rather than promise one.
+  const threadTable = m[5];
+  assert(/:futex_do_wait/.test(threadTable), `the thread table must show the futex wait, got ${threadTable}; sample=${report}`);
+  assert(m[6].includes("No diagnostic report was produced"), `the message must say no report came, got: ${m[6]}`);
+  assert(/futex|thread-wchan/.test(m[6]), `and it must point at the thread table instead, got: ${m[6]}`);
 });
 
 Deno.test("bounded child: a fast, successful child raises nothing", async () => {

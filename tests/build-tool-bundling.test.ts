@@ -36,7 +36,8 @@ async function run(cmd, args, timeoutMs = CHILD_TIMEOUT_MS) {
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 async function verify() {
-  return await run("node", [GENERATOR, "--verify"]);
+  // The report flags: a non-futex hang leaves a diagnostic report for the bounded runner (fnmr).
+  return await run("node", ["--report-on-signal", "--report-signal=SIGUSR2", GENERATOR, "--verify"]);
 }
 /** chrome-agent-platform-p15i: a run KILLED mid-fixture (SIGKILL traps no
  * finally) leaves its drift in the SHARED packages/bundled tree, and every
