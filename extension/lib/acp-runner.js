@@ -63,6 +63,125 @@ export function buildPromptWithSkillContext(task, skills) {
   return `<cap-skills>\n${block}\n\n${String(task ?? "")}`;
 }
 
+/**
+ * Extract browser/call_tool JSON-RPC blocks from model text output, and return
+ * the cleaned display text with the raw tool-call JSON stripped. Pure.
+ *
+ * @param {string} rawText
+ * @returns {{ calls: Array<{ id: string, name: string, args: Record<string, unknown>, raw: object }>, cleanText: string }}
+ */
+export function extractBrowserToolCalls(rawText) {
+  const text = String(rawText ?? "");
+  const calls = [];
+  const removals = [];
+
+  let searchIndex = 0;
+  while (searchIndex < text.length) {
+    const methodIdx = text.indexOf('"browser/call_tool"', searchIndex);
+    if (methodIdx === -1) break;
+
+    // Scan backwards to find the start of the JSON object
+    let startIdx = -1;
+    let depth = 0;
+    for (let i = methodIdx; i >= 0; i--) {
+      if (text[i] === "}") depth++;
+      else if (text[i] === "{") {
+        if (depth === 0) {
+          startIdx = i;
+          break;
+        }
+        depth--;
+      }
+    }
+
+    if (startIdx === -1) {
+      searchIndex = methodIdx + 19;
+      continue;
+    }
+
+    // Scan forwards from startIdx to find the matching closing }
+    let endIdx = -1;
+    depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = startIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (!inString) {
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) {
+            endIdx = i + 1;
+            break;
+          }
+        }
+      }
+    }
+
+    if (endIdx === -1) {
+      searchIndex = methodIdx + 19;
+      continue;
+    }
+
+    const jsonStr = text.slice(startIdx, endIdx);
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed && parsed.method === "browser/call_tool" && parsed.id !== undefined) {
+        calls.push({
+          id: String(parsed.id),
+          name: String(parsed.params?.name ?? ""),
+          args: parsed.params?.args ?? {},
+          raw: parsed,
+        });
+
+        let removeStart = startIdx;
+        let removeEnd = endIdx;
+
+        // Check if wrapped in markdown code fence: ```(json)? ... ```
+        const before = text.slice(0, startIdx);
+        const fenceBeforeMatch = /```(?:json)?\s*$/i.exec(before);
+        if (fenceBeforeMatch) {
+          removeStart = before.length - fenceBeforeMatch[0].length;
+          const after = text.slice(endIdx);
+          const fenceAfterMatch = /^\s*```/.exec(after);
+          if (fenceAfterMatch) {
+            removeEnd = endIdx + fenceAfterMatch[0].length;
+          }
+        }
+
+        removals.push({ start: removeStart, end: removeEnd });
+        searchIndex = removeEnd;
+        continue;
+      }
+    } catch {
+      // not valid JSON
+    }
+
+    searchIndex = methodIdx + 19;
+  }
+
+  removals.sort((a, b) => b.start - a.start);
+  let cleaned = text;
+  for (const { start, end } of removals) {
+    cleaned = cleaned.slice(0, start) + cleaned.slice(end);
+  }
+  cleaned = cleaned.replace(/\n\s*\n\s*\n/g, "\n\n").trim();
+
+  return { calls, cleanText: cleaned };
+}
+
 
 /** Default loopback WebSocket endpoint for the ACP bridge */
 export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
@@ -542,15 +661,6 @@ export async function runAcpTaskTurn(options) {
       return { ok: false, error: "Task was superseded" };
     }
 
-    status({ state: "running", activity: `${harnessId} is thinking…` });
-
-    let thinkingStarted = false;
-    let streamedAgentBubble = null;
-    let streamedText = "";
-    /** toolCallId → the card this turn appended, so updates SETTLE it instead
-     * of appending a second permanently-running card per update. */
-    const toolCards = new Map();
-
     // chrome-agent-platform-etdn: forward CAP skill context. The owner's own
     // text stays the conversation surface; the harness payload carries the
     // skill definitions the prompt references (or the caller supplied).
@@ -562,95 +672,197 @@ export async function runAcpTaskTurn(options) {
       harnessPrompt = buildPromptWithSkillContext(task, ctx);
     } catch { /* a context failure never blocks the turn */ }
 
-    const turn = await client.prompt(
-      sessionId,
-      harnessPrompt,
-      (ev) => {
-        if (superseded()) return;
-        try { onEvent?.(ev); } catch { /* a consumer's error never fails the turn */ }
+    // chrome-agent-platform-2amt: in-turn browser tool execution loop.
+    // When the model outputs browser/call_tool JSON-RPC blocks in its text stream,
+    // intercept them, clean the chat bubble so raw JSON is not shown, dispatch
+    // via browser.callTool, and feed the result back to the harness. Loop bounded to 5 hops.
+    let currentPrompt = harnessPrompt;
+    let turn = null;
+    let finalText = "";
+    let streamedAgentBubble = null;
+    let streamedText = "";
+    let thinkingStarted = false;
+    const toolCards = new Map();
+    const MAX_TOOL_HOPS = 5;
+    let hops = 0;
 
-        if (ev.kind === "thought" && ev.text) {
-          if (typeof container.thinkingDelta === "function") {
-            container.thinkingDelta({ delta: ev.text, start: !thinkingStarted });
-            thinkingStarted = true;
-          }
-        } else if (ev.kind === "tool") {
-          const cardId = ev.toolCallId || ev.detail || "tool";
-          const toolStatus = acpToolStatusUi(ev.status);
-          if (typeof container.appendTool === "function") {
-            const existing = toolCards.get(cardId);
-            if (existing) {
-              // The same call progressing: settle the card it already has.
-              if (typeof existing.setAttribute === "function") {
-                existing.setAttribute("tool-status", toolStatus);
-                if (ev.detail) existing.setAttribute("tool-detail", ev.detail);
+    while (hops++ < MAX_TOOL_HOPS) {
+      if (superseded()) {
+        client.close();
+        if (claim.stoppedByOwner) status({ state: "cancelled" });
+        return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId, resumed, resumeFailed, resumeError };
+      }
+
+      status({ state: "running", activity: `${harnessId} is thinking…` });
+      streamedText = "";
+      thinkingStarted = false;
+
+      turn = await client.prompt(
+        sessionId,
+        currentPrompt,
+        (ev) => {
+          if (superseded()) return;
+          try { onEvent?.(ev); } catch { /* a consumer's error never fails the turn */ }
+
+          if (ev.kind === "thought" && ev.text) {
+            if (typeof container.thinkingDelta === "function") {
+              container.thinkingDelta({ delta: ev.text, start: !thinkingStarted });
+              thinkingStarted = true;
+            }
+          } else if (ev.kind === "tool") {
+            const cardId = ev.toolCallId || ev.detail || "tool";
+            const toolStatus = acpToolStatusUi(ev.status);
+            if (typeof container.appendTool === "function") {
+              const existing = toolCards.get(cardId);
+              if (existing) {
+                // The same call progressing: settle the card it already has.
+                if (typeof existing.setAttribute === "function") {
+                  existing.setAttribute("tool-status", toolStatus);
+                  if (ev.detail) existing.setAttribute("tool-detail", ev.detail);
+                }
+              } else {
+                const card = container.appendTool({
+                  name: `${harnessId}-tool`,
+                  status: toolStatus,
+                  detail: ev.detail,
+                });
+                if (card) toolCards.set(cardId, card);
+              }
+            }
+            if (ev.detail) status({ state: "running", activity: `${harnessId}: ${String(ev.detail).slice(0, 40)}…` });
+          } else if (ev.kind === "chunk" && ev.text) {
+            if (thinkingStarted && typeof container.collapseThinkingTrace === "function") {
+              container.collapseThinkingTrace();
+            }
+            streamedText += ev.text;
+            if (!streamedAgentBubble) {
+              if (typeof container.appendAgent === "function") {
+                streamedAgentBubble = container.appendAgent(streamedText);
               }
             } else {
-              const card = container.appendTool({
-                name: `${harnessId}-tool`,
-                status: toolStatus,
-                detail: ev.detail,
-              });
-              if (card) toolCards.set(cardId, card);
+              if (typeof streamedAgentBubble.setAttribute === "function") {
+                streamedAgentBubble.setAttribute("content", streamedText);
+              }
+            }
+            status({ state: "running", activity: "Writing response…" });
+          } else if (ev.kind === "permission") {
+            // Honest, in the owner's words: what the harness asked for and what it
+            // was told. A denial reads as a denial, never as an ambiguous line.
+            if (typeof container.appendSystem === "function") {
+              const detail = String(ev.detail ?? "");
+              const denied = /deny|declined|not allowed|no\b/i.test(detail);
+              container.appendSystem(
+                denied ? `Permission denied: ${detail || "the harness was told no"}`
+                       : `Permission granted: ${detail || "allowed"}`,
+              );
             }
           }
-          if (ev.detail) status({ state: "running", activity: `${harnessId}: ${String(ev.detail).slice(0, 40)}…` });
-        } else if (ev.kind === "chunk" && ev.text) {
-          if (thinkingStarted && typeof container.collapseThinkingTrace === "function") {
-            container.collapseThinkingTrace();
-          }
-          streamedText += ev.text;
-          if (!streamedAgentBubble) {
-            if (typeof container.appendAgent === "function") {
-              streamedAgentBubble = container.appendAgent(streamedText);
-            }
-          } else {
-            if (typeof streamedAgentBubble.setAttribute === "function") {
-              streamedAgentBubble.setAttribute("content", streamedText);
-            }
-          }
-          status({ state: "running", activity: "Writing response…" });
-        } else if (ev.kind === "permission") {
-          // Honest, in the owner's words: what the harness asked for and what it
-          // was told. A denial reads as a denial, never as an ambiguous line.
-          if (typeof container.appendSystem === "function") {
-            const detail = String(ev.detail ?? "");
-            const denied = /deny|declined|not allowed|no\b/i.test(detail);
-            container.appendSystem(
-              denied ? `Permission denied: ${detail || "the harness was told no"}`
-                     : `Permission granted: ${detail || "allowed"}`,
-            );
-          }
-        }
-      },
-      attachments,
-    );
+        },
+        hops === 1 ? attachments : [],
+      );
 
-    if (superseded()) {
-      client.close();
-      if (claim.stoppedByOwner) status({ state: "cancelled" });
-      return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId, resumed, resumeFailed, resumeError };
-    }
-
-    // A cancelled turn is NOT a success: the harness reports stopReason
-    // "cancelled" when a newer turn (or a cancel request) stopped it.
-    if (String(turn.stopReason ?? "").toLowerCase().startsWith("cancel") || claim.stoppedByOwner) {
-      status({ state: "cancelled" });
-      return { ok: false, error: "Task was cancelled", stopReason: turn.stopReason || "cancelled", sessionId, resumed, resumeFailed, resumeError };
-    }
-
-    // Ensure complete response rendered
-    if (!streamedAgentBubble && turn.text) {
-      if (typeof container.appendAgent === "function") {
-        container.appendAgent(turn.text);
+      if (superseded()) {
+        client.close();
+        if (claim.stoppedByOwner) status({ state: "cancelled" });
+        return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId, resumed, resumeFailed, resumeError };
       }
+
+      // A cancelled turn is NOT a success: the harness reports stopReason
+      // "cancelled" when a newer turn (or a cancel request) stopped it.
+      if (String(turn?.stopReason ?? "").toLowerCase().startsWith("cancel") || claim.stoppedByOwner) {
+        status({ state: "cancelled" });
+        return { ok: false, error: "Task was cancelled", stopReason: turn?.stopReason || "cancelled", sessionId, resumed, resumeFailed, resumeError };
+      }
+
+      const rawHopOutput = turn?.text || streamedText;
+      const { calls, cleanText } = extractBrowserToolCalls(rawHopOutput);
+
+      if (cleanText) {
+        finalText = cleanText;
+        if (streamedAgentBubble && typeof streamedAgentBubble.setAttribute === "function") {
+          streamedAgentBubble.setAttribute("content", cleanText);
+        } else if (!streamedAgentBubble && typeof container.appendAgent === "function") {
+          streamedAgentBubble = container.appendAgent(cleanText);
+        }
+      } else if (streamedAgentBubble && calls.length > 0) {
+        // If the model ONLY emitted the tool call JSON, remove or clear the empty bubble
+        if (typeof streamedAgentBubble.remove === "function") {
+          streamedAgentBubble.remove();
+        } else if (typeof streamedAgentBubble.setAttribute === "function") {
+          streamedAgentBubble.setAttribute("content", "");
+        }
+        streamedAgentBubble = null;
+      }
+
+      if (!calls.length) {
+        // No browser tool calls to execute — turn is complete!
+        break;
+      }
+
+      // Execute extracted browser tool calls
+      const toolResults = [];
+      const send = runtimeSend ?? ((type, body) => globalThis.chrome?.runtime?.sendMessage?.({ type, ...body }));
+
+      for (const call of calls) {
+        if (superseded()) break;
+
+        status({ state: "running", activity: `Running browser tool: ${call.name}…` });
+
+        // Append tool card in container
+        let card = null;
+        if (typeof container.appendTool === "function") {
+          card = container.appendTool({
+            name: `browser:${call.name}`,
+            status: "running",
+            detail: `${call.name}(${Object.keys(call.args || {}).join(", ")})`,
+          });
+        }
+
+        let reply;
+        try {
+          reply = await send("browser.callTool", { name: call.name, args: call.args });
+        } catch (err) {
+          reply = { ok: false, error: String(err?.message ?? err) };
+        }
+
+        const toolResult = reply && reply.ok === false && reply.error !== undefined
+          ? { error: reply.error }
+          : reply;
+
+        if (card && typeof card.setAttribute === "function") {
+          card.setAttribute("tool-status", toolResult?.error ? "error" : "done");
+        }
+
+        toolResults.push({ id: call.id, result: toolResult });
+      }
+
+      if (superseded()) {
+        client.close();
+        if (claim.stoppedByOwner) status({ state: "cancelled" });
+        return { ok: false, error: "Task was cancelled", stopReason: "cancelled", sessionId, resumed, resumeFailed, resumeError };
+      }
+
+      // Format response back to the harness.
+      if (toolResults.length === 1) {
+        currentPrompt = JSON.stringify({
+          jsonrpc: "2.0",
+          id: toolResults[0].id,
+          result: toolResults[0].result,
+        });
+      } else {
+        currentPrompt = toolResults.map((r) =>
+          JSON.stringify({ jsonrpc: "2.0", id: r.id, result: r.result })
+        ).join("\n");
+      }
+
+      streamedAgentBubble = null;
     }
 
     status({ state: "completed" });
     return {
       ok: true,
-      result: turn.text || streamedText,
-      stopReason: turn.stopReason,
+      result: finalText || turn?.text || streamedText,
+      stopReason: turn?.stopReason,
       sessionId,
       resumed,
       resumeFailed,

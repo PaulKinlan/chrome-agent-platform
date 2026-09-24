@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.485] — 2026-09-24
+- external agent runs now run and display browser tool calls in the conversation
+
 ## [0.3.484] — 2026-09-24
 - the browser.callTool fence is pinned to its wiring
 
