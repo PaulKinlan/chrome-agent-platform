@@ -115,6 +115,10 @@ async function attachRuntime(cdp: Cdp, targetId: string): Promise<string> {
 
 async function evalIn(cdp: Cdp, session: string, expression: string): Promise<unknown> {
   const r = await withTimeout(cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, session), 15000, "evalIn");
+  if ((r as any)?.result?.exceptionDetails) {
+    const ex = (r as any).result.exceptionDetails;
+    throw new Error(`page expression threw: ${ex.exception?.description ?? ex.text ?? "evaluate threw"}`);
+  }
   return (r as any)?.result?.result?.value;
 }
 

@@ -130,6 +130,10 @@ async function attachRuntime(cdp: Cdp, targetId: string) {
 }
 async function evalIn(cdp: Cdp, session: string, expression: string) {
   const r = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, session);
+  if (r?.result?.exceptionDetails) {
+    const ex = r.result.exceptionDetails;
+    throw new Error(`page expression threw: ${ex.exception?.description ?? ex.text ?? "evaluate threw"}`);
+  }
   return r?.result?.result?.value;
 }
 async function boxOf(cdp: Cdp, session: string, selector: string) {

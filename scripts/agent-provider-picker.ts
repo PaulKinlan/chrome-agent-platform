@@ -778,6 +778,10 @@ async function evalIn(sid, expr) {
   // Bounded step label carries the expression context into every diagnostic.
   const label = `eval#${__evalStep} ${String(expr).replace(/\s+/g, " ").slice(0, 60)}`;
   const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sid, label);
+  if (r?.result?.exceptionDetails) {
+    const ex = r.result.exceptionDetails;
+    throw new Error(`page expression threw: ${ex.exception?.description ?? ex.text ?? "evaluate threw"}`);
+  }
   return r?.result?.result?.value;
 }
 

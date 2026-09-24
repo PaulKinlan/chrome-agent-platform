@@ -93,6 +93,9 @@ async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp }> {
   };
   const evl = async (s: string, expr: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
+    if (r?.exceptionDetails) {
+      throw new Error(`page expression threw: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? "evaluate threw"}`);
+    }
     return r?.result?.value;
   };
   return { proc, cdp: { send, evl, port } };

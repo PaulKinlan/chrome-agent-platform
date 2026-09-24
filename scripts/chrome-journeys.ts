@@ -1,3 +1,4 @@
+// @ts-nocheck
 // chrome-journeys.ts — retained Chrome regression journeys for the security /
 // runtime boundaries. Loads the built extension in headless Chrome and drives
 // REAL behaviour, including GENUINE CDP user input (Input.dispatchMouseEvent /
@@ -343,8 +344,9 @@ async function attachRuntime(cdp, targetId) {
   return session;
 }
 
-/** Runtime.evaluate an expression in a session, returning its value. */
-async function evalIn(cdp, session, expression) {
+/** Runtime.evaluate an expression in a session, returning its value.
+ * Surfaces page-side exceptions instead of swallowing them into undefined (chrome-agent-platform-0lb4). */
+export async function evalIn(cdp, session, expression) {
   const r = await withTimeout(
     cdp.send(
       "Runtime.evaluate",
@@ -354,6 +356,12 @@ async function evalIn(cdp, session, expression) {
     15000,
     "evalIn",
   );
+  if (r?.result?.exceptionDetails) {
+    const ex = r.result.exceptionDetails;
+    throw new Error(
+      `page expression threw: ${ex.exception?.description ?? ex.text ?? "evaluate threw"}`,
+    );
+  }
   return r?.result?.result?.value;
 }
 
@@ -9188,4 +9196,6 @@ async function killChromiumTree(proc, profile) {
   throw new Error("chromium descendants survived cleanup");
 }
 
-await main();
+if (import.meta.main) {
+  await main();
+}

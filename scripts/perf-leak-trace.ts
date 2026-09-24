@@ -49,6 +49,9 @@ async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; close: () 
     (await client.send(method, params, sessionId)).result;
   const evl = async (s: string, expr: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
+    if (r?.exceptionDetails) {
+      throw new Error(`page expression threw: ${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? "evaluate threw"}`);
+    }
     return r?.result?.value;
   };
   const cdp: Cdp = { send, evl, port: chrome.port };
