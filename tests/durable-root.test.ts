@@ -5,8 +5,8 @@
 // defaults retained evidence or big scratch to /tmp (allowlist: tiny
 // cross-process coordination files and test fixtures).
 import { fileURLToPath } from "node:url";
-import { assert, assertEquals, assertThrows, assertStringIncludes } from "jsr:@std/assert@1";
-import { isRamBacked, durableRoot, durableDir } from "../scripts/lib/durable-root.mjs";
+import { assert, assertEquals } from "jsr:@std/assert@1";
+import { isRamBacked } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -16,62 +16,96 @@ Deno.test("isRamBacked identifies the tmpfs /tmp and disk-backed $HOME", () => {
   assertEquals(isRamBacked(Deno.env.get("HOME") ?? "/home"), false, "$HOME is disk");
 });
 
-Deno.test("durableRoot defaults to $HOME/cap-evidence (durable), honoring CAP_DURABLE_ROOT", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    Deno.env.delete("CAP_DURABLE_ROOT");
-    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
-    Deno.env.set("CAP_DURABLE_ROOT", "/home/paulkinlan/cap-evidence-test-probe");
-    assertEquals(durableRoot(), "/home/paulkinlan/cap-evidence-test-probe");
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
+async function runWithEnv(env: Record<string, string | null>, script: string) {
+  const currentEnv = Deno.env.toObject();
+  for (const [k, v] of Object.entries(env)) {
+    if (v === null) delete currentEnv[k];
+    else currentEnv[k] = v;
   }
+  const cmd = new Deno.Command(Deno.execPath(), {
+    args: ["eval", script],
+    env: currentEnv,
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const out = await cmd.output();
+  return {
+    code: out.code,
+    stdout: new TextDecoder().decode(out.stdout).trim(),
+    stderr: new TextDecoder().decode(out.stderr).trim(),
+  };
+}
+
+Deno.test("durableRoot defaults to $HOME/cap-evidence (durable), honoring CAP_DURABLE_ROOT", async () => {
+  // Run in an isolated subprocess to prevent mutating process.env.CAP_DURABLE_ROOT in the shared parallel test runner (chrome-agent-platform-m3a2)
+  const unset = await runWithEnv({ CAP_DURABLE_ROOT: null }, `
+    import { durableRoot } from "./scripts/lib/durable-root.mjs";
+    import { homedir } from "node:os";
+    import { join } from "node:path";
+    console.log(durableRoot() === join(homedir(), "cap-evidence"));
+  `);
+  assertEquals(unset.stdout, "true", "durableRoot must default to $HOME/cap-evidence when CAP_DURABLE_ROOT is unset");
+
+  const overridden = await runWithEnv({ CAP_DURABLE_ROOT: "/home/paulkinlan/cap-evidence-test-probe" }, `
+    import { durableRoot } from "./scripts/lib/durable-root.mjs";
+    console.log(durableRoot() === "/home/paulkinlan/cap-evidence-test-probe");
+  `);
+  assertEquals(overridden.stdout, "true", "durableRoot must honor CAP_DURABLE_ROOT");
 });
 
-Deno.test("durableRoot treats an EMPTY CAP_DURABLE_ROOT as unset — never a relative CWD path", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    // CAP_DURABLE_ROOT="" is the classic result of shell parameter expansion
-    // of an unset var; ?? alone keeps "", and join("", …) would then yield a
-    // RELATIVE path silently (review P2 on 62696628). Pin: empty/whitespace
-    // means unset → the default.
-    Deno.env.set("CAP_DURABLE_ROOT", "");
-    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
-    Deno.env.set("CAP_DURABLE_ROOT", "   ");
-    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
-  }
+Deno.test("durableRoot treats an EMPTY CAP_DURABLE_ROOT as unset — never a relative CWD path", async () => {
+  // Run in an isolated subprocess to prevent polluting parallel suites
+  const empty = await runWithEnv({ CAP_DURABLE_ROOT: "" }, `
+    import { durableRoot } from "./scripts/lib/durable-root.mjs";
+    import { homedir } from "node:os";
+    import { join } from "node:path";
+    console.log(durableRoot() === join(homedir(), "cap-evidence"));
+  `);
+  assertEquals(empty.stdout, "true", "empty string must be treated as unset");
+
+  const whitespace = await runWithEnv({ CAP_DURABLE_ROOT: "   " }, `
+    import { durableRoot } from "./scripts/lib/durable-root.mjs";
+    import { homedir } from "node:os";
+    import { join } from "node:path";
+    console.log(durableRoot() === join(homedir(), "cap-evidence"));
+  `);
+  assertEquals(whitespace.stdout, "true", "whitespace-only string must be treated as unset");
 });
 
-Deno.test("durableRoot THROWS on a RAM-backed root — no silent tmpfs fallback", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    Deno.env.set("CAP_DURABLE_ROOT", "/tmp/cap-chp-must-refuse");
-    const err = assertThrows(() => durableRoot());
-    assertStringIncludes((err as Error).message, "RAM-backed");
-    Deno.env.set("CAP_DURABLE_ROOT", "/dev/shm/cap-chp-must-refuse");
-    assertThrows(() => durableRoot());
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
-  }
+Deno.test("durableRoot THROWS on a RAM-backed root — no silent tmpfs fallback", async () => {
+  // Run in an isolated subprocess to prevent polluting parallel suites
+  const tmpRefusal = await runWithEnv({ CAP_DURABLE_ROOT: "/tmp/cap-chp-must-refuse" }, `
+    import { durableRoot } from "./scripts/lib/durable-root.mjs";
+    try { durableRoot(); Deno.exit(0); }
+    catch (e) {
+      if (String(e.message).includes("RAM-backed")) Deno.exit(42);
+      Deno.exit(1);
+    }
+  `);
+  assertEquals(tmpRefusal.code, 42, "/tmp override must throw with RAM-backed error");
+
+  const shmRefusal = await runWithEnv({ CAP_DURABLE_ROOT: "/dev/shm/cap-chp-must-refuse" }, `
+    import { durableRoot } from "./scripts/lib/durable-root.mjs";
+    try { durableRoot(); Deno.exit(0); }
+    catch (e) {
+      if (String(e.message).includes("RAM-backed")) Deno.exit(42);
+      Deno.exit(1);
+    }
+  `);
+  assertEquals(shmRefusal.code, 42, "/dev/shm override must throw with RAM-backed error");
 });
 
-Deno.test("durableDir fails loudly when the durable location is unavailable", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    // /proc is a read-only virtual filesystem: mkdir MUST fail, and the error
-    // must surface (this is the bead's falsification: evidence does NOT
-    // silently land back on /tmp when the durable location is gone).
-    Deno.env.set("CAP_DURABLE_ROOT", "/proc/cap-chp-impossible");
-    assertThrows(() => durableDir("probe"));
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
-  }
+Deno.test("durableDir fails loudly when the durable location is unavailable", async () => {
+  // Run in an isolated subprocess: /proc/cap-chp-impossible is set only inside the child process,
+  // preventing race conditions with parallel tests calling durableDir() (chrome-agent-platform-m3a2)
+  const unavailable = await runWithEnv({ CAP_DURABLE_ROOT: "/proc/cap-chp-impossible" }, `
+    import { durableDir } from "./scripts/lib/durable-root.mjs";
+    try { durableDir("probe"); Deno.exit(0); }
+    catch (e) {
+      Deno.exit(42);
+    }
+  `);
+  assertEquals(unavailable.code, 42, "durableDir must throw when directory creation fails under unavailable location");
 });
 
 // --- Static guard (widened): no shipped source materializes evidence/scratch
