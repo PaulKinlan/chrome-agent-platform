@@ -291,6 +291,80 @@ export function toolServerError(raw: string, adapterName: string | null) {
   };
 }
 
+/**
+ * THE BROWSER TOOLS CAP OFFERS THE HARNESS (chrome-agent-platform-2amt).
+ *
+ * Paul's directive: "I need tools in the browser to be available to the harness (like claude) and
+ * then have it called and messaged back to Chrome over a protocol inside this app (not via MCP)."
+ *
+ * So there is no MCP server and no HTTP surface: the harness is TOLD the catalogue in its opening
+ * prompt and calls back over the ACP connection it already has, with
+ *   {"jsonrpc":"2.0","id":"…","method":"browser/call_tool","params":{"name":…,"args":{…}}}
+ * which extension/lib/acp-client.js dispatches into browserToolset(). The tools' own permission and
+ * browser-control grants are untouched, so this adds reach, not authority.
+ *
+ * THE NAMES HERE ARE CHECKED AGAINST THE IMPLEMENTATION. tests/browser-tool-proxy.test.ts compares
+ * this list with Object.keys(browserToolset()) in both directions, so a tool cannot be declared
+ * without existing and cannot exist without being declared — the drift that would make the harness
+ * call something that is not there (or miss one that is).
+ */
+export const BROWSER_TOOL_DECLARATIONS: ReadonlyArray<{ name: string; args: string; summary: string }> = [
+  {
+    name: "list_tabs",
+    args: "{}",
+    summary: "List every open tab across every window with a count, window ids and per-tab groupId — call this before grouping so nothing is guessed.",
+  },
+  {
+    name: "group_tabs",
+    args: '{"tabIds":[number,…] (1-16),"title"?:"string","color"?:"grey|blue|red|yellow|green|pink|purple|cyan|orange"}',
+    summary: "Put the given tabs into one new tab group (chrome.tabs.group + the title/colour afterwards). Grant-gated per tab origin.",
+  },
+  {
+    name: "ungroup_tabs",
+    args: '{"tabIds":[number,…] (1-16)}',
+    summary: "Remove the given tabs from their groups.",
+  },
+];
+
+/** The prompt block that tells the harness what it can call and how. Injected once per session. */
+export function browserToolPromptBlock(): string {
+  const lines = BROWSER_TOOL_DECLARATIONS.map((t) => `- ${t.name}(${t.args}) — ${t.summary}`);
+  return [
+    "## Browser tools available in this app",
+    "You are running inside the Chrome Agent Platform. The browser exposes tools to you DIRECTLY over this",
+    "connection (no MCP server, no HTTP endpoint). To call one, emit a JSON-RPC request as your next line:",
+    '{"jsonrpc":"2.0","id":"<any id>","method":"browser/call_tool","params":{"name":"<tool>","args":{…}}}',
+    "The result arrives as the JSON-RPC response with the same id, and each call is subject to the same",
+    "browser permissions and user consent as the app's own tools.",
+    "",
+    ...lines,
+    "",
+    "Example — grouping the user's tabs: call list_tabs, choose the tabIds, then call group_tabs with a",
+    'title (e.g. {"name":"group_tabs","args":{"tabIds":[…],"title":"Reading","color":"blue"}}).',
+  ].join("\n");
+}
+
+/** Sessions already told about the browser tools, so the block is added once, not once per turn. */
+const browsertoolsGreeted = new Set<string>();
+
+/** Prepend the browser-tool block to a session's FIRST prompt (pc: params.sessionId). */
+export function applyBrowserToolDeclaration(raw: string): string {
+  try {
+    const msg: any = JSON.parse(raw);
+    if (msg?.method !== "session/prompt") return raw;
+    const sessionId = String(msg.params?.sessionId ?? msg.sessionId ?? "");
+    if (browsertoolsGreeted.has(sessionId)) return raw;
+    const blocks = msg.params?.prompt;
+    if (!Array.isArray(blocks) || blocks.length === 0) return raw;
+    browsertoolsGreeted.add(sessionId);
+    const block = { type: "text", text: browserToolPromptBlock() };
+    msg.params.prompt = [block, ...blocks];
+    return JSON.stringify(msg);
+  } catch {
+    return raw;
+  }
+}
+
 export function applyHostDefaults(raw: string, hostCwd?: string): string {
   try {
     const msg: any = JSON.parse(raw);
@@ -537,7 +611,9 @@ export function createAcpServer(
           socket.send(JSON.stringify(refusal));
           return;
         }
-        const data = applyHostDefaults(String(event.data), hostCwdDefault || undefined);
+        // Host defaults first, then the browser-tool declaration: the harness learns what it can call
+        // BACK to Chrome with on its first prompt of the session (2amt).
+        const data = applyBrowserToolDeclaration(applyHostDefaults(String(event.data), hostCwdDefault || undefined));
         const encoder = new TextEncoder();
         await writer.write(encoder.encode(data + "\n"));
       } catch (err) {

@@ -2195,6 +2195,46 @@ async function resolveFsTarget(grantId) {
   return g; // grant_not_found / fs_permission_lapsed / grant_ambiguous / other
 }
 
+/**
+ * Run a browser tool BY NAME for a caller outside the model loop — the ACP harness (2amt).
+ *
+ * The tool signatures the harness is told about and the tools that exist here are the same list:
+ * `BROWSER_TOOL_DECLARATIONS` in scripts/acp-bridge.ts is checked against browserToolset()'s keys by
+ * tests/browser-tool-proxy.test.ts, so the declaration cannot drift from the implementation.
+ *
+ * The GRANTS ARE INSIDE THE TOOLS and stay inside them: this dispatcher adds no authority, so a
+ * harness call is refused exactly where a model call would be refused (permissions + the
+ * browser-control grant, per tool). That is the property that makes proxying safe to expose.
+ *
+ * Unknown tool and invalid arguments return `{ error }` rather than throwing, because a harness sees
+ * a JSON result and a thrown exception would arrive as a protocol error with no way to correct it.
+ */
+export async function runBrowserToolCall(name, args = {}) {
+  if (typeof name !== "string" || name.length === 0) {
+    return { error: "browser/call_tool needs a tool name", available: Object.keys(browserToolset()) };
+  }
+  const tools = browserToolset();
+  const tool = tools[name];
+  if (!tool) {
+    return { error: `unknown browser tool: ${name}`, available: Object.keys(tools).sort() };
+  }
+  let parsed = args;
+  if (tool.inputSchema && typeof tool.inputSchema.safeParse === "function") {
+    const outcome = tool.inputSchema.safeParse(args ?? {});
+    if (!outcome.success) {
+      // The zod message is the useful part for a caller; `available` is not repeated here because the
+      // name was fine and the arguments were not.
+      return { error: `invalid arguments for ${name}`, details: outcome.error?.issues ?? String(outcome.error) };
+    }
+    parsed = outcome.data;
+  }
+  try {
+    return await tool.execute(parsed);
+  } catch (error) {
+    return { error: `${name} failed: ${String((error && error.message) || error)}` };
+  }
+}
+
 export function browserToolset(readOnly = false, {
   scheduleScriptGate = null,
   cookieValueGate = null,
