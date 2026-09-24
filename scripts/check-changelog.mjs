@@ -6,7 +6,7 @@
 // unit tests pin (imported from extension/options/changelog-filter.js so the
 // three cannot drift).
 import { readFile } from "node:fs/promises";
-import { isInternalEntry, isUserFacingEntry } from "../extension/options/changelog-filter.js";
+import { explainUserFacingEntry, isInternalEntry } from "../extension/options/changelog-filter.js";
 
 const changelogUrl = new URL("../CHANGELOG.md", import.meta.url);
 const pkgUrl = new URL("../package.json", import.meta.url);
@@ -55,7 +55,12 @@ const voiceFail = [];
 for (const m of blocks) {
   const bullets = m[2].split(/\r?\n/).filter((l) => l.startsWith("- ")).map((l) => l.slice(2).trim());
   for (const b of bullets) {
-    if (!isUserFacingEntry(b) && !isInternalEntry(b)) voiceFail.push(`v${m[1]}: ${b.slice(0, 80)}`);
+    if (!isInternalEntry(b)) {
+      // chrome-agent-platform-smxw: name the matching rule and token, not just
+      // the truncated bullet — the same diagnostic the unit test asserts.
+      const d = explainUserFacingEntry(b);
+      if (!d.ok) voiceFail.push(`v${m[1]}: ${b.slice(0, 80)} — matched ${d.rule} (${d.why}): "${d.token}"`);
+    }
   }
 }
 // The broad bans stay in force over the whole recent section (mirror of the

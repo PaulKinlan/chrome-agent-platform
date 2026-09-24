@@ -8,6 +8,7 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
+  explainUserFacingEntry,
   isInternalEntry,
   isUserFacingEntry,
   parseChangelog,
@@ -240,7 +241,11 @@ Deno.test("changelog: every modern (0.3.x) bullet is user-facing, or says it is 
     if (major === 0 && minor < 3) continue; // ancient history is frozen, not rewritten
     for (const b of v.bullets as string[]) {
       if (!isUserFacingEntry(b) && !isInternalEntry(b)) {
-        offenders.push(`v${v.version}: ${b.slice(0, 80)}`);
+        // chrome-agent-platform-smxw: name the offending rule and token, so a
+        // rejected bullet says WHICH rule matched (e.g. JARGON_RE / harness)
+        // instead of only showing truncated text.
+        const d = explainUserFacingEntry(b) as { ok: false; rule: string; why: string; token: string };
+        offenders.push(`v${v.version}: ${b.slice(0, 80)} — matched ${d.rule} (${d.why}): "${d.token}"`);
       }
     }
   }
@@ -274,4 +279,32 @@ Deno.test("changelog: the modern (0.3.x) series is contiguous — no consumed-bu
   assertEquals(missing, [],
     `gaps in the 0.3 series mean a version number was consumed without an entry ` +
     `(the parallel-lane race) — renumber or restore:\n${missing.join(", ")}`);
+});
+
+Deno.test("smxw: the rejection diagnostic names the matching rule and token (harness)", () => {
+  // The x1zq defect: two bullets beginning "Harness agents/connections" were
+  // rejected with only truncated bullet text, and nobody could see that
+  // JARGON_RE matched "harness". The diagnostic must name both.
+  for (const b of ["Harness agents and Harness connections are now split", "the harness gate reported RED for two checks"]) {
+    const d = explainUserFacingEntry(b);
+    if (d.ok) throw new Error(`expected a rejection naming a rule; got ok for: ${b}`);
+    assertEquals(d.rule, "JARGON_RE", JSON.stringify(d));
+    assertEquals(d.token.toLowerCase(), "harness", JSON.stringify(d));
+  }
+  // Other rules name themselves too — one representative per family.
+  for (const [line, rule] of [
+    ["fix(core): thing", "ENGINEERING_PREFIX_RE"],
+    ["merged 3a1b2c4d into the splice", "SHA_RE"],
+    ["the fix landed early", "WORKFLOW_RE"],
+  ] as const) {
+    const d = explainUserFacingEntry(line);
+    if (d.ok) throw new Error(`expected a rejection for: ${line}`);
+    assertEquals(d.rule, rule, `${line}: ${JSON.stringify(d)}`);
+  }
+  // User-facing copy carries no rejection.
+  assertEquals(explainUserFacingEntry("agent icons in the closed sidebar are no longer cut off").ok, true);
+  // And the boolean wrapper stays exactly consistent with the explanation.
+  for (const b of ["Harness agents", "fix(x): y", "internal: notes", "the lane landed early", "icons no longer cut off"]) {
+    assertEquals(isUserFacingEntry(b), explainUserFacingEntry(b).ok, b);
+  }
 });

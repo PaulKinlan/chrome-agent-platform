@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.480] — 2026-09-24
+- changelog rejections now name the matching rule and token
+
 ## [0.3.479] — 2026-09-24
 - a truncated /proc walk is retried with room, and still refuses if that fails
 
