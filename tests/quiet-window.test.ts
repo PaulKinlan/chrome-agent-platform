@@ -408,7 +408,27 @@ Deno.test("mkax: quietReasons names what is holding the gate; heavy builders are
 });
 
 Deno.test("mkax: a real sample from this box is finite, bounded and evidence-shaped", async () => {
-  const s = await readLoadSample();
+  // THE SCAN BUDGET IS SCOPED HERE ON PURPOSE (chrome-agent-platform-2bli). This test asks "can a
+  // sample be taken on this box", but its default 400 ms /proc budget is exceeded by the suite's
+  // OWN parallel phase (478 files, each spawning children): 1io9's refusal is then CORRECT — the
+  // sample says so instead of reporting a partial count — and this assertion reddened for
+  // unrelated changes (measured 2026-09-24: "proc scan truncated after 912 entries in 404 ms").
+  // So the sample is taken with a deliberately larger budget, which is the operator remedy the
+  // refusal message itself names, and the refusal keeps its own assertion below. The env is set and
+  // restored inside one sequential test (Deno runs the tests in a file in order), so no other test
+  // inherits it — the same pattern the hermetic 1io9 drill already uses.
+  const withScanBudget = async <T>(entries: string, ms: string, fn: () => Promise<T>): Promise<T> => {
+    const before = [Deno.env.get("CAP_QUIET_MAX_PROC_SCAN"), Deno.env.get("CAP_QUIET_MAX_PROC_SCAN_MS")] as const;
+    Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", entries);
+    Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", ms);
+    try {
+      return await fn();
+    } finally {
+      if (before[0] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN", before[0]);
+      if (before[1] === undefined) Deno.env.delete("CAP_QUIET_MAX_PROC_SCAN_MS"); else Deno.env.set("CAP_QUIET_MAX_PROC_SCAN_MS", before[1]);
+    }
+  };
+  const s = await withScanBudget("20000", "5000", () => readLoadSample());
   assertEquals(s.measurable, true, `this box is measurable: ${s.error ?? ""}`);
   assert(Number.isFinite(s.load1) && s.load1 >= 0, `load1 ${s.load1}`);
   assert(s.cores >= 1, `cores ${s.cores}`);
@@ -419,6 +439,12 @@ Deno.test("mkax: a real sample from this box is finite, bounded and evidence-sha
   const line = environmentLine(s);
   assert(line.includes("load1=") && line.includes("cores=") && line.includes("heavy-builders="), line);
   assertEquals(line.includes("worktrees"), false, "no paths or argv in the evidence line");
+  // AND THE REFUSAL IS STILL REAL, pinned here so raising the budget above cannot read as "the
+  // truncation path no longer matters": a budget that cannot be met must report measurable:false
+  // with the partial count as evidence, never a quiet verdict built on an incomplete walk (1io9).
+  const refused = await withScanBudget("20000", "0", () => readLoadSample());
+  assertEquals(refused.measurable, false, "a /proc budget that cannot be met must refuse, not report a partial count");
+  assert(String(refused.error ?? "").includes("truncated"), `the refusal must say what happened: ${refused.error}`);
 });
 
 Deno.test("mkax: the launcher refuses to START the browser when the box is not quiet", async () => {

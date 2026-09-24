@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.477] — 2026-09-24
+- the mkax sample asks for a usable budget instead of racing the suite's own churn
+
 ## [0.3.476] — 2026-09-24
 - test real page reload in agent header rename regression
 
