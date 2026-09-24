@@ -308,3 +308,66 @@ Deno.test("smxw: the rejection diagnostic names the matching rule and token (har
     assertEquals(isUserFacingEntry(b), explainUserFacingEntry(b).ok, b);
   }
 });
+
+Deno.test("4zp3: the leaked first-person internal sentence is rejected, naming the rule", () => {
+  // The EXACT sentence that shipped to CHANGELOG.md past the old filter
+  // (chrome-agent-platform-4zp3, measured on cap/mcp-harness-tools).
+  const s = "correct my own capability claim — NO pinned adapter implements client-hosted MCP";
+  assertEquals(isUserFacingEntry(s), false, "the leaked sentence must be rejected");
+  const d = explainUserFacingEntry(s);
+  if (d.ok) throw new Error(`expected a rejection naming a rule; got ok for: ${s}`);
+  // Rule order decides which rule is NAMED when several match: JARGON_RE is
+  // consulted before FIRST_PERSON_RE, so the jargon phrase is the diagnostic.
+  assertEquals(d.rule, "JARGON_RE", JSON.stringify(d));
+  assertEquals(d.token, "capability claim", JSON.stringify(d));
+});
+
+Deno.test("4zp3: each leaked vocabulary token names itself under JARGON_RE", () => {
+  for (const [line, token] of [
+    ["recorded a capability claim in the notes", "capability claim"],
+    ["the pinned adapter ships with the build", "pinned adapter"],
+    ["the client-hosted server stayed local", "client-hosted"],
+  ] as const) {
+    const d = explainUserFacingEntry(line);
+    if (d.ok) throw new Error(`expected JARGON_RE rejection for: ${line}`);
+    assertEquals(d.rule, "JARGON_RE", `${line}: ${JSON.stringify(d)}`);
+    assertEquals(d.token, token, `${line}: the matched token must be the leak`);
+  }
+});
+
+Deno.test("4zp3: first-person engineering prose is rejected, naming FIRST_PERSON_RE", () => {
+  for (const [line, token] of [
+    ["I corrected the note myself", "I"],
+    ["my own drafting of the note", "my"],
+    ["we ship the fix with this build", "we"],
+    ["our release notes explain the change", "our"],
+  ] as const) {
+    const d = explainUserFacingEntry(line);
+    if (d.ok) throw new Error(`expected FIRST_PERSON_RE rejection for: ${line}`);
+    assertEquals(d.rule, "FIRST_PERSON_RE", `${line}: ${JSON.stringify(d)}`);
+    assertEquals(d.token, token, `${line}: ${JSON.stringify(d)}`);
+  }
+});
+
+Deno.test("4zp3: the product's own WebMCP/MCP vocabulary stays user-facing", () => {
+  // POLICY (measured, not assumed): five shipped 0.3.x entries use "MCP" as
+  // product vocabulary and were shipped as user-facing; a blanket \bMCP\b ban
+  // would rewrite accepted history. The leaked sentence is still caught by its
+  // other tokens + first person. If Paul wants MCP banned outright, that is a
+  // separate ruling (it requires marking the five historical entries internal).
+  assert(isUserFacingEntry("WebMCP tool calls now work from the side panel."));
+  assert(isUserFacingEntry("The WebMCP directory refreshed its offers."));
+  assert(isUserFacingEntry("implements MCP server tools on a run"));
+  assert(isUserFacingEntry("Platform streaming I/O connects attachments and files directly"));
+});
+
+Deno.test("4zp3: bump-version must not re-inline the filter rules (the ku6o shape)", async () => {
+  // scripts/bump-version.mjs imports isUserFacingEntry from THIS module since
+  // the ku6o unification (its own second copy once published three internal:
+  // notes and burned a version). Expanding the filter upgrades the hook with
+  // no second copy to maintain — asserted structurally, not by an import
+  // string (which alone would be an import shadow).
+  const hook = await Deno.readTextFile(new URL("../scripts/bump-version.mjs", import.meta.url));
+  assert(!/const JARGON_RE/.test(hook), "bump-version must not re-declare the jargon alternation — it imports the unified filter");
+  assert(!/journey\|KAT\|/.test(hook), "bump-version must not carry an inlined jargon alternation");
+});

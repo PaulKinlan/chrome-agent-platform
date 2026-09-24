@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.479] — 2026-09-24
+- the changelog jargon filter catches the vocabulary that actually leaks
+
 ## [0.3.478] — 2026-09-24
 - changelog rejections now name the matching rule and token
 
