@@ -198,17 +198,124 @@ export async function verifyLoadedProbeSnapshot() {
   return { snapshot, currentManifest };
 }
 
-export async function assertNoExistingProbe(extension: string) {
-  // lstat catches empty directories and dangling links without changing closure keys.
+// w6wo: the probe path is reserved, and anything already there must never be clobbered — a real
+// fixture, a dangling link, or someone else's directory. But a run that STAGES the probe and is
+// interrupted (a failed assertion between mkdir and cleanup) leaves an empty directory behind, and
+// that leftover then fails an UNRELATED change's `test:changed` in a check whose name means "a
+// fixture is in the way" — measured 2026-09-24 while validating scripts/lib/heavy-gate-slot.ts.
+// So a staged probe is recorded by a sidecar OUTSIDE the extension tree, and only a path whose
+// sidecar proves ownership is removable. The record cannot live inside the tree: extension/ is an
+// indexed source authority, so a file written there changes the closure and invalidates
+// dist.complete — the first version of this fix did exactly that and the harness's own dist check
+// refused it, which is why the record is a lock-file-style sidecar under the durable scratch dir.
+const PROBE_OWNER_RECORD_PREFIX = "emscripten-probe-owner-";
+const PROBE_OWNER_RECORD_CREATOR = "emscripten-abi-loaded";
+
+export interface ProbeOwnerRecord {
+  creator: string;
+  extension: string;
+  startedAt: string;
+  pid: number;
+}
+
+/** The sidecar that proves a staged probe belongs to a run of this harness. Deterministic in the
+ *  extension path so a later run finds it; deliberately outside the tree it describes. */
+export function probeOwnerRecordPath(extension: string): string {
+  const key = extension.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return join(durableDir("scratch"), `${PROBE_OWNER_RECORD_PREFIX}${key}.json`);
+}
+
+/** Record that this process staged the probe in `extension`. */
+export async function writeProbeOwnerRecord(extension: string): Promise<void> {
+  const record: ProbeOwnerRecord = {
+    creator: PROBE_OWNER_RECORD_CREATOR,
+    extension,
+    startedAt: new Date().toISOString(),
+    pid: Deno.pid,
+  };
+  await Deno.writeTextFile(probeOwnerRecordPath(extension), JSON.stringify(record) + "\n");
+}
+
+/** Read the record. `null` means "not provably ours" — absent, unreadable, another creator, or a
+ *  record that names a different extension. */
+export async function readProbeOwnerRecord(extension: string): Promise<ProbeOwnerRecord | null> {
   try {
-    await Deno.lstat(join(extension, PROBE_DEST));
+    const parsed = JSON.parse(await Deno.readTextFile(probeOwnerRecordPath(extension))) as ProbeOwnerRecord;
+    if (parsed && parsed.creator === PROBE_OWNER_RECORD_CREATOR && parsed.extension === extension) return parsed;
+  } catch { /* no record, unreadable, or not ours */ }
+  return null;
+}
+
+export type ProbePathVerdict =
+  | { kind: "absent" }
+  | { kind: "leftover"; record: ProbeOwnerRecord }
+  | { kind: "foreign"; mtime: string | null; target: string | null };
+
+/** What is at the reserved probe path? `leftover` requires BOTH the path and a matching sidecar
+ *  record; everything else that exists is `foreign`, with `target` naming where a symlink points so
+ *  a dangling link is visible as one. */
+export async function probePathVerdict(extension: string): Promise<ProbePathVerdict> {
+  const probe = join(extension, PROBE_DEST);
+  let info: Deno.FileInfo;
+  try {
+    info = await Deno.lstat(probe);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return;
+    if (error instanceof Deno.errors.NotFound) return { kind: "absent" };
     throw error;
   }
-  throw new Error(
-    "production extension unexpectedly contains the test-only probe path",
+  const record = info.isDirectory ? await readProbeOwnerRecord(extension) : null;
+  if (record) return { kind: "leftover", record };
+  return {
+    kind: "foreign",
+    mtime: info.mtime?.toISOString() ?? null,
+    target: info.isSymlink ? await Deno.readLink(probe).catch(() => null) : null,
+  };
+}
+
+/** The refusal the harness and the test's precondition share. A provable LEFTOVER says so and is
+ *  named as safe to clear; anything else keeps the original refusal, with the path, its age, what a
+ *  symlink points at, and the command to look at it — never a bare "unexpectedly contains". */
+export function probeRefusalMessage(extension: string, verdict: Exclude<ProbePathVerdict, { kind: "absent" }>): string {
+  const probe = join(extension, PROBE_DEST);
+  if (verdict.kind === "leftover") {
+    return (
+      `production extension contains a LEFTOVER probe directory: ${probe} ` +
+      `(staged by ${verdict.record.creator}, pid ${verdict.record.pid}, started ${verdict.record.startedAt}, ` +
+      `recorded at ${probeOwnerRecordPath(extension)}). No fixture can be behind a path this harness ` +
+      `staged — clear it with: rm -rf ${probe}`
+    );
+  }
+  const shape = verdict.target === null ? "path" : `symlink -> ${verdict.target}`;
+  return (
+    `production extension unexpectedly contains the test-only probe path: ${probe} ` +
+    `(${shape}, mtime ${verdict.mtime ?? "unknown"}). A path with no ownership record is NEVER removed ` +
+    `automatically — inspect it with \`ls -la ${probe}\` and, only if you know it is not a fixture you need, \`rm -rf ${probe}\``
   );
+}
+
+/** Remove a PROVABLE leftover (the directory and its record) so the next run can stage its probe;
+ *  refuse anything else. Returns what it did so a caller can say so. */
+export async function clearProbeLeftoverIfProvable(extension: string): Promise<"absent" | "removed"> {
+  const verdict = await probePathVerdict(extension);
+  if (verdict.kind === "absent") return "absent";
+  if (verdict.kind === "leftover") {
+    const probe = join(extension, PROBE_DEST);
+    console.log(
+      `emscripten-abi-loaded: LEFTOVER ${probe} (staged by pid ${verdict.record.pid}, started ${verdict.record.startedAt}) — removing it; ` +
+        `a path with no ownership record would still be refused`,
+    );
+    await Deno.remove(probe, { recursive: true });
+    await Deno.remove(probeOwnerRecordPath(extension)).catch(() => {});
+    return "removed";
+  }
+  throw new Error(probeRefusalMessage(extension, verdict));
+}
+
+export async function assertNoExistingProbe(extension: string) {
+  // lstat catches empty directories and dangling links without changing closure keys.
+  const verdict = await probePathVerdict(extension);
+  if (verdict.kind === "absent") return;
+  throw new Error(probeRefusalMessage(extension, verdict));
 }
 
 export async function prepareLoadedExtension() {

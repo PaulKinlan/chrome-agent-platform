@@ -5,6 +5,7 @@ import {
   assertEquals,
   assertMatch,
   assertRejects,
+  assertStringIncludes,
   assertThrows,
 } from "jsr:@std/assert@1";
 
@@ -250,15 +251,19 @@ Deno.test("j7km: absent probe permits neighboring prefixes and preserves rooted 
 });
 
 Deno.test("dqxa: prepareLoadedExtension refuses a pre-existing probe before destination copying or injection", async () => {
-  const { prepareLoadedExtension, treeRecords } = await import(
+  const { prepareLoadedExtension, treeRecords, clearProbeLeftoverIfProvable, writeProbeOwnerRecord } = await import(
     new URL("../scripts/emscripten-abi-loaded.ts", import.meta.url).href
   );
   const { durableDir } = await import("../scripts/lib/durable-root.mjs");
   const extension = fileURLToPath(new URL("../extension", import.meta.url));
   const probe = `${extension}/_emscripten_abi_probe`;
-  // Never replace a real fixture, including a dangling link. mkdir below also
-  // refuses a path created after this check; only our empty directory is removed.
-  await assertRejects(() => Deno.lstat(probe), Deno.errors.NotFound);
+  // w6wo: a leftover from an INTERRUPTED run of this very test used to fail this precondition as a
+  // bare NotFound expectation, reddening an UNRELATED change's `test:changed` (measured 2026-09-24
+  // while validating scripts/lib/heavy-gate-slot.ts). A provable leftover (it carries the marker)
+  // is now cleared here with a LEFTOVER line; a path WITHOUT the marker is still never removed —
+  // the helper throws the actionable refusal instead. Never replace a real fixture, including a
+  // dangling link.
+  await clearProbeLeftoverIfProvable(extension);
   const before = await treeRecords(extension);
   const makeTempDir = Deno.makeTempDir;
   const scratch = await makeTempDir({
@@ -287,12 +292,16 @@ Deno.test("dqxa: prepareLoadedExtension refuses a pre-existing probe before dest
 
     // Empty directories add no indexed source bytes, so the real Store marker
     // stays valid. The guard must still refuse this reserved filesystem entry.
+    // w6wo: the staged directory carries the marker a run leaves behind, so an interruption of
+    // THIS test leaves a provable leftover that the next run clears instead of a mystery red — and
+    // the refusal still fires, reported as a LEFTOVER rather than as a surprise.
     await Deno.mkdir(probe);
     ownsProbe = true;
+    await writeProbeOwnerRecord(extension);
     await assertRejects(
       () => prepareLoadedExtension(),
       Error,
-      "production extension unexpectedly contains the test-only probe path",
+      "LEFTOVER probe directory",
     );
     assertEquals(
       destinations.length,
@@ -301,12 +310,17 @@ Deno.test("dqxa: prepareLoadedExtension refuses a pre-existing probe before dest
     );
     const probeEntries = [];
     for await (const entry of Deno.readDir(probe)) probeEntries.push(entry.name);
+    // w6wo: the staged directory carries exactly the marker an interrupted run leaves, and nothing
+    // else — the refusal must not have copied a snapshot into it, which is what the original
+    // "entries == []" was protecting (an empty staged dir was its form of the same claim).
     assertEquals(probeEntries, []);
     assertEquals(await treeRecords(extension), before);
   } finally {
     Deno.makeTempDir = makeTempDir;
     try {
-      if (ownsProbe) await Deno.remove(probe);
+      // w6wo: the staged directory now carries the marker, so the cleanup is recursive — it
+      // still removes only the directory this test created (ownsProbe).
+      if (ownsProbe) await Deno.remove(probe, { recursive: true });
     } finally {
       await Deno.remove(scratch, { recursive: true });
     }
@@ -752,4 +766,53 @@ Deno.test("local runtime report corrects the resize filter and makes no unmeasur
     readme,
     /not a full typed-export\/global decoder or an admission validator/,
   );
+});
+
+// ── w6wo: a leftover is provable, and only a provable leftover is ever removed ──
+Deno.test("w6wo: a MARKED leftover is cleared by the next run's setup, with a LEFTOVER line", async () => {
+  const { clearProbeLeftoverIfProvable, writeProbeOwnerRecord, probePathVerdict } = await import(
+    new URL("../scripts/emscripten-abi-loaded.ts", import.meta.url).href
+  );
+  const extension = fileURLToPath(new URL("../extension", import.meta.url));
+  const probe = `${extension}/_emscripten_abi_probe`;
+  let ownsProbe = false;
+  try {
+    // Exactly what an interrupted run leaves: the directory, and the marker inside it.
+    await Deno.mkdir(probe).catch((e) => { if (!(e instanceof Deno.errors.AlreadyExists)) throw e; });
+    ownsProbe = true;
+    await writeProbeOwnerRecord(extension);
+    assertEquals((await probePathVerdict(extension)).kind, "leftover", "the ownership record makes it provably ours");
+    const outcome = await clearProbeLeftoverIfProvable(extension);
+    assertEquals(outcome, "removed", "a provable leftover is cleared so the next run can stage its probe");
+    await assertRejects(() => Deno.lstat(probe), Deno.errors.NotFound);
+    assertEquals((await probePathVerdict(extension)).kind, "absent");
+    assertEquals(await clearProbeLeftoverIfProvable(extension), "absent", "and clearing an absent path is a no-op");
+  } finally {
+    if (ownsProbe) await Deno.remove(probe, { recursive: true }).catch(() => {});
+  }
+});
+
+Deno.test("w6wo: an UNMARKED path is never removed, and refuses with the actionable message", async () => {
+  const { clearProbeLeftoverIfProvable, probePathVerdict } = await import(
+    new URL("../scripts/emscripten-abi-loaded.ts", import.meta.url).href
+  );
+  const extension = fileURLToPath(new URL("../extension", import.meta.url));
+  const probe = `${extension}/_emscripten_abi_probe`;
+  const link = `${extension}/_emscripten_abi_probe_link`;
+  try {
+    // (a) a directory someone else made: no marker, so it can never be proved to be ours.
+    await Deno.mkdir(probe).catch((e) => { if (!(e instanceof Deno.errors.AlreadyExists)) throw e; });
+    assertEquals((await probePathVerdict(extension)).kind, "foreign");
+    const err = await assertRejects(() => clearProbeLeftoverIfProvable(extension), Error);
+    assertStringIncludes(err.message, "NEVER removed");
+    assertStringIncludes(err.message, probe);
+    assertStringIncludes(err.message, "ls -la");
+    await Deno.stat(probe); // still there — a refusal must not delete what it refused
+    // (b) a dangling symlink: lstat sees it, and it is not ours either.
+    await Deno.symlink("missing-target", link).catch((e) => { if (!(e instanceof Deno.errors.AlreadyExists)) throw e; });
+    assertEquals((await probePathVerdict(extension)).kind, "foreign");
+  } finally {
+    await Deno.remove(probe, { recursive: true }).catch(() => {});
+    await Deno.remove(link).catch(() => {});
+  }
 });
