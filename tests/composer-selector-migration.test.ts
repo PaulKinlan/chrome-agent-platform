@@ -57,7 +57,14 @@ const EXEMPT = new Set([
 // named harnesses, then one-off evidence, then unit tests that mention the ids.
 const INVENTORY: Record<string, number> = {
   // ── gates inside test:all ────────────────────────────────────────────────
-  "scripts/chrome-journeys.ts": 44, // most route through boxOf()'s compat mapping; :2688 and :2721 do not
+  // 76qp: 44 -> 40. The four sites that did NOT route through boxOf()'s compat
+  // mapping are migrated to the resolver; the rest are boxOf/clickSel/typeInto
+  // arguments, which the compat mapping rewrites. The previous note named
+  // ":2688 and :2721", line numbers that had drifted off the real sites — the
+  // classification is now "raw evalIn query" vs "passed to boxOf", which does
+  // not rot. Why it mattered: two of the four carried assertions and reported a
+  // working feature as a product red on the journey gate.
+  "scripts/chrome-journeys.ts": 40,
   "scripts/component-gallery-smoke.ts": 3, // :200,:216,:217
   // MIGRATED, so pruned from the ledger (a clean file that stays listed fails the
   // second test on purpose — the ledger must list only work that is left):

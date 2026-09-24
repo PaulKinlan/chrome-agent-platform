@@ -56,6 +56,20 @@ import {
 import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
 import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
+// chrome-agent-platform-76qp: the sanctioned way to address the composer. The
+// two fixed composer ids were REMOVED by bead sndb because several documents
+// carry more than one composer, so a fixed id silently resolved to the FIRST
+// one. boxOf() below rewrites those retired ids for the call sites that go
+// through it, but a RAW `evalIn` query gets no such rewrite — and four such
+// sites in this file read an element that has not existed since sndb landed.
+// Two of them carry assertions, so the gate reported a WORKING feature as a
+// product defect (measured on the 132/370 run: "multi-slash: the skill
+// reference is inserted" and "...holds BOTH the skill and the tab reference"
+// FAILED, while the service-worker-side check "the two-command task reached the
+// agent journal with both references" PASSED in the same run — the journal had
+// both references; only the DOM read was dead).
+// Ledger: tests/composer-selector-migration.test.ts.
+import { composerInput, composerPopup } from "./lib/composer-target.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -2745,10 +2759,13 @@ async function main() {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await sleep(800);
+    // 76qp: host-scoped through the resolver. The previous form asked for a
+    // retired id inside the first `agent-composer` in document order — exactly
+    // the ambiguity sndb removed — so `value` was always '' and this assertion
+    // could only fail.
     const afterSkill = await evalIn(cdp, ntpSession, `(() => {
-      const comp = document.querySelector('agent-composer');
-      const inp = comp?.querySelector('#task-input');
-      const pop = comp?.querySelector('.popup');
+      const inp = document.querySelector(${JSON.stringify(composerInput("hub"))});
+      const pop = document.querySelector(${JSON.stringify(composerPopup("hub"))});
       return JSON.stringify({ value: inp?.value ?? '', popupHidden: pop ? pop.hidden : true });
     })()`);
     const skillResolved = JSON.parse(afterSkill ?? "{}");
@@ -2780,7 +2797,8 @@ async function main() {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await sleep(800);
-    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('agent-composer #task-input')?.value ?? ''`);
+    // 76qp: same dead selector as the read above; same false red.
+    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector(${JSON.stringify(composerInput("hub"))})?.value ?? ''`);
     check("multi-slash: the final input holds BOTH the skill and the tab reference",
       /\/skill:(?:builtin:)?page-summary/.test(multiValue) && /\/tabs:/.test(multiValue));
     check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
@@ -2821,7 +2839,9 @@ async function main() {
     );
     const taskVal = await evalIn(
       cdp, ntpSession,
-      `document.querySelector('#composer [data-composer-input], #composer textarea, #task-input')?.value`,
+      // 76qp: this one PASSED only because of its fallback list; the resolver is
+      // the single spelling, and the dead leg is removed.
+      `document.querySelector(${JSON.stringify(composerInput("hub"))})?.value`,
     );
     check("NTP: textarea reflects the typed text", taskVal === typedTask);
     check(
@@ -6305,7 +6325,9 @@ async function main() {
       await cdp.send("Page.bringToFront", {}, ntpSession);
       await sleep(300);
       if (!(await typeInto(cdp, ntpSession, "#thread-composer #task-input", task))) return false;
-      const typed = await evalIn(cdp, ntpSession, `document.querySelector('#thread-composer #task-input')?.value ?? null`);
+      // 76qp: debug-only read, but it reported `null` for every send because of
+      // the retired id — a diagnostic that always lies is worse than none.
+      const typed = await evalIn(cdp, ntpSession, `document.querySelector(${JSON.stringify(composerInput("thread"))})?.value ?? null`);
       if (typed !== task) console.log(`[debug] sendTask typed=${JSON.stringify(typed)}`);
       return await clickSel(cdp, ntpSession, "#thread-composer #run-task");
     };
