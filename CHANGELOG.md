@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.480] — 2026-09-24
+- revise 4: the classifier MATCHES ACROSS trivia and never rewrites the input
+
 ## [0.3.479] — 2026-09-24
 - revise 3: comments are stripped linearly, not matched by a comment-run regex
 

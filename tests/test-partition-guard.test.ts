@@ -189,11 +189,46 @@ Deno.test("partition guard: the detectors classify the known hazards", () => {
     classifyHazards(urlThenImport).join("|"), IMPORT_HAZARD,
     "a // inside a string must not swallow the rest of the line (the stripper respects strings)",
   );
-  // And stripping means a COMMENTED-OUT import is dead code, not a hazard — the deliberate
-  // reversal of the earlier fail-closed note, pinned so the change is visible rather than implicit.
-  assertEquals(classifyHazards(`// import { A } from "../${GEN}";`), []);
-  // PERF: the previous pattern-based attempt hung here. A generous ceiling that a quadratic
-  // pattern cannot meet, so a regression is a red test rather than a wedged gate.
+  // A COMMENTED-OUT import IS reported (fail-closed) — the rule no longer rewrites the input, so it
+  // cannot tell a comment from code, and the safe direction is "declare it". This reverses the
+  // stripper-era assertion deliberately; the stripper is gone because IT introduced a miss.
+  assertStringIncludes(
+    classifyHazards(`// import { A } from "../${GEN}";`).join("|"), IMPORT_HAZARD,
+    "with no rewriting, a commented-out import is reported rather than silently dropped",
+  );
+  // THE REGRESSION THE STRIPPER CAUSED (cap-astra, lexically-parsed cases): `const slashes = /\/\//;`
+  // followed by a real import. A stripper reads the regex literal as an escaped line comment and
+  // DELETES the rest of the line — including the import. Matching across trivia cannot lose it, and
+  // these three cases are pinned so no future "helpful" rewriting can reintroduce the loss.
+  const regexSlashes = String.raw`const slashes = /\/\//; ` + `const m = await import("${"../" + GEN}");`;
+  const regexQuote = `const quote = /"/;\nconst m = await import(/* fixed module */ "${"../" + GEN}");`;
+  const templateInterp = 'const count = `${Object.keys((await import(/* fixed module */ "' + "../" + GEN + '")).AGENT_DESCRIPTIONS).length}`;';
+  for (const [label, text] of Object.entries({ regexSlashes, regexQuote, templateInterp })) {
+    assertStringIncludes(
+      classifyHazards(text).join("|"), IMPORT_HAZARD,
+      `${label}: a regex literal or a template interpolation must not hide an import`,
+    );
+  }
+  // LINE TERMINATORS (cap-astra): a JS line comment ends at CR, U+2028 and U+2029 as well as LF.
+  // The reviewer's probe showed Node's VM reaching the generator specifier through all four, while
+  // 2fd — whose STRIPPER deleted the rest of the "line" — saw only LF. Matching across trivia is
+  // immune for a comment before the statement; the class below keeps it immune BETWEEN tokens too.
+  for (const [termName, term] of Object.entries({ LF: "\n", CR: "\r", LS: "\u2028", PS: "\u2029" })) {
+    const beforeStatement = `// comment${term}const m = await import("${"../" + GEN}");`;
+    const betweenTokens = `import // c${term}("${"../" + GEN}")`;
+    assertStringIncludes(classifyHazards(beforeStatement).join("|"), IMPORT_HAZARD, `${termName}: comment before the statement`);
+    assertStringIncludes(classifyHazards(betweenTokens).join("|"), IMPORT_HAZARD, `${termName}: comment between import and its paren`);
+  }
+  // The dead-comment control: a comment that names the generator but imports nothing requests
+  // nothing, so it must stay clean — the fail-closed direction is "report an import", not "report
+  // the word".
+  assertEquals(classifyHazards(`// ${GEN} only`), []);
+
+  // PERF: the previous pattern-based attempt HUNG on this input (measured: killed at 60 s).
+  // WHAT THIS ASSERTS AND WHAT IT DOES NOT: it catches a regression that is slow but still
+  // finishes; a true hang never reaches the assertion, and is caught by the runner's per-file
+  // bound instead. The structural protection is the UNROLLED comment body in TRIVIA — an unrolled
+  // `[^*]*\*+(?:[^/*][^*]*\*+)*` is linear, a `*`-quantified `[\s\S]*?` is not.
   const nasty = `import(${("/* a */".repeat(400) + " ".repeat(2000))}`;
   const t0 = Date.now();
   classifyHazards(nasty);

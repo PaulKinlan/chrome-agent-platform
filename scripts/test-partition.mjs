@@ -112,63 +112,30 @@ const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
 // CAS NotFound failures. `\\bimport\\b` plus `from\\s*` covers every spacing including none, and the
 // bare form is no longer line-anchored for the same reason (a minifier puts it mid-line).
 const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-packages)[^"'\n]*["']`;
-// A COMMENT IS NOT A TOKEN BARRIER EITHER (cap-astra, 2026-09-24): `import(/* fixed local path */
-// "../scripts/build-bundled-tool-packages.mjs")` was a known predicate miss the static-spacing
-// tolerance could not address — it is the DYNAMIC alternative, with the comment between the paren
-// and the specifier. The first attempt put whitespace-or-comment runs INTO the regex, and that hung
-// the classifier on a pathological comment run (catastrophic backtracking: a `*`-quantified
-// `[\s\S]*?` has no ceiling). A hang in a shared gate is worse than a miss, so comments are now
-// removed by a LINEAR, string-aware scan and the patterns stay whitespace-only:
-//   * `stripComments` replaces each comment with a single space, so tokens do not merge and the
-//     existing whitespace tolerance does the rest;
-//   * it respects `'`, `"` and `` ` `` strings, so a `//` inside a URL does not swallow the rest of
-//     the line — a naive stripper would MISS a hazard after such a string;
-//   * a specifier inside a STRING still matches (fail-closed for generated code), while a
-//     commented-out import does NOT (it is dead code, not a hazard — this reverses the earlier
-//     note, deliberately, now that stripping is in place).
-export function stripComments(text) {
-  let out = "";
-  let i = 0;
-  const n = text.length;
-  while (i < n) {
-    const c = text[i];
-    const next = text[i + 1];
-    if (c === "/" && next === "/") {
-      while (i < n && text[i] !== "\n") i++;
-      out += " ";
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      i += 2;
-      while (i < n && !(text[i] === "*" && text[i + 1] === "/")) i++;
-      i = Math.min(n, i + 2);
-      out += " ";
-      continue;
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      const quote = c;
-      out += c;
-      i++;
-      while (i < n) {
-        const ch = text[i];
-        if (ch === "\\") { out += ch + (text[i + 1] ?? ""); i += 2; continue; }
-        out += ch;
-        i++;
-        if (ch === quote) break;
-      }
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-
+// A COMMENT IS NOT A TOKEN BARRIER, AND NEITHER IS A REGEX LITERAL (cap-astra, 2026-09-24).
+// History of this rule, because each version looked complete and was not:
+//   1. one line shape            -> evaded by wrapping the import;
+//   2. specifier-based           -> evaded by dropping the whitespace (minified);
+//   3. comments stripped first   -> the STRIPPER ITSELF introduced a miss: `const slashes = /\/\//;
+//      const m = await import("<generator>")` looked like an escaped line comment, so the rest of the
+//      line — including a real import — was deleted. It also mis-lexed `"` inside a regexp and left
+//      comments unstripped inside template interpolations. A 49-placement trivia matrix could not
+//      prove a CONTEXT-AWARE lexical reduction, and claiming token completeness from it was wrong.
+// So the rule no longer rewrites the input at all: it MATCHES ACROSS trivia. Deleting text can lose
+// an import; matching across text cannot, and the only failure mode left is matching a comment that
+// is not code — fail-closed, which for this rule means "declare it", never "run it in parallel".
+// The block-comment body is the UNROLLED form (`[^*]*\*+(?:[^/*][^*]*\*+)*`), which is linear: the
+// earlier `*`-quantified `[\s\S]*?` hung this classifier on a pathological comment run.
+// A LINE COMMENT ENDS AT EVERY LineTerminator the spec defines — LF, CR, U+2028, U+2029 —
+// not just LF (cap-astra). The miss only bit the STRIPPER, which deleted the rest of the
+// "line" and took a following import with it; matching across trivia is immune for a comment
+// BEFORE the statement, and this class keeps it immune between tokens too.
+const TRIVIA = String.raw`(?:\s|\/\*[^*]*\*+(?:[^/*][^*]*\*+)*\/|\/\/[^\n\r\u2028\u2029]*)*`;
 const IMPORT_BUILD_RE = new RegExp(
-  `\\bimport\\b[\\s\\S]{0,400}?from\\s*${BUILD_MODULE_SPEC}` + // static: any spacing, wrapped or minified
-    `|\\bimport\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // dynamic import, literal specifier
-    `|\\brequire\\s*\\(\\s*${BUILD_MODULE_SPEC}` + // CJS require, literal specifier
-    `|\\bimport\\s*${BUILD_MODULE_SPEC}`, // bare side-effect import, not line-anchored
+  `\\bimport\\b[\\s\\S]{0,400}?from${TRIVIA}${BUILD_MODULE_SPEC}` + // static: any trivia, wrapped or minified
+    `|\\bimport${TRIVIA}\\(${TRIVIA}${BUILD_MODULE_SPEC}` + // dynamic import, literal specifier
+    `|\\brequire${TRIVIA}\\(${TRIVIA}${BUILD_MODULE_SPEC}` + // CJS require, literal specifier
+    `|\\bimport${TRIVIA}${BUILD_MODULE_SPEC}`, // bare side-effect import, not line-anchored
 );
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
@@ -194,7 +161,7 @@ function writesTree(text) {
 export function classifyHazards(text) {
   const classes = [];
   if (SPAWN_RE.test(text) && BUILD_REF_RE.test(text)) classes.push("spawns build.mjs or the bundled-tool generator");
-  if (IMPORT_BUILD_RE.test(stripComments(text))) classes.push("imports build.mjs or the bundled-tool generator (module side effects)");
+  if (IMPORT_BUILD_RE.test(text)) classes.push("imports build.mjs or the bundled-tool generator (module side effects)");
   if (writesTree(text)) classes.push("writes under extension/ or packages/");
   if (READ_RE.test(text) && DIST_LITERAL_RE.test(text)) classes.push("reads extension/dist");
   return classes;
