@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.478] — 2026-09-24
+- changelog rejections now name the matching rule and token
+
 ## [0.3.477] — 2026-09-24
 - agent-opened pages can now open side-by-side with your tab (Tabs Split View, Chrome 155+)
 
