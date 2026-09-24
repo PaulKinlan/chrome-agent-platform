@@ -307,6 +307,20 @@ Deno.test("4lc0: the DELIMITER CLASS is proved by LOADING, not by the predicate 
     templateWithComment: "await import(/* fixed path */ `" + marker + "`);",
     commentOnly: `// ${marker} is mentioned here and nothing loads it`,
   };
+  // THE ENUMERATION IS ASSERTED, NOT CLAIMED (cap-astra): four shapes, and the predicate table must
+  // cover exactly the same set — otherwise "the assertion enumerates what it claims" is itself an
+  // unverified claim about the test.
+  const predicateShapes: Record<string, string> = {
+    quotes: `import(${JSON.stringify(generatorSpecForTest())});`,
+    templateNoSubstitution: "import(`" + generatorSpecForTest() + "`);",
+    templateWithComment: "import(/* fixed path */ `" + generatorSpecForTest() + "`);",
+    commentOnly: `// ${generatorSpecForTest()} is mentioned here and nothing loads it`,
+  };
+  assertEquals(Object.keys(shapes).length, 4, "the loader table enumerates four shapes");
+  assertEquals(Object.keys(predicateShapes).sort(), Object.keys(shapes).sort(), "the predicate table enumerates the SAME shapes as the loader table");
+  function generatorSpecForTest(): string {
+    return "../" + "scripts/build-bundled" + "-tool-packages.mjs";
+  }
   try {
     for (const [name, body] of Object.entries(shapes)) {
       await Deno.remove(evaluated).catch(() => {});
@@ -327,16 +341,15 @@ Deno.test("4lc0: the DELIMITER CLASS is proved by LOADING, not by the predicate 
       // Built rather than written as a literal, matching this file's style: the classifier looks for
       // the generator's NAME, and a test that names it is exempted above, but assembling it keeps the
       // intent visible to a reader.
-      const generatorSpec = "../" + "scripts/build-bundled" + "-tool-packages.mjs";
-      const sameShape: Record<string, string> = {
-        quotes: `import(${JSON.stringify(generatorSpec)});`,
-        templateNoSubstitution: "import(`" + generatorSpec + "`);",
-        templateWithComment: "import(/* fixed path */ `" + generatorSpec + "`);",
-        commentOnly: `// ${generatorSpec} is mentioned here and nothing loads it`,
-      };
+      const shapeText = predicateShapes[name];
+      // A THROW rather than assert(): it narrows the type AND fails loudly, where a fallback let a
+      // missing key pass by pointing the predicate at a different path.
+      if (typeof shapeText !== "string") {
+        throw new Error(`${name}: the predicate table must enumerate this shape too, got ${JSON.stringify(Object.keys(predicateShapes))}`);
+      }
       assertStringIncludes(
-        classifyHazards(sameShape[name] ?? generatorSpec).join("|"), "names " + "build" + ".mjs",
-        `${name}: the generator named through this shape must be flagged, got classes=${JSON.stringify(classifyHazards(sameShape[name] ?? generatorSpec))}`,
+        classifyHazards(shapeText).join("|"), "names " + "build" + ".mjs",
+        `${name}: the generator named through this shape must be flagged, got classes=${JSON.stringify(classifyHazards(shapeText))}`,
       );
     }
   } finally {
