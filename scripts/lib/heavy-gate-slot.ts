@@ -322,19 +322,39 @@ export async function acquireHeavyGateSlot(opts: AcquireHeavyGateOptions): Promi
     // said: 66 + 'cannot open lock file' is a SETUP fault; 1 (or still running
     // when our backstop deadline passed) is genuine contention.
     let exitCode: number | null = null;
+    let exitSignal: string | null = null;
     try {
       const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 1500);
       const status = await child.status;
       clearTimeout(timer);
       exitCode = status.code;
+      exitSignal = status.signal;
     } catch { /* reaped */ }
     let errText = "";
     try {
       errText = (await new Response(child.stderr).text()).trim();
     } catch { /* no stderr to read */ }
-    const setupFailure = /cannot open lock file|Permission denied|No such file or directory/iu.test(errText) || exitCode === 66;
-    if (setupFailure) {
-      throw new HeavyGateSlotSetupError(opts.gate, slotPath, errText || `the locking helper exited ${exitCode}`);
+    // WHAT CONTENTION LOOKS LIKE, MEASURED rather than pattern-matched (util-linux flock,
+    // 2026-09-24). Every shape staged on this box:
+    //   contention (held, -w elapsed): exit 1, stderr EMPTY
+    //   missing parent dir / permission / read-only fs: exit 66 + "cannot open lock file …"
+    //   invalid timeout:                               exit 64 + "invalid timeout: 'abc'"
+    //   cannot execute the command:                    exit 69 + "failed to execute …"
+    //   helper killed by a signal (OOM or our backstop): status.code = null, signal = SIGKILL
+    // So contention is the STATUS PAIR — a quiet exit 1 (its own -w elapsed), or null-code killed
+    // because our bound elapsed while it was still waiting. Everything else is a setup/system
+    // fault, and this file already states the rule it was breaking: reporting a setup fault as
+    // "busy" sends a lane to wait for a holder that does not exist, and blames a peer for it.
+    // The previous version scanned stderr for /cannot open lock file|Permission denied|No such
+    // file or directory/ or exit 66, which named the reviewer's bad-path case (missing parent)
+    // correctly but still blamed a peer for exit 69 (exec failure), exit 64, or a killed helper.
+    const quietTimeout = exitCode === 1 && errText === "";
+    const killedWhileWaiting = exitCode === null && exitSignal === "SIGKILL";
+    const contention = quietTimeout || killedWhileWaiting;
+    if (!contention) {
+      // Bounded diagnostics: the helper's own words are the real cause, kept short.
+      const detail = errText || `the locking helper exited ${exitCode === null ? `on signal ${exitSignal ?? "unknown"}` : `with status ${exitCode}`}`;
+      throw new HeavyGateSlotSetupError(opts.gate, slotPath, detail.slice(0, 300));
     }
     const now = readHeavyGateHolder(holderPath);
     throw new HeavyGateSlotRefusedError(opts.gate, now.holder ?? holderAtStart.holder, now.alive, waitedMs, slotPath);

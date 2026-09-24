@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.476] — 2026-09-24
+- SETUP vs CONTENTION is decided by flock's status pair, not by scanning its message
+
 ## [0.3.475] — 2026-09-23
 - agent icons in the closed sidebar are no longer cut off
 
