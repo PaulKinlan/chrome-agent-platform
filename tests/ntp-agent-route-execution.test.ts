@@ -51,7 +51,32 @@ async function waitFor(fn: () => boolean, label: string, ms = 3000) {
 /** The house DOM + chrome stub (the shape conversation-run-sequence.test.ts and
  *  durable-task-restore.test.ts use), plus a REAL history object so the
  *  navigation controller's pushState/replaceState guard is satisfied. */
-function makeHarness({ agentName }: { agentName: string }) {
+// TWO INDEPENDENT PATHS feed the agent header, and a harness that satisfies
+// both cannot tell them apart. Measured: reverting the history-sync condition
+// at ntp.js:2733 left this file GREEN, because the `named-agent.list` callback
+// (ntp.js:2714-2723) re-synchronised history.state by itself. So the routes are
+// isolated here — `getName` feeds named-agent.get (the openAgentChat path) and
+// `listAgents` feeds named-agent.list (the late-callback path), and a test that
+// targets one supplies nothing through the other.
+//
+// `listDelayMs` exists because REPLY LATENCY CHANGES THE OUTCOME, measured:
+// with a microtask reply the list callback (ntp.js:2714) runs BEFORE
+// openAgentSurface's awaited history load, so its header correction is then
+// overwritten by `threadTitle.textContent = name` at :2758 and the STALE name
+// wins; with a 40 ms reply the correction survives.
+//
+// WHAT I DO NOT KNOW, stated rather than implied: whether that fast ordering is
+// reachable in a real browser. Both calls are IPC and the list is issued FIRST
+// (:2714) while the history read is issued later (:2752), so the list replying
+// first is plausible rather than impossible. It only matters when
+// named-agent.get and named-agent.list DISAGREE, which the product's own flow
+// does not normally produce. Filed as its own bead rather than asserted here,
+// because "my stub is unrealistic" and "the product has an ordering bug" are
+// different claims and this file has only measured the first.
+function makeHarness(opts: { getName: string; listAgents?: any[]; listDelayMs?: number }) {
+  const agentName = opts.getName;
+  const listAgents = opts.listAgents ?? [{ id: AGENT_ID, name: agentName, role: "tester" }];
+  const listDelayMs = opts.listDelayMs ?? 0;
   const elements = new Map<string, any>();
   const sent: any[] = [];
 
@@ -221,7 +246,9 @@ function makeHarness({ agentName }: { agentName: string }) {
           return reply({ ok: true, agent: { id: AGENT_ID, name: agentName, role: "tester" } });
         }
         if (msg.type === "named-agent.list") {
-          return reply({ ok: true, agents: [{ id: AGENT_ID, name: agentName, role: "tester" }] });
+          const payload = { ok: true, agents: listAgents };
+          if (listDelayMs > 0) { setTimeout(() => cb(payload), listDelayMs); return; }
+          return reply(payload);
         }
         if (msg.type === "named-agent.history") return reply({ ok: true, entries: [] });
         if (msg.type === "agent.history-view") return reply({ ok: false });
@@ -254,7 +281,11 @@ async function bootNtp() {
 }
 
 Deno.test("32yz: booting #agent=named:<id> EXECUTES ntp.js and resolves the fresh persisted name", async () => {
-  const harness = makeHarness({ agentName: FRESH_NAME });
+  // ISOLATED to the openAgentChat path: the list returns NOTHING, so the only
+  // source of the fresh name is named-agent.get. Without this, a route that
+  // skipped openAgentChat entirely would still be rescued by the list callback
+  // and this test would pass on the defect it exists to catch.
+  const harness = makeHarness({ getName: FRESH_NAME, listAgents: [] });
   await bootNtp();
 
   const threadTitle = harness.getOrCreateElement("thread-title");
@@ -277,7 +308,10 @@ Deno.test("32yz: booting #agent=named:<id> EXECUTES ntp.js and resolves the fres
 });
 
 Deno.test("32yz: the agent route re-synchronises history.state to the fresh name", async () => {
-  const harness = makeHarness({ agentName: FRESH_NAME });
+  // ISOLATED to openAgentSurface's own sync (ntp.js:2733). The list returns
+  // nothing, so the late callback at :2721 cannot do the work instead —
+  // measured: with the list populated, reverting :2733 left this GREEN.
+  const harness = makeHarness({ getName: FRESH_NAME, listAgents: [] });
   assertEquals(harness.history.state.name, STALE_NAME, "precondition: history.state starts stale");
 
   await bootNtp();
@@ -293,8 +327,37 @@ Deno.test("32yz: the agent route re-synchronises history.state to the fresh name
   assertEquals(harness.history.state.id, AGENT_ID, "the entry still identifies the same agent");
 });
 
+Deno.test("32yz: a LATE named-agent.list correction updates the header and history", async () => {
+  // The other path, isolated the other way: named-agent.get answers with the
+  // STALE name (a cached/late store), and only the list carries the fresh one.
+  // ntp.js:2714-2723 must notice the discrepancy and correct BOTH surfaces.
+  const harness = makeHarness({
+    getName: STALE_NAME,
+    listAgents: [{ id: AGENT_ID, name: FRESH_NAME, role: "tester" }],
+    // GENUINELY LATE. Measured: at 0 ms the callback lands before
+    // openAgentSurface's awaited history load and :2758 overwrites its header
+    // correction with the stale name — an ordering a real browser's IPC does not
+    // produce, and an artefact of the stub rather than a product defect. Filed
+    // separately rather than asserted here.
+    listDelayMs: 40,
+  });
+  await bootNtp();
+
+  const threadTitle = harness.getOrCreateElement("thread-title");
+  await waitFor(
+    () => threadTitle.textContent === FRESH_NAME,
+    `the list callback to correct the header (saw ${JSON.stringify(threadTitle.textContent)})`,
+  );
+  assertEquals(threadTitle.textContent, FRESH_NAME, "a late list correction reaches the header");
+  await waitFor(
+    () => harness.history.state?.name === FRESH_NAME,
+    `the list callback to re-sync history.state (saw ${JSON.stringify(harness.history.state?.name)})`,
+  );
+  assertEquals(harness.history.state.name, FRESH_NAME, "a late list correction re-syncs history.state");
+});
+
 Deno.test("32yz: the named-agent surface wires its owner controls", async () => {
-  const harness = makeHarness({ agentName: FRESH_NAME });
+  const harness = makeHarness({ getName: FRESH_NAME });
   await bootNtp();
 
   const editBtn = harness.getOrCreateElement("edit-agent");
@@ -304,6 +367,23 @@ Deno.test("32yz: the named-agent surface wires its owner controls", async () => 
   // delete control is offered for every kind except acp.
   assertEquals(editBtn.hidden, false, "a named agent surface offers Edit");
   assertEquals(harness.getOrCreateElement("delete-agent").hidden, false, "a named agent surface offers Delete");
+});
+
+Deno.test("32yz: the two header paths are ISOLATED, so neither can mask the other", async () => {
+  // A guard on this file's own discriminating power, written because it FAILED
+  // this property once: with both paths supplying the fresh name, reverting the
+  // history-sync condition at ntp.js:2733 left all four tests green. Each
+  // path-specific test must therefore starve the other path.
+  const self = await Deno.readTextFile(new URL(import.meta.url));
+  const isolated = [...self.matchAll(/listAgents:\s*\[\]/g)].length;
+  assert(
+    isolated >= 2,
+    `the openAgentChat-path tests must starve the list callback (listAgents: []); found ${isolated}`,
+  );
+  assert(
+    /getName:\s*STALE_NAME/.test(self),
+    "the list-callback test must starve the get path by answering it with the stale name",
+  );
 });
 
 Deno.test("32yz: the executing coverage this file adds is REAL — the harness drives the route, not a simulation", async () => {

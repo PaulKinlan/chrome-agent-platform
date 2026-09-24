@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.477] — 2026-09-24
+- isolate the two header paths so neither masks a regression in the other
+
 ## [0.3.476] — 2026-09-24
 - the hub's agent route is checked by running the real page code, not by reading it
 
