@@ -44,9 +44,19 @@ const ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
 // fix is a review convention or a second signal, not a guess at the writer's meaning.
 const INTERNAL_MARKER_RE = /^internal:/i;
 const SHA_RE = /\b[0-9a-f]{7,40}\b/i;
-const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice/i;
+// chrome-agent-platform-4zp3: the words that ACTUALLY leaked into a shipped
+// entry ("correct my own capability claim — NO pinned adapter implements
+// client-hosted MCP") are in the alternation now. The phrases that never
+// legitimately appear (fleet-internal architecture shorthand) are banned;
+// \bMCP\b is deliberately absent (five shipped entries use it as product
+// vocabulary — see tests/changelog.test.ts 4zp3 for the measured policy).
+const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|capability claim|pinned adapter|client-hosted/i;
 const GATE_STATE_RE = /\b(RED|GREEN)\b/;
 const WORKFLOW_RE = /\blanded\b|in review|in progress|recorded as|\bclaimed\b/i;
+// First-person engineering prose is the author's voice, never the reader's
+// (chrome-agent-platform-4zp3): the leaked sentence began "correct my own…".
+// \bI\b excludes "I/O" (a real technical term that must stay user-facing).
+const FIRST_PERSON_RE = /\b(?:my|myself|mine|we|our|ours|us)\b|\bI\b(?!\s*\/)/i;
 // The same joiner class scripts/bump-version.mjs strips from a subject (y6z6):
 // a bullet still starting with one, followed by whitespace or nothing, is a leak.
 const LEAKED_JOINER_RE = /^[+&:;,./|—–-]+(?:\s|$)/;
@@ -65,6 +75,7 @@ const REJECTION_RULES = [
   { name: "JARGON_RE", why: "internal vocabulary (jargon)", re: JARGON_RE },
   { name: "GATE_STATE_RE", why: "a RED/GREEN gate-state word", re: GATE_STATE_RE },
   { name: "WORKFLOW_RE", why: "a workflow-status word (landed / in review / in progress / recorded as / claimed)", re: WORKFLOW_RE },
+  { name: "FIRST_PERSON_RE", why: "first-person engineering prose (mark the note 'internal:' instead)", re: FIRST_PERSON_RE },
 ];
 
 /**
