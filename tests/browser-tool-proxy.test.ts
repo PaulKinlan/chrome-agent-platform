@@ -191,3 +191,18 @@ Deno.test("2amt: the ACP client turns a browser/call_tool FRAME into a JSON-RPC 
   const refusal = sent.find((m) => m.id === "harness-2");
   assertEquals(refusal?.error?.code, -32601);
 });
+
+Deno.test("9842: browser.callTool is fenced with isOwnerPrincipal — the census class is pinned to the wiring", async () => {
+  // The census classifies browser.callTool as OWNER_EXTENSION_FENCED
+  // (isOwnerPrincipal(context), callers owner-options + extension). A handler
+  // that drops the context check passes every behavioural test (the bare
+  // toolset auto-approves the Destructive class), so the wiring itself is
+  // pinned here — the 9t1p source-structure pattern; the alternative is
+  // manufacturing an unfenced extension-page sender.
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const site = src.indexOf('"browser.callTool"');
+  assert(site >= 0, "the browser.callTool route must exist");
+  const handler = src.slice(site, src.indexOf("activityRoutes", site));
+  assert(/isOwnerPrincipal\(/.test(handler), "the handler must fence with isOwnerPrincipal(context)");
+  assert(/owner_extension_required/.test(handler), "the refusal must be the documented owner_extension_required");
+});
