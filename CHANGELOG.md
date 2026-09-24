@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.478] — 2026-09-24
+- the v8-pool experiment is INCONCLUSIVE, and the flag does the opposite of its name
+
 ## [0.3.477] — 2026-09-24
 - the hang is bounded, and now it leaves a durable record of why
 

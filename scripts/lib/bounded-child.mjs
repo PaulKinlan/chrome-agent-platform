@@ -119,8 +119,12 @@ export async function runBoundedChild(command, args, {
         try {
           const cacheDir = join(dir, ".cache");
           mkdirSync(cacheDir, { recursive: true });
+          // stdoutTail answers the question the FIX depends on: did the child finish its WORK and
+          // then fail to exit (a teardown-only hang, which a caller could accept), or did it hang
+          // mid-work (which it cannot)? Captured only when stdio was piped.
+          const tail = capture ? Buffer.concat(outChunks).toString("utf8").trim().split("\n").slice(-2).join(" ⏎ ") : "(stdout not captured)";
           appendFileSync(join(cacheDir, "bounded-child-hangs.log"), JSON.stringify({
-            at: new Date().toISOString(), label, timeoutMs, snapshot: at, report,
+            at: new Date().toISOString(), label, timeoutMs, snapshot: at, report, stdoutTail: tail,
           }) + "\n");
         } catch { /* best effort: never turn logging into a second failure */ }
       }, REPORT_GRACE_MS);
