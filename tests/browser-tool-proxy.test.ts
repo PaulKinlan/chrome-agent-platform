@@ -39,7 +39,19 @@ function stubChrome(overrides: Record<string, unknown> = {}) {
     tabs,
     tabGroups: { update: async () => {}, query: async () => [] },
     permissions: { contains: async () => false, request: async () => false, getAll: async () => ({ permissions: [], origins: [] }) },
-    runtime: { sendMessage: async () => ({ ok: true }), getURL: (p: string) => `chrome-extension://test/${p}`, lastError: undefined },
+    // The client messages the SW for tools now (SW authority), so the stub answers that route by
+    // running the real dispatcher — otherwise the frame test would assert against a stub.
+    runtime: {
+      sendMessage: async (message: { type?: string; name?: string; args?: Record<string, unknown> }) => {
+        if (message?.type === "browser.callTool") {
+          const { runBrowserToolCall } = await import("../extension/lib/browser-tools.js");
+          return await runBrowserToolCall(String(message.name ?? ""), message.args ?? {});
+        }
+        return { ok: true };
+      },
+      getURL: (p: string) => `chrome-extension://test/${p}`,
+      lastError: undefined,
+    },
     // STATEFUL, because the browser-control grant is STORED: a stub that discards writes cannot
     // prime a grant, and group_tabs reads one through this store (kvSet/kvGet).
     storage: (() => {

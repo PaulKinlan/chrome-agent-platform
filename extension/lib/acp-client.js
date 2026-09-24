@@ -370,10 +370,13 @@ export class AcpClient {
     if (msg.method === "browser/call_tool") {
       let result;
       try {
-        const { runBrowserToolCall } = await import("./browser-tools.js");
         const name = typeof msg.params?.name === "string" ? msg.params.name : "";
         this.activeTurnListener?.({ kind: "tool", detail: `browser:${name || "(unnamed)"}`, raw: msg.params });
-        result = await runBrowserToolCall(name, msg.params?.args ?? {});
+        // THE SERVICE WORKER RUNS THE TOOL. This module is page context and must not import
+        // browser-tools.js (agent-loop.js: "those are SW authority"), which is also why the tools'
+        // grants stay where they are — the SW checks them, not this transport.
+        const reply = await chrome.runtime.sendMessage({ type: "browser.callTool", name, args: msg.params?.args ?? {} });
+        result = reply && reply.ok === false && reply.error !== undefined ? { error: reply.error } : reply;
       } catch (error) {
         result = { error: `browser tool dispatch failed: ${String((error && error.message) || error)}` };
       }

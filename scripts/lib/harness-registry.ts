@@ -180,6 +180,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-user-wasm-call.ts": { class: "kat" },
   "kat-user-wasm-store.ts": { class: "kat" },
   "kat-bundled-execute.ts": { class: "kat" },
+  "kat-browser-tool-proxy.ts": { class: "kat" },
   "kat-webmcp-honest-errors.ts": { class: "kat" },
   "kat-webmcp-bistro.ts": { class: "kat" },
   "kat-ux-lows.ts": { class: "kat", ...RED("8/2", "UX-010: wide grid inactive and settings content does not fill wide viewport (theme content-max cap 720px)") },
