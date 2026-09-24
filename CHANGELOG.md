@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.484] — 2026-09-24
+- the browser.callTool fence is pinned to its wiring
+
 ## [0.3.483] — 2026-09-24
 - external agents can now use your browser tools directly to inspect and organize tabs
 
