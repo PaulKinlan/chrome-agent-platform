@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.512] — 2026-09-25
+- renaming an agent mid-compose can no longer leave a stale name in the header
+
+## [0.3.511] — 2026-09-25
+- an agent conversation header updates reliably when renamed mid-compose, preventing stale names from persisting
+
 ## [0.3.510] — 2026-09-25
 - the residue map names the semicolon escape inside a spawn argument region
 
