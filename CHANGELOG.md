@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.531] — 2026-09-25
+- drop the wall-clock bound from the quiesced-screenshot fallback test
+
+## [0.3.530] — 2026-09-25
+- internal: drop wall-clock bound from quiesced-screenshot fallback test to avoid timing flakiness in parallel phase
+
 ## [0.3.529] — 2026-09-25
 - use deno run stdin instead of eval for permission flags in Deno 2
 
