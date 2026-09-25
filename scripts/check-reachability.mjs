@@ -75,7 +75,7 @@ export const RETAINED = {
   "lib/opfs-tool-workspace.js":
     "Only tests/opfs-tool-workspace.test.ts imports it.",
   "lib/profile-store.js":
-    "Only tests/profile-store.test.ts imports it.",
+    "Layer 1 of the form-filler direction: the shipped form-filler skill (skill-registry, Data Wrangler and three other templates) fills fields 'from the user's stored profile in memory' — this schema-validated, grant-gated, audited store is that profile substrate (chrome-agent-platform-xtwv: retained, not orphaned).",
   "lib/tar-stream.js":
     "Streaming regular-file TAR/PAX encoder (11rm.1): options/settings export will import it once staging and barrier integration exist; tests/tar-stream.test.ts imports it.",
   "lib/preference-bridge.js":

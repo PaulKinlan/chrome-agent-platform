@@ -1,7 +1,10 @@
 # Changelog
 
+## [0.3.540] — 2026-09-25
+- C15 resolved — profile-store is the form-filler substrate, retained and documented
+
 ## [0.3.539] — 2026-09-25
-- land headed native ACP transport verification (union merge of cap/astra-gab8-headed)
+- evaluate MCP Zod peer unification with schema parity tests and evidence
 
 ## [0.3.538] — 2026-09-25
 - evaluate MCP Zod peer unification with schema parity tests and evidence
