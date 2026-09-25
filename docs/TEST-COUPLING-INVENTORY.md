@@ -71,12 +71,15 @@ whole-suite mutant run); **inspection** means read from the source, not executed
 - **Owed by a re-anchor:** if your test spawns `node build.mjs`, writes into the shipped
   tree, or reads `extension/dist`, add it to `SERIAL_REASONS` in
   `scripts/test-partition.mjs` with the reason in the SAME commit.
-- **The inheritance trap (verified by inspection; the rule is documented in
-  machine-path-honesty's allowlist comment):** `DRIVER_REF_RE = /tests\/[\w.-]+\.(?:mjs|ts)/g`
-  makes a test file inherit the hazard class of every SIBLING `tests/` path it merely
-  MENTIONS — even inside an allowlist key or a comment. Assemble such strings at runtime
-  (`"tests/" + name`), never as literals. Naming a serial-phase file in prose can push
-  your parallel test into the serial class and redden the partition.
+- **The inheritance rule (reference-scoped by 8b8w/f94p, 2026-09-25):** the partition guard
+  merges a test file with the text of every `tests/*` driver the file LOADS (import/from/
+  require specifier) or SPAWNS (spawn/exec argument). A PROSE mention — a comment, a doc
+  string, an allowlist key naming a sibling test — is no longer a reference and inherits
+  nothing (the old mention rule made a census comment pull a serial file's reads-dist hazard
+  into the mentioning file; measured, then fixed). Runtime assembly of sibling paths is no
+  longer REQUIRED for the partition's sake, though machine-path-honesty's allowlist keeps
+  the convention for its own reasons. What still inherits: a real module specifier or spawn
+  argument — including a COMMENTED-OUT one (fail-closed).
 - **Subject moves:** LOUD, naming file and hazard classes.
 
 ## 4. tests/docs-process-truth.test.ts

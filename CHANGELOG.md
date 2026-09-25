@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.502] — 2026-09-25
+- explaining a test no longer makes your file inherit its hazards
+
+## [0.3.501] — 2026-09-25
+- internal: test partition guard restricts hazard inheritance to real module loads and process spawns, ignoring prose mentions
+
 ## [0.3.500] — 2026-09-25
 - mark theme-picker as owner-retained (ol11)
 

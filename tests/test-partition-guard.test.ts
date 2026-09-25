@@ -19,9 +19,9 @@ import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   classifyHazards,
-  DRIVER_REF_RE,
   EXEMPTIONS,
   partition,
+  realDriverRefs,
   SERIAL,
   SERIAL_REASONS,
   unserialisedHazards,
@@ -44,14 +44,16 @@ async function allTestFiles(): Promise<string[]> {
   return out.sort();
 }
 
-// A test that spawns a local tests/*.mjs|*.ts driver inherits the driver's
-// classification (the hazard may live in the driver — e.g. the
+// A test that SPAWNS or IMPORTS a local tests/*.mjs|*.ts driver inherits the
+// driver's classification (the hazard may live in the driver — e.g. the
 // package-extension-freshness driver writes the dist-complete marker).
+// REFERENCE-SCOPED (8b8w/f94p): a PROSE mention of a driver is not a
+// reference — a comment explaining a test must not make this file inherit
+// that test's hazards.
 async function contentWithDrivers(rel: string): Promise<string> {
   const text = await Deno.readTextFile(`${ROOT}${rel}`);
   const parts = [text];
-  for (const m of text.matchAll(DRIVER_REF_RE)) {
-    const driver = m[0];
+  for (const driver of realDriverRefs(text)) {
     if (driver === rel) continue;
     try {
       parts.push(await Deno.readTextFile(`${ROOT}${driver}`));
@@ -76,6 +78,68 @@ Deno.test("partition guard: every build-artifact hazard test is serial (or revie
   );
 });
 
+Deno.test("partition guard: a driver reference is a LOAD or a SPAWN, never a mention (8b8w/f94p)", async () => {
+  // Probe strings are ASSEMBLED at runtime so this file's own text never
+  // carries a literal tests/* reference for its own inheritance scan.
+  const DRIVER = "tests/" + "wasm-tree-shaking" + ".test.ts"; // a REAL serial hazard file (reads extension/dist)
+  const driverText = await Deno.readTextFile(`${ROOT}${DRIVER}`);
+  const own = `Deno.test("synthetic wrapper", () => { assertEquals(1, 1); });\n`;
+
+  // 1. COMMENT-ONLY mention: no reference, no inheritance. Before the fix a
+  // comment naming the driver pulled its whole hazard text into this file's
+  // classification (measured: inherited "reads extension/dist").
+  const commentOnly = `${own}// see also ${DRIVER} for the tree-shaking property\n`;
+  assertEquals(realDriverRefs(commentOnly), [], "a comment naming a driver is prose, not a reference");
+  const merged = commentOnly;
+  assertEquals(
+    classifyHazards(merged).filter((c) => classifyHazards(driverText).includes(c)),
+    [],
+    "a comment-only mention inherits NONE of the driver's hazard classes",
+  );
+
+  // 2. A real MODULE SPECIFIER still inherits: importing runs the driver.
+  const importRef = `${own}import { x } from "../${DRIVER}";\n`;
+  assert(realDriverRefs(importRef).includes(DRIVER), "an import specifier is a real driver reference");
+  const dynRef = `${own}await import("../" + "wasm-tree-shaking" + ".test.ts");\n`;
+  // runtime-assembled specifier stays invisible to any text detector (residue,
+  // unchanged from the old rule — recorded, not hidden):
+  assertEquals(realDriverRefs(dynRef), [], "a runtime-assembled specifier is invisible to text detection (documented residue)");
+  const requireRef = `${own}const m = require("./${DRIVER}");\n`;
+  assert(realDriverRefs(requireRef).includes(DRIVER), "a require call is a real driver reference");
+
+  // 3. A real SPAWN ARGUMENT still inherits: spawning runs the driver.
+  const spawnRef = `${own}new Deno.Command("deno", { args: ["test", "-A", "${DRIVER}"] }).output();\n`;
+  assert(realDriverRefs(spawnRef).includes(DRIVER), "a spawn argument is a real driver reference");
+  const execRef = `${own}execFileSync("deno", ["test", "${DRIVER}"]);\n`;
+  assert(realDriverRefs(execRef).includes(DRIVER), "an exec argument is a real driver reference");
+
+  // 3b. TEMPLATES THAT CAN LOAD are references too (audiofeed-astra review):
+  // a no-substitution template specifier loads exactly like a quoted one —
+  // the shape that cost the generator taxonomy round 5 — and a template quote
+  // inside a spawn argument list must not end the spawn window.
+  const templateImport = `import(\`../${DRIVER}\`);\n`;
+  assert(realDriverRefs(templateImport).includes(DRIVER), "a no-substitution template specifier is a real driver reference");
+  const templateSpawn = `${own}new Deno.Command("deno", { args: [\`test\`, "${DRIVER}"] }).output();\n`;
+  assert(realDriverRefs(templateSpawn).includes(DRIVER), "a spawn window crosses template quotes to the path argument");
+  // A SUBSTITUTING template stays invisible (runtime assembly — residue, unchanged):
+  const substituting = "await import(`../tests/" + "${name}`);\n";
+  assertEquals(realDriverRefs(substituting), [], "a substituting template is runtime assembly (documented residue)");
+
+  // The inheritance END-TO-END through the merged classifier: a wrapper that
+  // genuinely spawns the hazard driver sees its classes; the comment-only
+  // wrapper does not.
+  const withSpawn = [own, `const cmd = new Deno.Command("deno", { args: ["test", "${DRIVER}"] });`, driverText].join("\n");
+  assertStringIncludes(
+    classifyHazards(withSpawn).join("|"),
+    "reads extension/" + "dist",
+    "spawning the driver inherits its reads-dist hazard",
+  );
+
+  // 4. Prose in a STRING (not a load/spawn context) is still not a reference.
+  const prose = `${own}const note = "mirrors the approach of ${DRIVER}";\n`;
+  assertEquals(realDriverRefs(prose), [], "a doc string naming a driver is prose, not a reference");
+});
+
 Deno.test("partition guard: SERIAL membership is pinned with reasons and exists on disk", async () => {
   assertEquals(new Set(Object.keys(SERIAL_REASONS)), SERIAL, "SERIAL is exactly the reasoned set");
   for (const [rel, reason] of Object.entries(SERIAL_REASONS)) {
@@ -88,6 +152,14 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
     const st = await Deno.stat(`${ROOT}${rel}`).catch(() => null);
     assert(st !== null, `${rel}: exemption must name a file that exists on disk`);
     assert(!SERIAL.has(rel), `${rel}: a file is serial OR exempt, never both`);
+    // An exemption whose file no longer classifies as ANY hazard is dead
+    // weight that hides its own reason from review (audiofeed-astra, 8b8w
+    // review: durable-root's entry survived its own obsolescence silently).
+    const own = await Deno.readTextFile(`${ROOT}${rel}`);
+    assert(
+      classifyHazards(own).length > 0 || realDriverRefs(own).length > 0,
+      `${rel}: exemption is DEAD — the file classifies with no hazard classes and no driver refs; delete the entry`,
+    );
   }
 });
 
