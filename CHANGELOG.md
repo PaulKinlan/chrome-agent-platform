@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.488] — 2026-09-25
+- evaluate MCP Zod peer unification with schema parity tests and evidence
+
 ## [0.3.487] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 
