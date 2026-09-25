@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.504] — 2026-09-25
+- static pairing guard for chrome-checks, agent-access-checks and run-status-lifecycle check literals against EXPECTED ledgers
+
+## [0.3.503] — 2026-09-25
+- internal: add static pairing guard for journey assertion check() literals against EXPECTED ledgers
+
 ## [0.3.502] — 2026-09-25
 - explaining a test no longer makes your file inherit its hazards
 
