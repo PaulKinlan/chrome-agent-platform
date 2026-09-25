@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.496] — 2026-09-25
+- assign serial-phase-timeout test to serial phase to eliminate parallel load wall-clock flake
+
 ## [0.3.495] — 2026-09-25
 - the Diagnostics probe clicks the control in the panel it names, and says which seam failed
 
