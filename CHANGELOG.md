@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.489] — 2026-09-25
+- both adapter spawn sites are pinned by a real child, and an explicit childEnv key survives
+
 ## [0.3.488] — 2026-09-25
 - the A/B did NOT reproduce the stall, so the fix is scoped to what WAS observed — and an integration check caught it lying
 

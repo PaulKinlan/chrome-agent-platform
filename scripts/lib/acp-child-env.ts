@@ -7,7 +7,7 @@
 // removed from the CHILD environment. It also says, correctly: "Cause not established: key
 // validity/provider/transient delay not measured. Reproduce controlled A/B before attributing."
 //
-// I ran that A/B (scripts/drill-5f5u-ab.ts: same adapter, one arm without the key, one with a
+// I ran that A/B (cap-evidence/5f5u/ab-drill.ts: same adapter, one arm without the key, one with a
 // deliberately invalid key, 60 s prompt deadline) and it did NOT reproduce the difference — both arms
 // stalled identically and BOTH reported `apiType=native baseUrl=native`, so in my harness the key
 // never became the auth source. The attribution therefore remains OPEN on the bead.
@@ -68,6 +68,30 @@ export function acpChildEnv(
   return { env, bridgedAuthVars };
 }
 
+/** The composed adapter-child environment: the HOST environment scoped by policy, then the caller's
+ * explicit `childEnv` applied ON TOP.
+ *
+ * Order is the documented contract of `createAcpServer`'s `childEnv` parameter (chrome-agent-platform
+ * jp78): explicit keys win over inherited state, so a caller pinning the adapter's configuration is
+ * never silently overruled by the scoping policy. `bridgedAuthVars` names only the variables that are
+ * actually absent from the composed env — an explicit override keeps the key out of that list, so the
+ * host-side note never claims a scoping a caller prevented. */
+export interface AcpChildEnvForOptions extends AcpChildEnvOptions {
+  /** The HOST environment to scope. Defaults to this process's environment. */
+  host?: Record<string, string>;
+}
+
+export function acpChildEnvFor(
+  explicit: Record<string, string> = {},
+  { host = Deno.env.toObject(), ...options }: AcpChildEnvForOptions = {},
+): AcpChildEnvResult {
+  const scoped = acpChildEnv(host, options);
+  return {
+    env: { ...scoped.env, ...explicit },
+    bridgedAuthVars: scoped.bridgedAuthVars.filter((name) => !Object.hasOwn(explicit, name)),
+  };
+}
+
 /** The host-side line for what was scoped out, or null when there was nothing to say. */
 export function acpChildEnvNote({ bridgedAuthVars }: AcpChildEnvResult, harness: string): string | null {
   if (bridgedAuthVars.length === 0) return null;
@@ -89,7 +113,27 @@ export function actionableAuthWarning(line: string): string | null {
   if (!/api[_-]?key|auth|login|credential|connector/i.test(line)) return null;
   return (
     `[acp-bridge] the harness reported an auth precedence problem: ${line.trim()} — ` +
-    `CAP scopes ANTHROPIC_API_KEY out of the adapter child by default; if you want the key used, set ` +
-    `CAP_ACP_KEEP_API_KEY=1, and if you want the native login, unset the variable in this environment.`
+    `CAP scopes ANTHROPIC_API_KEY out of the adapter child unless CAP_ACP_KEEP_API_KEY=1 is set in ` +
+    `the environment that started CAP; if you already set it, the key is being passed through ` +
+    `deliberately and this warning is the key taking precedence — unset the variable there to use the ` +
+    `native login.`
   );
+}
+
+/**
+ * The Deno.Command options for an adapter child, built in ONE place so both spawn sites (the WebSocket
+ * bridge and the native host) cannot drift apart on the load-bearing line.
+ *
+ * `clearEnv` is the mechanism the whole scoping story depends on: Deno MERGES `env` over the parent's
+ * environment by default, so a variable omitted from `env` is still inherited unless clearEnv is true.
+ * Measured, not assumed — see cap-evidence/5f5u/ab-drill.ts and tests/acp-child-env-wiring.test.ts,
+ * which drives each real spawn site with a child that reports what it can actually see. */
+export function acpChildSpawnOptions(
+  { args, env, stderr = "piped" }: {
+    args: string[];
+    env: Record<string, string>;
+    stderr?: "inherit" | "piped" | "null";
+  },
+): Deno.CommandOptions {
+  return { args, stdin: "piped", stdout: "piped", stderr, env, clearEnv: true };
 }

@@ -11,7 +11,7 @@
 // extension would be wrong on every other machine (3khn/evidence-durable).
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
-import { acpChildEnv, acpChildEnvNote, actionableAuthWarning } from "./lib/acp-child-env.ts";
+import { acpChildEnvFor, acpChildEnvNote, acpChildSpawnOptions, actionableAuthWarning } from "./lib/acp-child-env.ts";
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
 
@@ -558,7 +558,9 @@ if (!isLoopbackHost(HOST) && import.meta.main) {
  * Measured (chrome-agent-platform-jp78): a concurrent test file's fixture
  * appended its frames to the other file's frame log, which made a resume pin
  * that had actually resumed count two `session/new`. Explicit keys win over
- * the inherited environment. */
+ * the inherited environment — and the auth-source scoping below applies to the
+ * INHERITED environment only, so an explicit key here is passed through rather
+ * than scoped away (5f5u). */
 export function createAcpServer(
   port: number,
   adapterPathOverride = ADAPTER_PATH,
@@ -660,26 +662,18 @@ export function createAcpServer(
           throw new Error(`adapter not found: ${resolved.args[0]}`);
         }
         // The scoped child environment, computed once per connection so the host-side note is emitted
-        // even when the adapter dies later (5f5u).
-        const acpChildEnvResult = acpChildEnv({ ...Deno.env.toObject(), ...childEnv });
+        // even when the adapter dies later (5f5u). The HOST layer is scoped first and the caller's
+        // explicit childEnv is merged on top, so an explicitly pinned key is never deleted.
+        const acpChildEnvResult = acpChildEnvFor(childEnv);
         const acpChildEnvNoteText = acpChildEnvNote(acpChildEnvResult, connectionHarness);
         if (acpChildEnvNoteText) console.error(acpChildEnvNoteText);
-        const cmd = new Deno.Command(resolved.cmd, {
+        const cmd = new Deno.Command(resolved.cmd, acpChildSpawnOptions({
           args: resolved.args,
-          stdin: "piped",
-          stdout: "piped",
-          stderr: "piped",
-          // clearEnv IS REQUIRED, AND IT WAS FOUND BY AN INTEGRATION CHECK RATHER THAN BY A UNIT TEST
-          // (5f5u): Deno MERGES `env` over the parent's environment by default, so simply omitting
-          // ANTHROPIC_API_KEY left the child seeing the host's value — while the host-side note
-          // claimed it had been scoped out. Measured directly: with the default the child prints
-          // PRESENT, with clearEnv:true it prints ABSENT. Passing the composed env plus clearEnv
-          // makes the child environment exactly what this block builds and nothing more.
-          clearEnv: true,
           // 5f5u: the CHILD environment is scoped, not inherited wholesale. An ANTHROPIC_API_KEY in
           // the host takes precedence over a claude.ai login (the adapter's own warning), so a
           // native-login user would be switched auth source silently. Your environment is untouched —
-          // CAP_ACP_KEEP_API_KEY=1 passes it through instead.
+          // CAP_ACP_KEEP_API_KEY=1 passes it through instead. clearEnv (in acpChildSpawnOptions) is
+          // what actually scopes the child: Deno merges `env` over the parent's by default.
           env: {
             ...acpChildEnvResult.env,
             PI_ACP_HARNESS: connectionHarness,
@@ -688,7 +682,7 @@ export function createAcpServer(
             // (npx/CLI), because it spawns the harness CLI itself.
             PATH: [Deno.build.os === "windows" ? "" : "", Deno.env.get("PATH") ?? ""].filter(Boolean).join(":"),
           },
-        });
+        }));
         const proc = cmd.spawn();
         child = proc;
         writer = proc.stdin.getWriter();

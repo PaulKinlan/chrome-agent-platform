@@ -15,7 +15,7 @@
 // WebSocket bridge uses (imported, not duplicated).
 
 import { applyHostDefaults, resolveAdapter, HARNESS_ADAPTERS, toolServerError, adapterNameFromInitialize } from "./acp-bridge.ts";
-import { acpChildEnv, acpChildEnvNote } from "./lib/acp-child-env.ts";
+import { acpChildEnv, acpChildEnvNote, acpChildSpawnOptions } from "./lib/acp-child-env.ts";
 
 const HARNESS = Deno.env.get("CAP_ACP_HARNESS") || "pi";
 const ADAPTER_OVERRIDE = Deno.env.get("CAP_ACP_ADAPTER") || "";
@@ -65,16 +65,13 @@ if (import.meta.main) {
   const childEnvResult = acpChildEnv();
   const childEnvNote = acpChildEnvNote(childEnvResult, "native host");
   if (childEnvNote) console.error(childEnvNote);
-  const child = new Deno.Command(resolved.cmd, {
+  const child = new Deno.Command(resolved.cmd, acpChildSpawnOptions({
     args: resolved.args,
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "inherit",
     env: childEnvResult.env,
     // Same measured reason as the bridge: Deno merges `env` over the parent's, so omitting the key is
-    // not enough to scope it out (5f5u).
-    clearEnv: true,
-  }).spawn();
+    // not enough to scope it out — acpChildSpawnOptions carries clearEnv:true (5f5u).
+    stderr: "inherit",
+  })).spawn();
 
   const childWriter = child.stdin.getWriter();
 
