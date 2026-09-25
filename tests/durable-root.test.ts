@@ -189,6 +189,9 @@ const ALLOWED_FILES = new Set([
   "tests/perf-spans.test.ts",
   "tests/permission-orchestration.test.ts",
   "tests/permission-variant.test.ts",
+  // 8nec: a scratch git repository for the post-commit hook, under tmpdir() and
+  // removed in the same test — a fixture, not retained evidence.
+  "tests/post-commit-hook.test.ts",
   "tests/provider-gate.test.ts",
   "tests/quiet-window.test.ts",
   "tests/scan-shipped.test.ts",
