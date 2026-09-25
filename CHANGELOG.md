@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.258] — 2026-09-25
+- journal-ahv: preserve the ltkj1 harness-registry working state (top-up — the one file the first snapshot missed)
+
 ## [0.3.257] — 2026-09-18
 - journal-ahv preservation: ltkj1 — verbatim untracked deliverable(s) of .1
 
