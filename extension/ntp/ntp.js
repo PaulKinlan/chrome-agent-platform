@@ -9,7 +9,8 @@ import { send } from "../lib/messages.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
-import { projectUnifiedAgents } from "../lib/named-agents.js";
+import { projectUnifiedAgents, slugifyAgentId } from "../lib/named-agents.js";
+import { exportAgentCardJson, importAgentCard } from "../lib/agent-cards.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
 import { buildMcpServerEditor, mcpServerRow } from "../lib/mcp-server-editor.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
@@ -2287,6 +2288,7 @@ if (threadConversation) {
   });
 }
 const editAgentBtn = document.getElementById("edit-agent");
+const shareAgentBtn = document.getElementById("share-agent");
 const deleteAgentBtn = document.getElementById("delete-agent");
 // Current conversation identity is declared before the run-registry subscription
 // so even an immediate snapshot is projected into the correct surface.
@@ -2509,6 +2511,7 @@ async function openThread(id) {
   // Tasks use direct click-to-edit on the title with an editable hover affordance;
   // the separate Edit button is removed from the task view (CAP-FB-20260823-TASK-INLINE-EDIT-01).
   editAgentBtn.hidden = true;
+  if (shareAgentBtn) shareAgentBtn.hidden = true;
   if (deleteAgentBtn) deleteAgentBtn.hidden = true;
   threadTitle.classList.add("editable-task");
   threadTitle.setAttribute("tabindex", "-1");
@@ -2594,6 +2597,7 @@ async function openBackgroundAgentChat(id, name) {
   // No per-agent config route exists for background agents yet (only
   // named-agent.update), so hide the Edit button rather than show a dead one.
   editAgentBtn.hidden = true;
+  if (shareAgentBtn) shareAgentBtn.hidden = true;
   if (deleteAgentBtn) {
     deleteAgentBtn.hidden = false;
     deleteAgentBtn.setAttribute("aria-label", "Delete background agent");
@@ -2738,6 +2742,7 @@ async function openAgentSurface({ kind, id, name }) {
   // Only named agents have the owner-facing config dialog (named-agent.update).
   editAgentBtn.hidden = kind !== "named";
   if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
+  if (shareAgentBtn) shareAgentBtn.hidden = kind !== "named";
   if (deleteAgentBtn) {
     // ACP harness agents have no delete route (nothing to delete: the harness
     // lives on the host) — the control must not be offered for them.
@@ -2937,6 +2942,7 @@ async function openAgentConfig() {
     initialCanDelegateTo: agent.canDelegateTo ?? [],
     canRegenerateAvatar: true,
     canDelete: true,
+    shareAgent: agent,
     savedLabel: "Save",
     schedule: agent.schedule?.periodInMinutes ?? null,
     initialMcpServers: agent.mcpServers ?? [],
@@ -3006,6 +3012,7 @@ function openQuickCreateAgent() {
     initialCoreAssets: [],
     canRegenerateAvatar: false,
     showTemplates: true,
+    canImport: true,
     savedLabel: "Create agent",
     onSave: async (v) => {
       const r = await send("named-agent.create", {
@@ -3702,10 +3709,89 @@ async function buildAgentConfigDialog(opts) {
       deleteAgentBtn?.click();
     });
   }
+
+  // ── Share agent (CAP-FB-20260830-AGENT-SHARING-01): download the agent's
+  // card as <slug>.agent.json. The card library (lib/agent-cards.js) owns the
+  // content contract: name/role/skills/core assets/schedule/avatar — NEVER
+  // memory, keys, provider config, or context-file bodies.
+  const shareAgent = opts.shareAgent ?? null;
+  const shareBtn = shareAgent ? configButton("Share agent", "secondary") : null;
+  if (shareBtn) {
+    shareBtn.addEventListener("click", () => {
+      try {
+        const file = downloadAgentCard(shareAgent);
+        setStatus(`Agent card downloaded as ${file} — hand the file to a colleague.`, false);
+      } catch (e) {
+        errorEl.textContent = `Sharing failed: ${e?.message ?? e}`;
+        errorEl.style.display = "block";
+      }
+    });
+  }
+
+  // ── Import agent (create mode): accept a shared .agent.json card, validate
+  // it through the card library, PREFILL the form, and show the validated
+  // name/role/skills for confirmation — creation still goes through Create.
+  const importInput = opts.canImport ? document.createElement("input") : null;
+  if (importInput) {
+    importInput.type = "file";
+    importInput.accept = ".json,application/json,.agent.json";
+    importInput.style.display = "none";
+  }
+  const importBtn = opts.canImport ? configButton("Import agent", "secondary") : null;
+  const importNote = opts.canImport ? document.createElement("div") : null;
+  if (importNote) {
+    importNote.className = "agent-config-import-note";
+    importNote.setAttribute("role", "status");
+    importNote.style.cssText = "display:none;font-size:12px;color:var(--ok,#1b7f4d);line-height:1.4;margin-bottom:6px;";
+  }
+  if (importBtn && importInput) {
+    importBtn.addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", () => {
+      const f = importInput.files?.[0];
+      if (!f) return;
+      const fr = new FileReader();
+      fr.onload = () => {
+        importInput.value = "";
+        const r = importAgentCard(String(fr.result));
+        if (!r.ok) {
+          errorEl.textContent = `Import failed: ${r.error ?? "unknown"}`;
+          errorEl.style.display = "block";
+          importNote.style.display = "none";
+          return;
+        }
+        const cardAgent = r.agent;
+        // Prefill the SAME fields a template prefill fills — the owner reviews
+        // and edits everything before Create commits anything.
+        nameField.el.value = cardAgent.name ?? "";
+        roleField.el.value = cardAgent.role ?? "";
+        if (cardAgent.schedule?.periodInMinutes != null) {
+          scheduleField.el.value = `every ${cardAgent.schedule.periodInMinutes} minutes`;
+          scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        if (cardAgent.avatar) {
+          avatarValue = cardAgent.avatar;
+          renderAvatarPreview();
+        }
+        if (Array.isArray(cardAgent.skills) && cardAgent.skills.length) {
+          skillSection.checkTemplate(cardAgent.skills);
+        }
+        const skillCount = Array.isArray(cardAgent.skills) ? cardAgent.skills.length : 0;
+        const dropped = Array.isArray(r.droppedSkills) ? r.droppedSkills.length : 0;
+        importNote.textContent = `Card imported: “${cardAgent.name}” — ${cardAgent.role || "no role"}; ${skillCount} skill${skillCount === 1 ? "" : "s"} selected${dropped ? ` (${dropped} unknown id${dropped === 1 ? "" : "s"} dropped)` : ""}. Review below, then Create.`;
+        importNote.style.display = "block";
+        errorEl.style.display = "none";
+        nameField.el.focus();
+      };
+      fr.readAsText(f);
+    });
+  }
+
   const cancelBtn = configButton("Cancel", "secondary");
   const saveBtn = configButton(opts.savedLabel ?? "Save", "primary");
   if (deleteBtn) footer.append(deleteBtn);
+  if (importBtn) footer.append(importNote, importBtn, importInput);
   if (regenBtn) footer.append(regenBtn);
+  if (shareBtn) footer.append(shareBtn);
   footer.append(cancelBtn, saveBtn);
   footer.prepend(errorEl);
 
@@ -4129,9 +4215,38 @@ document.getElementById("thread-back")?.addEventListener("click", hideThreadView
 // open the agent config; a background agent → also the agent config (its own
 // edit surface). A task's button must not open the agent config (it did
 // nothing before because openAgentConfig only handles named agents).
+/** Download an agent's share card (CAP-FB-20260830-AGENT-SHARING-01): the
+ * card library owns the content contract — name/role/skills/core assets/
+ * schedule/avatar, never memory, keys, provider config, or context bodies. */
+function downloadAgentCard(agent) {
+  const json = exportAgentCardJson(agent, { schedule: agent.schedule ?? null });
+  const slug = slugifyAgentId(agent.name || "agent") || "agent";
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${slug}.agent.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return `${slug}.agent.json`;
+}
+
 editAgentBtn?.addEventListener("click", () => {
   if (currentAgentKind === "named") openAgentConfig();
   else if (currentThreadId) startTitleEdit();
+});
+
+shareAgentBtn?.addEventListener("click", async () => {
+  if (currentAgentKind !== "named" || !currentAgentId) return;
+  const res = await send("named-agent.get", { id: currentAgentId }).catch(() => ({ ok: false }));
+  if (!res.ok || !res.agent) { setStatus("Agent not found", false); return; }
+  try {
+    const file = downloadAgentCard(res.agent);
+    setStatus(`Agent card downloaded as ${file} — hand the file to a colleague.`, false);
+  } catch (e) {
+    setStatus(`Sharing failed: ${e?.message ?? e}`, false);
+  }
 });
 
 deleteAgentBtn?.addEventListener("click", async () => {

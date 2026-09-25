@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.510] — 2026-09-25
+- share an agent as a .agent.json card and import one back
+
+## [0.3.509] — 2026-09-25
+- share an agent as a .agent.json card and import one back
+
 ## [0.3.508] — 2026-09-25
 - a run settles and heartbeats survive even when its durable record vanishes under it
 
