@@ -266,14 +266,13 @@ export function auditEmscriptenModule(input) {
     }
     s.end();
   }
+  if (spaces.table.length > 1) features.add("reference-types");
   if (spaces.memory.length > 1) fail("multi_memory_rejected");
   if (functions.length !== counts.code) fail("function_code_count_mismatch");
   if (counts.dataCount !== null && counts.dataCount !== counts.data) fail("data_count_mismatch");
   if (counts.dataInstructions.length && counts.dataCount === null) fail("data_count_missing");
   if (counts.dataInstructions.some(i => i >= counts.data)) fail("data_index_invalid");
   if (!WebAssembly.validate(bytes)) fail("wasm_engine_invalid");
-  // MVP permits one table total, including imports in the table index space.
-  if (spaces.table.length > 1) features.add("reference-types");
   return { ...result, features: [...features].sort() };
 }
 

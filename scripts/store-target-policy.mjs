@@ -7,6 +7,9 @@
 
 import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { validateDistCompleteMarker } from "./dist-complete.mjs";
 import { scanBundledWasmFiles, scanShippedJs } from "./scan-shipped.mjs";
 // The admitted Pyodide runtime lane (CAP-FB-20260823-PYODIDE-PYTHON-01): the
 // runtime ships as one byte-verified blob set (dist/wasm-tools/python/) whose
@@ -23,8 +26,6 @@ export const PYTHON_RUNTIME_ARCHIVE_PREFIX = PYTHON_RUNTIME_DIR; // "dist/wasm-t
 export const STORE_TARGET = "store";
 export const STORE_EXTENSION_CSP =
   "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:";
-export const STORE_SANDBOX_CSP =
-  "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; child-src 'self'; connect-src 'none'; img-src data: blob:;";
 export const STORE_WASM_LANE = "bundled-reviewed-only";
 export const STORE_ALLOWED_WORKER_LITERALS = Object.freeze([]);
 
@@ -92,15 +93,12 @@ export function parsePackageArguments(args) {
 }
 
 function assertExactStoreCsp(manifest) {
-  if (!plainExact(manifest?.content_security_policy, ["extension_pages", "sandbox"])) {
+  if (!plainExact(manifest?.content_security_policy, ["extension_pages"])) {
     throw policyError("content_security_policy object is not exact");
   }
   if (
     manifest.content_security_policy.extension_pages !== STORE_EXTENSION_CSP
   ) throw policyError("extension_pages CSP is not exact");
-  if (
-    manifest.content_security_policy.sandbox !== STORE_SANDBOX_CSP
-  ) throw policyError("sandbox CSP is not exact");
 }
 
 function remoteHtmlScriptViolations(text, archivePath) {
@@ -205,10 +203,29 @@ export async function assertStoreTargetBoundary({
       entry.archivePath === "sandbox/script-sandbox.js"
     ).map((entry) => entry.sourcePath),
   );
+  // The writer is trusted, not cryptographically authenticated (coord242).
+  // Obtain origin evidence through strict current marker/source/output checks,
+  // never an inventory row's self-declared permission or a path-suffix guess.
+  const generatedValidation = new Map();
+  const markerEntry = byPath.get("dist/dist.complete");
+  if (markerEntry) {
+    const distRoot = path.dirname(markerEntry.sourcePath);
+    const marker = await validateDistCompleteMarker({
+      root: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."),
+      distRoot, expectedTarget: STORE_TARGET,
+    });
+    for (const site of marker.validateOrigin?.sites ?? []) {
+      const entry = byPath.get(`dist/${site.output}`);
+      const output = marker.outputs.find(o => o.path === site.output);
+      if (!entry || path.resolve(entry.sourcePath) !== path.resolve(distRoot, site.output)) throw policyError("validate origin physical/logical binding mismatch");
+      generatedValidation.set(entry.sourcePath, { ...site, sha256: output.sha256 });
+    }
+  }
   const jsViolations = await scanShippedJs(
     jsEntries.map((entry) => entry.sourcePath),
     {
       generatedBundles,
+      generatedValidation,
       allowedWorkerLiterals: new Set(STORE_ALLOWED_WORKER_LITERALS),
       allowedDynamicEvaluatorFiles,
       readText: async (file) => {

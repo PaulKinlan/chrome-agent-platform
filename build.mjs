@@ -14,15 +14,12 @@
 //   - per-FILE modes preserved from the previous tree; failures roll back and
 //     ROLLBACK FAILURE IS FATAL; every failure path cleans its staging.
 import { build, transform } from "esbuild";
-import { browserDependencies, browserDefines } from './scripts/browser-dependencies.mjs';
 import { createRequire } from "node:module";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";
 import {
@@ -63,7 +60,7 @@ function parseBuildTarget(args) {
 const RAW_ARGS = process.argv.slice(2);
 const REGEN_TOOLS = RAW_ARGS.includes("--regen-tools");
 const BUILD_TARGET = parseBuildTarget(RAW_ARGS.filter((a) => a !== "--regen-tools"));
-const ROOT = fileURLToPath(new URL(".", import.meta.url));
+const ROOT = new URL(".", import.meta.url).pathname;
 const EXT_DIR = path.join(ROOT, "extension");
 const DIST = path.join(EXT_DIR, "dist");
 const COMPLETE_MARKER = path.join(DIST, "dist.complete");
@@ -85,29 +82,10 @@ if (process.platform === "win32") {
 // CLOSED on any drift (hand edit, stale bytes, ungenerated file), so
 // `npm run build` truthfully bundles the exact pinned tools. Full regeneration
 // never happens implicitly — only via the explicit --regen-tools flag.
-// BOUNDED (chrome-agent-platform-fnmr): the generator can block in a futex wait
-// and never exit, and an unbounded execFileSync here wedged a worktree's build
-// for 3h37m. The bound names the hang instead and takes the group down.
-try {
-  const generator = await runBoundedChild(process.execPath, [
-    path.join(ROOT, "scripts/build-bundled-tool-packages.mjs"),
-    ...(REGEN_TOOLS ? [] : ["--verify"]),
-  ], {
-    cwd: ROOT,
-    stdio: "inherit",
-    label: "bundled-tool generator",
-    timeoutMs: Number(process.env.CAP_BUNDLED_TOOL_TIMEOUT_MS ?? 120_000),
-  });
-  if (generator.status !== 0) {
-    // execFileSync used to throw here; the bounded runner reports the status
-    // instead, so the fail-closed contract has to be explicit.
-    console.error(`\nbuild: bundled-tool generator failed (status ${generator.status})`);
-    process.exit(1);
-  }
-} catch (error) {
-  console.error(`\nbuild: ${error?.message ?? error}`);
-  process.exit(1);
-}
+execFileSync(process.execPath, [
+  path.join(ROOT, "scripts/build-bundled-tool-packages.mjs"),
+  ...(REGEN_TOOLS ? [] : ["--verify"]),
+], { cwd: ROOT, stdio: "inherit" });
 
 // SECURITY/build assertion: TEST-ONLY controls/oracles must never reach the
 // shipped extension. RECURSIVELY discover every shipped .js under extension/,
@@ -443,22 +421,22 @@ try {
       );
     }
     const denoStoreNodeModules = path.join(denoStoreDir, mcpStoreEntry, "node_modules");
+    const { createValidateOriginBuild } = await import("./scripts/lib/wasm-validate-origin.mjs");
+    const validateOriginBuild = DEBUG_BUILD ? null : createValidateOriginBuild(ROOT);
     const shared = {
       bundle: true, format: "esm", target: "chrome120", platform: "browser",
       logLevel: "silent", sourcemap: DEBUG_BUILD, legalComments: "none",
-      plugins: [browserDependencies, diffCoreFromSource, capAiSdkDedup],
-      metafile: true,
+      minifySyntax: !DEBUG_BUILD,
+      plugins: [...(validateOriginBuild ? [validateOriginBuild.plugin] : []), diffCoreFromSource, capAiSdkDedup],
       nodePaths: [denoStoreNodeModules],
       define: {
-        ...browserDefines,
         __CAP_BUILD_LOG_DEFAULT__: JSON.stringify(DEBUG_BUILD ? "verbose" : "off"),
       },
     };
     const SW = path.join(STAGE, "background/service-worker.js");
     const OPT = path.join(STAGE, "options.bundle.js");
-    const NTP_BUNDLE = path.join(STAGE, "ntp.bundle.js");
-    const SIDEPANEL_BUNDLE = path.join(STAGE, "sidepanel.bundle.js");
     await mkdir(path.dirname(SW), { recursive: true });
+    const shimNode = path.join(ROOT, "browser-shim-node.js");
     // DEVELOPER-ONLY MCP transport-spike probe
     // (CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01). scripts/mcp-probe-entry.js
     // imports the remote-MCP client (lib/mcp-client.js → the browser-safe
@@ -467,7 +445,7 @@ try {
     // INSIDE the real service worker (SW globals forbid dynamic import(), so
     // the probe must be part of the bundle). It is injected ONLY for the
     // developer target and is absent from every store build.
-    const swInject = [];
+    const swInject = [path.join(ROOT, "browser-shim-process.js")];
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
     const swResult = await build({
       ...shared,
@@ -478,6 +456,12 @@ try {
       // (CAP-FB-20260830-BUNDLE-BUDGET-01): the contributors are visible in
       // every build log, and the store gate failure names them.
       metafile: true,
+      alias: {
+        "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
+        "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
+        "node:stream": shimNode, "node:util": shimNode, "node:module": shimNode,
+        "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
+      },
     });
     {
       // The budget report NEVER lands in dist/: the shipped package must not
@@ -489,8 +473,6 @@ try {
       await writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile));
     }
     await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE });
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE });
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
     // component / the SW imports this single build by relative path.
@@ -509,39 +491,36 @@ try {
       entryPoints: [path.join(EXT_DIR, "workers/agent-worker.js")],
       outfile: WORKER,
       format: "esm",
+      // agent-do pulls @modelcontextprotocol/sdk (MCP) which imports node: builtins
+      // even on the browser path — same shims as the SW bundle.
+      inject: [path.join(ROOT, "browser-shim-process.js")],
+      alias: {
+        "node:fs": shimNode, "node:fs/promises": shimNode, "node:path": shimNode,
+        "node:os": shimNode, "node:crypto": shimNode, "node:process": shimNode,
+        "node:stream": shimNode, "node:util": shimNode, "node:module": shimNode,
+        "node:child_process": shimNode, fs: shimNode, path: shimNode, child_process: shimNode,
+      },
     });
 
-    // Scrub + seam-scan IN STAGING over ALL FOUR generated bundles (the SW,
-    // the agent-worker bundle — agent-do/ai/mcp-sdk carry a `new Function`/
-    // `new F("")` evaluator that the store-target policy forbids — the Options
-    // bundle, and diff-core). chrome-agent-platform-tptx (+4f3j, absorbed):
-    // the pinned Zod Doc.compile denial runs here too, and OPT is inside the
-    // loop — before this change OPT was the one bundle still taking zod's JIT
-    // path (its allowsEval probe and Doc.compile survived). After it, OPT's
-    // probe throws inside zod's own try/catch, `allowsEval` is false, and zod
-    // runs its jitless interpreter BY DESIGN (util.allowsEval consumers gate
-    // JIT: schemas.js). That is a runtime behavior change for ONE bundle,
-    // made deliberately: an evaluator-free Store package beats JIT parsing.
+    // Same staged denial handling for all four generated bundles, including
+    // Options. The independent final AST gate below still refuses unknown sites.
+    const { denyZodDocCompiles } = await import("./scripts/lib/scrub-zod-doc.mjs");
     let occurrences = 0;
     let zodProbes = 0;
     let zodDocCompiles = 0;
-    const { denyZodDocCompiles } = await import("./scripts/lib/scrub-zod-doc.mjs");
-    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
+    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE]) {
       let bundle = await readFile(scrubPath, "utf8");
       if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
         throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
       }
+      const denied = denyZodDocCompiles(bundle);
+      bundle = denied.code;
+      zodDocCompiles += denied.count;
+      console.log(`build scrub: ${path.basename(scrubPath)} denied ${denied.count} pinned Zod Doc.compile method(s)`);
       occurrences += (bundle.match(/new Function\s*\(/g) ?? []).length;
       bundle = bundle.replace(/new Function\s*\(/g, "(function(){ throw new Error('eval disabled (MV3 CSP)'); })(");
       zodProbes += (bundle.match(/new F\(""\)/g) ?? []).length;
       bundle = bundle.replace(/new F\(""\)/g, '(() => { throw new Error("eval disabled (MV3 CSP)"); })()');
-      // The pinned Doc.compile denial: hash-recognized class bodies only, and
-      // (chrome-agent-platform-ol0j) only when the constructor's own lexical
-      // provenance resolves to the GLOBAL evaluator — a shadowed/local
-      // `Function` binding is preserved.
-      const denied = denyZodDocCompiles(bundle);
-      bundle = denied.code;
-      zodDocCompiles += denied.count;
       await writeFile(scrubPath, bundle);
       const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
       if (remaining > 0) throw new Error(`bundle still contains ${remaining} eval sites after cleaning`);
@@ -551,11 +530,12 @@ try {
     // documented contract was always "developer = unminified + source maps,
     // store = minified" — but no minify step existed, so the store package
     // shipped 141k lines of readable JS (SW: 5.47 MB). Minify runs AFTER the
-    // eval scrub: the scrub's textual patterns (new Function / new F("")) are
-    // only reliable on unminified code, and minification never reintroduces
-    // them (globals are never renamed). The developer build is untouched.
+    // eval scrub: its textual patterns (new Function / new F(""))
+    // require preserved names/whitespace. The shared Store pass optimizes syntax
+    // only; final evaluator AST validation below runs after all transforms.
+    // The developer build is untouched.
     if (!DEBUG_BUILD) {
-      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
+      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE]) {
         const source = await readFile(minifyPath, "utf8");
         const minified = await transform(source, {
           minify: true,
@@ -573,18 +553,23 @@ try {
       }
     }
 
-    // Final evaluator gate (chrome-agent-platform-kdax): parse the ACTUAL final
-    // bytes of every generated bundle — after the scrub AND any minify transform
-    // — and refuse publication when ANY dynamic evaluator site survives. The
-    // regex checks above are defense in depth; this whole-AST classifier pass is
-    // what sees ALIAS/MEMBER/SEQUENCE evaluators (the zod Doc.compile aliases a
-    // regex could never name — 8 live sites on unmodified main, 2026-09-18).
-    // Scope is exactly the four generated bundles: the wasm-tools runtime ships
-    // as a separately reviewed, manifest-hash-pinned blob lane
-    // (scripts/store-target-policy.mjs), not generated JavaScript.
+    // The private source marker must reach exactly the two admitted calls.
+    // Strip verified AST argument spans only; no marked intermediate publishes.
+    let validationOrigin;
+    if (validateOriginBuild) {
+      const generatedOutputs = new Map();
+      for (const output of await walkJs(STAGE)) generatedOutputs.set(path.relative(STAGE, output), await readFile(output, "utf8"));
+      validationOrigin = validateOriginBuild.finish(generatedOutputs);
+      for (const [rel, code] of validationOrigin.outputs) await writeFile(path.join(STAGE, rel), code);
+      await validateOriginBuild.assertDirectoryNonceFree(STAGE);
+    }
+    // Developer input/maps are untouched by nonce marking (coord245).
+
+    // Parse the actual final bytes, after scrubbing AND syntax/minify transforms.
+    // No sandbox or static Wasm-host exemption permits a dynamic evaluator here.
     const { assertNoDynamicEvaluators } = await import("./scripts/lib/dynamic-evaluator-scan.mjs");
-    for (const gatePath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
-      assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
+    for (const output of await walkJs(STAGE)) {
+      assertNoDynamicEvaluators(await readFile(output, "utf8"), output);
     }
 
     // The bundle budget gate (CAP-FB-20260830-BUNDLE-BUDGET-01): the store
@@ -635,7 +620,7 @@ try {
       console.log(`build: admitted Pyodide runtime staged (${runtimeFiles.length} files, sha256-verified against MANIFEST.json)`);
     }
 
-    for (const rel of ["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js"]) {
+    for (const rel of ["background/service-worker.js", "options.bundle.js", "shared/diff-core.bundle.js"]) {
       const mode = await prevMode(rel);
       if (mode != null) await chmod(path.join(STAGE, rel), mode); // mode failure = publish failure (fatal)
     }
@@ -666,12 +651,16 @@ try {
       root: ROOT,
       distRoot: STAGE,
       target: BUILD_TARGET,
+      validateOrigin: validationOrigin?.derivation,
     });
     await validateDistCompleteMarker({
       root: ROOT,
       distRoot: STAGE,
       expectedTarget: BUILD_TARGET,
     });
+
+    // Includes the derivation marker and later pinned runtime staging.
+    await validateOriginBuild?.assertDirectoryNonceFree(STAGE);
 
     // ── THE PUBLISH (serialized by the lock) ────────────────────────────────
     // VERSIONED-DIR + ATOMIC POINTER: the real trees are dist-versions/<id>/;

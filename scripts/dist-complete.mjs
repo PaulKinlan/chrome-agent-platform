@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { lstat, readFile, readlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { verifyValidateOrigin } from "./lib/wasm-validate-origin.mjs";
 
 export const DIST_COMPLETE_SCHEMA = "cap-dist-complete-v2";
 export const LEGACY_DIST_COMPLETE_SCHEMA = "cap-dist-complete-v1";
@@ -34,18 +35,6 @@ const MAX_SOURCE_PATH_BYTES = 1_024;
 const MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_TOTAL_BYTES = 512 * 1024 * 1024;
 const MAX_MARKER_BYTES = 4_096;
-
-/** chrome-agent-platform-1mz2: the marker binds HEAD, every indexed source byte
- * and the generated outputs, so ANY commit invalidates a built tree — including
- * the post-commit hook's own version bump and `git commit --amend`. A lane then
- * meets the staleness as red serial-phase tests, and a verdict that names only
- * the marker costs a re-diagnosis every time. Both staleness verdicts carry the
- * cause and the exact fix; the pinned substrings stay at the front so every
- * existing tamper assertion still reads the same verdict. */
-const STALE_REBUILD_GUIDANCE =
-  " — dist.complete binds the exact commit, every indexed source byte and the generated " +
-  "bundles, so any commit invalidates it (the post-commit hook also bumps the version and " +
-  "amends HEAD); rebuild before the gate: npm run build:production";
 
 function markerError(message) {
   return new Error(`dist.complete validation failed: ${message}`);
@@ -200,7 +189,7 @@ function validTarget(value) {
   return DIST_COMPLETE_TARGETS.includes(value);
 }
 
-export async function createDistCompleteMarker({ root, distRoot, target }) {
+export async function createDistCompleteMarker({ root, distRoot, target, validateOrigin }) {
   if (!validTarget(target)) throw markerError("marker target is invalid");
   const source = await computeIndexedSourceAuthority({ root });
   // The key order is part of the canonical v2 byte contract. `target` is an
@@ -212,15 +201,19 @@ export async function createDistCompleteMarker({ root, distRoot, target }) {
     schema: DIST_COMPLETE_SCHEMA,
     source: { digest: source.digest, files: source.files },
     target,
+    ...(validateOrigin === undefined ? {} : { validateOrigin }),
   };
+  // Trusted builder custody (coord242), not signed historical provenance.
+  // Public hash/site checks do not defeat an operator replacing marker+bytes.
+  if (validateOrigin !== undefined) await verifyValidateOrigin(validateOrigin, { root, distRoot, outputs: marker.outputs });
   return Object.freeze({
     ...marker,
     source: Object.freeze(marker.source),
   });
 }
 
-export async function writeDistCompleteMarker({ root, distRoot, target }) {
-  const marker = await createDistCompleteMarker({ root, distRoot, target });
+export async function writeDistCompleteMarker({ root, distRoot, target, validateOrigin }) {
+  const marker = await createDistCompleteMarker({ root, distRoot, target, validateOrigin });
   await writeFile(path.join(distRoot, "dist.complete"), canonicalJson(marker), {
     flag: "wx",
     mode: 0o644,
@@ -254,7 +247,7 @@ export async function validateDistCompleteMarker({
     );
   }
   if (
-    !exactObject(marker, ["commit", "outputs", "schema", "source", "target"])
+    !exactObject(marker, ["commit", "outputs", "schema", "source", "target", ...(Object.hasOwn(marker ?? {}, "validateOrigin") ? ["validateOrigin"] : [])])
   ) {
     throw markerError("marker top-level schema is not exact");
   }
@@ -302,12 +295,12 @@ export async function validateDistCompleteMarker({
     outputAuthority(distRoot),
   ]);
   if (marker.commit !== gitCommit(root)) {
-    throw markerError(`marker commit is stale${STALE_REBUILD_GUIDANCE}`);
+    throw markerError("marker commit is stale");
   }
   if (
     marker.source.digest !== source.digest ||
     marker.source.files !== source.files
-  ) throw markerError(`marker indexed source authority is stale${STALE_REBUILD_GUIDANCE}`);
+  ) throw markerError("marker indexed source authority is stale");
   for (let index = 0; index < outputs.length; index++) {
     if (
       marker.outputs[index].path !== outputs[index].path ||
@@ -315,6 +308,7 @@ export async function validateDistCompleteMarker({
       marker.outputs[index].size !== outputs[index].size
     ) throw markerError(`marker output is stale: ${outputs[index].path}`);
   }
+  if (Object.hasOwn(marker, "validateOrigin")) await verifyValidateOrigin(marker.validateOrigin, { root, distRoot, outputs });
   return Object.freeze({
     commit: marker.commit,
     outputs: Object.freeze(
@@ -323,5 +317,6 @@ export async function validateDistCompleteMarker({
     schema: marker.schema,
     source: Object.freeze({ ...marker.source }),
     target: marker.target,
+    ...(Object.hasOwn(marker, "validateOrigin") ? { validateOrigin: structuredClone(marker.validateOrigin) } : {}),
   });
 }

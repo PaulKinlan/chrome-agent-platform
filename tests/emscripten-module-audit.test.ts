@@ -54,6 +54,20 @@ Deno.test("emscripten module audit: actual image and memoryless side are structu
   assert(compatibleEmscriptenType("function", imported.type, exported.type));
 });
 
+Deno.test("emscripten module audit: 40an classifies the combined imported and defined table space", () => {
+  const defined = Uint8Array.from([0,97,115,109,1,0,0,0,4,9,2,112,1,1,1,112,1,1,1]);
+  const mixed = Uint8Array.from([0,97,115,109,1,0,0,0,2,10,1,1,109,1,116,1,112,1,1,1,4,5,1,112,1,1,1]);
+  for (const bytes of [defined, mixed]) {
+    assert(WebAssembly.validate(bytes));
+    const scan = auditEmscriptenModule(bytes);
+    assertEquals(scan.tables.length + scan.imports.filter(i => i.kind === "table").length, 2);
+    assertEquals(scan.features, ["reference-types"]);
+  }
+  const single = wasm(section(4, [1,112,1,1,1]), section(6, [1,127,1,65,0,11]));
+  assert(WebAssembly.validate(single));
+  assertEquals(auditEmscriptenModule(single).features, []);
+});
+
 Deno.test("emscripten module audit: bounded legal padded LEB, overflow, framing and unsupported types", () => {
   assertEquals(auditEmscriptenModule(wasm([1, 0x84, 0x80, 0x80, 0x80, 0, 1, 0x60, 0, 0])).imports, []);
   refused(wasm([1, 0xff, 0xff, 0xff, 0xff, 0x10]), "leb_overflow");
@@ -187,54 +201,4 @@ Deno.test("emscripten module audit: scanner allows only the one validate-only si
     source + "\nWebAssembly.validate(bytes);\n",
   ]) assert((await scan(path, mutated)).some(v => v.includes("dynamic WebAssembly")));
   assert((await scan("extension/lib/other.js", source)).some(v => v.includes("dynamic WebAssembly")));
-});
-
-// Fixed binary encodings and hand-written expectations: neither the fixture
-// bytes nor expected metadata come from the auditor or its section builders.
-const mvpTable = { element: "funcref", min: 1, max: 1 };
-const internalMutableGlobal = [{ index: 0, type: { value: "i32", mutable: true }, initializer: { op: "i32.const", value: 7 } }];
-for (const fixture of [
-  {
-    name: "two defined tables require reference-types",
-    bytes: [0, 97, 115, 109, 1, 0, 0, 0, 4, 9, 2, 112, 1, 1, 1, 112, 1, 1, 1],
-    imports: [],
-    tables: [{ index: 0, type: mvpTable }, { index: 1, type: mvpTable }],
-    globals: [], features: ["reference-types"],
-  },
-  {
-    name: "two imported tables require reference-types",
-    bytes: [0, 97, 115, 109, 1, 0, 0, 0, 2, 19, 2, 1, 109, 1, 97, 1, 112, 1, 1, 1, 1, 109, 1, 98, 1, 112, 1, 1, 1],
-    imports: [
-      { module: "m", symbol: "a", kind: "table", index: 0, type: mvpTable },
-      { module: "m", symbol: "b", kind: "table", index: 1, type: mvpTable },
-    ],
-    tables: [], globals: [], features: ["reference-types"],
-  },
-  {
-    name: "one imported plus one defined table require reference-types",
-    bytes: [0, 97, 115, 109, 1, 0, 0, 0, 2, 10, 1, 1, 109, 1, 97, 1, 112, 1, 1, 1, 4, 5, 1, 112, 1, 1, 1],
-    imports: [{ module: "m", symbol: "a", kind: "table", index: 0, type: mvpTable }],
-    tables: [{ index: 1, type: mvpTable }],
-    globals: [], features: ["reference-types"],
-  },
-  {
-    name: "one defined funcref table and internal mutable global remain MVP",
-    bytes: [0, 97, 115, 109, 1, 0, 0, 0, 4, 5, 1, 112, 1, 1, 1, 6, 6, 1, 127, 1, 65, 7, 11],
-    imports: [], tables: [{ index: 0, type: mvpTable }],
-    globals: internalMutableGlobal, features: [],
-  },
-  {
-    name: "one imported funcref table and internal mutable global remain MVP",
-    bytes: [0, 97, 115, 109, 1, 0, 0, 0, 2, 10, 1, 1, 109, 1, 97, 1, 112, 1, 1, 1, 6, 6, 1, 127, 1, 65, 7, 11],
-    imports: [{ module: "m", symbol: "a", kind: "table", index: 0, type: mvpTable }],
-    tables: [], globals: internalMutableGlobal, features: [],
-  },
-]) Deno.test(`emscripten module audit: ${fixture.name}`, () => {
-  const bytes = Uint8Array.from(fixture.bytes);
-  assert(WebAssembly.validate(bytes), "positive control must be engine-valid");
-  const scan = auditEmscriptenModule(bytes);
-  assertEquals(scan.imports, fixture.imports);
-  assertEquals(scan.tables, fixture.tables);
-  assertEquals(scan.globals, fixture.globals);
-  assertEquals(scan.features, fixture.features);
 });

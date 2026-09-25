@@ -8,6 +8,12 @@
 import { masterMemory } from "./memory.js";
 import { sha256Hex, sha256HexBytes } from "./pure.js";
 
+// Structural auditing is exposed separately from package admission. Schema 1
+// continues to use its existing WASI-only auditor below.
+export { auditEmscriptenModule, auditEmscriptenGraph } from "./emscripten-module-audit.js";
+import { auditEmscriptenGraph } from "./emscripten-module-audit.js";
+import { validateEmscriptenManifest, validateEmscriptenProvenance, assertEmscriptenNumericEligibility, emscriptenIdentity } from "./emscripten-manifest.js";
+
 export const LANES = Object.freeze(["bundled"]);
 export const WASM_PACKAGE_LIMITS = Object.freeze({
   // dptw (2026-09-03): the package SIZE ceilings (binary/manifest/section
@@ -230,8 +236,11 @@ function validateReplay(value, path) {
 }
 
 function validateManifestObject(manifest) {
-  exactKeys(manifest, ["schemaVersion", "package", "tools", "executables", "signer", "source", "build", "sbom", "license", "meta"]);
-  if (manifest.schemaVersion !== 1) fail("manifest_schema_version", "$.schemaVersion");
+  const schema2 = manifest?.schemaVersion === 2;
+  exactKeys(manifest, schema2
+    ? ["schemaVersion", "package", "tools", "signer", "source", "build", "sbom", "license", "meta", "runtime", "assets", "entry", "modules", "linkGraph", "resources", "provenance"]
+    : ["schemaVersion", "package", "tools", "executables", "signer", "source", "build", "sbom", "license", "meta"]);
+  if (!schema2 && manifest.schemaVersion !== 1) fail("manifest_schema_version", "$.schemaVersion");
 
   exactKeys(manifest.package, ["id", "version", "name", "type"], [], "$.package");
   const packageId = assertAscii(manifest.package.id, "$.package.id", { min: 1, max: 128 });
@@ -256,6 +265,7 @@ function validateManifestObject(manifest) {
     validateReplay(tool.replayClass, `${path}.replayClass`);
   }
 
+  if (!schema2) {
   if (!Array.isArray(manifest.executables) || manifest.executables.length === 0) fail("executable_bound", "$.executables");
   const executableIds = new Set();
   for (let index = 0; index < manifest.executables.length; index++) {
@@ -311,6 +321,7 @@ function validateManifestObject(manifest) {
     if (executable.capabilityDigest !== capabilityDigest(capabilities)) fail("capability_digest_mismatch", `${path}.capabilityDigest`);
   }
 
+  }
   exactKeys(manifest.signer, ["lane", "keyId", "alg"], ["sig"], "$.signer");
   if (manifest.signer.lane !== "bundled") fail("lane_not_admitted", "$.signer.lane");
   if (!/^[a-z0-9-]{1,64}$/u.test(assertAscii(manifest.signer.keyId, "$.signer.keyId", { min: 1, max: 64 }))) fail("signer_key_invalid", "$.signer.keyId");
@@ -344,7 +355,16 @@ function validateManifestObject(manifest) {
     if (typeof value === "string") assertAscii(value, `$.meta.${key}`, { max: 256 });
     if (typeof value === "number" && !Number.isFinite(value)) fail("meta_scalar", `$.meta.${key}`);
   }
+  if (schema2) validateEmscriptenManifest(manifest);
   return manifest;
+}
+
+export function parseCanonicalJson(raw) {
+  if (typeof raw !== "string") fail("manifest_raw_required");
+  preparseJson(raw);
+  const value = JSON.parse(raw);
+  if (raw !== canonicalJson(value)) fail("manifest_not_canonical");
+  return value;
 }
 
 function withoutSignature(manifest) {
@@ -600,7 +620,7 @@ export class WasmPackageAuthority {
       const canonical = canonicalJson(manifest);
       if (raw !== canonical) fail("manifest_not_canonical");
       const digest = this.manifestDigest(manifest);
-      const signatureScope = `cap-wasm-manifest:v1\u0000${digest}`;
+      const signatureScope = `cap-wasm-manifest:v${manifest.schemaVersion}\u0000${digest}`;
       return { ok: true, manifest: Object.freeze(manifest), canonical, manifestDigest: digest, signatureScope };
     } catch (error) {
       if (error instanceof WasmPackageAuthorityError) return { ok: false, error: error.code, path: error.path, detail: error.detail };
@@ -648,13 +668,33 @@ export class WasmPackageAuthority {
   }
 
   async _verifyBundle(validated, filesInput) {
-    if (!this._inventoryFiles) await this.loadInventory();
     const { manifest, manifestDigest } = validated;
+    // Explicit schema-2 revalidation must not reuse earlier unpacked-tree bytes.
+    if (manifest.schemaVersion === 2 || !this._inventoryFiles) await this.loadInventory();
     if ((this._inventory.revocations ?? []).some((row) => row?.keyId === manifest.signer.keyId)) fail("key_revoked");
     if (this._inventory.signer?.lane !== "bundled" || this._inventory.signer?.keyId !== manifest.signer.keyId) fail("key_not_active");
     if (!(this._inventory.manifests ?? []).some((row) => row?.pkg === manifest.package.id && row?.version === manifest.package.version && row?.digest === manifestDigest)) fail("inventory_mismatch", "manifest");
-    const files = normalizeFiles(filesInput);
+    let graph = null;
     const measured = [];
+    if (manifest.schemaVersion === 2) {
+      const files = new Map();
+      for (const asset of manifest.assets) {
+        const bytes = this._inventoryFiles.get(asset.path);
+        if (!bytes || bytes.length !== asset.size || await sha256HexBytes(bytes) !== asset.sha256) fail("inventory_mismatch", asset.path);
+        files.set(asset.path, bytes);
+      }
+      const pin = manifest.provenance.record;
+      const provenanceBytes = this._inventoryFiles.get(pin.path);
+      if (!provenanceBytes || provenanceBytes.length !== pin.size || await sha256HexBytes(provenanceBytes) !== pin.sha256) fail("provenance_mismatch");
+      validateEmscriptenProvenance(decoder.decode(provenanceBytes), manifest);
+      graph = await auditEmscriptenGraph({ assets: manifest.assets, modules: manifest.modules, linkGraph: manifest.linkGraph }, files);
+      assertEmscriptenNumericEligibility(manifest, graph);
+      for (const module of graph.modules) {
+        const asset = manifest.assets.find(a => a.id === module.asset);
+        measured.push({ id: asset.id, sha256: asset.sha256, size: asset.size, ...module });
+      }
+    } else {
+    const files = normalizeFiles(filesInput);
     for (const executable of manifest.executables) {
       const bytes = new Uint8Array(files.get(executable.sha256) ?? []);
       if (bytes.byteLength !== executable.size) fail("size_mismatch", executable.id);
@@ -665,6 +705,7 @@ export class WasmPackageAuthority {
       if (!this._largeEvidence(executable)) fail("tier_blocked", executable.id);
       measured.push({ id: executable.id, ...auditWasmBinary(bytes, executable, { allowLarge: executable.memory.tier === "large" }) });
     }
+    }
     const sbom = this._inventoryFiles.get(manifest.sbom.ref);
     if (!sbom || await sha256HexBytes(sbom) !== manifest.sbom.sha256) fail("sbom_mismatch");
     if (!this._inventoryFiles.has(manifest.license.file) || (manifest.license.notices && !this._inventoryFiles.has(manifest.license.notices))) fail("provenance_incomplete");
@@ -673,7 +714,9 @@ export class WasmPackageAuthority {
 
   _record(validated, measured, previous = null) {
     const { manifest, manifestDigest, signatureScope } = validated;
-    const identityDigest = sha256Hex(canonicalJson({
+    const schema2 = manifest.schemaVersion === 2;
+    const graphIdentity = schema2 ? emscriptenIdentity(manifest) : null;
+    const identityDigest = schema2 ? graphIdentity.capabilityDigest : sha256Hex(canonicalJson({
       tools: manifest.tools.map((tool) => ({ id: tool.toolId, digest: tool.digest, capabilityDigest: tool.capabilityDigest })),
       executables: manifest.executables.map((executable) => ({ id: executable.id, sha256: executable.sha256, capabilityDigest: executable.capabilityDigest })),
     }));
@@ -681,7 +724,8 @@ export class WasmPackageAuthority {
       version: manifest.package.version,
       manifestDigest,
       capabilityDigest: identityDigest,
-      executables: manifest.executables.map((executable) => {
+      ...(schema2 ? { runtime: structuredClone(manifest.runtime), graphDigest: graphIdentity.graphDigest, operationDigests: graphIdentity.operationDigests, manifest: structuredClone(manifest) } : {}),
+      executables: schema2 ? structuredClone(measured) : manifest.executables.map((executable) => {
         const scan = measured.find((row) => row.id === executable.id);
         return { id: executable.id, sha256: executable.sha256, size: executable.size, declared: structuredClone(executable.memory), measured: structuredClone(scan.measured), imports: structuredClone(scan.imports), skippedSections: structuredClone(scan.skippedSections) };
       }),

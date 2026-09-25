@@ -12,6 +12,7 @@
 
 import { parse } from "acorn";
 import { findDynamicEvaluators } from "./lib/dynamic-evaluator-scan.mjs";
+import { matchesGeneratedValidate } from "./lib/wasm-validate-origin.mjs";
 import { auditWasmBinary } from "../extension/lib/wasm-package-authority.js";
 
 // Test controls/oracles that must never appear in shipped code (scanned
@@ -224,10 +225,10 @@ const CALLEXPORT_HOST_MODULE_LOCATION = { line: 49, column: 19 };
 const CALLEXPORT_HOST_INSTANCE_LOCATION = { line: 50, column: 15 };
 const CALLEXPORT_HOST_MODULE_RE = /new\s+WebAssembly\.Module\(/g;
 const CALLEXPORT_HOST_INSTANCE_RE = /new\s+WebAssembly\.Instance\(/g;
-// The inert structural auditor validates bytes, never instantiates a module.
-// This exact validate-only site is not an execution-host exemption.
+// Admission's sole engine check validates bytes without compiling/instantiating
+// or running constructors. This is not an execution-host exemption.
 const EMSCRIPTEN_AUDIT_PATH = "extension/lib/emscripten-module-audit.js";
-const EMSCRIPTEN_VALIDATE_LOCATION = { line: 274, column: 7 };
+const EMSCRIPTEN_VALIDATE_LOCATION = { line: 275, column: 7 };
 
 // THE WORKER-HOST exemption — a second FIXED canonical constant owned by the
 // scanner (NOT caller-supplied): the exact source-only, unreachable executor
@@ -239,11 +240,19 @@ const EMSCRIPTEN_VALIDATE_LOCATION = { line: 274, column: 7 };
 const WORKER_HOST_CANONICAL_PATH = "extension/lib/wasm-executor.js";
 const WORKER_HOST_CANONICAL_LOCATION = { line: 226, column: 9 };
 const WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
-// (chrome-agent-platform-9bse: the js-minifier and jwt-decode tools + worker
-// bundles were removed — unregistered tools with only test consumers. Their
-// canonical worker-host exemptions are deleted WITH them: a canonical entry
-// bound to a file that no longer exists is dead authority, and if such a file
-// ever returns the scanner flags it, which is the safe direction.)
+// The bounded JS-minifier host constructs its fresh Worker through an injected
+// `WorkerCtor` (the `{ WorkerCtor = globalThis.Worker }` dependency). It is a
+// SEPARATE canonical entry bound to the exact line/column + the exact
+// `new WorkerCtor(` shape, never a broad exemption for the minifier files.
+const MINIFIER_WORKER_HOST_CANONICAL_PATH = "extension/lib/js-minifier-lifecycle.js";
+const MINIFIER_WORKER_HOST_CANONICAL_LOCATION = { line: 13, column: 13 };
+const MINIFIER_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
+// The bounded JWT-decode host constructs its fresh browser Worker directly
+// (`new Worker(workerUrl, { type: "module" })`). A SEPARATE canonical entry
+// bound to the exact line/column + the exact `new Worker(` shape.
+const JWT_WORKER_HOST_CANONICAL_PATH = "extension/lib/jwt-decode.js";
+const JWT_WORKER_HOST_CANONICAL_LOCATION = { line: 60, column: 19 };
+const JWT_WORKER_HOST_ALLOWED_RE = /new\s+Worker\s*\(/g;
 // The agent-worker host (CAP-FB-20260826-AGENT-WORKERS-01) constructs the
 // per-agent SHARED worker from a runtime-resolved `chrome.runtime.getURL` URL
 // (shared workers require an ABSOLUTE URL, so a source literal is impossible).
@@ -319,10 +328,11 @@ function isCanonicalScannedPath(file, canonicalRelative) {
 
 /**
  * @param {string[]} files
- * @param {{generatedBundles?:Set<string>,allowedWorkerLiterals?:Set<string>,allowedDynamicEvaluatorFiles?:Set<string>,readText?:(file:string)=>Promise<string>}} options
+ * @param {{generatedBundles?:Set<string>,generatedValidation?:Map<string,object>,allowedWorkerLiterals?:Set<string>,allowedDynamicEvaluatorFiles?:Set<string>,readText?:(file:string)=>Promise<string>}} options
  */
 export async function scanShippedJs(files, {
   generatedBundles = new Set(),
+  generatedValidation = new Map(),
   allowedWorkerLiterals = new Set(),
   allowedDynamicEvaluatorFiles = new Set(),
   readText,
@@ -331,7 +341,7 @@ export async function scanShippedJs(files, {
     throw new Error("scanShippedJs requires an injected readText(file) function");
   }
   if (
-    !(generatedBundles instanceof Set) ||
+    !(generatedBundles instanceof Set) || !(generatedValidation instanceof Map) ||
     !(allowedWorkerLiterals instanceof Set) ||
     !(allowedDynamicEvaluatorFiles instanceof Set)
   ) {
@@ -369,6 +379,9 @@ export async function scanShippedJs(files, {
       continue;
     }
 
+    if (!allowedDynamicEvaluatorFiles.has(file)) {
+      for (const _site of findDynamicEvaluators(ast)) violations.push(`${file}: dynamic source evaluator is forbidden`);
+    }
     const sinkAliases = new Map();
     // Resolve direct/computed global sinks and simple alias chains. This is a
     // bounded heuristic, not a substitute for CSP or exact package hashes.
@@ -436,19 +449,13 @@ export async function scanShippedJs(files, {
       // AST checks are heuristic defense in depth; exact CSP and package SHA
       // verification remain primary authority.
       if (
-        node.type === "ImportDeclaration" || node.type === "ExportNamedDeclaration" ||
-        node.type === "ExportAllDeclaration" || node.type === "ImportExpression"
-      ) {
-        const dynamic = node.type === "ImportExpression";
-        const specifier = dynamic ? foldString(node.source) : node.source?.value;
-        // node: is a builtin specifier, not a remote URL. Diagnose it before
-        // the broad scheme check so this pre-bundle scan names the real cause.
-        if (typeof specifier === "string" && specifier.startsWith("node:")) {
-          violations.push(`Node builtin "${specifier}" forbidden in browser bundle (importer: ${file})`);
-        } else if (isRemoteScriptUrl(specifier)) {
-          violations.push(`${file}: ${dynamic ? "dynamically imports" : "imports"} a remote script URL`);
-        }
-      }
+        (node.type === "ImportDeclaration" || node.type === "ExportNamedDeclaration" ||
+          node.type === "ExportAllDeclaration") &&
+        isRemoteScriptUrl(node.source?.value)
+      ) violations.push(`${file}: imports a remote script URL`);
+      if (
+        node.type === "ImportExpression" && isRemoteScriptUrl(foldString(node.source))
+      ) violations.push(`${file}: dynamically imports a remote script URL`);
       if (
         node.type === "CallExpression" &&
         sinkName(node.callee, sinkAliases) === "importScripts"
@@ -490,6 +497,20 @@ export async function scanShippedJs(files, {
             node.loc?.start?.column === WORKER_HOST_CANONICAL_LOCATION.column &&
             value === null &&
             (text.match(WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, MINIFIER_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "WorkerCtor" &&
+            node.loc?.start?.line === MINIFIER_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === MINIFIER_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(MINIFIER_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
+          ) || (
+            isCanonicalScannedPath(file, JWT_WORKER_HOST_CANONICAL_PATH) &&
+            workerSink === "Worker" &&
+            node.loc?.start?.line === JWT_WORKER_HOST_CANONICAL_LOCATION.line &&
+            node.loc?.start?.column === JWT_WORKER_HOST_CANONICAL_LOCATION.column &&
+            value === null &&
+            (text.match(JWT_WORKER_HOST_ALLOWED_RE) ?? []).length === 1
           ) || (
             isCanonicalScannedPath(file, AGENT_WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "SharedWorker" &&
@@ -550,9 +571,6 @@ export async function scanShippedJs(files, {
           }
         }
       }
-
-      // (c) moved BELOW the walk: dynamic-source-evaluator detection now runs
-      // as a whole-AST lexical-provenance pass per file (see the comment there).
 
       // (d) Dynamic Wasm construction/compilation and literal .wasm fetches
       // are forbidden in shipped source. The bundled authority is record-only;
@@ -620,7 +638,10 @@ export async function scanShippedJs(files, {
           node.loc?.start?.line === EMSCRIPTEN_VALIDATE_LOCATION.line &&
           node.loc?.start?.column === EMSCRIPTEN_VALIDATE_LOCATION.column &&
           (text.match(/WebAssembly\.validate\(/g) ?? []).length === 1;
-        const allowed = isAdmissionValidation || isCallexportAllowed || (isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
+        // Exact output hash/site evidence from strict Store marker validation.
+        // Conditional on trusted builder custody, not an operator-proof signature.
+        const isDerivedValidation = generatedBundles.has(file) && matchesGeneratedValidate(node, text, generatedValidation.get(file));
+        const allowed = isAdmissionValidation || isDerivedValidation || isCallexportAllowed || (isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
           (isCanonicalHost && sameLegacyLocation && legacyCount === 1) ||
           (isStreamHost && sameStreamLocation && streamCount === 1)
         ));
@@ -668,22 +689,6 @@ export async function scanShippedJs(files, {
         }
       }
     });
-
-    // (c) Dynamic source evaluation is forbidden except for the exact
-    // manifest-sandbox evaluator path supplied by Store policy. Generated
-    // service-worker/options bundles never inherit this exemption.
-    // chrome-agent-platform-kdax: detection is the shared bounded classifier
-    // (scripts/lib/dynamic-evaluator-scan.mjs), a whole-AST lexical-provenance
-    // pass that sees ALIAS (`const F = Function; new F(...)`), MEMBER
-    // (`globalThis["Function"](...)`), SEQUENCE (`(0, eval)(...)`) and
-    // constructor-trick (`(function(){}).constructor(...)`) evaluators the old
-    // direct-Identifier check missed — while lexical shadowing
-    // (`function f(Function) {...}`) is correctly NOT the global evaluator.
-    if (!allowedDynamicEvaluatorFiles.has(file)) {
-      for (const _site of findDynamicEvaluators(ast)) {
-        violations.push(`${file}: dynamic source evaluator is forbidden`);
-      }
-    }
   }
 
   return violations;
