@@ -457,6 +457,18 @@ export function createDurableRunRegistry({
     return normalized;
   }
 
+  /** A STORE-TRUTH read that bypasses the record cache. Use it when a write has
+   *  just lost its CAS: the cache is sound only while this registry is the
+   *  single writer of `run:` keys, and a lost CAS means the store moved in a
+   *  way the cache may not have seen — including the measured case where the
+   *  record FILE IS GONE (chrome-agent-platform-cejm: a live run's execution
+   *  dir emptied with no product-level delete, the memory ledger still listing
+   *  the files). */
+  async function readRecordFresh(executionId) {
+    recordCache.delete(executionId);
+    return await readRecord(executionId, { persistMigration: false });
+  }
+
   async function persistJsonPayload(executionId, id, value) {
     const json = JSON.stringify(value);
     const ref = `${PAYLOAD_PREFIX}${executionId}:${id}`;
@@ -1272,16 +1284,30 @@ export function createDurableRunRegistry({
     record = await readRecord(executionId);
     const terminalPhase = cancelling ? "cancelled" : "terminal";
     if (!TERMINAL_PHASES.has(record.phase)) {
-      const terminal = await writeRecord({
+      // Retention bookkeeping: the log's size once the terminal row below
+      // lands (one file stat; the terminal row is estimated from its
+      // payload). Read by the global byte cap without opening any file.
+      const terminalValue = {
         ...record,
         phase: terminalPhase,
         heartbeatAt: now(),
         terminal: outbox.terminal,
-        // Retention bookkeeping: the log's size once the terminal row below
-        // lands (one file stat; the terminal row is estimated from its
-        // payload). Read by the global byte cap without opening any file.
         logBytes: await logBytesFor(executionId) + JSON.stringify(outbox.terminal ?? null).length + 160,
-      }, record.revision);
+      };
+      let terminal = await writeRecord(terminalValue, record.revision);
+      if (!terminal) {
+        // A lost CAS is INFORMATION, not a failure to settle. Re-read the
+        // STORE — never the cache — and either accept another writer's terminal
+        // projection, or RE-CREATE the authority this projection needs when the
+        // record has VANISHED under a live run (chrome-agent-platform-cejm
+        // measured exactly that: the execution dir emptied with no
+        // product-level delete while the memory ledger still listed the
+        // files). The outbox is the authority for this run's outcome.
+        const fresh = await readRecordFresh(executionId);
+        terminal = fresh && TERMINAL_PHASES.has(fresh.phase)
+          ? fresh
+          : await writeRecord(terminalValue, fresh ? fresh.revision : null);
+      }
       if (!terminal) throw new Error("terminal registry CAS failed");
       record = terminal;
     }
@@ -1905,7 +1931,26 @@ export function createDurableRunRegistry({
       record = await readRecord(executionId);
       if (record.phase === "running") {
         const settling = await writeRecord({ ...record, phase: "settling", heartbeatAt: now() }, record.revision);
-        if (!settling) throw new Error("settling registry CAS failed");
+        if (!settling) {
+          // A lost CAS is INFORMATION, not a run failure. Re-read the STORE
+          // (never the cache: the loss means the store moved in a way the cache
+          // may not have seen) and settle against what is actually there.
+          // chrome-agent-platform-cejm measured the record file VANISHING under
+          // a live run with no product-level delete; the outbox below is the
+          // authority for this run's outcome, so the settling marker is
+          // RECREATED rather than misreporting a storage anomaly as a run
+          // failure. A no-movement refusal still throws.
+          const fresh = await readRecordFresh(executionId);
+          if (fresh && fresh.phase !== "running") {
+            record = fresh; // another writer moved the run on; the outbox below is idempotent
+          } else {
+            const retry = await writeRecord(
+              { ...(fresh ?? record), phase: "settling", heartbeatAt: now() },
+              fresh ? fresh.revision : null,
+            );
+            if (!retry) throw new Error("settling registry CAS failed");
+          }
+        }
       }
       return await processOutbox(executionId);
     });

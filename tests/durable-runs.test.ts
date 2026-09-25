@@ -65,7 +65,7 @@ class FakeStore {
   async keys() { return [...this.values.keys()].sort(); }
 }
 
-function harness(store, { bootId = "boot-a", failAt = null, retention = null } = {}) {
+function harness(store, { bootId = "boot-a", failAt = null, retention = null, onBoundary = null } = {}) {
   const journal = [];
   const thread = [];
   let failed = false;
@@ -99,6 +99,7 @@ function harness(store, { bootId = "boot-a", failAt = null, retention = null } =
       else thread.push(row);
     },
     injectFailure: async (boundary) => {
+      if (onBoundary) await onBoundary(boundary);
       if (!failed && boundary === failAt) {
         failed = true;
         throw new Error(`injected crash at ${boundary}`);
@@ -425,6 +426,57 @@ Deno.test("durable runs: terminal fault matrix recovers exactly one journal and 
       assert(!snapshot.runs.some((row) => row.executionId === executionId && row.phase === "orphaned"));
     });
   }
+});
+
+Deno.test("durable runs: a record that VANISHES under a live run still settles (cejm)", async () => {
+  // Measured in the delegation KAT (chrome-agent-platform-cejm): under machine
+  // load the run record's file disappeared from its OPFS execution dir with no
+  // product-level delete (the memory ledger still listed it), so the settling
+  // CAS read "absent" and the run failed with "settling registry CAS failed" —
+  // a storage anomaly reported AS the run's outcome. The outbox is the
+  // authority for the outcome, so the settle must RECREATE the record and
+  // commit the terminal instead of failing.
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+
+  // The vanish: the store loses the record; the registry's cache still holds it.
+  await store.delete(`run:${executionId}`);
+  assertEquals(await store.has(`run:${executionId}`), false);
+
+  const terminal = await run.registry.settle(executionId, terminalPayload);
+  assertEquals(terminal.phase, "terminal", "a vanished record must not fail the settle");
+  assertEquals(terminal.terminal?.summary, terminalPayload.summary);
+  const durable = await store.get(`run:${executionId}`);
+  assertEquals(durable.phase, "terminal", "the terminal authority is re-created in the store");
+  assertEquals(durable.terminal?.summary, terminalPayload.summary);
+  assertEquals(await store.has(`run-outbox:${executionId}`), false, "the outbox is acknowledged and removed");
+  assertEquals(run.journal.filter((row) => row.executionId === executionId).length, 1);
+  assertEquals(run.thread.filter((row) => row.executionId === executionId).length, 1);
+});
+
+Deno.test("durable runs: a record that vanishes AFTER the settling marker still commits the terminal (cejm)", async () => {
+  // The other half of the cejm recovery: if the vanish lands between the
+  // settling marker and the terminal write, the terminal write is the one that
+  // loses its CAS — and it must re-create the authority it is projecting, not
+  // fail the settle.
+  const store = new FakeStore();
+  let vanished = false;
+  const run = harness(store, {
+    onBoundary: async (boundary) => {
+      if (!vanished && boundary === "after-thread") {
+        vanished = true;
+        await store.delete(`run:${executionId}`);
+      }
+    },
+  });
+  await begin(run.registry);
+  const terminal = await run.registry.settle(executionId, terminalPayload);
+  assertEquals(vanished, true, "the vanish must have been injected at the terminal boundary");
+  assertEquals(terminal.phase, "terminal");
+  const durable = await store.get(`run:${executionId}`);
+  assertEquals(durable.phase, "terminal", "the terminal write re-creates a record that vanished after the marker");
+  assertEquals(durable.terminal?.summary, terminalPayload.summary);
 });
 
 Deno.test("durable runs: pre-outbox crash cannot create result+orphan double state; replayed payload settles once", async () => {
