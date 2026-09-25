@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.518] — 2026-09-25
+- sync docs/components.js from extension/shared/components.js (ypz0)
+
 ## [0.3.517] — 2026-09-25
 - keyboard navigation in tab strips uses non-scrolling focus so component scroll bounds remain discriminating
 
