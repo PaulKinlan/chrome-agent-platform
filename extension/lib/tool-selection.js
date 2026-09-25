@@ -335,7 +335,20 @@ export class ToolSelectionAuthority {
       );
     }
     if (!sameContext(record.context, context)) {
-      return selectionError("selection-scope-mismatch");
+      // The catalog generation is NOT scope (rg01): a bridge re-collect
+      // between search_tools and execute_tool bumps it without touching the
+      // run, and the shared fence misreported that drift as
+      // "selection-scope-mismatch" ("belongs to a different run, agent, or
+      // page") — wrong cause, wrong remedy. Fence the run identity first;
+      // catalog drift then reports as the catalog staleness it is (the
+      // message tells the caller to search again). Revocation itself is
+      // unchanged: a pinned protocol contract fails closed on ANY identity
+      // change, so drift is never tolerated here — the DEMO FLOW retries
+      // (search again, re-execute) instead.
+      if (!sameRunFence(record.context, context)) {
+        return selectionError("selection-scope-mismatch");
+      }
+      return selectionError("selection-catalog-stale");
     }
     if (catalog?.generation !== context.catalogGeneration) {
       return selectionError("selection-catalog-stale");
@@ -539,8 +552,15 @@ export class ToolSelectionAuthority {
     if (Number(ownData(claim, "expiresAt")) <= now) {
       return selectionError("selection-missing-or-expired");
     }
-    if (!sameContext(ownData(claim, "context"), context)) {
-      return selectionError("selection-scope-mismatch");
+    const claimed = scopeContext(ownData(claim, "context"));
+    if (!sameContext(claimed, context)) {
+      // Same rg01 fence split as resolve(): catalog drift between claim and
+      // dispatch is catalog staleness, not a scope mismatch. Revocation on
+      // drift is unchanged (pinned protocol contract).
+      if (!sameRunFence(claimed, context)) {
+        return selectionError("selection-scope-mismatch");
+      }
+      return selectionError("selection-catalog-stale");
     }
     if (catalog?.generation !== context.catalogGeneration) {
       return selectionError("selection-catalog-stale");

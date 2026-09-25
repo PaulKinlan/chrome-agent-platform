@@ -1534,6 +1534,38 @@ function siteToolExecuteParts(prompt) {
   return boardToolParts(prompt).filter((p) => p?.toolName === "execute_tool" && p?.type === "tool-result");
 }
 
+/** The tool names the LATEST search_tools result returned — distinguishes the
+ * rg01 drift retry (a second search for the SITE tool) from the docs fallback
+ * (a search for read_page) when both show up as "a second search". */
+function lastSearchToolNames(prompt) {
+  const searches = boardToolParts(prompt).filter((p) => p?.toolName === "search_tools" && p?.type === "tool-result");
+  if (!searches.length) return [];
+  const v = browserUnwrap(searches[searches.length - 1].output);
+  const results = Array.isArray(v) ? v : (v && typeof v === "object" ? (v.results ?? v.tools ?? []) : []);
+  return Array.isArray(results) ? results.map((r) => r?.name).filter((n) => typeof n === "string") : [];
+}
+
+/** The selection errors a catalog re-collect produces for a ref issued before
+ * it (rg01). The selection authority fails closed on ANY identity change by
+ * design (the protocol pins it), so these are RETRYABLE by the flow: a fresh
+ * search_tools in the current catalog, then the same execute again. */
+const SELECTION_DRIFT_ERRORS = new Set([
+  "selection-catalog-stale",
+  "selection-scope-mismatch",
+  "selection-source-stale",
+  "selection-missing-or-expired",
+  "stale-catalog-generation",
+]);
+
+function executePartError(part) {
+  const v = browserUnwrap(part?.output);
+  if (part?.output?.type === "error-text") return String(part.output.value ?? "error");
+  if (v && typeof v === "object" && (v.waitingForPermission === true || v.ok === false || typeof v.error === "string")) {
+    return String(v.error ?? "denied");
+  }
+  return null;
+}
+
 function siteToolAlreadyFinal(prompt) {
   return runSlice(prompt).some((m) =>
     m?.role === "assistant" &&
@@ -1550,11 +1582,18 @@ function siteToolFinalText(prompt) {
   const parts = siteToolExecuteParts(prompt);
   if (!parts.length) return `[demo model] Site tool ${spec.tool} was not called — the site may not be a Site Agent yet.`;
   if (parts.length >= 2) {
-    const first = parts[0];
-    const second = parts[1];
-    const v1 = browserUnwrap(first.output);
-    const errStr = String((v1 && typeof v1 === "object" && v1.error) || first.output?.value || "error").slice(0, 160);
-    return `[demo model] Site tool ${spec.tool} failed (${errStr}). Fallback: fetched documentation directly via read_page. Beads is a dependency-aware, Dolt-backed issue tracker built for AI coding agents that survive context loss.`;
+    // Two endings reach multiple executes: the docs fallback (a search for
+    // read_page followed the site tool's honest failure) and the rg01 drift
+    // retry (a second search for the SITE tool after a catalog re-collect
+    // revoked the first ref). Only the fallback gets the canned docs text;
+    // the retry is judged on ITS OWN last execute below.
+    const fallback = lastSearchToolNames(prompt).includes("read_page");
+    if (fallback) {
+      const first = parts[0];
+      const v1 = browserUnwrap(first.output);
+      const errStr = String((v1 && typeof v1 === "object" && v1.error) || first.output?.value || "error").slice(0, 160);
+      return `[demo model] Site tool ${spec.tool} failed (${errStr}). Fallback: fetched documentation directly via read_page. Beads is a dependency-aware, Dolt-backed issue tracker built for AI coding agents that survive context loss.`;
+    }
   }
   const last = parts[parts.length - 1];
   if (last.output?.type === "error-text") {
@@ -1595,19 +1634,59 @@ function lazyDemoCall(prompt, { delegate = false, delegateAgent = false, board =
     const searches = toolParts.filter((p) => p.toolName === "search_tools").length;
     const executes = toolParts.filter((p) => p.toolName === "execute_tool").length;
     const executeParts = siteToolExecuteParts(prompt);
+    const lastSearchNames = lastSearchToolNames(prompt);
+    const driftRetrySearched = searches >= 2 && lastSearchNames.includes(spec.tool);
+    const docsFallbackSearched = lastSearchNames.includes("read_page") && !lastSearchNames.includes(spec.tool);
+
+    // rg01: a bridge re-collect between search_tools and execute_tool revokes
+    // the selectionRef (selection-catalog-stale — it used to be mislabeled
+    // selection-scope-mismatch). The authority fails closed on ANY identity
+    // change by design, so the flow retries the site tool ONCE: a fresh
+    // search_tools in the current catalog, then the same execute. Only a
+    // non-drift error, a retry that also fails, or a retry search that no
+    // longer returns the tool takes the read_page docs fallback.
+    if (executes === 1 && driftRetrySearched) {
+      const selectionRef = latestSelectionRef(prompt);
+      if (!selectionRef) return null;
+      return { id: "execute_site_drift_retry", name: "execute_tool", input: { selectionRef, arguments: spec.args } };
+    }
 
     if (executes === 1 && executeParts.length >= 1) {
-      const last = executeParts[0];
-      const v = browserUnwrap(last.output);
-      const isErr = last.output?.type === "error-text" || (v && typeof v === "object" && (v.waitingForPermission === true || v.ok === false || typeof v.error === "string"));
-      if (isErr) {
-        if (searches <= 1) {
+      const errToken = executePartError(executeParts[0]);
+      if (errToken !== null) {
+        if (SELECTION_DRIFT_ERRORS.has(errToken) && searches <= 1) {
+          return { id: "search_site_drift_retry", name: "search_tools", input: { query: spec.tool, limit: 3 } };
+        }
+        // The drift retry search no longer returns the tool (removed by the
+        // re-collect): go straight to the docs fallback.
+        if (SELECTION_DRIFT_ERRORS.has(errToken) && !driftRetrySearched && !docsFallbackSearched && searches >= 2) {
+          return { id: "search_site_fallback_1", name: "search_tools", input: { query: "read_page", limit: 3 } };
+        }
+        if (!docsFallbackSearched && searches <= 1) {
           return { id: `search_site_fallback_1`, name: "search_tools", input: { query: "read_page", limit: 3 } };
         }
+        if (docsFallbackSearched) {
+          const selectionRef = latestSelectionRef(prompt);
+          if (!selectionRef) return null;
+          return { id: `execute_site_fallback_1`, name: "execute_tool", input: { selectionRef, arguments: {} } };
+        }
+      }
+    }
+
+    // The drift retry executed. If it failed too, the docs fallback is the
+    // honest ending (search read_page, then execute it); the legacy path ends
+    // here once the fallback execute has run.
+    if (executes === 2 && executeParts.length >= 2) {
+      const retryFailed = executePartError(executeParts[executeParts.length - 1]) !== null;
+      if (retryFailed && !docsFallbackSearched) {
+        return { id: "search_site_fallback_2", name: "search_tools", input: { query: "read_page", limit: 3 } };
+      }
+      if (retryFailed && docsFallbackSearched) {
         const selectionRef = latestSelectionRef(prompt);
         if (!selectionRef) return null;
-        return { id: `execute_site_fallback_1`, name: "execute_tool", input: { selectionRef, arguments: {} } };
+        return { id: "execute_site_fallback_2", name: "execute_tool", input: { selectionRef, arguments: {} } };
       }
+      return null;
     }
 
     if (executes >= 1) return null;

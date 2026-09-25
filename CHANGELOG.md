@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.521] — 2026-09-25
+- catalog re-collect drift is catalog-stale (not scope-mismatch); the demo site-tool flow retries once
+
+## [0.3.520] — 2026-09-25
+- internal: split catalog generation drift from selection scope mismatch and retry demo model site tool runs once
+
 ## [0.3.519] — 2026-09-25
 - internal: extract shared typed cdp-eval helper for evaluating page scripts without swallowing exceptions, and migrate scripts/ drivers
 

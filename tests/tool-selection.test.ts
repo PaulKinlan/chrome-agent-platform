@@ -147,6 +147,58 @@ Deno.test("tool selection: source removal and generation changes revoke old refs
   );
 });
 
+Deno.test("tool selection: catalog drift is catalog-stale, never scope-mismatch (rg01)", () => {
+  // The fixture page's re-collect timers bump the catalog generation between
+  // search_tools and execute_tool. The shared fence misreported that drift as
+  // selection-scope-mismatch ("belongs to a different run, agent, or page") —
+  // wrong cause, wrong remedy. Revocation on drift is UNCHANGED (the protocol
+  // pins fail-closed on any identity change); only the token is now accurate,
+  // and its message tells the caller to search again.
+  const { catalog, search } = fixture();
+  const authority = new ToolSelectionAuthority({ newRef: refFactory() });
+  const issued = authority.issue(search, context(catalog), catalog);
+  const selectionRef = issued.results[0].selectionRef;
+  const recollected = buildToolCatalog(
+    [0, 1, 2].map((i) => item(i, { sourceGeneration: "enrollment:2:epoch:1:seq:2" })),
+  );
+  assertNotEquals(recollected.generation, catalog.generation);
+
+  // Drift with the run fence intact: revoked as catalog-stale, and the
+  // plain-English message names the real remedy.
+  const drifted = authority.resolve(
+    selectionRef,
+    context(catalog, { catalogGeneration: recollected.generation }),
+    recollected,
+  );
+  assertEquals(drifted.ok, false);
+  assertEquals(drifted.error, "selection-catalog-stale");
+  assertStringIncludes(String(drifted.message), "search_tools");
+
+  // A genuine scope change (different run) is still a scope mismatch.
+  assertEquals(
+    authority.resolve(
+      selectionRef,
+      context(catalog, { runId: "run-2", catalogGeneration: recollected.generation }),
+      recollected,
+    ).error,
+    "selection-scope-mismatch",
+  );
+
+  // The claim -> dispatch revalidation reports the same accurate token when a
+  // re-collect lands in the async window between them.
+  const authority2 = new ToolSelectionAuthority({ newRef: refFactory() });
+  const issued2 = authority2.issue(search, context(catalog), catalog);
+  const claimed = authority2.claim(issued2.results[0].selectionRef, context(catalog), catalog);
+  assertEquals(claimed.ok, true);
+  const revalidated = authority2.revalidateClaim(
+    claimed.claim,
+    context(catalog, { catalogGeneration: recollected.generation }),
+    recollected,
+  );
+  assertEquals(revalidated.ok, false);
+  assertEquals(revalidated.error, "selection-catalog-stale");
+});
+
 Deno.test("tool selection: per-run/result/total caps are enforced", () => {
   const { catalog, search } = fixture(100);
   const authority = new ToolSelectionAuthority({ newRef: refFactory() });
