@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.500] — 2026-09-25
+- mark theme-picker as owner-retained (ol11)
+
 ## [0.3.499] — 2026-09-25
 - the schema-2 surface is injected, so the decoder can never enter the service worker
 
