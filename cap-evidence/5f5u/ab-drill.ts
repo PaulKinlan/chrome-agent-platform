@@ -104,7 +104,7 @@ async function arm(label: string, keyValue: string | null) {
   };
 }
 
-const arms = [
+const arms: Array<[string, string | null]> = [
   ["A_no_key", null],
   ["B_invalid_key", INVALID_KEY],
 ];
