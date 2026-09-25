@@ -3167,23 +3167,97 @@ async function main() {
     // A REAL Undo — a genuine click on the button in the component's shadow DOM.
     // It calls actions.undo, which re-runs delete_named_agent through the SAME
     // executor (owner-direct via the clicking document's identity).
+    // chrome-agent-platform-co35: the l0r runs went 3/3 red here with the leg
+    // unnamed. Capture the component's own undo outcome — _undo emits
+    // action-undo / action-undo-error with the backend's refusal text, which
+    // nothing surfaced before — so one quiet-window run names the failing leg
+    // (click not delivered / agent survived / row not marked / SW refusal).
+    // The listeners attach BEFORE the click (sotw-gemini re-review): an event
+    // fired before the capture window existed would be exactly the silent
+    // loss this instrumentation exists to end.
+    const undoEvents: Array<{ kind: string; id?: string; error?: string }> = [];
+    await evalIn(cdp, ntpSession, `(() => {
+      const el = document.getElementById("side-action-ledger");
+      if (!el) return false;
+      el.addEventListener("action-undo", (e) => window.__co35UndoEvents.push({ kind: "undo", id: e.detail?.id }));
+      el.addEventListener("action-undo-error", (e) => window.__co35UndoEvents.push({ kind: "error", id: e.detail?.id, error: e.detail?.error }));
+      window.__co35UndoEvents = window.__co35UndoEvents ?? [];
+      return true;
+    })()`);
+    // co35 probe v2: mark the exact button node the click targets. The
+    // component's _paint() rebuilds the whole list on every refresh, so a
+    // refresh landing between the coordinate read and the CDP click replaces
+    // the node — press and release then land on different elements, no click
+    // event fires, and the undo silently vanishes. If the marked node is gone
+    // after the click, that race is the mechanism.
+    // co35 probe v3: replicate clickShadow's coordinate math, then ask what the
+    // hit test ACTUALLY returns at that point (document level + the component's
+    // own shadow root), plus the button's pointer-events/disabled state.
+    const clickCoords = await evalIn(cdp, ntpSession, `(() => {
+      const host = [...document.querySelectorAll("#side-action-ledger")].pop();
+      const el = document.getElementById("side-action-ledger");
+      const btn = el?.shadowRoot?.querySelector(".al-undo");
+      if (!btn) return null;
+      btn.dataset.co35Probe = "marked";
+      btn.scrollIntoView({ block: "center", inline: "center" });
+      const r = btn.getBoundingClientRect();
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const docHit = document.elementFromPoint(x, y);
+      const shadowHit = el.shadowRoot.elementFromPoint(x, y);
+      return {
+        x: Math.round(x), y: Math.round(y),
+        docHit: docHit ? docHit.tagName + "." + String(docHit.className).slice(0, 40) : null,
+        shadowHitTag: shadowHit ? shadowHit.tagName + "." + String(shadowHit.className).slice(0, 40) : null,
+        shadowHitIsButton: shadowHit === btn,
+        pointerEvents: getComputedStyle(btn).pointerEvents,
+        disabled: btn.disabled,
+        innerW: innerWidth, innerH: innerHeight,
+      };
+    })()`);
+    console.log("[co35 hit test]", JSON.stringify(clickCoords));
+    await evalIn(cdp, ntpSession, `(() => {
+      const el = document.getElementById("side-action-ledger");
+      const btn = el?.shadowRoot?.querySelector(".al-undo");
+      if (!btn) return false;
+      btn.dataset.co35Probe = "marked";
+      window.__co35Refreshes = 0;
+      const orig = el.refresh?.bind(el);
+      if (orig) el.refresh = async (...a) => { window.__co35Refreshes += 1; return orig(...a); };
+      return true;
+    })()`);
     const undoClicked = await clickShadow(cdp, ntpSession, "#side-action-ledger", ".al-undo");
     let agentGone = false;
     let rowUndone = false;
+    let lastAgentIds = null;
+    let lastRow = null;
     for (let i = 0; i < 24; i++) {
       const list = await msgValue({ type: "named-agent.list" });
       const ids = (list?.agents ?? []).map((a) => a.id);
+      lastAgentIds = ids;
       agentGone = createdAgentId !== null && !ids.includes(createdAgentId);
       const r = await msgValue({ type: "actions.list", limit: 20 });
       const row = (r?.rows ?? []).find((x) => x.id === createRow?.id);
+      lastRow = row ?? null;
       rowUndone = row?.undone === true;
       if (agentGone && rowUndone) break;
       await sleep(250);
     }
+    const undoEventLog = await evalIn(cdp, ntpSession, `(() => {
+      const el = document.getElementById("side-action-ledger");
+      const btn = el?.shadowRoot?.querySelector(".al-undo");
+      return { events: window.__co35UndoEvents ?? [], markedNodeStillInDom: btn?.dataset?.co35Probe === "marked", refreshesDuringClick: window.__co35Refreshes ?? null };
+    })()`);
     check(
       "Activity ledger: a real Undo deletes the agent and marks the row undone",
       undoClicked && agentGone && rowUndone,
+      { undoClicked, agentGone, rowUndone, createdAgentId, undoEvents: undoEventLog.events ?? undoEventLog, agentIdsAfter: lastAgentIds, rowAfter: lastRow, markedNodeStillInDom: undoEventLog.markedNodeStillInDom, refreshesDuringClick: undoEventLog.refreshesDuringClick },
     );
+    // check() discards its third argument (a harness-wide gap — other call
+    // sites pass diagnostics that never print), so the leg evidence is printed
+    // HERE or it does not exist (chrome-agent-platform-co35).
+    if (!(undoClicked && agentGone && rowUndone)) {
+      console.log("[co35 undo leg]", JSON.stringify({ undoClicked, agentGone, rowUndone, createdAgentId, undoEvents: undoEventLog, agentIdsAfter: lastAgentIds, rowAfter: lastRow }));
+    }
     const undoShot = await captureShot(cdp, ntpSession);
     if (undoShot) await writeEvidence("ntp-activity-ledger-undone.png", undoShot);
     check(
@@ -3398,9 +3472,15 @@ async function main() {
       permPanel?.rows > 0 && permPanel?.enableButtons > 0 && permPanel?.states === permPanel?.rows &&
         permPanel?.mandatoryRows >= 3,
     );
+    // chrome-agent-platform-co35: the panel grew a FIFTH group — "Chrome site
+    // access" (voicebox-beads-4dg lineage, reads chrome.permissions.getAll) —
+    // appended after the mandatory group. The old exact-match on four groups
+    // turned deterministic-red the day that landed; re-pinned to the post-fix
+    // truth with the fifth group named, so the next new group still trips this.
     check(
       "permissions: the rows are grouped Browsing · Content · System · Always on",
-      JSON.stringify(permPanel?.groups) === JSON.stringify(["Browsing", "Content", "System", "Always on"]),
+      JSON.stringify(permPanel?.groups) === JSON.stringify(["Browsing", "Content", "System", "Always on", "Chrome site access"]),
+      { groups: permPanel?.groups },
     );
 
     // tabs + notifications are OPTIONAL now — verified NOT granted at boot.
