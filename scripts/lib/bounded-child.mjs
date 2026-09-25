@@ -28,6 +28,17 @@ function snapshot(pid) {
 
 export const DEFAULT_BOUNDED_CHILD_TIMEOUT_MS = 120_000;
 
+/** The operator's bound, or the default. An empty or non-positive value means UNSET:
+ *  `Number("") === 0` used to hand every child a 0 ms bound, so it was killed on the first tick
+ *  and the failure read as a hang (chrome-agent-platform-61h3). A positive number is used
+ *  unscaled — the operator's number is the operator's number. */
+export function boundedChildTimeoutMs(env = process.env) {
+  const raw = env.CAP_BOUNDED_CHILD_TIMEOUT_MS;
+  if (raw === undefined) return DEFAULT_BOUNDED_CHILD_TIMEOUT_MS;
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_BOUNDED_CHILD_TIMEOUT_MS;
+}
+
 /**
  * @param {string} command
  * @param {string[]} args
@@ -39,7 +50,7 @@ export async function runBoundedChild(command, args, {
   cwd,
   env = process.env,
   stdio = "inherit",
-  timeoutMs = Number(env.CAP_BOUNDED_CHILD_TIMEOUT_MS ?? DEFAULT_BOUNDED_CHILD_TIMEOUT_MS),
+  timeoutMs = boundedChildTimeoutMs(env),
   label = command,
 } = {}) {
   const started = Date.now();

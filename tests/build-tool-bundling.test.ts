@@ -7,13 +7,16 @@
 // @ts-nocheck: subprocess and byte-level fixtures.
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { runBoundedChild } from "../scripts/lib/bounded-child.mjs";
+import { boundedChildTimeoutMs, runBoundedChild } from "../scripts/lib/bounded-child.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
 const DRIFT_TARGET = `${ROOT}packages/bundled/sqlite3/PROVENANCE.json`;
 
-const CHILD_TIMEOUT_MS = Number(Deno.env.get("CAP_BOUNDED_CHILD_TIMEOUT_MS") ?? 120_000);
+// 61h3: parse the operator's override through the shared helper, where an empty value means
+// "unset" — `Number("") === 0` used to make CAP_BOUNDED_CHILD_TIMEOUT_MS="" a 0 ms bound that
+// killed every child on the first tick.
+const CHILD_TIMEOUT_MS = boundedChildTimeoutMs(Deno.env.toObject());
 // build.mjs runs the generator under its OWN bound (CAP_BUNDLED_TOOL_TIMEOUT_MS,
 // default 120s) and each helper spawn is its own process group, so the outer
 // bound must be LONGER than the inner one: the inner error must surface first,
