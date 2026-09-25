@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.538] — 2026-09-25
+- evaluate MCP Zod peer unification with schema parity tests and evidence
+
+## [0.3.537] — 2026-09-25
+- internal: evaluate MCP Zod peer unification with schema parity tests and evidence (decision: retain separate peers)
+
 ## [0.3.536] — 2026-09-25
 - destructive browser tool calls from external agent runs can now be approved directly in the conversation
 
