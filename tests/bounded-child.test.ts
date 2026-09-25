@@ -17,6 +17,7 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   boundedChildTimeoutMs,
   DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
+  MAX_TIMER_MS,
   runBoundedChild,
 } from "../scripts/lib/bounded-child.mjs";
 
@@ -70,6 +71,27 @@ Deno.test("bounded child: an empty or invalid override means the default, never 
     );
   }
   assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "2500" }), 2500);
+  // A delay above the timer ceiling is CLAMPED, not passed through: Node and Deno silently make
+  // a longer setTimeout 1 ms, so 1e12 killed a fast child in ~5 ms and reported a nonsense bound
+  // (cap-k3's repro). Infinity is not a delay at all and falls back to the default.
+  assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "1e12" }), MAX_TIMER_MS);
+  assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "Infinity" }), DEFAULT_BOUNDED_CHILD_TIMEOUT_MS);
+
+  // build.mjs's variable goes through the same parser rather than a second copy of it, and each
+  // caller reads its own variable.
+  assertEquals(
+    boundedChildTimeoutMs({ CAP_BUNDLED_TOOL_TIMEOUT_MS: "2500" }, "CAP_BUNDLED_TOOL_TIMEOUT_MS"),
+    2500,
+  );
+  assertEquals(
+    boundedChildTimeoutMs({ CAP_BUNDLED_TOOL_TIMEOUT_MS: "" }, "CAP_BUNDLED_TOOL_TIMEOUT_MS"),
+    DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
+  );
+  assertEquals(
+    boundedChildTimeoutMs({ CAP_BUNDLED_TOOL_TIMEOUT_MS: "7000", CAP_BOUNDED_CHILD_TIMEOUT_MS: "3000" }),
+    3000,
+    "the default variable is the one read when no name is given",
+  );
 });
 
 Deno.test("bounded child: a fast, successful child raises nothing", async () => {
