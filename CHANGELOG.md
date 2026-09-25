@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.497] — 2026-09-25
+- the sweep's three equivalent mutants are recorded at their sites, and A2 is now a killed mutant rather than an unkillable one
+
+## [0.3.496] — 2026-09-25
+- internal: the KAT finalizer records its three equivalent mutants at their sites and guards poison detection independently of cleanup errors
+
 ## [0.3.495] — 2026-09-25
 - the Diagnostics probe clicks the control in the panel it names, and says which seam failed
 

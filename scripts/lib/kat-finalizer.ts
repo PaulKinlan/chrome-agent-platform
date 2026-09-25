@@ -152,8 +152,14 @@ export interface FinalizeKatExecutionOptions {
   runError: string | null;
   /** Every check entry the KAT recorded (pass/fail counts derive from it). */
   checks: KatCheckEntry[];
-  /** The teardown inputs (cdp/chrome/profilePath/poisonPath + seams). */
-  teardown: TeardownChromeAndProfileOptions;
+  /**
+   * The teardown inputs (cdp/chrome/profilePath/poisonPath + seams), OR a function returning an
+   * outcome directly. The function form exists for the ONE input the options cannot express: a
+   * POISONED slot with NO cleanup error. Nothing in production can produce that pair — the poison
+   * branch records both — which is exactly why `!poisonDetected` in `isGreen` (A2 below) could not
+   * be pinned: mutant A2 survived the whole suite and a 19-input divergence probe (23r0).
+   */
+  teardown: TeardownChromeAndProfileOptions | (() => Promise<TeardownResult>);
   /** The report's identity/evidence fields, written verbatim. */
   report: {
     expected: string;
@@ -235,7 +241,9 @@ export async function finalizeKatExecution(
     logInfo = console.log,
   } = options;
 
-  const { cleanupError, poisonDetected } = await teardownChromeAndProfile(teardown);
+  const { cleanupError, poisonDetected } = typeof teardown === "function"
+    ? await teardown()
+    : await teardownChromeAndProfile(teardown);
 
   const pass = checks.filter((c) => c.passed).length;
   const failCount = checks.length - pass;
@@ -244,6 +252,14 @@ export async function finalizeKatExecution(
   // first check (an early return, a caller wired to the shared finalizer without
   // checks) and the receipt would claim a pass for work that did not happen.
   const noChecksRecorded = checks.length === 0;
+  // A2 (23r0, the sweep's third equivalent mutant): `!poisonDetected` is REDUNDANT TODAY — the poison
+  // branch records a cleanup error in the same breath, so `!cleanupError` already forces RED — but it
+  // is DEFENCE IN DEPTH, not dead code. If that coupling is ever broken (a teardown that reports a
+  // poisoned slot without a cleanup error), this clause is the only thing keeping the GREEN receipt
+  // off the screen. Mutant A2 survived the suite AND a 19-input divergence probe because no input
+  // could reach that pair; `teardown` as a function now can, and
+  // tests/kat-finalizer-guards.test.ts pins it ("a POISONED slot is RED independently of
+  // cleanupError"). Removing this clause now fails that test.
   const isGreen = !runError && !noChecksRecorded && failCount === 0 && !cleanupError &&
     !poisonDetected;
   const resultData = {
@@ -283,6 +299,11 @@ export async function finalizeKatExecution(
     logError("KAT log write failed:", sanitizeKatLogError(logErr));
     finalGreen = false;
     resultData.state = "RED";
+    // B2 (23r0): `resultData.state = "RED"` here is a DEAD ASSIGNMENT — the payload is built below as
+    // `JSON.stringify({ ...resultData, state: finalGreen ? "GREEN" : "RED" })`, so the spread always
+    // overwrites it and it can never reach the receipt. The adjacent `finalGreen = false` IS
+    // load-bearing and IS pinned (mutant B1 was killed). Recorded, deliberately NOT removed: the
+    // sweep classifies it as an equivalent mutant, and deleting the line would erase that record.
     resultData.error = resultData.error ?? `kat_log_write_failed: ${reportError}`;
   }
   // Authoritative receipt publication (z6xw; sol's r6 closure + the GLM Deno
@@ -371,6 +392,10 @@ export async function finalizeKatExecution(
     // No authoritative result at all. finalGreen drops NOW: an exit seam that
     // RETURNS (tests) must never yield a returned GREEN.
     reportError = (err instanceof Error ? err.message : String(err)).slice(0, 512);
+    // H1 (23r0): `finalGreen = false` here is REDUNDANT — this catch exits(1) and RETURNS explicitly
+    // below with RED/exitCode 1, so finalGreen is never read again on this path. The explicit return
+    // is what makes a returning exit seam unable to yield GREEN, and H2-H5 are all killed. Recorded as
+    // the sweep's equivalent mutant, not "fixed".
     finalGreen = false;
     resultData.state = "RED";
     resultData.error = resultData.error ?? `result_publish_failed: ${reportError}`;
