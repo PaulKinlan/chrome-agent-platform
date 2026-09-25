@@ -194,7 +194,6 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "emscripten-abi-loaded.ts": { class: "manual", reason: "ltkj.1 A0 evidence: after explicit coordinator browser-slot authorization, loads a durable byte-identical production extension copy plus hash-pinned test-only native fixtures; never a product runtime or admission gate" },
   "flake-evidence.ts": { class: "manual", reason: "a bisect tool: runs the journey suite N times on a branch and its base and compares failure sets; exits 1 only for a branch-only failure" },
   "focus-shots.ts": { class: "manual", reason: "a screenshot generator for focus-ring evidence (3/0 at the re-inventory: the Tab walk reaches the control, the ring is present, the shot is written)" },
-  "headed-acceptance.ts": { class: "manual", reason: "needs a display (headed Chrome); run by hand for the headed acceptance" },
   "keyless-first-result.ts": { class: "manual", reason: "green at the re-inventory (16 s); the behaviour is journey 2k in chrome-journeys.ts (KEYLESS-FIRST-RESULT-01) — kept as the standalone repro" },
   "live-every-tab.ts": { class: "manual", reason: "needs a real Gemini key (GEMINI_API_KEY); the 30-tab sourced-digest live check for RUN-BUDGET-EVERY-ITEM-01 (arrived from main after the re-inventory; it launches through launchChrome and exits on its own verdict)" },
   "live-run-evidence.ts": { class: "manual", reason: "needs a real provider key; the live model evidence run" },

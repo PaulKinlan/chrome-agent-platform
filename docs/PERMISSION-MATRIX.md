@@ -47,5 +47,7 @@ grants *silently*). Headed is an extra, never a requirement. Evidence lands in
 
 `scripts/headed-acceptance.ts` (the 2026-08-27 macro) gated the Settings
 capability lifecycle on a human clicking OS prompts and refused to run without
-a display. Its permission-lifecycle coverage is superseded by this matrix; the
-script remains as an optional manual-evidence extra only.
+a display. Its permission-lifecycle coverage is superseded by this matrix. The
+script itself was removed (chrome-agent-platform-3s9v): the owner directive
+above says there is no headed-browser dependency, so nothing keeps a display-
+requiring extra; git history retains it.

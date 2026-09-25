@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.516] — 2026-09-25
+- remove headed-acceptance.ts — no headed-browser dependency
+
+## [0.3.515] — 2026-09-25
+- internal: remove obsolete scripts/headed-acceptance.ts harness, superseded by permission matrix
+
 ## [0.3.514] — 2026-09-25
 - code-diff view limits split from retention budgets so lifting caps cannot OOM the store
 
