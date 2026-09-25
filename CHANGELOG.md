@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.536] — 2026-09-25
+- destructive browser tool calls from external agent runs can now be approved directly in the conversation
+
+## [0.3.535] — 2026-09-25
+- destructive browser tool calls from external agent runs can now be approved directly in the conversation
+
 ## [0.3.534] — 2026-09-25
 - resolve the picker checkout from the environment and walk .sh in the home-path guard (tgx6)
 

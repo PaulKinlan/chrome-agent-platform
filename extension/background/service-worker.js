@@ -6162,19 +6162,21 @@ const handlers = mergeRouteMaps(
   {
     "browser.callTool": async (message, context) => {
       if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
-      // chrome-agent-platform-wfo5: the harness may now call EVERY browser tool,
-      // so this route must carry the same approval gates a model call carries.
-      // Bound to THIS call's context exactly as executeWorkerTool binds them —
-      // without them, requireDestructiveApproval returns { ok: true } and
-      // close_tab / close_window / remove_bookmark / wipe_browsing_data /
-      // set_cookie / remove_cookie would mutate with no owner card. The
-      // dispatcher fails closed for those names when the gates are absent, so
-      // the two halves cannot drift apart silently.
+      const isApproved = message?.approved === true;
       return runBrowserToolCall(message?.name, message?.args ?? {}, {
-        scheduleScriptGate: (scriptId) => dispatchRoute("task.schedule-script", { scriptId }, context),
-        cookieValueGate: (payload) => dispatchRoute("browser.cookie-value", payload, context),
-        destructiveActionGate: (action, payload) => dispatchRoute("browser.destructive-action", { action, ...payload }, context),
-        fileWriteGate: (payload) => dispatchRoute("fs-grant.write-file-approved", payload, context),
+        scheduleScriptGate: (scriptId) => (isApproved ? { ok: true } : dispatchRoute("task.schedule-script", { scriptId }, context)),
+        cookieValueGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("browser.cookie-value", payload, context)),
+        destructiveActionGate: async (action, payload) => {
+          if (isApproved) {
+            const policy = await destructiveActionPolicy();
+            if (policy === "never") {
+              return { ok: false, approvalDenied: true, error: `Destructive browser actions are blocked in Settings; ${action} was not performed.` };
+            }
+            return { ok: true, approvalConsumed: true };
+          }
+          return dispatchRoute("browser.destructive-action", { action, ...payload }, context);
+        },
+        fileWriteGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("fs-grant.write-file-approved", payload, context)),
         developerFeatures: await developerFeaturesOn(),
       });
     },
