@@ -66,7 +66,7 @@ export async function openAcpTurn({ task = "", attachments = [], threadId = null
     if (!createThread) return { ok: false, error: "createThread unavailable", executionId };
     const thread = await createThread(task, attachments);
     if (!thread?.id) return { ok: false, error: "create failed", executionId };
-    try { nameThread?.(thread.id, task); } catch {}
+    try { nameThread?.(thread.id, task); } catch { /* thread naming is cosmetic; creation already succeeded */ }
     return { ok: true, threadId: thread.id, history: [], executionId, created: true };
   } catch (err) {
     return { ok: false, error: String(err?.message ?? err), executionId };

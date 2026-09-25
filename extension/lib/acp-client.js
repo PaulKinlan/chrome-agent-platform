@@ -260,7 +260,7 @@ export class AcpClient {
     this.connected = false;
     this._abortPending(new Error("ACP client closed"));
     if (this.ws) {
-      try { this.ws.close(); } catch {}
+      try { this.ws.close(); } catch { /* already closing/closed; teardown continues */ }
       this.ws = null;
     }
   }

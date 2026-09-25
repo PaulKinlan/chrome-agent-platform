@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.523] — 2026-09-25
+- route raw console.* through cap-log, annotate bare catches, gate both
+
+## [0.3.522] — 2026-09-25
+- internal: route raw console calls through cap-log, annotate bare catches, and gate both in code-health
+
 ## [0.3.521] — 2026-09-25
 - catalog re-collect drift is catalog-stale (not scope-mismatch); the demo site-tool flow retries once
 

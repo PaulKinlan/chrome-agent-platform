@@ -305,7 +305,7 @@ async function openArtifactDialog(id, origin) {
   dialog.append(body);
   document.body.append(dialog);
   dialog.show();
-  dialog.addEventListener("close", () => { frameCleanups.forEach((c) => { try { c(); } catch {} }); dialog.remove(); }, { once: true });
+  dialog.addEventListener("close", () => { frameCleanups.forEach((c) => { try { c(); } catch { /* one cleanup failing must not skip the rest */ } }); dialog.remove(); }, { once: true });
 }
 
 render();

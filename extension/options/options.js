@@ -3346,7 +3346,7 @@ factoryResetBtn?.addEventListener("click", async () => {
       try {
         localStorage.clear();
         sessionStorage.clear();
-      } catch {}
+      } catch { /* storage can throw in restricted modes; the clear is best-effort */ }
       setTimeout(() => {
         if (typeof window !== "undefined") {
           window.location.href = chrome.runtime.getURL("ntp/ntp.html#factory-reset");
@@ -3870,7 +3870,7 @@ wireSectionAnchors();
 {
   const brand = document.getElementById("about-brand-home");
   const goHome = () => {
-    try { window.parent?.postMessage({ type: "cap:go-home" }, "*"); } catch {}
+    try { window.parent?.postMessage({ type: "cap:go-home" }, "*"); } catch { /* parent may not be the CAP hub; nothing to notify */ }
   };
   brand?.addEventListener("click", goHome);
   brand?.addEventListener("keydown", (e) => {

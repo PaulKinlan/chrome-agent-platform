@@ -30,6 +30,10 @@
 // exported, and there is no reset/setter API (the unit-test harness resets by
 // re-importing a FRESH module instance via a cache-busted dynamic import, so no
 // shipped state/mutation surface exists for tests to reach).
+import { capLog } from "./cap-log.js";
+
+const kvLog = capLog("kv");
+
 const session = new Map();
 let warned = false;
 let migrated = false;
@@ -89,7 +93,7 @@ function warnOnce() {
     // Permissionless storage is an expected first-run setup state, not an
     // error-console fault. Keep the diagnostic visible to developers at info
     // level while the owner-facing guide provides the path forward.
-    console.info(
+    kvLog.info(
       "storage permission not granted — changes are session-only; storage is granted at install, so reload the extension if this persists",
     );
   }

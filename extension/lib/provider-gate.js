@@ -27,6 +27,10 @@ import { defaultModelFor } from "./model-catalog.js";
  * EFFECTIVE base URL (the stored one, or the preset's when the stored one is
  * empty — CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01). Returns null for a
  * missing, malformed, credential-bearing, or non-http(s) URL. */
+import { capLog } from "./cap-log.js";
+
+const gateLog = capLog("provider-gate");
+
 export function providerOriginPattern(cfg) {
   try {
     const u = new URL(effectiveBaseURL(cfg));
@@ -277,7 +281,7 @@ export function logGateOnce(reason) {
   const key = String(reason ?? "");
   if (key === lastLoggedGate) return false;
   lastLoggedGate = key;
-  console.warn(`[provider-gate] ${key}`);
+  gateLog.warn(key);
   return true;
 }
 
