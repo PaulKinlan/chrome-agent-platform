@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.488] — 2026-09-25
+- journal-ahv: preserve the 4ctv performance baseline evidence, untracked and in no ref
+
 ## [0.3.487] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 
