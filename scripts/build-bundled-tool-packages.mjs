@@ -82,6 +82,63 @@ const PATHS = {
   date: join(REPO, "docs/admissions/t3-trio/date"),
   catalog: join(EVIDENCE, "catalog", "inventory.json"),
 };
+// ── Agent-useful descriptions (CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01) ──
+// Each description carries: plain function, when to choose, in/out shape, key flags,
+// bounds, and a concrete example. Provenance/library names stay in SBOM/licence fields.
+export const AGENT_DESCRIPTIONS = Object.freeze({
+  base64: "base64 - stream binary data to base64 text or decode it. Use for lossless text/binary conversion. In/out: file-backed stdin to chainable output. Flag: -d. Example: 'hello' -> 'aGVsbG8=\\n'.",
+  md5sum: "md5sum - compute legacy 128-bit MD5 hash checksums. Use for non-security file verification. In/out: stdin (<=2 KiB) to 32-hex digest. No flags. Example: stdin 'hello' -> '5d41402abc4b2a76b9719d911017c592'.",
+  sha256sum: "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure integrity. In/out: stdin (<=2 KiB) to 64-hex digest. No flags. Example: stdin 'hello' -> '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
+  sha512sum: "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security hashing. In/out: stdin (<=2 KiB) to 128-hex digest. No flags. Example: stdin 'hello' -> the 128-hex digest.",
+  xxd: "xxd - convert binary data to hex dumps and reconstruct it. Use for byte-level inspection. In/out: stdin (<=2 KiB) to hex stdout. Key flag: -p (plain hex). Example: -p + stdin 'Hi' -> '4869\\n'.",
+  uuid: "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs. In/out: empty stdin to UUID stdout. Key flag: -n <count> (max 64). Example: -n 2 -> two UUID lines.",
+  wc: "wc - stream and count lines, words, and bytes. Use to measure arbitrarily large text without loading it whole. In/out: file-backed stdin to counts. Flags: -l, -w, -c. Example: 'a b\\n' -> '1 2 4\\n'.",
+  head: "head - extract the leading lines from a text stream. Use to inspect the start of a file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'a\\nb'.",
+  tail: "tail - extract the trailing lines from a text stream. Use to inspect the end of a log file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'b\\nc'.",
+  cut: "cut - extract columns or delimiter-separated fields from text. Use to parse CSV or TSV columns. In/out: stdin (<=2 KiB) to column stdout. Flags: -d, -f. Example: -d , -f 2 + stdin 'a,b,c' -> 'b'.",
+  sort: "sort - external merge-sort file-backed text in the C byte locale. Use to order data larger than Wasm memory. In/out: chainable references. Flags: -r, -n, -u. Example: 'b\\na\\n' -> 'a\\nb\\n'.",
+  uniq: "uniq - stream adjacent lines and remove or count duplicates. Use after sort for deduplication. In/out: file-backed stdin to chainable output. Flags: -c, -d, -u. Example: 'a\\na\\nb' -> 'a\\nb'.",
+  tr: "tr - stream byte translation, deletion, and squeezing in the C locale. Use for case shifts and character maps. In/out: file-backed stdin to chainable output. Flags: -c, -d, -s. Example: 'a-z' 'A-Z' maps 'hi' to 'HI'.",
+  grep: "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
+  sed: "sed - stream-edit text with minised 1.16. Use for substitutions, selection, deletion, and standard sed scripts. In/out: file-backed stdin to chainable output. Flags: -e, -n. Example: 's/a/b/g'.",
+  awk: "awk - run the posixutils-rs parser and interpreter over streaming records. Use for fields, expressions, regex, arrays, and reports. In/out: file-backed stdin to chainable output. Command pipes and system() are unavailable.",
+  jq: "jq - parse and transform JSON with upstream jq 1.8.2. Use for object, array, filter, reduction, and formatting operations over JSON streams. In/out: file-backed stdin to chainable output. Oniguruma regex built-ins are unavailable.",
+  diff: "diff - compare text documents and calculate diff changes. Use to compare revisions by viewing differences, or for file editing. In/out: two text args (<=1 KiB each) to unified diff. No flags. Example: 'a\\nb\\n' and 'a\\nc\\n' -> hunk diff.",
+  patch: "patch - apply unified diff hunks to a source text document. Use to update files or do editing from patches. In/out: source text arg + diff arg (<=1 KiB each) to patched stdout. No flags. Example: source 'a\\nb\\n' + diff -> 'a\\nc\\n'.",
+  toml2json: "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config data. In/out: valid TOML stdin (<=2 KiB) to JSON stdout. No flags. Example: stdin 'a = 1' -> '{\"a\":1}\\n'.",
+  markdown: "markdown - convert Markdown formatted text into safe HTML. Use to render and view formatted content. In/out: Markdown stdin (<=2 KiB) to HTML stdout. No flags; safe mode is enforced. Example: stdin '# Hi' -> '<h1>Hi</h1>\\n'.",
+  du: "du - measure disk usage and file sizes across directories. Use to check file and folder space. In/out: optional /job path operand (default /job) to usage stdout. Bounded to 4096 entries. No flags. Example: empty args -> '1\\t/job'.",
+  stat: "stat - inspect file and directory metadata including size and type. Use to check file existence and details. In/out: /job path operand to stat stdout. Read-only. No flags. Example: '/job/inputs/f.bin' -> 'size=2\\ntype=regular file'.",
+  tree: "tree - display directory file structures as visual text trees. Use to explore workspace and folder layout. In/out: optional /job path operand to tree stdout. Bounded to 4096 nodes. No flags. Example: empty args -> directory tree.",
+  touch: "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
+  truncate: "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
+  csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
+  zxing: "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
+  imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
+  hash_blake3: "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
+  compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
+  oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
+  jxl: "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
+  avif: "avif - encode an image to AVIF on-device. Use to convert a PNG/JPEG/WebP to the smaller AVIF format. In/out: base64 image text on stdin to AVIF bytes on stdout (base64 at the boundary). Flags: --quality <1..100> (default 80); --speed <1..10> (default 10).",
+  gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
+  sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
+  awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
+  date_formatter_bounded: "date_formatter_bounded - format current time, numeric epochs, or exact ISO dates. Use for UTC and ISO formatting. In/out: up to four bounded args to one stdout line. Invalid or missing date specs fail nonzero.",
+});
+
+// chrome-agent-platform-i1i9 — everything below this line is the generator, and it runs ONLY
+// when this file is the main module. Its work used to sit at module top level, so a plain
+// `import { AGENT_DESCRIPTIONS } from "./build-bundled-tool-packages.mjs"` ran the whole
+// thing: measured on this repo, importing it rewrote all 38 files in extension/wasm/cas, and a
+// parallel-phase reader then raced a CAS file being replaced (the gzip-preview NotFound false
+// red chrome-agent-platform-4lc0 filed). AGENT_DESCRIPTIONS is declared above, so an import now
+// yields the data and touches nothing — tests/tool-descriptions.test.ts pins that.
+//
+// The body is deliberately NOT re-indented. Several template literals in here emit generated
+// markdown and licence text whose exact bytes --verify asserts, and their content opens at
+// column 0: adding two spaces would change shipped bytes, not just layout. Same reason the
+// body keeps its original column-0 statements inside the function.
+function main() {
 const missingEvidence = Object.entries(PATHS).filter(([, p]) => !existsSync(p));
 if (missingEvidence.length > 0) {
   if (!VERIFY) {
@@ -126,49 +183,6 @@ function catalogRow(toolId) {
   return row;
 }
 
-// ── Agent-useful descriptions (CAP-FB-20260823-TOOL-DESCRIPTION-QUALITY-01) ──
-// Each description carries: plain function, when to choose, in/out shape, key flags,
-// bounds, and a concrete example. Provenance/library names stay in SBOM/licence fields.
-export const AGENT_DESCRIPTIONS = Object.freeze({
-  base64: "base64 - stream binary data to base64 text or decode it. Use for lossless text/binary conversion. In/out: file-backed stdin to chainable output. Flag: -d. Example: 'hello' -> 'aGVsbG8=\\n'.",
-  md5sum: "md5sum - compute legacy 128-bit MD5 hash checksums. Use for non-security file verification. In/out: stdin (<=2 KiB) to 32-hex digest. No flags. Example: stdin 'hello' -> '5d41402abc4b2a76b9719d911017c592'.",
-  sha256sum: "sha256sum - compute cryptographic 256-bit SHA-256 hash digests. Use to hash files or verify secure integrity. In/out: stdin (<=2 KiB) to 64-hex digest. No flags. Example: stdin 'hello' -> '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'.",
-  sha512sum: "sha512sum - compute cryptographic 512-bit SHA-512 hash digests. Use for high-security hashing. In/out: stdin (<=2 KiB) to 128-hex digest. No flags. Example: stdin 'hello' -> the 128-hex digest.",
-  xxd: "xxd - convert binary data to hex dumps and reconstruct it. Use for byte-level inspection. In/out: stdin (<=2 KiB) to hex stdout. Key flag: -p (plain hex). Example: -p + stdin 'Hi' -> '4869\\n'.",
-  uuid: "uuid - generate random UUID v4 unique identifier strings. Use to create unique keys or IDs. In/out: empty stdin to UUID stdout. Key flag: -n <count> (max 64). Example: -n 2 -> two UUID lines.",
-  wc: "wc - stream and count lines, words, and bytes. Use to measure arbitrarily large text without loading it whole. In/out: file-backed stdin to counts. Flags: -l, -w, -c. Example: 'a b\\n' -> '1 2 4\\n'.",
-  head: "head - extract the leading lines from a text stream. Use to inspect the start of a file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'a\\nb'.",
-  tail: "tail - extract the trailing lines from a text stream. Use to inspect the end of a log file. In/out: stdin (<=2 KiB) to sliced stdout. Key flag: -n (default 10). Example: -n 2 + stdin 'a\\nb\\nc' -> 'b\\nc'.",
-  cut: "cut - extract columns or delimiter-separated fields from text. Use to parse CSV or TSV columns. In/out: stdin (<=2 KiB) to column stdout. Flags: -d, -f. Example: -d , -f 2 + stdin 'a,b,c' -> 'b'.",
-  sort: "sort - external merge-sort file-backed text in the C byte locale. Use to order data larger than Wasm memory. In/out: chainable references. Flags: -r, -n, -u. Example: 'b\\na\\n' -> 'a\\nb\\n'.",
-  uniq: "uniq - stream adjacent lines and remove or count duplicates. Use after sort for deduplication. In/out: file-backed stdin to chainable output. Flags: -c, -d, -u. Example: 'a\\na\\nb' -> 'a\\nb'.",
-  tr: "tr - stream byte translation, deletion, and squeezing in the C locale. Use for case shifts and character maps. In/out: file-backed stdin to chainable output. Flags: -c, -d, -s. Example: 'a-z' 'A-Z' maps 'hi' to 'HI'.",
-  grep: "grep - stream matching text lines with POSIX BRE/ERE or fixed strings. Use to search, find, and filter large text. In/out: file-backed stdin to chainable output. Flags: -E, -F, -i, -v, -n, -c.",
-  sed: "sed - stream-edit text with minised 1.16. Use for substitutions, selection, deletion, and standard sed scripts. In/out: file-backed stdin to chainable output. Flags: -e, -n. Example: 's/a/b/g'.",
-  awk: "awk - run the posixutils-rs parser and interpreter over streaming records. Use for fields, expressions, regex, arrays, and reports. In/out: file-backed stdin to chainable output. Command pipes and system() are unavailable.",
-  jq: "jq - parse and transform JSON with upstream jq 1.8.2. Use for object, array, filter, reduction, and formatting operations over JSON streams. In/out: file-backed stdin to chainable output. Oniguruma regex built-ins are unavailable.",
-  diff: "diff - compare text documents and calculate diff changes. Use to compare revisions by viewing differences, or for file editing. In/out: two text args (<=1 KiB each) to unified diff. No flags. Example: 'a\\nb\\n' and 'a\\nc\\n' -> hunk diff.",
-  patch: "patch - apply unified diff hunks to a source text document. Use to update files or do editing from patches. In/out: source text arg + diff arg (<=1 KiB each) to patched stdout. No flags. Example: source 'a\\nb\\n' + diff -> 'a\\nc\\n'.",
-  toml2json: "toml2json - convert TOML configuration text to JSON format. Use to parse, convert, or read config data. In/out: valid TOML stdin (<=2 KiB) to JSON stdout. No flags. Example: stdin 'a = 1' -> '{\"a\":1}\\n'.",
-  markdown: "markdown - convert Markdown formatted text into safe HTML. Use to render and view formatted content. In/out: Markdown stdin (<=2 KiB) to HTML stdout. No flags; safe mode is enforced. Example: stdin '# Hi' -> '<h1>Hi</h1>\\n'.",
-  du: "du - measure disk usage and file sizes across directories. Use to check file and folder space. In/out: optional /job path operand (default /job) to usage stdout. Bounded to 4096 entries. No flags. Example: empty args -> '1\\t/job'.",
-  stat: "stat - inspect file and directory metadata including size and type. Use to check file existence and details. In/out: /job path operand to stat stdout. Read-only. No flags. Example: '/job/inputs/f.bin' -> 'size=2\\ntype=regular file'.",
-  tree: "tree - display directory file structures as visual text trees. Use to explore workspace and folder layout. In/out: optional /job path operand to tree stdout. Bounded to 4096 nodes. No flags. Example: empty args -> directory tree.",
-  touch: "touch - create empty files or update file timestamps. Use to create or touch files in scratch space. In/out: /job/scratch path operand. Flags: -t <epoch_sec>, -c (no-create). Example: -t 0 '/job/scratch/touched'.",
-  truncate: "truncate - resize a file to a target size (shrink or extend); supports +/- and K/M/G/T suffixes. Use for editing file sizes in scratch space. In/out: /job/scratch path (max 10 MiB). Flag: -s. Example: -s 0 '/job/scratch/touched'.",
-  csvtool: "csvtool - parse, transform, and edit RFC 4180 CSV spreadsheet table data. Use for CSV editing, filtering, or formatting rows. In/out: CSV stdin (<=2 KiB) to CSV stdout. No flags. Example: stdin 'a,b\\n1,2' -> 'a,b\\n1,2'.",
-  zxing: "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
-  imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
-  hash_blake3: "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
-  compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
-  oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
-  jxl: "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
-  avif: "avif - encode an image to AVIF on-device. Use to convert a PNG/JPEG/WebP to the smaller AVIF format. In/out: base64 image text on stdin to AVIF bytes on stdout (base64 at the boundary). Flags: --quality <1..100> (default 80); --speed <1..10> (default 10).",
-  gzip: "gzip - compress or decompress data streams. Use to compress and decompress files or streams. In/out: stdin (<=2 KiB) to base64 stdout (<=64 KiB). Key flag: -d (decompress). Example: -d + base64 -> decompressed.",
-  sqlite3_query_bounded: "sqlite3_query_bounded - execute SQL queries to read, search, and filter SQLite database tables. Use to query relational data. In/out: JSON request (<=2 KiB) with sql and params to row set (<=64 KiB). No flags. Example: 'SELECT * FROM test'.",
-  awk_filter_bounded: "awk_filter_bounded - split, filter, and print bounded text records. Use for field extraction and literal line filtering. In/out: stdin plus one program arg to stdout. Supports -F and literal /pattern/ with ^/$ edge anchors.",
-  date_formatter_bounded: "date_formatter_bounded - format current time, numeric epochs, or exact ISO dates. Use for UTC and ISO formatting. In/out: up to four bounded args to one stdout line. Invalid or missing date specs fail nonzero.",
-});
 
 // ── Read + hash-verify every binary against its evidence inventory ──────────
 function verifiedBinary(lane, toolId, rel, expectedSha, expectedBytes) {
@@ -923,7 +937,10 @@ if (VERIFY) {
 
 console.log(`OK: ${packages.length} packages, ${inventoryFiles.length} shipped files, ${inventoryManifests.length} manifest identities`);
 
+}
+
 if (isMain) {
+  main();
   // Explicit exit avoids Node v24 DelayedTaskScheduler / isolate disposal futex race on shutdown (chrome-agent-platform-pozs)
   process.exit(0);
 }

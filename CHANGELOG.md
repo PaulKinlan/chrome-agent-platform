@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.528] — 2026-09-25
+- importing the bundled-tool generator is a data read, not a rebuild
+
 ## [0.3.527] — 2026-09-25
 - check:dist becomes note:dist — a note named as a note
 
