@@ -29,6 +29,8 @@ export const SCHEDULED_REPORT_KEY_PREFIX = "scheduled-report:";
  * task id. The slug keys the rolling report, so it must be stable per agent. */
 export function scheduledReportSlug(scheduleName, fallback = "run") {
   const s = String(scheduleName ?? "").trim();
+  // "recipe:" is a persisted schedule-name prefix (chrome-agent-platform-e5oe
+  // owns its migration), kept here so legacy rows still project honestly.
   for (const prefix of ["agent:", "recipe:", "background:", "named:"]) {
     if (s.startsWith(prefix)) {
       const rest = s.slice(prefix.length).trim();

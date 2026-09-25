@@ -7,7 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
-import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
+import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
@@ -1065,10 +1065,10 @@ function agentSummaryList({ agents = [], deletable = "", onSelect, onDelete } = 
 }
 
 /** Delete one background agent from the hub's unified list. DELETION goes
- * through recipe.delete: it removes the custom agent record AND tears the
+ * through background-agent.delete: it removes the custom agent record AND tears the
  * schedule down NON-BLOCKING (the instant-delete contract — a RUNNING task's 5s
  * termination dance must never block the UI; reconciliation reaps the inert
- * payload). A built-in copy has no custom record — recipe.delete still cancels
+ * payload). A built-in copy has no custom record — background-agent.delete still cancels
  * its schedule, which is what the row's existence derives from. */
 async function deleteBackgroundAgentFromHub(a, panel) {
   if (!a) return;
@@ -1078,7 +1078,7 @@ async function deleteBackgroundAgentFromHub(a, panel) {
   const removedIdx = [...(panel.querySelector("agent-picker")?.shadowRoot
     ?.querySelectorAll(".opt") ?? [])]
     .findIndex((row) => row.dataset?.ref === a.ref);
-  const r = await send("recipe.delete", { id: a.id })
+  const r = await send("background-agent.delete", { id: a.id })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   if (r?.ok === true) {
     setStatus(`Deleted ${name}.`, true);
@@ -1114,7 +1114,7 @@ async function renderNamedAgents() {
   const background = backgroundAgentsForDisplay(bgRes.agents);
   // ONE projection for every agent surface (CAP-FB-20260830-FRESH-PROFILE-
   // TEMPLATE-AGENTS-01): created named agents plus ENABLED background agents.
-  // A disabled recipe is a template, not an agent — it stays reachable through
+  // A disabled skill is a template, not an agent — it stays reachable through
   // the create dialog / Settings' "Configure" picker, never as an agent row.
   // The hub panel, the sidebar, the side panel and Settings all agree on it.
   const active = projectUnifiedAgents(
@@ -1225,7 +1225,7 @@ async function renderSidebarAgents(agents) {
   }
 }
 
-// ── background agents (scheduled recipes, enabled/disabled) ──────────────
+// ── background agents (scheduled skills, enabled/disabled) ───────────────
 // Item 25: the hub shows only the ACTIVE (enabled) background agents — the
 // full catalog (presets + disabled) lives in Settings behind the "Configure"
 // link + the base-select picker.
@@ -2408,7 +2408,7 @@ function showThreadView(options = {}) {
   }
   runRouteUpdate(() => {
     // Only ONE overlay at a time (item 48): the thread view replaces the
-    // settings/directory/recipes view.
+    // settings/directory view.
     if (!viewOverlay.hidden) hideViewInner();
     threadView.hidden = false;
     activeViewRoute = VIEW_ROUTE.TASK;
@@ -3046,14 +3046,14 @@ function openQuickCreateAgent() {
 async function buildAgentConfigDialog(opts) {
   const [skillsRes, bgRes] = await Promise.all([
     send("skill.list").catch(() => ({ skills: [] })),
-    // The 22 background recipes are scheduled TEMPLATES in the create flow
+    // The 22 background skills are scheduled TEMPLATES in the create flow
     // (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01) — fetched only when the
-    // gallery is shown, projected through recipeAsTemplate (no data copy).
+    // gallery is shown, projected through skillAsTemplate (no data copy).
     opts.showTemplates ? send("background-agent.list").catch(() => ({ agents: [] })) : Promise.resolve({ agents: [] }),
   ]);
   const available = Array.isArray(skillsRes.skills) ? skillsRes.skills : [];
   const backgroundTemplates = (Array.isArray(bgRes?.agents) ? bgRes.agents : [])
-    .map(recipeAsTemplate).filter(Boolean);
+    .map(skillAsTemplate).filter(Boolean);
   const agentSkillIds = new Set((opts.initialSkills ?? []).map((s) => (typeof s === "string" ? s : s?.id ?? s?.name)));
 
   const dialog = document.createElement("agent-dialog");
@@ -3148,7 +3148,7 @@ async function buildAgentConfigDialog(opts) {
     const catalogue = [
       ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean).map((t) => ({ ...t, starter: true })),
       ...AGENT_TEMPLATES.filter((t) => !starterIds.has(t.id)),
-      // A recipe that already has a curated template (same id, e.g.
+      // A skill that already has a curated template (same id, e.g.
       // price-watcher) is offered once — the curated card is the richer one.
       ...backgroundTemplates.filter((t) => !AGENT_TEMPLATES.some((c) => c.id === t.id)),
     ];
@@ -4156,15 +4156,16 @@ deleteAgentBtn?.addEventListener("click", async () => {
   } else if (kind === "site" || kind === "origin") {
     out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   } else if (kind === "background") {
-    // Background agents schedule deterministically as `recipe:<id>` (the
+    // Background agents schedule deterministically as `recipe:<id>` (a persisted
+    // identity — e5oe owns its migration; the
     // enabled state derives from the task store). The old code passed the RAW
-    // recipe id, so task.cancel hit "no such task" and silently deleted
+    // skill id, so task.cancel hit "no such task" and silently deleted
     // NOTHING while the UI claimed success — the dead NTP delete button.
-    // DELETION now routes through recipe.delete (removes the custom record +
+    // DELETION now routes through background-agent.delete (removes the custom record +
     // tears the schedule down NON-BLOCKING — the instant-delete contract; a
     // RUNNING task's 5s termination dance must never block this dialog), and
     // success is asserted EXPLICITLY (ok === true), not "anything but false".
-    out = await send("recipe.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    out = await send("background-agent.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   }
 
   if (out?.ok === true) {
@@ -4625,7 +4626,7 @@ function openView(path, title, trigger) {
 
   runRouteUpdate(() =>
     viewFocus.open(trigger, () => {
-      // Only ONE overlay at a time (item 48): the settings/directory/recipes
+      // Only ONE overlay at a time (item 48): the settings/directory
       // view replaces the task thread. Synchronize covered-view state inside
       // the route update.
       if (!threadView.hidden) hideThreadViewInner();
@@ -4966,7 +4967,7 @@ async function handleOmniboxEntry() {
   if (mode === "thread") {
     await openThread(query);
   } else if (query) {
-    // A task (or a recipe expanded by the SW into a prompt).
+    // A task (or a skill expanded by the SW into a prompt).
     currentThreadId = null;
     threadConversation.clear?.();
     threadTitle.textContent = "New task";

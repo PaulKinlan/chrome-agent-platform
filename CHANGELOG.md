@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.489] — 2026-09-25
+- finish recipes to skills rename and sync check EXPECTED ledger
+
+## [0.3.488] — 2026-09-25
+- finish the recipes to skills rename across internal modules, background routes, and acceptance tests
+
 ## [0.3.487] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 

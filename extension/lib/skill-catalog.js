@@ -6,9 +6,9 @@
 //   - the agent-config dialog skills section (ntp/ntp.js buildAgentConfigDialog)
 //   - Settings → Skills (skills/skills-panel.js)
 //
-// The catalog is: built-in ON-DEMAND recipes + imported skills (bodies in OPFS).
-// BACKGROUND recipes are NOT skills — they are scheduled agents surfaced through
-// background-agent.list (an on-demand /skill: invocation of a background recipe
+// The catalog is: built-in ON-DEMAND skills + imported skills (bodies in OPFS).
+// BACKGROUND skills are NOT catalog skills — they are scheduled agents surfaced
+// through background-agent.list (an on-demand /skill: invocation of a background skill
 // errors at run time, which is the owner-reported "sorting hat" mismatch: the
 // Sorting Hat is `auto-group-by-domain`, mode background, and used to appear in
 // /skill while Settings correctly filtered it out).
@@ -20,7 +20,7 @@
 //
 // No chrome.*, no DOM — Deno-testable pure store read.
 
-import { onDemandRecipes, intentOf } from "./recipes.js";
+import { onDemandSkills, intentOf } from "./skill-registry.js";
 
 /** Source labels for honest grouping in the UI. */
 export const SKILL_SOURCE_LABEL = Object.freeze({
@@ -55,13 +55,13 @@ export async function skillCatalog({ memory, fileStore = null }) {
     }
     // Collision-proof identity (r2 review P1): every catalog row carries a
     // source-qualified refId. An imported skill whose id collides with a
-    // built-in recipe id (e.g. an import named `auto-group-by-domain`) is
+    // built-in skill id (e.g. an import named `auto-group-by-domain`) is
     // offered as `imported:<id>` and resolves ONLY to the imported row — it
-    // can never resolve to the built-in BACKGROUND recipe (the owner bug
+    // can never resolve to the built-in BACKGROUND skill (the owner bug
     // returning through a different door).
     skills.push({ ...r, refId: `imported:${r.id}`, source: r.source ?? "imported", intent: intentOf(r) });
   }
-  for (const r of onDemandRecipes()) {
+  for (const r of onDemandSkills()) {
     skills.push({ ...r, refId: `builtin:${r.id}`, source: "builtin", intent: intentOf(r) });
   }
   return { skills, broken };

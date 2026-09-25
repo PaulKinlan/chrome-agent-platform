@@ -1,16 +1,19 @@
-// lib/recipes.js — the recipe registry.
+// lib/skill-registry.js — the authoritative built-in skill registry
+// (chrome-agent-platform-l0r: the recipes→skills rename, internal half — the
+// module, its exports and every importer now speak the one product
+// vocabulary, "skills").
 //
-// Recipes are prompt-driven utility agents, ported from the prompt-in-a-box
+// Skills are prompt-driven utility agents, ported from the prompt-in-a-box
 // pattern (a goal + the tool steps). Two modes:
 //   - "on-demand": shown as chips on the hub, run immediately when tapped.
 //   - "background": live-in-the-background agents, run on a schedule (the
 //     "sorting hat" tab-grouper is the canonical example). Enabled/disabled
 //     from the hub's background-agent manager; enabling schedules the task.
 //
-// Each recipe declares the optional capabilities it needs (requiredCapabilities)
-// so the agent can request them — never granted wholesale. Recipes are DATA
+// Each skill declares the optional capabilities it needs (requiredCapabilities)
+// so the agent can request them — never granted wholesale. Skills are DATA
 // (a prompt + config), never eval'd. This file is the single source of truth
-// for the hub's recipe chips, the background-agent manager, and the future
+// for the hub's skill chips, the background-agent manager, and the
 // /skill:name command + @-mention targets (ids are stable).
 
 import { skillMatchesUrl, validateSkillOrigins } from "../shared/match-patterns.js";
@@ -18,7 +21,8 @@ import { skillMatchesUrl, validateSkillOrigins } from "../shared/match-patterns.
 const ON_DEMAND = "on-demand";
 const BACKGROUND = "background";
 
-export const RECIPE_CATEGORIES = [
+// Renamed from RECIPE_CATEGORIES (l0r): one vocabulary.
+export const SKILL_CATEGORIES = [
   { id: "tabs", label: "Tabs" },
   { id: "bookmarks", label: "Bookmarks" },
   { id: "reading", label: "Reading" },
@@ -34,7 +38,7 @@ export const RECIPE_CATEGORIES = [
 // Intent groups — what the user is TRYING to do, not which Chrome resource it
 // touches. The hub groups capabilities by intent (a cleaner mental model than
 // "tabs vs bookmarks vs downloads"), and it is what makes the on-demand and
-// background recipes feel like ONE list instead of two overlapping ones.
+// background skills feel like ONE list instead of two overlapping ones.
 export const INTENTS = [
   { id: "organize", label: "Organize", hint: "tidy tabs, bookmarks, downloads" },
   { id: "digest", label: "Digest", hint: "read, summarise, understand" },
@@ -44,8 +48,8 @@ export const INTENTS = [
   { id: "analyze", label: "Analyze", hint: "inspect, audit, extract" },
 ];
 
-// Default intent per recipe category, with explicit per-recipe overrides where
-// a recipe's intent differs from its category default.
+// Default intent per skill category, with explicit per-skill overrides where
+// a skill's intent differs from its category default.
 const CATEGORY_INTENT = {
   tabs: "organize",
   bookmarks: "organize",
@@ -70,13 +74,14 @@ const INTENT_OVERRIDES = {
   "reader-mode": "digest",
 };
 
-/** Resolve a recipe's intent (with a safe fallback to "organize"). */
+/** Resolve a skill's intent (with a safe fallback to "organize"). */
 export function intentOf(recipe) {
   return INTENT_OVERRIDES[recipe.id] ?? CATEGORY_INTENT[recipe.category] ??
     "organize";
 }
 
-export const RECIPES = [
+// The built-in registry: on-demand skills + background agents (l0r rename).
+export const SKILLS = [
   // ── On-demand (chips) ────────────────────────────────────────────────────
   {
     id: "tab-hygiene",
@@ -357,7 +362,7 @@ export const RECIPES = [
     // Event triggers (the hooks registry): in addition to its 30-min schedule,
     // the Sorting Hat subscribes to tab-created/tab-updated so a burst of new
     // tabs is grouped immediately rather than waiting for the next alarm. Enabling
-    // the recipe subscribes these; disabling unsubscribes them.
+    // the skill subscribes these; disabling unsubscribes them.
     hooks: ["tabs.onCreated", "tabs.onUpdated"],
     prompt:
       "Group open tabs into tab groups by registered domain. On each scheduled run: (1) tab_list to get every tab. (2) For each window, group tabs by eTLD+1 (github.com, google.com, news.ycombinator.com). (3) For each domain with 3+ tabs in a window, move stragglers into an existing group with that domain's title, or create a new group via tab_group with title=domain, colour picked deterministically from the domain hash (grey/blue/red/yellow/green/pink/purple/cyan/orange), collapsed=true. (4) Leave 1–2-tab domains ungrouped. Dedupe: never create a duplicate group title; never re-group tabs already correctly grouped.",
@@ -792,23 +797,23 @@ export const RECIPES = [
   },
 ];
 
-export function getRecipe(id) {
-  return RECIPES.find((r) => r.id === id);
+export function getSkill(id) {
+  return SKILLS.find((r) => r.id === id);
 }
 
-/** The recipes offered for a URL (CAP-FB-20260830-SITE-PLAYBOOKS-01): global
- * recipes everywhere, origin-bound recipes only when one of their match
+/** The skills offered for a URL (CAP-FB-20260830-SITE-PLAYBOOKS-01): global
+ * skills everywhere, origin-bound skills only when one of their match
  * patterns matches. Pure. */
-export function recipesForOrigin(url, recipes = RECIPES) {
-  return (Array.isArray(recipes) ? recipes : []).filter((r) => skillMatchesUrl(r, url));
+export function skillsForOrigin(url, skills = SKILLS) {
+  return (Array.isArray(skills) ? skills : []).filter((r) => skillMatchesUrl(r, url));
 }
 
-/** Registry validation helper for tests: every recipe's `origins` declaration
+/** Registry validation helper for tests: every skill's `origins` declaration
  * must be valid (valid match patterns, bounded to MAX_SKILL_ORIGINS). Returns
  * the list of offending { id, error } entries (empty = valid registry). */
-export function invalidRecipeOrigins(recipes = RECIPES) {
+export function invalidSkillOrigins(skills = SKILLS) {
   const out = [];
-  for (const r of Array.isArray(recipes) ? recipes : []) {
+  for (const r of Array.isArray(skills) ? skills : []) {
     const v = validateSkillOrigins(r?.origins);
     if (!v.ok) out.push({ id: r?.id, error: v.error });
   }
@@ -822,7 +827,7 @@ export function invalidRecipeOrigins(recipes = RECIPES) {
  * parser tells the resolver whether a reference is source-locked:
  *   - "imported:x"  → resolve ONLY in the imported store (never a built-in)
  *   - "builtin:x"   → resolve ONLY in the built-in table
- *   - "custom:x"    → resolve ONLY among custom recipes
+ *   - "custom:x"    → resolve ONLY among custom skills
  *   - "x" (raw)     → historical order: built-in → custom → imported
  * Pure, no store access — unit-testable.
  */
@@ -846,7 +851,7 @@ export function parseSkillRef(ref) {
  * through to built-in or imported); a raw ref keeps the historical order
  * built-in → custom → imported (saved agents, old task text, and
  * background-agent.set resolving a duplicated background agent by its raw id).
- * Pure — resolveRecipe (service-worker) drives its branches from this order.
+ * Pure — resolveSkill (service-worker) drives its branches from this order.
  */
 export function skillResolutionOrder(source) {
   switch (source) {
@@ -865,7 +870,7 @@ export function skillResolutionOrder(source) {
  *
  * Collision rule: a raw saved id that several catalog rows share (a built-in
  * and an imported skill with the same id) matches EXACTLY ONE row — the
- * built-in — mirroring resolveRecipe's raw-id order (built-in first). This is
+ * built-in — mirroring resolveSkill's raw-id order (built-in first). This is
  * what prevents "selecting the checkbox selects BOTH source-qualified rows".
  * A refId saved id matches only its own row.
  *
@@ -914,7 +919,7 @@ export function agentSkillIds(agent) {
 }
 
 /**
- * Merge skill/recipe objects for ONE run's composition, deduped by identity
+ * Merge skill objects for ONE run's composition, deduped by identity
  * with first occurrence winning (an agent's saved skills first, then any
  * /skill:<id> references in the task text — a reference to an already-saved
  * skill composes once, never twice). The dedup key is the source-qualified
@@ -937,33 +942,24 @@ export function mergeRunSkills(...lists) {
   return out;
 }
 
-// ── Skills aliases ────────────────────────────────────────────────────────
-// Recipes are the user-facing SKILLS: reusable, composable capabilities you
-// INCLUDE in a task (anywhere in the composer string) or attach to an agent /
-// schedule as a background agent — not things you "run" in isolation. The
-// SKILLS/* aliases are the canonical skill-facing names; RECIPES/* remain for
-// back-compat with the existing routes.
-export const SKILLS = RECIPES;
-export const getSkill = getRecipe;
-export const skillsByMode = recipesByMode;
-export const skillsByCategory = recipesByCategory;
-export const onDemandSkills = onDemandRecipes;
-export const backgroundSkills = backgroundRecipes;
-export const skillById = getRecipe;
-export const skillIntentOf = intentOf;
-
-export function recipesByMode(mode) {
-  return RECIPES.filter((r) => r.mode === mode);
+// ── Mode accessors ────────────────────────────────────────────────────────
+// Skills are the product noun everywhere: reusable, composable capabilities
+// you INCLUDE in a task (anywhere in the composer string) or attach to an
+// agent / schedule as a background agent — not things you "run" in isolation.
+// The retired recipe* names are gone (chrome-agent-platform-l0r); these are
+// the canonical names the routes and pickers read.
+export function skillsByMode(mode) {
+  return SKILLS.filter((r) => r.mode === mode);
 }
 
-export function recipesByCategory(category) {
-  return RECIPES.filter((r) => r.category === category);
+export function skillsByCategory(category) {
+  return SKILLS.filter((r) => r.category === category);
 }
 
-export function onDemandRecipes() {
-  return recipesByMode(ON_DEMAND);
+export function onDemandSkills() {
+  return skillsByMode(ON_DEMAND);
 }
 
-export function backgroundRecipes() {
-  return recipesByMode(BACKGROUND);
+export function backgroundSkills() {
+  return skillsByMode(BACKGROUND);
 }

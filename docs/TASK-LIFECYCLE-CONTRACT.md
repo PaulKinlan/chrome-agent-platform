@@ -64,9 +64,9 @@ A reply must land in the conversation the user is looking at.
 - A deleted agent's schedule (`recipe:<slug>`) must not survive as a live
   alarm that keeps firing failed runs.
 - The `schedule.cancelOrphans` route cancels every `recipe:<slug>` scheduled
-  task whose slug is neither a built-in/background recipe nor a custom recipe,
+  task whose slug is neither a built-in/background skill nor a custom skill,
   and reports exactly what was cancelled.
-- The cleanup FAILS CLOSED: if the recipe/schedule registry cannot be read, a
-  live recipe is indistinguishable from an orphan and nothing is cancelled.
+- The cleanup FAILS CLOSED: if the skill/schedule registry cannot be read, a
+  live skill is indistinguishable from an orphan and nothing is cancelled.
 - Settings exposes the affordance ("Cancel orphaned alarms"); only confirmed
   cancellations are reported.

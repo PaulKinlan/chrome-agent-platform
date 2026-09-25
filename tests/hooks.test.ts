@@ -104,7 +104,7 @@ Deno.test("subscribe a permission-free hook succeeds", async () => {
   assertEquals(subs[0].recipeId, "auto-group-by-domain");
 });
 
-Deno.test("subscribe is idempotent for the same (hook, recipe)", async () => {
+Deno.test("subscribe is idempotent for the same (hook, skill)", async () => {
   reset();
   await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
   await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
@@ -187,7 +187,7 @@ Deno.test("an unknown recipeId refuses subscription (fan-out bound)", async () =
   reset();
   const r = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "not-a-real-recipe" });
   assertEquals(r.ok, false);
-  assert((r.error ?? "").includes("unknown recipe"), "unknown recipeId must be rejected");
+  assert((r.error ?? "").includes("unknown skill"), "unknown recipeId must be rejected");
   const subs = await getHookSubscriptions();
   assertEquals(subs.length, 0);
 });
@@ -216,7 +216,7 @@ Deno.test("concurrent denies of DIFFERENT hooks do not last-write-wins (the deny
   assert(deny.includes("bookmarks.onCreated"), "bookmarks.onCreated must remain denied");
 });
 
-Deno.test("concurrent subscribes of DISTINCT recipes do not last-write-wins (the subscription RMW is serialized)", async () => {
+Deno.test("concurrent subscribes of DISTINCT skills do not last-write-wins (the subscription RMW is serialized)", async () => {
   reset();
   await Promise.all([
     subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene" }),
@@ -244,7 +244,7 @@ Deno.test("concurrent same-key first subscriptions cannot produce an ungated rep
 
 Deno.test("the subscription registry has no count cap (dptw): 208 distinct subscriptions all land", async () => {
   reset();
-  // DISTINCT (hook, recipe) pairs: 13 known recipes × 16 hooks = 208 — past
+  // DISTINCT (hook, skill) pairs: 13 known skills × 16 hooks = 208 — past
   // the old 200-subscription cap.
   const ids = [
     "tab-hygiene", "page-summary", "link-collector", "reading-list",

@@ -1,5 +1,5 @@
 // lib/agent-templates.js — built-in starting agents (the owner's "chief of
-// staff" catalogue, docs/AGENT-PRODUCT-GAPS.md §3). DATA ONLY, like recipes:
+// staff" catalogue, docs/AGENT-PRODUCT-GAPS.md §3). DATA ONLY, like skills:
 // a template pre-fills the agent-create form (name, role persona, skills,
 // first task) and everything stays fully editable — a template is a starting
 // point, never a locked configuration.
@@ -451,30 +451,30 @@ A test report: per step, expected vs observed with screenshots; failures grouped
   },
   {
     id: "skill-smith",
-    name: "Skill Smith (Recipe Author)",
+    name: "Skill Smith (Skills Author)",
     description:
-      "Turns demonstrated behaviour into reusable skills: watches a flow and drafts the recipe for the skills manager.",
+      "Turns demonstrated behaviour into reusable skills: watches a flow and drafts the skill for the skills manager.",
     skills: ["page-summary", "data-extractor"],
     firstTask:
-      "Watch how I just cleaned these tabs; propose a newsletter-triage recipe with the exact steps I took.",
+      "Watch how I just cleaned these tabs; propose a newsletter-triage skill with the exact steps I took.",
     mode: "on-demand",
     role: `# Skill Smith Persona
 
 ## Identity
 
-- **Role**: recipe author
+- **Role**: skills author
 - **Purpose**: you turn demonstrated behaviour into reusable skills
 
 ## Instructions
 
-- When the owner does something twice, draft a recipe: goal, steps, requiredCapabilities — in the exact DATA shape the skills manager uses
+- When the owner does something twice, draft a skill: goal, steps, requiredCapabilities — in the exact DATA shape the skills manager uses
 - You never invent capabilities that don't exist: every step must map to tools the agent will actually have
 - Show the draft to the owner before saving it as a skill
-- Prefer small, composable recipes over kitchen-sink ones
+- Prefer small, composable skills over kitchen-sink ones
 
 ## Output Format
 
-The recipe as a ready-to-import block (id, name, description, requiredCapabilities, prompt), followed by the one-line trigger that would invoke it.`,
+The skill as a ready-to-import block (id, name, description, requiredCapabilities, prompt), followed by the one-line trigger that would invoke it.`,
   },
   {
     id: "scribe-doc-writer",
@@ -710,30 +710,30 @@ export function templatePrefill(template) {
 }
 
 /**
- * A background recipe rendered as a template card — a PURE projection over the
- * recipe record (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01), never a copy
+ * A background skill rendered as a template card — a PURE projection over the
+ * skill record (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01), never a copy
  * of its data. Choosing the card pre-fills the create form through the same
- * `templatePrefill` path as a curated template: the recipe's description is
+ * `templatePrefill` path as a curated template: the skill's description is
  * "what it does" and its prompt becomes the recurring task, so "Create agent"
  * produces ONE scheduled named agent through `named-agent.create({schedule})`.
- * On-demand recipes are skills, not scheduled templates → null.
+ * On-demand skills are skills, not scheduled templates → null.
  */
-export function recipeAsTemplate(recipe) {
-  if (!recipe || typeof recipe !== "object" || !recipe.id) return null;
-  if (recipe.mode !== "background") return null;
-  const minutes = Number(recipe.schedule?.periodInMinutes);
+export function skillAsTemplate(skill) {
+  if (!skill || typeof skill !== "object" || !skill.id) return null;
+  if (skill.mode !== "background") return null;
+  const minutes = Number(skill.schedule?.periodInMinutes);
   return {
-    id: String(recipe.id),
-    name: String(recipe.name ?? recipe.id),
-    description: String(recipe.description ?? ""),
-    role: String(recipe.description ?? ""),
+    id: String(skill.id),
+    name: String(skill.name ?? skill.id),
+    description: String(skill.description ?? ""),
+    role: String(skill.description ?? ""),
     skills: [],
     firstTask: "",
     mode: "background",
     schedule: Number.isFinite(minutes) && minutes > 0
-      ? { periodInMinutes: minutes, prompt: String(recipe.prompt ?? "") }
+      ? { periodInMinutes: minutes, prompt: String(skill.prompt ?? "") }
       : null,
-    source: "recipe",
-    icon: typeof recipe.icon === "string" ? recipe.icon : "",
+    source: "skill",
+    icon: typeof skill.icon === "string" ? skill.icon : "",
   };
 }

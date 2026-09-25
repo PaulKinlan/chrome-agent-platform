@@ -197,7 +197,10 @@ async function main() {
     // data-driven sub-items need chrome.runtime, which the showcase lacks).
     const pal = await evl(s.sessionId, `(()=>{
       const c = document.querySelector('#composer');
-      const ta = c.querySelector('#task-input');
+      // Stable component IDs: the composer's input is [data-composer-input]
+      // (the old #task-input light-DOM id is gone — the b5q4 stable-IDs change;
+      // this harness was still selecting it and red at baseline).
+      const ta = c.querySelector('[data-composer-input]');
       const pop = c.querySelector('.popup');
       ta.focus(); ta.value = "/"; ta.dispatchEvent(new Event('input', { bubbles: true }));
       return new Promise(r => setTimeout(() => r({ hidden: pop.hidden, count: pop.querySelectorAll('.item').length }), 100));
@@ -213,8 +216,8 @@ async function main() {
       const c = document.querySelector('#composer');
       const cv = document.getElementById('conv-example');
       return {
-        taskInput: vis(c?.querySelector('#task-input')),
-        runTask: vis(c?.querySelector('#run-task, .run')),
+        taskInput: vis(c?.querySelector('[data-composer-input]')),
+        runTask: vis(c?.querySelector('[data-composer-send], .run')),
         composer: vis(c),
         conversation: vis(cv),
       };

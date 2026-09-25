@@ -1,10 +1,11 @@
-// tests/recipe-delete-order.test.ts — ROUTE-LEVEL (real SW dispatcher) test for
-// the REVISE-5 P1: `recipe.delete` used to persist the customRecipes REMOVAL
-// BEFORE awaiting the schedule teardown's durable mark, so a marking failure
-// returned an honest {ok:false} while the recipe was ALREADY gone. The contract
-// under test: a marking failure removes NOTHING — the recipe remains and the
-// owner can retry; the removal only persists once the teardown is durably
-// underway (marked resolved).
+// tests/bgagent-delete-order.test.ts — ROUTE-LEVEL (real SW dispatcher) test
+// for the REVISE-5 P1: the custom-skill delete route (background-agent.delete,
+// born as recipe.delete) used to persist the customRecipes REMOVAL BEFORE
+// awaiting the schedule teardown's durable mark, so a marking failure returned
+// an honest {ok:false} while the skill was ALREADY gone. The contract under
+// test: a marking failure removes NOTHING — the skill remains and the owner
+// can retry; the removal only persists once the teardown is durably underway
+// (marked resolved).
 // @ts-nocheck — dynamic chrome/OPFS stubs (no types in Deno).
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
@@ -56,7 +57,7 @@ Object.defineProperty(globalThis.navigator, "storage", {
   configurable: true,
 });
 
-Deno.test("recipe.delete ROUTE: a teardown marking failure keeps the recipe (honest {ok:false}, retryable); success removes it", async () => {
+Deno.test("background-agent.delete ROUTE: a teardown marking failure keeps the skill (honest {ok:false}, retryable); success removes it", async () => {
   const listeners = [];
   const noopListener = { addListener: () => {} };
   // chrome.storage.local backed by a Map; `failTaskWrites` simulates the
@@ -119,11 +120,11 @@ Deno.test("recipe.delete ROUTE: a teardown marking failure keeps the recipe (hon
     for (const fn of [...listeners]) { try { fn(msg, sender, resolve); } catch { /* another listener's throw */ } }
   });
 
-  // 1. Duplicate a built-in recipe → a custom editable instance in masterMemory.
-  const dup = await dispatch({ type: "recipe.duplicate", id: "tab-hygiene" });
+  // 1. Duplicate a built-in skill → a custom editable instance in masterMemory.
+  const dup = await dispatch({ type: "background-agent.duplicate", id: "tab-hygiene" });
   assertEquals(dup?.ok, true, "duplicate succeeds");
-  const customId = dup?.recipe?.id;
-  assert(typeof customId === "string" && customId, "a custom recipe id exists");
+  const customId = dup?.skill?.id;
+  assert(typeof customId === "string" && customId, "a custom skill id exists");
 
   // 2. Give it a live schedule payload (so the teardown has something to mark).
   const seeded = await dispatch({ type: "kv.set", values: {
@@ -131,27 +132,27 @@ Deno.test("recipe.delete ROUTE: a teardown marking failure keeps the recipe (hon
   } });
   assert(seeded !== undefined, "schedule payload seeded");
 
-  // 3. FAIL the durable marking write → recipe.delete must be honest AND keep
+  // 3. FAIL the durable marking write → background-agent.delete must be honest AND keep
   //    the recipe (REVISE-5 P1: the removal must not precede the durable mark).
   failTaskWrites = true;
-  const failed = await dispatch({ type: "recipe.delete", id: customId });
+  const failed = await dispatch({ type: "background-agent.delete", id: customId });
   assertEquals(failed?.ok, false, "the route reports the failure honestly");
   assert(
     String(failed?.error ?? "").includes("teardown was durable"),
     `the error names the durable-mark failure (got: ${failed?.error})`,
   );
-  const afterFailure = await dispatch({ type: "recipe.custom-list" });
-  const stillThere = (afterFailure?.recipes ?? []).some((r) => r.id === customId);
+  const afterFailure = await dispatch({ type: "background-agent.custom-list" });
+  const stillThere = (afterFailure?.skills ?? []).some((r) => r.id === customId);
   assertEquals(stillThere, true, "the recipe REMAINS after a marking failure (retryable)");
 
   // 4. With the storage failure gone, the SAME delete succeeds and removes it.
   failTaskWrites = false;
-  const retried = await dispatch({ type: "recipe.delete", id: customId });
+  const retried = await dispatch({ type: "background-agent.delete", id: customId });
   assertEquals(retried?.ok, true, "the retry deletes once the teardown is durable");
-  const afterSuccess = await dispatch({ type: "recipe.custom-list" });
+  const afterSuccess = await dispatch({ type: "background-agent.custom-list" });
   assertEquals(
-    (afterSuccess?.recipes ?? []).some((r) => r.id === customId),
+    (afterSuccess?.skills ?? []).some((r) => r.id === customId),
     false,
-    "the successful delete removes the recipe",
+    "the successful delete removes the skill",
   );
 });

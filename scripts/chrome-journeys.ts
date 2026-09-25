@@ -942,9 +942,9 @@ const EXPECTED = [
   "skills: a named agent with the large skill reads its body mid-run via skill_read",
   "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
   "skill sync: retained the /skill popup screenshot",
-  "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
-  "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
-  "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+  "skill sync: an imported skill appears in /skill AND Settings — one catalog (skill.list)",
+  "skill sync: the background Sorting Hat is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+  "skill sync: skill.list returns the IDENTICAL set on both reads (one route, no drift fork)",
   "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
   "skill sync: a colliding import lands in the imported store under the built-in's id",
   "skill sync: the colliding imported skill is offered as imported:<id>, and NO background recipe row is offered",
@@ -7819,12 +7819,14 @@ async function main() {
     const bigSkillAfter = (bigListAfter?.skills ?? []).find((s: { id?: string }) => s?.id === "big-fixture-skill");
 
     // CAP-FB-20260831-SKILL-LIST-SYNC-01: /skill and Settings must be tallied
-    // from the SAME data source. Both routes return the single catalog — the
-    // imported skill is in BOTH, the background Sorting Hat recipe
-    // (auto-group-by-domain) is in NEITHER (it is a scheduled agent, surfaced
-    // via background-agent.list, never an on-demand /skill invocation).
-    const recipeList = await msgOpts({ type: "recipe.list" });
-    const recipeSkills = Array.isArray(recipeList?.recipes) ? recipeList.recipes : [];
+    // from the SAME data source. Since l0r there is ONE catalog route
+    // (skill.list — the recipe.list fork is retired), and the Settings panel
+    // rendering from that route is pinned by tests/skills-in-settings.test.ts.
+    // The imported skill is in the catalog; the background Sorting Hat skill
+    // (auto-group-by-domain) is NOT (it is a scheduled agent, surfaced via
+    // background-agent.list, never an on-demand /skill invocation).
+    const settingsList = await msgOpts({ type: "skill.list" });
+    const settingsSkills = Array.isArray(settingsList?.skills) ? settingsList.skills : [];
     // Evidence pair (CAP-FB-20260831-SKILL-LIST-SYNC-01): Settings → Skills
     // (captured as skills-import-large.png above) and the /skill popup must
     // list the SAME set. Open a FRESH hub page (the established refresh
@@ -7848,21 +7850,21 @@ async function main() {
     }
     check("skill sync: retained the /skill popup screenshot", skillPopupShot !== null && skillPopupShot.length > 200);
     const bigInBoth = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill")
-      && recipeSkills.some((s: { id?: string }) => s?.id === "big-fixture-skill");
+      && settingsSkills.some((s: { id?: string }) => s?.id === "big-fixture-skill");
     check(
-      "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
+      "skill sync: an imported skill appears in /skill AND Settings — one catalog (skill.list)",
       bigInBoth,
     );
     const sortingHatInSkill = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "auto-group-by-domain");
-    const sortingHatInSettings = recipeSkills.some((s: { id?: string }) => s?.id === "auto-group-by-domain");
+    const sortingHatInSettings = settingsSkills.some((s: { id?: string }) => s?.id === "auto-group-by-domain");
     check(
-      "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+      "skill sync: the background Sorting Hat is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
       !sortingHatInSkill && !sortingHatInSettings,
     );
     const skillSetSkill = (bigListAfter?.skills ?? []).map((s: { id?: string }) => s?.id).sort().join(",");
-    const skillSetSettings = recipeSkills.map((s: { id?: string }) => s?.id).sort().join(",");
+    const skillSetSettings = settingsSkills.map((s: { id?: string }) => s?.id).sort().join(",");
     check(
-      "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+      "skill sync: skill.list returns the IDENTICAL set on both reads (one route, no drift fork)",
       skillSetSkill === skillSetSettings,
     );
     if (bigSkillAfter?.id) {
@@ -7870,8 +7872,8 @@ async function main() {
     }
     const listAfterDelete = await msgOpts({ type: "skill.list" });
     const goneFromSkill = !(listAfterDelete?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
-    const settingsAfterDelete = await msgOpts({ type: "recipe.list" });
-    const goneFromSettings = !(settingsAfterDelete?.recipes ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    const settingsAfterDelete = await msgOpts({ type: "skill.list" });
+    const goneFromSettings = !(settingsAfterDelete?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
     check(
       "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
       goneFromSkill && goneFromSettings,

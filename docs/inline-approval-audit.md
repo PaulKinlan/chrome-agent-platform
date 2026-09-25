@@ -22,7 +22,7 @@ The 32-action destructive allowlist audited in `extension/lib/owner-approval.js`
 - Browser mutations: `browser.close-foreign-tab`, `browser.close-window`, `browser.remove-bookmark`, `browser.remove-cookie`, `browser.set-cookie`, `browser.wipe`
 
 The 13-action owner-direct allowlist audited in `extension/lib/owner-approval.js` (`OWNER_DIRECT_ACTIONS`, lines 135-156) is:
-`agent.delete`, `asset.delete`, `asset.restore`, `named-agent.delete`, `named-agent.set-mcp-servers`, `named-agent.set-schedule`, `named-agent.update`, `recipe.delete`, `script.create`, `script.run`, `task.pause`, `task.resume`, `task.update`.
+`agent.delete`, `asset.delete`, `asset.restore`, `named-agent.delete`, `named-agent.set-mcp-servers`, `named-agent.set-schedule`, `named-agent.update`, `background-agent.delete` (born as `recipe.delete`), `script.create`, `script.run`, `task.pause`, `task.resume`, `task.update`.
 When initiated directly by the owner from an extension UI or Options document (`isOwnerDirectApproval`), these actions execute without a pending card. Crucially, `named-agent.set-mcp-servers` is strictly owner-only: it is absent from `DESTRUCTIVE_ACTIONS` and absent from `MANAGEMENT_TOOL_NAMES`, so model callers fail closed (`operation is not approvable`) and cannot trigger an approval card to configure MCP servers.
 
 Not run-originated: provider-host preflight (before model execution), site enrollment, Settings capability toggles, and direct owner UI mutations. They retain their existing owner-click/Settings flows and do not create a pending run tool.

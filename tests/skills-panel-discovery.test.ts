@@ -167,13 +167,12 @@ Deno.test("kozg.4: mount — Discover renders the preview card; Import all batch
     }
     if (type === "command.delete") return { ok: true };
     if (type === "skill.delete") return { ok: true };
-    if (type === "recipe.list") {
-      return { recipes: [
+    if (type === "skill.list") {
+      return { skills: [
         { id: "r1", name: "existing", intent: "general", description: "d", refId: "r1" },
         { id: "imp1", name: "custom-imported", intent: "general", description: "imp", refId: "imp1", source: "imported" },
-      ] };
+      ], broken: [] };
     }
-    if (type === "skill.list") return { skills: [], broken: [] };
     return { ok: true };
   };
 
@@ -219,7 +218,7 @@ Deno.test("kozg.4: mount — Discover renders the preview card; Import all batch
   assertEquals(calls.filter((c) => c.type === "command.delete").length, beforeCmd + 1, "command.delete was sent");
 
   // 5. Imported skills also expose use-delete and call skill.delete without ReferenceError.
-  const skillRows = (ui.list.children as any[]).flatMap((g: any) => g.children).filter((c: any) => c.tag === "div" && c.className === "recipe").map((r: any) => r.children[0]);
+  const skillRows = (ui.list.children as any[]).flatMap((g: any) => g.children).filter((c: any) => c.tag === "div" && c.className === "skill").map((r: any) => r.children[0]);
   const builtinRow = skillRows.find((r: any) => r.getAttribute("name") === "existing");
   const importedRow = skillRows.find((r: any) => r.getAttribute("name") === "custom-imported");
   assertEquals(builtinRow?.getAttribute("action"), "use", "built-in skill uses action=use");
@@ -237,7 +236,7 @@ Deno.test("kozg.4: import selected sends ONLY the checked entries", async () => 
     if (type === "skill.discover") return DISCOVERY;
     if (type === "skill.importBatch") return { ok: true, skills: body.skills, commands: body.commands, errors: [] };
     if (type === "command.list") return { commands: [] };
-    if (type === "recipe.list") return { recipes: [] };
+    if (type === "skill.list") return { skills: [], broken: [] };
     if (type === "skill.list") return { skills: [], broken: [] };
     return { ok: true };
   };

@@ -12,7 +12,7 @@
 //
 // No chrome.* — DOM-only, so Deno tests can drive it with a fake document.
 
-import { skillRowChecked, templateSkillMatches } from "./recipes.js";
+import { skillRowChecked, templateSkillMatches } from "./skill-registry.js";
 
 /**
  * Build the skills-section rows for the agent-config dialog.

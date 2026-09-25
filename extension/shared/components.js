@@ -2796,7 +2796,7 @@ class WebmcpConsentManager extends Component {
 customElements.define("webmcp-consent-manager", WebmcpConsentManager);
 
 /* <capability-row name description icon action="run|open|open-delete|use|state" action-state="on" detail detail-label last-run>
- * The reusable capability/recipe row. A strict grid — icon (fixed) | label
+ * The reusable capability/skill row. A strict grid — icon (fixed) | label
  * column (name + description STACKED, never run together) | action
  * (right-aligned) — so every capability list is aligned by construction.
  *

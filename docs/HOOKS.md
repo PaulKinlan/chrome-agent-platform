@@ -1,6 +1,6 @@
 # Hooks — the system-event surface
 
-Agents (the master hub agent, or a background recipe like the **Sorting Hat**) can listen to a Chrome system event and be invoked when it fires. The full candidate surface is catalogued below, with the required (OPTIONAL) permission and a candidate use.
+Agents (the master hub agent, or a background skill like the **Sorting Hat**) can listen to a Chrome system event and be invoked when it fires. The full candidate surface is catalogued below, with the required (OPTIONAL) permission and a candidate use.
 
 An earlier extension of the owner's wires 11 of these (`action.onClicked`, `alarms.onAlarm`, `commands.onCommand`, `contextMenus.onClicked`, `runtime.onConnect/onInstalled/onMessage/onStartup`, `tabs.onCreated/onRemoved/onUpdated`). This project treats **every `chrome.*` `on*` event as a candidate hook** — anything that is an event in the extension API can be listened to + responded to.
 
@@ -50,6 +50,6 @@ The deny-list is owner-only (changed from Settings, a user gesture) and authorit
 
 ## Subscription model
 
-A subscription is **data** (never eval'd): `{ hookId, recipeId|null, promptTemplate, enabled }`, persisted under `cap:hooks`. When a hook fires, the registry resolves the subscription, builds a prompt (the template with the event payload serialized in place of `{{payload}}`, or the recipe's prompt with the payload appended), and invokes the agent via the same fenced `runTask` path as every other run.
+A subscription is **data** (never eval'd): `{ hookId, recipeId|null, promptTemplate, enabled }`, persisted under `cap:hooks`. When a hook fires, the registry resolves the subscription, builds a prompt (the template with the event payload serialized in place of `{{payload}}`, or the skill's prompt with the payload appended), and invokes the agent via the same fenced `runTask` path as every other run.
 
-Background recipes subscribe through this registry: an event-triggered recipe (e.g. the Sorting Hat on `tabs.onCreated`/`tabs.onUpdated`) is subscribed when the owner enables it and unsubscribed on disable.
+Background skills subscribe through this registry: an event-triggered skill (e.g. the Sorting Hat on `tabs.onCreated`/`tabs.onUpdated`) is subscribed when the owner enables it and unsubscribed on disable.

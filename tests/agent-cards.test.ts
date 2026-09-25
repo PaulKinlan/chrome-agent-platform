@@ -33,7 +33,7 @@ import {
   truncateToUtf8Bytes,
   validateAgentCard,
 } from "../extension/lib/agent-cards.js";
-import { RECIPES } from "../extension/lib/recipes.js";
+import { SKILLS } from "../extension/lib/skill-registry.js";
 
 Deno.test("P2 r4: truncateToUtf8Bytes handles tiny budgets (0, 1, 2 bytes return '')", () => {
   assertEquals(truncateToUtf8Bytes("hello", 0), "");
@@ -382,8 +382,8 @@ Deno.test("agent cards: import supports persona field as alias for role", () => 
 });
 
 Deno.test("agent cards: skill ID validation drops unknown skills and reports them explicitly", () => {
-  const knownSkill1 = RECIPES[0].id;
-  const knownSkill2 = RECIPES[1].id;
+  const knownSkill1 = SKILLS[0].id;
+  const knownSkill2 = SKILLS[1].id;
   assertExists(knownSkill1);
   assertExists(knownSkill2);
 

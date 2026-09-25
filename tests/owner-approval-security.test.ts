@@ -75,7 +75,7 @@ Deno.test("owner-direct approval: a browser-attested owner UI document's asset.d
   for (const other of ["script.delete", "script.update", "capability.revoke", "hooks.subscribe"]) {
     assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, other), false, other);
   }
-  for (const direct of ["asset.delete", "agent.delete", "named-agent.delete", "recipe.delete"]) {
+  for (const direct of ["asset.delete", "agent.delete", "named-agent.delete", "background-agent.delete"]) {
     assertEquals(isOwnerDirectApproval({ principal: "extension", documentId: "doc-1" }, direct), true, direct);
   }
   // Malformed inputs fail closed without throwing.
@@ -108,7 +108,7 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // chrome-agent-platform-9mz1: asset.update joined the AUDITED set (the owner's
   // own artifact edit IS the approval) — the set is still exact, and every other
   // member is unchanged; widening it again still requires a review.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "asset.update", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "named-agent.update", "recipe.delete", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "asset.update", "background-agent.delete", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "named-agent.update", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {

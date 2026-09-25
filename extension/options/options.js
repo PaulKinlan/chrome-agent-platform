@@ -5,8 +5,8 @@ if (IS_EMBEDDED_SETTINGS) document.documentElement.dataset.embedded = "1";
 
 import { registerWasmPreviewHost } from "../lib/wasm-preview-host.js";
 import {
-  RECIPES,
-} from "../lib/recipes.js";
+  SKILLS,
+} from "../lib/skill-registry.js";
 import {
   SETTINGS_SECTIONS,
   DEVELOPER_SECTIONS_SET,
@@ -15,7 +15,7 @@ import {
 } from "../lib/pure.js";
 import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { hydrateI18n } from "../shared/i18n.js";
-import { recipeAsTemplate } from "../lib/agent-templates.js";
+import { skillAsTemplate } from "../lib/agent-templates.js";
 import {
   agentScheduleMarker,
   backgroundAgentsForDisplay,
@@ -1848,7 +1848,7 @@ async function renderAgentProviders(list, projectedAgents, globalCfg) {
   }
 }
 
-// ── Background agents (scheduled recipes) ──
+// ── Background agents (scheduled skills) ──
 function backgroundAgentRow(a, hostRow = null) {
   const row = hostRow ?? document.createElement("div");
   row.classList.add("agent-settings-row", "background-agent-row");
@@ -1899,7 +1899,7 @@ function backgroundAgentRow(a, hostRow = null) {
   duplicate.setAttribute("aria-label", `Duplicate ${a.name} into an editable copy`);
   duplicate.addEventListener("click", async () => {
     const out = await chrome.runtime
-      .sendMessage({ type: "recipe.duplicate", id: a.id })
+      .sendMessage({ type: "background-agent.duplicate", id: a.id })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     saveFlash(out?.ok ? `Duplicated ${a.name} — edit the copy below.` : `Could not duplicate: ${out?.error ?? "failed"}.`);
     renderBackgroundAgents();
@@ -1917,7 +1917,7 @@ function backgroundAgentRow(a, hostRow = null) {
     edit.className = "btn small ghost";
     edit.textContent = "Edit prompt";
     edit.setAttribute("aria-label", `Edit ${a.name}'s prompt`);
-    edit.addEventListener("click", () => editRecipePrompt(a));
+    edit.addEventListener("click", () => editSkillPrompt(a));
     actions.append(edit);
 
     const del = document.createElement("button");
@@ -1927,7 +1927,7 @@ function backgroundAgentRow(a, hostRow = null) {
     del.setAttribute("aria-label", `Delete ${a.name}`);
     del.addEventListener("click", async () => {
       const out = await chrome.runtime
-        .sendMessage({ type: "recipe.delete", id: a.id })
+        .sendMessage({ type: "background-agent.delete", id: a.id })
         .catch(() => ({ ok: false }));
       if (out?.ok === true) {
         saveFlash(`Deleted ${a.name}.`);
@@ -1959,18 +1959,18 @@ function backgroundAgentRow(a, hostRow = null) {
 // the focus trap, focus return and scrollable overflow that the hand-rolled copy
 // only partly had. In particular the copy had no close button and no light
 // dismiss, so a fix to either of the other two dialogs never reached it.
-function editRecipePrompt(recipe) {
+function editSkillPrompt(skill) {
   const dialog = document.createElement("agent-dialog");
-  dialog.setAttribute("title", `${recipe.name} — system prompt`);
+  dialog.setAttribute("title", `${skill.name} — system prompt`);
 
   const textarea = document.createElement("textarea");
   textarea.rows = 8;
-  textarea.className = "recipe-edit-textarea";
-  textarea.value = recipe.prompt ?? "";
-  textarea.setAttribute("aria-label", `System prompt for ${recipe.name}`);
+  textarea.className = "skill-edit-textarea";
+  textarea.value = skill.prompt ?? "";
+  textarea.setAttribute("aria-label", `System prompt for ${skill.name}`);
 
   const actions = document.createElement("div");
-  actions.className = "recipe-edit-actions";
+  actions.className = "skill-edit-actions";
   const cancel = document.createElement("button");
   cancel.type = "button";
   cancel.className = "btn small ghost";
@@ -1982,9 +1982,9 @@ function editRecipePrompt(recipe) {
   save.textContent = "Save";
   save.addEventListener("click", async () => {
     const out = await chrome.runtime
-      .sendMessage({ type: "recipe.update", id: recipe.id, prompt: textarea.value })
+      .sendMessage({ type: "background-agent.update", id: skill.id, prompt: textarea.value })
       .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    saveFlash(out?.ok ? `Updated ${recipe.name}.` : `Could not update: ${out?.error ?? "failed"}.`);
+    saveFlash(out?.ok ? `Updated ${skill.name}.` : `Could not update: ${out?.error ?? "failed"}.`);
     dialog.close();
     renderBackgroundAgents();
   });
@@ -2001,9 +2001,9 @@ function editRecipePrompt(recipe) {
 
 // Settings offers the SAME scheduled catalogue as the hub's create flow,
 // through the SAME component (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01):
-// the disabled background recipes render as <agent-template-card>s inside an
+// the disabled background skills render as <agent-template-card>s inside an
 // <agent-template-gallery> filtered to Scheduled. Choosing a card selects it;
-// "Add" enables exactly ONE recipe through background-agent.set, and it then
+// "Add" enables exactly ONE skill through background-agent.set, and it then
 // appears in every agent list.
 function renderBackgroundAgentPicker(agents) {
   const host = $("#background-agent-add");
@@ -2031,7 +2031,7 @@ function renderBackgroundAgentPicker(agents) {
   gallery.id = "background-agent-gallery";
   gallery.setAttribute("filters", "scheduled");
   gallery.setAttribute("filter", "scheduled");
-  gallery.templates = agents.map(recipeAsTemplate).filter(Boolean);
+  gallery.templates = agents.map(skillAsTemplate).filter(Boolean);
 
   const controls = document.createElement("div");
   controls.className = "background-agent-add-controls";

@@ -14,7 +14,7 @@
 //
 // No chrome.*, no DOM — pure store reads with injected dependencies.
 
-import { parseSkillRef, skillResolutionOrder } from "./recipes.js";
+import { parseSkillRef, skillResolutionOrder } from "./skill-registry.js";
 
 const DEFAULT_BODY_BUDGET = 8 * 1024; // PROMPT_SKILL_BODY_BUDGET (small bodies compose)
 
@@ -24,8 +24,8 @@ const DEFAULT_BODY_BUDGET = 8 * 1024; // PROMPT_SKILL_BODY_BUDGET (small bodies 
  * @param {object} opts
  * @param {string} opts.ref            the raw or source-qualified reference
  * @param {object} opts.stores         injected stores:
- *   getRecipe(id)                       → built-in recipe record | undefined
- *   getCustomRecipes(): Promise<[...]>  → custom-recipe records
+ *   getSkill(id)                        → built-in skill record | undefined
+ *   getCustomSkills(): Promise<[...]>   → custom skill records
  *   loadAllImported(): Promise<[...]>   → imported-skill records (index rows;
  *                                         bodies live in the OPFS file store)
  *   readSkillFile(id, path): Promise<text>
@@ -40,11 +40,11 @@ export async function resolveSkillRef({ ref, stores, bodyBudget = DEFAULT_BODY_B
   const refId = source === "raw" ? null : `${source}:${rawId}`;
   const order = skillResolutionOrder(source);
   if (order.includes("builtin")) {
-    const builtIn = stores.getRecipe(rawId);
+    const builtIn = stores.getSkill(rawId);
     if (builtIn) return { ...builtIn, refId: refId ?? `builtin:${rawId}` };
   }
   if (order.includes("custom")) {
-    const custom = await stores.getCustomRecipes().catch(() => []);
+    const custom = await stores.getCustomSkills().catch(() => []);
     const fromCustom = (Array.isArray(custom) ? custom : []).find((r) => r.id === rawId);
     if (fromCustom) return { ...fromCustom, refId: refId ?? `custom:${rawId}` };
   }
