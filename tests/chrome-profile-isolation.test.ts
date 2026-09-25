@@ -55,10 +55,6 @@ const ALLOWED_PARAMETER_SITES = new Map<string, { reason: string; requires: RegE
       /const profileB = durableDir\(`cap-perm-matrix-b-\$\{Date\.now\(\)\}`\)/u,
     ],
   }],
-  ["headed-acceptance.ts|${profile}", {
-    reason: "launchHeadedChrome(profile) parameter; the caller passes instanceProfile(EVIDENCE_DIR)",
-    requires: [/const profile = instanceProfile\(EVIDENCE_DIR\)/u],
-  }],
 ]);
 
 function scriptFiles(dir = SCRIPTS, prefix = ""): string[] {

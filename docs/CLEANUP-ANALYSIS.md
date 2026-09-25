@@ -23,7 +23,7 @@ analysis.
 | # | Item | The one check that decides it |
 |---|---|---|
 | C5 | `scripts/build-pyodide-bounded.sh` | Owner confirms the custom Emscripten Pyodide build lane is permanently dead — docs/PYODIDE-BOUNDED-BUILD.md's status note says the official-dist admission made it moot. If confirmed: remove (git history keeps it). |
-| C6 | `scripts/headed-acceptance.ts` (+ registry entry) | docs/PERMISSION-MATRIX.md already declares it superseded ("remains as an optional manual-evidence extra only"). Owner confirms no headed dependency is wanted; then remove. |
+| C6 | ~~`scripts/headed-acceptance.ts` (+ registry entry)~~ (RESOLVED 2026-09-25, bead `3s9v` — script, registry row, profile-isolation case and doc mentions removed in one commit) | docs/PERMISSION-MATRIX.md declared it superseded ("remains as an optional manual-evidence extra only") and carries the owner directive (2026-08-30) that there is no headed-browser dependency; PERMISSION-MATRIX.md's replacement note now records the removal. | Verified: harness-registry + chrome-profile-isolation tests green; full `npm test` green at the landing commit. |
 | C7 | `scripts/p0-repro.ts` (+ registry entry) | Red at the 2026-09-02 re-inventory; its own registry reason says "a repro script for a P0 that has since moved on". Identify the P0; if closed, remove. |
 | C8 | `scripts/repro-recent-activity.ts` (+ registry entry) | Repro for the Recent-activity surface that the hub-timeline collapse cut (PRODUCT.md). If the surface is gone, the repro is dead. |
 | C9 | `scripts/opfs-wal-probe.ts` + `scripts/thread-open-trace.ts` (+ registry entries) | One-shot probes for the thread-open redesign that landed (0.2.314/0.2.317). Evidence is recorded; probes are re-derivable from history. |

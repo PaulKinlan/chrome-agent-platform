@@ -44,7 +44,7 @@ The full gate runs in two sequential phases:
 All harnesses under `scripts/` require a real browser:
 - **`scripts/chrome-journeys.ts`**: The 370-check sequential CDP journey suite. Loads the unpacked extension, requires real Chromium or Chrome for Testing, and takes the **exclusive canonical lock**.
 - **`scripts/kat-*.ts`** (14 KAT harnesses, e.g. `kat-agent-board.ts`, `kat-task-lifecycle.ts`, `kat-ux-lows.ts`, etc.): Exercise real browser interactions via CDP against the loaded extension. These take one slot of the **bounded-concurrency semaphore**.
-- **`scripts/axe-audit.ts`**, **`scripts/live-run-evidence.ts`**, **`scripts/headed-acceptance.ts`**: Real browser acceptance runs using the bounded-concurrency semaphore.
+- **`scripts/axe-audit.ts`**, **`scripts/live-run-evidence.ts`**: Real browser acceptance runs using the bounded-concurrency semaphore.
 
 ### 2.3 Subset Gates (`npm run test:changed` / `npm run test:file`)
 - **`npm run test:file -- tests/<file>`**: Runs only the designated file. If `<file>` is NOT `tests/chrome-profile-location.test.ts`, no real browser is launched.
