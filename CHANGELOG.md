@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.541] — 2026-09-25
+- the passive-detector probe waits for its relay instead of guessing 100 ms
+
+## [0.3.540] — 2026-09-25
+- internal: passive-detector test waits on condition with bounded budget instead of fixed sleep to prevent load flakes
+
 ## [0.3.539] — 2026-09-25
 - land headed native ACP transport verification (union merge of cap/astra-gab8-headed)
 
