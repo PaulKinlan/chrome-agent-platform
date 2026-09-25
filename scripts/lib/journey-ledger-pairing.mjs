@@ -9,6 +9,13 @@
 // Covers:
 //   - scripts/chrome-journeys.ts
 //   - scripts/agent-access-journeys.ts
+//   - scripts/run-status-lifecycle.ts
+//
+// Exclusions:
+//   - scripts/security-injection.ts: Excluded by design because its call sites
+//     directly index the array by reference — check(EXPECTED[0], ...),
+//     check(EXPECTED[1], ...), check(EXPECTED[2], ...) — making literal drift
+//     impossible by construction.
 
 import { readFileSync } from "node:fs";
 
@@ -37,11 +44,72 @@ const DUAL_SITES = new Set([
 ]);
 
 /**
+ * Strip single-line (//) and block (/* ... *\/) comments, preserving string
+ * literals and character count/newlines so indices remain exact.
+ * @param {string} src
+ * @returns {string}
+ */
+export function stripComments(src) {
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const next = src[i + 1];
+
+    if (c === "'") {
+      out += c; i++;
+      while (i < src.length && src[i] !== "'") {
+        if (src[i] === "\\") { out += src[i]; i++; }
+        if (i < src.length) { out += src[i]; i++; }
+      }
+      if (i < src.length) { out += src[i]; i++; }
+    } else if (c === '"') {
+      out += c; i++;
+      while (i < src.length && src[i] !== '"') {
+        if (src[i] === "\\") { out += src[i]; i++; }
+        if (i < src.length) { out += src[i]; i++; }
+      }
+      if (i < src.length) { out += src[i]; i++; }
+    } else if (c === '`') {
+      out += c; i++;
+      while (i < src.length && src[i] !== '`') {
+        if (src[i] === "\\") { out += src[i]; i++; }
+        if (i < src.length) { out += src[i]; i++; }
+      }
+      if (i < src.length) { out += src[i]; i++; }
+    } else if (c === "/" && next === "/") {
+      while (i < src.length && src[i] !== "\n") {
+        out += " ";
+        i++;
+      }
+    } else if (c === "/" && next === "*") {
+      out += "  ";
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
+        out += src[i] === "\n" ? "\n" : " ";
+        i++;
+      }
+      if (i < src.length) {
+        out += "  ";
+        i += 2;
+      }
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * Extract EXPECTED array and executed check calls in execution order.
- * @param {string} source - Source code of the journey script.
+ * @param {string} rawSource - Source code of the journey script.
  * @param {string} filePath - Path for diagnostics.
  */
-export function extractLedgerAndCalls(source, filePath = "unknown") {
+export function extractLedgerAndCalls(rawSource, filePath = "unknown") {
+  // Strip comments first so commented-out check() calls are never counted as live call sites (F1).
+  const source = stripComments(rawSource);
+
   // 1. Extract EXPECTED array
   const expIdx = source.indexOf("const EXPECTED = [");
   if (expIdx === -1) {

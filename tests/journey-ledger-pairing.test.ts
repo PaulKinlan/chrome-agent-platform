@@ -1,8 +1,9 @@
 // tests/journey-ledger-pairing.test.ts — chrome-agent-platform-ccl7
 //
 // Static pairing guard for journey assertion ledgers.
-// Asserts that every check() and report() call literal in chrome-journeys.ts
-// and agent-access-journeys.ts matches its EXPECTED ledger in set parity and order.
+// Asserts that every check() and report() call literal in chrome-journeys.ts,
+// agent-access-journeys.ts, and run-status-lifecycle.ts matches its EXPECTED
+// ledger in set parity and order.
 // Falsified by planted pair faults (mutant check name, mutant expected entry, order swap).
 // @ts-nocheck
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,29 @@ Deno.test("journey-ledger-pairing: agent-access-journeys.ts matches EXPECTED led
   assertEquals(result.missing.length, 0);
   assertEquals(result.extra.length, 0);
   assertEquals(result.orderMismatch, null);
+});
+
+Deno.test("journey-ledger-pairing: run-status-lifecycle.ts matches EXPECTED ledger in set and order", () => {
+  const file = `${ROOT}scripts/run-status-lifecycle.ts`;
+  const result = verifyJourneyLedgerPairing(file);
+  assertEquals(result.ok, true, `run-status-lifecycle ledger must be clean: ${result.errors.join("; ")}`);
+  assertEquals(result.expectedCount, 31, "clean run-status-lifecycle carries 31 non-meta checks");
+  assertEquals(result.actualCount, 31);
+  assertEquals(result.missing.length, 0);
+  assertEquals(result.extra.length, 0);
+  assertEquals(result.orderMismatch, null);
+});
+
+Deno.test("journey-ledger-pairing: comments are stripped so commented-out check() calls never register (F1)", async () => {
+  const file = `${ROOT}scripts/agent-access-journeys.ts`;
+  const originalSource = await Deno.readTextFile(file);
+
+  // Plant a commented check inside a line comment and a block comment
+  const plantedComments = originalSource + "\n// check(\"commented check not in ledger\");\n/* check(\"block commented check\"); */\n";
+
+  const result = verifyJourneyLedgerPairing(file, plantedComments);
+  assertEquals(result.ok, true, "commented check calls must not fail pairing guard");
+  assertEquals(result.extra.length, 0, "commented checks must not appear in extra calls");
 });
 
 Deno.test("journey-ledger-pairing: falsification — we0m fault (renamed EXPECTED entry) fails fast", async () => {

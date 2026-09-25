@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.497] — 2026-09-25
+- strip comments from call scanning, cover run-status-lifecycle, and document security-injection exclusion
+
 ## [0.3.496] — 2026-09-25
 - static pairing guard for chrome-checks and agent-access-checks check literals against EXPECTED ledgers
 

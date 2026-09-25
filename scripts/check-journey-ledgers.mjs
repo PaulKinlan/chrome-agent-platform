@@ -3,8 +3,10 @@
 //
 // Fast static pairing guard for journey assertion ledgers.
 // Ensures every check() and report() call literal matches the EXPECTED ledger
-// in both set parity and exact execution order for both chrome-journeys.ts
-// and agent-access-journeys.ts.
+// in both set parity and exact execution order for:
+//   - scripts/chrome-journeys.ts
+//   - scripts/agent-access-journeys.ts
+//   - scripts/run-status-lifecycle.ts
 
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -15,6 +17,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FILES = [
   "scripts/chrome-journeys.ts",
   "scripts/agent-access-journeys.ts",
+  "scripts/run-status-lifecycle.ts",
 ];
 
 let failed = false;

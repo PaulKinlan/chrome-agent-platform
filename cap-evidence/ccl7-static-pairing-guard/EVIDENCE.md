@@ -14,40 +14,51 @@ In `chrome-agent-platform-we0m`, a check name was updated during a skill rename 
 
 ---
 
-## 2. Guard Architecture
+## 2. Guard Architecture & Coverage
 
 Implemented in:
 - `scripts/lib/journey-ledger-pairing.mjs` (core analysis logic)
-- `scripts/check-journey-ledgers.mjs` (CLI command: `npm run check:ledgers`)
+- `scripts/check-journey-ledgers.mjs` (CLI command)
 - `tests/journey-ledger-pairing.test.ts` (unit test + falsification controls)
 
-### Handled Artifacts
-1. **Const-Bound Identifiers:** Resolves `const` declarations (e.g., `STEP1_NAME`, `ONE_CARD_NAME`, `STEP4_NAME`, `STEP5_NAME`, `PRIVACY_RENDERS`, `SEEDED`, `DIALOG`, etc.) passed to `report(ID, ...)`.
-2. **Execution Flow Ordering:** Traces execution order through `main()`, correctly accounting for helper sub-routines `await demoPathJourney()` and `await factoryResetJourney()` before final cleanup assertions.
-3. **Dual Happy/Catch Call Sites:** Recognizes duplicate call sites guarded by try/catch branches (e.g. `about:*` catch-handler duplicates and `extension loaded` conditional branches) where exactly one fires per run.
-4. **Deliberate Catch-Only Tripwires:** Ignores catch-only tripwires intentionally positioned outside `EXPECTED` (`site playbook journey completed without a harness error`).
-5. **Cross-File Coverage:** Validates both `scripts/chrome-journeys.ts` and `scripts/agent-access-journeys.ts`.
+### Covered Files
+1. `scripts/chrome-journeys.ts` (368 assertions)
+2. `scripts/agent-access-journeys.ts` (85 assertions)
+3. `scripts/run-status-lifecycle.ts` (31 assertions)
+
+### Documented Exclusion
+- `scripts/security-injection.ts`: Excluded by design because its call sites directly index the array by reference — `check(EXPECTED[0], ...)`, `check(EXPECTED[1], ...)`, `check(EXPECTED[2], ...)` — making literal drift impossible by construction.
+
+### Handled Artifacts & Review Refinements
+1. **Comment Stripping (F1 Resolution):** `stripComments(source)` removes line (`//`) and block (`/* ... */`) comments while preserving string literals and source character indexing, ensuring commented-out `check()` calls never register as active call sites.
+2. **Const-Bound Identifiers:** Resolves `const` declarations (e.g., `STEP1_NAME`, `ONE_CARD_NAME`, `STEP4_NAME`, `STEP5_NAME`, `PRIVACY_RENDERS`, `SEEDED`, `DIALOG`, etc.) passed to `report(ID, ...)`.
+3. **Execution Flow Ordering:** Traces execution order through `main()`, correctly accounting for helper sub-routines `await demoPathJourney()` and `await factoryResetJourney()` before final cleanup assertions.
+4. **Dual Happy/Catch Call Sites:** Recognizes duplicate call sites guarded by try/catch branches (e.g. `about:*` catch-handler duplicates and `extension loaded` conditional branches) where exactly one fires per run.
+5. **Deliberate Catch-Only Tripwires:** Ignores catch-only tripwires intentionally positioned outside `EXPECTED` (`site playbook journey completed without a harness error`).
 
 ---
 
 ## 3. Results & Measured Parity
 
-Running `npm run check:ledgers`:
+Running `node scripts/check-journey-ledgers.mjs`:
 - `scripts/chrome-journeys.ts`: **368 non-meta assertions** match `EXPECTED` in exact set and exact order.
 - `scripts/agent-access-journeys.ts`: **85 non-meta assertions** match `EXPECTED` in exact set and exact order.
-- Execution time: **< 20 ms**.
+- `scripts/run-status-lifecycle.ts`: **31 non-meta assertions** match `EXPECTED` in exact set and exact order.
+- Execution time: **< 30 ms**.
 
 ---
 
 ## 4. Falsification Drills
 
-1. **The we0m Regression Drill:**
+1. **Commented Call Site Neutrality (F1):**
+   Planting `// check("commented check not in ledger")` and `/* check(...) */` passes cleanly without generating false "Called but not in EXPECTED" errors.
+2. **The we0m Regression Drill:**
    Planted the exact `we0m` fault (renaming the Sorting Hat `EXPECTED` entry to include `"recipe"`).
    - Guard failed immediately: reported the mutated name as `MISSING` from calls, the call site name as `EXTRA` (not in EXPECTED), and identified order mismatch at index 322.
-2. **Call Site Disparity:**
-   Renamed `check("plus menu: opens via a real click")` in `agent-access-journeys.ts` without touching `EXPECTED`.
+3. **Call Site Disparity:**
+   Renamed `check("plus menu: opens via a real click")` in `agent-access-journeys.ts` without updating `EXPECTED`.
    - Guard failed immediately: reported the missing expected name and extra undeclared call site.
-3. **Assertion Order Swap:**
+4. **Assertion Order Swap:**
    Swapped two adjacent entries in `EXPECTED`.
    - Guard failed immediately: set sizes and members matched, but order mismatch was caught and reported at exact index.
 
@@ -55,7 +66,8 @@ Running `npm run check:ledgers`:
 
 ## 5. Verification
 
-- `npm run check:ledgers`: Green (both files pass).
-- `npm run test:file -- tests/journey-ledger-pairing.test.ts`: 5/5 passed in 19 ms.
-- `npm run test:file -- tests/test-partition-guard.test.ts`: 7/7 passed.
-- `npm run test:file -- tests/package-scripts-exist.test.ts`: 4/4 passed.
+- `node scripts/check-journey-ledgers.mjs`: Green (all three files pass).
+- `npm run test:file -- tests/journey-ledger-pairing.test.ts`: **7 passed / 0 failed** in 112 ms.
+- `npm run test:file -- tests/test-partition-guard.test.ts`: **7 passed / 0 failed** (clean parallel classification).
+- `npm run check:vocabulary`: Clean.
+- `npm run check:dist`: Clean.
