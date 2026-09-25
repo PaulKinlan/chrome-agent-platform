@@ -13,13 +13,16 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { durableDir } from "./durable-root.mjs";
 
 /** Per-thread wchan, which is what identifies a futex hang when a signal report cannot be written.
  *  MEASURED (2026-09-24, node v24.21.0): `--report-on-signal --report-signal=SIGUSR2` writes a full
- *  report for an idle child (measured: 31 KB file, child survives) but for a child BLOCKED in a
- *  futex (`Atomics.wait`, the `wchan=futex_do_wait` shape this bead is about) the signal TERMINATES
- *  it and no report appears — so the report path cannot diagnose fnmr and the thread table is the
- *  evidence. Bounded to a few threads to keep the message readable. */
+ *  report for an idle child (measured: 31 KB file, child survives), but a child BLOCKED in a futex
+ *  (`Atomics.wait`, the `wchan=futex_do_wait` shape this bead is about) writes none. Re-measured
+ *  2026-09-25: WITH the flags that child survives the signal (alive 1.6 s later, 0 reports) and only
+ *  the kill ends it; WITHOUT them the signal terminates it. Either way the report path cannot
+ *  diagnose fnmr, and the thread table is the evidence. Bounded to a few threads to keep the message
+ *  readable. */
 function threadTable(pid) {
   try {
     const tasks = readdirSync(`/proc/${pid}/task`).sort((a, b) => Number(a) - Number(b));
@@ -68,11 +71,32 @@ function findReport(pid, dir) {
   }
 }
 
+/** Append one JSON line describing a hang to `<recordDir>/hangs.jsonl`, and return the sentence that
+ *  says what happened to it. The sentence names the file ONLY when the append succeeded: the old
+ *  sentence was unconditional, and it was false in the futex case this helper exists for (fnmr
+ *  review, 2026-09-25). The default directory is on the durable root, not in the worktree: a
+ *  worktree is reset and pruned, and a record whose only copy lives there is not evidence. Never
+ *  throws — logging must not become a second failure. */
+function recordHang(recordDir, entry) {
+  try {
+    const dir = recordDir ?? durableDir("bounded-child-hangs");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "hangs.jsonl");
+    appendFileSync(file, JSON.stringify(entry) + "\n");
+    return `A durable record was appended to ${file}.`;
+  } catch (e) {
+    return `No durable record was written (${e?.message ?? e}).`;
+  }
+}
+
 /**
+ * `recordDir`: where a hang's record is appended (hangs.jsonl). The default is
+ * durableDir("bounded-child-hangs"); tests pass their own, so a record they read back is theirs.
+ *
  * @param {string} command
  * @param {string[]} args
  * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, stdio?: import("node:child_process").StdioOptions,
- *           timeoutMs?: number, label?: string }} [options]
+ *           timeoutMs?: number, label?: string, recordDir?: string }} [options]
  * @returns {Promise<{ status: number, signal: NodeJS.Signals | null, ms: number }>}
  */
 export async function runBoundedChild(command, args, {
@@ -81,6 +105,7 @@ export async function runBoundedChild(command, args, {
   stdio = "inherit",
   timeoutMs = Number(env.CAP_BOUNDED_CHILD_TIMEOUT_MS ?? DEFAULT_BOUNDED_CHILD_TIMEOUT_MS),
   label = command,
+  recordDir,
 } = {}) {
   const started = Date.now();
   const child = spawn(command, args, { cwd, env, stdio, detached: true });
@@ -94,7 +119,6 @@ export async function runBoundedChild(command, args, {
   let timedOut = false;
   let spawnError = null;
   let at = "no snapshot";
-  let report = "none";
   let killTimer;
   const timer = setTimeout(() => {
     timedOut = true;
@@ -102,31 +126,17 @@ export async function runBoundedChild(command, args, {
     if (child.pid) {
       // ASK FOR THE FRAMES BEFORE KILLING (fnmr): the state sample above says where the thread
       // sleeps (futex_do_wait), not what it was doing. A child started with
-      // `--report-on-signal --report-signal=SIGUSR2` writes a diagnostic report on that signal;
-      // one that was not is terminated by it, which is what the kill below does anyway. Either
-      // way the process-group kill still happens, REPORT_GRACE_MS later, so the bound is honoured
-      // and a hang now leaves a stack behind.
-      const dir = cwd ?? process.cwd();
+      // `--report-on-signal --report-signal=SIGUSR2` can write a diagnostic report on that signal
+      // (an idle one does; a futex-blocked one does not, see threadTable); one started without
+      // them is terminated by it. Either way the process-group kill still happens,
+      // REPORT_GRACE_MS later, so the bound is honoured.
       try { child.kill("SIGUSR2"); } catch { /* gone */ }
+      // This timer ONLY kills. The report lookup and the durable record happen once, after the
+      // child is gone (below). They used to live in here, and a child that DIES on SIGUSR2 inside
+      // the grace window cancels this timer: that case wrote no record while the message said it
+      // had (fnmr review, 2026-09-25).
       killTimer = setTimeout(() => {
         try { process.kill(-child.pid, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch { /* gone */ } }
-        report = findReport(child.pid, dir);
-        // WRITE IT DOWN, because the message may never be read: when this hang happens inside a
-        // serial test FILE, the runner's own per-file timeout can kill the file before its ERRORS
-        // section prints, and the message below is lost (observed: p15i reconciliation hung 121 s,
-        // the file timed out at 180 s, and no HUNG text appeared in the log at all). A durable line
-        // is what makes the next occurrence evidence.
-        try {
-          const cacheDir = join(dir, ".cache");
-          mkdirSync(cacheDir, { recursive: true });
-          // stdoutTail answers the question the FIX depends on: did the child finish its WORK and
-          // then fail to exit (a teardown-only hang, which a caller could accept), or did it hang
-          // mid-work (which it cannot)? Captured only when stdio was piped.
-          const tail = capture ? Buffer.concat(outChunks).toString("utf8").trim().split("\n").slice(-2).join(" ⏎ ") : "(stdout not captured)";
-          appendFileSync(join(cacheDir, "bounded-child-hangs.log"), JSON.stringify({
-            at: new Date().toISOString(), label, timeoutMs, snapshot: at, report, stdoutTail: tail,
-          }) + "\n");
-        } catch { /* best effort: never turn logging into a second failure */ }
       }, REPORT_GRACE_MS);
     }
   }, timeoutMs);
@@ -145,13 +155,30 @@ export async function runBoundedChild(command, args, {
     throw new Error(`${label} FAILED TO START: ${spawnError.message}`);
   }
   if (timedOut || status === null) {
+    const report = findReport(child.pid, cwd ?? process.cwd());
+    // How the child actually ended: SIGUSR2 when the diagnostic signal killed it, SIGKILL when it
+    // outlived the grace window. Recorded and said, because it is observed rather than assumed.
+    const endedBy = signal ?? `exit ${status}`;
+    // WRITE IT DOWN, because the message may never be read: when this hang happens inside a
+    // serial test FILE, the runner's own per-file timeout can kill the file before its ERRORS
+    // section prints, and the message below is lost (observed: p15i reconciliation hung 121 s,
+    // the file timed out at 180 s, and no HUNG text appeared in the log at all). A durable line
+    // is what makes the next occurrence evidence.
+    // stdoutTail answers the question the FIX depends on: did the child finish its WORK and
+    // then fail to exit (a teardown-only hang, which a caller could accept), or did it hang
+    // mid-work (which it cannot)? Captured only when stdio was piped.
+    const tail = capture ? Buffer.concat(outChunks).toString("utf8").trim().split("\n").slice(-2).join(" ⏎ ") : "(stdout not captured)";
+    // cwd says WHICH checkout hung: the default record file is shared by every lane on the box.
+    const recorded = recordHang(recordDir, {
+      at: new Date().toISOString(), label, cwd: cwd ?? process.cwd(), timeoutMs, snapshot: at, report, endedBy, stdoutTail: tail,
+    });
     throw new Error(
       `${label} HUNG: no exit within ${(timeoutMs / 1000).toFixed(0)}s (${at}); its process group was killed. ` +
       `This is a hang, not slow work — chrome-agent-platform-fnmr. ` +
       (report === "none"
-        ? `No diagnostic report was produced — expected when the child is BLOCKED in a futex (measured: the signal terminates such a child without writing one), so read the thread-wchan table above; start the child with --report-on-signal --report-signal=SIGUSR2 for the cases where a report IS possible.`
-        : `Diagnostic report: ${report} (it holds the frames of the futex wait).`) +
-      ` A durable record was appended to .cache/bounded-child-hangs.log in the child's cwd.`,
+        ? `No diagnostic report was produced (the child ended on ${endedBy}), so read the thread-wchan table above; start the child with --report-on-signal --report-signal=SIGUSR2 for the cases where a report IS possible.`
+        : `Diagnostic report: ${report} (the child ended on ${endedBy}).`) +
+      ` ${recorded}`,
     );
   }
   return {
