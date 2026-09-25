@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.490] — 2026-09-25
+- the residue map names the semicolon escape inside a spawn argument region
+
 ## [0.3.489] — 2026-09-25
 - round 2: template loads inherit, and a dead exemption retires itself
 
