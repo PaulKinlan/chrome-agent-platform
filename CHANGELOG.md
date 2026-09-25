@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.493] — 2026-09-25
+- the summary row's Delete pin reads parentage, not descendant counts
+
+## [0.3.492] — 2026-09-25
+- internal: the agent summary row Delete pin checks direct parentage rather than descendant counts
+
 ## [0.3.491] — 2026-09-25
 - the settings picker can never quietly re-offer Demo or Chrome Prompt API
 
