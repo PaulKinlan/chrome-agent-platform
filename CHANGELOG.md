@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.490] — 2026-09-25
+- restore the component change the first commit lost — and say how
+
 ## [0.3.489] — 2026-09-25
 - bump version for ypz0 user-facing tab focus fix
 
