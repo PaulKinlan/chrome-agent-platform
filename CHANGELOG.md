@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.488] — 2026-09-25
+- check-reachability gains exported-function reachability (v1)
+
 ## [0.3.487] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 

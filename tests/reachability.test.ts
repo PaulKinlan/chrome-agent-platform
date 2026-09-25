@@ -10,6 +10,8 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
   checkReachability,
   RETAINED,
+  exportedFunctions,
+  scanExportedFunctionReachability,
   candidateRefs,
   parseBundleMap,
   resolveRef,
@@ -122,4 +124,78 @@ Deno.test("reachability: edges come from string tokens, never comments; dist bun
   assertEquals(resolveRef("page/p.html", "../dist/options.bundle.js", shipped, bundles), "options/options.js");
   assertEquals(resolveRef("lib/a.js", "./ignored-in-comment.js", shipped, bundles), null);
   assertEquals(candidateRefs("page/p.html", `<script type="module" src="../lib/a.js"></script><link rel="stylesheet" href="./x.css">`), ["../lib/a.js", "./x.css"]);
+});
+
+// ── chrome-agent-platform-kf3h: exported-function reachability ──────────────
+// A reached module's exported function can still be DEAD: zero callers in the
+// shipped package (tests/ is not shipped, so a function whose only caller is
+// its own test is dead by definition — the bead's exact example: a safety
+// function kept alive by tests nobody in production calls).
+
+Deno.test("kf3h: exportedFunctions finds export function / export async function in order, deduped", () => {
+  const src = [
+    "export function alpha() {}",
+    "export async function beta() {}",
+    "export const gamma = () => {}; // arrow-const is v2 scope, not counted",
+    "function privateHelper() {}",
+    "export function alpha() {} // duplicate declaration is reported once",
+    "// export function commented() {} — a comment is not a declaration",
+  ].join("\n");
+  assertEquals(exportedFunctions(src), ["alpha", "beta"]);
+});
+
+Deno.test("kf3h: an export with zero callers anywhere in the package is DEAD", () => {
+  const files = ["lib/a.js", "lib/b.js"];
+  const sources = {
+    "lib/a.js": "export function abandonedSafetyCheck() { return 1; }",
+    "lib/b.js": "export function usedCheck() { return 2; }",
+  };
+  const r = scanExportedFunctionReachability({
+    files,
+    readSource: (rel) => sources[rel],
+  });
+  // BOTH exports are dead: neither file references the other's function.
+  assertEquals(
+    r.dead.map((d) => d.name).sort(),
+    ["abandonedSafetyCheck", "usedCheck"],
+  );
+});
+
+Deno.test("kf3h: a caller in ANOTHER file clears the finding (same-file references are a stated v1 limitation)", () => {
+  const files = ["lib/self.js", "lib/other.js", "lib/unused.js"];
+  const sources = {
+    // self-referential recursion: v1 counts any same-file occurrence as
+    // internal use, so this shape is NOT flagged — a stated v1 limitation
+    // (the alternative needs flow analysis; recorded in the bead).
+    // a real caller elsewhere keeps the export alive.
+    "lib/other.js": "import { called } from './self-adjacent.js'; export const x = called;",
+    "lib/unused.js": "export function neverReferenced() {}",
+  };
+  // The scan set only contains these three: a caller living in a file OUTSIDE
+  // the scanned package (tests/) does not exist here by construction.
+  const r = scanExportedFunctionReachability({
+    files: ["lib/self.js", "lib/unused.js", "lib/other.js"],
+    readSource: (rel) => sources[rel],
+  });
+  assertEquals(r.dead.map((d) => d.name).sort(), ["neverReferenced"]);
+});
+
+Deno.test("kf3h: exemptions keep dead exports on purpose, and rot LOUDLY", () => {
+  const files = ["lib/kept.js"];
+  const sources = { "lib/kept.js": "export function keptForLater() { return 1; }" };
+  const withExemption = scanExportedFunctionReachability({
+    files,
+    readSource: (rel) => sources[rel],
+    exemptions: { "lib/kept.js": { keptForLater: "11rm: wired into the streaming converter when it lands" } },
+  });
+  assertEquals(withExemption.dead, []);
+  assertEquals(withExemption.exempt.length, 1);
+  assertEquals(withExemption.exempt[0].reason, "11rm: wired into the streaming converter when it lands");
+  // Rot: the export disappears (or the file does) — the entry is reported.
+  const stale = scanExportedFunctionReachability({
+    files: ["lib/kept.js"],
+    readSource: () => "export function somethingElse() {}",
+    exemptions: { "lib/kept.js": { keptForLater: "stale reason" } },
+  });
+  assertEquals(stale.staleExemptions, ["lib/kept.js: RETAINED_EXPORTS entry keptForLater no longer exists"]);
 });

@@ -301,3 +301,127 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(1);
   }
 }
+
+// ── exported-function reachability (chrome-agent-platform-kf3h) ─────────────
+// The file-level walk above cannot see INSIDE a reached module: an exported
+// function with zero callers anywhere in the shipped package is dead weight
+// every security reviewer still reads (measured: dead safety functions kept
+// alive only by their own tests). This pass lists them.
+//
+// Scope (v1, stated): only `export function` / `export async function`
+// declarations in REACHED modules under extension/ are considered, and the
+// caller scan covers the shipped package only — tests/ live outside it, so a
+// function whose only caller is its own test is DEAD by definition here (that
+// is the bead's exact example). Arrow-const exports and scripts/ modules are
+// v2 scope, stated so the absence is a decision, not an oversight.
+
+/**
+ * Top-level exported function names in one source text, in declaration order.
+ * Uses the same comment-excluding tokenizer as the file walk.
+ */
+export function exportedFunctions(source, file = "<js>") {
+  const names = [];
+  let tokens = [];
+  try {
+    for (const tok of tokenizer(source, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
+      tokens.push(tok);
+    }
+  } catch (error) {
+    throw new Error(`check-reachability: cannot tokenize ${file}: ${error?.message ?? error}`);
+  }
+  for (let i = 0; i < tokens.length; i++) {
+    // Keyword tokens carry keyword-specific labels ("export", "function"),
+    // so the VALUE is the reliable signal, not the label.
+    if (tokens[i].value !== "export") continue;
+    let j = i + 1;
+    if (tokens[j]?.value === "async") j++;
+    if (tokens[j]?.value === "function") {
+      const nameTok = tokens[j + 1];
+      if (nameTok?.type?.label === "name" && typeof nameTok.value === "string" && !names.includes(nameTok.value)) {
+        names.push(nameTok.value);
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * Scan the shipped package for exported functions with zero callers.
+ *
+ * @param {{ files: string[], readSource: (rel: string) => string,
+ *            exemptions?: Record<string, Record<string, string>> }} args
+ *   files: the REACHED module list (relative to extension/). Caller scan
+ *   covers exactly these files minus the defining file, so test-only callers
+ *   (tests/ is not in the shipped set) never keep a function alive.
+ *   exemptions: file → { exportName → reason } — the explicit inventory of
+ *   dead exports kept on purpose, same shape as RETAINED.
+ * @returns {{ dead: [{file,name}], exempt: [{file,name,reason}], staleExemptions: string[] }}
+ */
+export function scanExportedFunctionReachability({ files, readSource, exemptions = {} }) {
+  const namesByFile = new Map();
+  const tokenSetByFile = new Map();
+  const occurrencesByFile = new Map();
+  for (const rel of files) {
+    let source;
+    try {
+      source = readSource(rel);
+    } catch {
+      continue; // unreadable in this scan: the file walk owns unreadable-file policy
+    }
+    const names = exportedFunctions(source, rel);
+    namesByFile.set(rel, names);
+    // Caller scan uses the same comment-excluding tokenizer: a name that only
+    // appears in a comment is not a caller.
+    const idents = new Map();
+    try {
+      for (const tok of tokenizer(source, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true })) {
+        if (tok.type?.label === "name" && tok.value) idents.set(tok.value, (idents.get(tok.value) ?? 0) + 1);
+      }
+    } catch { /* already thrown above for the same source */ }
+    tokenSetByFile.set(rel, idents);
+    occurrencesByFile.set(rel, idents);
+  }
+  const exempt = [];
+  const dead = [];
+  const staleExemptions = [];
+  const exemptionFiles = new Set(Object.keys(exemptions));
+  for (const rel of files) {
+    for (const name of namesByFile.get(rel) ?? []) {
+      let callers = 0;
+      // Internal composition counts: an export consumed by its own module's
+      // main flow (e.g. resolveSkillContext feeding runAcpTaskTurn) is alive —
+      // the module is the caller. Declarations themselves are not uses.
+      const ownDecls = (namesByFile.get(rel) ?? []).filter((n) => n === name).length;
+      const ownUses = (occurrencesByFile.get(rel)?.get(name) ?? 0) - ownDecls;
+      if (ownUses > 0) callers++;
+      if (callers === 0) for (const other of files) {
+        if (other === rel) continue;
+        if ((tokenSetByFile.get(other) ?? new Set()).has(name)) { callers++; break; }
+      }
+      const reason = exemptions[rel]?.[name];
+      if (callers === 0) {
+        if (reason) exempt.push({ file: rel, name, reason });
+        else dead.push({ file: rel, name });
+      } else if (reason) {
+        staleExemptions.push(`${rel}: ${name} has callers — drop the RETAINED_EXPORTS entry`);
+      }
+    }
+    for (const name of Object.keys(exemptions[rel] ?? {})) {
+      if (!(namesByFile.get(rel) ?? []).includes(name)) {
+        staleExemptions.push(`${rel}: RETAINED_EXPORTS entry ${name} no longer exists`);
+      }
+      exemptionFiles.delete(rel);
+    }
+    if (exemptions[rel]) exemptionFiles.delete(rel);
+  }
+  for (const f of exemptionFiles) staleExemptions.push(`${f}: RETAINED_EXPORTS entry for a file with no exports`);
+  return { dead, exempt, staleExemptions };
+}
+
+// The explicit inventory: dead exports kept ON PURPOSE, with the reason.
+// Same contract as RETAINED: an entry that becomes called, or whose export
+// disappears, is reported as stale so the list never rots.
+export const RETAINED_EXPORTS = {
+  // Intentionally empty at introduction: the first real-tree scan's findings
+  // are triaged (fix, cut, or exempt with a reason) before any entry is added.
+};
