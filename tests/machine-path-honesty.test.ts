@@ -101,7 +101,9 @@ function scriptFiles(): string[] {
     for (const e of Deno.readDirSync(dir)) {
       const p = `${dir}${e.name}`;
       if (e.isDirectory) walk(`${p}/`);
-      else if (e.name.endsWith(".ts") || e.name.endsWith(".mjs")) out.push(p.slice(ROOT.length));
+      else if (e.name.endsWith(".ts") || e.name.endsWith(".mjs") || e.name.endsWith(".js") || e.name.endsWith(".sh")) {
+        out.push(p.slice(ROOT.length));
+      }
     }
   };
   walk(SCRIPTS);
@@ -110,15 +112,24 @@ function scriptFiles(): string[] {
 
 /** Block comments blanked (newlines kept so line numbers survive), because a doc
  *  comment teaching the canon with an example path is exactly the prose the guard
- *  must not shoot. */
-function stripBlockComments(text: string): string {
+ *  must not shoot. Shell has no block comments: `.sh` text passes through unchanged. */
+function stripBlockComments(text: string, file = ""): string {
+  if (file.endsWith(".sh")) return text;
   return text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ""));
 }
 
-/** True when the match at `pos` sits after a `//` on its own line. */
-function inLineComment(text: string, pos: number): boolean {
+/** True when the match at `pos` sits after a line-comment marker on its own line:
+ *  `//` in JS/TS, or a shell `#` that starts the line or follows whitespace (the shebang
+ *  is an interpreter directive, not prose). A `#` glued to a word is part of it. */
+function inLineComment(text: string, pos: number, file = ""): boolean {
   const start = text.lastIndexOf("\n", pos) + 1;
   const before = text.slice(start, pos);
+  if (file.endsWith(".sh")) {
+    const i = before.lastIndexOf("#");
+    if (i < 0) return false;
+    if (before[i + 1] === "!") return false; // shebang: `#!/bin/sh` is not prose about a path
+    return i === 0 || /\s/.test(before[i - 1]);
+  }
   const i = before.indexOf("//");
   if (i < 0) return false;
   // a `//` inside a string on the same line is not a comment start; good enough for a
@@ -135,7 +146,7 @@ export function detect(text: string, file: string): Hit[] {
 
   for (const m of text.matchAll(DIRECT_RE)) {
     const pos = m.index!;
-    if (inLineComment(text, pos)) continue;
+    if (inLineComment(text, pos, file)) continue;
     hits.push({
       file, line: lineOf(pos), kind: "direct",
       key: `${file}::${m[2].slice(0, 120)}`,
@@ -147,7 +158,7 @@ export function detect(text: string, file: string): Hit[] {
   // filesystem call — otherwise it is a fixture value (the durable-root case).
   const constNames = new Map<string, { pos: number; value: string }>();
   for (const m of text.matchAll(CONST_RE)) {
-    if (inLineComment(text, m.index!)) continue;
+    if (inLineComment(text, m.index!, file)) continue;
     constNames.set(m[1], { pos: m.index!, value: m[3] });
   }
   if (constNames.size) {
@@ -155,7 +166,7 @@ export function detect(text: string, file: string): Hit[] {
     for (const m of text.matchAll(useRe)) {
       const held = constNames.get(m[1]);
       if (!held) continue;
-      if (inLineComment(text, m.index!)) continue;
+      if (inLineComment(text, m.index!, file)) continue;
       hits.push({
         file, line: lineOf(m.index!), kind: "const",
         key: `${file}::${held.value}`,
@@ -173,12 +184,12 @@ export function detect(text: string, file: string): Hit[] {
  *  is no fixture-value idiom in executable harness code that needs one. `$HOME`-style
  *  env-built roots are the portable idiom and never match. */
 export function detectScriptHomeLiteral(text: string, file: string): Hit[] {
-  const code = stripBlockComments(text);
+  const code = stripBlockComments(text, file);
   const hits: Hit[] = [];
   const re = new RegExp(HOME_PREFIX, "g");
   for (const m of code.matchAll(re)) {
     const pos = m.index!;
-    if (inLineComment(code, pos)) continue;
+    if (inLineComment(code, pos, file)) continue;
     const lineStart = code.lastIndexOf("\n", pos) + 1;
     const lineEnd = code.indexOf("\n", pos);
     hits.push({
@@ -361,4 +372,23 @@ Deno.test("machine paths: the scripts detector fires on a harness literal howeve
   assertEquals(detectScriptHomeLiteral(
     `/** Example: ${A("cache/chrome")} in a doc comment is prose. */\nconst x = 1;\n`, "scripts/probe.ts").length, 0,
     "a block comment is prose too");
+});
+
+// ── shell probes: the walker now covers .sh, with shell's own comment rule (tgx6) ──
+
+Deno.test("machine paths: a home literal in a shell harness is caught, its # prose is not", () => {
+  // The shape scripts/evidence-runner.sh had: a hardcoded ROOT, then a cd.
+  const assigned = `ROOT=${A("cap-provider-picker")}\ncd "$ROOT"\n`;
+  assertEquals(detectScriptHomeLiteral(assigned, "scripts/probe.sh").length, 1,
+    "a home literal in a .sh harness is flagged");
+
+  // The boundary: a # comment recording the old path is prose; the portable idiom is legal.
+  const prose = `#!/bin/bash\n# legacy default was ${A(".cache/cap-review")}\n` +
+    'ROOT="${CAP_PROVIDER_PICKER_ROOT:-$HOME/cap-provider-picker}"\n';
+  assertEquals(detectScriptHomeLiteral(prose, "scripts/probe.sh").length, 0,
+    "a # comment naming a home path is prose, not a live path");
+
+  // The shebang must not whitewash the line after it.
+  assertEquals(detectScriptHomeLiteral(`#!/bin/bash\ncd ${A("cap-review")}\n`, "scripts/probe.sh").length, 1,
+    "a shebang is not a comment that hides the next line's literal");
 });
