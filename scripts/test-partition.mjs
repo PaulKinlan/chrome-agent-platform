@@ -90,9 +90,35 @@ export const EXEMPTIONS = {
   "tests/durable-root.test.ts": "scans test file paths including serial build tests for tmpdir literals; executes no build or extension writes",
 };
 
-// A test that spawns one of these local drivers inherits the driver's hazard
-// classification (the hazard lives in the driver, not the test wrapper).
-export const DRIVER_REF_RE = /tests\/[\w.-]+\.(?:mjs|ts)/g;
+// A test that SPAWNS or IMPORTS one of these local drivers inherits the
+// driver's hazard classification (the hazard lives in the driver, not the test
+// wrapper). 8b8w/f94p: the first version of this rule keyed on the bare path
+// SHAPE and matched any mention — a comment explaining a test made the
+// explaining file inherit that test's hazards (measured 2026-09-25: a
+// synthetic wrapper whose only mention of tests/wasm-tree-shaking.test.ts is
+// inside a comment inherited "reads extension/dist" through DRIVER_REF_RE, and
+// the live cc18 workaround was an evasive comment that refused to name its
+// subject). The rule is now REFERENCE-SCOPED: only a module specifier
+// (import/from/require/dynamic import) or a spawn/exec argument list can carry
+// a driver reference, because those are the shapes that actually LOAD or RUN
+// the driver. RESIDUE, stated so it is not implied away: a path assembled at
+// runtime ("tests/" + name) is invisible to every text detector here — it was
+// equally invisible to the old mention rule, so the fix does not widen that
+// hole; and a COMMENTED-OUT import still matches its shape (fail-closed: the
+// cost is an inheritance a lane did not need, never a silent parallel writer).
+const DRIVER_LOAD_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'][^"'\n]*?(tests\/[\w.-]+\.(?:mjs|ts))["']/g;
+const DRIVER_SPAWN_RE = /(?:Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn(?:Sync)?\s*\()[^;`]{0,400}?(tests\/[\w.-]+\.(?:mjs|ts))/g;
+
+/** The tests/* drivers a file's text actually loads or spawns — the ONLY
+ * references whose hazard classification a mentioning file inherits. A prose
+ * mention (comment, doc string, explanatory note) is not a reference. */
+export function realDriverRefs(text) {
+  const refs = new Set();
+  for (const re of [DRIVER_LOAD_RE, DRIVER_SPAWN_RE]) {
+    for (const m of text.matchAll(re)) refs.add(m[1]);
+  }
+  return [...refs];
+}
 
 const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;

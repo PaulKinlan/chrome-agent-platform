@@ -200,14 +200,13 @@ export function detectScriptHomeLiteral(text: string, file: string): Hit[] {
 // teeth: an entry needs a reason, and an entry that stops matching FAILS, so a fix can
 // never leave a stale exception hiding behind it.
 //
-// IF YOU ADD ONE: assemble every sibling path this file names at RUNTIME. The partition
-// guard classifies a test file by scanning its content and INHERITS the hazard class of
-// every sibling test path the file merely mentions (its driver regex reads and
-// concatenates that file), so naming a serial-phase file — even inside an allowlist key or
-// a comment — reddens the partition. Build the key with a helper of the shape
-// `const tp = (n: string) => "tests/" + n;` instead of writing a path out: the convention
-// the partition guard uses for its own detector probes, and the one c9y8 landed under.
-// Take no exemption, so the partition stays strict for every other file.
+// IF YOU ADD ONE: since 8b8w (2026-09-25) the partition guard's driver inheritance is
+// REFERENCE-SCOPED — it merges a test file only with drivers the file LOADS (import/from/
+// require) or SPAWNS (spawn/exec argument); a PROSE mention of a sibling test file no
+// longer inherits its hazard class. Naming a serial-phase file in a comment or allowlist
+// key is therefore safe. The `const tp = (n: string) => "tests/" + n;` assembly remains
+// this file's own convention for keys (the one c9y8 landed under) — keep it for
+// consistency; it is no longer load-bearing for the partition.
 const ALLOWED = new Map<string, string>([]);
 
 function scanAll(): { hits: Hit[]; files: number } {

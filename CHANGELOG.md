@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.488] — 2026-09-25
+- explaining a test no longer makes your file inherit its hazards
+
 ## [0.3.487] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 
