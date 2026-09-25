@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.517] — 2026-09-25
+- keyboard navigation in tab strips uses non-scrolling focus so component scroll bounds remain discriminating
+
 ## [0.3.516] — 2026-09-25
 - remove headed-acceptance.ts — no headed-browser dependency
 
