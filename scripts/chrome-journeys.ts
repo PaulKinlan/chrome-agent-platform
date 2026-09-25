@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
+import { wireValue } from "./lib/cdp-eval.ts";
 import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -343,7 +344,10 @@ async function attachRuntime(cdp, targetId) {
   return session;
 }
 
-/** Runtime.evaluate an expression in a session, returning its value. */
+/** Runtime.evaluate an expression in a session, returning its value.
+ * A page-side throw is an instrument failure and surfaces as EvalSurfaceError
+ * naming this site — never a bare undefined a check can read as a product
+ * answer (kwrx / 0aeh). */
 async function evalIn(cdp, session, expression) {
   const r = await withTimeout(
     cdp.send(
@@ -354,7 +358,7 @@ async function evalIn(cdp, session, expression) {
     15000,
     "evalIn",
   );
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "jny.evalIn");
 }
 
 /** EVERY piece of text the thread can show the owner — light DOM AND every
@@ -1380,7 +1384,7 @@ async function main() {
         15000,
         `msgOpts ${payload.type}`,
       );
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.msgOpts");
       if (inner && typeof inner === "object" && "v" in inner) return inner.v;
       if (inner && typeof inner === "object" && "err" in inner) return inner.err;
       return inner;
@@ -1388,7 +1392,7 @@ async function main() {
 
     const msgValue = async (payload) => {
       const r = await withTimeout(sendMsg(payload), 15000, `msg ${payload.type}`);
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.msgValue");
       if (inner && typeof inner === "object" && "v" in inner) return inner.v;
       if (inner && typeof inner === "object" && "err" in inner) return inner.err;
       return inner;
@@ -2678,7 +2682,7 @@ async function main() {
       },
       swSession,
     );
-    const seededFolder = seedFolder?.result?.result?.value;
+    const seededFolder = wireValue<any>(seedFolder, "jny.seed-folder");
     check("folder command: a granted folder was seeded in the SW store", seededFolder?.ok === true);
     // Type /folder: into the composer (the hub input is empty after the Run).
     await evalIn(cdp, ntpSession, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
@@ -7126,7 +7130,7 @@ async function main() {
             expression: "document.documentElement.lang",
             returnByValue: true, contextId: world?.result?.executionContextId,
           }, frameSession);
-          srcdocLang = r?.result?.result?.value ?? null;
+          srcdocLang = wireValue<any>(r, "jny.srcdoc-lang") ?? null;
         } catch (e) {
           console.log(`[debug] srcdoc realm read failed: ${String(e?.message ?? e)}`);
         }
@@ -7244,7 +7248,7 @@ async function main() {
         15000,
         "iframe approval deny",
       );
-      iframeDeny = denied?.result?.result?.value === true;
+      iframeDeny = wireValue<any>(denied, "jny.iframe-deny") === true;
     }
     await sleep(250);
     const iframeAfter = await msgValue({ type: "asset.get", origin: "master", id: assetId });
@@ -8612,7 +8616,7 @@ async function demoPathJourney() {
         15000,
         `demo-path msg ${payload.type}`,
       );
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.demo-msg");
       return inner && typeof inner === "object" && "v" in inner ? inner.v : inner?.err ?? inner;
     };
 
@@ -8963,7 +8967,7 @@ async function factoryResetJourney() {
         payload.type === "agent.run" ? 120000 : 15000,
         `factory-reset msg ${payload.type}`,
       );
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.factory-reset-msg");
       return inner && typeof inner === "object" && "v" in inner ? inner.v : inner?.err ?? inner;
     };
 

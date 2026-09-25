@@ -49,6 +49,7 @@ import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
+import { wireValue } from "./lib/cdp-eval.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -130,7 +131,9 @@ async function attachRuntime(cdp: Cdp, targetId: string) {
 }
 async function evalIn(cdp: Cdp, session: string, expression: string) {
   const r = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, session);
-  return r?.result?.result?.value;
+  // kwrx/0aeh: a page-side throw is an instrument failure — surfaced named,
+  // never a bare undefined read as a product answer.
+  return wireValue<any>(r, "rphg.evalIn");
 }
 async function boxOf(cdp: Cdp, session: string, selector: string) {
   const v = await evalIn(cdp, session, `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.x + r.width/2, y: r.y + r.height/2 }; })()`);
