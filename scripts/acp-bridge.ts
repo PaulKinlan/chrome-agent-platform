@@ -11,6 +11,7 @@
 // extension would be wrong on every other machine (3khn/evidence-durable).
 
 import { parseArgs } from "jsr:@std/cli@1/parse-args";
+import { acpChildEnv, acpChildEnvNote, actionableAuthWarning } from "./lib/acp-child-env.ts";
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
 
@@ -658,14 +659,29 @@ export function createAcpServer(
         if (resolved.cmd === "node" && !Deno.statSync(resolved.args[0]).isFile) {
           throw new Error(`adapter not found: ${resolved.args[0]}`);
         }
+        // The scoped child environment, computed once per connection so the host-side note is emitted
+        // even when the adapter dies later (5f5u).
+        const acpChildEnvResult = acpChildEnv({ ...Deno.env.toObject(), ...childEnv });
+        const acpChildEnvNoteText = acpChildEnvNote(acpChildEnvResult, connectionHarness);
+        if (acpChildEnvNoteText) console.error(acpChildEnvNoteText);
         const cmd = new Deno.Command(resolved.cmd, {
           args: resolved.args,
           stdin: "piped",
           stdout: "piped",
           stderr: "piped",
+          // clearEnv IS REQUIRED, AND IT WAS FOUND BY AN INTEGRATION CHECK RATHER THAN BY A UNIT TEST
+          // (5f5u): Deno MERGES `env` over the parent's environment by default, so simply omitting
+          // ANTHROPIC_API_KEY left the child seeing the host's value — while the host-side note
+          // claimed it had been scoped out. Measured directly: with the default the child prints
+          // PRESENT, with clearEnv:true it prints ABSENT. Passing the composed env plus clearEnv
+          // makes the child environment exactly what this block builds and nothing more.
+          clearEnv: true,
+          // 5f5u: the CHILD environment is scoped, not inherited wholesale. An ANTHROPIC_API_KEY in
+          // the host takes precedence over a claude.ai login (the adapter's own warning), so a
+          // native-login user would be switched auth source silently. Your environment is untouched —
+          // CAP_ACP_KEEP_API_KEY=1 passes it through instead.
           env: {
-            ...Deno.env.toObject(),
-            ...childEnv,
+            ...acpChildEnvResult.env,
             PI_ACP_HARNESS: connectionHarness,
             ...childEnvForHarness(connectionHarness, Deno.env.get("PATH") ?? ""),
             // Give the adapter a PATH that contains the binaries we resolved
@@ -727,6 +743,10 @@ export function createAcpServer(
               if (text.trim()) {
                 lastStderr = (lastStderr + text).slice(-2000);
                 console.error(`[adapter-stderr] ${text.trim()}`);
+                // 5f5u: an auth-precedence warning only visible in a child's stderr is invisible in
+                // the surface the user is watching — say it host-side, with the way to change it.
+                const authNote = actionableAuthWarning(text);
+                if (authNote) console.error(authNote);
               }
             }
           } catch { /* stream closed */ }

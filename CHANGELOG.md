@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.488] — 2026-09-25
+- the A/B did NOT reproduce the stall, so the fix is scoped to what WAS observed — and an integration check caught it lying
+
 ## [0.3.487] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 
