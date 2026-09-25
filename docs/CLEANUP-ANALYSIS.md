@@ -1,8 +1,10 @@
 # Project cleanup analysis — 2026-09-05 (lane cap-arch-docs, bead chrome-agent-platform-d0ag, umbrella 9zw7)
 
 **Tree:** `origin/main@14e2a817`. **Method:** every candidate cross-referenced against
-package.json scripts, `scripts/lib/harness-registry.ts` (99 entries — every `scripts/*.ts`
-must be registered; tests/harness-registry.test.ts enforces), build.mjs, tests/, docs/,
+package.json scripts, `scripts/lib/harness-registry.ts` (no count quoted here on purpose:
+every `scripts/*.ts` must be registered and `tests/harness-registry.test.ts` enforces that in
+both directions, so the live number is whatever the test just measured — the "99 entries" this
+line carried was 109 by the time C10 was worked), build.mjs, tests/, docs/,
 and whole-repo `git grep`. Classification: **remove-now** (verified unreferenced or
 gating dead artifacts) / **verify-first** (needs one named check before removal) /
 **keep** (live or owned by an open bead). Nothing here is a sweep — every item carries
@@ -27,7 +29,7 @@ analysis.
 | C7 | `scripts/p0-repro.ts` (+ registry entry) | Red at the 2026-09-02 re-inventory; its own registry reason says "a repro script for a P0 that has since moved on". Identify the P0; if closed, remove. |
 | C8 | `scripts/repro-recent-activity.ts` (+ registry entry) | Repro for the Recent-activity surface that the hub-timeline collapse cut (PRODUCT.md). If the surface is gone, the repro is dead. |
 | C9 | `scripts/opfs-wal-probe.ts` + `scripts/thread-open-trace.ts` (+ registry entries) | One-shot probes for the thread-open redesign that landed (0.2.314/0.2.317). Evidence is recorded; probes are re-derivable from history. |
-| C10 | `scripts/tool-call-evidence.ts` (+ registry entry) | Evidence run for CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 with a noted DOM.focus crash. If the legibility work has landed, remove. |
+| C10 | ~~`scripts/tool-call-evidence.ts` (+ registry entry)~~ **REMOVED 2026-09-25** (bead `vga1`) | Evidence run for CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 with a noted DOM.focus crash. The check came back YES: that P0 is closed as `DONE — origin/main@d5620af9`, and `git merge-base --is-ancestor d5620af9 origin/main` passes, so the legibility behaviour it evidenced is on main and the harness is history. Removed with its `harness-registry` row AND its `composer-selector-migration` ledger row — that ledger is a ratchet whose own prune assertion fails on a row for a file that no longer exists. Git history keeps the script. | `tests/harness-registry.test.ts` (file↔entry both directions), `tests/composer-selector-migration.test.ts`, `npm run check:vocabulary`, full suite green. |
 | C11 | `scripts/live-every-tab.ts` | Known broken (bead chrome-agent-platform-2ypf: kills only the Chromium parent, leaves children + temp profiles). Fix-or-remove decision rides on 2ypf — this bead links it. |
 | C12 | `extension/lib/js-minifier-tools.js` + `extension/lib/jwt-decode-tools.js` (+ their worker bundles + tests) | RETAINED-map entries whose own reason says "No tool registers the bounded minifier/JWT decoder today; only tests import it … cut together with the named tests in a follow-up". The follow-up was never filed. NOTE: tests/scan-shipped.test.ts's canonical Worker-constructor exemptions are bound to these files — the removal must update the scanner's exemption anchors. Gate: check:reachability + scan-shipped + full suite. |
 | C13 | `extension/lib/preference-bridge.js` | RETAINED: "No page mounts the preference bridge" (docs/PREFERENCE-PERCOLATION.md is a design only). Owner decision: adopt the design or cut the module + its security test. |
