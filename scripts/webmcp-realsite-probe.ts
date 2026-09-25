@@ -106,7 +106,12 @@ const until = async (fn: () => Promise<any>, ms: number, step = 400) => {
   return null;
 };
 const clickSelector = async (sid: string, expr: string) => {
-  const box = await evalIn(sid, `(() => { const el = ${expr}; if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; })()`);
+  // A ZERO-AREA ELEMENT IS NOT CLICKABLE. 9uho: the old form returned a box for any
+  // element with a numeric x, so a control inside a HIDDEN Settings panel produced
+  // {x:0,y:0} and the click was dispatched at the viewport's top-left corner — where it
+  // hit whatever is painted there and the probe reported the toggle's failure as an
+  // unexplained null. Refuse instead, so the instrument names what it could not do.
+  const box = await evalIn(sid, `(() => { const el = ${expr}; if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); if (r.width === 0 || r.height === 0) return { __noBox: true, w: r.width, h: r.height }; return {x:r.x+r.width/2, y:r.y+r.height/2}; })()`);
   if (!box || typeof box.x !== "number") return false;
   await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", buttons: 1, clickCount: 1 }, sid);
   await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: box.x, y: box.y, button: "left", buttons: 0, clickCount: 1 }, sid);
@@ -123,12 +128,30 @@ try {
 
   // 2. Diagnostics ON via the REAL Settings toggle (gates the page-side
   //    [WebMCP:main] console capture we read the raw error from).
-  const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` });
+  //
+  //    TWO SEAMS, MEASURED (9uho, 2026-09-25; the probe reported `diagnostics gate
+  //    enabled — null` here for three weeks):
+  //      · the ROUTE. The toggle lives in <section id="agents" class="panel">
+  //        (extension/options/options.html); opening `options.html` without the hash
+  //        leaves that panel hidden, so the element exists with a 0x0 rect — measured
+  //        {w:0,h:0} — and the old click landed at (0,0) on the page header, flipping
+  //        nothing. The acceptance harness opens `options.html#agents`
+  //        (webmcp-acceptance.ts, the same check) and passes.
+  //      · the CONTROL. The clickable box is the shadow button, not the host: a click
+  //        at the HOST's centre left `checked` false after a real mouse event.
+  //    The product path is HEALTHY — driven in the same session: a direct
+  //    webmcp.diagnostics.set {enabled:true} then get returns {enabled:true}. So this is
+  //    a stale probe seam, not a Settings regression.
+  //    The flip is now asserted BEFORE the gate poll, so "the click missed" and "the
+  //    gate did not enable" are two named failures instead of one anonymous null.
+  const optT = await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html#agents` });
   const opts = (await send("Target.attachToTarget", { targetId: optT.result.targetId, flatten: true })).result?.sessionId;
   await send("Runtime.enable", {}, opts);
   await sleep(1600);
-  const diagClicked = await clickSelector(opts, `document.getElementById("webmcp-diagnostics")`);
+  const diagClicked = await clickSelector(opts, `document.getElementById("webmcp-diagnostics")?.shadowRoot?.querySelector("button")`);
   check("Settings: clicked the Diagnostics toggle via a real click", diagClicked);
+  const diagFlipped = await until(() => evalIn(opts, `document.getElementById("webmcp-diagnostics")?.checked === true`), 2000);
+  check("Settings: the real click flipped the Diagnostics toggle", diagFlipped === true, diagFlipped);
   const diagOn = await until(() => evalIn(opts, `chrome.runtime.sendMessage({ type: "webmcp.diagnostics.get" }).then(r => r?.enabled === true)`), 8000);
   check("diagnostics gate enabled", diagOn === true, diagOn);
   await send("Target.closeTarget", { targetId: optT.result.targetId });

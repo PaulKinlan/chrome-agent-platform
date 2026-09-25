@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.495] — 2026-09-25
+- the Diagnostics probe clicks the control in the panel it names, and says which seam failed
+
+## [0.3.494] — 2026-09-25
+- internal: the diagnostics probe selects the active settings panel and verifies control state before querying the gate
+
 ## [0.3.493] — 2026-09-25
 - the summary row's Delete pin reads parentage, not descendant counts
 
