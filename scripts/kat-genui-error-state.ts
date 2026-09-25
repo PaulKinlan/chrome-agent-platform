@@ -13,6 +13,7 @@
 //       retry reloads back to the preparing state.
 //
 //   deno run -A scripts/kat-genui-error-state.ts <path-to-extension> [<out-dir>]
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
@@ -105,7 +106,7 @@ async function newView(url: string) {
   await send("Page.navigate", { url }, sessionId);
   const ev = async (expr: string) => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
-    return r.result?.result?.value;
+    return wireValue<any>(r, "k.genui-error-state");
   };
   return { targetId, sessionId, ev };
 }

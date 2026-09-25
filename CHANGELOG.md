@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.519] — 2026-09-25
+- internal: extract shared typed cdp-eval helper for evaluating page scripts without swallowing exceptions, and migrate scripts/ drivers
+
 ## [0.3.518] — 2026-09-25
 - sync docs/components.js from extension/shared/components.js (ypz0)
 

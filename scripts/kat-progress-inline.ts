@@ -22,6 +22,7 @@
 //
 //   deno run -A scripts/kat-progress-inline.ts [<path-to-extension>] [<out-dir>]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-progress-inline`;
@@ -73,7 +74,7 @@ const ev = async (expr: string, sid: string) => {
   const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sid);
   if (r?.error) console.log(`EV-ERROR: ${r.error.message}`);
   if (r?.result?.exceptionDetails) console.log(`EV-EXCEPTION: ${JSON.stringify(r.result.exceptionDetails).slice(0, 200)}`);
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "k.progress-inline");
 };
 
 let sw = null;

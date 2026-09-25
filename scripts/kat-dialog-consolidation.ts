@@ -16,6 +16,7 @@
 // behaviours the consolidation is supposed to make identical by construction:
 // focus trap entry point, Escape, backdrop light-dismiss, and the destructive
 // default-focus rule. CAP-FB-20260827-DIALOG-CONSOLIDATION-01.
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -77,7 +78,7 @@ async function openPage(path: string) {
 const evalIn = async (s: string, expr: string) => {
   const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
   if (r?.result?.exceptionDetails) return { __error: r.result.exceptionDetails.exception?.description ?? "threw" };
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "k.dialog-consolidation");
 };
 
 const results: string[] = [];

@@ -16,6 +16,7 @@
 // Uses the mandated launchChrome() (kernel-assigned port, read from stderr) —
 // never a fixed debugging port.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -72,7 +73,7 @@ async function openSession(cdp: Cdp, port: number, url: string) {
 async function evalIn(cdp: Cdp, session: string, expression: string) {
   const r = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, session);
   if (r.result?.exceptionDetails) throw new Error(`eval threw: ${JSON.stringify(r.result.exceptionDetails).slice(0, 300)}`);
-  return r.result?.result?.value;
+  return wireValue<any>(r, "k.exec-build-flag");
 }
 
 async function shot(cdp: Cdp, session: string, name: string) {

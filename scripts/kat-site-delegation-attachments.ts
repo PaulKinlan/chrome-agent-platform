@@ -2,6 +2,7 @@
 // Real browser verification of site-agent delegation with attachments & live progress.
 // CAP-FB-20260825-DELEGATE-ATTACHMENTS-PROGRESS-01.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { textToDataUrl } from "../extension/lib/attachments.js";
@@ -59,7 +60,7 @@ try {
   const evalIn = async (expr: string) => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
     if (r?.result?.exceptionDetails) return { __error: r.result.exceptionDetails.exception?.description ?? "threw" };
-    return r?.result?.result?.value;
+    return wireValue<any>(r, "k.site-delegation-attachments");
   };
 
   const results: string[] = [];

@@ -13,6 +13,7 @@
 // the user message persist regardless (UX-008 semantics), which is exactly the
 // state needed to test continuity + projection.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 
@@ -54,7 +55,13 @@ ws.onmessage = (m: MessageEvent) => {
 };
 const evaluate = async (expr: string, sessionId: string) => {
   const j = await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
-  return j.result?.result?.value ?? j.result?.result?.description ?? null;
+  // kwrx: page exceptions now THROW named (wireValue strict); the legacy
+  // description fallback is kept only for genuinely unserializable value
+  // boxes, never as an exception stand-in.
+  const v = wireValue<string>(j, "p0-repro.evaluate");
+  if (v !== undefined) return v;
+  const d = (j?.result?.result as { description?: string } | undefined)?.description;
+  return d ?? null;
 };
 
 try {
@@ -218,7 +225,7 @@ try {
     const back2 = await backViaBrowser();
     console.log("BACK again (expect task1 or hub):", back2);
     try {
-      const A = JSON.parse(viewA), B = JSON.parse(viewB), A2 = JSON.parse(viewA2);
+      const A = JSON.parse(viewA ?? ""), B = JSON.parse(viewB ?? ""), A2 = JSON.parse(viewA2 ?? "");
       check("title updates when switching tasks", A.title !== B.title && A2.title === A.title, { a: A, b: B, a2: A2 });
       check("history renders on reopen (task1 non-empty)", A2.elems > 5, { a2: A2 });
     } catch (e) { check("title/history parse", false, String(e)); }

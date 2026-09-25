@@ -15,6 +15,7 @@
 //
 //   deno run -A scripts/sidepanel-companion-journey.ts [extension-dir] [out-dir]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -55,7 +56,11 @@ ws.onmessage = (m: MessageEvent) => {
 };
 const evaluate = async (expr: string, sessionId: string) => {
   const j = await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
-  return j.result?.result?.value ?? null;
+  // kwrx: strict — a page exception now THROWS named instead of reading as
+  // null. <any> keeps this multi-shape driver pass-through typing (strings
+  // AND layout objects flow through one helper); the honesty fix is the
+  // exception surface, not per-call-site generics.
+  return wireValue<any>(j, "spj.evaluate") ?? null;
 };
 
 try {

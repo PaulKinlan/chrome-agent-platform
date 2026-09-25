@@ -13,6 +13,7 @@
 //
 //   deno run -A scripts/kat-local-files.ts [extension-dir] [evidence-dir]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -69,7 +70,7 @@ try {
   const evaluate = async (sessionId: string, expression: string) => {
     const reply = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
     if (reply?.result?.exceptionDetails) throw new Error(reply.result.exceptionDetails.exception?.description ?? reply.result.exceptionDetails.text);
-    return reply?.result?.result?.value;
+    return wireValue<any>(reply, "k.local-files");
   };
   const screenshot = async (sessionId: string, name: string) => {
     const reply = await send("Page.captureScreenshot", { format: "png" }, sessionId);

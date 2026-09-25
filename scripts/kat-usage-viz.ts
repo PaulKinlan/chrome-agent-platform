@@ -15,6 +15,7 @@
 // chrome-agent-platform-q2we). What this harness proves: the Usage panel
 // renders honestly from real stored data. Counter-on-run behavior, if the
 // product decision changes, needs a run-driven probe then.
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -67,7 +68,7 @@ await sleep(1200);
 async function evaluate<T = any>(expression: string): Promise<T> {
   const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
   if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description ?? "eval failed");
-  return r.result?.result?.value;
+  return wireValue<any>(r, "k.usage-viz");
 }
 async function screenshot(name: string) {
   const shot = await send("Page.captureScreenshot", { format: "png" }, sessionId);

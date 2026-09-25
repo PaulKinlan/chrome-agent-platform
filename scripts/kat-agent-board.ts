@@ -12,6 +12,7 @@
 //
 //   deno run -A scripts/kat-agent-board.ts <path-to-extension> [<out-dir>]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 
@@ -51,7 +52,7 @@ ws.onmessage = (m: MessageEvent) => {
 const evaluate = async (expr: string, sessionId: string) => {
   const j = await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
   if (j.result?.exceptionDetails) return { __error: j.result.exceptionDetails.exception?.description ?? "evaluate failed" };
-  return j.result?.result?.value ?? null;
+  return wireValue<any>(j, "k.agent-board") ?? null;
 };
 
 try {

@@ -20,6 +20,7 @@
 //
 //   deno run -A scripts/kat-webmcp-honest-errors.ts [<out-dir>]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -95,7 +96,7 @@ const send = (method: string, params: any = {}, sessionId?: string) => new Promi
 const evalIn = async (sid: string, expr: string) => {
   const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sid);
   if (r?.result?.exceptionDetails) return { __exception: r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text };
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "k.webmcp-honest-errors");
 };
 const until = async (fn: () => Promise<any>, ms: number, step = 400) => {
   const deadline = Date.now() + ms;

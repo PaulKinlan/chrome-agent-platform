@@ -38,6 +38,7 @@
 import { fileURLToPath } from "node:url";
 import { inspectExactProfile, verifyRunnerGuard } from "./security-suite-custody.mjs";
 import { launchChrome, openCdp, type CdpClient } from "./lib/chrome-launch.ts";
+import { isEvalDiagnostic, wireValue } from "./lib/cdp-eval.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 // The composer is addressed by host + stable hook, never by the retired fixed
 // ids and never document-wide: ntp.html carries TWO composers, so an unscoped
@@ -296,13 +297,27 @@ async function main() {
     check("sender authority: a page's MAIN world has no chrome.runtime", mainRuntime === "undefined" || mainRuntime === false, { mainRuntime });
     const isolated = contexts.find((c) => c?.auxData?.type === "isolated");
     const inWorld = async (expr: string) => {
-      const r = await cdp.send("Runtime.evaluate", { expression: expr, contextId: isolated.id, returnByValue: true, awaitPromise: true }, fx.sessionId);
-      return r?.result?.result?.value;
+      // kwrx/4s4j: this site used to read r?.result?.result?.value blind — a
+      // page-side throw or a dead context surfaced as `undefined`, and the
+      // consumer graded that as a PRODUCT answer (the composer:false class).
+      // Tolerance is genuinely required here — the REFUSED case legitimately
+      // RESOLVES {thrown} as a value — but only resolved values may read as
+      // product answers now: a surfaced exception returns a NAMED diagnostic
+      // (AC-3) that every consumer must branch on via isEvalDiagnostic.
+      try {
+        const r = await cdp.send("Runtime.evaluate", { expression: expr, contextId: isolated.id, returnByValue: true, awaitPromise: true }, fx.sessionId);
+        return wireValue(r, "sender-authority.world-probe", {
+          tolerant: true,
+          why: "probe distinguishes a resolved refusal ({thrown}) from an instrument-dead read; consumers branch on isEvalDiagnostic",
+        });
+      } catch (e) {
+        return { __cdpEvalError: `send-failed ${String((e as Error)?.message ?? e)}`, site: "sender-authority.world-probe" };
+      }
     };
     let refusedRoute: any = null, allowedRoute: any = null;
     if (isolated) {
-      refusedRoute = await inWorld(`chrome.runtime.sendMessage({ type: "agent.list" }).then(v => v, e => ({ thrown: String(e && e.message || e) }))`).catch((e) => ({ evalError: String(e?.message ?? e) }));
-      allowedRoute = await inWorld(`chrome.runtime.sendMessage({ type: "tools.list" }).then(v => v, e => ({ thrown: String(e && e.message || e) }))`).catch((e) => ({ evalError: String(e?.message ?? e) }));
+      refusedRoute = await inWorld(`chrome.runtime.sendMessage({ type: "agent.list" }).then(v => v, e => ({ thrown: String(e && e.message || e) }))`);
+      allowedRoute = await inWorld(`chrome.runtime.sendMessage({ type: "tools.list" }).then(v => v, e => ({ thrown: String(e && e.message || e) }))`);
     }
     check(
       "sender authority: the content-script world is refused on a non-page route (agent.list)",
@@ -311,7 +326,7 @@ async function main() {
     );
     check(
       "sender authority: the same world still reaches a page-allowed route (tools.list) — the refusal is the route, not a dead channel",
-      !!isolated && allowedRoute && typeof allowedRoute === "object" && !("thrown" in allowedRoute) && !("evalError" in allowedRoute) && allowedRoute.error !== "not authorized from a page",
+      !!isolated && allowedRoute && typeof allowedRoute === "object" && !("thrown" in allowedRoute) && !isEvalDiagnostic(allowedRoute) && allowedRoute.error !== "not authorized from a page",
       { allowedRoute },
     );
 
