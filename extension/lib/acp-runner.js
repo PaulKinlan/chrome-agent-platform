@@ -183,6 +183,78 @@ export function extractBrowserToolCalls(rawText) {
 }
 
 
+/**
+ * Browser tools that require in-conversation owner approval when called by a harness (chrome-agent-platform-f3n2).
+ * Mirrors HARNESS_GATED_BROWSER_TOOLS in browser-tools.js without creating a direct module dependency.
+ */
+export const ACP_GATED_BROWSER_TOOLS = new Set([
+  "close_tab",
+  "close_window",
+  "wipe_browsing_data",
+  "remove_bookmark",
+  "set_cookie",
+  "remove_cookie",
+  "write_file",
+  "schedule_task",
+  "get_cookie",
+]);
+
+/** Format the human-readable approval title and detail for an in-conversation approval card. */
+export function formatBrowserToolApproval(name, args = {}) {
+  switch (name) {
+    case "close_tab":
+      return {
+        title: `Close browser tab #${args.tabId ?? ""}`,
+        detail: `The external agent requested to close tab ${args.tabId ?? ""}.`,
+      };
+    case "close_window":
+      return {
+        title: `Close browser window #${args.windowId ?? ""}`,
+        detail: `The external agent requested to close window ${args.windowId ?? ""}.`,
+      };
+    case "wipe_browsing_data":
+      return {
+        title: `Wipe browsing data (${Array.isArray(args.dataTypes) ? args.dataTypes.join(", ") : "all"})`,
+        detail: "The external agent requested to wipe browsing data.",
+      };
+    case "remove_bookmark":
+      return {
+        title: `Remove bookmark #${args.id ?? ""}`,
+        detail: `The external agent requested to delete bookmark ${args.id ?? ""}.`,
+      };
+    case "set_cookie":
+      return {
+        title: `Set cookie "${args.name ?? ""}" on ${args.url ?? ""}`,
+        detail: `The external agent requested to set a cookie on ${args.url ?? ""}.`,
+      };
+    case "remove_cookie":
+      return {
+        title: `Remove cookie "${args.name ?? ""}" on ${args.url ?? ""}`,
+        detail: `The external agent requested to remove a cookie from ${args.url ?? ""}.`,
+      };
+    case "write_file":
+      return {
+        title: `Write file "${args.path ?? ""}"`,
+        detail: `The external agent requested to write to ${args.path ?? ""}.`,
+      };
+    case "schedule_task":
+      return {
+        title: `Schedule task: "${args.task ?? ""}"`,
+        detail: "The external agent requested to schedule a future task.",
+      };
+    case "get_cookie":
+      return {
+        title: `Read cookie "${args.name ?? ""}" value`,
+        detail: `The external agent requested to reveal cookie value on ${args.origin ?? ""}.`,
+      };
+    default:
+      return {
+        title: `Execute browser tool "${name}"`,
+        detail: `The external agent requested to run ${name}.`,
+      };
+  }
+}
+
 /** Default loopback WebSocket endpoint for the ACP bridge */
 export const DEFAULT_ACP_ENDPOINT = "ws://127.0.0.1:3210/acp";
 
@@ -808,6 +880,44 @@ export async function runAcpTaskTurn(options) {
 
         status({ state: "running", activity: `Running browser tool: ${call.name}…` });
 
+        // Check if this tool is gated and requires in-conversation owner approval (chrome-agent-platform-f3n2)
+        let wasApproved = false;
+        if (ACP_GATED_BROWSER_TOOLS.has(call.name)) {
+          const approvalInfo = formatBrowserToolApproval(call.name, call.args);
+          const prompt = {
+            title: approvalInfo.title,
+            toolCall: { title: approvalInfo.title, detail: approvalInfo.detail },
+            options: [
+              { optionId: "allow_once", name: "Approve", kind: "allow_once" },
+              { optionId: "deny", name: "Deny", kind: "deny" },
+            ],
+          };
+
+          const decision = await permissionPrompter(prompt, {
+            container,
+            isCancelled: () => superseded(),
+            timeoutMs: options.permissionTimeoutMs ?? ACP_PERMISSION_TIMEOUT_MS,
+          });
+
+          const approved = decision && typeof decision.optionId === "string" && /allow/i.test(decision.optionId);
+
+          if (!approved) {
+            if (typeof container.appendTool === "function") {
+              const card = container.appendTool({
+                name: `browser:${call.name}`,
+                status: "error",
+                detail: `${call.name} (owner denied approval)`,
+              });
+              if (card && typeof card.setAttribute === "function") {
+                card.setAttribute("tool-status", "error");
+              }
+            }
+            toolResults.push({ id: call.id, result: { ok: false, error: "denied" } });
+            continue;
+          }
+          wasApproved = true;
+        }
+
         // Append tool card in container
         let card = null;
         if (typeof container.appendTool === "function") {
@@ -820,7 +930,11 @@ export async function runAcpTaskTurn(options) {
 
         let reply;
         try {
-          reply = await send("browser.callTool", { name: call.name, args: call.args });
+          reply = await send("browser.callTool", {
+            name: call.name,
+            args: call.args,
+            ...(wasApproved ? { approved: true } : {}),
+          });
         } catch (err) {
           reply = { ok: false, error: String(err?.message ?? err) };
         }
