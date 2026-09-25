@@ -19,6 +19,7 @@
 // run is still not reproducible in headless — the provider gate needs the
 // provider's host permission and headless has no prompt UI to grant it.)
 
+import { wireValue } from "./lib/cdp-eval.ts";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 import { fileURLToPath } from "node:url";
 import { pairToolJournal } from "../extension/shared/conversation.js";
@@ -115,7 +116,12 @@ async function attachRuntime(cdp: Cdp, targetId: string): Promise<string> {
 
 async function evalIn(cdp: Cdp, session: string, expression: string): Promise<unknown> {
   const r = await withTimeout(cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, session), 15000, "evalIn");
-  return (r as any)?.result?.result?.value;
+  // kwrx: r is the raw CDP envelope behind a Promise<unknown> (withTimeout);
+  // the structural cast names the exact shape wireValue reads.
+  return wireValue(
+    r as { result?: { result?: { value?: unknown }; exceptionDetails?: unknown }; error?: unknown },
+    "tce.evalIn",
+  );
 }
 
 async function captureShot(cdp: Cdp, session: string): Promise<Uint8Array<ArrayBuffer> | null> {
