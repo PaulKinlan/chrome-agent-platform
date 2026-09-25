@@ -77,6 +77,11 @@ export const EXEMPTIONS = {
   // fixture string it plants) and correctly flags the text — but every write goes to the scratch tree,
   // never to repo extension/ or packages/, and the file it writes is not in the real census at all.
   "tests/test-partition-guard.test.ts": "plants fixtures in a makeTempDir scratch tree; the extension/ literal is a fixture string, not a write target",
+  // chrome-agent-platform-xru1: the note-contract test spawns dist-staleness-note.mjs with cwd set
+  // to a durableDir scratch; its "extension/dist" literal is a path constructed INSIDE that scratch
+  // (freshScratch wipes it per case) — the repo tree is never read or written. The assertions are
+  // exit code 0 (the never-fail contract) and the note's wording.
+  "tests/dist-note-contract.test.ts": "runs the note script inside a durableDir scratch; extension/dist is a scratch-relative path, not a repo write",
   // 4lc0 round 5: the rule is now "naming the generator at all is a hazard", so these five are the
   // OVER-DECLARATION it costs. Each was read before being exempted: none of them loads or executes
   // anything — they read the build script's TEXT, list it as a path to scan, assert that package
