@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.489] — 2026-09-25
+- a live run's heartbeat and tool-safety writes survive a lost record too
+
 ## [0.3.488] — 2026-09-25
 - a run settles even when its durable record vanishes under it
 

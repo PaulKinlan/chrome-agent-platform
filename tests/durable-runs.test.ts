@@ -479,6 +479,25 @@ Deno.test("durable runs: a record that vanishes AFTER the settling marker still 
   assertEquals(durable.terminal?.summary, terminalPayload.summary);
 });
 
+Deno.test("durable runs: a heartbeat survives a record that VANISHED under the active run (cejm)", async () => {
+  // The mid-run half of the cejm anomaly: the vanish is discovered by the
+  // liveness heartbeat (the run loop ABORTS the run on a heartbeat failure), so
+  // the heartbeat must re-create the authority for a run this registry still
+  // owns instead of killing a healthy run over a storage-level loss.
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  const before = await store.get(`run:${executionId}`);
+  await store.delete(`run:${executionId}`);
+
+  const row = await run.registry.heartbeat(executionId, { progressed: true });
+  assertEquals(row.phase, "running", "the run is still live");
+  assertEquals(row.progressCount, before.progressCount + 1, "progress is preserved, not reset");
+  const durable = await store.get(`run:${executionId}`);
+  assertEquals(durable.phase, "running");
+  assertEquals(durable.progressCount, before.progressCount + 1, "the re-created record carries the heartbeat");
+});
+
 Deno.test("durable runs: pre-outbox crash cannot create result+orphan double state; replayed payload settles once", async () => {
   const store = new FakeStore();
   const first = harness(store, { failAt: "before-outbox" });

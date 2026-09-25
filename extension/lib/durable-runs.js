@@ -469,6 +469,32 @@ export function createDurableRunRegistry({
     return await readRecord(executionId, { persistMigration: false });
   }
 
+  /** A write for a run this registry still OWNS (`active`): a lost CAS is
+   *  reconciled instead of failing the caller — retry once at the store's fresh
+   *  revision when another writer moved the record, or RE-CREATE it when the
+   *  store lost it underneath the active run (chrome-agent-platform-cejm
+   *  measured a live run's execution dir emptied with no product-level delete,
+   *  the memory ledger still listing the files). Callers must have checked
+   *  `active` first, and a purge retires the writer so a purged run can never be
+   *  resurrected by its own heartbeat. A no-movement refusal (the store
+   *  rejected the write with the SAME revision — an injected fault or a real
+   *  refusal) still throws, unchanged. */
+  async function writeRecordWhileActive(executionId, value, expectedRevision, label, {
+    stillLive = (fresh) => ["running", "settling"].includes(fresh.phase),
+  } = {}) {
+    const written = await writeRecord(value, expectedRevision);
+    if (written) return written;
+    const fresh = await readRecordFresh(executionId);
+    if (fresh) {
+      // A record another writer took out of the live phases (terminal, paused,
+      // cancelled) must NEVER be overwritten by a liveness write: the run is
+      // over, so ownership is lost. Only a moved-but-still-live record retries.
+      if (fresh.revision === expectedRevision || !stillLive(fresh)) throw new Error(label);
+      return await writeRecord(value, fresh.revision);
+    }
+    return await writeRecord(value, null);
+  }
+
   async function persistJsonPayload(executionId, id, value) {
     const json = JSON.stringify(value);
     const ref = `${PAYLOAD_PREFIX}${executionId}:${id}`;
@@ -1206,13 +1232,12 @@ export function createDurableRunRegistry({
       // The FIRST recorded classification is authoritative for the first tool;
       // later tools worst-merge (mutating always wins). A null (unrecorded)
       // current value must NOT poison the merge as mutating.
-      const next = await writeRecord({
+      const next = await writeRecordWhileActive(executionId, {
         ...current,
         toolSafety: current.toolSafety == null
           ? classification
           : worstSafety(current.toolSafety, classification),
-      }, current.revision);
-      if (!next) throw new Error("durable run toolSafety CAS failed");
+      }, current.revision, "durable run toolSafety CAS failed");
       return publicRecord(next);
     });
   }
@@ -1225,12 +1250,11 @@ export function createDurableRunRegistry({
       if (!current || current.bootId !== bootId || !["running", "settling"].includes(current.phase)) {
         throw new Error("durable run ownership lost");
       }
-      const next = await writeRecord({
+      const next = await writeRecordWhileActive(executionId, {
         ...current,
         heartbeatAt: now(),
         progressCount: current.progressCount + (progressed ? 1 : 0),
-      }, current.revision);
-      if (!next) throw new Error("durable run heartbeat CAS failed");
+      }, current.revision, "durable run heartbeat CAS failed");
       return publicRecord(next);
     });
   }
@@ -2232,6 +2256,7 @@ export function createDurableRunRegistry({
         if (record.threadId) threadIds.add(String(record.threadId));
       }
       for (const executionId of purged) {
+        retireWriter(executionId);
         await store.delete(`${RUN_PREFIX}${executionId}`);
         await removeFromIndexExact(executionId, null);
         const dir = await purgeStoreDir(durableExecutionDirSegments(executionId));
