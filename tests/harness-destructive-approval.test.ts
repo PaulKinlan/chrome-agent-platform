@@ -252,3 +252,71 @@ Deno.test("f3n2: non-gated tools execute directly without raising approval card"
   assertEquals(toolCalls[0].name, "list_tabs");
   assertEquals(toolCalls[0].approved, undefined);
 });
+
+Deno.test("f3n2: SW browser.callTool route enforces policy 'never' even when caller passes approved: true (mutant M3 kill)", async () => {
+  // Pin the owner's strict opt-out: if destructiveActionPolicy() is 'never',
+  // an approved call must still be blocked (fail-closed defense).
+  // Falsifies mutant M3: removing the policy === 'never' check in service-worker.js
+  // will cause gateNever.ok to be true and fail this assertion.
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const site = src.indexOf('"browser.callTool": async');
+  assert(site >= 0, "the browser.callTool route must exist");
+  const end = src.indexOf("\n    },", site);
+  assert(end > site, "the handler body must be delimited");
+  const handlerSrc = src.slice(site + '"browser.callTool":'.length, end + "\n    }".length);
+
+  let currentPolicy = "never";
+  let receivedGates: any = null;
+
+  const compiled = new Function(
+    "isOwnerPrincipal",
+    "runBrowserToolCall",
+    "dispatchRoute",
+    "developerFeaturesOn",
+    "destructiveActionPolicy",
+    `return (${handlerSrc});`,
+  )(
+    (ctx: any) => ctx?.principal === "extension",
+    (_name: string, _args: any, gates: any) => {
+      receivedGates = gates;
+      return { ok: true };
+    },
+    (route: string, body: any, context: any) => ({ ok: true, route, body, context }),
+    () => Promise.resolve(false),
+    () => Promise.resolve(currentPolicy),
+  );
+
+  const ctx = { principal: "extension" };
+
+  // 1. Approved call under policy "never" must be BLOCKED
+  currentPolicy = "never";
+  await compiled({ name: "close_tab", args: { tabId: 15 }, approved: true }, ctx);
+  assert(receivedGates?.destructiveActionGate, "route must provide destructiveActionGate");
+  const gateNever = await receivedGates.destructiveActionGate("browser.close-foreign-tab", { tabId: 15 });
+  assertEquals(gateNever.ok, false, "policy 'never' must reject even with approved: true");
+  assertEquals(gateNever.approvalDenied, true);
+  assertStringIncludes(gateNever.error, "blocked in Settings");
+
+  // 2. Approved call under policy "ask" must SUCCEED
+  currentPolicy = "ask";
+  await compiled({ name: "close_tab", args: { tabId: 15 }, approved: true }, ctx);
+  const gateAsk = await receivedGates.destructiveActionGate("browser.close-foreign-tab", { tabId: 15 });
+  assertEquals(gateAsk.ok, true, "policy 'ask' allows approved call");
+  assertEquals(gateAsk.approvalConsumed, true);
+
+  // 3. Unapproved call under policy "ask" must DISPATCH to approval route
+  receivedGates = null;
+  await compiled({ name: "close_tab", args: { tabId: 15 } }, ctx);
+  const gateUnapproved = await receivedGates.destructiveActionGate("browser.close-foreign-tab", { tabId: 15 });
+  assertEquals(gateUnapproved.route, "browser.destructive-action", "unapproved call delegates to approval route");
+});
+
+Deno.test("f3n2 (advisory M4): ACP_GATED_BROWSER_TOOLS and HARNESS_GATED_BROWSER_TOOLS remain in sync", async () => {
+  const { HARNESS_GATED_BROWSER_TOOLS } = await import("../extension/lib/browser-tools.js");
+  assertEquals(
+    ACP_GATED_BROWSER_TOOLS,
+    HARNESS_GATED_BROWSER_TOOLS,
+    "ACP_GATED_BROWSER_TOOLS and HARNESS_GATED_BROWSER_TOOLS must match exactly without drift",
+  );
+});
+
