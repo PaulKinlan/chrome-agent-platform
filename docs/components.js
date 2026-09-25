@@ -1841,7 +1841,9 @@ class AttachButton extends Component {
 }
 customElements.define("attach-button", AttachButton);
 
-/* <theme-picker theme="sunlit"> — the theme swatches */
+/* <theme-picker theme="sunlit"> — the theme swatches.
+ * Gallery-only by owner decision (REVIEW-2026-08-30 §9 “Retain for future use … No component
+ * is deleted”): this is not dead code to delete — re-verify that decision before removing it. */
 export const THEMES = [
   { id: "midnight", label: "Midnight" },
   { id: "sunlit", label: "Sunlit" },
