@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.490] — 2026-09-25
+- the Diagnostics probe clicks the control in the panel it names, and says which seam failed
+
 ## [0.3.489] — 2026-09-25
 - finish recipes to skills rename and sync check EXPECTED ledger
 
