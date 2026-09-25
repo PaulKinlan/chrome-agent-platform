@@ -5,7 +5,14 @@
 # the picker manifest's commit FIELD is parsed (no broad grep); the repo ROOT
 # is scanned for stray lock/owner/stage temps.
 set -euo pipefail
-ROOT=/home/paulkinlan/cap-provider-picker
+# The picker checkout is an environment, not a machine: CAP_PROVIDER_PICKER_ROOT wins, else
+# $HOME/cap-provider-picker. A missing checkout fails loudly with that variable's name instead
+# of cd'ing into whatever happens to exist at a hardcoded path (chrome-agent-platform-tgx6).
+ROOT="${CAP_PROVIDER_PICKER_ROOT:-$HOME/cap-provider-picker}"
+if [ ! -d "$ROOT" ]; then
+  echo "# FATAL: provider-picker checkout not found at $ROOT — set CAP_PROVIDER_PICKER_ROOT to its path" >&2
+  exit 2
+fi
 # Durable evidence root — mirrors scripts/lib/durable-root.mjs: /tmp here is
 # RAM-backed tmpfs and evidence must survive a reboot. CAP_DURABLE_ROOT
 # overrides (empty = unset), else $HOME/cap-evidence.

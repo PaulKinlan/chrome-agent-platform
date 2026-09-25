@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.534] — 2026-09-25
+- resolve the picker checkout from the environment and walk .sh in the home-path guard (tgx6)
+
 ## [0.3.533] — 2026-09-25
 - share an agent as a .agent.json card and import one back
 
