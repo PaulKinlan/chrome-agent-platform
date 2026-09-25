@@ -1,13 +1,13 @@
 # Changelog
 
-## [0.3.546] — 2026-09-26
-- Export All streams the profile straight to a .tar file — no caps, no message buffering
+## [0.3.546] — 2026-09-25
+- co35 triage — permissions group pin re-truthed, undo leg instrumented
 
-## [0.3.545] — 2026-09-26
-- bounded-child names build.mjs in prose only — declare it and un-red main's partition guard
+## [0.3.545] — 2026-09-25
+- co35 triage — permissions group pin re-truthed, undo leg instrumented
 
-## [0.3.544] — 2026-09-26
-- an empty timeout override means the default, never 0 ms
+## [0.3.544] — 2026-09-25
+- C15 resolved — profile-store is the form-filler substrate, retained and documented
 
 ## [0.3.543] — 2026-09-25
 - C15 resolved — profile-store is the form-filler substrate, retained and documented
