@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.498] — 2026-09-25
+- ltkj.2 queued: sync the generated docs/components.js mirror with the panel form (build rewrite)
+
 ## [0.3.497] — 2026-09-25
 - ltkj.2 (QUEUED, do not land): the Emscripten admission surface, ready behind
 

@@ -13657,6 +13657,16 @@ class UserWasmManager extends Component {
           <button type="submit" class="primary">Add file</button>
         </fieldset>
       </form>
+      <form id="admission-form" aria-label="Check an Emscripten admission record">
+        <fieldset>
+          <legend>Check an admission record</legend>
+          <label class="field" for="admission-file"><span class="field-label">Admission record (JSON)</span>
+            <input class="control" id="admission-file" name="admission" type="file" accept=".json,application/json" required>
+          </label>
+          <p class="hint">Checks the record's structure and its linked module graph. Nothing is granted, registered or run.</p>
+          <button type="submit">Check record</button>
+        </fieldset>
+      </form>
       <p id="status" role="status"></p>
       <div class="list-head"><h3>Saved files</h3><button id="refresh" type="button">Refresh list</button></div>
       <p id="empty">No files saved yet.</p>
@@ -13711,6 +13721,13 @@ class UserWasmManager extends Component {
       });
     });
     this._root.querySelector("#refresh").addEventListener("click", () => this._emit("user-wasm-refresh"));
+    this._root.querySelector("#admission-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (this._busy || !event.target.reportValidity()) return;
+      const file = this._root.querySelector("#admission-file").files[0];
+      const text = await file.text();
+      this._emit("user-wasm-admission-check", { name: file.name, text });
+    });
   }
 }
 customElements.define("user-wasm-manager", UserWasmManager);
