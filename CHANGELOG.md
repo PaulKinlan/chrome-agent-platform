@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.533] — 2026-09-25
+- share an agent as a .agent.json card and import one back
+
+## [0.3.532] — 2026-09-25
+- you can now share an agent as an agent card file and import one back in the create dialog
+
 ## [0.3.531] — 2026-09-25
 - drop the wall-clock bound from the quiesced-screenshot fallback test
 

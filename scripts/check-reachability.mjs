@@ -52,8 +52,9 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 export const RETAINED = {
 
   // ── owner directives (TASKS.md CAP-FB-20260830-DEAD-CODE-CUT-01 Acceptance, 2026-08-30) ──
-  "lib/agent-cards.js":
-    "Owner directive 2026-08-30: adopted by CAP-FB-20260830-AGENT-SHARING-01; tests/agent-cards.test.ts pins it.",
+  // (lib/agent-cards.js was RETAINED here per the same directive; pu7n wired it
+  // into ntp.js — Share/Import agent — so it is REACHED from an entry point now
+  // and the RETAINED line is gone. tests/agent-cards.test.ts still pins it.)
   "lib/bundled-tool-packages.js":
     "Owner directive 2026-08-30: the WASI bundled-package inventory API must not change; tests/bundled-tool-packages.test.ts pins it (the service worker reads the generated *.data.js modules directly).",
   "lib/bundled-inventory.js":
