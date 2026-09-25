@@ -8,12 +8,30 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { runBoundedChild } from "../scripts/lib/bounded-child.mjs";
+import { currentLoadPerCpu, serialFileTimeoutMs } from "../scripts/lib/serial-phase.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
 const DRIFT_TARGET = `${ROOT}packages/bundled/sqlite3/PROVENANCE.json`;
 
-const CHILD_TIMEOUT_MS = Number(Deno.env.get("CAP_BOUNDED_CHILD_TIMEOUT_MS") ?? 120_000);
+/** ogmc: the inner bound SCALES with the machine exactly like the runner's serial file timeout
+ * (86gg) — the fixed 120 s was exceeded three times on 2026-09-25 at 1.8-4.6 load/CPU while the
+ * same work is ~1 s idle, and runBoundedChild then blamed chrome-agent-platform-fnmr (a futex
+ * hang) for slow work. CAP_BOUNDED_CHILD_TIMEOUT_MS still wins unscaled: the operator's number
+ * is the operator's number. */
+const OVERRIDE_MS = Number(Deno.env.get("CAP_BOUNDED_CHILD_TIMEOUT_MS") ?? NaN);
+const HAS_OVERRIDE = Number.isFinite(OVERRIDE_MS) && OVERRIDE_MS > 0;
+const LOAD_PER_CPU = currentLoadPerCpu();
+const CHILD_TIMEOUT_MS = HAS_OVERRIDE
+  ? OVERRIDE_MS
+  : serialFileTimeoutMs({ base: 120_000, loadPerCpu: LOAD_PER_CPU });
+const SCALED = !HAS_OVERRIDE && LOAD_PER_CPU > 1;
+if (SCALED) {
+  console.log(
+    `[ogmc] child bound scaled to ${Math.round(CHILD_TIMEOUT_MS / 1000)}s ` +
+      `(base 120s x load ${LOAD_PER_CPU.toFixed(2)} per CPU, ceiling x4)`,
+  );
+}
 // build.mjs runs the generator under its OWN bound (CAP_BUNDLED_TOOL_TIMEOUT_MS,
 // default 120s) and each helper spawn is its own process group, so the outer
 // bound must be LONGER than the inner one: the inner error must surface first,
@@ -27,13 +45,27 @@ const BUILD_TIMEOUT_MS = CHILD_TIMEOUT_MS + 30_000;
  * helper kills the whole process group (pozs) and throws naming the live
  * child's state (fnmr), so the failure blames the hang. */
 async function run(cmd, args, timeoutMs = CHILD_TIMEOUT_MS) {
-  const r = await runBoundedChild(cmd, args, {
-    cwd: ROOT,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeoutMs,
-    label: [cmd, ...args].join(" "),
-  });
-  return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  try {
+    const r = await runBoundedChild(cmd, args, {
+      cwd: ROOT,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeoutMs,
+      label: [cmd, ...args].join(" "),
+    });
+    return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  } catch (error) {
+    // ogmc: a timeout at an already-SCALED bound under load is environmental, not the fnmr futex
+    // hang and not a content red. Name the bound and the measured load so no lane has to guess.
+    const message = String((error as Error)?.message ?? error);
+    if (SCALED && message.includes("HUNG")) {
+      throw new Error(
+        `${message}\nENVIRONMENT: the bound was already scaled to ` +
+          `${Math.round(CHILD_TIMEOUT_MS / 1000)}s at ${LOAD_PER_CPU.toFixed(2)} load/CPU ` +
+          `(base 120s, ceiling x4) — this is load, not fnmr and not a content red; re-run in a quiet window.`,
+      );
+    }
+    throw error;
+  }
 }
 async function verify() {
   return await run("node", [GENERATOR, "--verify"]);
