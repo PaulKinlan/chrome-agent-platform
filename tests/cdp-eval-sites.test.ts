@@ -25,27 +25,10 @@ const GUARD = /exceptionDetails/;
 const HELPER_PATH = "scripts/lib/cdp-eval.ts";
 const LOOKBACK_LINES = 80;
 
-// Raw value-read sites deliberately retained, per file. Every entry is a migration gap (0aeh)
-// or a pattern false positive. Extend ONLY with a written reason; shrink in the same commit
-// that removes a raw read.
+// Raw value-read sites deliberately retained, per file. The 0aeh migration gaps are all
+// routed; the single remaining entry is a pattern false positive. Extend ONLY with a
+// written reason; shrink in the same commit that removes a raw read.
 const PERMITTED_RAW_READS: Record<string, { sites: number; reason: string }> = {
-  "scripts/chrome-journeys.ts": {
-    sites: 8,
-    reason:
-      "residual (0aeh): evalIn/evalX return r?.result?.result?.value with no exceptionDetails check; the file does not import cdp-eval, and the old file-level guard passed on the Runtime.exceptionThrown handler's mentions",
-  },
-  "scripts/agent-provider-picker.ts": {
-    sites: 1,
-    reason: "residual (0aeh): the evalStep helper returns r?.result?.result?.value with no exceptionDetails check",
-  },
-  "scripts/kat-browser-tool-proxy.ts": {
-    sites: 1,
-    reason: "residual (0aeh): inWorker reads .result.value and catches to null, so a page-side throw is reported as absent",
-  },
-  "scripts/read-page-host-grant-acceptance.ts": {
-    sites: 1,
-    reason: "residual (0aeh): evalIn returns r?.result?.result?.value with no exceptionDetails check",
-  },
   "scripts/kat-composer-slash-commands.ts": {
     sites: 1,
     reason: "not a CDP read: result?.value is a browser-tool result passed to check(), not a Runtime.evaluate value (pattern match only)",

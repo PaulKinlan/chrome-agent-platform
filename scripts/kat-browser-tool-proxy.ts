@@ -145,7 +145,11 @@ if (swTarget) {
   await cdp("Runtime.enable", {}, swSession);
   const inWorker = (expression: string) =>
     cdp("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, swSession)
-      .then((r: any) => r.result?.value ?? r.result?.result?.value ?? null, () => null);
+      // kwrx/0aeh: no null-on-failure — these reads feed Chrome-state assertions
+      // ("asked of CHROME, not of the harness"), so a dead instrument must abort the
+      // KAT named, not read as product-absent. cdp() rejects on protocol error and
+      // methodValue throws EvalSurfaceError on a page-side throw; both propagate.
+      .then((r: any) => methodValue(r, "k.browser-tool-proxy.inWorker"));
   swGroup = await inWorker(`(async () => {
       const groups = await chrome.tabGroups.query({});
       const mine = groups.find((g) => g.title === "2amt drive");
