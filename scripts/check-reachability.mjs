@@ -59,8 +59,12 @@ export const RETAINED = {
   "lib/bundled-inventory.js":
     "Owner directive 2026-08-30: part of the WASI bundled-package inventory (imported by lib/bundled-tool-packages.js); tests/bundled-tool-packages.test.ts pins it.",
   // ── surfaces or modules another OPEN entry owns ──
-  "lib/emscripten-module-audit.js":
-    "40an: inert structural auditor until ltkj.2's admission integration references it; remove this entry when reachable (the stale-retention gate enforces that).",
+  // lib/emscripten-module-audit.js WAS retained here as "40an: inert structural auditor until
+  // ltkj.2's admission integration references it; remove this entry when reachable". The admission
+  // integration now references it (wasm-package-authority re-exports auditEmscriptenModule /
+  // auditEmscriptenGraph and imports auditEmscriptenGraph), so the stale-retention gate refused the
+  // build — the entry's own instruction. Removed 2026-09-25 (ycez/ltkj.2), which is what makes the
+  // reachability half of this integration honest rather than a retained-but-unused module.
   "lib/archive-target-registry.js":
     "CAP-FB-20260905-UNBOUNDED-DATA-ARCHIVE-01 (11rm / qcuf): classification authority for durable targets. Its sanitizer family stayed tests-only; 8wbb shipped the agentConfig authority separately (lib/logical-site-agent-config.js) — this module ships when the 11rm streaming converter lands.",
   "lib/tabular-diff-artifacts.js":

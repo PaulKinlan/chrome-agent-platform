@@ -26,6 +26,27 @@ export async function mountUserWasmPanel(panel) {
   }
   mounted.set(panel, refresh);
   panel.addEventListener("user-wasm-refresh", refresh);
+  // ── the Settings-only ADMISSION CHECK (ycez / ltkj.2) ───────────────────────────────────────
+  // The schema-2 broker is loaded HERE, in the options document, and nowhere else: the same modules
+  // reached from the service worker put its Store bundle over budget (measured 3,009,120 vs 3,000,000;
+  // the split is why the authority takes the surface by injection). This action reads a record and
+  // reports the authority's verdict — it grants, registers and executes nothing.
+  panel.addEventListener("user-wasm-admission-check", async ({ detail }) => {
+    panel.busy = true;
+    panel.setStatus("Checking the record. Nothing is granted, registered or run.");
+    try {
+      const { validateSchema2Manifest } = await import("../lib/emscripten-admission.js");
+      const verdict = validateSchema2Manifest(detail.text);
+      if (verdict?.ok === true) {
+        panel.setStatus(`“${detail.name}” is structurally valid. Nothing was granted, registered or run.`);
+      } else {
+        const where = verdict?.path ? ` (at ${verdict.path})` : "";
+        panel.setStatus(`“${detail.name}” was refused${where}: ${verdict?.error ?? "unknown refusal"}. Nothing was granted, registered or run.`, true);
+      }
+    } catch (error) {
+      failure(error);
+    } finally { panel.busy = false; }
+  });
   panel.addEventListener("user-wasm-upload", async ({ detail }) => {
     panel.busy = true;
     panel.setStatus("Writing your file locally. Keep Settings open until it is saved.");

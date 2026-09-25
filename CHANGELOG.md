@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.497] — 2026-09-25
+- ltkj.2 (QUEUED, do not land): the Emscripten admission surface, ready behind
+
 ## [0.3.496] — 2026-09-25
 - the schema-2 surface is injected, so the decoder can never enter the service worker
 
