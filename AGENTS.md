@@ -354,7 +354,7 @@ read in run 2.
   `npm run test:file -- tests/x.test.ts`. Do not add `--config deno.runner.jsonc`
   to a sweep by hand; that is the runner's job.
   **Real browser requirement:** `npm test` is NOT a pure in-memory test run.
-  While all 15 serial files and 421+ parallel files are in-memory unit tests or use
+  While all 17 serial files and 480+ parallel files are in-memory unit tests or use
   fake-runner probes (`binary: fake`), `tests/chrome-profile-location.test.ts:115`
   unconditionally launches a REAL Chromium instance to test live profile mutation
   during whole-tree copies. It requires `/usr/bin/chromium` (or Chrome binary).

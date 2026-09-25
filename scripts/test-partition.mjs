@@ -53,16 +53,6 @@ export const SERIAL_REASONS = {
   // queueing thresholds (a 1500 ms skip bound against a 2000 ms marker window),
   // which is exactly what the 32-worker parallel phase makes flaky.
   "tests/chrome-slot-semaphore-honesty.test.ts": "mutates CAP_CHROME_SLOT_DIR and makes wall-clock queueing assertions (races/flakes with other lock tests under the parallel phase)",
-  // 4lc0: this file IMPORTS the bundled-tool generator for one constant
-  // (AGENT_DESCRIPTIONS). Importing it RUNS it — the generator's work is at module top
-  // level and its isMain flag gates only the final process.exit — so a run of this test
-  // rewrites all 38 files in extension/wasm/cas. Measured in isolation (per-file mtime
-  // fingerprint of the CAS dir changes), and in the nco2 subset that regeneration landed
-  // inside the parallel phase while tests/gzip-preview.test.ts was reading a CAS file,
-  // which failed NotFound: the false red this bead exists for. The spawn-based hazard
-  // scan could not see an import, which is why this entry and the IMPORT_BUILD_RE class
-  // in this file are the same fix.
-  "tests/tool-descriptions.test.ts": "imports scripts/build-bundled-tool-packages.mjs, whose import-time work regenerates extension/wasm/cas (38 files) — measured; readers race it",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
@@ -88,6 +78,16 @@ export const EXEMPTIONS = {
   "tests/risk-register-contract.test.ts": "asserts the risk register CITES build.mjs for the bundle budget; documentation text only",
   "tests/zod-jitless-fallback.test.ts": "mentions build.mjs in a comment describing how the pipeline scrubs; no load",
   "tests/durable-root.test.ts": "scans test file paths including serial build tests for tmpdir literals; executes no build or extension writes",
+  // i1i9 removed the 4lc0 hazard AT THE SOURCE instead of working around it: the
+  // generator's top-level work now lives in main(), called only under the existing
+  // isMain guard. Measured on this tree — a fresh-process import yields
+  // AGENT_DESCRIPTIONS (38 entries), prints no `OK: 38 packages …` generation line, and
+  // leaves the per-file mtime fingerprint of extension/wasm/cas unchanged, where before
+  // the same import rewrote all 38 files. So the import and the child probe below are
+  // reads: they cannot race a rebuild because they do not cause one. tests/
+  // tool-descriptions.test.ts pins that purity, so a regression re-serialises this file
+  // the moment the child probe reds.
+  "tests/tool-descriptions.test.ts": "imports the bundled-tool generator for its one pure export and spawns a no-write child that does the same; since chrome-agent-platform-i1i9 the generation work runs only under isMain, so neither the import nor the probe writes extension/wasm/cas — measured (CAS mtime fingerprint unchanged, no generation line on stdout)",
 };
 
 // A test that spawns one of these local drivers inherits the driver's hazard
