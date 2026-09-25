@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.508] — 2026-09-25
+- a run settles and heartbeats survive even when its durable record vanishes under it
+
+## [0.3.507] — 2026-09-25
+- internal: durable run state reconciles on settling, terminal, and live-run writes if an underlying record is lost, with negative paths pinned
+
 ## [0.3.506] — 2026-09-25
 - route serial-phase timeout test to serial and pin wall-clock flake declarations
 

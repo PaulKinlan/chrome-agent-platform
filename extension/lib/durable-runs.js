@@ -31,7 +31,7 @@ import {
   durableExecutionDirSegments,
   durablePayloadDirSegments,
   durableThreadDirSegments,
-  purgeStoreDir,
+  purgeStoreDir as purgeStoreDirImpl,
 } from "./memory.js";
 
 const INDEX_KEY = "run-registry";
@@ -250,6 +250,11 @@ export function createDurableRunRegistry({
   // The owner's run-log retention setting (see RUN_RETENTION_SETTING_KEY);
   // injectable so the unit suite never reaches chrome.storage.
   retentionSetting = defaultRetentionSetting,
+  // The OPFS directory purge used by purgeForTarget. Injectable for the same
+  // reason as the rest: a unit test that supplies its own store must be able to
+  // exercise the purge's registry effects (record, index, writer retirement)
+  // without reaching real OPFS (chrome-agent-platform-cejm review).
+  purgeStoreDir: purgeStoreDirDep = purgeStoreDirImpl,
   injectFailure = null,
 } = {}) {
   // ── the record cache (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ──────────
@@ -455,6 +460,44 @@ export function createDurableRunRegistry({
     if (recordCache.size >= 4096) recordCache.clear(); // bounded, like the other memos
     recordCache.set(executionId, normalized);
     return normalized;
+  }
+
+  /** A STORE-TRUTH read that bypasses the record cache. Use it when a write has
+   *  just lost its CAS: the cache is sound only while this registry is the
+   *  single writer of `run:` keys, and a lost CAS means the store moved in a
+   *  way the cache may not have seen — including the measured case where the
+   *  record FILE IS GONE (chrome-agent-platform-cejm: a live run's execution
+   *  dir emptied with no product-level delete, the memory ledger still listing
+   *  the files). */
+  async function readRecordFresh(executionId) {
+    recordCache.delete(executionId);
+    return await readRecord(executionId, { persistMigration: false });
+  }
+
+  /** A write for a run this registry still OWNS (`active`): a lost CAS is
+   *  reconciled instead of failing the caller — retry once at the store's fresh
+   *  revision when another writer moved the record, or RE-CREATE it when the
+   *  store lost it underneath the active run (chrome-agent-platform-cejm
+   *  measured a live run's execution dir emptied with no product-level delete,
+   *  the memory ledger still listing the files). Callers must have checked
+   *  `active` first, and a purge retires the writer so a purged run can never be
+   *  resurrected by its own heartbeat. A no-movement refusal (the store
+   *  rejected the write with the SAME revision — an injected fault or a real
+   *  refusal) still throws, unchanged. */
+  async function writeRecordWhileActive(executionId, value, expectedRevision, label, {
+    stillLive = (fresh) => ["running", "settling"].includes(fresh.phase),
+  } = {}) {
+    const written = await writeRecord(value, expectedRevision);
+    if (written) return written;
+    const fresh = await readRecordFresh(executionId);
+    if (fresh) {
+      // A record another writer took out of the live phases (terminal, paused,
+      // cancelled) must NEVER be overwritten by a liveness write: the run is
+      // over, so ownership is lost. Only a moved-but-still-live record retries.
+      if (fresh.revision === expectedRevision || !stillLive(fresh)) throw new Error(label);
+      return await writeRecord(value, fresh.revision);
+    }
+    return await writeRecord(value, null);
   }
 
   async function persistJsonPayload(executionId, id, value) {
@@ -1194,13 +1237,12 @@ export function createDurableRunRegistry({
       // The FIRST recorded classification is authoritative for the first tool;
       // later tools worst-merge (mutating always wins). A null (unrecorded)
       // current value must NOT poison the merge as mutating.
-      const next = await writeRecord({
+      const next = await writeRecordWhileActive(executionId, {
         ...current,
         toolSafety: current.toolSafety == null
           ? classification
           : worstSafety(current.toolSafety, classification),
-      }, current.revision);
-      if (!next) throw new Error("durable run toolSafety CAS failed");
+      }, current.revision, "durable run toolSafety CAS failed");
       return publicRecord(next);
     });
   }
@@ -1213,12 +1255,11 @@ export function createDurableRunRegistry({
       if (!current || current.bootId !== bootId || !["running", "settling"].includes(current.phase)) {
         throw new Error("durable run ownership lost");
       }
-      const next = await writeRecord({
+      const next = await writeRecordWhileActive(executionId, {
         ...current,
         heartbeatAt: now(),
         progressCount: current.progressCount + (progressed ? 1 : 0),
-      }, current.revision);
-      if (!next) throw new Error("durable run heartbeat CAS failed");
+      }, current.revision, "durable run heartbeat CAS failed");
       return publicRecord(next);
     });
   }
@@ -1272,16 +1313,30 @@ export function createDurableRunRegistry({
     record = await readRecord(executionId);
     const terminalPhase = cancelling ? "cancelled" : "terminal";
     if (!TERMINAL_PHASES.has(record.phase)) {
-      const terminal = await writeRecord({
+      // Retention bookkeeping: the log's size once the terminal row below
+      // lands (one file stat; the terminal row is estimated from its
+      // payload). Read by the global byte cap without opening any file.
+      const terminalValue = {
         ...record,
         phase: terminalPhase,
         heartbeatAt: now(),
         terminal: outbox.terminal,
-        // Retention bookkeeping: the log's size once the terminal row below
-        // lands (one file stat; the terminal row is estimated from its
-        // payload). Read by the global byte cap without opening any file.
         logBytes: await logBytesFor(executionId) + JSON.stringify(outbox.terminal ?? null).length + 160,
-      }, record.revision);
+      };
+      let terminal = await writeRecord(terminalValue, record.revision);
+      if (!terminal) {
+        // A lost CAS is INFORMATION, not a failure to settle. Re-read the
+        // STORE — never the cache — and either accept another writer's terminal
+        // projection, or RE-CREATE the authority this projection needs when the
+        // record has VANISHED under a live run (chrome-agent-platform-cejm
+        // measured exactly that: the execution dir emptied with no
+        // product-level delete while the memory ledger still listed the
+        // files). The outbox is the authority for this run's outcome.
+        const fresh = await readRecordFresh(executionId);
+        terminal = fresh && TERMINAL_PHASES.has(fresh.phase)
+          ? fresh
+          : await writeRecord(terminalValue, fresh ? fresh.revision : null);
+      }
       if (!terminal) throw new Error("terminal registry CAS failed");
       record = terminal;
     }
@@ -1905,7 +1960,26 @@ export function createDurableRunRegistry({
       record = await readRecord(executionId);
       if (record.phase === "running") {
         const settling = await writeRecord({ ...record, phase: "settling", heartbeatAt: now() }, record.revision);
-        if (!settling) throw new Error("settling registry CAS failed");
+        if (!settling) {
+          // A lost CAS is INFORMATION, not a run failure. Re-read the STORE
+          // (never the cache: the loss means the store moved in a way the cache
+          // may not have seen) and settle against what is actually there.
+          // chrome-agent-platform-cejm measured the record file VANISHING under
+          // a live run with no product-level delete; the outbox below is the
+          // authority for this run's outcome, so the settling marker is
+          // RECREATED rather than misreporting a storage anomaly as a run
+          // failure. A no-movement refusal still throws.
+          const fresh = await readRecordFresh(executionId);
+          if (fresh && fresh.phase !== "running") {
+            record = fresh; // another writer moved the run on; the outbox below is idempotent
+          } else {
+            const retry = await writeRecord(
+              { ...(fresh ?? record), phase: "settling", heartbeatAt: now() },
+              fresh ? fresh.revision : null,
+            );
+            if (!retry) throw new Error("settling registry CAS failed");
+          }
+        }
       }
       return await processOutbox(executionId);
     });
@@ -2187,14 +2261,15 @@ export function createDurableRunRegistry({
         if (record.threadId) threadIds.add(String(record.threadId));
       }
       for (const executionId of purged) {
+        retireWriter(executionId);
         await store.delete(`${RUN_PREFIX}${executionId}`);
         await removeFromIndexExact(executionId, null);
-        const dir = await purgeStoreDir(durableExecutionDirSegments(executionId));
+        const dir = await purgeStoreDirDep(durableExecutionDirSegments(executionId));
         if (dir?.ok === false) throw new Error(`execution dir purge failed: ${executionId}`);
         // kmpq P0: retained payload chunks live in their own store family
         // (durable-runs/payloads/<execId>) — purge them with the execution or
         // they outlive their run.
-        const payloadDir = await purgeStoreDir(durablePayloadDirSegments(executionId));
+        const payloadDir = await purgeStoreDirDep(durablePayloadDirSegments(executionId));
         if (payloadDir?.ok === false) throw new Error(`payload dir purge failed: ${executionId}`);
       }
       let threadsRemoved = 0;
@@ -2205,7 +2280,7 @@ export function createDurableRunRegistry({
         const remaining = current.filter((id) => !purged.includes(id));
         if (remaining.length === 0) {
           await store.delete(key);
-          const dir = await purgeStoreDir(durableThreadDirSegments(threadId));
+          const dir = await purgeStoreDirDep(durableThreadDirSegments(threadId));
           if (dir?.ok === false) throw new Error(`thread dir purge failed: ${threadId}`);
           threadsRemoved += 1;
         } else if (remaining.length !== current.length) {
