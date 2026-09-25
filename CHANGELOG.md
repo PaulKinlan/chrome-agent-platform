@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.489] — 2026-09-25
+- round 2: template loads inherit, and a dead exemption retires itself
+
 ## [0.3.488] — 2026-09-25
 - explaining a test no longer makes your file inherit its hazards
 

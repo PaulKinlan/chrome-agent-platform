@@ -113,6 +113,18 @@ Deno.test("partition guard: a driver reference is a LOAD or a SPAWN, never a men
   const execRef = `${own}execFileSync("deno", ["test", "${DRIVER}"]);\n`;
   assert(realDriverRefs(execRef).includes(DRIVER), "an exec argument is a real driver reference");
 
+  // 3b. TEMPLATES THAT CAN LOAD are references too (audiofeed-astra review):
+  // a no-substitution template specifier loads exactly like a quoted one —
+  // the shape that cost the generator taxonomy round 5 — and a template quote
+  // inside a spawn argument list must not end the spawn window.
+  const templateImport = `import(\`../${DRIVER}\`);\n`;
+  assert(realDriverRefs(templateImport).includes(DRIVER), "a no-substitution template specifier is a real driver reference");
+  const templateSpawn = `${own}new Deno.Command("deno", { args: [\`test\`, "${DRIVER}"] }).output();\n`;
+  assert(realDriverRefs(templateSpawn).includes(DRIVER), "a spawn window crosses template quotes to the path argument");
+  // A SUBSTITUTING template stays invisible (runtime assembly — residue, unchanged):
+  const substituting = "await import(`../tests/" + "${name}`);\n";
+  assertEquals(realDriverRefs(substituting), [], "a substituting template is runtime assembly (documented residue)");
+
   // The inheritance END-TO-END through the merged classifier: a wrapper that
   // genuinely spawns the hazard driver sees its classes; the comment-only
   // wrapper does not.
@@ -140,6 +152,14 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
     const st = await Deno.stat(`${ROOT}${rel}`).catch(() => null);
     assert(st !== null, `${rel}: exemption must name a file that exists on disk`);
     assert(!SERIAL.has(rel), `${rel}: a file is serial OR exempt, never both`);
+    // An exemption whose file no longer classifies as ANY hazard is dead
+    // weight that hides its own reason from review (audiofeed-astra, 8b8w
+    // review: durable-root's entry survived its own obsolescence silently).
+    const own = await Deno.readTextFile(`${ROOT}${rel}`);
+    assert(
+      classifyHazards(own).length > 0 || realDriverRefs(own).length > 0,
+      `${rel}: exemption is DEAD — the file classifies with no hazard classes and no driver refs; delete the entry`,
+    );
   }
 });
 

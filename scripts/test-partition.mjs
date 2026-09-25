@@ -87,7 +87,11 @@ export const EXEMPTIONS = {
   "tests/package-scripts-exist.test.ts": "asserts a package.json script REFERENCE to build.mjs resolves; it never imports the generator",
   "tests/risk-register-contract.test.ts": "asserts the risk register CITES build.mjs for the bundle budget; documentation text only",
   "tests/zod-jitless-fallback.test.ts": "mentions build.mjs in a comment describing how the pipeline scrubs; no load",
-  "tests/durable-root.test.ts": "scans test file paths including serial build tests for tmpdir literals; executes no build or extension writes",
+  // (tests/durable-root.test.ts was exempted here until 8b8w reference-scoped
+  // the driver inheritance: with prose mentions no longer inheriting, the file
+  // classifies with NO hazard classes and there is nothing left to exempt —
+  // measured by audiofeed-astra's review and re-measured on the widened
+  // delimiters.)
 };
 
 // A test that SPAWNS or IMPORTS one of these local drivers inherits the
@@ -102,12 +106,18 @@ export const EXEMPTIONS = {
 // (import/from/require/dynamic import) or a spawn/exec argument list can carry
 // a driver reference, because those are the shapes that actually LOAD or RUN
 // the driver. RESIDUE, stated so it is not implied away: a path assembled at
-// runtime ("tests/" + name) is invisible to every text detector here — it was
-// equally invisible to the old mention rule, so the fix does not widen that
-// hole; and a COMMENTED-OUT import still matches its shape (fail-closed: the
-// cost is an inheritance a lane did not need, never a silent parallel writer).
-const DRIVER_LOAD_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'][^"'\n]*?(tests\/[\w.-]+\.(?:mjs|ts))["']/g;
-const DRIVER_SPAWN_RE = /(?:Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn(?:Sync)?\s*\()[^;`]{0,400}?(tests\/[\w.-]+\.(?:mjs|ts))/g;
+// runtime ("tests/" + name, or a SUBSTITUTING template `../tests/${n}`) is
+// invisible to every text detector here — it was equally invisible to the old
+// mention rule, so the fix does not widen that hole; a hoisted-const path
+// (const D = "tests/x.mjs" … spawned later) is equally dataflow-invisible;
+// and a COMMENTED-OUT import still matches its shape (fail-closed: the cost is
+// an inheritance a lane did not need, never a silent parallel writer).
+// NO-SUBSTITUTION TEMPLATES ARE NOT RESIDUE (audiofeed-astra's review of this
+// fix): `import(`../tests/x.mjs`)` loads the module exactly like a quoted
+// specifier — the shape that cost the generator taxonomy round 5 — so the
+// delimiter classes include the backtick and the spawn window crosses it.
+const DRIVER_LOAD_RE = /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'`][^"'`\n]*?(tests\/[\w.-]+\.(?:mjs|ts))["'`]/g;
+const DRIVER_SPAWN_RE = /(?:Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn(?:Sync)?\s*\()[^;]{0,400}?(tests\/[\w.-]+\.(?:mjs|ts))/g;
 
 /** The tests/* drivers a file's text actually loads or spawns — the ONLY
  * references whose hazard classification a mentioning file inherits. A prose
