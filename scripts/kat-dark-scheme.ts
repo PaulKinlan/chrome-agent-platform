@@ -133,17 +133,18 @@ for (const [name, path] of paths) {
     }
     // Contrast sample in this scheme.
     const probeRes = await send("Runtime.evaluate", { expression: contrastProbe, returnByValue: true }, sessionId);
-    if (probeRes.result?.exceptionDetails) {
-      console.log(`DEBUG ${name}/${scheme} probe exception:`, probeRes.result.exceptionDetails.exception?.description ?? JSON.stringify(probeRes.result.exceptionDetails));
-    }
-    const sample = probeRes.result?.result?.value ?? [];
+    // kwrx P5: tolerant BY DESIGN — one scheme's dead contrast probe must not
+    // abort the whole sweep; the min-sample check below fails LOUDLY for that
+    // scheme. The death is named in the log, never silently [].
+    const sampleRes = wireValue(probeRes, "k.dark-scheme.sample", { tolerant: true, why: "per-scheme probe: a dead sample must not abort the sweep, and must be named" });
+    const sample = Array.isArray(sampleRes) ? sampleRes : (() => { console.log(`DEBUG ${name}/${scheme} sample probe died: ${(sampleRes && (sampleRes as { __cdpEvalError?: string }).__cdpEvalError) ?? "no samples"}`); return []; })();
     // artifacts-library is the empty-state page on a fresh profile — little text exists.
     const minSample = name === "artifacts-library" ? 2 : 5;
     check(`${name}/${scheme}: contrast probe actually sampled styles`, sample.length >= minSample, { sampled: sample.length });
     const bad = sample.filter((s: any) => s.ratio < (s.large ? 3 : 4.5));
     check(`${name}/${scheme}: WCAG AA on ${sample.length} sampled text styles (worst ${Math.min(...sample.map((s: any) => s.ratio), 99)})`, bad.length === 0, bad.slice(0, 4));
     if (name === "ntp-hub" && scheme === "dark") {
-      const userBubble = wireValue(await send("Runtime.evaluate", {
+      const userBubble = wireValue<any>(await send("Runtime.evaluate", {
         expression: `(() => {
           ${lumJs}
           const parse = (s) => (s.match(/\\d+(?:\\.\\d+)?/g) ?? []).slice(0, 3).map(Number);
@@ -158,7 +159,7 @@ for (const [name, path] of paths) {
         returnByValue: true,
       }, sessionId), "k.dark-scheme.user");
       check("ntp-hub/dark: user bubble resolves dark secondary-layer with AA ink", userBubble?.bg === "rgb(43, 40, 35)" && userBubble?.ratio >= 4.5, userBubble);
-      const toolTree = wireValue(await send("Runtime.evaluate", {
+      const toolTree = wireValue<any>(await send("Runtime.evaluate", {
         expression: `(() => {
           ${lumJs}
           const parse = (s) => (s.match(/\\d+(?:\\.\\d+)?/g) ?? []).slice(0, 3).map(Number);

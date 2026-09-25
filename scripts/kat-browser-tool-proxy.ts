@@ -19,6 +19,7 @@ import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { buildVariant } from "./permission-variant.mjs";
 import { fileURLToPath } from "node:url";
+import { methodValue } from "./lib/cdp-eval.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = Number(Deno.env.get("CAP_2AMT_PORT") ?? 3312); // NOT 3210: a real bridge may be there
@@ -80,8 +81,11 @@ const { sessionId: page } = await cdp("Target.attachToTarget", { targetId, flatt
 await cdp("Runtime.enable", {}, page);
 const evl = async (expr: string) => {
   const r = await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, page);
-  if (r.exceptionDetails) throw new Error(`page threw: ${JSON.stringify(r.exceptionDetails).slice(0, 400)}`);
-  return r.result.value;
+  // kwrx P5: the local guard folded into the shared helper — same strict
+  // semantics (throw named), one vocabulary across the fleet.
+  // kwrx P5: <any> pass-through preserved from the old any-typed chain —
+  // this driver evaluates strings, DOM objects, and event ledges alike.
+  return methodValue<any>(r, "k.browser-tool-proxy.evl");
 };
 await sleep(1500);
 
