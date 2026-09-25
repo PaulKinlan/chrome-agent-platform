@@ -231,18 +231,21 @@ Deno.test("tool naming & descriptions: importing the bundled-tool generator writ
   }
 
   const before = await fingerprint();
-  const run = await new Deno.Command(Deno.execPath(), {
-    args: [
-      "eval",
-      "--allow-read",
-      "--allow-env",
-      `const mod = await import(${JSON.stringify(generator)});` +
-      `console.log("EXPORTS:" + Object.keys(mod).sort().join(","));` +
-      `console.log("DESCRIPTIONS:" + Object.keys(mod.AGENT_DESCRIPTIONS ?? {}).length);`,
-    ],
+  const script =
+    `const mod = await import(${JSON.stringify(generator)});\n` +
+    `console.log("EXPORTS:" + Object.keys(mod).sort().join(","));\n` +
+    `console.log("DESCRIPTIONS:" + Object.keys(mod.AGENT_DESCRIPTIONS ?? {}).length);\n`;
+  const cmd = new Deno.Command(Deno.execPath(), {
+    args: ["run", "--allow-read", "--allow-env", "--ext=js", "-"],
+    stdin: "piped",
     stdout: "piped",
     stderr: "piped",
-  }).output();
+  });
+  const child = cmd.spawn();
+  const writer = child.stdin.getWriter();
+  await writer.write(new TextEncoder().encode(script));
+  await writer.close();
+  const run = await child.output();
 
   const stdout = new TextDecoder().decode(run.stdout);
   const stderr = new TextDecoder().decode(run.stderr);

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.529] — 2026-09-25
+- use deno run stdin instead of eval for permission flags in Deno 2
+
 ## [0.3.528] — 2026-09-25
 - importing the bundled-tool generator is a data read, not a rebuild
 
