@@ -82,7 +82,19 @@ Deno.test("passive detector rejects forged snapshots and relays the genuine prob
   assertEquals(typeof hookName, "string", "a per-document randomized hook exists");
 
   relayWindow.postMessage({ __cap_webmcp_detect: 1, type: "snapshot", toolCount: 99 }, "*");
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // jy4e: the genuine relay is asynchronous — the MAIN probe announces its per-document hook
+  // on a 50/250/1000 ms schedule and the SW arms it by calling that hook. A fixed 100 ms sleep
+  // raced the parallel suite's load and produced an unattributed 0-vs-1 red in a full-suite
+  // fallback run (10 reproduction attempts negative). Wait on the CONDITION with a deliberate
+  // budget that covers the schedule, so load changes latency, not the verdict. The forgery
+  // stays distinguished by payload: a relayed forgery arrives as toolCount 99 and fails the
+  // second assertion; a genuine probe that never arrives exhausts the budget and fails the
+  // first.
+  const RELAY_BUDGET_MS = 3_000;
+  const relayDeadline = Date.now() + RELAY_BUDGET_MS;
+  while (detections.length === 0 && Date.now() < relayDeadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   assertEquals(detections.length, 1, "nonce-less page forgery must not update the registry");
   assertEquals(detections[0].toolCount, 1, "the authenticated MAIN probe is relayed");
 });
