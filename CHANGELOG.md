@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.539] — 2026-09-25
+- negative control now covers the snapshot signature, not just the shape guard
+
 ## [0.3.538] — 2026-09-25
 - evaluate MCP Zod peer unification with schema parity tests and evidence
 

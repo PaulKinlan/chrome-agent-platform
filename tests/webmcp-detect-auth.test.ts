@@ -85,6 +85,24 @@ Deno.test("passive detector rejects forged snapshots and relays the genuine prob
   await new Promise((resolve) => setTimeout(resolve, 100));
   assertEquals(detections.length, 1, "nonce-less page forgery must not update the registry");
   assertEquals(detections[0].toolCount, 1, "the authenticated MAIN probe is relayed");
+
+  // xqpq: the forgery above dies on SHAPE (no seq) — it never reaches the
+  // signature clause. This second forgery lands AFTER the genuine relay (nonce
+  // exists, lastSequence is 0), is shape-valid (integer seq in range and ahead,
+  // in-range toolCount, string tag), and can ONLY be refused by the HMAC tag
+  // check: deleting that clause turns this assertion red, which the old control
+  // could never see.
+  relayWindow.postMessage(
+    { __cap_webmcp_detect: 1, type: "snapshot", seq: 7, toolCount: 99, tag: "guessed" },
+    "*",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assertEquals(
+    detections.length,
+    1,
+    "LATE FORGERY RELAYED: a well-formed but unsigned snapshot reached the registry",
+  );
+  assertEquals(detections[0].toolCount, 1, "the only detection remains the authenticated probe");
 });
 
 Deno.test("passive detector relay re-arms on the SW's post-grant nudge", async () => {
