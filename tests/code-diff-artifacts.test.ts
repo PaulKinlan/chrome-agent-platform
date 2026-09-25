@@ -1,7 +1,9 @@
 // @ts-nocheck — hostile proxy/getter and byte fixtures are intentionally dynamic.
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import {
-  CODE_DIFF_LIMITS,
+  CODE_DIFF_DOC_LIMITS,
+  CODE_DIFF_RETENTION_LIMITS,
+  CODE_DIFF_VIEW_LIMITS,
   MAX_RETAINED_BLOB_BYTES,
   MAX_RETAINED_BLOBS,
   MAX_RETAINED_CAS_BYTES,
@@ -343,12 +345,12 @@ Deno.test("unified and side-by-side views hash authoritative CAS, bound lines, n
   const side = await deriveSideBySide({ changeDoc: updatedDoc, casBlobs: cas });
   assert(side.rows.some((row) => row.kind === "binary" && row.mediaType === "image/png"));
   assert(side.rows.every((row) => typeof row === "object"));
-  const long = "x".repeat(CODE_DIFF_LIMITS.maxLineBytes * 2);
+  const long = "x".repeat(CODE_DIFF_VIEW_LIMITS.maxLineBytes * 2);
   const longBlob = await blob(long);
   const longDoc = { schemaVersion: 1, canonicalPathSet: ["long.ts"], displayPaths: null, changes: [{ op: "add", path: "long.ts", contentSha256: longBlob.sha256, size: longBlob.bytes.byteLength, encoding: "utf8" }] };
   const view = await deriveUnified({ changeDoc: longDoc, casBlobs: [longBlob] });
   assert(view.text.endsWith("…"));
-  assert(enc.encode(view.rows.at(-1)).byteLength <= CODE_DIFF_LIMITS.maxLineBytes);
+  assert(enc.encode(view.rows.at(-1)).byteLength <= CODE_DIFF_VIEW_LIMITS.maxLineBytes);
 });
 
 Deno.test("views refuse missing/mismatched CAS, invalid UTF-8 and total line budget", async () => {
@@ -359,10 +361,44 @@ Deno.test("views refuse missing/mismatched CAS, invalid UTF-8 and total line bud
   const badBlob = { sha256: await digest(bad), bytes: bad };
   const badDoc = { schemaVersion: 1, canonicalPathSet: ["bad.ts"], displayPaths: null, changes: [{ op: "add", path: "bad.ts", contentSha256: badBlob.sha256, size: bad.byteLength, encoding: "utf8" }] };
   await rejectCode(() => deriveUnified({ changeDoc: badDoc, casBlobs: [badBlob] }), "view_bad_unicode");
-  const many = `${"line\n".repeat(CODE_DIFF_LIMITS.maxViewLines + 1)}`;
+  const many = `${"line\n".repeat(CODE_DIFF_VIEW_LIMITS.maxViewLines + 1)}`;
   const manyBlob = await blob(many);
   const manyDoc = { schemaVersion: 1, canonicalPathSet: ["many.ts"], displayPaths: null, changes: [{ op: "add", path: "many.ts", contentSha256: manyBlob.sha256, size: manyBlob.bytes.byteLength, encoding: "utf8" }] };
   await rejectCode(() => deriveUnified({ changeDoc: manyDoc, casBlobs: [manyBlob] }), "view_over_budget");
+});
+
+Deno.test("code-diff limit authorities are split: disjoint keys, retention budgets pinned, memory-safety intact (op01)", () => {
+  // The whole point of the op01 split: lifting the VIEW limits (dptw's removal)
+  // must be structurally unable to touch retention budgets or intake validation.
+  const authorities = [
+    ["CODE_DIFF_DOC_LIMITS", CODE_DIFF_DOC_LIMITS],
+    ["CODE_DIFF_RETENTION_LIMITS", CODE_DIFF_RETENTION_LIMITS],
+    ["CODE_DIFF_VIEW_LIMITS", CODE_DIFF_VIEW_LIMITS],
+  ];
+  const seen = new Map();
+  for (const [name, limits] of authorities) {
+    assertEquals(Object.isFrozen(limits), true, `${name} must stay frozen`);
+    for (const key of Object.keys(limits)) {
+      assert(!seen.has(key), `${name}.${key} is shared with ${seen.get(key)} — the op01 seam requires disjoint authorities`);
+      seen.set(key, name);
+    }
+  }
+  // The memory-safety values, pinned EXACTLY: a removal that zeroes or lifts a
+  // retention budget is a heap decision and must red here, not in an OOM.
+  assertEquals({ ...CODE_DIFF_RETENTION_LIMITS }, {
+    maxRetainedBlobBytes: 180 * 1024,
+    maxRetainedCasBytes: 4 * 1024 * 1024,
+    maxRetainedBlobs: 64,
+  });
+  // The retention exports derive from the retention authority and nothing else.
+  assertEquals(MAX_RETAINED_BLOB_BYTES, CODE_DIFF_RETENTION_LIMITS.maxRetainedBlobBytes);
+  assertEquals(MAX_RETAINED_CAS_BYTES, CODE_DIFF_RETENTION_LIMITS.maxRetainedCasBytes);
+  assertEquals(MAX_RETAINED_BLOBS, CODE_DIFF_RETENTION_LIMITS.maxRetainedBlobs);
+  // No resurrected merged const: the shared block is gone, not aliased.
+  const source = new TextDecoder().decode(
+    Deno.readFileSync(new URL("../extension/lib/code-diff-artifacts.js", import.meta.url)),
+  );
+  assert(!/export const CODE_DIFF_LIMITS\b/.test(source), "the merged CODE_DIFF_LIMITS const must not return");
 });
 
 Deno.test("apply/reject/undo synchronously fail before side effects and module has no route/index/OPFS/runtime authority", async () => {

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.501] — 2026-09-25
+- code-diff view limits split from retention budgets so lifting caps cannot OOM the store
+
 ## [0.3.500] — 2026-09-25
 - mark theme-picker as owner-retained (ol11)
 
