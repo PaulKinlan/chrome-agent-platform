@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.489] — 2026-09-25
+- bump version for ypz0 user-facing tab focus fix
+
+## [0.3.488] — 2026-09-25
+- provider tabs no longer drag the Settings page on narrow screens; keyboard reveal is truly guarded
+
 ## [0.3.487] — 2026-09-24
 - external agents can call every browser tool, and the ones that need your approval still ask for it
 
