@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.546] — 2026-09-25
+- co35 triage — permissions group pin re-truthed, undo leg instrumented
+
+## [0.3.545] — 2026-09-25
+- co35 triage — permissions group pin re-truthed, undo leg instrumented
+
+## [0.3.544] — 2026-09-25
+- C15 resolved — profile-store is the form-filler substrate, retained and documented
+
 ## [0.3.543] — 2026-09-25
 - C15 resolved — profile-store is the form-filler substrate, retained and documented
 
