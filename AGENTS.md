@@ -99,6 +99,12 @@ refreshes `.beads/issues.jsonl` into the checkout being committed;
 from the primary checkout — hooks live in the common `.git/hooks`, so one
 install serves every linked worktree:
 `cp scripts/git-hooks/pre-commit scripts/git-hooks/post-commit .git/hooks/ && chmod +x .git/hooks/pre-commit .git/hooks/post-commit`.
+**The post-commit version bump is explicit and once per branch (chrome-agent-platform-8nec):**
+the commit subject is never a release note. To consume a version, put
+`Release-note: <what the user gets, in plain language>` in the commit body (or set
+`CAP_USER_NOTE` before `git commit`); without one the hook bumps nothing and writes no
+entry. A second commit on the same branch does not bump again — the branch keeps its one
+bump until it lands, and a branch behind `origin/main` waits for a rebase.
 A hook never locates the repo via `$0` — from every worktree that is the
 primary's hook file, and the old `cd "$(dirname "$0")/../.."` wrote the export
 into the shared checkout and staged the primary's file into the worktree's

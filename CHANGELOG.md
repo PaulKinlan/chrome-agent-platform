@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.525] — 2026-09-25
+- bump only on an explicit release note, once per branch (8nec)
+
 ## [0.3.524] — 2026-09-25
 - count raw value-read sites, not handled files (8ko7)
 
