@@ -48,7 +48,6 @@ const UNHANDLED: string[] = [
   "scripts/p0-repro.ts",
   "scripts/perf-leak-trace.ts",
   "scripts/screenshot-vision-evidence.ts",
-  "scripts/security-suite.ts",
   "scripts/sidepanel-companion-journey.ts",
   "scripts/tool-call-evidence.ts",
   "scripts/validate-package-load.ts",
