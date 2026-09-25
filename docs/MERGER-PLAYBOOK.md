@@ -102,7 +102,7 @@ git commit -m "chrome-agent-platform-<bead>: <summary of user-visible change>"
 
 # 6. Rebuild production store bundle (mandatory after commit)
 npm run build:production
-npm run check:dist
+npm run note:dist   # NOTE (not a gate) — the real dist gate is npm test's serial phase
 
 # 7. Run focused test / real-browser driver
 npm run test:file -- tests/<relevant>.test.ts

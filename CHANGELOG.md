@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.527] — 2026-09-25
+- check:dist becomes note:dist — a note named as a note
+
+## [0.3.526] — 2026-09-25
+- check:dist becomes note:dist to clearly indicate it is an informational check, not an enforcement gate
+
 ## [0.3.525] — 2026-09-25
 - bump only on an explicit release note, once per branch (8nec)
 

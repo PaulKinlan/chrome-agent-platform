@@ -51,7 +51,7 @@ an exception. These rules make that safe:
    **`extension/dist/dist.complete` binds HEAD, every indexed source byte and the generated
    bundles: ANY commit invalidates the build — including the post-commit hook's own version
    bump and `git commit --amend`.** Rebuild after your LAST commit, before `npm test`
-   (`npm run check:dist` says whether the build is current in ~0.2 s); otherwise the serial
+   (`npm run note:dist` says whether the build is current in ~0.2 s); otherwise the serial
    phase reds on `dist.complete` markers that are unrelated to your change (1mz2).
    Never implement directly in the primary checkout (`~/chrome-agent-platform`)
    — the primary checkout is shared by every session, and one session moving
