@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.520] — 2026-09-25
+- drop the wall-clock bound from the quiesced-screenshot fallback test
+
 ## [0.3.519] — 2026-09-25
 - internal: extract shared typed cdp-eval helper for evaluating page scripts without swallowing exceptions, and migrate scripts/ drivers
 

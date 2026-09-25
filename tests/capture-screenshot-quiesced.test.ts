@@ -51,17 +51,18 @@ Deno.test("safeCaptureScreenshot: fromSurface: true timeout falls back to compos
     throw new Error(`unexpected method ${method}`);
   };
 
-  // Run with a short 100ms timeout for test speed
-  const t0 = Date.now();
+  // Run with a short 100ms timeout for test speed. No wall-clock assertion:
+  // the call sequence below already pins that the 100ms bound fired (had the
+  // wrapper waited out the stub's 2000ms sleep, the first capture would have
+  // RESOLVED and the wake + fallback calls would never happen). An elapsed
+  // bound in the parallel phase adds flake risk and nothing else (8cu6).
   const bytes = await safeCaptureScreenshot(send, "session-1", {
     format: "png",
     fromSurface: true,
     timeoutMs: 100,
   });
-  const elapsed = Date.now() - t0;
 
   assert(bytes instanceof Uint8Array, "must return a Uint8Array on fallback");
-  assert(elapsed < 1500, `fallback must complete quickly (took ${elapsed}ms)`);
   // Verify call sequence: initial fromSurface: true -> Runtime.evaluate rAF -> fallback fromSurface: false
   assertEquals(calls[0].method, "Page.captureScreenshot");
   assertEquals(calls[0].params.fromSurface, true);
