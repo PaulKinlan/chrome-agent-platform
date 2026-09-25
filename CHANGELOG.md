@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.490] — 2026-09-25
+- hand-rolled ws handlers reject instead of resolving undefined on instrument death (2 files)
+
 ## [0.3.489] — 2026-09-25
 - finish recipes to skills rename and sync check EXPECTED ledger
 
