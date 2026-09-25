@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.490] — 2026-09-25
+- the recovery's NEGATIVE paths are pinned (review response)
+
 ## [0.3.489] — 2026-09-25
 - a live run's heartbeat and tool-safety writes survive a lost record too
 

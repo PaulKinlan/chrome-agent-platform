@@ -65,7 +65,7 @@ class FakeStore {
   async keys() { return [...this.values.keys()].sort(); }
 }
 
-function harness(store, { bootId = "boot-a", failAt = null, retention = null, onBoundary = null } = {}) {
+function harness(store, { bootId = "boot-a", failAt = null, retention = null, onBoundary = null, purgeStoreDir = null } = {}) {
   const journal = [];
   const thread = [];
   let failed = false;
@@ -75,6 +75,9 @@ function harness(store, { bootId = "boot-a", failAt = null, retention = null, on
     // The owner's retention setting (`cap:runRetention`), injected so a test
     // never reaches chrome.storage. null = the bounded defaults.
     ...(retention ? { retentionSetting: async () => retention } : {}),
+    // A test driving purgeForTarget supplies its own directory purge so the
+    // registry's effects are exercised without real OPFS (cejm review).
+    ...(purgeStoreDir ? { purgeStoreDir } : {}),
     bootId,
     now: (() => { let n = 1_000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal }),
@@ -496,6 +499,60 @@ Deno.test("durable runs: a heartbeat survives a record that VANISHED under the a
   const durable = await store.get(`run:${executionId}`);
   assertEquals(durable.phase, "running");
   assertEquals(durable.progressCount, before.progressCount + 1, "the re-created record carries the heartbeat");
+});
+
+Deno.test("durable runs: a liveness write is REFUSED when the fresh record left the live phases (cejm)", async () => {
+  // The NEGATIVE half of writeRecordWhileActive: a record another writer moved
+  // out of running/settling (a pause, a terminal settle, a cancel) must never be
+  // overwritten by a liveness write. Ownership is lost, and the refusal must
+  // leave the store's record EXACTLY as the other writer left it.
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  // Another writer pauses the run (a new revision, out of the live phases).
+  const paused = { ...(await store.get(`run:${executionId}`)), phase: "paused-interruption", revision: 99 };
+  await store.setTrusted(`run:${executionId}`, paused);
+  const versionBefore = await store.getVersion(`run:${executionId}`);
+
+  await assertRejects(
+    () => run.registry.heartbeat(executionId, { progressed: true }),
+    Error,
+    "durable run heartbeat CAS failed",
+  );
+
+  const after = await store.get(`run:${executionId}`);
+  assertEquals(after.phase, "paused-interruption", "a liveness write never overwrites a record that left the live phases");
+  assertEquals(after.revision, paused.revision, "and it does not bump the revision");
+  assertEquals(await store.getVersion(`run:${executionId}`), versionBefore, "the store version is untouched too");
+});
+
+Deno.test("durable runs: a PURGED run is not a live writer and its heartbeat re-creates nothing (cejm)", async () => {
+  // The other negative path: purgeForTarget must RETIRE the writer. Without
+  // that, a purged execution keeps projecting as live (isActive true) and any
+  // later liveness write would be treated as owning the record it no longer has.
+  const store = new FakeStore();
+  const run = harness(store, { purgeStoreDir: async () => ({ ok: true, absent: true }) });
+  await run.registry.start({
+    executionId,
+    clientCorrelationId: "purge-run-1",
+    threadId: "thread-purge",
+    kind: "task",
+    taskPreview: "purge me",
+    journalTarget: "agent:purge-fixture",
+    resumeRequest: null,
+  });
+  assertEquals(run.registry.isActive(executionId), true, "the run starts as a live writer");
+
+  await run.registry.purgeForTarget("agent:purge-fixture");
+
+  assertEquals(await store.has(`run:${executionId}`), false, "the purge removed the record");
+  assertEquals(run.registry.isActive(executionId), false, "a purged run is NOT a live writer (the purge retires the writer)");
+  await assertRejects(
+    () => run.registry.heartbeat(executionId),
+    Error,
+    "execution is not active in this boot",
+  );
+  assertEquals(await store.has(`run:${executionId}`), false, "the refused heartbeat re-creates nothing");
 });
 
 Deno.test("durable runs: pre-outbox crash cannot create result+orphan double state; replayed payload settles once", async () => {

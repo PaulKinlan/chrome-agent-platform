@@ -31,7 +31,7 @@ import {
   durableExecutionDirSegments,
   durablePayloadDirSegments,
   durableThreadDirSegments,
-  purgeStoreDir,
+  purgeStoreDir as purgeStoreDirImpl,
 } from "./memory.js";
 
 const INDEX_KEY = "run-registry";
@@ -250,6 +250,11 @@ export function createDurableRunRegistry({
   // The owner's run-log retention setting (see RUN_RETENTION_SETTING_KEY);
   // injectable so the unit suite never reaches chrome.storage.
   retentionSetting = defaultRetentionSetting,
+  // The OPFS directory purge used by purgeForTarget. Injectable for the same
+  // reason as the rest: a unit test that supplies its own store must be able to
+  // exercise the purge's registry effects (record, index, writer retirement)
+  // without reaching real OPFS (chrome-agent-platform-cejm review).
+  purgeStoreDir: purgeStoreDirDep = purgeStoreDirImpl,
   injectFailure = null,
 } = {}) {
   // ── the record cache (CAP-FB-20260830-RUN-LOG-COMPACTION-01) ──────────
@@ -2259,12 +2264,12 @@ export function createDurableRunRegistry({
         retireWriter(executionId);
         await store.delete(`${RUN_PREFIX}${executionId}`);
         await removeFromIndexExact(executionId, null);
-        const dir = await purgeStoreDir(durableExecutionDirSegments(executionId));
+        const dir = await purgeStoreDirDep(durableExecutionDirSegments(executionId));
         if (dir?.ok === false) throw new Error(`execution dir purge failed: ${executionId}`);
         // kmpq P0: retained payload chunks live in their own store family
         // (durable-runs/payloads/<execId>) — purge them with the execution or
         // they outlive their run.
-        const payloadDir = await purgeStoreDir(durablePayloadDirSegments(executionId));
+        const payloadDir = await purgeStoreDirDep(durablePayloadDirSegments(executionId));
         if (payloadDir?.ok === false) throw new Error(`payload dir purge failed: ${executionId}`);
       }
       let threadsRemoved = 0;
@@ -2275,7 +2280,7 @@ export function createDurableRunRegistry({
         const remaining = current.filter((id) => !purged.includes(id));
         if (remaining.length === 0) {
           await store.delete(key);
-          const dir = await purgeStoreDir(durableThreadDirSegments(threadId));
+          const dir = await purgeStoreDirDep(durableThreadDirSegments(threadId));
           if (dir?.ok === false) throw new Error(`thread dir purge failed: ${threadId}`);
           threadsRemoved += 1;
         } else if (remaining.length !== current.length) {
