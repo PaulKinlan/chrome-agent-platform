@@ -1,61 +1,163 @@
-// kwrx P2 — the count cannot silently regrow.
+// kwrx P2 — the count cannot silently regrow. 8ko7: count READ SITES, not files.
 //
-// A file under scripts/ that calls Runtime.evaluate AND reads a value back
-// must either handle exceptionDetails itself or go through
-// scripts/lib/cdp-eval.ts. UNHANDLED is a frozen, SHRINKING allowlist: one
-// unlisted new offender fails; one migrated file left in the list also fails
-// (the list stays honest per migration commit).
+// A file under scripts/ that calls Runtime.evaluate AND reads a value back must not swallow a
+// page-side throw. The first version of this guard marked a whole file HANDLED when it merely
+// MENTIONED exceptionDetails|cdp-eval anywhere, so:
+//   - a migrated file could add a NEW raw read elsewhere and pass CI;
+//   - 11 genuinely raw reads in four files rode behind unrelated mentions — chrome-journeys x8
+//     (its evalIn/evalX helpers, and the file does not import the helper at all; the mention was
+//     in a Runtime.exceptionThrown handler), agent-provider-picker, kat-browser-tool-proxy and
+//     read-page-host-grant-acceptance (tracked as 0aeh).
 //
-// Counted at filing time (tip 27cf212d7): 37 files / 52 value-read sites.
-// The bead said 34/49 at filing (2026-09-25, 0lb4-review tree) — three
-// drivers landed since; the bytes in THIS tree govern, as always.
+// A site is one value-read pattern occurrence. It is permitted when it is SELF-GUARDING — an
+// exceptionDetails check appears between the nearest preceding Runtime.evaluate and the read —
+// or explicitly listed below with a reason. scripts/lib/cdp-eval.ts is excluded by exact path,
+// never by keyword: it is where the guarded read lives.
+//
+// Re-measured on 566a2d39a: 31 files / 42 sites, 30 self-guarding, 12 permitted below.
+// Removing a raw read shrinks its permit in the same commit (stale permits fail); adding one
+// fails by file:line.
 import { assert, assertEquals } from "jsr:@std/assert";
 
 const EVAL = /Runtime\.evaluate/;
-const VALUE_READ = /\.result\??\.value|\.result\.result\??\.value|\bresult\?\.value\b/;
-const HANDLED = /exceptionDetails|cdp-eval/;
+const VALUE_READ = /\.result\??\.value\b|\.result\.result\??\.value\b|\bresult\?\.value\b/;
+const GUARD = /exceptionDetails/;
+const HELPER_PATH = "scripts/lib/cdp-eval.ts";
+const LOOKBACK_LINES = 80;
 
-const UNHANDLED: string[] = [
-  // EMPTY as of kwrx P4: every scripts/*.ts that calls Runtime.evaluate and
-  // reads a value now either routes through scripts/lib/cdp-eval.ts or names
-  // exceptionDetails itself. The migration trail: 37 files measured at the
-  // tip when claimed (the bead's 34 predated three drivers landing and
-  // undercounted files whose ONE guarded read masked raw secondary reads —
-  // kat-dark-scheme ×3 raw + kat-composer-grow-style auxiliaries), 56 files
-  // touched in total, 2 known self-guarded spellings left intact
-  // (kat-browser-tool-proxy, kat-dark-scheme probeRes site) — P5 folds those
-  // two into the helper. Add an entry ONLY with a written reason; the test
-  // fails on entries that no longer offend, so the list cannot rot.
-];
+// Raw value-read sites deliberately retained, per file. Every entry is a migration gap (0aeh)
+// or a pattern false positive. Extend ONLY with a written reason; shrink in the same commit
+// that removes a raw read.
+const PERMITTED_RAW_READS: Record<string, { sites: number; reason: string }> = {
+  "scripts/chrome-journeys.ts": {
+    sites: 8,
+    reason:
+      "residual (0aeh): evalIn/evalX return r?.result?.result?.value with no exceptionDetails check; the file does not import cdp-eval, and the old file-level guard passed on the Runtime.exceptionThrown handler's mentions",
+  },
+  "scripts/agent-provider-picker.ts": {
+    sites: 1,
+    reason: "residual (0aeh): the evalStep helper returns r?.result?.result?.value with no exceptionDetails check",
+  },
+  "scripts/kat-browser-tool-proxy.ts": {
+    sites: 1,
+    reason: "residual (0aeh): inWorker reads .result.value and catches to null, so a page-side throw is reported as absent",
+  },
+  "scripts/read-page-host-grant-acceptance.ts": {
+    sites: 1,
+    reason: "residual (0aeh): evalIn returns r?.result?.result?.value with no exceptionDetails check",
+  },
+  "scripts/kat-composer-slash-commands.ts": {
+    sites: 1,
+    reason: "not a CDP read: result?.value is a browser-tool result passed to check(), not a Runtime.evaluate value (pattern match only)",
+  },
+};
 
-async function offenders(root = "scripts"): Promise<string[]> {
-  const out: string[] = [];
-  const scan = async (p: string) => {
-    const src = await Deno.readTextFile(p);
-    if (EVAL.test(src) && VALUE_READ.test(src) && !HANDLED.test(src)) out.push(p);
-  };
-  for await (const e of Deno.readDir(root)) {
-    const p = `${root}/${e.name}`;
-    if (e.isDirectory) {
-      for await (const f of Deno.readDir(p)) {
-        if (f.isFile && f.name.endsWith(".ts")) await scan(`${p}/${f.name}`);
-      }
-    } else if (e.isFile && e.name.endsWith(".ts")) {
-      await scan(p);
+// Remove comments but keep every newline (line numbers must match the file) and keep the inside
+// of strings opaque, so a URL's `//` is not mistaken for a comment.
+function stripComments(source: string): string {
+  let out = "";
+  let state: "code" | "line" | "block" | "string" = "code";
+  let quote = "";
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    const next = source[i + 1] ?? "";
+    if (state === "code") {
+      if (c === "/" && next === "/") { state = "line"; i++; continue; }
+      if (c === "/" && next === "*") { state = "block"; i++; continue; }
+      if (c === "'" || c === '"' || c === "`") { state = "string"; quote = c; }
+      out += c;
+    } else if (state === "line") {
+      if (c === "\n") { state = "code"; out += c; }
+    } else if (state === "block") {
+      if (c === "*" && next === "/") { state = "code"; i++; continue; }
+      if (c === "\n") out += c;
+    } else {
+      out += c;
+      if (c === "\\") { out += next; i++; continue; }
+      if (c === quote) state = "code";
     }
   }
-  return out.sort();
+  return out;
+}
+
+interface ReadSite {
+  line: number;
+  guarded: boolean;
+}
+
+function readSites(source: string): ReadSite[] {
+  const lines = stripComments(source).split("\n");
+  const sites: ReadSite[] = [];
+  lines.forEach((line, index) => {
+    if (!VALUE_READ.test(line)) return;
+    let guarded = false;
+    for (let i = index; i >= Math.max(0, index - LOOKBACK_LINES); i--) {
+      if (!EVAL.test(lines[i])) continue;
+      guarded = GUARD.test(lines.slice(i, index + 1).join("\n"));
+      break;
+    }
+    sites.push({ line: index + 1, guarded });
+  });
+  return sites;
+}
+
+async function scan(root = "scripts"): Promise<Map<string, ReadSite[]>> {
+  const found = new Map<string, ReadSite[]>();
+  const visit = async (path: string) => {
+    for await (const entry of Deno.readDir(path)) {
+      const child = `${path}/${entry.name}`;
+      if (entry.isDirectory) {
+        await visit(child);
+      } else if (entry.isFile && entry.name.endsWith(".ts") && child !== HELPER_PATH) {
+        const source = stripComments(await Deno.readTextFile(child));
+        if (!EVAL.test(source)) continue; // a value read in a file with no evaluate is not a CDP read
+        const sites = readSites(source);
+        if (sites.length > 0) found.set(child, sites);
+      }
+    }
+  };
+  await visit(root);
+  return found;
 }
 
 Deno.test({
-  name: "kwrx guard: no new unhandled value-reading evaluates; allowlist stays exact",
+  name: "kwrx guard: every raw value-read site is self-guarding or explicitly permitted (by file:line)",
   fn: async () => {
-    const found = await offenders();
-    const allow = [...UNHANDLED].sort();
-    const fresh = found.filter((f) => !allow.includes(f));
-    const stale = allow.filter((f) => !found.includes(f));
-    assert(fresh.length === 0, `NEW unhandled value-reading eval files (route them through scripts/lib/cdp-eval.ts): ${fresh.join(", ")}`);
-    assert(stale.length === 0, `allowlist entries already migrated/handled — SHRINK this test's list in the same commit: ${stale.join(", ")}`);
-    assertEquals(found.length, UNHANDLED.length, "unhandled count drifted");
+    const scanned = await scan();
+    const failures: string[] = [];
+
+    for (const [file, sites] of [...scanned].sort()) {
+      const raw = sites.filter((site) => !site.guarded);
+      const permit = PERMITTED_RAW_READS[file];
+      if (!permit) {
+        if (raw.length > 0) {
+          failures.push(
+            `${file}: ${raw.length} raw value-read site(s) with no exceptionDetails check and no permit — ` +
+              `at ${raw.map((s) => `${file}:${s.line}`).join(", ")}`,
+          );
+        }
+        continue;
+      }
+      if (raw.length > permit.sites) {
+        failures.push(
+          `${file}: ${raw.length} raw sites but only ${permit.sites} permitted — ` +
+            raw.map((s) => `${file}:${s.line}`).join(", "),
+        );
+      }
+      if (raw.length < permit.sites) {
+        failures.push(`${file}: ${permit.sites} raw sites permitted but only ${raw.length} remain — shrink the permit in the same commit`);
+      }
+    }
+    for (const file of Object.keys(PERMITTED_RAW_READS)) {
+      if (!scanned.has(file)) failures.push(`${file}: permit names a file with no value-read sites — remove it`);
+    }
+    // A permit is a review decision; an empty reason cannot carry one (sotw-gemini review of
+    // 8ko7 @ 56f7f7b70).
+    for (const [file, permit] of Object.entries(PERMITTED_RAW_READS)) {
+      if (permit.reason.trim().length === 0) {
+        failures.push(`${file}: permit has no reason — every retained raw read states WHY in the guard`);
+      }
+    }
+    assertEquals(failures, [], failures.join("\n"));
   },
 });

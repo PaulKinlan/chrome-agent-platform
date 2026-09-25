@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.524] — 2026-09-25
+- count raw value-read sites, not handled files (8ko7)
+
 ## [0.3.523] — 2026-09-25
 - route raw console.* through cap-log, annotate bare catches, gate both
 
