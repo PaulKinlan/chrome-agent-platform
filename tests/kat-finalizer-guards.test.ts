@@ -68,7 +68,10 @@ function finalize(k, over = {}) {
     // `checks` is overridable so a case can exercise the zero-check guard; the
     // default keeps every other test's single passing check.
     checks: over.checks ?? [{ name: "c1", passed: true }],
-    teardown: {
+    // The function form is passed THROUGH, not spread: it is the seam for an
+    // outcome the teardown options cannot express (a poisoned slot with no
+    // cleanup error — the A2 pin below).
+    teardown: typeof over.teardown === "function" ? over.teardown : {
       cdp: null, chrome: null, profilePath: null,
       poisonPath: "/mock/out/no-poison",
       withTimeout: (p) => p,
@@ -297,6 +300,23 @@ Deno.test("kat-finalizer guards: the REAL default poison stat — an ABSENT file
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+// ── (A2) a poisoned slot is RED INDEPENDENTLY of cleanupError ──────────────────
+// The sweep's mutant A2 (removing `!poisonDetected` from `isGreen`) survived both
+// the committed suite and a 19-input divergence probe: the teardown OPTIONS can
+// only ever produce poison WITH a cleanup error (the poison branch records both),
+// so `!cleanupError` already forced RED and the clause was untestable. The function
+// form of `teardown` is the missing input, and this pins the clause itself.
+Deno.test("kat-finalizer guards: a POISONED slot is RED independently of cleanupError (A2)", async () => {
+  const k = seams();
+  const r = await finalize(k, { teardown: async () => ({ cleanupError: null, poisonDetected: true }) });
+  assertEquals(r.poisonDetected, true, "the poison must reach the result, or this test proves nothing");
+  assertEquals(r.cleanupError, null, "and this case must carry NO cleanup error, or it re-tests the coupling instead");
+  assertEquals(r.state, "RED", "a poisoned slot is RED even when every other field is clean");
+  assertEquals(r.exitCode, 1);
+  assert(k.exits.includes(1), "the fail-closed exit fires");
+  assertEquals(JSON.parse(k.payload()).state, "RED", "and the published receipt says so");
 });
 
 // ── cleanup errors AGGREGATE ────────────────────────────────────────────────

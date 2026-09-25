@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.494] — 2026-09-25
+- the sweep's three equivalent mutants are recorded at their sites, and A2 is now a killed mutant rather than an unkillable one
+
 ## [0.3.493] — 2026-09-25
 - the summary row's Delete pin reads parentage, not descendant counts
 
