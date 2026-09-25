@@ -26,6 +26,7 @@ import {
   repoRoot,
 } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableRoot, isRamBacked } from "../scripts/lib/durable-root.mjs";
+import { hostname } from "node:os";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 const SCRIPTS = `${ROOT}/scripts`;
@@ -196,7 +197,53 @@ Deno.test("9t1b: stale profiles prune by age, and a fresh one is never touched",
       try { Deno.removeSync(dir, { recursive: true }); } catch { /* already gone */ }
     }
   }
-  // Pruning an absent root is a no-op, not a crash.
-  const none = await pruneChromeProfileDirs({ olderThanMs: -1 });
-  assertEquals(Array.isArray(none.errors), true);
+  // Pruning an ABSENT root is a no-op, not a crash — and it must run against a
+  // fixture root that cannot exist. With an all-deleting threshold the SHARED
+  // root removes every profile on the box, including another lane's live Chrome
+  // mid-run (chrome-agent-platform-z5ym: a concurrent `npm test` deleted a live
+  // KAT profile, and the extension's OPFS state vanished underneath the run).
+  const absentRoot = `${durableRoot()}/${PROFILE_ROOT_NAME}-absent-fixture-${Deno.pid}`;
+  const none = await pruneChromeProfileDirs({ olderThanMs: -1, root: absentRoot });
+  assertEquals(none.errors, []);
+  assertEquals(none.removed, 0, "an absent root removes nothing");
+});
+
+Deno.test("9t1b/z5ym: a LIVE profile is never pruned, whatever threshold says (shared-root safety)", async () => {
+  // The z5ym mechanism, reproduced in a fixture root: pruneChromeProfileDirs
+  // with an all-deleting threshold used to remove profiles whose browsers were
+  // still running. Chrome's SingletonLock (a `<hostname>-<pid>` symlink) is the
+  // liveness authority; the age rule stays as the fallback for lockless dirs.
+  const root = `${durableRoot()}/${PROFILE_ROOT_NAME}-live-fixture-${Deno.pid}-${Date.now()}`;
+  const live = `${root}/live-browser-${Deno.pid}`;
+  const dead = `${root}/dead-browser`;
+  const noLock = `${root}/no-lock`;
+  const malformed = `${root}/malformed-lock`;
+  const foreign = `${root}/foreign-host`;
+  for (const dir of [live, dead, noLock, malformed, foreign]) Deno.mkdirSync(dir, { recursive: true });
+  // The LIVE profile: THIS process's pid behind Chrome's lock shape.
+  Deno.symlinkSync(`${hostname()}-${Deno.pid}`, `${live}/SingletonLock`);
+  // A DEAD lock: a pid that cannot exist.
+  Deno.symlinkSync(`${hostname()}-999999`, `${dead}/SingletonLock`);
+  // Fail-SAFE shapes (an unreadable lock / another machine's profile) must be
+  // KEPT: a wrongly kept profile costs disk, a wrongly removed one costs a run.
+  Deno.symlinkSync("not-a-lock-target", `${malformed}/SingletonLock`);
+  Deno.symlinkSync("some-other-host-12345", `${foreign}/SingletonLock`);
+  try {
+    // Backdate everything so ONLY the liveness guard can be what saves them.
+    const old = new Date(Date.now() - 7 * 60 * 60_000);
+    for (const dir of [live, dead, noLock, malformed, foreign]) Deno.utimeSync(dir, old, old);
+    const r = await pruneChromeProfileDirs({ olderThanMs: -1, root });
+    const exists = (dir: string) => {
+      try { return Deno.statSync(dir).isDirectory; } catch { return false; }
+    };
+    assertEquals(exists(live), true, "a live profile survives an all-deleting prune");
+    assertEquals(exists(malformed), true, "a malformed lock fails safe (kept)");
+    assertEquals(exists(foreign), true, "another host's profile fails safe (kept)");
+    assertEquals(exists(dead), false, "a dead lock's profile is still pruned");
+    assertEquals(exists(noLock), false, "a lockless profile still prunes (the age rule is unchanged)");
+    assertEquals(r.removed, 2, JSON.stringify(r));
+    assertEquals(r.kept, 3, JSON.stringify(r));
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+  }
 });

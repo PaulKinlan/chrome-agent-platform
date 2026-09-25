@@ -27,6 +27,8 @@
 // run's browser, and one run's cleanup then deletes the other's live profile.
 
 import { durableDir, durableRoot, isRamBacked } from "./durable-root.mjs";
+import { readlinkSync } from "node:fs";
+import { hostname } from "node:os";
 
 /** Sub-directory of the durable root that holds harness Chrome profiles. */
 export const PROFILE_ROOT_NAME = "cap-chrome-profiles";
@@ -107,10 +109,52 @@ function resolveExisting(path: string): string {
  * touches a live browser — and a removal failure is not fatal (a leaked profile
  * is a hygiene problem, not a red gate).
  */
+/** Is this profile directory owned by a LIVE browser? Chrome leaves
+ *  `SingletonLock` as a symlink whose target is `<hostname>-<pid>`.
+ *
+ *  The age rule is only a PROXY for liveness ("a live browser is minutes old")
+ *  and it is exactly wrong when a caller passes an all-deleting threshold:
+ *  tests/chrome-profile-location.test.ts ran `pruneChromeProfileDirs({
+ *  olderThanMs: -1 })` against the SHARED root to test the absent-root path,
+ *  which removed every profile on the box — including another lane's live
+ *  Chrome mid-KAT, whose OPFS state then vanished under the running extension
+ *  (chrome-agent-platform-z5ym, measured: a run's root marker and every
+ *  execution dir gone mid-run, no product delete).
+ *
+ *  Fails SAFE: an unreadable lock, a malformed target, or a lock from another
+ *  HOST is treated as live, because a wrongly kept profile costs disk while a
+ *  wrongly removed one costs a lane's run. A profile with no lock at all is not
+ *  live (a killed browser may leave none), and the age rule still applies. */
+export function profileIsLive(path: string): boolean {
+  let target = "";
+  try {
+    target = readlinkSync(`${path}/SingletonLock`);
+  } catch {
+    return false; // no lock: a dead/never-started profile — let the age rule decide
+  }
+  const match = /^(.*)-(\d+)$/u.exec(target);
+  if (!match) return true; // an unreadable shape must never authorize a removal
+  const [, host, pidText] = match;
+  if (host !== hostname()) return true; // another machine's profile: cannot prove it is dead
+  const pid = Number(pidText);
+  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  try {
+    Deno.kill(pid, 0); // signal 0: existence check only
+    return true;
+  } catch (e) {
+    return (e as { name?: string })?.name !== "NotFound"; // EPERM = it exists, just not ours
+  }
+}
+
 export async function pruneChromeProfileDirs(
-  { olderThanMs = 6 * 60 * 60_000, now = Date.now() }: { olderThanMs?: number; now?: number } = {},
+  {
+    olderThanMs = 6 * 60 * 60_000,
+    now = Date.now(),
+    // Injectable so a test can exercise pruning against its OWN fixture root
+    // instead of the shared one every lane's live browsers live under.
+    root = `${durableRoot()}/${PROFILE_ROOT_NAME}`,
+  }: { olderThanMs?: number; now?: number; root?: string } = {},
 ): Promise<{ removed: number; kept: number; errors: string[] }> {
-  const root = `${durableRoot()}/${PROFILE_ROOT_NAME}`;
   const out = { removed: 0, kept: 0, errors: [] as string[] };
   let entries: Deno.DirEntry[];
   try {
@@ -129,6 +173,9 @@ export async function pruneChromeProfileDirs(
       continue;
     }
     if (now - mtime < olderThanMs) { out.kept++; continue; }
+    // A LIVE browser is never pruned, whatever threshold the caller passed:
+    // the lock's pid is checked before the age rule can authorize a removal.
+    if (profileIsLive(path)) { out.kept++; continue; }
     try {
       Deno.removeSync(path, { recursive: true });
       out.removed++;
