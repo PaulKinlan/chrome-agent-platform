@@ -53,6 +53,10 @@ export const SERIAL_REASONS = {
   // queueing thresholds (a 1500 ms skip bound against a 2000 ms marker window),
   // which is exactly what the 32-worker parallel phase makes flaky.
   "tests/chrome-slot-semaphore-honesty.test.ts": "mutates CAP_CHROME_SLOT_DIR and makes wall-clock queueing assertions (races/flakes with other lock tests under the parallel phase)",
+  // 3vi7: tests/serial-phase-timeout.test.ts makes wall-clock queueing assertions
+  // (3.5 s fixture vs 2 s flat / 6 s scaled bounds) which race and flake under the
+  // 32-worker parallel phase on a heavily loaded fleet machine.
+  "tests/serial-phase-timeout.test.ts": "wall-clock bounds assertions (3.5 s fixture vs 2 s / 6 s bounds) race the parallel phase",
   // 4lc0: this file IMPORTS the bundled-tool generator for one constant
   // (AGENT_DESCRIPTIONS). Importing it RUNS it — the generator's work is at module top
   // level and its isMain flag gates only the final process.exit — so a run of this test
@@ -110,7 +114,9 @@ export const EXEMPTIONS = {
 // invisible to every text detector here — it was equally invisible to the old
 // mention rule, so the fix does not widen that hole; a hoisted-const path
 // (const D = "tests/x.mjs" … spawned later) is equally dataflow-invisible;
-// and a COMMENTED-OUT import still matches its shape (fail-closed: the cost is
+// within a spawn argument region the window also ends at the first `;`, so a
+// driver path AFTER a semicolon inside the args escapes the same way; and a
+// COMMENTED-OUT import still matches its shape (fail-closed: the cost is
 // an inheritance a lane did not need, never a silent parallel writer).
 // NO-SUBSTITUTION TEMPLATES ARE NOT RESIDUE (audiofeed-astra's review of this
 // fix): `import(`../tests/x.mjs`)` loads the module exactly like a quoted

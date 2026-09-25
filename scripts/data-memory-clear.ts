@@ -9,6 +9,7 @@
 //
 // This runs on a CLEAN profile so it tests the button rather than whatever
 // global state a long suite has accumulated. Run: npm run test:data-clear
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 const EXT = fileURLToPath(new URL("../extension", import.meta.url));
@@ -45,7 +46,11 @@ async function openPage(path: string) {
       const mid = ++id;
       const handler = (e: MessageEvent) => {
         const j = JSON.parse(e.data);
-        if (j.id === mid) { ws.removeEventListener("message", handler); resolve(j.result?.result?.value); }
+        if (j.id === mid) { ws.removeEventListener("message", handler);
+            // kwrx: strict read — a page exception or protocol death REJECTS the
+            // awaiter (named), instead of resolving undefined as a product answer.
+            try { resolve(wireValue(j, "dmc.evaluate")); } catch (err) { resolve(new Promise((_, rej) => rej(err))); }
+          }
       };
       ws.addEventListener("message", handler);
       ws.send(JSON.stringify({ id: mid, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true } }));

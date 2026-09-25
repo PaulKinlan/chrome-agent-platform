@@ -9,6 +9,7 @@
 // The row now clamps to two lines while keeping the full role in the DOM (screen
 // readers still get all of it) and on hover. This runs on a clean profile.
 // Run: npm run test:role-preview
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 const EXT = fileURLToPath(new URL("../extension", import.meta.url));
@@ -52,7 +53,11 @@ try {
       const mid = ++id;
       const handler = (e: MessageEvent) => {
         const j = JSON.parse(e.data);
-        if (j.id === mid) { ws.removeEventListener("message", handler); resolve(j.result?.result?.value); }
+        if (j.id === mid) { ws.removeEventListener("message", handler);
+            // kwrx: strict read — a page exception or protocol death REJECTS the
+            // awaiter (named), instead of resolving undefined as a product answer.
+            try { resolve(wireValue(j, "arp.evaluate")); } catch (err) { resolve(new Promise((_, rej) => rej(err))); }
+          }
       };
       ws.addEventListener("message", handler);
       ws.send(JSON.stringify({ id: mid, method: "Runtime.evaluate", params: { expression, returnByValue: true, awaitPromise: true } }));

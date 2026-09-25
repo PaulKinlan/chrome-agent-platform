@@ -25,6 +25,7 @@
 //
 //   deno run -A scripts/kat-task-view-simplify.ts <path-to-extension> [<out-dir>]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -73,7 +74,7 @@ const evalIn = async (expr: string, sid: string) => {
     check(`page evaluation did not throw (${expr.replace(/\s+/g, " ").slice(0, 70)}…)`, false, desc.slice(0, 300));
     return undefined;
   }
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "k.task-view-simplify");
 };
 
 let sw = null;

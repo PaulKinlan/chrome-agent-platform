@@ -21,6 +21,7 @@
 // Port discipline: Chrome is launched through launchChrome(), which asks the
 // kernel for a port and reads the endpoint back from that child's own stderr.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { generateText, stepCountIs } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createLazyProviderToolset, executableBrowserToolRecords } from "../extension/lib/lazy-tool-protocol.js";
@@ -83,7 +84,9 @@ async function capturePng(): Promise<{ dataURL: string; width: number; height: n
       { expression: "document.body.innerText", returnByValue: true },
       session,
     );
-    const sentences = String(text?.result?.result?.value ?? "")
+    // kwrx: a page throw here used to become "no sentences" (silent);
+    // strict now names it. Clean undefined still reads as "".
+    const sentences = String(wireValue(text, "sve.pageText") ?? "")
       .split(/[.\n]/).map((s: string) => s.trim()).filter((s: string) => s.length >= 30);
     sentences.sort((a: string, b: string) => b.length - a.length);
     return {

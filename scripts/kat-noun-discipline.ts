@@ -9,6 +9,7 @@
 //
 // Screenshots land in <out-dir> (default ./.cache/kat-noun-discipline).
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -60,7 +61,7 @@ const { result: { sessionId } } = await send("Target.attachToTarget", { targetId
 await send("Runtime.enable", {}, sessionId);
 await send("Page.enable", {}, sessionId);
 const ev = async (expr: string) =>
-  (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)).result?.result?.value;
+  wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId), "k.noun-discipline");
 const shot = async (name: string) => {
   const r = await send("Page.captureScreenshot", { format: "png" }, sessionId);
   if (r.result?.data) await Deno.writeFile(`${OUT}/${name}.png`, Uint8Array.from(atob(r.result.data), (c) => c.charCodeAt(0)));

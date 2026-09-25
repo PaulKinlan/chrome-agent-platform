@@ -4,6 +4,7 @@
 // worker's `script.run` route (via chrome.runtime.sendMessage from a page
 // context), and asserts the sandboxed script returns its result.
 // @ts-nocheck
+import { methodValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 
@@ -50,10 +51,10 @@ async function main() {
   // Get the extension id via the management API in the browser context.
   const tgt = await cdp.send("Target.createTarget", { url: "chrome://extensions" });
   const ses = await cdp.send("Target.attachToTarget", { targetId: tgt.targetId, flatten: true });
-  const extId = (await cdp.send("Runtime.evaluate", {
+  const extId = methodValue(await cdp.send("Runtime.evaluate", {
     expression: `(async()=>{const e=(await chrome.management.getAll()).find(x=>x.name&&x.name.toLowerCase().includes('agent')); return e?e.id:null;})()`,
     returnByValue: true, awaitPromise: true,
-  }, ses.sessionId)).result.value;
+  }, ses.sessionId), "vsr.extId");
 
   if (!extId) { console.error("ext not found"); Deno.exit(1); }
 
@@ -66,16 +67,17 @@ async function main() {
 
   // 1. Create a script (a computed value + a log — no network needed).
   const created = await run(`(async()=>{ const r = await chrome.runtime.sendMessage({ type:'script.create', origin:'master', name:'verify-42', source:'log("hi from script"); return 42;' }); return r; })()`);
-  console.log("create:", JSON.stringify(created.result?.value ?? created));
+  console.log("create:", JSON.stringify(methodValue(created, "vsr.create") ?? created));
 
-  const scriptId = created.result?.value?.script?.id;
+  const scriptId = (methodValue(created, "vsr.create") as any)?.script?.id;
   if (!scriptId) { console.error("no script id"); Deno.exit(1); }
 
   // 2. Run the script — must return { ok:true, result:42 } through the sandbox.
   const ran = await run(`(async()=>{ const r = await chrome.runtime.sendMessage({ type:'script.run', origin:'master', id:${JSON.stringify(scriptId)} }); return r; })()`);
-  console.log("run:", JSON.stringify(ran.result?.value ?? ran));
+  console.log("run:", JSON.stringify(methodValue(ran, "vsr.run") ?? ran));
 
-  const ok = ran.result?.value?.ok === true && ran.result?.value?.result === 42;
+  const ranVal = methodValue(ran, "vsr.run") as any;
+const ok = ranVal?.ok === true && ranVal?.result === 42;
   console.log(ok ? "SCRIPT-RUN-PASS" : "SCRIPT-RUN-FAIL");
   proc.kill("SIGKILL");
   Deno.exit(ok ? 0 : 1);

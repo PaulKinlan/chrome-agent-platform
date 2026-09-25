@@ -10,6 +10,7 @@
 //
 //   deno run -A scripts/kat-failed-runs.ts <path-to-extension> [<out-dir>]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -51,7 +52,7 @@ ws.onmessage = (m: MessageEvent) => {
 };
 const evalIn = async (expr: string, sid: string) => {
   const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sid);
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "k.failed-runs");
 };
 const shot = async (name: string) => {
   const r = await send("Page.captureScreenshot", { format: "png" }, pageSession);

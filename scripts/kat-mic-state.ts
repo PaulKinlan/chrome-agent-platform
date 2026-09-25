@@ -11,6 +11,7 @@
 // REAL (Chromium's fake audio device emits a tone), so the waveform is
 // genuinely level-driven in this run.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
@@ -76,7 +77,7 @@ await sleep(1500);
 const evalJs = async (expression: string) => {
   const r = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
   if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails).slice(0, 400));
-  return r.result?.result?.value;
+  return wireValue<any>(r, "k.mic-state");
 };
 const shot = async (name: string) => {
   const r = await send("Page.captureScreenshot", { format: "png" }, sessionId);

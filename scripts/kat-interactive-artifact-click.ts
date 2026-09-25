@@ -31,6 +31,7 @@
 // Evidence: screenshots (viewer before/after click, hub dialog before/after
 // click, big-artifact Source tab) written to the OUT dir (default
 // ~/.cache/cap-p45y-interactive), durable storage by default.
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker, CHROMIUM } from "./lib/chrome-launch.ts";
 
@@ -187,7 +188,7 @@ async function main() {
       if (response.result?.exceptionDetails) {
         return { __exception: response.result.exceptionDetails.exception?.description ?? "evaluate failed" };
       }
-      return response.result?.result?.value;
+      return wireValue<any>(response, "k.interactive-artifact-click");
     };
     await sleep(2500);
 
@@ -253,7 +254,7 @@ async function main() {
           const r = await cdp.send("Runtime.evaluate", {
             expression, returnByValue: true, contextId: world?.result?.executionContextId,
           }, sessionId);
-          const value = r?.result?.result?.value;
+          const value = wireValue<any>(r, "k.interactive-artifact-click");
           if (value !== undefined && value !== null) return value;
         } catch { /* try the next session */ }
       }
@@ -565,7 +566,7 @@ async function main() {
             expression: `(() => { const b = document.getElementById('bump-b'); if (!b) return null; const s = document.getElementById('score-b'); const r = b.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), vh: window.innerHeight, score: s ? s.textContent : null }; })()`,
             returnByValue: true, contextId: world?.result?.executionContextId,
           }, sessionId);
-          const v = r?.result?.result?.value;
+          const v = wireValue<any>(r, "k.interactive-artifact-click");
           if (v && typeof v.score === "string") { states.push(v); if (!best || v.vh > best.vh) best = v; }
         } catch { /* try the next session */ }
       }

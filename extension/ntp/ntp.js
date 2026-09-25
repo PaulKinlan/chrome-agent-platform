@@ -2710,12 +2710,29 @@ async function openAgentSurface({ kind, id, name }) {
   // Assistant turns carry THIS agent's identity (its generated avatar when it
   // has one, the initial otherwise). The list read is cached by the SW.
   threadConversation?.setIdentity?.({ name: name || id, avatar: initialAvatar(name || id) });
+  // A named-agent.list reply is the NEWER fact about this agent (read from the
+  // live registry AFTER the caller's name — get/pick precede this send). See
+  // the q0yg note in the named branch below.
+  let listResolvedName = null;
   if (kind === "named") {
+    // The list reply is the NEWER fact about this agent: it is read from the
+    // live registry AFTER the caller's name was (openAgentChat's get and the
+    // composer's pick-time mention snapshot both precede this send). Record
+    // what it resolved so the post-history assignment below cannot clobber a
+    // newer correction with a stale caller name — measured 2026-09-25
+    // (chrome-agent-platform-q0yg): a stale mention name + a list reply that
+    // lands before the history await left the header "V1" over
+    // history.state.name "V2", 5/5 in a real loaded extension.
     send("named-agent.list").then((r) => {
       if (currentAgentId !== id) return;
       const a = (Array.isArray(r?.agents) ? r.agents : []).find((x) => x?.id === id);
       if (a) {
-        if (a.name && threadTitle.textContent !== a.name) {
+        listResolvedName = a.name || null;
+        // Correct EITHER surface that disagrees: the header AND history.state
+        // are both written by the caller (possibly stale — a pick-time mention
+        // name), and a title that already agrees must not leave a stale name
+        // behind in history (the q0yg mirror case, measured same day).
+        if (a.name && (threadTitle.textContent !== a.name || window.history?.state?.name !== a.name)) {
           threadTitle.textContent = a.name;
           const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
           navigateNtpRoute(window, hash, { route: "agent", kind, id, name: a.name });
@@ -2754,8 +2771,9 @@ async function openAgentSurface({ kind, id, name }) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   // The title is the agent's NAME, never its slug: a caller without the name
   // (a hash entry) resolves it first; until then the surface reads "Agent"
-  // (CAP-FB-20260830-HUB-CHROME-POLISH-01).
-  threadTitle.textContent = name || "Agent";
+  // (CAP-FB-20260830-HUB-CHROME-POLISH-01). A list-resolved name wins over the
+  // caller's: it was read later, so it is never older (see the q0yg note above).
+  threadTitle.textContent = listResolvedName || name || "Agent";
   renderAgentSurfaceHistory(history);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });

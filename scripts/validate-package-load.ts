@@ -3,6 +3,7 @@
 // registers + the options page renders the shared picker. No seam — this is
 // the shipped extension exactly as a user would load it.
 // @ts-nocheck
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, launchChrome } from "./lib/chrome-launch.ts";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -45,8 +46,9 @@ await send("Runtime.evaluate",{expression:`chrome.runtime.sendMessage({type:"nam
 await send("Page.reload");
 await sleep(2000);
 const r = await send("Runtime.evaluate",{expression:`JSON.stringify({providerCards: document.querySelectorAll(".provider-card").length, picker: !!document.querySelector("model-picker"), providerSelect: !!document.querySelector("provider-select")})`,returnByValue:true});
-console.log("options render:", r?.result?.result?.value);
-const parsed = JSON.parse(r?.result?.result?.value ?? "{}");
+const renderVal = wireValue<string>(r, "validate-package-load.render");
+console.log("options render:", renderVal);
+const parsed = JSON.parse(renderVal ?? "{}");
 const ok = parsed.providerCards >= 5 && parsed.picker && parsed.providerSelect;
 console.log("PRODUCTION PACKAGE VALIDATION:", ok ? "PASS" : "FAIL");
 proc.kill();

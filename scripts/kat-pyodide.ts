@@ -4,6 +4,7 @@
 // the hub page, and proves the returned stdout came from Pyodide execution.
 // The JSON result and a screenshot are kept under the durable evidence root.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -78,7 +79,7 @@ async function evaluate(cdp: Cdp, sessionId: string, expression: string) {
       }`,
     );
   }
-  return message.result?.result?.value;
+  return wireValue<any>(message, "k.pyodide");
 }
 
 let browser: Deno.ChildProcess | null = null;

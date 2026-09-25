@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.3.519] — 2026-09-25
+- internal: extract shared typed cdp-eval helper for evaluating page scripts without swallowing exceptions, and migrate scripts/ drivers
+
+## [0.3.518] — 2026-09-25
+- sync docs/components.js from extension/shared/components.js (ypz0)
+
+## [0.3.517] — 2026-09-25
+- keyboard navigation in tab strips uses non-scrolling focus so component scroll bounds remain discriminating
+
+## [0.3.516] — 2026-09-25
+- remove headed-acceptance.ts — no headed-browser dependency
+
+## [0.3.515] — 2026-09-25
+- internal: remove obsolete scripts/headed-acceptance.ts harness, superseded by permission matrix
+
+## [0.3.514] — 2026-09-25
+- code-diff view limits split from retention budgets so lifting caps cannot OOM the store
+
+## [0.3.513] — 2026-09-25
+- internal: split code diff limits into document intake, retention, and view limits to allow separable view cap lifting
+
+## [0.3.512] — 2026-09-25
+- renaming an agent mid-compose can no longer leave a stale name in the header
+
+## [0.3.511] — 2026-09-25
+- an agent conversation header updates reliably when renamed mid-compose, preventing stale names from persisting
+
+## [0.3.510] — 2026-09-25
+- the residue map names the semicolon escape inside a spawn argument region
+
+## [0.3.509] — 2026-09-25
+- internal: clarify the semicolon escape boundary inside spawn argument regions in test partition residue docs
+
+## [0.3.508] — 2026-09-25
+- a run settles and heartbeats survive even when its durable record vanishes under it
+
+## [0.3.507] — 2026-09-25
+- internal: durable run state reconciles on settling, terminal, and live-run writes if an underlying record is lost, with negative paths pinned
+
+## [0.3.506] — 2026-09-25
+- route serial-phase timeout test to serial and pin wall-clock flake declarations
+
+## [0.3.505] — 2026-09-25
+- internal: route serial-phase timeout test to the serial phase to prevent wall-clock flakiness under load, and pin wall-clock flake declarations
+
 ## [0.3.504] — 2026-09-25
 - static pairing guard for chrome-checks, agent-access-checks and run-status-lifecycle check literals against EXPECTED ledgers
 

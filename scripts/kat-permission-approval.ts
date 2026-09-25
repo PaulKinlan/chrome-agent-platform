@@ -13,6 +13,7 @@
 //      revocation and return to #permissions.
 //   5. Captures screenshots, console messages, network activity, and accessibility tree.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -100,7 +101,7 @@ async function realClick(sessionId: string, expr: string) {
     returnByValue: true,
     awaitPromise: true,
   }, sessionId);
-  const rect = res?.result?.result?.value;
+  const rect = wireValue<{ x: number; y: number } | null>(res, "k.permission-approval.rect");
   if (!rect || rect.x == null) return false;
   const x = Math.round(rect.x);
   const y = Math.round(rect.y);
@@ -131,8 +132,8 @@ await send("DOM.enable", {}, ntpSessionId);
 await sleep(2500);
 
 const evNtp = async (expr: string) =>
-  (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, ntpSessionId))
-    ?.result?.result?.value;
+  wireValue(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, ntpSessionId),
+    "k.permission-approval.evNtp");
 
 // Verify custom element registration
 const hasCustomElement = await evNtp(`Boolean(customElements.get("permission-approval-card"))`);
@@ -212,8 +213,8 @@ await send("DOM.enable", {}, optSessionId);
 await sleep(2500);
 
 const evOpt = async (expr: string) =>
-  (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, optSessionId))
-    ?.result?.result?.value;
+  wireValue(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, optSessionId),
+    "k.permission-approval.evOpt");
 
 // Verify permissions section rendered with capability rows
 const permRowsCount = await evOpt(`document.querySelectorAll("#permission-list capability-row, .capability-row, .perm-row").length`);

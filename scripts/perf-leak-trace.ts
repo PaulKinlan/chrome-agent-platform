@@ -10,6 +10,7 @@
 //
 //   deno run -A scripts/perf-leak-trace.ts
 
+import { methodValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 
@@ -49,7 +50,7 @@ async function launch(): Promise<{ proc: Deno.ChildProcess; cdp: Cdp; close: () 
     (await client.send(method, params, sessionId)).result;
   const evl = async (s: string, expr: string): Promise<any> => {
     const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s);
-    return r?.result?.value;
+    return methodValue(r, "perf-leak-trace.evl");
   };
   const cdp: Cdp = { send, evl, port: chrome.port };
   return { proc: chrome.proc, cdp, close: client.close, tmp };
