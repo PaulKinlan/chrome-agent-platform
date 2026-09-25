@@ -94,7 +94,7 @@ try {
     await send("Runtime.enable", {}, sessionId);
     await send("Page.enable", {}, sessionId);
     const evaluate = async (expression: string) =>
-      wireValue(await send("Runtime.evaluate", {
+      wireValue<any>(await send("Runtime.evaluate", {
         expression,
         awaitPromise: true,
         returnByValue: true,

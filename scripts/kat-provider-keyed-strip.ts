@@ -62,7 +62,7 @@ async function attach(url: string) {
   return sessionId as string;
 }
 // evalSilent: never echoes the expression (it may carry the key).
-const evalOn = async (sid: string, expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sid)), "k.provider-keyed-strip");
+const evalOn = async (sid: string, expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sid), "k.provider-keyed-strip");
 const shotOn = async (sid: string, path: string) => {
   const { result } = await send("Page.captureScreenshot", { format: "png" }, sid);
   await Deno.writeFile(path, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));

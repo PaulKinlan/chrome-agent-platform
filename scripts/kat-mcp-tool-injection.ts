@@ -119,7 +119,7 @@ const newView = async (url: string) => {
   const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Runtime.enable", {}, sessionId);
   await send("Page.enable", {}, sessionId);
-  const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)), "k.mcp-tool-injection");
+  const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId), "k.mcp-tool-injection");
   const shot = async (path: string) => {
     const { result } = await send("Page.captureScreenshot", { format: "png" }, sessionId);
     if (result?.data) await Deno.writeFile(path, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));

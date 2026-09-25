@@ -195,7 +195,7 @@ for (const [width, height] of [[1440, 900], [1024, 700]] as const) {
     await send("Page.enable", {}, sid);
     await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sid);
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    const m = wireValue<any>(await send("Runtime.evaluate", { expression: MEASURE(sectionId), awaitPromise: true, returnByValue: true }, sid)), "k.settings-cleanliness");
+    const m = wireValue<any>(await send("Runtime.evaluate", { expression: MEASURE(sectionId), awaitPromise: true, returnByValue: true }, sid), "k.settings-cleanliness");
     const tag = `${sectionId} @${width}x${height}`;
     if (!BASELINE) {
       check(`${tag}: section rendered and visible`, m && !m.missing && m.hidden === false && m.rows > 0, m);

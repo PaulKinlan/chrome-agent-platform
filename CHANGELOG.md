@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.493] — 2026-09-25
+- repair the batch's paren-corruption (14 files, 17 sites) + typed-site fixes
+
+## [0.3.492] — 2026-09-25
+- repair the batch's paren-corruption + typed-site fixes; site-guard stays empty
+
 ## [0.3.491] — 2026-09-25
 - strict reads type as T (no diagnostic union); missing/error envelopes are named deaths, not undefined
 

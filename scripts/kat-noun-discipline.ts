@@ -61,7 +61,7 @@ const { result: { sessionId } } = await send("Target.attachToTarget", { targetId
 await send("Runtime.enable", {}, sessionId);
 await send("Page.enable", {}, sessionId);
 const ev = async (expr: string) =>
-  wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)), "k.noun-discipline");
+  wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId), "k.noun-discipline");
 const shot = async (name: string) => {
   const r = await send("Page.captureScreenshot", { format: "png" }, sessionId);
   if (r.result?.data) await Deno.writeFile(`${OUT}/${name}.png`, Uint8Array.from(atob(r.result.data), (c) => c.charCodeAt(0)));

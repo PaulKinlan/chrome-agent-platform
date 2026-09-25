@@ -57,7 +57,7 @@ const extId = new URL(sw.url).host;
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
 const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
 await send("Runtime.enable", {}, sessionId);
-const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)), "k.back-stack");
+const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId), "k.back-stack");
 await sleep(3000);
 
 // Open each view, press Back once, assert the overlay is hidden.
