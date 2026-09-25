@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.491] — 2026-09-25
+- strict reads type as T (no diagnostic union); missing/error envelopes are named deaths, not undefined
+
 ## [0.3.490] — 2026-09-25
 - hand-rolled ws handlers reject instead of resolving undefined on instrument death (2 files)
 

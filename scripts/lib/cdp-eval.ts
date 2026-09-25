@@ -128,6 +128,8 @@ function envelopeTrip<T>(
 }
 
 /** Read a value from a FULL wire message (`resolve(d)` transports). */
+export function wireValue<T = unknown>(msg: WireEvaluateMessage | null | undefined, site: string): T;
+export function wireValue<T = unknown>(msg: WireEvaluateMessage | null | undefined, site: string, mode: EvalMode): T | EvalDiagnostic;
 export function wireValue<T = unknown>(
   msg: WireEvaluateMessage | null | undefined,
   site: string,
@@ -148,6 +150,8 @@ export function wireValue<T = unknown>(
 }
 
 /** Read a value from an UNWRAPPED method result (`resolve(m.result)` transports). */
+export function methodValue<T = unknown>(res: MethodEvaluateResult | null | undefined, site: string): T;
+export function methodValue<T = unknown>(res: MethodEvaluateResult | null | undefined, site: string, mode: EvalMode): T | EvalDiagnostic;
 export function methodValue<T = unknown>(
   res: MethodEvaluateResult | null | undefined,
   site: string,
