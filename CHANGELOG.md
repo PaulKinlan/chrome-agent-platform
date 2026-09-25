@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.490] — 2026-09-25
+- renaming an agent mid-compose can no longer leave a stale name in the header
+
 ## [0.3.489] — 2026-09-25
 - finish recipes to skills rename and sync check EXPECTED ledger
 
