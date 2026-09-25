@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.543] — 2026-09-25
+- C15 resolved — profile-store is the form-filler substrate, retained and documented
+
+## [0.3.542] — 2026-09-25
+- internal: resolve C15 cleanup decision to retain profile-store as the form-filler substrate and document its role
+
 ## [0.3.541] — 2026-09-25
 - the passive-detector probe waits for its relay instead of guessing 100 ms
 
@@ -7,7 +13,7 @@
 - internal: passive-detector test waits on condition with bounded budget instead of fixed sleep to prevent load flakes
 
 ## [0.3.539] — 2026-09-25
-- land headed native ACP transport verification (union merge of cap/astra-gab8-headed)
+- evaluate MCP Zod peer unification with schema parity tests and evidence
 
 ## [0.3.538] — 2026-09-25
 - evaluate MCP Zod peer unification with schema parity tests and evidence

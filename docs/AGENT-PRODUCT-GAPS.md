@@ -85,6 +85,12 @@ All templates are **shippable today** (marked ✅) using the existing agent reco
 | **Price & Change Watcher** ✅ | "You watch pages for change: prices, content, availability. You only interrupt when a threshold is crossed." | `price-watcher`, `page-change-watcher`, `link-checker` | "Watch <url> for price drops below X." | ✅ today (background) |
 | **Site Auditor** ✅ | "You audit pages: accessibility, performance, SEO meta, cookies. You produce a scored report with evidence." | `accessibility-checker`, `performance-reporter`, `seo-meta-checker`, `cookie-tracker-auditor`, `screenshot-annotate` | "Audit <url>; report by severity." | ✅ today (uses wasm+browser capability tools) |
 | **Data Wrangler** ✅ | "You extract and shape: tables from pages, CSV clean-up, structured summaries. jq/csv/sed are your instruments." | `data-extractor`, `form-filler` + bundled wasm (jq/csvtool/sed/htmlq) | "Extract every table from <url> into clean CSV." | ✅ today |
+
+> Storage note (chrome-agent-platform-xtwv): the `form-filler` skill's "stored profile in memory" has a
+> purpose-built substrate — `extension/lib/profile-store.js`, a schema-validated, grant-gated,
+> write-audited profile store (`profile:basic`, `profile:work_history`, `profile:education`,
+> `profile:disclosures`) on the OPFS/memory base. It is reached today only by its own tests; the
+> skill layer that reads it directly is the natural next step of this persona.
 | **Meeting Wing** ✅ | "You prepare and follow up: brief before, digest after." | `meeting-prep`, `page-summary`, `context-menu-save-quote`, `weekly-review-prompt` | "Prep for <meeting>: brief on attendees' recent pages and open threads." | ✅ today |
 | **Site Specialist (WebMCP)** ⚠️(G4) | "You are the agent for <origin>: you use that site's own WebMCP tools first, browser control second." | per-origin WebMCP allow-list (needs G4) + `page-summary` | "Use <site>'s own tools to do X." | ⚠️ needs per-agent WebMCP config |
 
