@@ -172,3 +172,125 @@ Deno.test("site-agent: demo model triggers docs fallback when site tool fails (f
   assertStringIncludes(text, "Fallback: fetched documentation directly via read_page");
   assertStringIncludes(text, "Beads is a dependency-aware, Dolt-backed issue tracker");
 });
+
+Deno.test("site-agent: a catalog re-collect between search and execute retries the site tool once (rg01)", async () => {
+  // The fixture page's re-collect timers bump the catalog generation between
+  // search_tools and execute_tool, revoking the selectionRef
+  // (selection-catalog-stale — historically mislabeled selection-scope-mismatch).
+  // The authority fails closed on any identity change by design, so the demo
+  // flow retries ONCE with a fresh search before any docs fallback.
+  const model = createDemoModel();
+
+  const r1 = await model.doGenerate({ prompt: sitePrompt([]) });
+  const c1 = r1.content.find((p) => p.type === "tool-call");
+  assertEquals(c1.toolName, "search_tools");
+
+  const p2 = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+  ]);
+  const r2 = await model.doGenerate({ prompt: p2 });
+  const c2 = r2.content.find((p) => p.type === "tool-call");
+  assertEquals(c2.toolName, "execute_tool");
+
+  // The execute lands after a re-collect: the ref is revoked as catalog-stale.
+  const drifted = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c2.input),
+    toolMsg("execute_tool", envelope("search_docs", { ok: false, error: "selection-catalog-stale" })),
+  ]);
+
+  // The model must re-search the SITE tool — not jump to the read_page fallback.
+  const r3 = await model.doGenerate({ prompt: drifted });
+  const c3 = r3.content.find((p) => p.type === "tool-call");
+  assert(c3, "Model retries with a fresh search after catalog drift");
+  assertEquals(c3.toolName, "search_tools");
+  assertEquals(JSON.parse(c3.input).query, "search_docs", "the retry searches the site tool again, not read_page");
+
+  // Feed the fresh ref -> the model re-executes the same tool with the same args.
+  const p4 = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c2.input),
+    toolMsg("execute_tool", envelope("search_docs", { ok: false, error: "selection-catalog-stale" })),
+    assistantCall("search_tools", c3.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+  ]);
+  const r4 = await model.doGenerate({ prompt: p4 });
+  const c4 = r4.content.find((p) => p.type === "tool-call");
+  assert(c4, "Model re-executes the site tool on the fresh ref");
+  assertEquals(c4.toolName, "execute_tool");
+
+  // The retry succeeds -> the final text reports the SITE TOOL result, not the
+  // docs fallback.
+  const p5 = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c2.input),
+    toolMsg("execute_tool", envelope("search_docs", { ok: false, error: "selection-catalog-stale" })),
+    assistantCall("search_tools", c3.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c4.input),
+    toolMsg("execute_tool", envelope("search_docs", { ok: true, value: "Installation: npm install @beads/bd" })),
+  ]);
+  const r5 = await model.doGenerate({ prompt: p5 });
+  assertEquals(r5.finishReason, "stop");
+  const text = r5.content.find((p) => p.type === "text")?.text ?? "";
+  assertStringIncludes(text, "Site tool search_docs succeeded");
+  assertStringIncludes(text, "npm install @beads/bd");
+  assert(!text.includes("Fallback:"), "a successful drift retry must not claim the docs fallback");
+});
+
+Deno.test("site-agent: a drift retry that ALSO fails takes the docs fallback (rg01)", async () => {
+  const model = createDemoModel();
+  const drift = (ref) => envelope("search_docs", { ok: false, error: "selection-catalog-stale" });
+
+  const r1 = await model.doGenerate({ prompt: sitePrompt([]) });
+  const c1 = r1.content.find((p) => p.type === "tool-call");
+  const p2 = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+  ]);
+  const r2 = await model.doGenerate({ prompt: p2 });
+  const c2 = r2.content.find((p) => p.type === "tool-call");
+
+  const afterDrift = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c2.input),
+    toolMsg("execute_tool", drift()),
+  ]);
+  const r3 = await model.doGenerate({ prompt: afterDrift });
+  const c3 = r3.content.find((p) => p.type === "tool-call");
+  assertEquals(JSON.parse(c3.input).query, "search_docs");
+
+  const retried = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c2.input),
+    toolMsg("execute_tool", drift()),
+    assistantCall("search_tools", c3.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+  ]);
+  const r4 = await model.doGenerate({ prompt: retried });
+  const c4 = r4.content.find((p) => p.type === "tool-call");
+  assertEquals(c4.toolName, "execute_tool");
+
+  // The retry drifts too (a second re-collect): NOW the docs fallback fires.
+  const retryFailed = sitePrompt([
+    assistantCall("search_tools", c1.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c2.input),
+    toolMsg("execute_tool", drift()),
+    assistantCall("search_tools", c3.input),
+    toolMsg("search_tools", searchResult("search_docs")),
+    assistantCall("execute_tool", c4.input),
+    toolMsg("execute_tool", drift()),
+  ]);
+  const r5 = await model.doGenerate({ prompt: retryFailed });
+  const c5 = r5.content.find((p) => p.type === "tool-call");
+  assert(c5, "Model falls back to the docs after the retry also drifts");
+  assertEquals(c5.toolName, "search_tools");
+  assertEquals(JSON.parse(c5.input).query, "read_page");
+});
