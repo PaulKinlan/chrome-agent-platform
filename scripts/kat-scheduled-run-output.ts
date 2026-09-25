@@ -9,6 +9,7 @@
 //   (c) a chrome.notifications completion notification whose click opens the agent.
 //
 //   deno run -A scripts/kat-scheduled-run-output.ts [extension] [out-dir]
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
@@ -68,7 +69,7 @@ try {
     await send("Runtime.enable", {}, sessionId);
     await send("Page.enable", {}, sessionId);
     const evaluate = async (expr: string) =>
-      (await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sessionId)).result?.result?.value;
+      wireValue<any>(await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sessionId)), "k.scheduled-run-output");
     const screenshot = async (name: string) => {
       const shot = await send("Page.captureScreenshot", { format: "png" }, sessionId);
       await Deno.writeFile(`${OUT}/${name}`, Uint8Array.from(atob(shot.result.data), (c) => c.charCodeAt(0)));
@@ -111,7 +112,7 @@ try {
   const swSession = swAttached.result.sessionId;
   await send("Runtime.enable", {}, swSession);
   const swEval = async (expr: string) =>
-    (await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, swSession)).result?.result?.value;
+    wireValue<any>(await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, swSession)), "k.scheduled-run-output");
 
   // Accelerate ONLY the alarm timing; the persisted schedule stays recurring
   // and the real alarm handler/run path is unchanged.

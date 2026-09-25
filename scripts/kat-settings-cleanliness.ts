@@ -10,6 +10,7 @@
 //
 // deno run -A scripts/kat-settings-cleanliness.ts <extension> <out> [--baseline]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -74,7 +75,7 @@ while (Date.now() < deadline) {
     }))()`,
     returnByValue: true,
   }, sessionId);
-  state = result?.result?.result?.value;
+  state = wireValue<any>(result, "k.settings-cleanliness");
   if (state?.ready) break;
   await new Promise((resolve) => setTimeout(resolve, 250));
 }
@@ -100,7 +101,7 @@ const observedResult = await send("Runtime.evaluate", {
   })()`,
   returnByValue: true,
 }, sessionId);
-const observed = observedResult?.result?.result?.value;
+const observed = wireValue<any>(observedResult, "k.settings-cleanliness");
 if (BASELINE) {
   check("baseline contains the retired storage verifier", observed?.warningCount > 0, observed);
   check("baseline contains a dead Settings navigation item", observed?.deadNav?.includes("appearance"), observed);
@@ -194,7 +195,7 @@ for (const [width, height] of [[1440, 900], [1024, 700]] as const) {
     await send("Page.enable", {}, sid);
     await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sid);
     await new Promise((resolve) => setTimeout(resolve, 1200));
-    const m = (await send("Runtime.evaluate", { expression: MEASURE(sectionId), awaitPromise: true, returnByValue: true }, sid))?.result?.result?.value;
+    const m = wireValue<any>(await send("Runtime.evaluate", { expression: MEASURE(sectionId), awaitPromise: true, returnByValue: true }, sid)), "k.settings-cleanliness");
     const tag = `${sectionId} @${width}x${height}`;
     if (!BASELINE) {
       check(`${tag}: section rendered and visible`, m && !m.missing && m.hidden === false && m.rows > 0, m);

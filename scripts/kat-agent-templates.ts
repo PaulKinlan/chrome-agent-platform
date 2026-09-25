@@ -12,6 +12,7 @@
 // Also captures screenshots of the picker + prefilled state.
 //
 //   deno run -A scripts/kat-agent-templates.ts <path-to-extension> [<out-dir>]
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -58,7 +59,7 @@ const { result: { targetId } } = await send("Target.createTarget", { url: `chrom
 const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
 await send("Runtime.enable", {}, sessionId);
 await send("Page.enable", {}, sessionId);
-const ev = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)).result?.result?.value;
+const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)), "k.agent-templates");
 const shot = async (path: string) => {
   const { result } = await send("Page.captureScreenshot", { format: "png" }, sessionId);
   await Deno.writeFile(path, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));
@@ -93,7 +94,7 @@ const D = `window.__openDialog()`;
 // chrome.alarms in the SW context.
 const { result: { sessionId: swSession } } = await send("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
 await send("Runtime.enable", {}, swSession);
-const evSw = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, swSession)).result?.result?.value;
+const evSw = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, swSession)), "k.agent-templates");
 const alarms = async () => (await evSw(`chrome.alarms.getAll().then(a => a.map(x => ({ name: x.name, periodInMinutes: x.periodInMinutes ?? null })))`)) ?? [];
 
 // 0. FIRST-RUN OFFER (owner directive): a fresh profile with zero agents offers
@@ -323,7 +324,7 @@ const optT = await send("Target.createTarget", { url: `chrome-extension://${extI
 const optS = await send("Target.attachToTarget", { targetId: optT.result.targetId, flatten: true });
 const optSession = optS.result.sessionId;
 await send("Runtime.enable", {}, optSession);
-const evOpt = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, optSession)).result?.result?.value;
+const evOpt = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, optSession)), "k.agent-templates");
 for (let i = 0; i < 40; i++) {
   const n = await evOpt(`document.querySelectorAll('.grant-perm[data-capability="alarms"]').length`);
   if (Number(n) >= 1) break;

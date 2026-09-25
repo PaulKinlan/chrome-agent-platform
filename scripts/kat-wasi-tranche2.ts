@@ -2,6 +2,7 @@
 // Drives the exact Settings document -> service-worker `tool.preview.run` route.
 // deno run -A scripts/kat-wasi-tranche2.ts [extension-dir] [evidence-dir]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -74,7 +75,7 @@ try {
       return results;
     })()`, awaitPromise: true, returnByValue: true,
   }, sessionId);
-  const results = evaluated?.result?.result?.value;
+  const results = wireValue<any>(evaluated, "k.wasi-tranche2");
   check("awk ran through tool.preview.run with anchored matching", results?.awk?.ok === true && results.awk.result?.ok === true && results.awk.result?.stdout === "alice\n", results?.awk);
   check("date ran through tool.preview.run with deterministic UTC output", results?.date?.ok === true && results.date.result?.ok === true && results.date.result?.stdout?.trim() === "2024-08-18", results?.date);
   const boundedFailure = (response: any) => response?.ok === true && response.result?.ok === false && response.result?.errno === 1 && /proc_exit\(1\)/.test(response.result?.error ?? "") && String(response.result?.error ?? "").length <= 1024;

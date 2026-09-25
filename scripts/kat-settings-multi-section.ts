@@ -6,6 +6,7 @@
 // 3. Navigate directly to #skills deep link -> assert #skills is visible, others hidden.
 // 4. Navigate directly to #about deep link -> assert #about is visible, others hidden.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -45,7 +46,7 @@ const send = (method: string, params: any = {}, sessionId?: string) => new Promi
 const evalIn = async (sid: string, expr: string) => {
   const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sid);
   if (r?.result?.exceptionDetails) return { __exception: r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails.text };
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "k.settings-multi-section");
 };
 const clickSelector = async (sid: string, expr: string) => {
   const box = await evalIn(sid, `(() => { const el = ${expr}; if (!el) return null; el.scrollIntoView({block:"center"}); const r = el.getBoundingClientRect(); return {x:r.x+r.width/2, y:r.y+r.height/2}; })()`);

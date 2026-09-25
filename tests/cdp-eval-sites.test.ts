@@ -16,33 +16,16 @@ const VALUE_READ = /\.result\??\.value|\.result\.result\??\.value|\bresult\?\.va
 const HANDLED = /exceptionDetails|cdp-eval/;
 
 const UNHANDLED: string[] = [
-  "scripts/axe-audit.ts",
-  "scripts/kat-agent-delegation.ts",
-  "scripts/kat-agent-templates.ts",
-  "scripts/kat-back-stack.ts",
-  "scripts/kat-background-run-transcript.ts",
-  "scripts/kat-bgagent-delete.ts",
-  "scripts/kat-failed-runs.ts",
-  "scripts/kat-genui-error-state.ts",
-  "scripts/kat-hub-timeline.ts",
-  "scripts/kat-mcp-tool-injection.ts",
-  "scripts/kat-narrow-toggle.ts",
-  "scripts/kat-notify-icon.ts",
-  "scripts/kat-noun-discipline.ts",
-  "scripts/kat-permission-approval.ts",
-  "scripts/kat-provider-keyed-strip.ts",
-  "scripts/kat-providers-recommended.ts",
-  "scripts/kat-providers-tabs.ts",
-  "scripts/kat-python-no-ambient-network.ts",
-  "scripts/kat-recent-activity.ts",
-  "scripts/kat-scheduled-next-run-widget.ts",
-  "scripts/kat-scheduled-run-output.ts",
-  "scripts/kat-settings-cleanliness.ts",
-  "scripts/kat-task-lifecycle.ts",
-  "scripts/kat-thinking-trace.ts",
-  "scripts/kat-ux-lows.ts",
-  "scripts/kat-wasi-tranche2.ts",
-  "scripts/validate-package-load.ts",
+  // EMPTY as of kwrx P4: every scripts/*.ts that calls Runtime.evaluate and
+  // reads a value now either routes through scripts/lib/cdp-eval.ts or names
+  // exceptionDetails itself. The migration trail: 37 files measured at the
+  // tip when claimed (the bead's 34 predated three drivers landing and
+  // undercounted files whose ONE guarded read masked raw secondary reads —
+  // kat-dark-scheme ×3 raw + kat-composer-grow-style auxiliaries), 56 files
+  // touched in total, 2 known self-guarded spellings left intact
+  // (kat-browser-tool-proxy, kat-dark-scheme probeRes site) — P5 folds those
+  // two into the helper. Add an entry ONLY with a written reason; the test
+  // fails on entries that no longer offend, so the list cannot rot.
 ];
 
 async function offenders(root = "scripts"): Promise<string[]> {

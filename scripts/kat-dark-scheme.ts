@@ -11,6 +11,7 @@
 //   - the computed body background must flip between the schemes
 //   - sampled visible text must hold WCAG AA (>= 4.5:1; large text >= 3:1)
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -118,10 +119,10 @@ for (const [name, path] of paths) {
       features: [{ name: "prefers-color-scheme", value: scheme }],
     }, sessionId);
     await sleep(400);
-    const bg = (await send("Runtime.evaluate", {
+    const bg = wireValue(await send("Runtime.evaluate", {
       expression: `getComputedStyle(document.body).backgroundColor`,
       returnByValue: true,
-    }, sessionId)).result?.result?.value;
+    }, sessionId), "k.dark-scheme.bg");
     const shot = await send("Page.captureScreenshot", { format: "png" }, sessionId);
     await Deno.writeFile(`${OUT}/${name}-${scheme}.png`, Uint8Array.from(atob(shot.result.data), c => c.charCodeAt(0)));
     check(`${name}/${scheme}: body background resolved (got ${bg})`, typeof bg === "string" && bg.includes("rgb"));
@@ -142,7 +143,7 @@ for (const [name, path] of paths) {
     const bad = sample.filter((s: any) => s.ratio < (s.large ? 3 : 4.5));
     check(`${name}/${scheme}: WCAG AA on ${sample.length} sampled text styles (worst ${Math.min(...sample.map((s: any) => s.ratio), 99)})`, bad.length === 0, bad.slice(0, 4));
     if (name === "ntp-hub" && scheme === "dark") {
-      const userBubble = (await send("Runtime.evaluate", {
+      const userBubble = wireValue(await send("Runtime.evaluate", {
         expression: `(() => {
           ${lumJs}
           const parse = (s) => (s.match(/\\d+(?:\\.\\d+)?/g) ?? []).slice(0, 3).map(Number);
@@ -155,9 +156,9 @@ for (const [name, path] of paths) {
           bubble.remove(); return { bg, fg, ratio };
         })()`,
         returnByValue: true,
-      }, sessionId)).result?.result?.value;
+      }, sessionId), "k.dark-scheme.user");
       check("ntp-hub/dark: user bubble resolves dark secondary-layer with AA ink", userBubble?.bg === "rgb(43, 40, 35)" && userBubble?.ratio >= 4.5, userBubble);
-      const toolTree = (await send("Runtime.evaluate", {
+      const toolTree = wireValue(await send("Runtime.evaluate", {
         expression: `(() => {
           ${lumJs}
           const parse = (s) => (s.match(/\\d+(?:\\.\\d+)?/g) ?? []).slice(0, 3).map(Number);
@@ -172,7 +173,7 @@ for (const [name, path] of paths) {
           bubble.remove(); return { bg, fg, ratio, text: preview?.textContent ?? '' };
         })()`,
         returnByValue: true,
-      }, sessionId)).result?.result?.value;
+      }, sessionId), "k.dark-scheme.tree");
       check("ntp-hub/dark: JSON tree preview resolves scheme-aware ink", toolTree?.fg === "rgb(234, 230, 222)" && toolTree?.ratio >= 4.5 && /Readable/.test(toolTree?.text ?? ""), toolTree);
     }
   }

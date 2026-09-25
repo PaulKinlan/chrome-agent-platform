@@ -6,6 +6,7 @@
 // opens the agent with a trusted click, and asserts its scheduled turn is shown.
 //
 //   deno run -A scripts/kat-background-run-transcript.ts [extension] [out-dir]
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
@@ -93,11 +94,11 @@ try {
     await send("Runtime.enable", {}, sessionId);
     await send("Page.enable", {}, sessionId);
     const evaluate = async (expression: string) =>
-      (await send("Runtime.evaluate", {
+      wireValue(await send("Runtime.evaluate", {
         expression,
         awaitPromise: true,
         returnByValue: true,
-      }, sessionId)).result?.result?.value;
+      }, sessionId), "k.background-run-transcript");
     const screenshot = async (name: string) => {
       const shot = await send(
         "Page.captureScreenshot",

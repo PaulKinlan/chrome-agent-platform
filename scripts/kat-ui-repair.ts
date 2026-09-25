@@ -1,5 +1,6 @@
 // Settings → Agents and create-agent visual repair KAT.
 // Runs against the real loaded extension and writes durable screenshots + metrics.
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -58,7 +59,7 @@ async function open(path: string) {
 async function evaluate(sessionId: string, expression: string) {
   const response = await send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
   if (response.result?.exceptionDetails) throw new Error(response.result.exceptionDetails.exception?.description ?? "evaluation failed");
-  return response.result?.result?.value;
+  return wireValue<any>(response, "k.ui-repair");
 }
 async function screenshot(sessionId: string, name: string) {
   const response = await send("Page.captureScreenshot", { format: "png", fromSurface: true }, sessionId);
