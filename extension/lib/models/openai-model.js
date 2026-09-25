@@ -5,12 +5,16 @@
 // a genuine model — it calls the user's endpoint. It is never a fake label and
 // the extension never ships the owner's keys.
 
+import { capLog } from "../cap-log.js";
+
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { wrapLanguageModel } from "ai";
 import { normaliseModelId } from "./model-name.js";
 import { thoughtSignatureMiddleware } from "./thought-signature-middleware.js";
 import { toolCallFinishMiddleware } from "./tool-call-finish-middleware.js";
 import { safeProviderError } from "../pure.js";
+
+const providerHttpLog = capLog("provider:http");
 
 // A single, deduped per-(url,status) log so a failing provider logs its HTTP
 // status + body ONCE (not once per retry attempt). The extension's describeError
@@ -52,8 +56,7 @@ export function makeLoggingFetch(knownSecrets = []) {
         try {
           body = await res.clone().text();
         } catch { /* ignore */ }
-        // eslint-disable-next-line no-console
-        console.error(
+        providerHttpLog.error(
           `[provider] HTTP ${res.status} from ${safeUrl}${body ? ` — ${safeProviderError(body, knownSecrets)}` : ""}`,
         );
       }

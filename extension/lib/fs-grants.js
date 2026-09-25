@@ -29,6 +29,10 @@ import { newId } from "./pure.js";
 // whole. Only BINARY files are skipped (never decoded as garbage); that skip
 // is content correctness, not a size bound.
 
+import { capLog } from "./cap-log.js";
+
+const grantsLog = capLog("fs-grants");
+
 const DB_NAME = "cap_fs_grants";
 const DB_VERSION = 1;
 const STORE_NAME = "grants";
@@ -1161,7 +1165,7 @@ export async function watchFsGrant(
         unwatch: entry.unwatch,
       };
     } catch (err) {
-      console.warn("FileSystemObserver.observe failed, falling back to polling", err);
+      grantsLog.warn("FileSystemObserver.observe failed, falling back to polling", err);
     }
   }
 

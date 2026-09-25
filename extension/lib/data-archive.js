@@ -636,7 +636,7 @@ export async function importArchive(bundleText, { kvGet, kvSet, kvRemove, opfs, 
     let restored = false;
     try {
       restored = await recoverPendingImport(backends);
-    } catch {}
+    } catch { /* recovery attempt failed; the ArchiveFormatError below reports the rollback failure */ }
     if (!restored) {
       throw new ArchiveFormatError("import-rollback-failed", `rollback failed (${err?.message || err}); import again or restart to recover`);
     }

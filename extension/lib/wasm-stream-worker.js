@@ -76,9 +76,9 @@ async function makeStreamAdapters(handles) {
       });
     },
     abort() {
-      try { inputAccess.close(); } catch {}
-      try { stdoutAccess.close(); } catch {}
-      try { stderrAccess.close(); } catch {}
+      try { inputAccess.close(); } catch { /* already closed; abort continues */ }
+      try { stdoutAccess.close(); } catch { /* already closed; abort continues */ }
+      try { stderrAccess.close(); } catch { /* already closed; abort continues */ }
     },
   };
 }

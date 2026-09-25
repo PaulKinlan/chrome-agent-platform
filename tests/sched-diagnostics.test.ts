@@ -10,6 +10,7 @@ import {
   MAX_ACTIVE_ALARMS,
 } from "../extension/lib/scheduler.js";
 import { kvGet, kvSet } from "../extension/lib/kv.js";
+import { capLogReady, clearLogBuffer, dumpLogBuffer } from "../extension/lib/cap-log.js";
 
 // In-memory alarms mock
 const armedAlarms = new Map();
@@ -45,11 +46,10 @@ Deno.test("sched-diagnostics: formatSchedulerDiagnostic produces structured, bou
   assert(typeof diag.ts === "number" && diag.ts > 0, "timestamp present");
 });
 
-Deno.test("sched-diagnostics: logSchedulerDiagnostic formats and writes to console without throwing", () => {
-  let loggedMsg = "";
-  const origError = console.error;
-  console.error = (tag, msg) => { loggedMsg = `${tag} ${msg}`; };
-
+Deno.test("sched-diagnostics: logSchedulerDiagnostic formats and logs through cap-log without throwing", async () => {
+  // Routed through capLog (chrome-agent-platform-9do7): the ring is the export
+  // boundary and always receives the record; console forwarding is level-gated.
+  await capLogReady();
   try {
     const record = logSchedulerDiagnostic({
       event: "test_error_event",
@@ -59,10 +59,13 @@ Deno.test("sched-diagnostics: logSchedulerDiagnostic formats and writes to conso
     });
 
     assertEquals(record.event, "test_error_event");
-    assert(loggedMsg.includes("[scheduler:diagnostic]"), "tag logged");
-    assert(loggedMsg.includes("test_alarm_1"), "alarm name logged");
+    const hit = dumpLogBuffer().entries.find((e) =>
+      e.ns === "scheduler-diagnostic" && e.msg.includes("[scheduler:diagnostic]") &&
+      e.msg.includes("test_alarm_1")
+    );
+    assert(hit, "diagnostic record must land in the cap-log ring");
   } finally {
-    console.error = origError;
+    clearLogBuffer();
   }
 });
 

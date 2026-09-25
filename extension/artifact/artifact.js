@@ -44,7 +44,7 @@ copyBtn?.addEventListener("click", async () => {
     const orig = copyBtn.textContent;
     copyBtn.textContent = "Copied!";
     setTimeout(() => { copyBtn.textContent = orig; }, 1500);
-  } catch {}
+  } catch { /* clipboard write can be denied; the Copied! label is best-effort feedback */ }
 });
 
 function renderError(message) {

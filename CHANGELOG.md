@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.492] — 2026-09-25
+- route raw console.* through cap-log, annotate bare catches, gate both
+
 ## [0.3.491] — 2026-09-25
 - the settings picker can never quietly re-offer Demo or Chrome Prompt API
 

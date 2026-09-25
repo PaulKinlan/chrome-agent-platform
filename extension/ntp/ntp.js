@@ -510,10 +510,10 @@ function handleFactoryResetBoot() {
       sessionStorage.removeItem(FIRST_RUN_BROWSER_CHOICE_KEY);
       localStorage.clear();
       sessionStorage.clear();
-    } catch {}
+    } catch { /* storage can throw in restricted modes; the clear is best-effort */ }
     try {
       history.replaceState(null, "", location.pathname + location.search);
-    } catch {}
+    } catch { /* replaceState can throw on opaque origins; cosmetic URL tidy only */ }
   }
 }
 handleFactoryResetBoot();
@@ -4381,7 +4381,7 @@ function persistSidebar(collapsed) {
       const r = await send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } });
       if (r?.ok === false) {
         sidebarDurability = "error";
-        console.warn("sidebar collapse not persisted:", r.error ?? "unknown");
+        ntpLog.warn("sidebar collapse not persisted:", r.error ?? "unknown");
       } else {
         // kv.set now reports durable vs permissionless-session fallback.
         sidebarDurability = r?.mode === "durable" ? "durable" : "session";
@@ -4976,9 +4976,9 @@ async function handleOmniboxEntry() {
 }
 
 async function bootNtpRoutes() {
-  await handleOmniboxEntry().catch((e) => console.error("omnibox entry failed", e?.message ?? e));
+  await handleOmniboxEntry().catch((e) => ntpLog.error("omnibox entry failed", e?.message ?? e));
   // At boot/startup: restore current hash route (#view=, #thread=, #agent=) on reload
-  await applyCurrentHashRoute(false).catch((e) => console.error("boot route failed", e?.message ?? e));
+  await applyCurrentHashRoute(false).catch((e) => ntpLog.error("boot route failed", e?.message ?? e));
 }
 bootNtpRoutes();
 

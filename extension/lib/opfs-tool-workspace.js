@@ -36,6 +36,10 @@
 import { createAssetKeyed } from "./artifacts.js";
 import { sha256HexBytes } from "./pure.js";
 
+import { capLog } from "./cap-log.js";
+
+const wsLog = capLog("opfs-tool-workspace");
+
 export const WORKSPACE_ROOT = "tool-jobs";
 export const MAX_SEGMENT = 128;
 export const MAX_SAFE_SEQ = Number.MAX_SAFE_INTEGER;
@@ -154,7 +158,7 @@ export class OpfsToolWorkspace {
       const fh = await dir.getFileHandle(name);
       const file = await fh.getFile();
       const t = await file.text();
-      if (this._debug) console.log("[debug] read", name, typeof t, JSON.stringify(String(t).slice(0, 60)));
+      if (this._debug) wsLog.debug("read", name, typeof t, JSON.stringify(String(t).slice(0, 60)));
       return t;
     } catch {
       return null;

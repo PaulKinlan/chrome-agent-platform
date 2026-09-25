@@ -1406,7 +1406,7 @@ async function handleAlarm(alarm) {
         // Orphaned agent schedule (deleted out from under it): never run for
         // a ghost. A one-shot orphan still falls through to markScheduledDone;
         // a recurring one is left for the owner to cancel (task.cancel).
-        console.warn(`orphaned agent schedule ${alarm.name} — the agent is gone; cancel it from Tasks`);
+        swLog.warn(`orphaned agent schedule ${alarm.name} — the agent is gone; cancel it from Tasks`);
       } else {
         await fence.assertOwned();
         await runTask({
@@ -1476,7 +1476,7 @@ async function handleAlarm(alarm) {
     if (isMemoryKeyQuotaError(e)) {
       const blocked = await blockScheduledTaskForStorage(alarm.name, e);
       if (blocked.newlyBlocked) {
-        console.error(
+        swLog.error(
           "scheduled task paused — execution storage was full; no owner data was removed. Retry or cancel it from Tasks.",
           alarm.name,
         );
@@ -1521,7 +1521,7 @@ chrome.permissions?.onAdded?.addListener((perms) => {
   // migration is logged, never silently dropped.
   if (perms?.permissions?.includes("storage")) {
     migrateSessionToStorage().catch((e) =>
-      console.error("migrateSessionToStorage:", e?.message ?? e)
+      swLog.error("migrateSessionToStorage:", e?.message ?? e)
     );
   }
 });
@@ -3008,8 +3008,8 @@ async function invokeSiteToolCore(
         }
       });
       // The resolved tab's bridge may already be running — poke it to re-sync.
-      try { await chrome.tabs.sendMessage(targetTabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
-      try { await chrome.tabs.update(targetTabId, { active: true }).catch(() => {}); } catch {}
+      try { await chrome.tabs.sendMessage(targetTabId, { type: "enrollment.poke" }).catch(() => {}); } catch { /* best-effort: the tab may have no bridge or be gone */ }
+      try { await chrome.tabs.update(targetTabId, { active: true }).catch(() => {}); } catch { /* best-effort focus: the tab may be gone */ }
       resolvedBinding = await waitForSnapshotBinding(canonical, targetTabId);
       if (!resolvedBinding) {
         return {
@@ -3091,7 +3091,7 @@ async function invokeSiteToolCore(
     };
   }
   // Focus the destination tab before dispatch
-  try { await chrome.tabs.update(tab.id, { active: true }).catch(() => {}); } catch {}
+  try { await chrome.tabs.update(tab.id, { active: true }).catch(() => {}); } catch { /* best-effort focus: dispatch proceeds unfocused */ }
   // The site invocation is a SIDE-EFFECTING boundary (it drives a page function
   // on the origin) — it must be fenced like every other tool (the round-16 fence
   // coverage finding: site invocation called tabs.sendMessage without a run check).
@@ -3184,8 +3184,8 @@ async function invokeSiteToolCore(
         map[canonical] = rebindSnapshotGate(map[canonical] ?? null, recoverTabId);
         await setSnapshotGateMap(map);
       });
-      try { await chrome.tabs.sendMessage(recoverTabId, { type: "enrollment.poke" }).catch(() => {}); } catch {}
-      try { await chrome.tabs.update(recoverTabId, { active: true }).catch(() => {}); } catch {}
+      try { await chrome.tabs.sendMessage(recoverTabId, { type: "enrollment.poke" }).catch(() => {}); } catch { /* best-effort: the recovered tab may have no bridge */ }
+      try { await chrome.tabs.update(recoverTabId, { active: true }).catch(() => {}); } catch { /* best-effort focus: the recovered tab may be gone */ }
     } else if (plan.kind === "open") {
       const openTargetUrl = plan.url || canonical;
       const created = await chrome.tabs.create({ url: openTargetUrl, active: true }).catch(() => null);
@@ -4245,7 +4245,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
             ok: true,
           });
         } catch (e) {
-          console.warn("scheduled report artifact write failed", e?.message ?? e);
+          swLog.warn("scheduled report artifact write failed", e?.message ?? e);
         }
         await fence?.assertOwned?.();
         // Completion lifecycle: surface the result as a notification. The
@@ -4291,7 +4291,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
               message: spec.message,
             });
           } catch (e) {
-            console.error("notification failed", e);
+            swLog.error("notification failed", e);
           }
         }
         // Re-check ownership AFTER the notification commit as well.
@@ -4358,7 +4358,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       durableRunAborters.delete(executionId);
       const streamCleanup = await releaseRunWasmStreamOutputs(executionId);
       if (streamCleanup.failed > 0) {
-        console.warn(`stream output cleanup failed for ${streamCleanup.failed} run-owned reference(s)`);
+        swLog.warn(`stream output cleanup failed for ${streamCleanup.failed} run-owned reference(s)`);
       }
       // The delegation run-state dies with the run: a tool closure from a
       // settled run can never authorize a new delegation (fail-closed).
@@ -4774,7 +4774,7 @@ async function issueBridgeNonce(tabId, documentId, diagnostics) {
 let webmcpDiagnosticsCache = false;
 function swWebmcpLog(...args) {
   if (!webmcpDiagnosticsCache) return;
-  try { console.log("[WebMCP:sw]", ...args); } catch { /* never throw from a logger */ }
+  capLog("webmcp-sw").debug(...args);
 }
 
 async function webmcpDiagnosticsEnabled() {
@@ -5644,7 +5644,7 @@ async function writeActionLedgerRow(name, args, result, context) {
     try {
       const recent = await executeWorkerTool("list_recently_closed", { maxResults: 1 }, { ...(context ?? {}), __ledgerReentrant: true });
       if (Array.isArray(recent?.closed)) extra = { recentlyClosed: recent.closed };
-    } catch {}
+    } catch { /* ledger enrichment only: a session-store miss must not lose the row */ }
   }
   const row = ledgerRowFor(name, args, result, extra);
   if (!row) return;
@@ -10972,13 +10972,13 @@ async function dispatchHook(hookId, payload) {
   let dispatched = 0;
   for (const sub of matching) {
     if (dispatched >= MAX_DISPATCH_PER_EVENT) {
-      console.warn(`hook ${hookId} fan-out capped at ${MAX_DISPATCH_PER_EVENT} runs`);
+      swLog.warn(`hook ${hookId} fan-out capped at ${MAX_DISPATCH_PER_EVENT} runs`);
       break;
     }
     // Fail-closed re-check at dispatch time (the deny-list is authoritative).
     const allowed = await checkHookAllowed(hookId);
     if (!allowed.ok) {
-      console.warn(`hook ${hookId} refused at dispatch: ${allowed.error}`);
+      swLog.warn(`hook ${hookId} refused at dispatch: ${allowed.error}`);
       securityEvent("denied-hook", `hook ${hookId} refused: ${allowed.error}`);
       continue;
     }
@@ -11017,7 +11017,7 @@ async function dispatchHook(hookId, payload) {
       if (isProviderError(e)) {
         logGateOnce(e?.message ?? "provider unavailable");
       } else {
-        console.error(`hook ${hookId} run failed:`, e?.message ?? e);
+        swLog.error(`hook ${hookId} run failed:`, e?.message ?? e);
       }
     });
     dispatched += 1;
@@ -11103,13 +11103,13 @@ chrome.notifications?.onClicked?.addListener((notificationId) => {
       }
       return { ok: false, error: "resume_handler_missing" };
     },
-  }).catch((e) => console.warn("notification click routing failed", e?.message ?? e));
+  }).catch((e) => swLog.warn("notification click routing failed", e?.message ?? e));
 });
 
 chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
   handleNotificationClosed(notificationId, byUser, {
     registry: notificationRegistry,
-  }).catch((e) => console.warn("notification close tracking failed", e?.message ?? e));
+  }).catch((e) => swLog.warn("notification close tracking failed", e?.message ?? e));
 });
 
 // Capture errors + rejections into the diagnostics ring buffer so the
@@ -11127,7 +11127,7 @@ chrome.runtime.onInstalled.addListener(async () => {
       multiAgent: true,
     });
   }
-  console.log("Chrome Agent Platform installed");
+  swLog.info("Chrome Agent Platform installed");
 });
 
 // The OWNER-invoked screenshot path (the headed-browser success case). Clicking
@@ -11160,7 +11160,7 @@ chrome.action?.onClicked?.addListener(async (tab) => {
       });
     }
   } catch (e) {
-    console.error("action screenshot failed", e?.message ?? e);
+    swLog.error("action screenshot failed", e?.message ?? e);
   }
 });
 
@@ -11173,21 +11173,21 @@ chrome.action?.onClicked?.addListener(async (tab) => {
 // live lock acquired between the two can never be cleared twice.
 chrome.runtime.onStartup?.addListener(() => {
   recoverOnBoot().catch((e) =>
-    console.error("recoverOnBoot:", e?.message ?? e)
+    swLog.error("recoverOnBoot:", e?.message ?? e)
   );
   reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
-    console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
+    swLog.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
   );
   // chrome-agent-platform-afiu: an SW stop can orphan a queue CLAIM (the
   // follow-up was fired but never durably admitted, or its run settled while
   // the SW was down). Reconcile AFTER recoverOnBoot so stale-boot run rows
   // have their final phase before each claim is decided.
   reconcileThreadQueueClaims().catch((e) =>
-    console.error("reconcileThreadQueueClaims:", e?.message ?? e)
+    swLog.error("reconcileThreadQueueClaims:", e?.message ?? e)
   );
 });
 recoverOnBoot().catch((e) =>
-  console.error("recoverOnBoot:", e?.message ?? e)
+  swLog.error("recoverOnBoot:", e?.message ?? e)
 );
 // chrome-agent-platform-ch8x: a worker death mid-import leaves a durable
 // recovery journal — restore the original profile before anything reads it.
@@ -11200,16 +11200,16 @@ if (navigator?.storage?.getDirectory) {
     .then((root) =>
       recoverPendingImport({ kvGet, kvSet, kvRemove, opfs: createOpfsAdapter(root), alarms: createChromeAlarmsAdapter() }),
     )
-    .catch((e) => console.error("import recovery:", e?.message ?? e));
+    .catch((e) => swLog.error("import recovery:", e?.message ?? e));
 }
 reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
-  console.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
+  swLog.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
 );
 reconcileThreadQueueClaims().catch((e) =>
-  console.error("reconcileThreadQueueClaims:", e?.message ?? e)
+  swLog.error("reconcileThreadQueueClaims:", e?.message ?? e)
 );
 reconcileAgentWorkers({ ensureOffscreen, kvGet }).catch((e) =>
-  console.error("reconcileAgentWorkers:", e?.message ?? e)
+  swLog.error("reconcileAgentWorkers:", e?.message ?? e)
 );
 
 // The admitted local Pyodide runtime (CAP-FB-20260823-PYODIDE-PYTHON-01): the

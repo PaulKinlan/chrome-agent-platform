@@ -49,7 +49,7 @@ function boundedName(value) {
 
 function mutationClassOf(name) {
   for (const s of ["chrome-api", "management"]) {
-    try { return chromeToolCapability(name, s).mutationClass; } catch {}
+    try { return chromeToolCapability(name, s).mutationClass; } catch { /* probe: a throw means the tool is not in this set */ }
   }
   return null;
 }
@@ -208,10 +208,10 @@ export function withRunToolBookkeeping(toolMap, context, { recordCall = null, wr
     out[name] = {
       ...tool,
       execute: async (args) => {
-        try { recordCall?.(name)?.catch?.(() => {}); } catch {}
+        try { recordCall?.(name)?.catch?.(() => {}); } catch { /* ledgering must never break the tool call it records */ }
         const result = await tool.execute(args);
         if (isLedgerableTool(name) && context?.__ledgerReentrant !== true) {
-          try { writeLedgerRow?.(name, args, result, context)?.catch?.(() => {}); } catch {}
+          try { writeLedgerRow?.(name, args, result, context)?.catch?.(() => {}); } catch { /* ledgering must never break the tool call it records */ }
         }
         return result;
       },
