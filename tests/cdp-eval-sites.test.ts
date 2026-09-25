@@ -151,6 +151,13 @@ Deno.test({
     for (const file of Object.keys(PERMITTED_RAW_READS)) {
       if (!scanned.has(file)) failures.push(`${file}: permit names a file with no value-read sites — remove it`);
     }
+    // A permit is a review decision; an empty reason cannot carry one (sotw-gemini review of
+    // 8ko7 @ 56f7f7b70).
+    for (const [file, permit] of Object.entries(PERMITTED_RAW_READS)) {
+      if (permit.reason.trim().length === 0) {
+        failures.push(`${file}: permit has no reason — every retained raw read states WHY in the guard`);
+      }
+    }
     assertEquals(failures, [], failures.join("\n"));
   },
 });
