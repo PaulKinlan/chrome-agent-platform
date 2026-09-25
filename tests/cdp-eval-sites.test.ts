@@ -16,10 +16,7 @@ const VALUE_READ = /\.result\??\.value|\.result\.result\??\.value|\bresult\?\.va
 const HANDLED = /exceptionDetails|cdp-eval/;
 
 const UNHANDLED: string[] = [
-  "scripts/agent-role-preview.ts",
   "scripts/axe-audit.ts",
-  "scripts/capability-lifecycle.ts",
-  "scripts/data-memory-clear.ts",
   "scripts/kat-agent-delegation.ts",
   "scripts/kat-agent-templates.ts",
   "scripts/kat-back-stack.ts",
@@ -45,13 +42,7 @@ const UNHANDLED: string[] = [
   "scripts/kat-thinking-trace.ts",
   "scripts/kat-ux-lows.ts",
   "scripts/kat-wasi-tranche2.ts",
-  "scripts/p0-repro.ts",
-  "scripts/perf-leak-trace.ts",
-  "scripts/screenshot-vision-evidence.ts",
-  "scripts/sidepanel-companion-journey.ts",
-  "scripts/tool-call-evidence.ts",
   "scripts/validate-package-load.ts",
-  "scripts/verify-script-run.ts",
 ];
 
 async function offenders(root = "scripts"): Promise<string[]> {
