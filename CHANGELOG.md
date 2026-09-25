@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.510] — 2026-09-25
+- the residue map names the semicolon escape inside a spawn argument region
+
+## [0.3.509] — 2026-09-25
+- internal: clarify the semicolon escape boundary inside spawn argument regions in test partition residue docs
+
 ## [0.3.508] — 2026-09-25
 - a run settles and heartbeats survive even when its durable record vanishes under it
 

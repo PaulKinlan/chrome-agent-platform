@@ -114,7 +114,9 @@ export const EXEMPTIONS = {
 // invisible to every text detector here — it was equally invisible to the old
 // mention rule, so the fix does not widen that hole; a hoisted-const path
 // (const D = "tests/x.mjs" … spawned later) is equally dataflow-invisible;
-// and a COMMENTED-OUT import still matches its shape (fail-closed: the cost is
+// within a spawn argument region the window also ends at the first `;`, so a
+// driver path AFTER a semicolon inside the args escapes the same way; and a
+// COMMENTED-OUT import still matches its shape (fail-closed: the cost is
 // an inheritance a lane did not need, never a silent parallel writer).
 // NO-SUBSTITUTION TEMPLATES ARE NOT RESIDUE (audiofeed-astra's review of this
 // fix): `import(`../tests/x.mjs`)` loads the module exactly like a quoted
