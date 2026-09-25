@@ -16,6 +16,8 @@
 
 import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import {
   assertBundleBudget,
   BUDGET_REPORTED_BUNDLES,
@@ -229,4 +231,39 @@ Deno.test("2eb5: an oversize error names a symlinked node_modules — and stays 
   } finally {
     await Deno.remove(durableDir("cap-budget-symlink"), { recursive: true }).catch(() => {});
   }
+});
+
+// ── the ycez pin: the SW bundle carries no Emscripten decoder ─────────────────────────────────────
+// WHY THE METAFILE AND NOT A SOURCE WALK (ycez / ltkj.2, 2026-09-25): `background/service-worker.js`
+// names `options/options.html`, so the source-level reachability walk folds the OPTIONS bundle into the
+// SW's reachable set and cannot answer "what is in the SW bundle". The metafile can: it is esbuild's
+// own module list for this bundle. With the authority importing the validator and the auditor
+// directly, both were SW inputs and the bundle was 3,009,120 against the unchanged 3,000,000 (over
+// 9,120); clean main is 2,982,877, and with the options-document broker the SW is 2,984,188.
+Deno.test("bundle budget: the service-worker bundle carries no Emscripten decoder (ycez)", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const report = join(repo, ".build", "bundle-report.json");
+  let metafile: { inputs?: Record<string, unknown> };
+  try {
+    metafile = JSON.parse(await Deno.readTextFile(report));
+  } catch {
+    throw new Error(
+      `bundle budget: ${report} is missing — run \`npm run build:production\` first. The SW bundle's composition cannot be checked without the metafile the build writes, and a check that cannot read its subject must refuse rather than pass.`,
+    );
+  }
+  const inputs = Object.keys(metafile.inputs ?? {});
+  assert(inputs.length > 10, `the metafile must describe the real SW bundle (got ${inputs.length} inputs)`);
+  for (const forbidden of ["emscripten-manifest.js", "emscripten-module-audit.js", "emscripten-admission.js"]) {
+    assertEquals(
+      inputs.some((input) => input.endsWith(forbidden)),
+      false,
+      `${forbidden} must not be an input of the service-worker bundle: the Store budget cannot carry the decoder, and the contract pins schema-2 validation to the options document (ycez)`,
+    );
+  }
+  // POSITIVE CONTROL: the authority IS an SW input (background/service-worker.js reaches it through
+  // lib/tool-exec-preview.js). A metafile that names nothing cannot pass this test by accident.
+  assert(
+    inputs.some((input) => input.endsWith("wasm-package-authority.js")),
+    "the SW bundle must carry the authority — otherwise this exclusion proves nothing",
+  );
 });

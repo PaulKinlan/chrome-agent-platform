@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.499] — 2026-09-25
+- the schema-2 surface is injected, so the decoder can never enter the service worker
+
+## [0.3.498] — 2026-09-25
+- internal: the schema-2 surface is injected into the package authority so the decoder never enters the service worker bundle
+
 ## [0.3.497] — 2026-09-25
 - the sweep's three equivalent mutants are recorded at their sites, and A2 is now a killed mutant rather than an unkillable one
 
