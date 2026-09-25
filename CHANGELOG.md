@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.519] — 2026-09-25
+- the passive-detector probe waits for its relay instead of guessing 100 ms
+
 ## [0.3.518] — 2026-09-25
 - sync docs/components.js from extension/shared/components.js (ypz0)
 
