@@ -41,6 +41,39 @@ Deno.test("provider public list: filters internal choices without changing runti
   }
 });
 
+Deno.test("provider options: the settings picker source never offers an internal provider", async () => {
+  // Structured extraction, not a substring scan (test-honesty rule 2): slice
+  // the PROVIDERS array literal out of options.js and read the ids actually
+  // declared inside it, so a demo/prompt-api card added back into the picker
+  // fails this test by construction. The exclusion lives by ABSENCE from this
+  // array (Paul 2026-08-17 note in options.js) — this pin is what makes the
+  // absence a guarded property instead of an accident.
+  const js = await Deno.readTextFile("extension/options/options.js");
+  const arrayStart = js.indexOf("const PROVIDERS = [");
+  assert(arrayStart !== -1, "the settings PROVIDERS array literal is missing");
+  const arrayEnd = js.indexOf("\n];", arrayStart);
+  assert(arrayEnd !== -1, "the settings PROVIDERS array literal has no terminator");
+  const literal = js.slice(arrayStart, arrayEnd);
+  const declaredIds = [...literal.matchAll(/\bid:\s*"([^"]+)"/g)].map((m) => m[1]);
+  assert(declaredIds.length > 0, "the settings picker declares no provider cards");
+  for (const internal of INTERNAL_PROVIDER_IDS) {
+    assert(
+      !declaredIds.includes(internal),
+      `${internal} became selectable in the settings picker`,
+    );
+  }
+  // One-directional sync: every card the picker declares is a provider the
+  // runtime authority serves as PUBLIC. (The inverse is deliberately not
+  // asserted — lm-studio is public but needs no picker card to stay valid.)
+  const publicIds = publicProviderChoices(PROVIDER_CHOICES).map((choice) => choice.id);
+  for (const declared of declaredIds) {
+    assert(
+      publicIds.includes(declared),
+      `${declared} is a settings picker card but is not in the public authority list`,
+    );
+  }
+});
+
 Deno.test("provider public list: malformed choice inputs fail closed", () => {
   assertEquals(publicProviderChoices(null), []);
   assertEquals(

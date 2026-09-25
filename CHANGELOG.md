@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.491] — 2026-09-25
+- the settings picker can never quietly re-offer Demo or Chrome Prompt API
+
+## [0.3.490] — 2026-09-25
+- internal: the settings picker source is guarded against re-offering internal provider cards
+
 ## [0.3.489] — 2026-09-25
 - finish recipes to skills rename and sync check EXPECTED ledger
 
