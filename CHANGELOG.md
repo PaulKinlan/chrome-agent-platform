@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.489] — 2026-09-25
+- re-review (e1m0): AGENTS.md follows the rename to note:dist
+
 ## [0.3.488] — 2026-09-25
 - check:dist becomes note:dist — a note named as a note
 
