@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.491] — 2026-09-25
+- the lock classifier is THREE states — UNKNOWN is kept and reported, and a negative threshold is refused
+
 ## [0.3.490] — 2026-09-25
 - the recovery's NEGATIVE paths are pinned (review response)
 

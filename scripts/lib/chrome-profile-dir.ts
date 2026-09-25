@@ -125,24 +125,56 @@ function resolveExisting(path: string): string {
  *  HOST is treated as live, because a wrongly kept profile costs disk while a
  *  wrongly removed one costs a lane's run. A profile with no lock at all is not
  *  live (a killed browser may leave none), and the age rule still applies. */
-export function profileIsLive(path: string): boolean {
+/** The three states a profile's lock can be in — never two.
+ *
+ * - `live`:   `SingletonLock` is a `<hostname>-<pid>` symlink and that pid is
+ *             alive on THIS host. Never pruned, at any threshold.
+ * - `absent`: no `SingletonLock` at all. Chrome removes it on a clean exit, so
+ *             this is the one state that positively means "not running" — the
+ *             age rule decides.
+ * - `unknown`: a lock exists but cannot be tied to an alive owner on this host
+ *             (unreadable/EINVAL, a malformed target, another host's lock, a
+ *             non-numeric pid, a permission refusal, or a DEAD pid). A dead pid
+ *             is deliberately UNKNOWN, not stale: pid liveness is only
+ *             meaningful in the same PID namespace, so a browser in another
+ *             namespace looks dead from here.
+ *
+ *  UNKNOWN must never mean "delete" — that is how chrome-agent-platform-z5ym
+ *  removed a RUNNING profile's directory (a test pruned the shared root with an
+ *  all-deleting threshold) and lost a live extension's OPFS state mid-run — and
+ *  it must never be reported as `live` either, or crashed profiles would hide
+ *  inside the live count forever and rebuild the disk pressure the age rule
+ *  exists to prevent. The pruner KEEPS an unknown profile and reports it in its
+ *  own `unknown` count, so the residue stays visible and an operator decision
+ *  (not a heuristic) cleans it. */
+export type ProfileLiveness = "live" | "absent" | "unknown";
+
+export function profileLiveness(path: string): ProfileLiveness {
   let target = "";
   try {
     target = readlinkSync(`${path}/SingletonLock`);
-  } catch {
-    return false; // no lock: a dead/never-started profile — let the age rule decide
+  } catch (e) {
+    // NotFound = no lock (clean exit). Anything else (EINVAL when the lock is
+    // not a symlink, EACCES, ...) is unreadable: UNKNOWN, never "fresh" and
+    // never "stale enough to delete". node:fs errors carry `code` (ENOENT);
+    // Deno's own errors carry `name` (NotFound) — accept either.
+    const kind = (e as { code?: string; name?: string })?.code ?? (e as { name?: string })?.name;
+    return kind === "ENOENT" || kind === "NotFound" ? "absent" : "unknown";
   }
   const match = /^(.*)-(\d+)$/u.exec(target);
-  if (!match) return true; // an unreadable shape must never authorize a removal
+  if (!match) return "unknown";
   const [, host, pidText] = match;
-  if (host !== hostname()) return true; // another machine's profile: cannot prove it is dead
+  if (host !== hostname()) return "unknown"; // another machine's profile: cannot prove it is dead
   const pid = Number(pidText);
-  if (!Number.isSafeInteger(pid) || pid <= 0) return true;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return "unknown";
   try {
     Deno.kill(pid, 0); // signal 0: existence check only
-    return true;
+    return "live";
   } catch (e) {
-    return (e as { name?: string })?.name !== "NotFound"; // EPERM = it exists, just not ours
+    // PermissionDenied = it exists but is not ours -> live. NotFound = a dead
+    // pid -> UNKNOWN (a namespace may hide the real owner), never stale.
+    const kind = (e as { code?: string; name?: string })?.code ?? (e as { name?: string })?.name;
+    return kind === "EPERM" || kind === "PermissionDenied" ? "live" : "unknown";
   }
 }
 
@@ -154,8 +186,17 @@ export async function pruneChromeProfileDirs(
     // instead of the shared one every lane's live browsers live under.
     root = `${durableRoot()}/${PROFILE_ROOT_NAME}`,
   }: { olderThanMs?: number; now?: number; root?: string } = {},
-): Promise<{ removed: number; kept: number; errors: string[] }> {
-  const out = { removed: 0, kept: 0, errors: [] as string[] };
+): Promise<{ removed: number; kept: number; unknown: number; errors: string[] }> {
+  // A negative (or non-finite) threshold means "delete everything", which is
+  // exactly the call shape that deleted the fleet's live profiles (z5ym).
+  // Refuse it HERE, so no caller and no test has to be careful.
+  if (!Number.isFinite(olderThanMs) || olderThanMs < 0) {
+    throw new Error(
+      `pruneChromeProfileDirs: olderThanMs must be a non-negative finite number (got ${olderThanMs}) — ` +
+        "a negative threshold deletes every profile, including a live one (chrome-agent-platform-z5ym)",
+    );
+  }
+  const out = { removed: 0, kept: 0, unknown: 0, errors: [] as string[] };
   let entries: Deno.DirEntry[];
   try {
     entries = [...Deno.readDirSync(root)];
@@ -173,9 +214,13 @@ export async function pruneChromeProfileDirs(
       continue;
     }
     if (now - mtime < olderThanMs) { out.kept++; continue; }
-    // A LIVE browser is never pruned, whatever threshold the caller passed:
-    // the lock's pid is checked before the age rule can authorize a removal.
-    if (profileIsLive(path)) { out.kept++; continue; }
+    // Only the two states that POSITIVELY mean "not running" may reach a
+    // removal: `absent` (no lock — a clean exit) via the age rule. `live` is
+    // never pruned, and `unknown` is kept AND counted separately so the
+    // residue is visible instead of hiding inside `kept` (z5ym).
+    const liveness = profileLiveness(path);
+    if (liveness === "live") { out.kept++; continue; }
+    if (liveness === "unknown") { out.kept++; out.unknown++; continue; }
     try {
       Deno.removeSync(path, { recursive: true });
       out.removed++;

@@ -254,6 +254,11 @@ export function createDurableRunRegistry({
   // reason as the rest: a unit test that supplies its own store must be able to
   // exercise the purge's registry effects (record, index, writer retirement)
   // without reaching real OPFS (chrome-agent-platform-cejm review).
+  // The seam is safe by construction, and that is deliberate: the DEFAULT is
+  // the real memory.js implementation, production callers pass nothing, and
+  // memory.js's own "refusing to remove the storage root" guard is untouched —
+  // tests/agent-opfs-teardown.test.ts covers the real function independently.
+  // Nothing here may ever default to a no-op.
   purgeStoreDir: purgeStoreDirDep = purgeStoreDirImpl,
   injectFailure = null,
 } = {}) {
