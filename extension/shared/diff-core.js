@@ -23,7 +23,7 @@ import {
 export { applyPatch, createTwoFilesPatch, diffLines, formatPatch, parsePatch, structuredPatch };
 
 /** Hard ceiling on one rendered diff line (bytes, UTF-8). Mirrors
- *  CODE_DIFF_LIMITS.maxLineBytes in the retention layer. */
+ *  CODE_DIFF_VIEW_LIMITS.maxLineBytes in the retention layer. */
 export const DIFF_LINE_MAX_BYTES = 8192;
 
 const textEncoder = new TextEncoder();

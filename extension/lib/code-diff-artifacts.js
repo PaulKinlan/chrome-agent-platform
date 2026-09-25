@@ -11,24 +11,49 @@ import { ASSET_BOUNDS, createAssetKeyed, getAsset } from "./artifacts.js";
 import { sha256HexBytes } from "./pure.js";
 
 export const CODE_DIFF_MEDIA = "application/x-cap-code-diff@1";
-export const CODE_DIFF_LIMITS = Object.freeze({
+
+// ── THREE AUTHORITIES, ONE CONCERN EACH (chrome-agent-platform-op01) ──
+// These used to be one shared CODE_DIFF_LIMITS block. The parent epic (dptw:
+// remove self-imposed size caps) needs the VIEW limits lifted WITHOUT
+// touching the retention budgets — sharing one const made "remove the caps"
+// a heap OOM, because the retention budgets are memory-safety LOAD-BEARING
+// (the CAS store exists to bound retained bytes; measured: naive removal
+// OOMs tests/code-diff-artifacts.test.ts). Split so removal is local.
+
+/** Per-DOCUMENT intake validation: the shape a retained change document may
+ * have. Hostile-input defence — not a view or storage concern. */
+export const CODE_DIFF_DOC_LIMITS = Object.freeze({
   maxPathBytes: 1024,
   maxSegmentBytes: 255,
   maxPathCount: 256,
   maxChanges: 512,
   maxInputs: 64,
-  maxRetainedBlobBytes: 180 * 1024,
-  maxRetainedCasBytes: 4 * 1024 * 1024,
-  maxRetainedBlobs: 64,
-  maxViewLines: 2000,
-  maxViewBytes: 512 * 1024,
-  maxLineBytes: 8192,
   maxPatchBytes: 240 * 1024,
 });
 
-export const MAX_RETAINED_BLOB_BYTES = CODE_DIFF_LIMITS.maxRetainedBlobBytes;
-export const MAX_RETAINED_CAS_BYTES = CODE_DIFF_LIMITS.maxRetainedCasBytes;
-export const MAX_RETAINED_BLOBS = CODE_DIFF_LIMITS.maxRetainedBlobs;
+/** RETENTION BUDGETS — the memory-safety authority for the retained blob/CAS
+ * store. These do NOT follow an "unlimited" directive: they bound what this
+ * module RETAINS, which is exactly what OOMs when lifted. Any change here is
+ * a review-time memory decision, not a cap cleanup. */
+export const CODE_DIFF_RETENTION_LIMITS = Object.freeze({
+  maxRetainedBlobBytes: 180 * 1024,
+  maxRetainedCasBytes: 4 * 1024 * 1024,
+  maxRetainedBlobs: 64,
+});
+
+/** Derived-text VIEW limits: how much of a retained diff a rendered view may
+ * show. The separable set the parent epic's removal targets — lifting these
+ * cannot touch intake validation or retention (disjoint authorities, no
+ * shared keys, pinned by tests/code-diff-artifacts.test.ts). */
+export const CODE_DIFF_VIEW_LIMITS = Object.freeze({
+  maxViewLines: 2000,
+  maxViewBytes: 512 * 1024,
+  maxLineBytes: 8192,
+});
+
+export const MAX_RETAINED_BLOB_BYTES = CODE_DIFF_RETENTION_LIMITS.maxRetainedBlobBytes;
+export const MAX_RETAINED_CAS_BYTES = CODE_DIFF_RETENTION_LIMITS.maxRetainedCasBytes;
+export const MAX_RETAINED_BLOBS = CODE_DIFF_RETENTION_LIMITS.maxRetainedBlobs;
 
 const HEX64 = /^[0-9a-f]{64}$/u;
 const SEMVER = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
@@ -171,11 +196,11 @@ export function normalizeUserPath(raw) {
   const segments = rawSegments.map((segment) => {
     const normalized = segment.normalize("NFC");
     if (!normalized || normalized === "." || normalized === "..") fail("path_traversal");
-    if (textEncoder.encode(normalized).byteLength > CODE_DIFF_LIMITS.maxSegmentBytes) fail("path_over_budget");
+    if (textEncoder.encode(normalized).byteLength > CODE_DIFF_DOC_LIMITS.maxSegmentBytes) fail("path_over_budget");
     return normalized;
   });
   const canonical = segments.join("/");
-  if (textEncoder.encode(canonical).byteLength > CODE_DIFF_LIMITS.maxPathBytes) fail("path_over_budget");
+  if (textEncoder.encode(canonical).byteLength > CODE_DIFF_DOC_LIMITS.maxPathBytes) fail("path_over_budget");
   return canonical;
 }
 
@@ -197,7 +222,7 @@ export function validateChangeDocument(input) {
   const doc = snapshot(input, "changeDoc");
   exactKeys(doc, ["schemaVersion", "canonicalPathSet", "displayPaths", "changes"], ["schemaVersion", "canonicalPathSet", "displayPaths", "changes"], "changeDoc");
   if (doc.schemaVersion !== 1) fail("unsupported_schema");
-  if (!Array.isArray(doc.canonicalPathSet) || doc.canonicalPathSet.length < 1 || doc.canonicalPathSet.length > CODE_DIFF_LIMITS.maxPathCount) fail("path_count_exceeded");
+  if (!Array.isArray(doc.canonicalPathSet) || doc.canonicalPathSet.length < 1 || doc.canonicalPathSet.length > CODE_DIFF_DOC_LIMITS.maxPathCount) fail("path_count_exceeded");
   const paths = [];
   const canonicalSeen = new Set();
   const foldedSeen = new Set();
@@ -230,7 +255,7 @@ export function validateChangeDocument(input) {
     }
   }
 
-  if (!Array.isArray(doc.changes) || doc.changes.length < 1 || doc.changes.length > CODE_DIFF_LIMITS.maxChanges) fail("change_count_exceeded");
+  if (!Array.isArray(doc.changes) || doc.changes.length < 1 || doc.changes.length > CODE_DIFF_DOC_LIMITS.maxChanges) fail("change_count_exceeded");
   const changes = [];
   const usedPaths = new Set();
   const usePath = (path, label) => {
@@ -372,9 +397,9 @@ export async function buildPatchIdentity(input) {
   exactKeys(value, ["producer", "context", "inputs", "base", "result", "changeDoc"], ["producer", "context", "inputs", "base", "result", "changeDoc"], "identityInput");
   const producer = validateProducer(value.producer);
   const context = validateContext(value.context);
-  const inputs = validateDigestList(value.inputs, "inputs", { max: CODE_DIFF_LIMITS.maxInputs });
-  const base = validateDigestList(value.base, "base", { withPath: true, max: CODE_DIFF_LIMITS.maxPathCount });
-  const result = validateDigestList(value.result, "result", { withPath: true, max: CODE_DIFF_LIMITS.maxPathCount });
+  const inputs = validateDigestList(value.inputs, "inputs", { max: CODE_DIFF_DOC_LIMITS.maxInputs });
+  const base = validateDigestList(value.base, "base", { withPath: true, max: CODE_DIFF_DOC_LIMITS.maxPathCount });
+  const result = validateDigestList(value.result, "result", { withPath: true, max: CODE_DIFF_DOC_LIMITS.maxPathCount });
   const changeDoc = validateChangeDocument(value.changeDoc);
   const expected = expectedBaseResult(changeDoc);
   if (canonicalJson(base) !== canonicalJson(expected.base) || canonicalJson(result) !== canonicalJson(expected.result)) fail("identity_change_mismatch");
@@ -515,7 +540,7 @@ export async function retainPatch(input, apiInput = null) {
   // by createAssetKeyed's WAL and the same digest-bound retry keys.
   const cas = await preflightCas(changeDoc, values.casBlobs);
   const patchContent = canonicalJson(changeDoc);
-  if (textEncoder.encode(patchContent).byteLength > CODE_DIFF_LIMITS.maxPatchBytes) fail("patch_over_budget");
+  if (textEncoder.encode(patchContent).byteLength > CODE_DIFF_DOC_LIMITS.maxPatchBytes) fail("patch_over_budget");
   // Materialize every deterministic artifact body before the first write too;
   // a base64/envelope failure can therefore never strand an earlier blob.
   const plan = cas.map((blob) => {
@@ -581,7 +606,7 @@ function truncateLine(value) {
   const clean = neutralizeText(value);
   // Reserve one byte for the unified +/- row marker. Side-by-side cells are
   // therefore bounded one byte more conservatively than the public ceiling.
-  const limit = CODE_DIFF_LIMITS.maxLineBytes - 1;
+  const limit = CODE_DIFF_VIEW_LIMITS.maxLineBytes - 1;
   const encoded = textEncoder.encode(clean);
   if (encoded.byteLength <= limit) return clean;
   let low = 0;
@@ -619,7 +644,7 @@ async function viewInput(input) {
 function pushViewRow(state, row) {
   const serialized = typeof row === "string" ? row : canonicalJson(row);
   const bytes = textEncoder.encode(serialized).byteLength + 1;
-  if (state.rows.length + 1 > CODE_DIFF_LIMITS.maxViewLines || state.bytes + bytes > CODE_DIFF_LIMITS.maxViewBytes) fail("view_over_budget");
+  if (state.rows.length + 1 > CODE_DIFF_VIEW_LIMITS.maxViewLines || state.bytes + bytes > CODE_DIFF_VIEW_LIMITS.maxViewBytes) fail("view_over_budget");
   state.rows.push(row);
   state.bytes += bytes;
 }

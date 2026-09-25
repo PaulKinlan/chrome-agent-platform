@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.514] — 2026-09-25
+- code-diff view limits split from retention budgets so lifting caps cannot OOM the store
+
+## [0.3.513] — 2026-09-25
+- internal: split code diff limits into document intake, retention, and view limits to allow separable view cap lifting
+
 ## [0.3.512] — 2026-09-25
 - renaming an agent mid-compose can no longer leave a stale name in the header
 
