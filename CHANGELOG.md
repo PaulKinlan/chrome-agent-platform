@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.506] — 2026-09-25
+- route serial-phase timeout test to serial and pin wall-clock flake declarations
+
+## [0.3.505] — 2026-09-25
+- internal: route serial-phase timeout test to the serial phase to prevent wall-clock flakiness under load, and pin wall-clock flake declarations
+
 ## [0.3.504] — 2026-09-25
 - static pairing guard for chrome-checks, agent-access-checks and run-status-lifecycle check literals against EXPECTED ledgers
 

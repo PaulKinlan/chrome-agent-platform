@@ -163,6 +163,30 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
   }
 });
 
+// hso8: content hazards are re-derived from the tree by the detectors above; a wall-clock
+// flake declaration is a review-time decision that nothing re-derives, so deleting the entry
+// leaves the guard GREEN and silently returns the file to the parallel phase (drilled on
+// 18f825dd6 during chrome-agent-platform-3vi7's review). Pin the reviewed declarations by
+// name — extend this list when a new wall-clock flake is declared, never remove an entry
+// without re-running that review.
+const WALL_CLOCK_FLAKE_SERIAL = [
+  "tests/serial-phase-timeout.test.ts", // 3vi7: 3.5 s fixture vs 2 s flat / 6 s scaled bounds
+  "tests/chrome-slot-semaphore-honesty.test.ts", // mee3: 1.5 s skip bound vs 2 s marker window
+];
+
+Deno.test("partition guard: reviewed wall-clock flake declarations are pinned by name", () => {
+  for (const rel of WALL_CLOCK_FLAKE_SERIAL) {
+    assert(
+      SERIAL.has(rel),
+      `${rel}: a reviewed wall-clock flake declaration was removed — re-run the review before returning it to the parallel phase`,
+    );
+    assert(
+      ((SERIAL_REASONS as Record<string, string | undefined>)[rel] ?? "").trim().length > 0,
+      `${rel}: a pinned serial entry must keep its reason`,
+    );
+  }
+});
+
 Deno.test("partition guard: the split is total, disjoint, and new safe files default to parallel", async () => {
   const files = await allTestFiles();
   const { serial, parallel } = partition(files);
