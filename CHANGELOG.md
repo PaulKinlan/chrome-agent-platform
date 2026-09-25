@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.493] — 2026-09-25
+- route console.table too — gate covers every console method
+
 ## [0.3.492] — 2026-09-25
 - route raw console.* through cap-log, annotate bare catches, gate both
 

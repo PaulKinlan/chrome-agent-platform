@@ -3,11 +3,13 @@
 // Two hygiene rules for the shipped extension tree, with falsification pins so a
 // regression fails here instead of accumulating again:
 //
-//  1. No raw console.* call outside extension/lib/cap-log.js. Logging goes
-//     through capLog(ns): levelled (silent by default in store builds),
-//     redacted (scrubLogValue), and ring-buffered for the diagnostics surface.
-//     Two files are EXEMPT, with the reason recorded below: the WebMCP
-//     page-world diagnostics shims. content/main-world.js runs in the PAGE's
+//  1. No raw console.* call — any method — outside extension/lib/cap-log.js.
+//     Logging goes through capLog(ns): levelled (silent by default in store
+//     builds), redacted (scrubLogValue), and ring-buffered for the diagnostics
+//     surface. The scanner covers every console method, not just the common
+//     five: the 9do7 re-review caught console.table() surviving a
+//     log|info|warn|error|debug census. Two files are EXEMPT, with the reason
+//     recorded below: the WebMCP page-world diagnostics shims. content/main-world.js runs in the PAGE's
 //     world — it cannot import modules and chrome.* is unavailable there — and
 //     the entire point of those logs is to appear in the PAGE's DevTools
 //     console when the owner enables Settings → Site agents → Diagnostics.
@@ -238,7 +240,7 @@ function lineOf(text: string, index: number): number {
   return line;
 }
 
-const CONSOLE_CALL = /console\.(?:log|info|warn|error|debug)\s*\(/g;
+const CONSOLE_CALL = /console\.[A-Za-z]+\s*\(/g;
 const EMPTY_CATCH = /catch\s*(?:\([^)]*\))?\s*\{([^{}]*)\}/g;
 
 /** console.* calls at code positions: [line, ...] */
@@ -332,8 +334,10 @@ Deno.test("falsification: planted violations are reported, clean code is not", (
     "try { risky(); } catch {}",
     "try { fine(); } catch { /* probe: a throw means absent */ }",
     "capLog('ns').warn('routed');",
+    'console.table([{ a: 1 }]);',
+    'console.trace("here");',
   ].join("\n");
-  assertEquals(rawConsoleCalls(planted), [2]);
+  assertEquals(rawConsoleCalls(planted), [2, 6, 7]);
   assertEquals(uncommentedEmptyCatches(planted), [3]);
 
   const clean = [
