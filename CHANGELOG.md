@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.544] — 2026-09-25
+- the ACP 'ask' owner gate comment now states its true scope, with a regression fixture
+
 ## [0.3.543] — 2026-09-25
 - C15 resolved — profile-store is the form-filler substrate, retained and documented
 

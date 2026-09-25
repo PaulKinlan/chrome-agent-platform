@@ -618,6 +618,56 @@ Deno.test("requestAcpPermission: no surface to ask on denies rather than grantin
   assertEquals(ACP_PERMISSION_TIMEOUT_MS, 120_000, "the documented default timeout");
 });
 
+Deno.test("runAcpTaskTurn: a harness action that emits no permission request cannot be gated by CAP (hcj9)", async () => {
+  // The measured boundary (evidence ~/cap-evidence/harness-capabilities-20260921/):
+  // on hosts configured fs/terminal=false, pi's read/bash/write and Codex's
+  // exec_command/file edit executed with ZERO session/request_permission
+  // callbacks. CAP's "ask" mode gates the requests it RECEIVES; it cannot
+  // interpose on an action that never becomes one. This fixture drives the REAL
+  // runner in ask mode with a harness whose tool executes silently, and pins the
+  // boundary: no card is rendered, the action is VISIBLE (a tool card), and the
+  // turn completes. If the runner ever synthesizes gates for tool events, this
+  // test fails.
+  const container = new MockContainer();
+  let prompterCalls = 0;
+  let toolExecuted = false;
+  const silentClient = {
+    connected: false,
+    _receiveRaw() {},
+    _abortPending() {},
+    async connect() { this.connected = true; },
+    async initialize() { return { protocolVersion: 1, agentCapabilities: {} }; },
+    async newSession() { return { sessionId: "hcj9-session" }; },
+    async loadSession() { throw new Error("no prior session"); },
+    async prompt(_sessionId: string, _prompt: unknown, onEvent?: (ev: any) => void) {
+      // A native tool executes WITHOUT emitting session/request_permission —
+      // the exact observed behavior this bead documents.
+      toolExecuted = true;
+      onEvent?.({ kind: "tool", toolCallId: "bash-1", status: "completed", detail: "printf hello" });
+      return { stopReason: "end_turn", text: "hello" };
+    },
+    async cancel() {},
+    close() { this.connected = false; },
+  };
+
+  const res = await runAcpTaskTurn({
+    container,
+    task: "run printf hello",
+    harnessId: "pi",
+    endpoint: "ws://127.0.0.1:1/acp", // unused: clientFactory injects the harness
+    clientFactory: () => silentClient,
+    permissionPrompter: () => {
+      prompterCalls += 1;
+      return Promise.resolve({ optionId: "allow" });
+    },
+  } as any);
+
+  assertEquals(res.ok, true, String(res.error));
+  assertEquals(toolExecuted, true, "the native action ran");
+  assertEquals(prompterCalls, 0, "no session/request_permission arrived, so no card could render");
+  assertEquals(container.tools.length, 1, "the ungated action is still VISIBLE in the conversation");
+});
+
 Deno.test("runAcpTaskTurn: ask mode sends the OWNER's decision to the harness (deny stays deny)", async () => {
   const logPath = `${durableDir("acp-fixture-logs")}/perm-${Date.now()}.jsonl`;
   const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, CAP_ACP_FIXTURE_ASK_PERMISSION: "1" });

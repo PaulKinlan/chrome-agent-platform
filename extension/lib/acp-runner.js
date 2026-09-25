@@ -574,9 +574,16 @@ export async function runAcpTaskTurn(options) {
     status({ state: "running", activity: `Connecting to the local ${harnessId} host…` });
   }
 
-  // THE OWNER GATE: in "ask" (the default) every harness permission request is
-  // rendered as an inline Allow/Deny card and the turn waits for the click, so
-  // the harness runs shell/file commands with the owner's consent or not at all.
+  // THE OWNER GATE, scoped honestly (hcj9): in "ask" (the default) every
+  // session/request_permission the harness EMITS is rendered as an inline
+  // Allow/Deny card and the turn waits for the click. CAP gates the requests
+  // it receives — a harness tool that emits NO request runs under the
+  // configured host's own policy, which CAP does not see and cannot veto
+  // (measured: pi's read/bash/write and Codex's exec_command/file edit
+  // executed with zero callbacks on fs/terminal=false hosts). Harness security
+  // belongs to the configured host (owner decision); per-call policy beyond
+  // the request stream would be a new decision, not something this gate
+  // already provides. tests/acp-runner.test.ts pins the boundary.
   // "auto" keeps the auto-grant and must be set deliberately in kv. The
   // cancellation check is late-bound: the claim it reads is created below.
   let permissionCancelled = () => false;
