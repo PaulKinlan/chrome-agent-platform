@@ -90,7 +90,6 @@ const INVENTORY: Record<string, number> = {
   "scripts/run-status-lifecycle.ts": 4,
   "scripts/read-page-host-grant-acceptance.ts": 4,
   "scripts/system-prompts-integration.ts": 3,
-  "scripts/tool-call-evidence.ts": 2,
   "scripts/page-actions-journey.ts": 2,
   "scripts/live-run-evidence.ts": 2,
   "scripts/live-every-tab.ts": 2,

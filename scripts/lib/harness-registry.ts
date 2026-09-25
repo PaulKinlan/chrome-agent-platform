@@ -208,7 +208,6 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "sidepanel-companion-journey.ts": { class: "manual", reason: "9/0 at the re-inventory (54 s); the side-panel companion journey standalone" },
   "skills-in-settings-evidence.ts": { class: "manual", reason: "9/0 at the re-inventory (23 s); the skills-in-Settings evidence run" },
   "system-prompts-integration.ts": { class: "manual", reason: "3/11 at the re-inventory and then a crash: <system-prompt-editor> never renders on options.html#prompts (Settings drift); kept for bisecting" },
-  "tool-call-evidence.ts": { class: "manual", reason: "the tool-call legibility evidence run (28/6 in --mode=tree at the re-inventory, then a DOM.focus crash; --mode=raw is the deliberate pre-fix repro); screenshots" },
   "unix-tools-streaming-acceptance.ts": { class: "manual", reason: "long-form release evidence: loads the exact extension and drives all nine streamed Unix tools over one 100 MiB owner-bound OPFS fixture, including receipt hashes and reference chaining" },
   "validate-package-load.ts": { class: "manual", reason: "loads the PACKAGED build (scripts/evidence-runner.sh gate 18 after gate 17 packages it)" },
   "verify-script-run.ts": { class: "manual", reason: "a verification probe for the script-run path; evidence only" },
