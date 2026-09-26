@@ -240,3 +240,71 @@ Deno.test("rekey: idempotent — a second run has nothing to migrate", async () 
   assertEquals(r2.errors, []);
   assertEquals(calls.length, 2); // exactly one mint + one cancel across both runs
 });
+
+// ---- the background-agent.set BUILT-IN branch (the REAL route logic) ----
+
+import { createBuiltinBackgroundSet } from "../extension/lib/agent-seeds.js";
+
+function makeSetHarness({ applyResult = { ok: true, scheduled: true, name: "agent:auto-group-by-domain", periodInMinutes: 30 } } = {}) {
+  const calls = [];
+  const setEnabled = createBuiltinBackgroundSet({
+    applyAgentSchedule: async (id, period, task) => {
+      calls.push({ op: "apply", id, period, task });
+      return applyResult;
+    },
+    subscribeHook: async ({ hookId, recipeId }) => {
+      calls.push({ op: "subscribe", hookId, recipeId });
+    },
+    unsubscribeHook: async ({ hookId, recipeId }) => {
+      calls.push({ op: "unsubscribe", hookId, recipeId });
+    },
+    cancelScheduledTaskBackground: (name) => {
+      calls.push({ op: "cancelLegacy", name });
+      return { marked: Promise.resolve({ ok: true }) };
+    },
+  });
+  return { setEnabled, calls };
+}
+
+const HOOKED_HAT = { ...SORTING_HAT, hooks: ["tabs.onCreated", "tabs.onUpdated"] };
+
+Deno.test("builtin set ENABLE: hooks first, then the unified agent schedule with the skill prompt, then legacy cancel", async () => {
+  const { setEnabled, calls } = makeSetHarness();
+  const r = await setEnabled(HOOKED_HAT, true);
+  assertEquals(r, { ok: true, enabled: true, id: "auto-group-by-domain", name: "agent:auto-group-by-domain", periodInMinutes: 30 });
+  assertEquals(calls.map((c) => c.op), ["subscribe", "subscribe", "apply", "cancelLegacy"]);
+  assertEquals(calls[2], { op: "apply", id: "auto-group-by-domain", period: 30, task: SORTING_HAT.prompt });
+  assertEquals(calls[3], { op: "cancelLegacy", name: "recipe:auto-group-by-domain" });
+  // Hooks ride the skill's id, as the legacy path did.
+  assertEquals(calls[0].recipeId, "auto-group-by-domain");
+});
+
+Deno.test("builtin set ENABLE: no schedule on the skill is an error BEFORE any hook or schedule write", async () => {
+  const { setEnabled, calls } = makeSetHarness();
+  const r = await setEnabled({ ...SORTING_HAT, schedule: undefined }, true);
+  assertEquals(r.ok, false);
+  assert(r.error.includes("no schedule"));
+  assertEquals(calls, []);
+});
+
+Deno.test("builtin set ENABLE: a schedule failure propagates and the legacy task is NOT cancelled", async () => {
+  const { setEnabled, calls } = makeSetHarness({ applyResult: { ok: false, error: "agent deleted mid-schedule" } });
+  const r = await setEnabled(HOOKED_HAT, true);
+  assertEquals(r, { ok: false, error: "agent deleted mid-schedule" });
+  assertEquals(calls.some((c) => c.op === "cancelLegacy"), false);
+});
+
+Deno.test("builtin set DISABLE: cancels the unified schedule, unsubscribes the hooks, and belts-and-braces cancels the legacy task", async () => {
+  const { setEnabled, calls } = makeSetHarness({ applyResult: { ok: true, scheduled: false, name: "agent:auto-group-by-domain", stopping: true } });
+  const r = await setEnabled(HOOKED_HAT, false);
+  assertEquals(r, { ok: true, enabled: false, id: "auto-group-by-domain", stopping: true, name: "agent:auto-group-by-domain" });
+  assertEquals(calls.map((c) => c.op), ["apply", "unsubscribe", "unsubscribe", "cancelLegacy"]);
+  assertEquals(calls[0], { op: "apply", id: "auto-group-by-domain", period: null, task: undefined });
+});
+
+Deno.test("builtin set DISABLE: a teardown failure propagates honestly", async () => {
+  const { setEnabled } = makeSetHarness({ applyResult: { ok: false, error: "schedule removal failed before it was durable" } });
+  const r = await setEnabled(HOOKED_HAT, false);
+  assertEquals(r.ok, false);
+  assert(r.error.includes("durable"));
+});

@@ -1128,6 +1128,12 @@ async function renderNamedAgents() {
   for (const a of active) {
     if (!a?.id || !a?.name) continue;
     noteAgentName(a.kind === "named" ? `named:${a.id}` : `background:${a.id}`, a.name);
+    // wz6i: a seeded built-in background agent keeps attributing its runs to
+    // its LEGACY `background:<id>` surface — register that ref too so the
+    // timeline reads the agent's name, not the raw ref.
+    if (typeof a.surfaceRef === "string" && a.surfaceRef) {
+      noteAgentName(a.surfaceRef, a.name);
+    }
   }
   if (el) {
     el.replaceChildren();

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.546] — 2026-09-26
+- built-in background agents run on the ONE agent store + schedule path (slices 3-4)
+
 ## [0.3.545] — 2026-09-26
 - seed built-in background agents into the named-agent store (slices 1-2)
 

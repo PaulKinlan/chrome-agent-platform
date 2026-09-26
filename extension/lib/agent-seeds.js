@@ -124,6 +124,56 @@ export function isVisibleAgentRow(agent) {
 }
 
 /**
+ * The `background-agent.set` BUILT-IN branch (wz6i), extracted so tests drive
+ * the REAL route logic with fakes. A built-in background agent is a
+ * named-agent store record: its enable/disable IS the ONE agent schedule path
+ * (`agent:<id>` via applyAgentSchedule — the fire path's real named-agent run
+ * with the record's legacy identity overrides). Hooks subscribe/unsubscribe
+ * exactly as the legacy path did; any legacy `recipe:<id>` task is cancelled
+ * (the startup re-key does this too — this closes the window for a profile
+ * that enabled the agent before this build). Custom duplicated skills never
+ * reach this branch.
+ */
+export function createBuiltinBackgroundSet({
+  applyAgentSchedule,
+  subscribeHook,
+  unsubscribeHook,
+  cancelScheduledTaskBackground,
+}) {
+  return async function setBuiltinBackgroundEnabled(skill, enabled) {
+    if (!enabled) {
+      const r = await applyAgentSchedule(skill.id, null);
+      for (const hookId of skill.hooks ?? []) {
+        await unsubscribeHook({ hookId, recipeId: skill.id }).catch(() => {});
+      }
+      // Belt-and-braces: cancel any legacy `recipe:` task the startup re-key
+      // has not reached (non-blocking, inert-first as always).
+      cancelScheduledTaskBackground(`recipe:${skill.id}`);
+      return r.ok
+        ? { ok: true, enabled: false, id: skill.id, stopping: r.stopping, name: r.name }
+        : r;
+    }
+    const periodInMinutes = skill.schedule?.periodInMinutes;
+    if (!periodInMinutes) {
+      return { ok: false, error: `skill ${skill.id} has no schedule` };
+    }
+    // Subscribe the skill's event triggers (fail-closed: a denied hook, or a
+    // hook whose optional permission is absent, is refused — the skill still
+    // runs on its schedule, just not on the event).
+    for (const hookId of skill.hooks ?? []) {
+      await subscribeHook({ hookId, recipeId: skill.id }).catch(() => {});
+    }
+    // The recurring task text is the skill's prompt — identical to the legacy
+    // payload, so a fired run composes the same instructions.
+    const r = await applyAgentSchedule(skill.id, periodInMinutes, skill.prompt);
+    if (r.ok) cancelScheduledTaskBackground(`recipe:${skill.id}`);
+    return r.ok
+      ? { ok: true, enabled: true, id: skill.id, name: r.name, periodInMinutes }
+      : r;
+  };
+}
+
+/**
  * The startup re-key, extracted so tests drive the REAL migration with
  * controlled interleavings (wz6i slice 3). For every scheduled task named
  * `recipe:<id>` whose id is a BUILT-IN background skill, mint the unified

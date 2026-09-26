@@ -129,6 +129,11 @@ import {
   siteMemory,
 } from "../lib/memory.js";
 import {
+  createBuiltinBackgroundSet,
+  createBuiltinScheduleRekey,
+  isBuiltinBackgroundSkill,
+} from "../lib/agent-seeds.js";
+import {
   filterBundledWasmRowsForAgent,
   filterWebmcpOriginsForAgent,
   isWebmcpOriginAllowed,
@@ -904,10 +909,17 @@ async function enrichAgentsWithSchedules(agents) {
   const tasks = await listScheduledTasks().catch(() => []);
   const byName = new Map((Array.isArray(tasks) ? tasks : []).map((t) => [t.name, t]));
   return list.map((a) => {
-    const t = byName.get(`agent:${a.id}`);
-    return t && !t.cancelling
+    // wz6i: a seed's live schedule may still ride its LEGACY `recipe:<id>`
+    // task in the window before the startup re-key completes — dual-read so
+    // the enabled state never flickers off.
+    const t = byName.get(`agent:${a.id}`) ?? (a.seeded ? byName.get(`recipe:${a.id}`) : null);
+    const live = t && !t.cancelling;
+    const withSchedule = live
       ? { ...a, schedule: { periodInMinutes: t.periodInMinutes ?? null, task: t.task ?? "" } }
       : a;
+    // Seeds get an explicit enabled flag: the ONE projection hides a disabled
+    // seed (a template, not an agent row) on every surface.
+    return withSchedule.seeded ? { ...withSchedule, enabled: Boolean(live) } : withSchedule;
   });
 }
 // The single schedule code path for named agents (extracted to
@@ -920,6 +932,26 @@ const applyAgentSchedule = createApplyAgentSchedule({
   broadcastRegistryChanged,
   slugifyAgentId,
   withNamedAgentsLock,
+});
+// wz6i: the startup re-key that moves BUILT-IN background agents from their
+// legacy `recipe:<id>` schedules onto the unified `agent:<id>` path (the ONE
+// record store merge). Extracted to lib/agent-seeds.js so tests drive the
+// REAL migration; custom duplicated skills are never touched here.
+const rekeyBuiltinBackgroundSchedules = createBuiltinScheduleRekey({
+  listScheduledTasks,
+  scheduleTask,
+  cancelScheduledTaskBackground,
+  isBuiltinBackgroundId: (id) => backgroundSkills().some((s) => s.id === id),
+  log: (msg) => swLog.warn(msg),
+});
+// wz6i: the `background-agent.set` BUILT-IN branch — a built-in background
+// agent's enable/disable IS the ONE agent schedule path (lib/agent-seeds.js,
+// so tests drive the real logic). Custom duplicates keep the legacy path.
+const setBuiltinBackgroundEnabled = createBuiltinBackgroundSet({
+  applyAgentSchedule,
+  subscribeHook,
+  unsubscribeHook,
+  cancelScheduledTaskBackground,
 });
 import {
   checkHookAllowed,
@@ -1420,10 +1452,16 @@ async function handleAlarm(alarm) {
           promptScope: `agent:${slug}`,
           agentRole: agent.role ?? "",
           agentSkills: await resolveAgentSkills(agent),
-          agentSurfaceRef: `named:${slug}`,
+          // wz6i: a seeded built-in background agent keeps its LEGACY runtime
+          // identity — the same `background:<id>` surface attribution and the
+          // same OPFS tier (`recipe:<id>`) its runs have always written —
+          // until e5oe's physical migration. Persisted agents are unaffected.
+          agentSurfaceRef: agent.surfaceRef ?? `named:${slug}`,
           // Match runNamedAgentTask + named-agent.history: the immutable
           // instance namespace, never the reusable/legacy slug directory.
-          memory: namedAgentMemory(agent.instanceId || slug),
+          memory: agent.memoryKey
+            ? backgroundAgentMemory(agent.memoryKey)
+            : namedAgentMemory(agent.instanceId || slug),
         });
       }
     } else {
@@ -5670,7 +5708,11 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
   // The store is namespaced by the agent's IMMUTABLE instanceId (not the
   // reusable slug): a recreated same-name agent gets a genuinely fresh
   // namespace, and the deleted agent's journalTarget dies with it.
-  const mem = namedAgentMemory(agent.instanceId || slug);
+  // wz6i: a seeded built-in background agent keeps its LEGACY OPFS tier
+  // (`recipe:<id>`) — the same memory + journal its runs have always written.
+  const mem = agent.memoryKey
+    ? backgroundAgentMemory(agent.memoryKey)
+    : namedAgentMemory(agent.instanceId || slug);
   const runTag = runId ?? `named:${slug}:${Date.now()}`;
   // PER-AGENT provider override: resolve the agent's OWN complete provider
   // config (the full override WITH its key — never surfaced), then thread the
@@ -5723,7 +5765,7 @@ async function runNamedAgentTask({ id, task, attachments, runId, threadId = null
       // The agent's SAVED skills compose into every run (the same path a
       // /skill:<id> reference takes) — saved skills are real, not decorative.
       agentSkills: await resolveAgentSkills(agent),
-      agentSurfaceRef: `named:${slug}`,
+      agentSurfaceRef: agent.surfaceRef ?? `named:${slug}`,
       // Paid provider-tool authority follows the immutable identity, not the
       // reusable slug. A legacy agent missing instanceId fails closed.
       providerServerAgentId: agent.instanceId || null,
@@ -7354,9 +7396,13 @@ const handlers = mergeRouteMaps(
     // The agent's OWN run history (its journal — task/result/tool-call rows),
     // most-recent-first, so the agent-chat surface can show what the agent did.
     // Reads the per-agent OPFS, never the master journal.
+    // wz6i: a seeded built-in background agent's journal lives in its LEGACY
+    // `recipe:<id>` tier — the same store background-agent.history reads.
     const agent = await getNamedAgent(id);
     if (!agent) return { ok: false, error: `no agent ${id}` };
-    const mem = namedAgentMemory(agent.instanceId || slugifyAgentId(id));
+    const mem = agent.memoryKey
+      ? backgroundAgentMemory(agent.memoryKey)
+      : namedAgentMemory(agent.instanceId || slugifyAgentId(id));
     const journal = (await mem.get("journal").catch(() => null)) ?? [];
     const entries = Array.isArray(journal) ? journal.slice(-200).reverse() : [];
     return { entries, count: entries.length };
@@ -7753,7 +7799,7 @@ const handlers = mergeRouteMaps(
     const enabled = new Set(
       (tasks ?? [])
         .map((t) => t.name)
-        .filter((n) => n.startsWith("recipe:")),
+        .filter((n) => n.startsWith("recipe:") || n.startsWith("agent:")),
     );
     const bgAll = [
       ...backgroundSkills(),
@@ -7789,7 +7835,12 @@ const handlers = mergeRouteMaps(
         {
           id: "named",
           label: "Named agents",
-          agents: (Array.isArray(named) ? named : []).map((a) => ({
+          agents: (Array.isArray(named) ? named : [])
+            // wz6i: built-in background SEEDS ride listNamedAgents now, but
+            // the picker's contract is unchanged — built-ins list under the
+            // background group (with their live enabled flag), never twice.
+            .filter((a) => !a.seeded)
+            .map((a) => ({
             ref: `named:${a.id}`,
             id: a.id,
             kind: "named",
@@ -9416,30 +9467,39 @@ const handlers = mergeRouteMaps(
     // The background-agent manager: each background skill (built-in AND custom
     // copies — item 56) + its enabled state (derived from the scheduled-task
     // store, so it reflects reality, not a stale in-memory flag).
+    // wz6i: a built-in's live schedule may be named `agent:<id>` (the unified
+    // path) or `recipe:<id>` (legacy, pre-re-key) — dual-read both.
     const tasks = await listScheduledTasks();
     const enabled = new Set(
       (tasks ?? [])
         .map((t) => t.name)
-        .filter((n) => n.startsWith("recipe:")),
+        .filter((n) => n.startsWith("recipe:") || n.startsWith("agent:")),
     );
     const custom = await getCustomSkills();
     const all = [...backgroundSkills(), ...custom.filter((r) => r.mode !== "on-demand")];
     return {
       agents: all.map((r) => ({
         ...r,
-        enabled: enabled.has(`recipe:${r.id}`),
+        enabled: enabled.has(`recipe:${r.id}`) || enabled.has(`agent:${r.id}`),
       })),
     };
   },
   async "background-agent.set"(m) {
     // Enable/disable a background agent. Enable schedules the skill's prompt
-    // as a recurring task (deterministic name `recipe:<id>`) with the skill's
-    // periodInMinutes. Disable authoritatively cancels it. This routes through
-    // the SAME atomic scheduleTask/cancelScheduledTask paths as schedule_task /
-    // task.cancel (fenced, crash-safe, quarantined-on-unknown-state).
+    // as a recurring task with the skill's periodInMinutes. Disable
+    // authoritatively cancels it.
     const skill = await resolveSkill(m?.id);
     if (!skill || skill.mode !== "background") {
       return { ok: false, error: `no background skill ${m?.id}` };
+    }
+    const enabled = m?.enabled !== false;
+    // wz6i: a BUILT-IN background agent is a named-agent store record — its
+    // enable/disable IS the ONE agent schedule path (`agent:<id>`, the fire
+    // path's real named-agent run with the record's legacy identity
+    // overrides). Custom duplicated skills keep the legacy `recipe:` path
+    // below.
+    if (isBuiltinBackgroundSkill(skill)) {
+      return await setBuiltinBackgroundEnabled(skill, enabled);
     }
     // `recipe:<id>` is a PERSISTED task identity (cap:scheduledTasks key +
     // chrome.alarms name + the backgroundAgentMemory slug), not vocabulary —
@@ -9447,7 +9507,6 @@ const handlers = mergeRouteMaps(
     // re-key + OPFS directory migration. Do NOT change this literal alone:
     // every matcher below and every existing profile's data depend on it.
     const name = `recipe:${skill.id}`;
-    const enabled = m?.enabled !== false;
     if (!enabled) {
       // Non-blocking cancel (owner: disabling must be instant — the payload is
       // marked cancelling/inert + the live run aborted now; alarm cleanup
@@ -11191,6 +11250,23 @@ chrome.runtime.onStartup?.addListener(() => {
 recoverOnBoot().catch((e) =>
   swLog.error("recoverOnBoot:", e?.message ?? e)
 );
+// wz6i: re-key legacy `recipe:<id>` schedules for BUILT-IN background agents
+// onto the unified `agent:<id>` path, AFTER recoverOnBoot cleared stale
+// in-flight locks. Mint-then-cancel preserves the payload verbatim (same
+// next-fire, task, period, owner) and can never silently disable an agent;
+// the alarm handler skips cancelling payloads, so the overlap cannot
+// double-fire. Idempotent — a failure leaves the legacy task live and the
+// next boot retries.
+recoverOnBoot()
+  .then(() => rekeyBuiltinBackgroundSchedules())
+  .then((r) => {
+    if (r?.migrated?.length || r?.errors?.length) {
+      swLog.info(
+        `wz6i schedule re-key: ${r?.migrated?.length ?? 0} migrated, ${r?.errors?.length ?? 0} errors`,
+      );
+    }
+  })
+  .catch((e) => swLog.error("wz6i schedule re-key:", e?.message ?? e));
 // chrome-agent-platform-ch8x: a worker death mid-import leaves a durable
 // recovery journal — restore the original profile before anything reads it.
 // Module eval runs on EVERY worker start (onStartup does not), and the
