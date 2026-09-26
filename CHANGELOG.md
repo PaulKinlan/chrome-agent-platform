@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.546] — 2026-09-26
+- Export All streams the profile straight to a .tar file — no caps, no message buffering
+
 ## [0.3.545] — 2026-09-26
 - bounded-child names build.mjs in prose only — declare it and un-red main's partition guard
 

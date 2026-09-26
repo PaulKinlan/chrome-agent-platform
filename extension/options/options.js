@@ -29,6 +29,8 @@ import {
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../lib/site-access.js";
+import { createOpfsAdapter } from "../lib/data-archive.js";
+import { streamExportArchive } from "../lib/backup-export.js";
 import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";
 import {
   USAGE_RANGES,
@@ -3257,13 +3259,49 @@ function setBackupStatus(text) {
   backupStatus.textContent = text;
 }
 
-/** One-click owner export: ask the service worker for the full bundle, then
- * download it as a single inspectable .json file. The SW route is
- * owner-gated; the bundle never contains provider keys or MCP headers. */
+/** One-click owner export — STREAMED (0ymn / 11rm.3): the Options page reads
+ * the OPFS tree directly (same extension origin as the service worker) and
+ * writes a .tar backup straight to the picked file in 64 KiB chunks — nothing
+ * buffers whole, nothing rides a runtime message, and the old 512 MiB /
+ * 100,000-file bounds simply do not exist on this path. The redaction contract
+ * is the SAME sanitizers collectExportData runs (excluded paths skipped,
+ * managed redacted targets sanitized through their registered helper before
+ * any byte enters the archive). When the File System Access picker is
+ * unavailable, the legacy buffered owner.export.all route is kept as the
+ * fallback so the button always works. */
 exportAllBtn?.addEventListener("click", async () => {
   setBackupStatus("Collecting your agents, memories, artifacts and settings…");
   exportAllBtn.disabled = true;
   try {
+    if (typeof window.showSaveFilePicker === "function") {
+      const when = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      const handle = await window.showSaveFilePicker({
+        suggestedName: `cap-backup-${when}.tar`,
+        types: [{ description: "CAP backup (TAR)", accept: { "application/x-tar": [".tar"] } }],
+      });
+      const writable = await handle.createWritable();
+      try {
+        const root = await navigator.storage.getDirectory();
+        const adapter = createOpfsAdapter(root);
+        const result = await streamExportArchive({
+          writable,
+          listFiles: () => adapter.listFiles(),
+          open: async (path) => {
+            const file = await (await root.getFileHandle(path, { create: false })).getFile();
+            return { size: file.size, stream: file.stream() };
+          },
+          kvGet: (key) => chrome.storage.local.get(key ?? null),
+          alarms: { getAll: () => chrome.alarms.getAll() },
+          extensionVersion: String(chrome.runtime.getManifest()?.version ?? "unknown"),
+          onProgress: (p) => setBackupStatus(`Exported ${p.bytesSoFar} bytes…`),
+        });
+        setBackupStatus(`Exported ${result.files - 3} stored files, ${result.totalBytes} payload bytes to ${handle.name}. Keep the file safe — it contains your agents' memories.`);
+        return;
+      } finally {
+        try { await writable.close(); } catch { /* already closed on error */ }
+      }
+    }
+    // ── legacy buffered fallback (File System Access unavailable) ──
     const res = await chrome.runtime.sendMessage({ type: "owner.export.all" });
     if (!res?.ok || typeof res.bundle !== "string") {
       throw new Error(res?.error || "Export failed");

@@ -76,8 +76,10 @@ export const RETAINED = {
     "Only tests/opfs-tool-workspace.test.ts imports it.",
   "lib/profile-store.js":
     "Layer 1 of the form-filler direction: the shipped form-filler skill (skill-registry, Data Wrangler and three other templates) fills fields 'from the user's stored profile in memory' — this schema-validated, grant-gated, audited store is that profile substrate (chrome-agent-platform-xtwv: retained, not orphaned).",
-  "lib/tar-stream.js":
-    "Streaming regular-file TAR/PAX encoder (11rm.1): options/settings export will import it once staging and barrier integration exist; tests/tar-stream.test.ts imports it.",
+  // (lib/tar-stream.js was RETAINED per 11rm.1 "encoder without product
+  // wiring"; 0ymn wired the streaming EXPORT driver into options.js, so it is
+  // REACHED from an entry point now and the RETAINED line is gone.
+  // tests/tar-stream.test.ts still pins it.)
   "lib/preference-bridge.js":
     "No page mounts the preference bridge (docs/PREFERENCE-PERCOLATION.md describes the design); only tests/security.test.ts imports it to pin the message validation.",
 };

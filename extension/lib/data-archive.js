@@ -293,7 +293,7 @@ export function sanitizeKvForExport(kv) {
   return out;
 }
 
-function summarizeProviders(providerConfig) {
+export function summarizeProviders(providerConfig) {
   const providers = providerConfig?.providers;
   if (!Array.isArray(providers)) return [];
   return providers
@@ -305,7 +305,7 @@ function summarizeProviders(providerConfig) {
     }));
 }
 
-function summarizeMcpServers(servers) {
+export function summarizeMcpServers(servers) {
   if (!Array.isArray(servers)) return [];
   return servers
     .filter((s) => s && typeof s === "object")
