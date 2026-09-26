@@ -600,6 +600,7 @@ async function dispatchBundledWasmStream({ toolId, args: validatedArgs, context 
         type: CALLEXPORT_RUN_TYPE,
         toolId,
         data: String(validatedArgs?.data ?? ""),
+        args: validatedArgs ?? {},
         owner,
         authority,
       });

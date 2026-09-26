@@ -1413,6 +1413,33 @@ export function executableBundledToolRecords(rows, context = {}) {
         if (Object.hasOwn(rawArgs, "toolId") && rawArgs.toolId !== toolId) {
           return { ok: false, error: "invalid_arguments: toolId" };
         }
+        if (toolId === "chacha20_poly1305") {
+          const keys = Object.keys(rawArgs).filter((k) => k !== "toolId");
+          const allowedKeys = new Set(["data", "key", "nonce", "mode", "aad"]);
+          if (!keys.every((k) => allowedKeys.has(k))) {
+            return { ok: false, error: "invalid_arguments: unexpected_keys" };
+          }
+          if (typeof rawArgs.data !== "string" || typeof rawArgs.key !== "string" || typeof rawArgs.nonce !== "string") {
+            return { ok: false, error: "invalid_arguments: required_fields" };
+          }
+          if (rawArgs.mode !== undefined && rawArgs.mode !== "encrypt" && rawArgs.mode !== "decrypt") {
+            return { ok: false, error: "invalid_arguments: mode" };
+          }
+          if (rawArgs.aad !== undefined && typeof rawArgs.aad !== "string") {
+            return { ok: false, error: "invalid_arguments: aad" };
+          }
+          return {
+            ok: true,
+            data: Object.freeze({
+              toolId,
+              data: rawArgs.data,
+              key: rawArgs.key,
+              nonce: rawArgs.nonce,
+              mode: rawArgs.mode ?? "encrypt",
+              ...(rawArgs.aad !== undefined ? { aad: rawArgs.aad } : {}),
+            }),
+          };
+        }
         const keys = Object.keys(rawArgs).filter((k) => k !== "toolId");
         if (JSON.stringify(keys) !== JSON.stringify(["data"]) ||
             typeof rawArgs.data !== "string") {

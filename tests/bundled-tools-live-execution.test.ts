@@ -42,7 +42,7 @@ Deno.test("ten9 GUARD: live dispatch of EVERY admitted bundled tool reaches the 
     scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
   });
   const recordMap = new Map(records.map((r) => [r.descriptorInput.toolId, r]));
-  assertEquals(records.length, 38, "every admitted tool exposes an executable record (37 wasi + 1 call-export)");
+  assertEquals(records.length, 39, "every admitted tool exposes an executable record (37 wasi + 2 call-export)");
 
   for (const toolId of PREVIEW_TOOL_IDS) {
     const record = recordMap.get(toolId);

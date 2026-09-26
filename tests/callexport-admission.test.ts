@@ -134,3 +134,128 @@ Deno.test("callexport: non-base64 input and missing spec fail closed", async () 
   try { await executeCallexportRun({ wasmBytes: bytes, executable: { memory: { tier: "tiny", maxPages: 512 }, imports: { allowed: [], disallowed: [] } }, data: btoa("x") }); } catch (e) { caught = e; }
   assert(caught && String(caught.message).includes("no_callexport_spec"), "missing spec refuses");
 });
+
+Deno.test("callexport: the real chacha_poly1305 module passes the audit with abi declaration", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const audit = auditWasmBinary(bytes, executable, {});
+  assertEquals(audit.ok, true);
+  assertEquals(audit.imports.length, 0, "zero imports by measurement");
+});
+
+Deno.test("callexport: the harness runs chacha20_poly1305 round-trip encrypt and decrypt", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(7)));
+  const nonce = btoa(String.fromCharCode(...new Uint8Array(12).fill(3)));
+  const plaintext = "Hello from CAP call-export lane with ChaCha20-Poly1305!";
+  const data = btoa(plaintext);
+
+  // Encrypt
+  const encResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data,
+    args: { key, nonce, data, mode: "encrypt" },
+  });
+  assertEquals(encResult.algorithm, "chacha20_poly1305");
+  assertEquals(encResult.mode, "encrypt");
+  assert(encResult.data && encResult.data !== data);
+
+  // Decrypt
+  const decResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data: encResult.data,
+    args: { key, nonce, data: encResult.data, mode: "decrypt" },
+  });
+  assertEquals(decResult.algorithm, "chacha20_poly1305");
+  assertEquals(decResult.mode, "decrypt");
+  assertEquals(atob(decResult.data), plaintext);
+});
+
+Deno.test("callexport: chacha20_poly1305 authenticated data (AAD) binds to ciphertext", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)));
+  const nonce = btoa(String.fromCharCode(...new Uint8Array(12).fill(4)));
+  const data = btoa("Sensitive mission directive");
+  const aad = btoa("authenticated-session-header");
+
+  const enc = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data,
+    args: { key, nonce, data, aad, mode: "encrypt" },
+  });
+
+  // Decrypt with matching AAD succeeds
+  const dec = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data: enc.data,
+    args: { key, nonce, data: enc.data, aad, mode: "decrypt" },
+  });
+  assertEquals(atob(dec.data), "Sensitive mission directive");
+
+  // Decrypt with mismatched or missing AAD fails closed
+  let caught = null;
+  try {
+    await executeCallexportRun({
+      wasmBytes: bytes,
+      executable,
+      data: enc.data,
+      args: { key, nonce, data: enc.data, aad: btoa("tampered-aad"), mode: "decrypt" },
+    });
+  } catch (err) { caught = err; }
+  assert(caught, "mismatched AAD throws");
+  assert(String(caught.message).includes("invalid_tag"), caught.message);
+});
+
+Deno.test("callexport: chacha20_poly1305 tampered ciphertext fails closed (invalid_tag)", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(1)));
+  const nonce = btoa(String.fromCharCode(...new Uint8Array(12).fill(2)));
+  const data = btoa("Confidential payload");
+
+  const enc = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data,
+    args: { key, nonce, data, mode: "encrypt" },
+  });
+
+  // Tamper with the raw ciphertext
+  const rawBytes = Uint8Array.from(atob(enc.data), (c) => c.charCodeAt(0));
+  rawBytes[0] ^= 0x01; // flip 1 bit
+  const tamperedB64 = btoa(String.fromCharCode(...rawBytes));
+
+  let caught = null;
+  try {
+    await executeCallexportRun({
+      wasmBytes: bytes,
+      executable,
+      data: tamperedB64,
+      args: { key, nonce, data: tamperedB64, mode: "decrypt" },
+    });
+  } catch (err) { caught = err; }
+  assert(caught, "tampered ciphertext throws");
+  assert(String(caught.message).includes("invalid_tag"), caught.message);
+});

@@ -1171,6 +1171,43 @@ export const BUNDLED_TOOL_PACKAGE_ROWS = Object.freeze([
   "callexport": true
  },
  {
+  "packageId": "cap.bundled.chacha20.poly1305",
+  "version": "1.0.0",
+  "toolId": "chacha20_poly1305",
+  "lane": "awasm-chacha",
+  "displayName": "chacha20_poly1305",
+  "category": "crypto",
+  "description": "chacha20_poly1305 - encrypt/decrypt data with ChaCha20-Poly1305 AEAD. Use for authenticated encryption on-device. In/out: base64 key (32B), nonce (12B), data, mode ('encrypt'|'decrypt'). Example: {key: '...', nonce: '...', data: '...'} -> {data: '...'}.",
+  "caveats": [
+   "Authenticated encryption of base64 input with ChaCha20-Poly1305 up to 2 MiB."
+  ],
+  "capabilities": [
+   "compute",
+   "crypto"
+  ],
+  "replayClass": "read-only",
+  "licence": {
+   "spdx": "MIT",
+   "file": SHARED_STRINGS[2],
+   "notices": null
+  },
+  "binary": {
+   "sha256": "e1acae9b3ee3da01b2bd0574f906fede6f5219da4b9b43fd5c36ee16fbf11330",
+   "bytes": 43461,
+   "tier": "default",
+   "initialPages": 41,
+   "maxPages": 41
+  },
+  "manifestRef": "extension/wasm/manifests/cap.bundled.chacha20.poly1305-1.0.0.manifest.json",
+  "sourceKind": "bundled-package",
+  "canonicalNameClaim": false,
+  "admitted": true,
+  "settingsPreview": false,
+  "disabled": false,
+  "disabledReason": null,
+  "callexport": true
+ },
+ {
   "packageId": "cap.bundled.gzip",
   "version": "1.0.0",
   "toolId": "gzip",

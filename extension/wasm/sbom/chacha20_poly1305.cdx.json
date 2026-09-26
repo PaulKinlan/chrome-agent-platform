@@ -1,0 +1,57 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:e1acae9b-3ee3-4da0-92bd-0574f906fede",
+  "version": 1,
+  "metadata": {
+    "timestamp": "1970-01-01T00:00:00Z",
+    "component": {
+      "type": "application",
+      "bom-ref": "awasm-chacha@0.1.4",
+      "name": "awasm-chacha",
+      "version": "0.1.4",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e1acae9b3ee3da01b2bd0574f906fede6f5219da4b9b43fd5c36ee16fbf11330"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "provenance",
+          "value": "byte-exact extraction from the pinned @awasm/noble npm tarball (no rebuild); chrome-agent-platform-2uhx"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "npm:@awasm/noble@0.1.4",
+      "name": "@awasm/noble",
+      "version": "0.1.4",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "LFkAq7VnGc8Hum4x12yxBsyoQYq9mWDf02j1lltzXaeZ14qcXwEYnOl5ByJ49xiBk1L7h6m3vkKkInvtDUIvOg=="
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "distribution",
+          "url": "https://registry.npmjs.org/@awasm/noble/-/noble-0.1.4.tgz"
+        }
+      ]
+    }
+  ]
+}

@@ -83,7 +83,7 @@ Deno.test("fresh-checkout: FULL verify (not fallback) passes on a pristine tree 
     assert(count > 0, "the materializer produced an empty tree");
     const r = run("node", [join(tmp, "scripts/build-bundled-tool-packages.mjs"), "--verify"], { cwd: tmp });
     assertEquals(r.code, 0, r.stderr);
-    assertStringIncludes(r.stdout, "VERIFY OK: 141 generated files byte-identical");
+    assertStringIncludes(r.stdout, "VERIFY OK: 144 generated files byte-identical");
     if (r.stderr.includes("self-consistency fallback") || r.stdout.includes("self-consistency fallback")) {
       throw new Error("fresh checkout fell back to degraded verify — migration incomplete");
     }

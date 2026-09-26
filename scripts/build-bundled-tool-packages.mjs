@@ -72,6 +72,7 @@ const PATHS = {
   jxl: join(EVIDENCE, "jxl"),
   avif: join(EVIDENCE, "avif"),
   hashwasmBlake3: join(EVIDENCE, "hashwasm-blake3"),
+  awasmChacha: join(EVIDENCE, "awasm-chacha"),
   d3: join(EVIDENCE, "d3"),
   sqlite3: join(EVIDENCE, "sqlite3"),
   stream: join(REPO, "packages/bundled/unix-stream-v1"),
@@ -116,6 +117,7 @@ export const AGENT_DESCRIPTIONS = Object.freeze({
   zxing: "zxing - read and write barcodes. Use when decoding a barcode image or generating one from text. In/out: read takes image bytes on stdin, one JSON line per barcode out; write <format> <text> prints PNG. Formats: qrcode, ean13, code128, datamatrix, pdf417.",
   imageops: "imageops - inspect, resize, and convert images (png/jpeg/webp). Use for image dimensions, resizing, or format conversion. In/out: base64 image text on stdin; base64 image bytes (or info JSON text) on stdout. Subcommands: info; resize; convert.",
   hash_blake3: "hash_blake3 - hash data with BLAKE3. Use to fingerprint content, verify integrity, or derive ids. In/out: base64-encoded bytes as 'data' to a hex digest. Example: {data: 'aGVsbG8='} -> {hash: '...'}.",
+  chacha20_poly1305: "chacha20_poly1305 - encrypt/decrypt data with ChaCha20-Poly1305 AEAD. Use for authenticated encryption on-device. In/out: base64 key (32B), nonce (12B), data, mode ('encrypt'|'decrypt'). Example: {key: '...', nonce: '...', data: '...'} -> {data: '...'}.",
   compressops: "compressops - compress or decompress with zstd or brotli. Use to shrink text or bytes. Compress text (stdin) to a base64 frame; decompress a base64 frame to base64; info reports a base64 frame. zstd [-d] [-l 1..19]; brotli [-d] [-q 0..11]; info.",
   oxipng: "oxipng - shrink a PNG without changing its pixels. Use to optimise a PNG before saving or sharing it. In/out: base64 PNG text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: -o <0..6> effort (default 2); --strip safe|all.",
   jxl: "jxl - decode a JPEG XL (JXL) image to PNG. Use to decode or view a JXL file or convert JXL to PNG. In/out: base64 JXL text on stdin to PNG bytes on stdout (base64 at the tool boundary). Flags: --to png (default).",
@@ -318,6 +320,13 @@ for (const toolId of LANES.c2.tools) {
   const wasm = readFileSync(join(PATHS.hashwasmBlake3, "binaries/blake3.wasm"));
   if (sha256(wasm) !== "984b12e3b76a670fe58f43aa965658cdfefe0867f88c4935a292f68bdf3c55e1" || wasm.byteLength !== 11891) throw new Error("hashwasm-blake3 hash/size mismatch");
   packages.push({ toolId: "hash_blake3", lane: "hashwasm-blake3", bytes: wasm, row: null, spdx: "MIT", licenseFile: "extension/wasm/licenses/MIT.txt", notices: null, sbom: { src: join(PATHS.hashwasmBlake3, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/hash_blake3.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "byte-exact extraction (extract.mjs; tarball sha512-pinned)", buildScriptLane: "hashwasm-blake3", displayName: "hash_blake3", category: "data", description: AGENT_DESCRIPTIONS.hash_blake3, caveats: ["One-shot hashing of base64 input up to 4 MiB; no streaming API yet."], replayClass: "read-only", capabilities: ["compute", "crypto"], callexport: { entry: "Hash_Calculate", inputBuffer: "Hash_GetBuffer", digestBytes: 32 }, metaStatus: "call-export-enabled", metaNote: "live via the call-export host (extension/lib/wasm-callexport-host.js); evidence: packages/bundled/evidence/hashwasm-blake3" });
+}
+{ // chacha20_poly1305 (2uhx — the call-export lane: @awasm/noble 0.1.4's chacha_poly1305,
+  // a ZERO-IMPORT compute module byte-extracted from the pinned npm tarball;
+  // no rebuild claimed. MIT, Paul Miller)
+  const wasm = readFileSync(join(PATHS.awasmChacha, "binaries/chacha_poly1305.wasm"));
+  if (sha256(wasm) !== "e1acae9b3ee3da01b2bd0574f906fede6f5219da4b9b43fd5c36ee16fbf11330" || wasm.byteLength !== 43461) throw new Error("awasm-chacha hash/size mismatch");
+  packages.push({ toolId: "chacha20_poly1305", lane: "awasm-chacha", bytes: wasm, row: null, tier: "default", spdx: "MIT", licenseFile: "extension/wasm/licenses/MIT.txt", notices: null, sbom: { src: join(PATHS.awasmChacha, "sbom/cyclonedx-1.5.json"), rel: "extension/wasm/sbom/chacha20_poly1305.cdx.json", format: "cyclonedx-json@1.5" }, toolchain: "byte-exact extraction (extract.mjs; tarball sha512-pinned)", buildScriptLane: "awasm-chacha", displayName: "chacha20_poly1305", category: "crypto", description: AGENT_DESCRIPTIONS.chacha20_poly1305, caveats: ["Authenticated encryption of base64 input with ChaCha20-Poly1305 up to 2 MiB."], replayClass: "read-only", capabilities: ["compute", "crypto"], callexport: { abi: "chacha20_poly1305" }, metaStatus: "call-export-enabled", metaNote: "live via the call-export host (extension/lib/wasm-callexport-host.js); evidence: packages/bundled/evidence/awasm-chacha" });
 }
 { // gzip (zlib 1.3.1 minigzip upstream + CAP-authored runtime): Zlib AND Apache-2.0
   const d3 = JSON.parse(readFileSync(join(PATHS.d3, "inventory.json"), "utf8"));

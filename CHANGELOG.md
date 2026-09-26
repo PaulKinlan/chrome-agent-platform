@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- admit awasm-noble chacha20_poly1305 as on-device AEAD call-export Wasm tool
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 

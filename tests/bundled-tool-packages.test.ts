@@ -73,9 +73,9 @@ Deno.test("SPDX: everything else rejected fail-closed", () => {
   assert(!isValidLicenseExpression(null) && !isValidLicenseExpression(undefined) && !isValidLicenseExpression(42));
 });
 
-Deno.test("manifests: all 38 shipped manifests validate against the real authority (canonical bytes)", async () => {
+Deno.test("manifests: all 39 shipped manifests validate against the real authority (canonical bytes)", async () => {
   const probe = new WasmPackageAuthority();
-  assertEquals(BUNDLED_INVENTORY.manifests.length, 38);
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 39);
   for (const row of BUNDLED_INVENTORY.manifests) {
     const rel = `extension/wasm/manifests/${row.pkg}-${row.version}.manifest.json`;
     const raw = await Deno.readTextFile(root(rel));
@@ -123,7 +123,7 @@ Deno.test("inventory: every declared file ships on disk with the exact pinned sh
   }
   // no unmanifested binaries: every CAS file maps to exactly one manifest executable
   const cas = BUNDLED_INVENTORY.files.filter((f) => f.rel.startsWith("extension/wasm/cas/"));
-  assertEquals(cas.length, 38);
+  assertEquals(cas.length, 39);
   const execShas = new Set();
   for (const m of BUNDLED_INVENTORY.manifests) {
     const manifest = JSON.parse(await Deno.readTextFile(root(`extension/wasm/manifests/${m.pkg}-${m.version}.manifest.json`)));
@@ -133,13 +133,13 @@ Deno.test("inventory: every declared file ships on disk with the exact pinned sh
   for (const f of cas) assert(execShas.has(f.rel.slice("extension/wasm/cas/".length, -".wasm".length)), f.rel);
 });
 
-Deno.test("admission: all 38 packages admit through the real authority over the real bytes; re-admission dedupes", async () => {
+Deno.test("admission: all 39 packages admit through the real authority over the real bytes; re-admission dedupes", async () => {
   const store = new FakeStore();
   const inventory = diskInventory();
   const authority = new WasmPackageAuthority({ getStore: () => store, inventory, now: () => 1000 });
   const first = await admitBundledToolPackages(authority, { inventory });
   assert(first.ok, JSON.stringify(first.results.filter((r) => !r.ok)));
-  assertEquals(first.results.length, 38);
+  assertEquals(first.results.length, 39);
   assert(first.results.every((r) => !r.deduped));
   for (const row of BUNDLED_TOOL_PACKAGES) {
     const q = await authority.query({ packageId: row.packageId });
@@ -167,10 +167,10 @@ Deno.test("admission: shipped CAS bytes pass the authority scanner unmanifested-
   assertEquals(violations, []);
 });
 
-Deno.test("posture: descriptors admit exactly the 38-tool Settings allowlist", () => {
-  assertEquals(BUNDLED_TOOL_PACKAGES.length, 38);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 38);
-  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 38);
+Deno.test("posture: descriptors admit exactly the 39-tool Settings allowlist", () => {
+  assertEquals(BUNDLED_TOOL_PACKAGES.length, 39);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.packageId)).size, 39);
+  assertEquals(new Set(BUNDLED_TOOL_PACKAGES.map((r) => r.toolId)).size, 39);
   // uslb: admitted splits into the WASI Settings-preview set PLUS the
   // call-export set (admitted without a preview spec — the offscreen harness).
   const previewRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.admitted === true && row.callexport !== true);
@@ -178,7 +178,7 @@ Deno.test("posture: descriptors admit exactly the 38-tool Settings allowlist", (
     ["avif", "awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ), "exactly the preview allowlist");
   const callexportRows = BUNDLED_TOOL_PACKAGES.filter((row) => row.callexport === true);
-  assertEquals(JSON.stringify(callexportRows.map((r) => r.toolId).sort()), JSON.stringify(["hash_blake3"]), "exactly the call-export set (uslb pilot)");
+  assertEquals(JSON.stringify(callexportRows.map((r) => r.toolId).sort()), JSON.stringify(["chacha20_poly1305", "hash_blake3"]), "exactly the call-export set (uslb + 2uhx)");
   for (const row of callexportRows) {
     assertEquals(row.admitted, true, row.toolId);
     assertEquals(row.settingsPreview, false, row.toolId);
@@ -359,9 +359,9 @@ import { assertStoreTargetBoundary } from "../scripts/store-target-policy.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
-Deno.test("store map: exact archivePath→executable mapping for ALL 38 shipped CAS binaries", async () => {
+Deno.test("store map: exact archivePath→executable mapping for ALL 39 shipped CAS binaries", async () => {
   const map = await buildBundledWasmManifestMap(repoRoot);
-  assertEquals(map.size, 38);
+  assertEquals(map.size, 39);
   for (const [archivePath, executable] of map) {
     assert(archivePath.startsWith("wasm/cas/") && archivePath.endsWith(".wasm"), archivePath);
     assertEquals(archivePath, `wasm/cas/${executable.sha256}.wasm`);
@@ -502,7 +502,7 @@ Deno.test("sqlite sources stay outside extension/; shipped code imports no Node 
 Deno.test("regeneration preserves predecessor manifest digests except intentional admissions", async () => {
   const identity26 = BUNDLED_INVENTORY.manifests.find((m) => m.pkg === "cap.bundled.sqlite3.query.bounded");
   assert(identity26, "sqlite identity present");
-  assertEquals(BUNDLED_INVENTORY.manifests.length, 38);
+  assertEquals(BUNDLED_INVENTORY.manifests.length, 39);
   // chrome-agent-platform-ne8u: this comparison used to read its predecessor from an
   // ABSOLUTE path under one author's worktree with `.catch(() => null)`, and every
   // assertion below sat inside `if (prevText) { … }`. That path exists on no other

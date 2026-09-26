@@ -712,16 +712,29 @@ export function adaptBundledTools(rows, context = {}) {
       name: toolId,
       aliases: [],
       description: ownData(row, "description") ?? ownData(row, "displayName") ?? "",
-      inputSchema: context.inputSchemaByTool?.[toolId] ?? (isCallExport ? {
-        // The call-export lane (uslb): data is a base64 string — the tool
-        // protocol cannot carry raw binary.
-        type: "object",
-        properties: {
-          data: { type: "string", description: "base64-encoded input bytes" },
-        },
-        required: ["data"],
-        additionalProperties: false,
-      } : {
+      inputSchema: context.inputSchemaByTool?.[toolId] ?? (isCallExport ? (
+        toolId === "chacha20_poly1305" ? {
+          type: "object",
+          properties: {
+            data: { type: "string", description: "base64-encoded input bytes (plaintext for encrypt, ciphertext with tag for decrypt)" },
+            key: { type: "string", description: "base64-encoded 32-byte secret key" },
+            nonce: { type: "string", description: "base64-encoded 12-byte nonce" },
+            mode: { type: "string", enum: ["encrypt", "decrypt"], description: "operation mode (default: encrypt)" },
+            aad: { type: "string", description: "optional base64-encoded additional authenticated data" },
+          },
+          required: ["data", "key", "nonce"],
+          additionalProperties: false,
+        } : {
+          // The call-export lane (uslb): data is a base64 string — the tool
+          // protocol cannot carry raw binary.
+          type: "object",
+          properties: {
+            data: { type: "string", description: "base64-encoded input bytes" },
+          },
+          required: ["data"],
+          additionalProperties: false,
+        }
+      ) : {
         type: "object",
         properties: {
           args: { type: "array", items: { type: "string" }, description: "command-line arguments, excluding argv[0]" },
