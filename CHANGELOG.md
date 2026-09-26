@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.444] — 2026-09-26
+- the CAP envelope is pinned by structure, not by a substring that survives its removal
+
 ## [0.3.443] — 2026-09-21
 - add candidate ACP tool transport and model backend (incomplete)
 

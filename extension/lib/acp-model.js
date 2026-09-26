@@ -4,6 +4,19 @@ import { AcpClient } from "./acp-client.js";
 
 const usage = { inputTokens: undefined, outputTokens: undefined, totalTokens: undefined };
 
+/** The envelope every harness prompt is wrapped in (chrome-agent-platform-6yfm,
+ *  coord ruling seq944 — option C: insertion-only, no bare-command bypass).
+ *
+ *  ACP has no system-prompt setter, so the CAP prompt travels as explicitly
+ *  labelled CONVERSATION data: this prefix is the label, and the prompt itself
+ *  is JSON — structured, never a raw concatenation. Removing or bypassing the
+ *  envelope is the "silent raw-prompt bypass" this bead forbids, so the tests
+ *  pin the envelope as a PREFIX (not a substring anywhere) and parse what
+ *  follows it; `tests/acp-model.test.ts` drives both mutants (envelope dropped,
+ *  prompt raw-concatenated) to prove those pins can fail. */
+export const ACP_PROMPT_ENVELOPE =
+  "Follow the CAP instructions and conversation below. Use the CAP tools to act through CAP.\n";
+
 export function createAcpModel({ url, cwd = "", harnessId, permissionHandler, clientFactory = (options) => new AcpClient(options) }) {
   const children = new Set();
   let client = null;
@@ -43,6 +56,16 @@ export function createAcpModel({ url, cwd = "", harnessId, permissionHandler, cl
       finish("tool-calls");
     });
   }
+/** The envelope every harness prompt is wrapped in (chrome-agent-platform-6yfm,
+ *  coord ruling seq944 — option C: insertion-only, no bare-command bypass).
+ *
+ *  ACP has no system-prompt setter, so the CAP prompt travels as explicitly
+ *  labelled CONVERSATION data: this prefix is the label, and the prompt itself
+ *  is JSON — structured, never a raw concatenation. Removing or bypassing the
+ *  envelope is the "silent raw-prompt bypass" this bead forbids, so the tests
+ *  pin the envelope as a PREFIX (not a substring anywhere) and parse what
+ *  follows it; `tests/acp-model.test.ts` drives both mutants (envelope dropped,
+ *  prompt raw-concatenated) to prove those pins can fail. */
   async function start(prompt) {
     client = clientFactory({ url, defaultCwd: cwd, toolHandler: handleTool,
       // Never inherit AcpClient's legacy no-handler auto-allow mode.
@@ -53,7 +76,7 @@ export function createAcpModel({ url, cwd = "", harnessId, permissionHandler, cl
     const session = await client.newSession({ cwd });
     // ACP has no system-prompt setter. Pass the complete CAP prompt, including
     // protected untrusted-content rules, as explicitly labelled conversation data.
-    const text = "Follow the CAP instructions and conversation below. Use the CAP tools to act through CAP.\n" + JSON.stringify(prompt);
+    const text = ACP_PROMPT_ENVELOPE + JSON.stringify(prompt);
     await client.prompt(session.sessionId, text, (event) => {
       if (event.kind !== "chunk" || !controller || closed) return;
       const id = `acp-text-${++textId}`;
