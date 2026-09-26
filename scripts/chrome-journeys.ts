@@ -2561,7 +2561,11 @@ async function main() {
       "create dialog: a Scheduled-group template creates one scheduled agent that the sidebar and Settings both list",
       schedPick?.picked === true && /every \d+ minutes/.test(schedMinutes) && scheduledAgent !== null &&
         Array.isArray(sidebarSched) && sidebarSched.some((t) => t.includes(schedName) && /Scheduled · every \d+ min/.test(t)) &&
-        surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount),
+        surfacesS.sidebarRows === 2 && surfacesS.panelRows === 2 && surfacesS.settingsRows === 2 && /^2 agents/.test(surfacesS.panelCount) &&
+        // h97m: the FOURTH surface asserts too — the picker's +3 (acp harness
+        // rows leaking into the created-agents projection) walked through this
+        // check unnoticed until the picker asserted nothing.
+        surfacesS.sidepanelRows === 2,
     );
     // CAP-FB-20260830-USER-VOICE-COPY-01: the hub's and Settings' delete
     // confirmations are ONE shared dialog whose body says what the person
@@ -2625,7 +2629,9 @@ async function main() {
     check(
       "create dialog: the journey's created agents are removed again (fresh profile restored)",
       deletions.length === 2 && deletions.every((d) => d?.ok === true) &&
-        surfacesR.sidebarRows === 0 && surfacesR.panelRows === 0 && surfacesR.settingsRows === 0,
+        surfacesR.sidebarRows === 0 && surfacesR.panelRows === 0 && surfacesR.settingsRows === 0 &&
+        // h97m: the picker agrees on the restored fresh profile too.
+        surfacesR.sidepanelRows === 0,
     );
 
     // ─────────────────────────────────────────────────────────────

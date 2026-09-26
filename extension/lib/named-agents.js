@@ -1119,6 +1119,16 @@ export { initialAvatar } from "./avatar.js";
  * skills/memory); a recipe-side schedule fills in only when the named record
  * has none of its own, while both source records remain available to management
  * surfaces. Pure — no store access.
+ *
+ * THE FOUR-SURFACE RULE (chrome-agent-platform-h97m, 2026-09-26): the hub
+ * sidebar, the hub Agents panel (+count), Settings → Agents and the side
+ * panel's agents list project the SAME set — created named agents plus
+ * ENABLED background agents; a disabled background agent is a template, never
+ * a row. ACP HARNESS agents are NOT agent rows: the side panel offers them
+ * through its designed harness-quick affordance instead (its <agent-picker>
+ * sets exclude-kinds="acp" — the journeys' measureAgentSurfaces asserts the
+ * four counts agree). Whether ENROLLED SITE AGENTS join the invariant is the
+ * open chrome-agent-platform-v15y product call.
  */
 export function projectUnifiedAgents(namedAgents = [], backgroundAgents = []) {
   const byId = new Map();

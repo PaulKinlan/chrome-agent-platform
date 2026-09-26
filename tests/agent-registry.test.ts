@@ -134,3 +134,67 @@ Deno.test("candidatesFromGroups: picker/slash items carry the canonical ref + gr
   const q = candidatesFromGroups(groups, { query: "sorting" });
   assertEquals(q.map((i) => i.ref), ["background:sorting-hat"]);
 });
+
+// ── h97m: the side panel's agents list projects the ONE created-agents set ──
+
+const H97M_REGISTRY = [
+  { id: "named", label: "Named agents", agents: [] },
+  {
+    id: "background",
+    label: "Background agents",
+    agents: [
+      { ref: "background:sorting-hat", id: "sorting-hat", kind: "background", name: "Sorting Hat", summary: "groups tabs", status: "every 30 min", enabled: true },
+    ],
+  },
+  { id: "site", label: "Site Agents", agents: [] },
+  {
+    id: "acp",
+    label: "Harnesses (ACP)",
+    // The registry admits these with NO enabled field (service-worker.js's
+    // literal), so isCallable's acp arm keeps them on every profile — the +3.
+    agents: [
+      { id: "pi", kind: "acp", name: "pi" },
+      { id: "claude-code", kind: "acp", name: "Claude Code" },
+      { id: "codex", kind: "acp", name: "Codex" },
+    ],
+  },
+];
+
+Deno.test("h97m: callableOnly alone keeps the acp harness rows (the pre-fix divergence, pinned)", () => {
+  // This is WHY the side panel picker counted +3 on a fresh profile: the
+  // filter has no kind rule unless the caller passes one.
+  const rows = filterGroups(H97M_REGISTRY, "", { callableOnly: true }).flatMap((g) => g.agents);
+  assertEquals(rows.length, 4); // 1 enabled background + 3 acp
+  assertEquals(rows.filter((a) => a.kind === "acp").length, 3);
+});
+
+Deno.test("h97m: excludeKinds [acp] makes the picker agree with the other three surfaces", () => {
+  const filtered = filterGroups(H97M_REGISTRY, "", { callableOnly: true, excludeKinds: ["acp"] });
+  const rows = filtered.flatMap((g) => g.agents);
+  assertEquals(rows.map((a) => a.id), ["sorting-hat"]);
+  // The acp GROUP is dropped entirely (empty groups never render).
+  assertEquals(filtered.some((g) => g.id === "acp"), false);
+  // The empty named/site groups are gone too — the list is the created-agents set.
+  assertEquals(filtered.map((g) => g.id), ["background"]);
+});
+
+Deno.test("h97m: a fresh profile (no created agents) projects ZERO rows with the acp group excluded", () => {
+  const fresh = [
+    { id: "named", label: "Named agents", agents: [] },
+    { id: "background", label: "Background agents", agents: [
+      { ref: "background:sorting-hat", id: "sorting-hat", kind: "background", name: "Sorting Hat", summary: "", status: "disabled", enabled: false },
+    ] },
+    { id: "acp", label: "Harnesses (ACP)", agents: H97M_REGISTRY[3].agents },
+  ];
+  const rows = filterGroups(fresh, "", { callableOnly: true, excludeKinds: ["acp"] });
+  assertEquals(rows, [], "the four surfaces agree at 0 on a fresh profile");
+});
+
+Deno.test("h97m: excludeKinds composes with query + callableOnly, and an empty/unknown list is a no-op", () => {
+  const q = filterGroups(H97M_REGISTRY, "sorting", { callableOnly: true, excludeKinds: ["acp"] });
+  assertEquals(q.flatMap((g) => g.agents).map((a) => a.id), ["sorting-hat"]);
+  const noop = filterGroups(H97M_REGISTRY, "", { callableOnly: true, excludeKinds: [] });
+  assertEquals(noop.flatMap((g) => g.agents).length, 4);
+  const unknown = filterGroups(H97M_REGISTRY, "", { callableOnly: true, excludeKinds: ["master"] });
+  assertEquals(unknown.flatMap((g) => g.agents).length, 4);
+});
