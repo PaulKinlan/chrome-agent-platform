@@ -194,6 +194,273 @@ function stripAmbientStorage() {
     } catch { /* ignore */ }
   }
 }
+// ---- Python's permissioned network access (bead chrome-agent-platform-4p7j.2,
+// stage S0.5) ---------------------------------------------------------------
+//
+// S0 above removed every ambient network global from this worker. That was
+// never meant to be the end state: Paul's requirement is that model-authored
+// Python CAN make requests, but only ones the owner granted, only through a
+// proxy the owner can see, and only with a record. So this worker gets ONE way
+// out — `await cap.fetch(url)` — and it is not a network capability at all. It
+// is a message.
+//
+//   Python cap.fetch  ->  capFetchRequest (here)  ->  postMessage to the
+//   offscreen host  ->  chrome.runtime to the SERVICE WORKER  ->  grant check,
+//   the one real fetch, and the record  ->  the answer back down the same path.
+//
+// Nothing in this file decides anything. There is no allow-list here, no
+// credential policy here, no logging here — all of that is in the service
+// worker (background/service-worker.js "python.fetch" + lib/python-network.js),
+// deliberately, so that a reader who wants to know what Python may reach has
+// exactly one place to read and this worker cannot quietly disagree with it.
+// This side is a mailbox.
+//
+// AWAITABLE, NOT SYNCHRONOUS. The shim returns a promise the Python side
+// awaits; runPythonAsync supports that, so no SharedArrayBuffer/Atomics gymnastics
+// are needed. The honest consequence is stated in cap.py's docstring: `requests`
+// and `urllib` CANNOT be offered on top of an async primitive and stay
+// unavailable. An import of one of them raises a message pointing at cap.fetch
+// rather than a bare ModuleNotFoundError.
+let currentRunId = "";
+let nextCallId = 0;
+const pendingFetches = new Map();
+
+/** The Python-facing primitive. Takes a JSON request string, resolves with a
+ * JSON response string. It NEVER rejects: every outcome, including "the proxy
+ * could not be reached", comes back as an ok:false envelope, so the Python side
+ * has exactly one shape to read and raises the exception itself. */
+function capFetchRequest(payloadJson) {
+  return new Promise((resolve) => {
+    const fail = (error) => resolve(JSON.stringify({ ok: false, error }));
+    let payload;
+    try {
+      payload = JSON.parse(String(payloadJson ?? "{}"));
+    } catch {
+      fail("the request could not be encoded for the network proxy");
+      return;
+    }
+    const callId = "cap-fetch-" + (++nextCallId);
+    pendingFetches.set(callId, resolve);
+    try {
+      self.postMessage({
+        type: "python.fetch",
+        runId: currentRunId,
+        callId,
+        url: String(payload.url ?? ""),
+        method: String(payload.method ?? "GET"),
+        headers: payload.headers && typeof payload.headers === "object" ? payload.headers : {},
+        body: typeof payload.body === "string" ? payload.body : "",
+      });
+    } catch (error) {
+      pendingFetches.delete(callId);
+      fail("the network proxy could not be reached from this interpreter: " + String(error?.message ?? error));
+    }
+  });
+}
+
+// The `cap` module, written into the interpreter's site-packages so `import cap`
+// is an ordinary import and the program's own namespace stays clean.
+const CAP_PY_SOURCE = `"""cap - the only way out of this interpreter, and a narrow one.
+
+This Python runs with NO ambient network access: fetch, XMLHttpRequest,
+WebSocket, EventSource and friends were removed from the environment before your
+code started. That is deliberate. Network access here is a permission the owner
+grants per origin, not a capability that comes with the interpreter.
+
+    import cap
+    response = await cap.fetch("https://api.example.com/items")
+    data = response.json()
+
+WHAT YOU CAN COUNT ON
+  * cap.fetch is AWAITABLE. Call it with await, from an async function or at
+    top level (this runtime supports top-level await).
+  * GET, HEAD and POST only.
+  * Only origins the owner has granted. An ungranted origin raises
+    cap.NetworkRefused naming the origin - it is not an outage and retrying will
+    not help; the owner has to grant it.
+  * Requests are ANONYMOUS. No cookies and no credentials are ever attached, and
+    you cannot set Cookie or Authorization headers. A granted origin buys
+    anonymous access, never the owner's logged-in session there.
+  * Redirects are NOT followed. A granted origin that redirects elsewhere is
+    refused, because the owner granted an origin and not a starting point.
+  * EVERY request and every refusal is recorded and shown to the owner: method,
+    URL, status, size, duration. Visibility is the point of the design.
+
+WHY NOT requests / urllib / httpx
+  They are synchronous, and the only primitive available here is asynchronous -
+  a message to the extension and an answer back. There is no honest way to put a
+  blocking API on top of that, so those libraries are not offered rather than
+  offered broken. Importing one tells you this and points back here, whether or
+  not you imported cap first - the guard is installed when the interpreter starts.
+"""
+
+import json as _json
+import sys as _sys
+
+import _cap_net as _bridge
+
+__all__ = ["fetch", "Response", "NetworkRefused", "NetworkError"]
+
+
+class NetworkRefused(Exception):
+    """The request was not permitted: the origin is not granted, the method or
+    scheme is not allowed, the address is private, or a redirect left the
+    granted origin. Retrying changes nothing - the owner decides."""
+
+
+class NetworkError(Exception):
+    """The request was permitted but did not complete (DNS, TLS, the network,
+    or the server). Retrying may help."""
+
+
+class Response:
+    """One HTTP response. Bodies are text; use .json() to parse."""
+
+    __slots__ = ("status", "url", "headers", "text", "bytes")
+
+    def __init__(self, payload):
+        self.status = payload.get("status")
+        self.url = payload.get("url") or ""
+        self.headers = dict(payload.get("headers") or {})
+        self.text = payload.get("text") or ""
+        self.bytes = payload.get("bytes") or 0
+
+    @property
+    def ok(self):
+        """True for a 2xx status. A 404 is a completed request, not a refusal."""
+        return isinstance(self.status, int) and 200 <= self.status < 300
+
+    def json(self):
+        return _json.loads(self.text)
+
+    def __repr__(self):
+        return "<cap.Response %s %s (%s bytes)>" % (self.status, self.url, self.bytes)
+
+
+async def fetch(url, method="GET", headers=None, body=None):
+    """Make one HTTP request through the owner's grant. Awaitable.
+
+    Raises cap.NetworkRefused when the request was not permitted (the message
+    names the origin and how to grant it) and cap.NetworkError when it was
+    permitted but failed. Both are recorded for the owner either way."""
+    if body is None:
+        payload_body = ""
+    elif isinstance(body, (str, bytes, bytearray)):
+        payload_body = body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else body
+    else:
+        payload_body = _json.dumps(body)
+    request = _json.dumps({
+        "url": str(url),
+        "method": str(method).upper(),
+        "headers": {str(k): str(v) for k, v in dict(headers or {}).items()},
+        "body": payload_body,
+    })
+    raw = await _bridge.request(request)
+    payload = _json.loads(raw)
+    if not payload.get("ok"):
+        message = payload.get("error") or "the request was refused"
+        if "failed" in message and "not granted" not in message:
+            raise NetworkError(message)
+        raise NetworkRefused(message)
+    return Response(payload)
+
+
+class _NoHttpClientLibraries:
+    """Turn 'ModuleNotFoundError: requests' into an answer.
+
+    These are third-party libraries that are not installed here anyway, so this
+    changes no behaviour - only the message, from a dead end into a pointer at
+    the thing that does work."""
+
+    _NAMES = frozenset({"requests", "httpx", "aiohttp", "urllib3", "treq", "grequests"})
+
+    def find_spec(self, fullname, path=None, target=None):
+        root = fullname.split(".")[0]
+        if root in self._NAMES:
+            raise ImportError(
+                root + " is not available in this interpreter, and neither is any other "
+                "HTTP client library: there is no ambient network here to build one on. "
+                "Use cap.fetch instead - 'import cap' then 'await cap.fetch(url)'. It "
+                "reaches only origins the owner has granted, sends no cookies, and every "
+                "request is recorded for the owner to see."
+            )
+        return None
+
+
+_sys.meta_path.insert(0, _NoHttpClientLibraries())
+`;
+
+/** Run a snippet in a THROWAWAY namespace. `pyodide.runPython` defaults to the
+ * program's own `__main__` globals, and the interpreter is advertised as fresh
+ * per run — installing the bridge must not leave `site`, `importlib` or a
+ * stray underscore name sitting in the namespace the owner's code then runs in. */
+function runIsolated(pyodide, code) {
+  const ns = pyodide.toPy({});
+  try {
+    return pyodide.runPython(code, { globals: ns });
+  } finally {
+    try { ns.destroy(); } catch { /* the dict outlives the proxy if anything holds it */ }
+  }
+}
+
+/** Install `cap` as a real importable module. Writing the file (rather than
+ * exec-ing a string into a synthesised module) keeps `import cap` an ordinary
+ * import with an ordinary traceback, and keeps the program's namespace clean.
+ *
+ * This THROWS on failure rather than continuing quietly. A Python runtime that
+ * silently lacks the one documented way to reach the network would send the
+ * model hunting for the ambient globals S0 removed, and the owner would see a
+ * confusing failure instead of a clear one. */
+function installCapModule(pyodide) {
+  let dir = "";
+  try {
+    dir = String(runIsolated(pyodide, [
+      "import sys, site",
+      "_d = ''",
+      "try:",
+      "    _d = site.getsitepackages()[0]",
+      "except Exception:",
+      "    _d = ''",
+      "if not _d:",
+      "    for _p in sys.path:",
+      "        if _p.endswith('site-packages'):",
+      "            _d = _p",
+      "            break",
+      "_d",
+    ].join("\n")) ?? "");
+  } catch (error) {
+    throw new Error("python network bridge: could not locate site-packages (" + String(error?.message ?? error) + ")");
+  }
+  if (!dir) throw new Error("python network bridge: could not locate site-packages (no candidate on sys.path)");
+  try {
+    pyodide.FS.writeFile(dir + "/cap.py", CAP_PY_SOURCE);
+  } catch (error) {
+    throw new Error("python network bridge: could not write cap.py (" + String(error?.message ?? error) + ")");
+  }
+  // A file written this instant can be invisible to an import that already
+  // cached this directory's listing — the finder's cache has 1-second mtime
+  // granularity, so the very first run is exactly the one at risk.
+  try {
+    runIsolated(pyodide, "import importlib\nimportlib.invalidate_caches()");
+  } catch { /* a cold interpreter has nothing cached to invalidate */ }
+  // Import it NOW, before the owner's program runs, for two reasons.
+  //
+  // The first is the import guard. cap installs a meta_path finder that turns
+  // `import requests` into a message pointing at cap.fetch. Left to load lazily,
+  // that guard would only exist AFTER `import cap` — which is exactly backwards:
+  // the program reaching for `requests` is the one that has NOT found cap yet,
+  // and it would get a bare "No module named 'requests'" and conclude the
+  // network is simply absent. (Measured: the first real-browser run of
+  // scripts/kat-python-permissioned-fetch.ts failed on precisely that.)
+  //
+  // The second is that a broken cap.py should fail HERE, loudly, at interpreter
+  // startup, rather than as a mystery inside somebody's first await.
+  try {
+    runIsolated(pyodide, "import cap");
+  } catch (error) {
+    throw new Error("python network bridge: cap.py did not import (" + String(error?.message ?? error) + ")");
+  }
+}
 
 function runtime() {
   if (!runtimePromise) {
@@ -208,6 +475,11 @@ function runtime() {
       // note above for why this ordering is load-bearing.
       stripAmbientNetwork();
       stripAmbientStorage();
+      // Then hand back the ONE narrow, permissioned, recorded way out. The
+      // order matters here too: the ambient reach is gone before the granted
+      // reach exists, so there is never a moment when both are available.
+      pyodide.registerJsModule("_cap_net", { request: capFetchRequest });
+      installCapModule(pyodide);
       return pyodide;
     }).catch((error) => {
       runtimePromise = null; // a failed init can be retried by the next run
@@ -219,7 +491,27 @@ function runtime() {
 
 self.onmessage = async (event) => {
   const message = event && typeof event.data === "object" ? event.data : {};
+  if (message.type === "python.fetch.result") {
+    // The host's answer to one cap.fetch. Correlated by callId, because a
+    // program may have several requests in flight.
+    const callId = String(message.callId ?? "");
+    const resolve = pendingFetches.get(callId);
+    if (!resolve) return; // a late answer to a call this run already abandoned
+    pendingFetches.delete(callId);
+    const result = message.result && typeof message.result === "object"
+      ? message.result
+      : { ok: false, error: "the network proxy returned nothing" };
+    try {
+      resolve(JSON.stringify(result));
+    } catch {
+      resolve(JSON.stringify({ ok: false, error: "the network proxy's answer could not be decoded" }));
+    }
+    return;
+  }
   if (message.type !== "python.run") return;
+  // The run id every cap.fetch frame carries, so the service worker can file
+  // the record against the run the owner is looking at.
+  currentRunId = String(message.runId ?? "");
   const respond = (payload) => {
     try {
       self.postMessage({ runId: message.runId, ...payload });

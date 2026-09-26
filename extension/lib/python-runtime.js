@@ -49,7 +49,7 @@ export const PYTHON_RUNTIME_PIN = Object.freeze({
     "pyodide.asm.wasm": Object.freeze({ sha256: "b7e66a19427a55010ac3367c1b6c64b893f9826f783412945fdf0c3337f3bc94", bytes: 10088051 }),
     "python_stdlib.zip": Object.freeze({ sha256: "72894522b791858b9d613ac786b951d8b5094035dcf376313ea24a466810f336", bytes: 2341872 }),
     "pyodide-lock.json": Object.freeze({ sha256: "cd50b49de944c579045e122fe8628b31f9ce446379f032f36c05e273d38766e0", bytes: 106335 }),
-    "python-worker.js": Object.freeze({ sha256: "957bb4f73e04caf0a19c37e49652138e745247109665962b68d582d540e33df1", bytes: 11122 }),
+    "python-worker.js": Object.freeze({ sha256: "350ae711199fd6d8daeb6c5db293cde7d793c8dfeb68277567ce4fa9f9dcdc6c", bytes: 24263 }),
   }),
 });
 
@@ -86,6 +86,7 @@ export function createPythonRuntimeProvider({
   ensureHost = null,
   sendMessage = null,
   timeoutMs = PYTHON_EXEC_TIMEOUT_MS,
+  networkLedger = null,
 } = {}) {
   let hostSettled = false;
   let hostOk = false;
@@ -131,6 +132,13 @@ export function createPythonRuntimeProvider({
     let emitStdout = null;
     let readStdin = null;
     let stdinGiven = false;
+    // The network records for THIS run, taken from the ledger when the run
+    // settles (bead chrome-agent-platform-4p7j.2). They are collected by the
+    // service worker's "python.fetch" proxy — the actor — so a program that
+    // catches a refusal and prints nothing still cannot hide it. runPython
+    // reads them back through takeNetworkRecords() and the python tool puts
+    // them in its result, where the transcript shows them beside the run.
+    let networkRecords = { records: [], dropped: 0 };
     const oneShotStdin = () => {
       if (stdinGiven) return undefined; // EOF — the whole input arrives once
       stdinGiven = true;
@@ -143,8 +151,22 @@ export function createPythonRuntimeProvider({
       setStdin({ stdin }) {
         if (typeof stdin === "function") readStdin = stdin;
       },
+      /** The run's network records: every request the proxy made or refused.
+       * Empty for a run that asked for nothing — which is most runs. */
+      takeNetworkRecords() {
+        const taken = networkRecords;
+        networkRecords = { records: [], dropped: 0 };
+        return taken;
+      },
       runPythonAsync: async (code) => {
         const runId = newId("python");
+        // Whatever happens below — a settled run, a timeout, a dead host — the
+        // ledger entry for this run id is taken exactly once. A run id left in
+        // the ledger is a slow leak in a service worker that can live for days.
+        const takeRecords = () => {
+          if (!networkLedger) return;
+          try { networkRecords = networkLedger.take(runId); } catch { /* never fail a run over its own log */ }
+        };
         const ready = await ensureHostReady();
         if (!ready) throw new Error("python_unavailable_host");
         let response;
@@ -159,11 +181,16 @@ export function createPythonRuntimeProvider({
             timeoutMs,
           );
         } catch (error) {
+          takeRecords();
           if (String(error?.message ?? error) === "python_run_timeout") throw error;
           // A dead host channel is retried next run.
           hostSettled = false;
           throw new Error("python_unavailable_host");
         }
+        // Take the records BEFORE deciding the verdict: a run that ended in a
+        // Python traceback, or with no host answering, is exactly a run whose
+        // requests the owner wants to see, so a failure must not drop them.
+        takeRecords();
         if (!response || typeof response !== "object") {
           // No host answered (it can die between ensureHost and the send) — the
           // next run retries the host.

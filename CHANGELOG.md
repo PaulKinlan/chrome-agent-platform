@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.544] — 2026-09-26
+- Python can reach the web again, but only the origins you allow — and you see every request
+
 ## [0.3.543] — 2026-09-25
 - C15 resolved — profile-store is the form-filler substrate, retained and documented
 

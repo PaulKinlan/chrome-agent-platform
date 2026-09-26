@@ -105,9 +105,16 @@ function hostKey(u) {
   return u.port ? `${u.hostname}:${u.port}` : u.hostname;
 }
 
-/** Decide whether a sandboxed script's fetch may proceed. `policy` is the
- * run's registered allow-list ({ hosts, dynamic }); absent → refuse. */
-export function checkFetchPolicy(url, policy) {
+/** The checks EVERY host-bridged fetch shares, whatever grants it: the URL
+ * parses, the scheme is http(s), and the address is not loopback/private/
+ * link-local. Callers differ only in WHO may then reach the target — the
+ * script run's source-derived allow-list (`checkFetchPolicy` below) or the
+ * owner's per-origin Python grants (lib/python-network.js). One
+ * implementation, so a fix to the SSRF predicate reaches both bridges and
+ * neither can drift into being the weaker one.
+ *
+ * Returns { ok:true, url:URL } or { ok:false, error }. */
+export function checkFetchTarget(url) {
   let u;
   try {
     u = new URL(String(url ?? ""));
@@ -120,6 +127,15 @@ export function checkFetchPolicy(url, policy) {
   if (isPrivateOrLoopbackHost(u.hostname)) {
     return { ok: false, error: `fetch to ${u.hostname} refused: private or loopback address` };
   }
+  return { ok: true, url: u };
+}
+
+/** Decide whether a sandboxed script's fetch may proceed. `policy` is the
+ * run's registered allow-list ({ hosts, dynamic }); absent → refuse. */
+export function checkFetchPolicy(url, policy) {
+  const target = checkFetchTarget(url);
+  if (!target.ok) return target;
+  const u = target.url;
   if (!policy || typeof policy !== "object" || !Array.isArray(policy.hosts)) {
     return { ok: false, error: "fetch refused: no approved script run is active" };
   }
