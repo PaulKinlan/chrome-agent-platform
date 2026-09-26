@@ -86,6 +86,15 @@ export const EXEMPTIONS = {
   "tests/package-scripts-exist.test.ts": "asserts a package.json script REFERENCE to build.mjs resolves; it never imports the generator",
   "tests/risk-register-contract.test.ts": "asserts the risk register CITES build.mjs for the bundle budget; documentation text only",
   "tests/zod-jitless-fallback.test.ts": "mentions build.mjs in a comment describing how the pipeline scrubs; no load",
+  // chrome-agent-platform-zla5 (61h3 fallout): the 61h3 timeout-clamp tests
+  // added a comment naming build.mjs's env variable, and the scanner's
+  // name-the-generator rule flagged the file. Read before exempting: the
+  // tests drive boundedChildTimeoutMs (pure env parsing) and runBoundedChild
+  // against tiny self-contained node scripts (a futex-wait one-liner) — they
+  // never read, import or execute the repo build, the generator, or any
+  // shared artifact. The build.mjs literal is prose, exactly the
+  // changelog-shipping/zod-jitless class above.
+  "tests/bounded-child.test.ts": "names build.mjs only in a comment about its env variable; the tests parse env vars and spawn tiny self-contained node scripts, never the repo build",
   // (tests/durable-root.test.ts was exempted here until 8b8w reference-scoped
   // the driver inheritance: with prose mentions no longer inheriting, the file
   // classifies with NO hazard classes and there is nothing left to exempt —
