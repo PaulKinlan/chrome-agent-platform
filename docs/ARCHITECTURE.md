@@ -501,14 +501,12 @@ every syscall checks cancellation and host-call quota
 execution-host contract").
 
 ### 6.3 Store policy
-Chrome Web Store lane: bundled-reviewed executables ONLY — downloaded or
-uploaded Wasm is treated as remotely hosted code unless written policy says
-otherwise (owner decision Q13 still open; recommended default: keep bundled-
-only). Owner-selected packages are an unpacked/developer lane, blocked on the
-policy decision (docs/tool-platform-architecture.md §"Distribution lanes";
-docs/OPEN-QUESTIONS.md Q13). The store build target statically rejects
-unmanifested `.wasm` and non-literal Worker constructors (README §"Load +
-run"). Today's shipped set: 38 admitted single-tool packages
+Chrome Web Store lane: no Store release is planned (Q11, Paul 2026-09-18).
+Shipped default tools are bundled-reviewed executables (38 admitted packages).
+Owner-selected packages are an unpacked/developer lane; whether they may run there is
+open (Q13; docs/tool-platform-architecture.md §"Distribution lanes"; docs/OPEN-QUESTIONS.md Q13).
+The store build target statically rejects unmanifested `.wasm` and non-literal Worker
+constructors (README §"Load + run"). Today's shipped set: 38 admitted single-tool packages
 (`build.mjs:108`, `packages/bundled/README.md`, `extension/wasm/manifests/`).
 
 ## 7. MCP discovery & capacity/messaging
