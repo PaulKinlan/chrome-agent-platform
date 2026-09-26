@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- bounded-child names build.mjs in prose only — declare it and un-red main's partition guard
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 
