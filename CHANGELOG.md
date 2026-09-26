@@ -1,10 +1,10 @@
 # Changelog
 
 ## [0.3.546] — 2026-09-26
-- built-in background agents run on the ONE agent store + schedule path (slices 3-4)
+- Your built-in background agents (like the Sorting Hat) are now real agents — one list, one schedule, and the same memory and history as always
 
 ## [0.3.545] — 2026-09-26
-- seed built-in background agents into the named-agent store (slices 1-2)
+- internal: seed records behind the background-agent store merge (shipped in 0.3.546)
 
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
