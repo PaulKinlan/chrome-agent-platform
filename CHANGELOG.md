@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- add abuse gates 8, 9, 10 covering stream promotion, cross-owner hijacking, and tabular formula injection
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 

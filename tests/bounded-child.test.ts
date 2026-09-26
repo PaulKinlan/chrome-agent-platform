@@ -77,7 +77,7 @@ Deno.test("bounded child: an empty or invalid override means the default, never 
   assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "1e12" }), MAX_TIMER_MS);
   assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "Infinity" }), DEFAULT_BOUNDED_CHILD_TIMEOUT_MS);
 
-  // build.mjs's variable goes through the same parser rather than a second copy of it, and each
+  // The build script's variable goes through the same parser rather than a second copy of it, and each
   // caller reads its own variable.
   assertEquals(
     boundedChildTimeoutMs({ CAP_BUNDLED_TOOL_TIMEOUT_MS: "2500" }, "CAP_BUNDLED_TOOL_TIMEOUT_MS"),
