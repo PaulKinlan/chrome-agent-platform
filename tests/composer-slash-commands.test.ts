@@ -508,3 +508,21 @@ Deno.test("harness picker inserts literal text without CAP resolution, sending, 
   composer._select(0);
   assertEquals(text, "$probe  existing arguments");
 });
+
+Deno.test("6yfm/wp7y: the harness picker discloses insert-text-only, visibly and accessibly", () => {
+  // The 6yfm ruling (coord seq944, option C): insertion-only is the landing
+  // behaviour AND the UI must say so. That disclosure is a user-facing claim, so
+  // this pin DRIVES the renderer rather than grepping for the sentence:
+  // removing the note block makes it RED (no note child, no aria-describedby).
+  const composer = new AgentComposer();
+  const popup = new FakeNode("div");
+  composer._popup = popup;
+  composer._popupToken = { type: "harness", start: 0, end: 0 };
+  composer._popupItems = [{ id: "/plan", label: "/plan", kind: "harness-command", description: "Plan" }];
+  composer._renderPopupItems();
+  const note = popup.children.find((child) => /harness-note$/u.test(String(child.id)));
+  assert(note, "the harness popup must render its disclosure note");
+  assertMatch(String(note.textContent), /inserts text only/iu);
+  assertMatch(String(note.textContent), /CAP cannot run these as harness commands/iu);
+  assertEquals(popup.getAttribute("aria-describedby"), note.id, "the disclosure is also the listbox's accessible description");
+});
