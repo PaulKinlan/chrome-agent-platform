@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- S0.5 permissioned proxy bridge onto current main
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 

@@ -539,6 +539,13 @@ function cancelTableExecution(runId) {
 // "cap:fetch" route applies THIS list (plus the private-address deny list) and
 // refuses any fetch that carries no registered run id. Entries are removed
 // when the run settles; a bounded sweep drops any the host never settled.
+// The per-run ledger of every request the "python.fetch" proxy made or refused
+// on Python's behalf (bead chrome-agent-platform-4p7j.2). Written by the SW —
+// the actor — and taken by lib/python-runtime.js when the run settles, so the
+// records travel back attached to the tool result and a program cannot suppress
+// its own record by catching the refusal.
+const pythonNetworkLedger = createPythonNetworkLedger();
+
 const scriptRunPolicies = new Map();
 const SCRIPT_RUN_POLICY_TTL_MS = 60_000;
 function registerScriptRunPolicy(runId, source) {
@@ -969,6 +976,16 @@ import { z } from "zod";
 import { setRunFence, clearRunFence, runAborted } from "../lib/run-fence.js";
 import { setRunContext, clearRunContext, currentRunContext } from "../lib/run-context.js";
 import { checkFetchPolicy, extractFetchHosts } from "../lib/fetch-policy.js";
+import {
+  PYTHON_NETWORK_GRANTS_KEY,
+  addGrant as addPythonNetworkGrant,
+  checkPythonNetworkRequest,
+  createPythonNetworkLedger,
+  isRedirect as isRedirectResponse,
+  normalizeGrants as normalizePythonNetworkGrants,
+  removeGrant as removePythonNetworkGrant,
+  sanitizeRequestHeaders as sanitizePythonRequestHeaders,
+} from "../lib/python-network.js";
 import {
   acceptToolSnapshot,
   applyWebmcpLifecycle,
@@ -6372,6 +6389,165 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: `fetch failed: ${e?.message ?? e}` };
     }
   },
+  // ---- Python's permissioned network access (bead chrome-agent-platform-4p7j.2,
+  // stage S0.5) -----------------------------------------------------------
+  //
+  // S0 (chrome-agent-platform-4p7j.1) removed the Pyodide worker's ambient
+  // network globals, so model-authored Python can reach nothing on its own.
+  // THIS ROUTE is what it reaches instead: the service worker performs the one
+  // and only fetch, after checking the owner's per-origin grants, and RECORDS
+  // every attempt whether it succeeded, was refused, or failed.
+  //
+  // The record is made HERE, by the actor, not by the caller. A Python program
+  // that catches the refusal and prints nothing still leaves the refusal in the
+  // run's records, because it never held the pen. Visibility the caller can
+  // suppress is not visibility, and visibility is the stated point.
+  //
+  // CONFUSED-DEPUTY DEFAULTS — the part most worth reviewing. This worker holds
+  // host_permissions <all_urls> AND the owner's ambient cookies for every
+  // origin, so a granted origin must buy ANONYMOUS access and nothing more:
+  //   - credentials "omit", always. An authenticated request to a granted
+  //     origin would turn "the agent may read from example.com" into "the agent
+  //     may read your logged-in session at example.com".
+  //   - redirect "manual", and a 3xx is REFUSED rather than re-checked and
+  //     followed. Redirect chains are how an allow-list gets laundered; the
+  //     owner granted an origin, not a starting point.
+  //   - scheme + loopback/private-address checks via the shared
+  //     `checkFetchTarget` in lib/fetch-policy.js (SSRF into localhost, the
+  //     intranet, router admin pages, cloud metadata).
+  //   - caller-set Cookie/Authorization/Origin/Referer are dropped and named.
+  async "python.fetch"({ url, method = "GET", headers, body, runId }, context) {
+    // Only an extension host relays this — in production the offscreen document
+    // running the Pyodide worker. A model principal must never reach the proxy
+    // directly: what makes a request legible is that it came from inside a
+    // bounded interpreter run that the owner can see the records of.
+    if (context?.principal !== "extension") {
+      return { ok: false, error: "unauthorized_principal" };
+    }
+    const started = Date.now();
+    const id = typeof runId === "string" ? runId : "";
+    const m = String(method ?? "GET").toUpperCase();
+    const record = (entry) => {
+      try {
+        pythonNetworkLedger.record(id, { method: m, url: String(url ?? ""), ms: Date.now() - started, ...entry });
+      } catch { /* a ledger failure must never become a network failure */ }
+    };
+
+    let grants = [];
+    try {
+      grants = normalizePythonNetworkGrants((await kvGet(PYTHON_NETWORK_GRANTS_KEY))?.[PYTHON_NETWORK_GRANTS_KEY] ?? []);
+    } catch (e) {
+      // Storage is the grant authority. If it cannot be read we do NOT fall
+      // back to "no grants, refuse" quietly, nor to allowing anything — we say
+      // which it was, and refuse.
+      const error = `network access could not be checked (the grant store failed to read: ${e?.message ?? e}); nothing was sent`;
+      record({ ok: false, error });
+      return { ok: false, error };
+    }
+
+    const verdict = checkPythonNetworkRequest({ url, method: m, grants });
+    if (!verdict.ok) {
+      record({ ok: false, origin: verdict.origin ?? null, refused: true, error: verdict.error });
+      return { ok: false, error: verdict.error };
+    }
+
+    const { headers: safeHeaders, refused: refusedHeaders } = sanitizePythonRequestHeaders(headers);
+    const u = new URL(verdict.url);
+    try {
+      const hasHost = await chrome.permissions?.contains?.({
+        origins: [`${u.protocol}//${u.host}/*`],
+      }).catch(() => false);
+      if (hasHost === false) {
+        const error = `network access to ${u.host} is not granted by Chrome — host access is granted at install (<all_urls>); if Settings → Permissions shows it missing, reinstall the extension`;
+        record({ ok: false, origin: verdict.origin, error });
+        return { ok: false, error };
+      }
+      const init = {
+        method: m,
+        credentials: "omit", // never the owner's session — see the note above
+        redirect: "manual", // a 3xx is refused below, never followed
+        headers: safeHeaders,
+      };
+      if (m === "POST") init.body = typeof body === "string" ? body : "";
+      const res = await fetch(u.href, init);
+      if (isRedirectResponse(res)) {
+        const error = `fetch to ${verdict.origin} refused: the response redirected elsewhere. A granted origin is an origin, not a starting point — grant the destination if you meant to reach it.`;
+        record({ ok: false, origin: verdict.origin, refused: true, status: res.status || 0, error });
+        return { ok: false, error };
+      }
+      // Bodies are one-shot streams: read once, then measure what we read.
+      const text = m === "HEAD" ? "" : await res.text();
+      const bytes = new TextEncoder().encode(text).byteLength;
+      const responseHeaders = {};
+      try {
+        for (const [k, v] of res.headers) responseHeaders[k] = v;
+      } catch { /* some header sets are not iterable in older runtimes */ }
+      record({
+        ok: true,
+        origin: verdict.origin,
+        status: res.status,
+        bytes,
+        ...(refusedHeaders.length ? { refusedHeaders } : {}),
+      });
+      // The body is untrusted web content. It reaches the model as the return
+      // value of cap.fetch inside Python, i.e. as data the program chose to
+      // read — the same trust level as any fetched text.
+      return {
+        ok: true,
+        status: res.status,
+        url: res.url || u.href,
+        headers: responseHeaders,
+        text,
+        bytes,
+        refusedHeaders,
+      };
+    } catch (e) {
+      const error = `fetch to ${verdict.origin} failed: ${e?.message ?? e}`;
+      record({ ok: false, origin: verdict.origin, error });
+      return { ok: false, error };
+    }
+  },
+  /** The owner's grant list, for Settings → Permissions. */
+  async "python.network.grants"(_m, context) {
+    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+      return { ok: false, error: "unauthorized_principal" };
+    }
+    try {
+      const rows = (await kvGet(PYTHON_NETWORK_GRANTS_KEY))?.[PYTHON_NETWORK_GRANTS_KEY] ?? [];
+      return { ok: true, grants: normalizePythonNetworkGrants(rows) };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+  /** Grant one origin. An owner gesture in Settings — never something a run can
+   * do for itself, which is why this refuses every principal but the owner's
+   * own Settings page. */
+  async "python.network.grant"({ origin, gesture }, context) {
+    if (context?.principal !== "owner-options") return { ok: false, error: "unauthorized_principal" };
+    try {
+      const rows = (await kvGet(PYTHON_NETWORK_GRANTS_KEY))?.[PYTHON_NETWORK_GRANTS_KEY] ?? [];
+      const result = addPythonNetworkGrant(rows, origin, { gesture: gesture === "first-use-prompt" ? "first-use-prompt" : "settings" });
+      if (!result.ok) return { ok: false, error: result.error };
+      await kvSet({ [PYTHON_NETWORK_GRANTS_KEY]: result.grants });
+      return { ok: true, origin: result.origin, added: result.added, grants: result.grants };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+  /** Revoke one origin. Removing the row IS the revocation — there is no
+   * disabled state that could disagree with the list the owner is reading. */
+  async "python.network.revoke"({ origin }, context) {
+    if (context?.principal !== "owner-options") return { ok: false, error: "unauthorized_principal" };
+    try {
+      const rows = (await kvGet(PYTHON_NETWORK_GRANTS_KEY))?.[PYTHON_NETWORK_GRANTS_KEY] ?? [];
+      const result = removePythonNetworkGrant(rows, origin);
+      if (!result.ok) return { ok: false, error: result.error };
+      await kvSet({ [PYTHON_NETWORK_GRANTS_KEY]: result.grants });
+      return { ok: true, origin: result.origin, removed: result.removed, grants: result.grants };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
   async "capabilities.status"() {
     // Granted/absent status of every OPTIONAL capability (storage, alarms,
     // tabs, scripting, notifications, sidePanel). The Settings panel renders
@@ -11220,7 +11396,10 @@ reconcileAgentWorkers({ ensureOffscreen, kvGet }).catch((e) =>
 // python_execute call and transports each run to a fresh classic Pyodide
 // worker there (lib/python-runtime.js + lib/python-host.js).
 setPythonRuntimeProvider(
-  createPythonRuntimeProvider({ ensureHost: ensureOffscreen }).provider,
+  createPythonRuntimeProvider({
+    ensureHost: ensureOffscreen,
+    networkLedger: pythonNetworkLedger,
+  }).provider,
 );
 
 // ---- keyboard commands (manifest `commands`) ---------------------------

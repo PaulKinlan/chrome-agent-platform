@@ -265,7 +265,7 @@ const AGENT_WORKER_CLIENT_ALLOWED_RE = /new\s+SharedWorker\s*\(/g;
 // runtime dir). A SEPARATE canonical entry bound to the exact line/column +
 // the exact `new WorkerCtor(` shape, never a broad exemption.
 const PYTHON_WORKER_HOST_CANONICAL_PATH = "extension/lib/python-host.js";
-const PYTHON_WORKER_HOST_CANONICAL_LOCATION = { line: 72, column: 15 };
+const PYTHON_WORKER_HOST_CANONICAL_LOCATION = { line: 81, column: 15 };
 const PYTHON_WORKER_HOST_ALLOWED_RE = /new\s+WorkerCtor\s*\(/g;
 // OPFS-backed bundled-tool host: exactly one fresh module Worker, created from
 // one runtime-resolved extension URL and killed by the 180s wall deadline.
