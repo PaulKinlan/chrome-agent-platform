@@ -10,6 +10,8 @@
 > are admitted whole and executed through a dedicated classic-worker dispatcher
 > (extension/lib/python-host.js + wasm-tools/python/python-worker.js), fresh
 > interpreter per run, pinned + hash-verified at the build/store gates.
+> **The exact bounded-build command (`scripts/build-pyodide-bounded.sh`) was REMOVED 2026-09-26 (cleanup C5, bead chrome-agent-platform-dvhx): the official-dist admission above made it moot, nothing referenced it, and it carried no harness-registry row. Git history keeps it.**
+>
 > build.mjs verifies every byte against MANIFEST.json and copies the runtime into
 > the packaged extension at dist/wasm-tools/python/ (the generated-artifact
 > tree; chrome-extension:// serves it, so nothing fetches the network). The
