@@ -86,6 +86,10 @@ export const EXEMPTIONS = {
   "tests/package-scripts-exist.test.ts": "asserts a package.json script REFERENCE to build.mjs resolves; it never imports the generator",
   "tests/risk-register-contract.test.ts": "asserts the risk register CITES build.mjs for the bundle budget; documentation text only",
   "tests/zod-jitless-fallback.test.ts": "mentions build.mjs in a comment describing how the pipeline scrubs; no load",
+  // chrome-agent-platform-61h3 landing: the test's comment explains that the production build caller
+  // reuses the one timeout parser, and names it to say where. The test's own children are node -e
+  // probes driven by runBoundedChild; it never imports, requires or spawns the generator.
+  "tests/bounded-child.test.ts": "names build.mjs in a comment about the shared timeout parser; its children are node -e probes, never a load or spawn of the generator",
   // (tests/durable-root.test.ts was exempted here until 8b8w reference-scoped
   // the driver inheritance: with prose mentions no longer inheriting, the file
   // classifies with NO hazard classes and there is nothing left to exempt —
