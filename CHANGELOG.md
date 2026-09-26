@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.544] — 2026-09-26
+- streaming TAR decoder — restore-side parse with GNU-tar interop and fail-closed truncation
+
 ## [0.3.543] — 2026-09-25
 - C15 resolved — profile-store is the form-filler substrate, retained and documented
 
