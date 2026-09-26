@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- The side panel's agent list now matches every other surface — external tools like pi, Claude Code and Codex no longer show up as your agents
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 
