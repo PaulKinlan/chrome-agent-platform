@@ -15,101 +15,26 @@ Resolved answers are recorded here (Paul confirmed each over the course of the b
 9. **Full Agent Directory presentation** — RESOLVED (Paul, 2026-08-19): a full Directory view hides/inerts covered sidebar controls; focus enters after reveal and returns safely on close; each function presents canonical description/schema metadata and its own accessible source/approval state in semantic responsive order.
 10. **Durable retention versus owner memory quota** — RESOLVED (Paul, 2026-08-21): remove the arbitrary key-count ceiling, keep byte ceilings, retain all Durable history without automatic eviction, and isolate execution authority from owner/model master memory so routine schedules cannot crowd owner data or flood errors. OPFS search/indexing improvements are deferred.
 11. **Extension name/distribution** — RESOLVED (Paul, 2026-09-18): "I don't need this to be in the store at all. Close this issue / requirement. Keep the name as is." The product name stays **Chrome Agent Platform** (no rename), and the distribution channel is the unpacked/developer demo — **no Store release**, so `CAP-FB-20260825-WEBSTORE-RELEASE-01` closes as not-required. This resolves both halves of the former open entry: the public name AND the channel.
+12. **The model for the hub** — RESOLVED (Paul, 2026-09-01): The Settings → Providers redesign (`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`) shipped OpenAI `gpt-5.6-luna` as the pre-selected Recommended provider and Gemini `gemini-3.7-flash` as the documented Alternative. `claude-sonnet-5` and `glm-5.3` are retained under "More providers" pending balance measurement (`chrome-agent-platform-q2tc`).
+13. **Owner-selected Wasm distribution policy** — RESOLVED (Paul, 2026-09-18, via Q11): Chrome Agent Platform is distributed strictly as an unpacked/developer demo with no Chrome Web Store publication. The CWS remotely-hosted-code policy does not apply. Owner-selected Wasm is supported as a local/developer capability gated by explicit owner gestures and isolated within the sandboxed WASI runtime.
+14. **Co-do licence/provenance reconciliation** — RESOLVED (2026-09-05, Pillar 4): No Co-do binaries are copied into the platform. All shipped tools are built from verified in-repo sources or pinned releases with immutable SHA-256 hashes, exact SPDX license declarations, SBOM provenance, and strict MV3 compliance (`STORE_WASM_LANE = "bundled-reviewed-only"`). Closed in `chrome-agent-platform-39is`.
+16. **Grouped tabular artifact promotion** — RESOLVED (2026-09-26, pursuant to dptw directive): Under owner directive dptw (2026-09-03), `extension/lib/artifacts.js:422` set `ASSET_BOUNDS.maxContentBytes = Infinity`. Single-body artifact storage is retained without size truncation; chunked tabular promotion is formally deferred.
+17. **`debugger` permission posture** — RESOLVED (Paul, 2026-08-27): remove it for now; the permission and the tools can come back later. `0.2.286` had re-declared `debugger` as an optional permission for the CDP power tools (network conditions, CPU throttling, device emulation, navigation, screenshots, performance metrics; `Runtime.evaluate` never exposed), reversing its deliberate removal at `c5ccb2d0`. The costs decided it: Chrome's all-sites permission warning and a persistent "…started debugging this browser" bar are not acceptable in the current posture. Removed 2026-08-27 — the optional permission, the four tools, the capability row and the Settings label. Browser tools 130 → 126, capability table 159 → 155.
+18. **Host-access posture** — RESOLVED (Paul, 2026-08-31): option (a) — keep install-granted host_permissions <all_urls>; this is a private tool and the broad access is acceptable, the capability must demonstrate clearly. Make README/comments/docs honest about it. `extension/manifest.json` declares `host_permissions: ["<all_urls>"]` plus two content scripts on every http(s) page at `document_start` (install-granted, since `0.2.419`).
+19. **Are page actions in scope?** — RESOLVED (Paul, 2026-08-31): YES — add the minimal grant-gated page-action family (find/click/type/select/scroll/wait) behind the untrusted-content fence and the activity ledger. DELIVERED (2026-08-31, `CAP-FB-20260830-PAGE-ACTION-TOOLS-01`): the six-tool family (`find_elements`, `click_element`, `type_text`, `select_option`, `scroll_page`, `wait_for`) ships in `extension/lib/browser-tools.js`.
+20. **"Browser control" first, or "coworker" first?** — RESOLVED (Paul, 2026-08-31): progress to the coworker features in the recommended order: activity ledger with undo, companion side panel, plan strip, scheduled-run reports on the timeline.
+23. **When does a site's WebMCP tool ask for consent?** — CLOSED (owner decision, 2026-09-05): enrollment creates the Site Agent and its discovery channel, but is not automatic-use consent. Every exact origin/tool asks once on its first genuine model use. Allow persists for that browser profile; later runs use that unchanged tool without another card. Deny is sticky and blocks without nagging until the owner explicitly allows or resets it in Settings.
 
 ## Open
 
-12. **The model for the hub** — Gemini Nano is weak for tool-calling; which provider should be the recommended default for the best experience? **Recommended default (reanalysis 2026-08-30, re-measured on CURRENT model ids after the owner's correction; still OPEN):** OpenAI `gpt-5.6-luna` — the only model that passed every journey (open tab, list tabs, memory set + recall in a new thread, create then edit an artifact behind the approval card, injection resisted) at 7-12 s and $0.005-0.02 per turn. `CAP-FB-20260830-MODEL-CATALOG-CURRENT-01` landed the adapter change (the OpenAI adapter sends `reasoning_effort:"none"` for gpt-5.x, Test connection sends `max_completion_tokens`, and the bundled catalogue `extension/lib/model-catalog.js` pre-fills `gpt-5.6-luna` for OpenAI / `gemini-3.7-flash` for Gemini / `claude-sonnet-5` for Anthropic) — re-verified 2026-08-30 on the unpatched build: the hub answered "open a new tab with https://example.com and tell me its title" with "Example Domain" in 13 s over 6 calls, all HTTP 200. `gemini-3.7-flash` remains the fallback when the owner has only a Gemini key (passes through the native lane; 3-6x slower per turn, edits by re-creating the asset rather than update_asset). Not recommended: `gpt-5.6-sol` (25x luna's price, re-executes under the loop nudge), `gpt-5.6-terra` (missed the new-thread recall by guessing the memory key), `grok-4.6` (runaway under the nudge: 12 duplicate tabs, $0.77, never settled). `claude-sonnet-5` / `claude-opus-5` / `claude-fable-5` and Z.ai `glm-5.3` were not measured (dead key / no balance) and should be before the default is final. Evidence table: `REVIEW-2026-08-30.md` section 9. **ANSWERED (2026-09-01):** the Settings → Providers redesign (`CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01`) shipped OpenAI `gpt-5.6-luna` as the pre-selected Recommended card and Gemini `gemini-3.7-flash` as the documented Alternative; the rest sit under "More providers". `claude-sonnet-5` / `glm-5.3` remain unmeasured (dead key / no balance) — a follow-up measures them before either is offered as a recommended default.
-13. **Owner-selected Wasm distribution policy** — may a Chrome Web Store build execute genuinely local owner-selected Wasm without violating remotely hosted code policy? Until written policy resolves this, Store mode is bundled-reviewed-executables only; owner-selected packages remain an unpacked/enterprise/developer lane. The credential-free `--target=store` marker-v2/CSP/package/static scan proves only the checked archive boundary and does not answer this policy question. **Recommended default (reanalysis 2026-08-30; still OPEN):** Store = bundled-reviewed executables only (the current posture); owner-selected Wasm stays a developer lane. Not demo-relevant; park until after the demo.
-14. **Co-do licence/provenance reconciliation** — **RESOLVED (2026-09-05, Pillar 4): No Co-do binaries are copied into the platform.** All shipped tools are built from verified in-repo sources or pinned releases with immutable SHA-256 hashes, exact SPDX license declarations, SBOM provenance, and strict MV3/CWS remotely-hosted-code compliance (`STORE_WASM_LANE = "bundled-reviewed-only"`). All dynamic execution paths enforce CSP `script-src 'self' 'wasm-unsafe-eval'` and reject unmanifested binaries. Closed in `chrome-agent-platform-39is`.
-15. **Semantic index engine** — deterministic exact/alias/lexical retrieval ships first. Embedding model, dimensions, quality thresholds, storage engine (SQLite versus IndexedDB), device tiers, and telemetry policy remain decisions under the existing `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`; the task must not be duplicated. **Recommended default (reanalysis 2026-08-30; still OPEN):** defer entirely — the lazy provider with lexical search is sufficient at ~160 capabilities; the demo build hides the lane (`CAP-FB-20260830-EXEC-BUILD-FLAG-01`).
-16. **Grouped tabular artifact promotion** — before any route can retain up to one MiB across digest-keyed chunks, choose either an atomic/reservable grouped keyed promotion with safe refcount/orphan collection or an explicitly lower single-body cap. (Note: under owner directive dptw on 2026-09-03, `extension/lib/artifacts.js:422` set `ASSET_BOUNDS.maxContentBytes = Infinity`, rendering legacy 256 KB single-body caps obsolete). The source candidate does neither silently: it remains unreachable, writes the manifest last, surfaces capacity/orphan receipts and never auto-deletes a possibly referenced chunk. **Recommended default (reanalysis 2026-08-30; still OPEN):** defer chunked promotion.
+15. **Semantic index engine** — deterministic exact/alias/lexical retrieval ships first. Embedding model, dimensions, quality thresholds, storage engine (SQLite versus IndexedDB), device tiers, and telemetry policy remain decisions under `CAP-FB-20260820-SEMANTIC-TOOL-SEARCH-01`.
+    - **Concrete Recommendation:** Defer semantic embeddings entirely for the demo; the lazy provider with lexical search is fast (< 1 ms), zero-dependency, and covers all ~160 capabilities cleanly.
+    - **Next Action:** Keep dormant behind developer flag; revisit only if tool catalogue exceeds 500 entries.
 
-17. **`debugger` permission posture** — **RESOLVED (Paul, 2026-08-27): remove it for
-    now; the permission and the tools can come back later.** `0.2.286` had re-declared
-    `debugger` as an optional permission for the CDP power tools (network conditions,
-    CPU throttling, device emulation, navigation, screenshots, performance metrics;
-    `Runtime.evaluate` never exposed), reversing its deliberate removal at `c5ccb2d0`.
-    The costs decided it: Chrome's all-sites permission warning and a persistent
-    "…started debugging this browser" bar are not acceptable in the current posture.
-    Removed 2026-08-27 — the optional permission, the four tools, the capability row
-    and the Settings label. Browser tools 130 → 126, capability table 159 → 155. The
-    user-scripts half of T12 is untouched. A removal guard in
-    `tests/chrome-tools-t12.test.ts` plus the manifest assertion in the journey suite
-    make any return a deliberate act. When it does return, it should land behind a
-    separate developer-only surface rather than the default product.
-    The same pattern was applied to `open_side_panel` (Paul, 2026-08-30,
-    `CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01`): the tool could never succeed from a
-    model call because `chrome.sidePanel.open()` needs a user gesture, so it was
-    removed with a guard test rather than left in the catalogue as a promise that
-    always failed. Browser tools 126 → 125, capability table 167 → 166.
+21. **Do first-class shared-worker agent runs get conversation history?** — The shared-worker run path (`extension/workers/agent-worker.js` → `extension/lib/agent-loop.js` → `agent.run(task, {}, [])`) hardcodes EMPTY history: `agent-worker.run` accepts `{agentId, task, system, modelKind, maxIterations}` and has no thread source.
+    - **Concrete Recommendation:** Retain current architecture where worker runs are stateless single-shot executions by design. Threads remain owned by the hub (`continueThread` → `runTask`).
+    - **Next Action:** Documented residual. If multi-turn background worker threads are ever requested, wire `threadId` through `agent-worker.run`.
 
-18. **Host-access posture** — **RESOLVED (Paul, 2026-08-31): option (a) — keep install-granted host_permissions <all_urls>; this is a private tool and the broad access is acceptable, the capability must demonstrate clearly. Make README/comments/docs honest about it.** `extension/manifest.json` declares `host_permissions: ["<all_urls>"]`
-    plus two content scripts on every http(s) page at `document_start` (install-granted, since
-    `0.2.419`), while the README and several comments still describe an all-optional model. The
-    install prompt reads "Read and change all your data on all websites" — the first question a
-    Chrome reviewer will ask. Either (a) keep install-granted host access and passive WebMCP
-    detection and describe it truthfully everywhere, or (b) move `<all_urls>` to
-    `optional_host_permissions`, keep the detector on `activeTab` plus JIT origin grants, and
-    lose passive discovery. **Recommended default (reanalysis 2026-08-30; OPEN, needed before
-    the demo):** (a) — the WebMCP thesis depends on noticing when a site offers tools, and the
-    honest sentence is "this extension can read every page in order to notice when a site
-    offers tools; it acts only after you allow it". Blocks `CAP-FB-20260830-HOST-ACCESS-STORY-01`;
-    shapes `WEBSTORE-RELEASE-01` and `CAP-FB-20260830-PRIVACY-STATEMENT-01`.
-
-19. **Are page actions in scope?** — **RESOLVED (Paul, 2026-08-31): YES — add the minimal grant-gated page-action family (find/click/type/select/scroll/wait) behind the untrusted-content fence and the activity ledger.** There is no click, type, fill, scroll or find-element tool;
-    the only way to act inside a page is a site that ships WebMCP tools. Every comparator leads
-    with "it fills the form". Either add a minimal grant-gated page-action family on
-    `chrome.scripting` (find by accessible name, click, type, select, scroll, wait) behind the
-    untrusted-content fence and the activity ledger, or decide the product is WebMCP-only for
-    page interaction and say so on the slide. **Recommended default (reanalysis 2026-08-30;
-    OPEN, needed before the demo script is final):** add the minimal family — it is the largest
-    missing piece of the thesis and the Chrome-native permission model is the differentiator
-    against screenshot-and-click agents. **DELIVERED (2026-08-31, `CAP-FB-20260830-PAGE-ACTION-TOOLS-01`):**
-    the six-tool family (`find_elements`, `click_element`, `type_text`, `select_option`, `scroll_page`,
-    `wait_for`) ships in `extension/lib/browser-tools.js`, executed through
-    `chrome.scripting.executeScript` under the `scripting` permission + the per-origin browser-control
-    grant + the privileged-URL block. The model only ever receives an opaque per-snapshot integer ref
-    (never a selector or JS); `find_elements` is tagged untrusted so attacker-controlled accessible names
-    are fenced; click/type/select write an activity-ledger row. Unblocks
-    `CAP-FB-20260830-SIDE-PANEL-COMPANION-01`.
-
-20. **"Browser control" first, or "coworker" first?** — **RESOLVED (Paul, 2026-08-31): progress to the coworker features in the recommended order: activity ledger with undo, companion side panel, plan strip, scheduled-run reports on the timeline.** The product carries two thesis
-    statements: sites-as-sub-agents via WebMCP (unique, working, hidden) and a coworking
-    environment for knowledge workers (`PRODUCT.md`; aspirational, missing page actions and a
-    companion). The hub is a third thing — an agent-management dashboard. The answer orders the
-    post-demo queue in `REVIEW-2026-08-30.md` section 5. **Recommended default (reanalysis
-    2026-08-30; still OPEN):** lead the demo with browser control plus WebMCP (what works today),
-    and build toward the coworker shape in this order: the activity ledger with undo, the
-    companion side panel, the plan strip, scheduled-run reports on the timeline.
-
-21. **Do first-class shared-worker agent runs get conversation history?** — The shared-worker run path
-    (`extension/workers/agent-worker.js` → `extension/lib/agent-loop.js` → `agent.run(task, {}, [])`)
-    hardcodes EMPTY history: `agent-worker.run` accepts `{agentId, task, system, modelKind, maxIterations}`
-    and has no thread source. `historyFromThread` only feeds the hub thread path (continueThread → runTask).
-    **Status (CAP slice 2026-08-30): documented residual, not fixed.** The worker path was never wired to
-    a thread and no caller currently passes threadId into it, so there is nothing to replay; wiring one
-    would be inventing a feature. If first-class worker runs become thread-backed (a durable agent-run
-    surface), the fix is to accept `history`/`threadId` in `agent-worker.run` and pass it into
-    `runAgentLoop`. Until then, worker runs are stateless single-shot executions by design.
-
-22. **One permission card per demo step, or one per tool?** — After `CAP-FB-20260901-ONE-CARD-PER-STEP-01`
-    a tool asks for everything it needs on ONE card (permissions + site access + browser control, in
-    user language, one Chrome prompt). But with a real model the "group my tabs" step calls `list_tabs`
-    first (needs only `tabs`), then `group_tabs` (needs `tabGroups` + browser control), so a genuinely
-    fresh profile still sees TWO cards for that step under the "never widen beyond the selected tool"
-    rule. **Recommended default (coordinator, 2026-09-02; OPEN):** keep per-tool asks as the safety
-    floor, and add a task-level "tab tools" bundle the model can select once when a task is about the
-    owner's tabs (one card: see tabs, group tabs, control the browser on the listed sites). Owner call
-    needed before `CAP-FB-20260830-EXEC-DEMO-01`'s final recording, which asserts at most one card per step.
-
-23. **When does a site's WebMCP tool ask for consent?** — **CLOSED (owner decision, 2026-09-05):**
-    enrollment creates the Site Agent and its discovery channel, but is not automatic-use consent.
-    Every exact origin/tool asks once on its first genuine model use. Allow persists for that browser
-    profile; later runs use that unchanged tool without another card. Deny is sticky and blocks without
-    nagging until the owner explicitly allows or resets it in Settings. Settings provides exact-tool and
-    site-wide disable/reset controls. Consent and invocation events are durably, redactedly audited; a
-    required audit write failure blocks dispatch/publication, and authority is rechecked before page
-    dispatch and before a result reaches the model. If the terminal `invocation-finished` audit cannot
-    be committed, an otherwise successful page result is discarded rather than published. Arguments
-    that cannot be canonically digested fail before dispatch and therefore create no invocation audit
-    row: no site work started.
+22. **One permission card per demo step, or one per tool?** — A tool asks for everything it needs on ONE card (permissions + site access + browser control). But with a real model the "group my tabs" step calls `list_tabs` first (needs `tabs`), then `group_tabs` (needs `tabGroups` + browser control), resulting in two cards.
+    - **Concrete Recommendation:** Keep per-tool asks as the non-negotiable security floor. For the exec demo, introduce a pre-prompt task-level capability bundle for tab operations (`tabs` + `tabGroups`) so the owner sees exactly one prompt on step 1.
+    - **Next Action:** Wire task-level capability pre-request into demo runner before recording.

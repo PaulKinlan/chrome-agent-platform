@@ -295,10 +295,13 @@ demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the 
 
 ## Open questions for Paul
 The full list with resolved answers is [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
-Genuinely open: **Q11** extension name/distribution channel · **Q12** the recommended
-default provider/model for the best out-of-box experience · **Q13** owner-selected Wasm
-under Store policy · **Q14** Co-do licence/provenance reconciliation · **Q15** the
-semantic index engine · **Q16** grouped tabular artifact promotion.
+Resolved in recent passes: **Q11** extension name/distribution (unpacked/developer only,
+no Store release) · **Q12** recommended default provider (`gpt-5.6-luna`) · **Q13**
+owner-selected Wasm (developer/unpacked capability under explicit owner approval) · **Q14**
+Co-do licence reconciliation (no external binaries copied; in-repo/pinned sources only) ·
+**Q16** grouped tabular artifact promotion (dptw unbounded single-body; chunked promotion deferred).
+Genuinely open / deferred: **Q15** semantic index engine · **Q21** shared-worker conversation history ·
+**Q22** permission card bundling.
 
 ## Feature: Artifacts (Paul 2026-08-16) — shipped
 Agents create things for the user in the context of a task (generated pages, files, UI,
