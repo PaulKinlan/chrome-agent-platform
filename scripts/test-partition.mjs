@@ -101,6 +101,13 @@ export const EXEMPTIONS = {
   // tool-descriptions.test.ts pins that purity, so a regression re-serialises this file
   // the moment the child probe reds.
   "tests/tool-descriptions.test.ts": "imports the bundled-tool generator for its one pure export and spawns a no-write child that does the same; since chrome-agent-platform-i1i9 the generation work runs only under isMain, so neither the import nor the probe writes extension/wasm/cas — measured (CAS mtime fingerprint unchanged, no generation line on stdout)",
+  // chrome-agent-platform-0efa: the guard's build-artifact class matched a PROSE
+  // mention. The file's doc comment names build.mjs / CAP_BUNDLED_TOOL_TIMEOUT_MS
+  // while the test only asserts on the timeout parser's return values — no child
+  // process, no filesystem, no generator call — so the shared-artifact hazard
+  // cannot apply and the file runs safely in the parallel phase. (The guard's
+  // over-match on prose is itself tracked as f94p/8b8w.)
+  "tests/bounded-child.test.ts": "pure timeout-parser unit test — imports boundedChildTimeoutMs and asserts on return values only: no child process, no filesystem access, no generator call. The content scan matched the PROSE mention of build.mjs / CAP_BUNDLED_TOOL_TIMEOUT_MS in the helper's doc comment",
 };
 
 // A test that SPAWNS or IMPORTS one of these local drivers inherits the
