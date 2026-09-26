@@ -11,6 +11,7 @@
 //
 //   deno run -A scripts/kat-hub-timeline.ts [extension-dir] [out-dir]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
@@ -50,7 +51,7 @@ ws.onmessage = (m: MessageEvent) => {
 };
 const evaluate = async (expr: string, sessionId: string) => {
   const j = await cdp("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
-  return j.result?.result?.value ?? null;
+  return wireValue<any>(j, "k.hub-timeline") ?? null;
 };
 
 try {

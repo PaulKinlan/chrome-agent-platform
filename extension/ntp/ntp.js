@@ -7,9 +7,10 @@
 
 import { send } from "../lib/messages.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
-import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, recipeAsTemplate, templatePrefill } from "../lib/agent-templates.js";
+import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
-import { projectUnifiedAgents } from "../lib/named-agents.js";
+import { projectUnifiedAgents, slugifyAgentId } from "../lib/named-agents.js";
+import { exportAgentCardJson, importAgentCard } from "../lib/agent-cards.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
 import { buildMcpServerEditor, mcpServerRow } from "../lib/mcp-server-editor.js";
 import { schedulePreviewText } from "../lib/schedule-preview.js";
@@ -510,10 +511,10 @@ function handleFactoryResetBoot() {
       sessionStorage.removeItem(FIRST_RUN_BROWSER_CHOICE_KEY);
       localStorage.clear();
       sessionStorage.clear();
-    } catch {}
+    } catch { /* storage can throw in restricted modes; the clear is best-effort */ }
     try {
       history.replaceState(null, "", location.pathname + location.search);
-    } catch {}
+    } catch { /* replaceState can throw on opaque origins; cosmetic URL tidy only */ }
   }
 }
 handleFactoryResetBoot();
@@ -1065,10 +1066,10 @@ function agentSummaryList({ agents = [], deletable = "", onSelect, onDelete } = 
 }
 
 /** Delete one background agent from the hub's unified list. DELETION goes
- * through recipe.delete: it removes the custom agent record AND tears the
+ * through background-agent.delete: it removes the custom agent record AND tears the
  * schedule down NON-BLOCKING (the instant-delete contract — a RUNNING task's 5s
  * termination dance must never block the UI; reconciliation reaps the inert
- * payload). A built-in copy has no custom record — recipe.delete still cancels
+ * payload). A built-in copy has no custom record — background-agent.delete still cancels
  * its schedule, which is what the row's existence derives from. */
 async function deleteBackgroundAgentFromHub(a, panel) {
   if (!a) return;
@@ -1078,7 +1079,7 @@ async function deleteBackgroundAgentFromHub(a, panel) {
   const removedIdx = [...(panel.querySelector("agent-picker")?.shadowRoot
     ?.querySelectorAll(".opt") ?? [])]
     .findIndex((row) => row.dataset?.ref === a.ref);
-  const r = await send("recipe.delete", { id: a.id })
+  const r = await send("background-agent.delete", { id: a.id })
     .catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   if (r?.ok === true) {
     setStatus(`Deleted ${name}.`, true);
@@ -1114,7 +1115,7 @@ async function renderNamedAgents() {
   const background = backgroundAgentsForDisplay(bgRes.agents);
   // ONE projection for every agent surface (CAP-FB-20260830-FRESH-PROFILE-
   // TEMPLATE-AGENTS-01): created named agents plus ENABLED background agents.
-  // A disabled recipe is a template, not an agent — it stays reachable through
+  // A disabled skill is a template, not an agent — it stays reachable through
   // the create dialog / Settings' "Configure" picker, never as an agent row.
   // The hub panel, the sidebar, the side panel and Settings all agree on it.
   const active = projectUnifiedAgents(
@@ -1225,7 +1226,7 @@ async function renderSidebarAgents(agents) {
   }
 }
 
-// ── background agents (scheduled recipes, enabled/disabled) ──────────────
+// ── background agents (scheduled skills, enabled/disabled) ───────────────
 // Item 25: the hub shows only the ACTIVE (enabled) background agents — the
 // full catalog (presets + disabled) lives in Settings behind the "Configure"
 // link + the base-select picker.
@@ -2287,6 +2288,7 @@ if (threadConversation) {
   });
 }
 const editAgentBtn = document.getElementById("edit-agent");
+const shareAgentBtn = document.getElementById("share-agent");
 const deleteAgentBtn = document.getElementById("delete-agent");
 // Current conversation identity is declared before the run-registry subscription
 // so even an immediate snapshot is projected into the correct surface.
@@ -2408,7 +2410,7 @@ function showThreadView(options = {}) {
   }
   runRouteUpdate(() => {
     // Only ONE overlay at a time (item 48): the thread view replaces the
-    // settings/directory/recipes view.
+    // settings/directory view.
     if (!viewOverlay.hidden) hideViewInner();
     threadView.hidden = false;
     activeViewRoute = VIEW_ROUTE.TASK;
@@ -2509,6 +2511,7 @@ async function openThread(id) {
   // Tasks use direct click-to-edit on the title with an editable hover affordance;
   // the separate Edit button is removed from the task view (CAP-FB-20260823-TASK-INLINE-EDIT-01).
   editAgentBtn.hidden = true;
+  if (shareAgentBtn) shareAgentBtn.hidden = true;
   if (deleteAgentBtn) deleteAgentBtn.hidden = true;
   threadTitle.classList.add("editable-task");
   threadTitle.setAttribute("tabindex", "-1");
@@ -2594,6 +2597,7 @@ async function openBackgroundAgentChat(id, name) {
   // No per-agent config route exists for background agents yet (only
   // named-agent.update), so hide the Edit button rather than show a dead one.
   editAgentBtn.hidden = true;
+  if (shareAgentBtn) shareAgentBtn.hidden = true;
   if (deleteAgentBtn) {
     deleteAgentBtn.hidden = false;
     deleteAgentBtn.setAttribute("aria-label", "Delete background agent");
@@ -2710,12 +2714,29 @@ async function openAgentSurface({ kind, id, name }) {
   // Assistant turns carry THIS agent's identity (its generated avatar when it
   // has one, the initial otherwise). The list read is cached by the SW.
   threadConversation?.setIdentity?.({ name: name || id, avatar: initialAvatar(name || id) });
+  // A named-agent.list reply is the NEWER fact about this agent (read from the
+  // live registry AFTER the caller's name — get/pick precede this send). See
+  // the q0yg note in the named branch below.
+  let listResolvedName = null;
   if (kind === "named") {
+    // The list reply is the NEWER fact about this agent: it is read from the
+    // live registry AFTER the caller's name was (openAgentChat's get and the
+    // composer's pick-time mention snapshot both precede this send). Record
+    // what it resolved so the post-history assignment below cannot clobber a
+    // newer correction with a stale caller name — measured 2026-09-25
+    // (chrome-agent-platform-q0yg): a stale mention name + a list reply that
+    // lands before the history await left the header "V1" over
+    // history.state.name "V2", 5/5 in a real loaded extension.
     send("named-agent.list").then((r) => {
       if (currentAgentId !== id) return;
       const a = (Array.isArray(r?.agents) ? r.agents : []).find((x) => x?.id === id);
       if (a) {
-        if (a.name && threadTitle.textContent !== a.name) {
+        listResolvedName = a.name || null;
+        // Correct EITHER surface that disagrees: the header AND history.state
+        // are both written by the caller (possibly stale — a pick-time mention
+        // name), and a title that already agrees must not leave a stale name
+        // behind in history (the q0yg mirror case, measured same day).
+        if (a.name && (threadTitle.textContent !== a.name || window.history?.state?.name !== a.name)) {
           threadTitle.textContent = a.name;
           const hash = `#agent=${encodeURIComponent(kind)}:${encodeURIComponent(id)}`;
           navigateNtpRoute(window, hash, { route: "agent", kind, id, name: a.name });
@@ -2738,6 +2759,7 @@ async function openAgentSurface({ kind, id, name }) {
   // Only named agents have the owner-facing config dialog (named-agent.update).
   editAgentBtn.hidden = kind !== "named";
   if (kind === "named") editAgentBtn.setAttribute("aria-label", "Edit agent");
+  if (shareAgentBtn) shareAgentBtn.hidden = kind !== "named";
   if (deleteAgentBtn) {
     // ACP harness agents have no delete route (nothing to delete: the harness
     // lives on the host) — the control must not be offered for them.
@@ -2754,8 +2776,9 @@ async function openAgentSurface({ kind, id, name }) {
   if (!runSurfaceOwner.owns(owner) || currentAgentId !== id || currentAgentKind !== kind) return;
   // The title is the agent's NAME, never its slug: a caller without the name
   // (a hash entry) resolves it first; until then the surface reads "Agent"
-  // (CAP-FB-20260830-HUB-CHROME-POLISH-01).
-  threadTitle.textContent = name || "Agent";
+  // (CAP-FB-20260830-HUB-CHROME-POLISH-01). A list-resolved name wins over the
+  // caller's: it was read later, so it is never older (see the q0yg note above).
+  threadTitle.textContent = listResolvedName || name || "Agent";
   renderAgentSurfaceHistory(history);
   projectSurfaceRunTranscript();
   showThreadView({ focusAfter: threadComposer });
@@ -2937,6 +2960,7 @@ async function openAgentConfig() {
     initialCanDelegateTo: agent.canDelegateTo ?? [],
     canRegenerateAvatar: true,
     canDelete: true,
+    shareAgent: agent,
     savedLabel: "Save",
     schedule: agent.schedule?.periodInMinutes ?? null,
     initialMcpServers: agent.mcpServers ?? [],
@@ -3006,6 +3030,7 @@ function openQuickCreateAgent() {
     initialCoreAssets: [],
     canRegenerateAvatar: false,
     showTemplates: true,
+    canImport: true,
     savedLabel: "Create agent",
     onSave: async (v) => {
       const r = await send("named-agent.create", {
@@ -3046,14 +3071,14 @@ function openQuickCreateAgent() {
 async function buildAgentConfigDialog(opts) {
   const [skillsRes, bgRes] = await Promise.all([
     send("skill.list").catch(() => ({ skills: [] })),
-    // The 22 background recipes are scheduled TEMPLATES in the create flow
+    // The 22 background skills are scheduled TEMPLATES in the create flow
     // (CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01) — fetched only when the
-    // gallery is shown, projected through recipeAsTemplate (no data copy).
+    // gallery is shown, projected through skillAsTemplate (no data copy).
     opts.showTemplates ? send("background-agent.list").catch(() => ({ agents: [] })) : Promise.resolve({ agents: [] }),
   ]);
   const available = Array.isArray(skillsRes.skills) ? skillsRes.skills : [];
   const backgroundTemplates = (Array.isArray(bgRes?.agents) ? bgRes.agents : [])
-    .map(recipeAsTemplate).filter(Boolean);
+    .map(skillAsTemplate).filter(Boolean);
   const agentSkillIds = new Set((opts.initialSkills ?? []).map((s) => (typeof s === "string" ? s : s?.id ?? s?.name)));
 
   const dialog = document.createElement("agent-dialog");
@@ -3148,7 +3173,7 @@ async function buildAgentConfigDialog(opts) {
     const catalogue = [
       ...STARTER_TEMPLATE_IDS.map(agentTemplateById).filter(Boolean).map((t) => ({ ...t, starter: true })),
       ...AGENT_TEMPLATES.filter((t) => !starterIds.has(t.id)),
-      // A recipe that already has a curated template (same id, e.g.
+      // A skill that already has a curated template (same id, e.g.
       // price-watcher) is offered once — the curated card is the richer one.
       ...backgroundTemplates.filter((t) => !AGENT_TEMPLATES.some((c) => c.id === t.id)),
     ];
@@ -3702,10 +3727,89 @@ async function buildAgentConfigDialog(opts) {
       deleteAgentBtn?.click();
     });
   }
+
+  // ── Share agent (CAP-FB-20260830-AGENT-SHARING-01): download the agent's
+  // card as <slug>.agent.json. The card library (lib/agent-cards.js) owns the
+  // content contract: name/role/skills/core assets/schedule/avatar — NEVER
+  // memory, keys, provider config, or context-file bodies.
+  const shareAgent = opts.shareAgent ?? null;
+  const shareBtn = shareAgent ? configButton("Share agent", "secondary") : null;
+  if (shareBtn) {
+    shareBtn.addEventListener("click", () => {
+      try {
+        const file = downloadAgentCard(shareAgent);
+        setStatus(`Agent card downloaded as ${file} — hand the file to a colleague.`, false);
+      } catch (e) {
+        errorEl.textContent = `Sharing failed: ${e?.message ?? e}`;
+        errorEl.style.display = "block";
+      }
+    });
+  }
+
+  // ── Import agent (create mode): accept a shared .agent.json card, validate
+  // it through the card library, PREFILL the form, and show the validated
+  // name/role/skills for confirmation — creation still goes through Create.
+  const importInput = opts.canImport ? document.createElement("input") : null;
+  if (importInput) {
+    importInput.type = "file";
+    importInput.accept = ".json,application/json,.agent.json";
+    importInput.style.display = "none";
+  }
+  const importBtn = opts.canImport ? configButton("Import agent", "secondary") : null;
+  const importNote = opts.canImport ? document.createElement("div") : null;
+  if (importNote) {
+    importNote.className = "agent-config-import-note";
+    importNote.setAttribute("role", "status");
+    importNote.style.cssText = "display:none;font-size:12px;color:var(--ok,#1b7f4d);line-height:1.4;margin-bottom:6px;";
+  }
+  if (importBtn && importInput) {
+    importBtn.addEventListener("click", () => importInput.click());
+    importInput.addEventListener("change", () => {
+      const f = importInput.files?.[0];
+      if (!f) return;
+      const fr = new FileReader();
+      fr.onload = () => {
+        importInput.value = "";
+        const r = importAgentCard(String(fr.result));
+        if (!r.ok) {
+          errorEl.textContent = `Import failed: ${r.error ?? "unknown"}`;
+          errorEl.style.display = "block";
+          importNote.style.display = "none";
+          return;
+        }
+        const cardAgent = r.agent;
+        // Prefill the SAME fields a template prefill fills — the owner reviews
+        // and edits everything before Create commits anything.
+        nameField.el.value = cardAgent.name ?? "";
+        roleField.el.value = cardAgent.role ?? "";
+        if (cardAgent.schedule?.periodInMinutes != null) {
+          scheduleField.el.value = `every ${cardAgent.schedule.periodInMinutes} minutes`;
+          scheduleField.el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+        if (cardAgent.avatar) {
+          avatarValue = cardAgent.avatar;
+          renderAvatarPreview();
+        }
+        if (Array.isArray(cardAgent.skills) && cardAgent.skills.length) {
+          skillSection.checkTemplate(cardAgent.skills);
+        }
+        const skillCount = Array.isArray(cardAgent.skills) ? cardAgent.skills.length : 0;
+        const dropped = Array.isArray(r.droppedSkills) ? r.droppedSkills.length : 0;
+        importNote.textContent = `Card imported: “${cardAgent.name}” — ${cardAgent.role || "no role"}; ${skillCount} skill${skillCount === 1 ? "" : "s"} selected${dropped ? ` (${dropped} unknown id${dropped === 1 ? "" : "s"} dropped)` : ""}. Review below, then Create.`;
+        importNote.style.display = "block";
+        errorEl.style.display = "none";
+        nameField.el.focus();
+      };
+      fr.readAsText(f);
+    });
+  }
+
   const cancelBtn = configButton("Cancel", "secondary");
   const saveBtn = configButton(opts.savedLabel ?? "Save", "primary");
   if (deleteBtn) footer.append(deleteBtn);
+  if (importBtn) footer.append(importNote, importBtn, importInput);
   if (regenBtn) footer.append(regenBtn);
+  if (shareBtn) footer.append(shareBtn);
   footer.append(cancelBtn, saveBtn);
   footer.prepend(errorEl);
 
@@ -4129,9 +4233,38 @@ document.getElementById("thread-back")?.addEventListener("click", hideThreadView
 // open the agent config; a background agent → also the agent config (its own
 // edit surface). A task's button must not open the agent config (it did
 // nothing before because openAgentConfig only handles named agents).
+/** Download an agent's share card (CAP-FB-20260830-AGENT-SHARING-01): the
+ * card library owns the content contract — name/role/skills/core assets/
+ * schedule/avatar, never memory, keys, provider config, or context bodies. */
+function downloadAgentCard(agent) {
+  const json = exportAgentCardJson(agent, { schedule: agent.schedule ?? null });
+  const slug = slugifyAgentId(agent.name || "agent") || "agent";
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${slug}.agent.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return `${slug}.agent.json`;
+}
+
 editAgentBtn?.addEventListener("click", () => {
   if (currentAgentKind === "named") openAgentConfig();
   else if (currentThreadId) startTitleEdit();
+});
+
+shareAgentBtn?.addEventListener("click", async () => {
+  if (currentAgentKind !== "named" || !currentAgentId) return;
+  const res = await send("named-agent.get", { id: currentAgentId }).catch(() => ({ ok: false }));
+  if (!res.ok || !res.agent) { setStatus("Agent not found", false); return; }
+  try {
+    const file = downloadAgentCard(res.agent);
+    setStatus(`Agent card downloaded as ${file} — hand the file to a colleague.`, false);
+  } catch (e) {
+    setStatus(`Sharing failed: ${e?.message ?? e}`, false);
+  }
 });
 
 deleteAgentBtn?.addEventListener("click", async () => {
@@ -4156,15 +4289,16 @@ deleteAgentBtn?.addEventListener("click", async () => {
   } else if (kind === "site" || kind === "origin") {
     out = await send("agent.delete", { origin: id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   } else if (kind === "background") {
-    // Background agents schedule deterministically as `recipe:<id>` (the
+    // Background agents schedule deterministically as `recipe:<id>` (a persisted
+    // identity — e5oe owns its migration; the
     // enabled state derives from the task store). The old code passed the RAW
-    // recipe id, so task.cancel hit "no such task" and silently deleted
+    // skill id, so task.cancel hit "no such task" and silently deleted
     // NOTHING while the UI claimed success — the dead NTP delete button.
-    // DELETION now routes through recipe.delete (removes the custom record +
+    // DELETION now routes through background-agent.delete (removes the custom record +
     // tears the schedule down NON-BLOCKING — the instant-delete contract; a
     // RUNNING task's 5s termination dance must never block this dialog), and
     // success is asserted EXPLICITLY (ok === true), not "anything but false".
-    out = await send("recipe.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+    out = await send("background-agent.delete", { id }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
   }
 
   if (out?.ok === true) {
@@ -4380,7 +4514,7 @@ function persistSidebar(collapsed) {
       const r = await send("kv.set", { values: { [SIDEBAR_KEY]: collapsed } });
       if (r?.ok === false) {
         sidebarDurability = "error";
-        console.warn("sidebar collapse not persisted:", r.error ?? "unknown");
+        ntpLog.warn("sidebar collapse not persisted:", r.error ?? "unknown");
       } else {
         // kv.set now reports durable vs permissionless-session fallback.
         sidebarDurability = r?.mode === "durable" ? "durable" : "session";
@@ -4625,7 +4759,7 @@ function openView(path, title, trigger) {
 
   runRouteUpdate(() =>
     viewFocus.open(trigger, () => {
-      // Only ONE overlay at a time (item 48): the settings/directory/recipes
+      // Only ONE overlay at a time (item 48): the settings/directory
       // view replaces the task thread. Synchronize covered-view state inside
       // the route update.
       if (!threadView.hidden) hideThreadViewInner();
@@ -4966,7 +5100,7 @@ async function handleOmniboxEntry() {
   if (mode === "thread") {
     await openThread(query);
   } else if (query) {
-    // A task (or a recipe expanded by the SW into a prompt).
+    // A task (or a skill expanded by the SW into a prompt).
     currentThreadId = null;
     threadConversation.clear?.();
     threadTitle.textContent = "New task";
@@ -4975,9 +5109,9 @@ async function handleOmniboxEntry() {
 }
 
 async function bootNtpRoutes() {
-  await handleOmniboxEntry().catch((e) => console.error("omnibox entry failed", e?.message ?? e));
+  await handleOmniboxEntry().catch((e) => ntpLog.error("omnibox entry failed", e?.message ?? e));
   // At boot/startup: restore current hash route (#view=, #thread=, #agent=) on reload
-  await applyCurrentHashRoute(false).catch((e) => console.error("boot route failed", e?.message ?? e));
+  await applyCurrentHashRoute(false).catch((e) => ntpLog.error("boot route failed", e?.message ?? e));
 }
 bootNtpRoutes();
 

@@ -65,7 +65,7 @@ class FakeStore {
   async keys() { return [...this.values.keys()].sort(); }
 }
 
-function harness(store, { bootId = "boot-a", failAt = null, retention = null } = {}) {
+function harness(store, { bootId = "boot-a", failAt = null, retention = null, onBoundary = null, purgeStoreDir = null } = {}) {
   const journal = [];
   const thread = [];
   let failed = false;
@@ -75,6 +75,9 @@ function harness(store, { bootId = "boot-a", failAt = null, retention = null } =
     // The owner's retention setting (`cap:runRetention`), injected so a test
     // never reaches chrome.storage. null = the bounded defaults.
     ...(retention ? { retentionSetting: async () => retention } : {}),
+    // A test driving purgeForTarget supplies its own directory purge so the
+    // registry's effects are exercised without real OPFS (cejm review).
+    ...(purgeStoreDir ? { purgeStoreDir } : {}),
     bootId,
     now: (() => { let n = 1_000; return () => ++n; })(),
     resolveJournalStore: async () => ({ journal }),
@@ -99,6 +102,7 @@ function harness(store, { bootId = "boot-a", failAt = null, retention = null } =
       else thread.push(row);
     },
     injectFailure: async (boundary) => {
+      if (onBoundary) await onBoundary(boundary);
       if (!failed && boundary === failAt) {
         failed = true;
         throw new Error(`injected crash at ${boundary}`);
@@ -425,6 +429,130 @@ Deno.test("durable runs: terminal fault matrix recovers exactly one journal and 
       assert(!snapshot.runs.some((row) => row.executionId === executionId && row.phase === "orphaned"));
     });
   }
+});
+
+Deno.test("durable runs: a record that VANISHES under a live run still settles (cejm)", async () => {
+  // Measured in the delegation KAT (chrome-agent-platform-cejm): under machine
+  // load the run record's file disappeared from its OPFS execution dir with no
+  // product-level delete (the memory ledger still listed it), so the settling
+  // CAS read "absent" and the run failed with "settling registry CAS failed" —
+  // a storage anomaly reported AS the run's outcome. The outbox is the
+  // authority for the outcome, so the settle must RECREATE the record and
+  // commit the terminal instead of failing.
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+
+  // The vanish: the store loses the record; the registry's cache still holds it.
+  await store.delete(`run:${executionId}`);
+  assertEquals(await store.has(`run:${executionId}`), false);
+
+  const terminal = await run.registry.settle(executionId, terminalPayload);
+  assertEquals(terminal.phase, "terminal", "a vanished record must not fail the settle");
+  assertEquals(terminal.terminal?.summary, terminalPayload.summary);
+  const durable = await store.get(`run:${executionId}`);
+  assertEquals(durable.phase, "terminal", "the terminal authority is re-created in the store");
+  assertEquals(durable.terminal?.summary, terminalPayload.summary);
+  assertEquals(await store.has(`run-outbox:${executionId}`), false, "the outbox is acknowledged and removed");
+  assertEquals(run.journal.filter((row) => row.executionId === executionId).length, 1);
+  assertEquals(run.thread.filter((row) => row.executionId === executionId).length, 1);
+});
+
+Deno.test("durable runs: a record that vanishes AFTER the settling marker still commits the terminal (cejm)", async () => {
+  // The other half of the cejm recovery: if the vanish lands between the
+  // settling marker and the terminal write, the terminal write is the one that
+  // loses its CAS — and it must re-create the authority it is projecting, not
+  // fail the settle.
+  const store = new FakeStore();
+  let vanished = false;
+  const run = harness(store, {
+    onBoundary: async (boundary) => {
+      if (!vanished && boundary === "after-thread") {
+        vanished = true;
+        await store.delete(`run:${executionId}`);
+      }
+    },
+  });
+  await begin(run.registry);
+  const terminal = await run.registry.settle(executionId, terminalPayload);
+  assertEquals(vanished, true, "the vanish must have been injected at the terminal boundary");
+  assertEquals(terminal.phase, "terminal");
+  const durable = await store.get(`run:${executionId}`);
+  assertEquals(durable.phase, "terminal", "the terminal write re-creates a record that vanished after the marker");
+  assertEquals(durable.terminal?.summary, terminalPayload.summary);
+});
+
+Deno.test("durable runs: a heartbeat survives a record that VANISHED under the active run (cejm)", async () => {
+  // The mid-run half of the cejm anomaly: the vanish is discovered by the
+  // liveness heartbeat (the run loop ABORTS the run on a heartbeat failure), so
+  // the heartbeat must re-create the authority for a run this registry still
+  // owns instead of killing a healthy run over a storage-level loss.
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  const before = await store.get(`run:${executionId}`);
+  await store.delete(`run:${executionId}`);
+
+  const row = await run.registry.heartbeat(executionId, { progressed: true });
+  assertEquals(row.phase, "running", "the run is still live");
+  assertEquals(row.progressCount, before.progressCount + 1, "progress is preserved, not reset");
+  const durable = await store.get(`run:${executionId}`);
+  assertEquals(durable.phase, "running");
+  assertEquals(durable.progressCount, before.progressCount + 1, "the re-created record carries the heartbeat");
+});
+
+Deno.test("durable runs: a liveness write is REFUSED when the fresh record left the live phases (cejm)", async () => {
+  // The NEGATIVE half of writeRecordWhileActive: a record another writer moved
+  // out of running/settling (a pause, a terminal settle, a cancel) must never be
+  // overwritten by a liveness write. Ownership is lost, and the refusal must
+  // leave the store's record EXACTLY as the other writer left it.
+  const store = new FakeStore();
+  const run = harness(store);
+  await begin(run.registry);
+  // Another writer pauses the run (a new revision, out of the live phases).
+  const paused = { ...(await store.get(`run:${executionId}`)), phase: "paused-interruption", revision: 99 };
+  await store.setTrusted(`run:${executionId}`, paused);
+  const versionBefore = await store.getVersion(`run:${executionId}`);
+
+  await assertRejects(
+    () => run.registry.heartbeat(executionId, { progressed: true }),
+    Error,
+    "durable run heartbeat CAS failed",
+  );
+
+  const after = await store.get(`run:${executionId}`);
+  assertEquals(after.phase, "paused-interruption", "a liveness write never overwrites a record that left the live phases");
+  assertEquals(after.revision, paused.revision, "and it does not bump the revision");
+  assertEquals(await store.getVersion(`run:${executionId}`), versionBefore, "the store version is untouched too");
+});
+
+Deno.test("durable runs: a PURGED run is not a live writer and its heartbeat re-creates nothing (cejm)", async () => {
+  // The other negative path: purgeForTarget must RETIRE the writer. Without
+  // that, a purged execution keeps projecting as live (isActive true) and any
+  // later liveness write would be treated as owning the record it no longer has.
+  const store = new FakeStore();
+  const run = harness(store, { purgeStoreDir: async () => ({ ok: true, absent: true }) });
+  await run.registry.start({
+    executionId,
+    clientCorrelationId: "purge-run-1",
+    threadId: "thread-purge",
+    kind: "task",
+    taskPreview: "purge me",
+    journalTarget: "agent:purge-fixture",
+    resumeRequest: null,
+  });
+  assertEquals(run.registry.isActive(executionId), true, "the run starts as a live writer");
+
+  await run.registry.purgeForTarget("agent:purge-fixture");
+
+  assertEquals(await store.has(`run:${executionId}`), false, "the purge removed the record");
+  assertEquals(run.registry.isActive(executionId), false, "a purged run is NOT a live writer (the purge retires the writer)");
+  await assertRejects(
+    () => run.registry.heartbeat(executionId),
+    Error,
+    "execution is not active in this boot",
+  );
+  assertEquals(await store.has(`run:${executionId}`), false, "the refused heartbeat re-creates nothing");
 });
 
 Deno.test("durable runs: pre-outbox crash cannot create result+orphan double state; replayed payload settles once", async () => {

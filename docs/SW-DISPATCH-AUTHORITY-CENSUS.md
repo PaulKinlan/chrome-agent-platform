@@ -2,13 +2,13 @@
 
 **Status:** Authoritative Census (chrome-agent-platform-ygvt / CAP-FB-20260908-OWNER-DISPATCH-CENSUS-01)  
 **Seams:** `extension/background/service-worker.js`, `extension/background/routes/`, `extension/lib/owner-approval.js`, `extension/lib/pure.js`  
-**Population:** 259 total registered routes derived from executable composition (`mergeRouteMaps`).
+**Population:** 260 total registered routes derived from executable composition (`mergeRouteMaps`).
 
 ---
 
 ## 1. Executive Summary & Purpose
 
-This document provides a total, honest census of all 259 message routes registered in the Chrome Agent Platform Service Worker.
+This document provides a total, honest census of all 260 message routes registered in the Chrome Agent Platform Service Worker.
 
 Prior audits (such as 18ug) focused narrowly on call sites of `requireOwnerApproval`, identifying 31 approval sites. However, `requireOwnerApproval` is only one of multiple gating layers in the extension. A route that does not call `requireOwnerApproval` is not necessarily insecure, but a mutation that reaches state modification without an explicit policy decision represents an unclassified authority boundary.
 
@@ -39,7 +39,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Layer 2: Central Dispatcher (dispatchRoute)                            │
-│ - look up type in handlers map (259 registered routes)                 │
+│ - look up type in handlers map (260 registered routes)                 │
 │ - scrub __* fields and userActivation from message body                │
 │ - inject trusted browser-attested sender (__sender = pageSender)       │
 └───────────────────────────────────┬────────────────────────────────────┘
@@ -71,7 +71,7 @@ Every message arriving at the Service Worker passes through a layered defense-in
 
 ---
 
-## 3. High-Level Population Summary (259 Routes)
+## 3. High-Level Population Summary (260 Routes)
 
 | Category | Count | Permitted Callers | Gating Mechanism |
 |---|---|---|---|
@@ -79,13 +79,13 @@ Every message arriving at the Service Worker passes through a layered defense-in
 | **Settings-Only Direct (`SETTINGS_ONLY_DIRECT`)** | 36 | `owner-options` | `requireSettingsSender` or `wasmStreamOwner` |
 | **Owner-Approval Direct (`OWNER_APPROVAL_DIRECT`)** | 13 | `owner-options`, `extension` | `requireOwnerApproval` + `isOwnerDirectApproval` |
 | **Owner-Approval Required (`OWNER_APPROVAL_REQUIRED`)** | 16 | `model`, `extension` | `requireOwnerApproval` (always prompts or model card) |
-| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 22 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
+| **Owner Extension-Fenced (`OWNER_EXTENSION_FENCED`)** | 23 | `owner-options`, `extension` | `isOwnerPrincipal(context)` |
 | **Execution & Worker Orchestration** | 22 | `extension`, `model`, worker | `runControl`, `activeExecutions`, worker RPC |
 | **Agent Task Board (`AGENT_BOARD`)** | 13 | `extension`, `model` | Board state machine, role fences |
 | **Storage, KV & Memory Fenced** | 10 | `owner-options`, `extension` | Secret key fences, quiescence tracking, leases |
 | **Unclassified Mutations (Gaps)** | 31 | `extension` (any) | Central page filter only; no route-local gate |
 | **Read-Only / Status / Telemetry** | 88 | `owner-options`, `extension` | Read-only; no state mutation |
-| **Total** | **259** | | |
+| **Total** | **260** | | |
 
 ---
 
@@ -169,7 +169,7 @@ When called by an owner UI document with a valid `documentId`, `isOwnerDirectApp
 | `task.pause` | `routes/scheduler.js` | Pauses a scheduled routine | `task.pause` |
 | `task.resume` | `routes/scheduler.js` | Resumes a paused scheduled routine | `task.resume` |
 | `task.update` | `routes/scheduler.js` | Updates routine schedule configuration | `task.update` |
-| `recipe.delete` | `service-worker.js` | Deletes a custom recipe | `recipe.delete` *(Declared in Set)* |
+| `background-agent.delete` | `service-worker.js` | Deletes a custom skill | `background-agent.delete` *(Declared in Set; born as `recipe.delete`, renamed by l0r)* |
 
 ---
 
@@ -198,11 +198,12 @@ Actions that require an explicit owner approval card with a payload digest befor
 
 ---
 
-### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 22 routes)
+### 4.5 Owner Extension-Fenced Routes (`OWNER_EXTENSION_FENCED` — 23 routes)
 Fenced with `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`). Callable by extension surfaces (hub, side panel, options), but rejected for pages.
 
 | Route Name | Owning Module | Description |
 |---|---|---|
+| `browser.callTool` | `service-worker.js` | Invokes a browser tool (ACP in-app protocol) |
 | `actions.undo` | `service-worker.js` | Undoes a user action recorded in ledger |
 | `notifications.list` | `service-worker.js` | Lists pending extension notifications |
 | `notification.get` | `service-worker.js` | Reads a single notification |
@@ -238,7 +239,7 @@ Triggers or manages interactive runs, background worker processes, and sandboxed
 | `named-agent.delegate` | `service-worker.js` | Delegates from one agent to another |
 | `agent.delegate` | `service-worker.js` | Dispatches a worker subagent |
 | `background-agent.run` | `service-worker.js` | Dispatches background routine |
-| `recipe.run` | `service-worker.js` | Executes a recipe |
+| `skill.run` | `service-worker.js` | Executes a skill *(born as `recipe.run`, renamed by l0r)* |
 | `register-task` | `service-worker.js` | Registers an alarm schedule |
 | `run-task` | `service-worker.js` | Runs scheduled alarm task |
 | `task.retry` | `routes/scheduler.js` | Retries failed scheduled task |
@@ -312,9 +313,9 @@ These routes perform state mutations (modifying storage, memory, agents, threads
 | `skill.delete` | `service-worker.js` (~9370) | Deletes custom skill | Valid id | Mutates master skill registry | Require `isOwnerPrincipal(context)` |
 | `skill.importBatch` | `service-worker.js` (~9400) | Batch imports skills | JSON array parse | Mutates master skill registry | Require `isOwnerPrincipal(context)` |
 | `command.delete` | `service-worker.js` (~7690) | Deletes imported command | Valid id | Mutates imported commands list | Require `isOwnerPrincipal(context)` |
-| `recipe.duplicate` | `service-worker.js` (~9500) | Duplicates recipe to custom | None | Writes new custom recipe | Require `isOwnerPrincipal(context)` |
-| `recipe.update` | `service-worker.js` (~9520) | Updates custom recipe | None | Overwrites custom recipe | Require `isOwnerPrincipal(context)` |
-| `recipe.delete` | `service-worker.js` (~9534) | Deletes custom recipe | None | **Discrepancy:** In `OWNER_DIRECT_ACTIONS`, but never calls `requireOwnerApproval` | Wire `requireOwnerApproval(context, "recipe.delete")` |
+| `background-agent.duplicate` | `service-worker.js` (~9470) | Duplicates skill to custom | None | Writes new custom skill | Require `isOwnerPrincipal(context)` |
+| `background-agent.update` | `service-worker.js` (~9490) | Updates custom skill | None | Overwrites custom skill | Require `isOwnerPrincipal(context)` |
+| `background-agent.delete` | `service-worker.js` (~9505) | Deletes custom skill | None | **Discrepancy:** In `OWNER_DIRECT_ACTIONS`, but never calls `requireOwnerApproval` | Wire `requireOwnerApproval(context, "background-agent.delete")` |
 | `background-agent.set` | `service-worker.js` (~9480) | Enables/disables bg agent | None | Creates/cancels recurring alarms | Require `isOwnerPrincipal(context)` |
 | `prompt.set` | `service-worker.js` (~9600) | Overwrites system prompt | None | Overwrites global/agent prompts | Require `requireSettingsSender(context)` |
 | `prompt.reset` | `service-worker.js` (~9620) | Resets system prompt | None | Resets prompts to default | Require `requireSettingsSender(context)` |
@@ -340,7 +341,7 @@ These routes perform state mutations (modifying storage, memory, agents, threads
 ### 4.10 Read-Only / Status / Telemetry Routes (88 routes)
 These routes perform no state mutations and return status, listings, configuration summaries, or diagnostics.
 
-`actions.list`, `activity.list`, `agent-workspace.usage`, `agent.directory`, `agent.discoverable-tabs`, `agent.get`, `agent.history-view`, `agent.list`, `agent.listAll`, `agent.orchestrator`, `agent.registry`, `agent.tool-offers`, `alarms.permission-granted`, `asset.capacity`, `asset.get`, `asset.list`, `asset.version-get`, `asset.versions`, `background-agent.history`, `background-agent.list`, `browser-control.get`, `cap:fetch`, `capabilities.status`, `capability.request`, `capture.tab`, `command.list`, `diagnostics.list`, `diagnostics.report`, `fs-grant.get`, `fs-grant.grep`, `fs-grant.list`, `fs-grant.list-entries`, `fs-grant.read-file`, `fs-grant.scan`, `fs-grant.search`, `hooks.status`, `invalidate-agent`, `mcp.servers.get`, `mcp.servers.global-redacted`, `memory.origins`, `memory.overview`, `memory.stores`, `named-agent.get`, `named-agent.grep`, `named-agent.history`, `named-agent.list`, `named-agent.delegations`, `observability.clearTrace`, `observability.dumpTrace`, `observability.page-measures`, `observability.setVerbosity`, `prompt.attest`, `prompt.attestRun`, `prompt.describe`, `provider.models`, `provider.permission-summary`, `provider.status`, `provider.summary`, `recipe.custom-list`, `recipe.list`, `run-log.list`, `run.dismissedFailed`, `run.list`, `schedules.list`, `screenshots.get`, `screenshots.list`, `script.get`, `script.list`, `security.state`, `sidepanel.getTarget`, `sidepanel.getTools`, `sidepanel.openPage`, `site-skills.get`, `skill.discover`, `skill.list`, `skills.all`, `skills.get`, `task.list`, `task.nextRun`, `thread.get`, `thread.list`, `tools.allOrigins`, `tools.consent.states`, `tools.policies`, `usage.get`, `webmcp.status`.
+`actions.list`, `activity.list`, `agent-workspace.usage`, `agent.directory`, `agent.discoverable-tabs`, `agent.get`, `agent.history-view`, `agent.list`, `agent.listAll`, `agent.orchestrator`, `agent.registry`, `agent.tool-offers`, `alarms.permission-granted`, `asset.capacity`, `asset.get`, `asset.list`, `asset.version-get`, `asset.versions`, `background-agent.history`, `background-agent.list`, `browser-control.get`, `cap:fetch`, `capabilities.status`, `capability.request`, `capture.tab`, `command.list`, `diagnostics.list`, `diagnostics.report`, `fs-grant.get`, `fs-grant.grep`, `fs-grant.list`, `fs-grant.list-entries`, `fs-grant.read-file`, `fs-grant.scan`, `fs-grant.search`, `hooks.status`, `invalidate-agent`, `mcp.servers.get`, `mcp.servers.global-redacted`, `memory.origins`, `memory.overview`, `memory.stores`, `named-agent.get`, `named-agent.grep`, `named-agent.history`, `named-agent.list`, `named-agent.delegations`, `observability.clearTrace`, `observability.dumpTrace`, `observability.page-measures`, `observability.setVerbosity`, `prompt.attest`, `prompt.attestRun`, `prompt.describe`, `provider.models`, `provider.permission-summary`, `provider.status`, `provider.summary`, `background-agent.custom-list`, `run-log.list`, `run.dismissedFailed`, `run.list`, `schedules.list`, `screenshots.get`, `screenshots.list`, `script.get`, `script.list`, `security.state`, `sidepanel.getTarget`, `sidepanel.getTools`, `sidepanel.openPage`, `site-skills.get`, `skill.discover`, `skill.list`, `skills.all`, `skills.get`, `task.list`, `task.nextRun`, `thread.get`, `thread.list`, `tools.allOrigins`, `tools.consent.states`, `tools.policies`, `usage.get`, `webmcp.status`.
 
 ---
 
@@ -357,10 +358,10 @@ These routes perform no state mutations and return status, listings, configurati
 - **Mechanism:** It relies purely on the Layer 1 sender filter (`PAGE_ALLOWED_ROUTES` excluding content scripts). Inside the extension context, any sender with `principal: "extension"` can overwrite the agent's tool config without triggering `requireOwnerApproval` or requiring `owner-options`.
 - **Remediation Recommendation:** Route should require `isOwnerPrincipal(context)` and invoke `requireOwnerApproval(context, "named-agent.update", slug, { tools })`.
 
-### 5.2 The `recipe.delete` Discrepancy (~9534)
-- **Observed Behavior:** `recipe.delete` is declared in `OWNER_DIRECT_ACTIONS` in `extension/lib/owner-approval.js`.
-- **Actual Code:** The route handler in `service-worker.js` line 9534 does not call `requireOwnerApproval(context, "recipe.delete")`; it doesn't even inspect `context`.
-- **Remediation Recommendation:** Update `service-worker.js` handler for `recipe.delete` to accept `context` and invoke `requireOwnerApproval(context, "recipe.delete", id, {})`.
+### 5.2 The `background-agent.delete` Discrepancy (~9505, born as `recipe.delete`)
+- **Observed Behavior:** `background-agent.delete` is declared in `OWNER_DIRECT_ACTIONS` in `extension/lib/owner-approval.js`.
+- **Actual Code:** The route handler in `service-worker.js` does not call `requireOwnerApproval(context, "background-agent.delete")`; it doesn't even inspect `context`.
+- **Remediation Recommendation:** Update `service-worker.js` handler for `background-agent.delete` to accept `context` and invoke `requireOwnerApproval(context, "background-agent.delete", id, {})`.
 
 ### 5.3 The `named-agent.set-mcp-servers` Approver Policy (Resolved in gcuw)
 - **Observed Behavior:** `named-agent.set-mcp-servers` is in `OWNER_DIRECT_ACTIONS`, but absent from `DESTRUCTIVE_ACTIONS`.

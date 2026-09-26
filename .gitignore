@@ -27,3 +27,4 @@ evidence/
 .beads-credential-key
 .beads/proxieddb/
 .DS_Store
+worktrees/

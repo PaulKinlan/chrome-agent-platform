@@ -14,6 +14,7 @@
 //
 //   deno run -A scripts/kat-notify-icon.ts [<path-to-extension>] [<out-dir>]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
@@ -69,7 +70,7 @@ ws.onmessage = (m: MessageEvent) => {
 };
 const evalIn = async (expr: string, sid: string) => {
   const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sid);
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "k.notify-icon");
 };
 
 let code = 1;

@@ -124,7 +124,7 @@ export function createActivityRoutes({
           reg?.name || reg?.id || id,
         ));
       }
-      // Background/scheduled agents (recipes + hook-driven runs) — the class
+      // Background/scheduled agents (scheduled skills + hook-driven runs) — the class
       // that can number in the HUNDREDS on a real profile, so the cap matters.
       const backgroundIds = await listBackgroundAgentIds().catch(() => []);
       for (const id of backgroundIds.slice(0, ACTIVITY_STORE_CAPS.backgroundAgents)) {

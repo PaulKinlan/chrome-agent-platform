@@ -44,9 +44,19 @@ const ENGINEERING_PREFIX_RE = /^(merge|chore|fix|test|ci|docs)(\([^)]*\))?:/i;
 // fix is a review convention or a second signal, not a guess at the writer's meaning.
 const INTERNAL_MARKER_RE = /^internal:/i;
 const SHA_RE = /\b[0-9a-f]{7,40}\b/i;
-const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice/i;
+// chrome-agent-platform-4zp3: the words that ACTUALLY leaked into a shipped
+// entry ("correct my own capability claim — NO pinned adapter implements
+// client-hosted MCP") are in the alternation now. The phrases that never
+// legitimately appear (fleet-internal architecture shorthand) are banned;
+// \bMCP\b is deliberately absent (five shipped entries use it as product
+// vocabulary — see tests/changelog.test.ts 4zp3 for the measured policy).
+const JARGON_RE = /journey|KAT|assertion|CDP|harness|worktree|lane|tracker|splice|capability claim|pinned adapter|client-hosted/i;
 const GATE_STATE_RE = /\b(RED|GREEN)\b/;
 const WORKFLOW_RE = /\blanded\b|in review|in progress|recorded as|\bclaimed\b/i;
+// First-person engineering prose is the author's voice, never the reader's
+// (chrome-agent-platform-4zp3): the leaked sentence began "correct my own…".
+// \bI\b excludes "I/O" (a real technical term that must stay user-facing).
+const FIRST_PERSON_RE = /\b(?:my|myself|mine|we|our|ours|us)\b|\bI\b(?!\s*\/)/i;
 // The same joiner class scripts/bump-version.mjs strips from a subject (y6z6):
 // a bullet still starting with one, followed by whitespace or nothing, is a leak.
 const LEAKED_JOINER_RE = /^[+&:;,./|—–-]+(?:\s|$)/;
@@ -55,16 +65,39 @@ export function isInternalEntry(text) {
   return INTERNAL_MARKER_RE.test(String(text).trim());
 }
 
-export function isUserFacingEntry(text) {
+// The rejection rules in EXACTLY the order isUserFacingEntry has always
+// applied them — the explain view must never disagree with the boolean.
+const REJECTION_RULES = [
+  { name: "INTERNAL_MARKER_RE", why: "declared internal (leading 'internal:')", re: INTERNAL_MARKER_RE },
+  { name: "LEAKED_JOINER_RE", why: "a leading joiner-punctuation leak", re: LEAKED_JOINER_RE },
+  { name: "ENGINEERING_PREFIX_RE", why: "a conventional commit prefix", re: ENGINEERING_PREFIX_RE },
+  { name: "SHA_RE", why: "a bare git SHA", re: SHA_RE },
+  { name: "JARGON_RE", why: "internal vocabulary (jargon)", re: JARGON_RE },
+  { name: "GATE_STATE_RE", why: "a RED/GREEN gate-state word", re: GATE_STATE_RE },
+  { name: "WORKFLOW_RE", why: "a workflow-status word (landed / in review / in progress / recorded as / claimed)", re: WORKFLOW_RE },
+  { name: "FIRST_PERSON_RE", why: "first-person engineering prose (mark the note 'internal:' instead)", re: FIRST_PERSON_RE },
+];
+
+/**
+ * chrome-agent-platform-smxw: WHY an entry was rejected, not just that it was.
+ * Returns `{ ok: true }` for user-facing copy, or
+ * `{ ok: false, rule, why, token }` naming the FIRST rule that matched and the
+ * exact token it matched (e.g. rule JARGON_RE, token "harness"). The rules and
+ * their order are identical to isUserFacingEntry — same list, same sequence.
+ * @param {unknown} text
+ * @returns {{ ok: true } | { ok: false, rule: string, why: string, token: string }}
+ */
+export function explainUserFacingEntry(text) {
   const line = String(text).trim();
-  if (isInternalEntry(line)) return false;
-  if (LEAKED_JOINER_RE.test(line)) return false;
-  if (ENGINEERING_PREFIX_RE.test(line)) return false;
-  if (SHA_RE.test(line)) return false;
-  if (JARGON_RE.test(line)) return false;
-  if (GATE_STATE_RE.test(line)) return false;
-  if (WORKFLOW_RE.test(line)) return false;
-  return true;
+  for (const rule of REJECTION_RULES) {
+    const m = rule.re.exec(line);
+    if (m) return { ok: false, rule: rule.name, why: rule.why, token: m[0] };
+  }
+  return { ok: true };
+}
+
+export function isUserFacingEntry(text) {
+  return explainUserFacingEntry(text).ok;
 }
 
 /** Parse a CHANGELOG.md body into [{ version, date, bullets }]. */

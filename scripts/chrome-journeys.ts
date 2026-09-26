@@ -44,6 +44,7 @@ import { fileURLToPath } from "node:url";
 import { DEMO_STREAM_ANSWER } from "../extension/lib/models/demo-model.js";
 import { durableDir } from "./lib/durable-root.mjs";
 import { isCdpEvaluateTimeout } from "./lib/quiet-window.ts";
+import { wireValue } from "./lib/cdp-eval.ts";
 import { launchChrome as spawnChrome } from "./lib/chrome-launch.ts";
 import {
   ENVIRONMENTAL_REFUSAL_EXIT,
@@ -343,7 +344,10 @@ async function attachRuntime(cdp, targetId) {
   return session;
 }
 
-/** Runtime.evaluate an expression in a session, returning its value. */
+/** Runtime.evaluate an expression in a session, returning its value.
+ * A page-side throw is an instrument failure and surfaces as EvalSurfaceError
+ * naming this site — never a bare undefined a check can read as a product
+ * answer (kwrx / 0aeh). */
 async function evalIn(cdp, session, expression) {
   const r = await withTimeout(
     cdp.send(
@@ -354,7 +358,7 @@ async function evalIn(cdp, session, expression) {
     15000,
     "evalIn",
   );
-  return r?.result?.result?.value;
+  return wireValue<any>(r, "jny.evalIn");
 }
 
 /** EVERY piece of text the thread can show the owner — light DOM AND every
@@ -942,9 +946,9 @@ const EXPECTED = [
   "skills: a named agent with the large skill reads its body mid-run via skill_read",
   "hub: @demo-skill-read drives search → execute → a body-excerpt final (large skill)",
   "skill sync: retained the /skill popup screenshot",
-  "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
-  "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
-  "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+  "skill sync: an imported skill appears in /skill AND Settings — one catalog (skill.list)",
+  "skill sync: the background Sorting Hat is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+  "skill sync: skill.list returns the IDENTICAL set on both reads (one route, no drift fork)",
   "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
   "skill sync: a colliding import lands in the imported store under the built-in's id",
   "skill sync: the colliding imported skill is offered as imported:<id>, and NO background recipe row is offered",
@@ -1380,7 +1384,7 @@ async function main() {
         15000,
         `msgOpts ${payload.type}`,
       );
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.msgOpts");
       if (inner && typeof inner === "object" && "v" in inner) return inner.v;
       if (inner && typeof inner === "object" && "err" in inner) return inner.err;
       return inner;
@@ -1388,7 +1392,7 @@ async function main() {
 
     const msgValue = async (payload) => {
       const r = await withTimeout(sendMsg(payload), 15000, `msg ${payload.type}`);
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.msgValue");
       if (inner && typeof inner === "object" && "v" in inner) return inner.v;
       if (inner && typeof inner === "object" && "err" in inner) return inner.err;
       return inner;
@@ -2678,7 +2682,7 @@ async function main() {
       },
       swSession,
     );
-    const seededFolder = seedFolder?.result?.result?.value;
+    const seededFolder = wireValue<any>(seedFolder, "jny.seed-folder");
     check("folder command: a granted folder was seeded in the SW store", seededFolder?.ok === true);
     // Type /folder: into the composer (the hub input is empty after the Run).
     await evalIn(cdp, ntpSession, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
@@ -7126,7 +7130,7 @@ async function main() {
             expression: "document.documentElement.lang",
             returnByValue: true, contextId: world?.result?.executionContextId,
           }, frameSession);
-          srcdocLang = r?.result?.result?.value ?? null;
+          srcdocLang = wireValue<any>(r, "jny.srcdoc-lang") ?? null;
         } catch (e) {
           console.log(`[debug] srcdoc realm read failed: ${String(e?.message ?? e)}`);
         }
@@ -7244,7 +7248,7 @@ async function main() {
         15000,
         "iframe approval deny",
       );
-      iframeDeny = denied?.result?.result?.value === true;
+      iframeDeny = wireValue<any>(denied, "jny.iframe-deny") === true;
     }
     await sleep(250);
     const iframeAfter = await msgValue({ type: "asset.get", origin: "master", id: assetId });
@@ -7819,12 +7823,14 @@ async function main() {
     const bigSkillAfter = (bigListAfter?.skills ?? []).find((s: { id?: string }) => s?.id === "big-fixture-skill");
 
     // CAP-FB-20260831-SKILL-LIST-SYNC-01: /skill and Settings must be tallied
-    // from the SAME data source. Both routes return the single catalog — the
-    // imported skill is in BOTH, the background Sorting Hat recipe
-    // (auto-group-by-domain) is in NEITHER (it is a scheduled agent, surfaced
-    // via background-agent.list, never an on-demand /skill invocation).
-    const recipeList = await msgOpts({ type: "recipe.list" });
-    const recipeSkills = Array.isArray(recipeList?.recipes) ? recipeList.recipes : [];
+    // from the SAME data source. Since l0r there is ONE catalog route
+    // (skill.list — the recipe.list fork is retired), and the Settings panel
+    // rendering from that route is pinned by tests/skills-in-settings.test.ts.
+    // The imported skill is in the catalog; the background Sorting Hat skill
+    // (auto-group-by-domain) is NOT (it is a scheduled agent, surfaced via
+    // background-agent.list, never an on-demand /skill invocation).
+    const settingsList = await msgOpts({ type: "skill.list" });
+    const settingsSkills = Array.isArray(settingsList?.skills) ? settingsList.skills : [];
     // Evidence pair (CAP-FB-20260831-SKILL-LIST-SYNC-01): Settings → Skills
     // (captured as skills-import-large.png above) and the /skill popup must
     // list the SAME set. Open a FRESH hub page (the established refresh
@@ -7848,21 +7854,21 @@ async function main() {
     }
     check("skill sync: retained the /skill popup screenshot", skillPopupShot !== null && skillPopupShot.length > 200);
     const bigInBoth = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill")
-      && recipeSkills.some((s: { id?: string }) => s?.id === "big-fixture-skill");
+      && settingsSkills.some((s: { id?: string }) => s?.id === "big-fixture-skill");
     check(
-      "skill sync: an imported skill appears in /skill (skill.list) AND Settings (recipe.list) — same catalog",
+      "skill sync: an imported skill appears in /skill AND Settings — one catalog (skill.list)",
       bigInBoth,
     );
     const sortingHatInSkill = (bigListAfter?.skills ?? []).some((s: { id?: string }) => s?.id === "auto-group-by-domain");
-    const sortingHatInSettings = recipeSkills.some((s: { id?: string }) => s?.id === "auto-group-by-domain");
+    const sortingHatInSettings = settingsSkills.some((s: { id?: string }) => s?.id === "auto-group-by-domain");
     check(
-      "skill sync: the background Sorting Hat recipe is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
+      "skill sync: the background Sorting Hat is in NEITHER surface (it is a scheduled agent, not an on-demand skill)",
       !sortingHatInSkill && !sortingHatInSettings,
     );
     const skillSetSkill = (bigListAfter?.skills ?? []).map((s: { id?: string }) => s?.id).sort().join(",");
-    const skillSetSettings = recipeSkills.map((s: { id?: string }) => s?.id).sort().join(",");
+    const skillSetSettings = settingsSkills.map((s: { id?: string }) => s?.id).sort().join(",");
     check(
-      "skill sync: skill.list and recipe.list return the IDENTICAL set (single source of truth)",
+      "skill sync: skill.list returns the IDENTICAL set on both reads (one route, no drift fork)",
       skillSetSkill === skillSetSettings,
     );
     if (bigSkillAfter?.id) {
@@ -7870,8 +7876,8 @@ async function main() {
     }
     const listAfterDelete = await msgOpts({ type: "skill.list" });
     const goneFromSkill = !(listAfterDelete?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
-    const settingsAfterDelete = await msgOpts({ type: "recipe.list" });
-    const goneFromSettings = !(settingsAfterDelete?.recipes ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
+    const settingsAfterDelete = await msgOpts({ type: "skill.list" });
+    const goneFromSettings = !(settingsAfterDelete?.skills ?? []).some((s: { id?: string }) => s?.id === "big-fixture-skill");
     check(
       "skill sync: deleting a skill removes it from BOTH surfaces instantly (one store write)",
       goneFromSkill && goneFromSettings,
@@ -8610,7 +8616,7 @@ async function demoPathJourney() {
         15000,
         `demo-path msg ${payload.type}`,
       );
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.demo-msg");
       return inner && typeof inner === "object" && "v" in inner ? inner.v : inner?.err ?? inner;
     };
 
@@ -8961,7 +8967,7 @@ async function factoryResetJourney() {
         payload.type === "agent.run" ? 120000 : 15000,
         `factory-reset msg ${payload.type}`,
       );
-      const inner = r?.result?.result?.value;
+      const inner = wireValue<any>(r, "jny.factory-reset-msg");
       return inner && typeof inner === "object" && "v" in inner ? inner.v : inner?.err ?? inner;
     };
 

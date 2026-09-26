@@ -11,6 +11,7 @@
 //
 // Defaults to the in-repo extension dir.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -56,7 +57,7 @@ const extId = new URL(sw.url).host;
 const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
 const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
 await send("Runtime.enable", {}, sessionId);
-const ev = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)).result?.result?.value;
+const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId), "k.back-stack");
 await sleep(3000);
 
 // Open each view, press Back once, assert the overlay is hidden.

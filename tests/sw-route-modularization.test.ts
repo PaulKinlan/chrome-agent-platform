@@ -258,7 +258,6 @@ const BASELINE_ROUTES = [
   "browser.destructive-action",
   "task.schedule-script",
   "schedules.list",
-  "recipe.list",
   "skill.list",
   "skill.import",
   "skill.delete",
@@ -270,13 +269,13 @@ const BASELINE_ROUTES = [
   // (set is Settings-sender-only; get is read-back for surfaces).
   "site-skills.set",
   "site-skills.get",
-  "recipe.run",
+  "skill.run",
   "background-agent.list",
   "background-agent.set",
-  "recipe.custom-list",
-  "recipe.duplicate",
-  "recipe.update",
-  "recipe.delete",
+  "background-agent.custom-list",
+  "background-agent.duplicate",
+  "background-agent.update",
+  "background-agent.delete",
   "prompt.describe",
   "prompt.set",
   "prompt.reset",
@@ -322,6 +321,7 @@ const BASELINE_ROUTES = [
   "diagnostics.report",
   "security.state",
   "security.clear",
+  "browser.callTool",
 ];
 
 Deno.test("sw routes: mergeRouteMaps combines maps and detects collisions", () => {

@@ -1841,7 +1841,9 @@ class AttachButton extends Component {
 }
 customElements.define("attach-button", AttachButton);
 
-/* <theme-picker theme="sunlit"> — the theme swatches */
+/* <theme-picker theme="sunlit"> — the theme swatches.
+ * Gallery-only by owner decision (REVIEW-2026-08-30 §9 “Retain for future use … No component
+ * is deleted”): this is not dead code to delete — re-verify that decision before removing it. */
 export const THEMES = [
   { id: "midnight", label: "Midnight" },
   { id: "sunlit", label: "Sunlit" },
@@ -2796,7 +2798,7 @@ class WebmcpConsentManager extends Component {
 customElements.define("webmcp-consent-manager", WebmcpConsentManager);
 
 /* <capability-row name description icon action="run|open|open-delete|use|state" action-state="on" detail detail-label last-run>
- * The reusable capability/recipe row. A strict grid — icon (fixed) | label
+ * The reusable capability/skill row. A strict grid — icon (fixed) | label
  * column (name + description STACKED, never run together) | action
  * (right-aligned) — so every capability list is aligned by construction.
  *
@@ -4147,9 +4149,20 @@ class SegmentedControl extends Component {
     }
   }
   _focusSelected() {
+    // chrome-agent-platform-ypz0: reveal is component-owned — _select() calls
+    // _scrollSelectedIntoView() right after this with "nearest" minimal
+    // alignment. A bare focus() let Chrome's native focus scroll do (and hide)
+    // that work: it dragged the PAGE on emulated mobile (measured 2026-09-22,
+    // sy 0 -> ~493) and made the keyboard-reveal KAT check non-discriminating
+    // — it passed on trees with the component reveal removed (and again on
+    // 2026-09-25 when a git-checkout cleanup silently reverted this very line
+    // before the first commit — reviewer e1m0 caught it; the mutation below
+    // only goes RED with this line present). preventScroll keeps focus where
+    // the component's own scroll can see it; same convention as the
+    // drawer/hunk focus in this file.
     const value = this.value;
     for (const b of this._root?.querySelectorAll?.('[role="tab"]') ?? []) {
-      if (b.dataset.val === value) { b.focus?.(); break; }
+      if (b.dataset.val === value) { b.focus?.({ preventScroll: true }); break; }
     }
   }
 }

@@ -125,7 +125,11 @@ const ALLOWED_FILES = new Set([
   // Ephemeral Chrome profiles / per-run artifact dirs owned by acceptance and
   // KAT runners — script-lived scratch, never retained evidence (each file's
   // RETAINED evidence dir is durableDir-routed).
-  "scripts/a11y-audit.ts",
+  // tuw7: the a11y audit was REMOVED from this allowance — it used to make an uncleaned temporary
+  // profile (thirteen directories, 71 MB of residue). It now uses the house profile API under the
+  // durable root and removes it in its own teardown, so this guard catches a regression here rather
+  // than permitting it. (Writing that sentence with the old path literal tripped this very guard,
+  // which is the behaviour we want from a text scan.)
   "scripts/agent-directory-ui.ts",
   "scripts/agent-provider-picker.ts",
   "scripts/agent-role-preview.ts",
@@ -178,15 +182,16 @@ const ALLOWED_FILES = new Set([
   "tests/emscripten-abi-loaded-harness.test.ts",
   "tests/evidence-durable.test.ts",
   "tests/kat-bistro-caller.test.ts",
-  "tests/kat-bistro-finalizer.test.ts",
-  "tests/kat-finalizer-guards.test.ts",
-  "tests/kat-finalizer-log-residue.test.ts",
+  "tests/kat-finalizer.test.ts",
   "tests/machine-path-honesty.test.ts",
   "tests/named-agents-provider.test.ts",
   "tests/package-extension-freshness-driver.mjs",
   "tests/perf-spans.test.ts",
   "tests/permission-orchestration.test.ts",
   "tests/permission-variant.test.ts",
+  // 8nec: a scratch git repository for the post-commit hook, under tmpdir() and
+  // removed in the same test — a fixture, not retained evidence.
+  "tests/post-commit-hook.test.ts",
   "tests/provider-gate.test.ts",
   "tests/quiet-window.test.ts",
   "tests/scan-shipped.test.ts",

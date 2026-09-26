@@ -134,7 +134,7 @@ export function perfSummary() {
   return out;
 }
 
-/** Console-table the summary (verbose only) — the owner's "where did 10s go". */
+/** Log the measured stages (verbose only — debug level) — the owner's "where did 10s go". */
 export function perfReport() {
   const summary = perfSummary();
   if (summary.measures.length === 0) {
@@ -142,9 +142,8 @@ export function perfReport() {
     return summary;
   }
   log.info(`${summary.measures.length} measured stages${summary.truncated ? ` (${summary.truncated} truncated)` : ""}`);
-  if (log.verbose) {
-    try { console.table(summary.measures); } catch { /* noop */ }
-  }
+  // debug is verbose-gated inside capLog; the ring keeps the rows either way.
+  log.debug("measures", summary.measures);
   return summary;
 }
 

@@ -11,6 +11,7 @@ import { canonicalOrigin, masterMemory, saveScreenshot } from "./memory.js";
 import { kvGet, kvRemove, kvSet } from "./kv.js";
 import { assertRunOwned } from "./run-fence.js";
 import { currentRunContext } from "./run-context.js";
+import { createSplitAware } from "./split-view.js";
 import {
   listFsGrants,
   getFsGrant,
@@ -2194,6 +2195,144 @@ async function resolveFsTarget(grantId) {
   return g; // grant_not_found / fs_permission_lapsed / grant_ambiguous / other
 }
 
+/**
+ * Run a browser tool BY NAME for a caller outside the model loop — the ACP harness (2amt).
+ *
+ * The tool signatures the harness is told about and the tools that exist here are the same list:
+ * `BROWSER_TOOL_DECLARATIONS` in scripts/acp-bridge.ts is checked against browserToolset()'s keys by
+ * tests/browser-tool-proxy.test.ts, so the declaration cannot drift from the implementation.
+ *
+ * The GRANTS ARE INSIDE THE TOOLS and stay inside them: this dispatcher adds no authority, so a
+ * harness call is refused exactly where a model call would be refused (permissions + the
+ * browser-control grant, per tool). That is the property that makes proxying safe to expose.
+ *
+ * Unknown tool and invalid arguments return `{ error }` rather than throwing, because a harness sees
+ * a JSON result and a thrown exception would arrive as a protocol error with no way to correct it.
+ */
+/**
+ * Every browser tool a harness may execute — DERIVED from the toolset, never a
+ * hand-kept list (chrome-agent-platform-wfo5, Paul's directive: "there is a lot
+ * of browser functionality that should be enabled and available to claude code
+ * and other harnesses to call").
+ *
+ * Derived rather than enumerated because a hand-kept copy is a list that drifts:
+ * the previous three-name set silently excluded 132 implemented tools, and a
+ * retyped 135-name set would go stale the first time a tool is added. Computed
+ * with `developerFeatures: true` so the developer-only cookie tools are in the
+ * permitted set as well — the BUILD still decides whether they exist, because
+ * `browserToolset()` simply omits them when the flag is off and the lookup below
+ * then reports "unknown browser tool".
+ *
+ * PERMISSION IS NOT AUTHORITY. Every grant, permission check and owner-approval
+ * card lives INSIDE each tool and stays there; this set only says "the harness
+ * may attempt it". A harness call is refused exactly where a model call would be.
+ *
+ * LAZY, and that is not a style choice: computing this at module scope throws
+ * `ReferenceError: Cannot access 'PRIVACY_SETTING_NAMES' before initialization`,
+ * because `browserToolset()` closes over consts declared further down the file.
+ * Measured, not assumed — the eager version failed on import. Cached after the
+ * first call, so the cost is paid once.
+ */
+let permittedBrowserToolsCache = null;
+export function harnessPermittedBrowserTools() {
+  if (permittedBrowserToolsCache === null) {
+    permittedBrowserToolsCache = new Set(Object.keys(browserToolset(false, { developerFeatures: true })));
+  }
+  return permittedBrowserToolsCache;
+}
+
+/**
+ * The tools whose execution needs a route-bound approval gate, mirroring
+ * GATED_WORKER_TOOLS in the service worker.
+ *
+ * WHY THIS EXISTS (wfo5, measured): `runBrowserToolCall` used to call
+ * `browserToolset()` with NO gate arguments. That is harmless for three
+ * read-ish tools, and unsafe the moment the permitted set is widened —
+ * `requireDestructiveApproval` returns `{ ok: true }` when
+ * `destructiveActionGate` is null, so close_tab, close_window, remove_bookmark,
+ * wipe_browsing_data, set_cookie and remove_cookie would have executed with NO
+ * owner card. (get_cookie's value read, write_file and schedule_task already
+ * fail closed on their own when their gate is missing; these six did not.)
+ *
+ * So the dispatcher now takes the gates from its caller. The service worker
+ * binds them to `dispatchRoute(..., context)` exactly as executeWorkerTool does,
+ * and a call with no gates FAILS CLOSED for these names rather than quietly
+ * skipping the approval card.
+ */
+export const HARNESS_GATED_BROWSER_TOOLS = new Set([
+  "schedule_task",
+  "get_cookie",
+  "close_tab",
+  "close_window",
+  "wipe_browsing_data",
+  "remove_bookmark",
+  "set_cookie",
+  "remove_cookie",
+  "write_file",
+]);
+
+/**
+ * @param {string} name
+ * @param {Record<string, unknown>} [args]
+ * @param {{
+ *   scheduleScriptGate?: ((scriptId: string) => unknown) | null,
+ *   cookieValueGate?: ((payload: unknown) => unknown) | null,
+ *   destructiveActionGate?: ((action: string, payload: unknown) => unknown) | null,
+ *   fileWriteGate?: ((payload: unknown) => unknown) | null,
+ *   developerFeatures?: boolean,
+ * } | null} [gates] The caller's approval channel. Required for every name in
+ *   HARNESS_GATED_BROWSER_TOOLS; omitted, those names fail closed.
+ */
+export async function runBrowserToolCall(name, args = {}, gates = null) {
+  const permitted = harnessPermittedBrowserTools();
+  if (typeof name !== "string" || name.length === 0) {
+    return { error: "browser/call_tool needs a tool name", available: [...permitted].sort() };
+  }
+  if (!permitted.has(name)) {
+    return { error: `tool "${name}" is not permitted for harness execution`, available: [...permitted].sort() };
+  }
+  const gated = HARNESS_GATED_BROWSER_TOOLS.has(name);
+  // FAIL CLOSED: a tool that owes the owner an approval card must not run on a
+  // path that cannot raise one. Never "execute anyway" — that is precisely the
+  // hole widening the permitted set would otherwise open.
+  if (gated && (!gates || typeof gates !== "object")) {
+    return {
+      error: `tool "${name}" needs owner approval, which this caller cannot request`,
+      available: [...permitted].sort(),
+    };
+  }
+  const tools = gated
+    ? browserToolset(false, {
+      scheduleScriptGate: gates.scheduleScriptGate ?? null,
+      cookieValueGate: gates.cookieValueGate ?? null,
+      destructiveActionGate: gates.destructiveActionGate ?? null,
+      fileWriteGate: gates.fileWriteGate ?? null,
+      developerFeatures: gates.developerFeatures === true,
+    })
+    : browserToolset(false, { developerFeatures: gates?.developerFeatures === true });
+  const tool = tools[name];
+  if (!tool) {
+    // Reached for a developer-only tool on a default build: it is PERMITTED but
+    // does not exist here, which is the build's decision, not this set's.
+    return { error: `unknown browser tool: ${name}`, available: [...permitted].sort() };
+  }
+  let parsed = args;
+  if (tool.inputSchema && typeof tool.inputSchema.safeParse === "function") {
+    const outcome = tool.inputSchema.safeParse(args ?? {});
+    if (!outcome.success) {
+      // The zod message is the useful part for a caller; `available` is not repeated here because the
+      // name was fine and the arguments were not.
+      return { error: `invalid arguments for ${name}`, details: outcome.error?.issues ?? String(outcome.error) };
+    }
+    parsed = outcome.data;
+  }
+  try {
+    return await tool.execute(parsed);
+  } catch (error) {
+    return { error: `${name} failed: ${String((error && error.message) || error)}` };
+  }
+}
+
 export function browserToolset(readOnly = false, {
   scheduleScriptGate = null,
   cookieValueGate = null,
@@ -2422,9 +2561,13 @@ export function browserToolset(readOnly = false, {
         "Open a URL in a new browser tab. Requires browser-control permission (scoped + expiring). " +
         "Pass keep:true when this tab IS the task's result and you intend it to stay open for the user " +
         "(a default-off run-end auto-close then leaves it alone). " +
+        "Pass split:true to open it SIDE-BY-SIDE with the user's active tab via the Tabs Split View API " +
+        "(Chrome 155+) — the right choice when the owner should watch the page you are opening for a " +
+        "Web MCP tool call or context reading. Falls back to a plain tab (with splitFallbackReason set) " +
+        "on Chrome <155, headless environments, or unpairable tabs; the page opens either way. " +
         cleanupGuidanceFor("open_tab"),
-      inputSchema: z.object({ url: z.string().url(), keep: z.boolean().optional() }),
-      execute: async ({ url, keep }) => {
+      inputSchema: z.object({ url: z.string().url(), keep: z.boolean().optional(), split: z.boolean().optional() }),
+      execute: async ({ url, keep, split }) => {
         // Scheme guard FIRST: a chrome:/file:/about:/data: destination can
         // never be authorized, so it is refused before any permission check.
         const dest = webDestination(url);
@@ -2449,7 +2592,24 @@ export function browserToolset(readOnly = false, {
           } catch {
             return { error: "run aborted — tab not opened" };
           }
-          const tab = await chrome.tabs.create({ url });
+          // chrome-agent-platform-gin2: split:true asks for the Tabs Split View
+          // API (Chrome 155+) — the new tab opens SIDE-BY-SIDE with the user's
+          // active tab instead of a background tab, so an owner can watch the
+          // page the agent is working on. Every unsupported/refused pairing
+          // falls back to a plain create; the reason travels to the model.
+          let tab;
+          let splitInfo = {};
+          if (split === true) {
+            const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+            const alongside = (activeTabs ?? []).find((t) => typeof t?.id === "number");
+            const r = await createSplitAware({ url, alongsideTabId: alongside?.id });
+            tab = r.tab;
+            splitInfo = r.split
+              ? { splitView: true }
+              : { splitView: false, ...(r.reason ? { splitFallbackReason: r.reason } : {}) };
+          } else {
+            tab = await chrome.tabs.create({ url });
+          }
           // Re-check the fence AFTER the await, before returning success: an
           // abort/ownership loss during tabs.create must NOT report a committed
           // open. Compensate (close the just-opened tab) + return aborted (the
@@ -2466,7 +2626,7 @@ export function browserToolset(readOnly = false, {
           // the Act class (no destructive card); a tab the run did NOT open is
           // Destructive (CAP-FB-20260830-DESTRUCTIVE-ACTION-POLICY-01).
           if (typeof tab?.id === "number") openedTabIds.add(tab.id);
-          return { ok: true, tabId: tab.id, url, ...(keep === true ? { keep: true } : {}) };
+          return { ok: true, tabId: tab.id, url, ...splitInfo, ...(keep === true ? { keep: true } : {}) };
         });
       },
     }),

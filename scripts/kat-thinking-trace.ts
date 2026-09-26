@@ -6,6 +6,7 @@
 // answer's first token lands, and vanish at settle. A plain task shows no
 // trace at all. Evidence screenshots land in test-artifacts/.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -45,7 +46,7 @@ const send = (method: string, params: any = {}, sessionId?: string) => new Promi
 });
 const ev = async (sessionId: string, expression: string) => {
   const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sessionId);
-  return r.result?.result?.value;
+  return wireValue<any>(r, "k.thinking-trace");
 };
 
 async function shot(sessionId: string, name: string) {

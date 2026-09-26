@@ -20,6 +20,7 @@
 //
 // Uses the mandated launchChrome() (kernel-assigned debug port from stderr).
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { startMcpTestServer } from "./mcp-test-server.ts";
@@ -69,7 +70,7 @@ async function evalIn(cdp: Cdp, session: string, expression: string) {
   if (r.result?.exceptionDetails) {
     throw new Error(`eval threw: ${JSON.stringify(r.result.exceptionDetails).slice(0, 600)}`);
   }
-  return r.result?.result?.value;
+  return wireValue<any>(r, "k.mcp-agent-ui");
 }
 
 async function shot(cdp: Cdp, session: string, file: string) {

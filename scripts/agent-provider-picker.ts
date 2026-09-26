@@ -16,6 +16,7 @@
 import { fileURLToPath } from "node:url";
 import { ensureDir } from "https://deno.land/std@0.224.0/fs/ensure_dir.ts";
 import { launchChrome } from "./lib/chrome-launch.ts";
+import { wireValue } from "./lib/cdp-eval.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -778,7 +779,9 @@ async function evalIn(sid, expr) {
   // Bounded step label carries the expression context into every diagnostic.
   const label = `eval#${__evalStep} ${String(expr).replace(/\s+/g, " ").slice(0, 60)}`;
   const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sid, label);
-  return r?.result?.result?.value;
+  // kwrx/0aeh: a page-side throw is an instrument failure — surfaced named (the
+  // step label doubles as the site), never a bare undefined read as a product answer.
+  return wireValue<any>(r, label);
 }
 
 /** A GENUINE CDP click (Input.dispatchMouseEvent) at an element's center —

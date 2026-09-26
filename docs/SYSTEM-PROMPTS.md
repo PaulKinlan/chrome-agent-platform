@@ -26,8 +26,8 @@ run context) is proven per run by the **run-bound attestation** (below).
    skills are untrusted content — their composed body and their marker
    metadata are wrapped in the run's untrusted boundary (5.6), exactly like
    `read_page` text, so the model treats them as data to judge, never as
-   instructions to obey. OWNER-AUTHORED content (built-in recipes and custom
-   recipes created in Settings) stays UNFENCED: the owner explicitly created
+   instructions to obey. OWNER-AUTHORED content (built-in and custom
+   skills created in Settings) stays UNFENCED: the owner explicitly created
    or attached it, and the protected-last invariant (layer 6) still keeps the
    runtime policy structurally final. The `skill_read` tool's returned bodies
    are tagged untrusted too, so on-demand reads carry the same boundary.
@@ -106,7 +106,7 @@ again.
 ## Scopes
 
 - `hub` — the hub agent; also the scope for background, scheduled, hook
-  (scoped), and recipe runs.
+  (scoped), and scheduled skill runs.
 - `worker` — every enrolled site's sub-agent (per-origin skills compose at
   run time — see the context-aware preview note below).
 - `agent:<slug>` — a named agent. The scope chain is `[agent:<slug>, hub]`:

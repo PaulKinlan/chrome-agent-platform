@@ -1,5 +1,6 @@
 // Browser KAT: /tabs lists real tabs from every Chrome window and attaches one.
 // deno run -A scripts/kat-composer-slash-commands.ts [extension-dir] [evidence-dir]
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -66,7 +67,7 @@ try {
     if (response?.result?.exceptionDetails) {
       throw new Error(response.result.exceptionDetails.text);
     }
-    return response?.result?.result?.value;
+    return wireValue<any>(response, "k.composer-slash-commands");
   };
 
   const worker = await waitForServiceWorker(send, {

@@ -92,6 +92,8 @@ function procScanBudget(): { entries: number; ms: number } {
 export interface LoadSample {
   /** Epoch ms. */
   at: number;
+  /** True when the first /proc walk truncated and the bounded retry produced this sample (r2ai). */
+  retriedAfterTruncation?: boolean;
   load1: number;
   load5: number;
   load15: number;
@@ -277,7 +279,33 @@ function describe(sample: LoadSample | null, spec: ResolvedSpec): string {
 
 /** Read one sample. Never throws: an unreadable /proc becomes
  *  `measurable: false`, which fails closed downstream. */
+/**
+ * A load sample, with ONE BOUNDED RETRY when the /proc walk truncates (chrome-agent-platform-r2ai).
+ *
+ * The refusal exists so a PARTIAL count is never read as a quiet verdict (1io9), and that stays: if
+ * the retry truncates too, the sample is unmeasurable and the caller must treat it as such. What the
+ * retry fixes is the other direction — a truncated walk is not a property of the box when the SUITE'S
+ * OWN parallel phase trips a 400 ms budget (measured repeatedly: "proc scan truncated after 796
+ * entries in 406 ms"), and refusing on that turns a timing artifact into a red in tests that assume a
+ * measurable box (`2bli`, `r2ai`). The retry gets 4x the budget and is still bounded, so a box that
+ * genuinely cannot be sampled still refuses — with both attempts named in the evidence.
+ */
 export async function readLoadSample(prev?: ProcCpuMap | null): Promise<LoadSample> {
+  const budget = procScanBudget();
+  const first = await readLoadSampleOnce(prev, budget);
+  if (first.measurable !== false || typeof first.error !== "string" || !first.error.includes("truncated")) return first;
+  const retry = { entries: budget.entries * 4, ms: budget.ms * 4 };
+  const second = await readLoadSampleOnce(prev, retry);
+  if (second.measurable === false) {
+    return {
+      ...second,
+      error: `${second.error} — and a retry with ${retry.entries} entries / ${retry.ms} ms truncated too, so this box could not be sampled at either budget`,
+    };
+  }
+  return { ...second, retriedAfterTruncation: true };
+}
+
+async function readLoadSampleOnce(prev: ProcCpuMap | null | undefined, budget: { entries: number; ms: number }): Promise<LoadSample> {
   const at = Date.now();
   const cores = Math.max(1, navigator.hardwareConcurrency || 1);
   let load1 = NaN, load5 = NaN, load15 = NaN;
@@ -316,7 +344,6 @@ export async function readLoadSample(prev?: ProcCpuMap | null): Promise<LoadSamp
     // assumed quiet one).
     let truncated = false;
     const startedAt = Date.now();
-    const budget = procScanBudget();
     for await (const entry of Deno.readDir("/proc")) {
       if (seen >= budget.entries || Date.now() - startedAt > budget.ms) {
         truncated = true;

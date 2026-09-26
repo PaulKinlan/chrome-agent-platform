@@ -52,8 +52,9 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 export const RETAINED = {
 
   // ── owner directives (TASKS.md CAP-FB-20260830-DEAD-CODE-CUT-01 Acceptance, 2026-08-30) ──
-  "lib/agent-cards.js":
-    "Owner directive 2026-08-30: adopted by CAP-FB-20260830-AGENT-SHARING-01; tests/agent-cards.test.ts pins it.",
+  // (lib/agent-cards.js was RETAINED here per the same directive; pu7n wired it
+  // into ntp.js — Share/Import agent — so it is REACHED from an entry point now
+  // and the RETAINED line is gone. tests/agent-cards.test.ts still pins it.)
   "lib/bundled-tool-packages.js":
     "Owner directive 2026-08-30: the WASI bundled-package inventory API must not change; tests/bundled-tool-packages.test.ts pins it (the service worker reads the generated *.data.js modules directly).",
   "lib/bundled-inventory.js":
@@ -74,7 +75,7 @@ export const RETAINED = {
   "lib/opfs-tool-workspace.js":
     "Only tests/opfs-tool-workspace.test.ts imports it.",
   "lib/profile-store.js":
-    "Only tests/profile-store.test.ts imports it.",
+    "Layer 1 of the form-filler direction: the shipped form-filler skill (skill-registry, Data Wrangler and three other templates) fills fields 'from the user's stored profile in memory' — this schema-validated, grant-gated, audited store is that profile substrate (chrome-agent-platform-xtwv: retained, not orphaned).",
   "lib/tar-stream.js":
     "Streaming regular-file TAR/PAX encoder (11rm.1): options/settings export will import it once staging and barrier integration exist; tests/tar-stream.test.ts imports it.",
   "lib/preference-bridge.js":

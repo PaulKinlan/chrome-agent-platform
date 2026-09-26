@@ -18,6 +18,10 @@
 
 import { safeProviderError } from "./pure.js";
 
+import { capLog } from "./cap-log.js";
+
+const catalogLog = capLog("model-catalog");
+
 export const MODEL_CATALOG = Object.freeze({
   openai: {
     default: "gpt-5.6-luna",
@@ -186,8 +190,7 @@ export async function fetchLiveModels(providerId, { baseURL, apiKey, signal } = 
       .filter((id) => !NON_CHAT.test(id));
     return [...new Set(ids)].sort(newestFirst);
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn(`[model-catalog] live model list unavailable: ${safeProviderError(String(e?.message ?? e), key ? [key] : [])}`);
+    catalogLog.warn(`live model list unavailable: ${safeProviderError(String(e?.message ?? e), key ? [key] : [])}`);
     return [];
   } finally {
     clearTimeout(timer);

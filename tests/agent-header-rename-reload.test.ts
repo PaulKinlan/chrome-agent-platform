@@ -34,10 +34,18 @@ Deno.test("7zf0 source pin: ntp.js updates threadTitle and history.state on rena
     "openAgentSurface must update history.state with the new name when hash is already set",
   );
 
-  // 2. openAgentSurface named-agent.list callback must update threadTitle.textContent if a.name changed
+  // 2. openAgentSurface named-agent.list callback must correct EITHER surface
+  //    that disagrees with the live registry row (the header or history.state —
+  //    q0yg: a title that already agrees must not leave a stale name in history),
+  //    and the post-history assignment must prefer the list-resolved name over
+  //    the caller's (the measured stale-mention clobber).
   assert(
-    /if \(a\.name && threadTitle\.textContent !== a\.name\) \{\s*threadTitle\.textContent = a\.name;/.test(ntpJs),
-    "openAgentSurface named-agent.list callback must update threadTitle.textContent when a.name differs",
+    /if \(a\.name && \(threadTitle\.textContent !== a\.name \|\| window\.history\?\.state\?\.name !== a\.name\)\)\s*\{\s*threadTitle\.textContent = a\.name;/.test(ntpJs),
+    "openAgentSurface named-agent.list callback must correct the header or history.state when a.name differs",
+  );
+  assert(
+    /threadTitle\.textContent = listResolvedName \|\| name \|\| "Agent";/.test(ntpJs),
+    "the post-history title assignment must prefer the list-resolved name over the caller's",
   );
 
   // 3. applyCurrentHashRoute for named agents must call openAgentChat rather than blindly trusting stale meta.name
@@ -173,6 +181,140 @@ Deno.test({
       // Fix assertion: header and history.state must reflect the renamed name, never the stale original name
       assertEquals(titleAfter, "ZZZ Renamed Name", "Thread header must show updated name after reload");
       assertEquals(stateAfter, "ZZZ Renamed Name", "History state must be updated to fresh name");
+    } finally {
+      ws.close();
+      try { launched.proc.kill("SIGKILL"); } catch { /* gone */ }
+      try { await launched.proc.status; } catch { /* reaped */ }
+    }
+  },
+});
+
+Deno.test({
+  name: "q0yg: a stale mention name cannot leave the header and history.state disagreeing after openAgentSurface",
+  ignore: CHROME_FOR_TESTING === null,
+  fn: async () => {
+    // The measured defect (chrome-agent-platform-q0yg, 2026-09-25): a mention
+    // chip captures the agent's name at PICK time; a rename landing between
+    // pick and send makes openAgentSurface navigate with a STALE caller name.
+    // The named-agent.list reply (read later, therefore newer) corrected the
+    // header and history — and then the post-history assignment clobbered the
+    // header back to the stale caller name: settled header "V1" over
+    // history.state.name "V2", 5/5 in a real loaded extension (pre-fix RED;
+    // this test is the in-suite form of that measurement).
+    const profile = chromeProfileDir("q0yg-stale-mention");
+    const launched = await launchChrome({
+      binary: CHROME_FOR_TESTING,
+      args: [
+        "--headless=new",
+        "--no-sandbox",
+        "--disable-gpu",
+        "--silent-debugger-extension-api",
+        `--disable-extensions-except=${EXT}`,
+        `--load-extension=${EXT}`,
+        "--remote-allow-origins=*",
+        `--user-data-dir=${profile}`,
+        "about:blank",
+      ],
+    });
+
+    const ws = new WebSocket(launched.wsUrl);
+    await new Promise((r) => (ws.onopen = r));
+    let id = 0;
+    const pending = new Map();
+    const send = (method: string, params: any = {}, sessionId?: string) =>
+      new Promise<any>((res) => {
+        const mid = ++id;
+        pending.set(String(mid), res);
+        ws.send(JSON.stringify({ id: mid, method, params, sessionId }));
+      });
+    ws.onmessage = (m: MessageEvent) => {
+      const j = JSON.parse(m.data);
+      if (j.id && pending.has(String(j.id))) {
+        pending.get(String(j.id))(j);
+        pending.delete(String(j.id));
+      }
+    };
+
+    try {
+      const sw = await waitForServiceWorker(send, {
+        timeoutMs: 10000,
+        match: (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background"),
+      });
+      assert(sw, "Service worker must be running");
+      const extId = new URL(sw.url).host;
+
+      const { result: { targetId } } = await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` });
+      const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
+      await send("Runtime.enable", {}, sessionId);
+      await send("Page.enable", {}, sessionId);
+
+      const ev = async (expr: string) => {
+        const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId);
+        return r.result?.result?.value;
+      };
+      await new Promise((r) => setTimeout(r, 1500));
+
+      // Seed the target agent, and put the internal TESTING provider (demo) in
+      // front of it: the race window only manifests against real history weight
+      // (an empty-history history-view beat the list reply in the measurement).
+      const made = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({
+        type: "named-agent.create", id: "agent-q0yg-guard", name: "V1", role: "tester"
+      }, resolve))`);
+      assertEquals(made?.ok, true, "Named agent creation must succeed");
+      // (Runs fall back to the internal demo model with no provider set — the
+      // provider.* routes are sender-gated and return nothing from this page;
+      // the measurement only needs real journal weight, which the fallback gives.)
+
+      // Open TARGET's own surface via the real hub row, then run two REAL demo
+      // turns so its journal has the weight a real agent has.
+      await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
+      await new Promise((r) => setTimeout(r, 1500));
+      const opened = await ev(`(() => {
+        const picker = document.querySelector("#named-agents agent-picker");
+        const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+        const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === "V1");
+        if (!row) return false;
+        row.click();
+        return true;
+      })()`);
+      assertEquals(opened, true, "Agent row must be found and opened");
+      await new Promise((r) => setTimeout(r, 1200));
+      for (let i = 0; i < 2; i++) {
+        await ev(`(() => {
+          const tc = document.querySelector("#thread-composer");
+          tc.dispatchEvent(new CustomEvent("send", { detail: { text: "demo run " + ${i}, attachments: [] } }));
+        })()`);
+        await new Promise((r) => setTimeout(r, 4000));
+      }
+      const entries = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.history", id: "agent-q0yg-guard" }, (res) => resolve(res?.entries?.length ?? -1)))`);
+      assert(entries > 0, `the target must carry real journal history (got ${entries})`);
+
+      // The rename lands BETWEEN mention-pick and send (the product window):
+      // the chip in the send below carries "V1" while storage holds "V2" —
+      // the same route the edit dialog performs.
+      const renamed = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({
+        type: "named-agent.update", id: "agent-q0yg-guard", name: "V2", role: "tester"
+      }, resolve))`);
+      assertEquals(renamed?.ok, true, "Named agent update must succeed");
+
+      // Send the stale mention from the open agent surface (the chip-navigate
+      // path: openAgentSurface runs with the STALE caller name).
+      await ev(`(() => {
+        const tc = document.querySelector("#thread-composer");
+        tc.dispatchEvent(new CustomEvent("send", { detail: { text: "stale mention check", attachments: [], agent: { ref: "named:agent-q0yg-guard", kind: "named", id: "agent-q0yg-guard", name: "V1" } } }));
+      })()`);
+      await new Promise((r) => setTimeout(r, 3000));
+
+      const title = await ev(`document.getElementById("thread-title")?.textContent`);
+      const stateName = await ev(`window.history?.state?.name`);
+      const storageName = await ev(`new Promise((resolve) => chrome.runtime.sendMessage({ type: "named-agent.get", id: "agent-q0yg-guard" }, (res) => resolve(res?.agent?.name)))`);
+
+      // Storage control: the rename is real.
+      assertEquals(storageName, "V2", "storage must hold the renamed name");
+      // The fix property: BOTH surfaces read the newer (list-resolved) name —
+      // the pre-fix tree settles here with title "V1" over history "V2".
+      assertEquals(title, "V2", "the header must read the newer list-resolved name, never the stale caller name");
+      assertEquals(stateName, "V2", "history.state must agree with the header after the surface settles");
     } finally {
       ws.close();
       try { launched.proc.kill("SIGKILL"); } catch { /* gone */ }

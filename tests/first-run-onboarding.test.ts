@@ -8,6 +8,7 @@ import {
   requestBrowserControlFromOwnerClick,
 } from "../extension/lib/first-run-onboarding.js";
 import { freshKv } from "./test-hooks.js";
+import { clearLogBuffer, dumpLogBuffer } from "../extension/lib/cap-log.js";
 
 Deno.test("first run: credential warning is required before an ungranted key can be accepted", () => {
   assert(
@@ -158,13 +159,21 @@ Deno.test("first run: permissionless storage is informational, not an error-cons
     infos += 1;
   };
   try {
+    clearLogBuffer();
     await kv.kvGet("providerConfig");
   } finally {
     console.warn = originalWarn;
     console.info = originalInfo;
   }
   assertEquals(warnings, 0);
-  assertEquals(infos, 1);
+  // Routed through capLog (chrome-agent-platform-9do7): the store-build default
+  // level is "off", so nothing forwards to console.info — the informational
+  // record lives in the redacted ring buffer instead.
+  assertEquals(infos, 0);
+  const hit = dumpLogBuffer().entries.find((e) =>
+    e.ns === "kv" && e.level === "info" && e.msg.includes("storage permission not granted")
+  );
+  assert(hit, "the informational storage record must land in the cap-log ring");
 });
 
 Deno.test("first run: shared setup components use native labelled controls and restore the next action", async () => {

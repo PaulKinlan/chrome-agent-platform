@@ -16,6 +16,7 @@
 //
 // Writes evidence: axe-surfaces.json + a PNG per surface.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 
@@ -234,8 +235,12 @@ for (const s of SURFACES) {
     }))`,
     returnByValue: true, awaitPromise: true,
   }, sessionId);
+  // kwrx: the read is HOISTED out of the parse-try — a page throw (axe never
+  // loaded/run) must surface NAMED, not collapse into parsed=null and read
+  // as a clean a11y pass (the 4vfj class).
+  const runVal = wireValue<string>(run, "axe.run");
   let parsed: any = null;
-  try { parsed = JSON.parse(run.result?.result?.value ?? "null"); } catch { /* keep null */ }
+  try { parsed = JSON.parse(runVal ?? "null"); } catch { /* malformed payload — keep null */ }
   results[s.name] = parsed;
 
   const audited = (parsed?.violations ?? []).filter((v: any) => AUDITED_RULES.includes(v.id));
@@ -258,7 +263,7 @@ for (const s of SURFACES) {
         };
       })()
     ` }, sessionId);
-    const r = row.result?.result?.value ?? {};
+    const r = wireValue<any>(row, "axe.seed.row") ?? {};
     check("ntp-hub: thread-item is a non-interactive wrapper with an explicit open button",
       r.present === true && r.role === null && r.tabbable === false && r.openBtn === true, r);
   }
@@ -266,7 +271,7 @@ for (const s of SURFACES) {
     const act = await send("Runtime.evaluate", {
       expression: ACTIVATION_PROBE, returnByValue: true, awaitPromise: true,
     }, sessionId);
-    const a = act.result?.result?.value ?? {};
+    const a = wireValue<any>(act, "axe.seed.activation") ?? {};
     check("activation: child Retry/Delete clicks do NOT open the row; open button does; keydown on the row is inert",
       a.present === true && a.retry === 1 && a.delete === 1 && a.open === 1 &&
       a.rowRole === null && a.rowTabbable === false,

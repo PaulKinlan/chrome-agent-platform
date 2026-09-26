@@ -2,7 +2,7 @@
 // artifact the agents have made. Each card shows a live preview thumbnail (an
 // html artifact renders in a sandboxed iframe), the name/type/size/origin/time,
 // and actions: open (the full live viewer), reuse (attach to a new task via the
-// parent NTP), delete. Mirrors the directory/recipes view pattern (loaded in the
+// parent NTP), delete. Mirrors the directory view pattern (loaded in the
 // NTP's in-context view frame; messaging via lib/messages.js).
 
 import { send } from "../lib/messages.js";
@@ -305,7 +305,7 @@ async function openArtifactDialog(id, origin) {
   dialog.append(body);
   document.body.append(dialog);
   dialog.show();
-  dialog.addEventListener("close", () => { frameCleanups.forEach((c) => { try { c(); } catch {} }); dialog.remove(); }, { once: true });
+  dialog.addEventListener("close", () => { frameCleanups.forEach((c) => { try { c(); } catch { /* one cleanup failing must not skip the rest */ } }); dialog.remove(); }, { once: true });
 }
 
 render();

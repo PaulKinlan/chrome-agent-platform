@@ -22,7 +22,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { runBoundedChild } from "./scripts/lib/bounded-child.mjs";
+import { boundedChildTimeoutMs, runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
 import { syncChangelog } from "./scripts/sync-changelog.mjs";
 import {
@@ -101,7 +101,7 @@ try {
     cwd: ROOT,
     stdio: "inherit",
     label: "bundled-tool generator",
-    timeoutMs: Number(process.env.CAP_BUNDLED_TOOL_TIMEOUT_MS ?? 120_000),
+    timeoutMs: boundedChildTimeoutMs(process.env, "CAP_BUNDLED_TOOL_TIMEOUT_MS"),
   });
   if (generator.status !== 0) {
     // execFileSync used to throw here; the bounded runner reports the status

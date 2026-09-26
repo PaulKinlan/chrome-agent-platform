@@ -242,7 +242,7 @@ Deno.test("security: hook fan-out is guarded by KNOWN-recipe validation (dptw: s
   // an arbitrary/unknown recipeId must NOT create a fan-out row
   const bad = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "not-a-real-recipe-123" });
   assertEquals(bad.ok, false);
-  assert((bad.error ?? "").includes("recipe"), "unknown recipeId must be rejected");
+  assert((bad.error ?? "").includes("unknown skill"), "unknown recipeId must be rejected");
   // dptw: a large prompt template is ACCEPTED (no size cap) — the fan-out
   // guard is the known-recipe validation above, not a byte bound.
   const huge = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain", promptTemplate: "x".repeat(70000) });

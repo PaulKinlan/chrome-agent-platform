@@ -1,7 +1,7 @@
 // tests/agent-templates.test.ts — agent template catalogue + collaboration
 // skill pack (docs/AGENT-PRODUCT-GAPS.md G1+G2+G10, phase 1). The catalogue is
-// DATA (like recipes): templates pre-fill the create form and stay fully
-// editable; the collaboration skills are recipe entries, never code.
+// DATA (like skills): templates pre-fill the create form and stay fully
+// editable; the collaboration skills are skill entries, never code.
 import { assert, assertEquals, assertExists } from "jsr:@std/assert@1";
 import {
   AGENT_TEMPLATES,
@@ -10,7 +10,7 @@ import {
   agentTemplateById,
   templatePrefill,
 } from "../extension/lib/agent-templates.js";
-import { RECIPES, getRecipe, agentSkillIds, mergeRunSkills } from "../extension/lib/recipes.js";
+import { SKILLS, getSkill, agentSkillIds, mergeRunSkills } from "../extension/lib/skill-registry.js";
 import { composeSystemPrompt } from "../extension/lib/system-prompts.js";
 
 Deno.test("templates: the catalogue ships 21 starting agents with unique ids/names", () => {
@@ -26,12 +26,12 @@ Deno.test("templates: the catalogue ships 21 starting agents with unique ids/nam
   }
 });
 
-Deno.test("templates: every referenced skill id exists in RECIPES (no dangling suggestions)", () => {
-  const recipeIds = new Set(RECIPES.map((r) => r.id));
+Deno.test("templates: every referenced skill id exists in SKILLS (no dangling suggestions)", () => {
+  const skillIds = new Set(SKILLS.map((r) => r.id));
   for (const t of AGENT_TEMPLATES) {
     assert(t.skills.length > 0, `${t.id}: no suggested skills`);
     for (const s of t.skills) {
-      assert(recipeIds.has(s), `${t.id} suggests "${s}" — not a recipe id`);
+      assert(skillIds.has(s), `${t.id} suggests "${s}" — not a skill id`);
     }
   }
 });
@@ -52,7 +52,7 @@ Deno.test("templates: honest scope — no promises of agent-to-agent delegation 
     assert(!banned.test(t.description), `${t.id}: description promises MCP (G4 is not built)`);
   }
   // delegate-and-collect discloses the delegation limitation inside the skill.
-  const d = getRecipe("delegate-and-collect");
+  const d = getSkill("delegate-and-collect");
   assertExists(d);
   assert(d.prompt.includes("not available yet"), "delegate-and-collect must disclose agent-to-agent is coming");
 });
@@ -72,7 +72,7 @@ Deno.test("templates: prefill is a pure mapping (starting point, fully editable 
   assertEquals(templatePrefill(null), null);
 });
 
-Deno.test("collaboration pack: all 12 skills exist as DATA recipes in the collaboration category", () => {
+Deno.test("collaboration pack: all 12 skills exist as DATA skills in the collaboration category", () => {
   const expected = [
     "review-work",
     "delegate-and-collect",
@@ -88,7 +88,7 @@ Deno.test("collaboration pack: all 12 skills exist as DATA recipes in the collab
     "export-artifact",
   ];
   for (const id of expected) {
-    const r = getRecipe(id);
+    const r = getSkill(id);
     assertExists(r, `missing collaboration skill: ${id}`);
     assertEquals(r.category, "collaboration");
     assertEquals(r.mode, "on-demand");
@@ -96,10 +96,10 @@ Deno.test("collaboration pack: all 12 skills exist as DATA recipes in the collab
   }
 });
 
-Deno.test("collaboration pack: the recipes stay DATA — prompts are inert strings", () => {
+Deno.test("collaboration pack: the skills stay DATA — prompts are inert strings", () => {
   const pack = ["review-work", "red-team", "manager-check"];
   for (const id of pack) {
-    const r = getRecipe(id);
+    const r = getSkill(id);
     assertExists(r);
     // No executable-looking payloads: the prompt never contains script/script-injection seams.
     assert(!/<script/i.test(r.prompt), `${id}: prompt contains a script tag`);
@@ -210,16 +210,16 @@ Deno.test("P1-c: an agent's SAVED skills resolve and compose into the run skill 
   assertEquals(ids, ["reader-mode", "page-summary"]);
   // Resolved through the REAL registry and merged — the same list the run path
   // composes into the system prompt.
-  const resolved = ids.map((id) => getRecipe(id)).filter(Boolean);
-  assertEquals(resolved.length, 2, "both saved skills resolve to real recipes");
+  const resolved = ids.map((id) => getSkill(id)).filter(Boolean);
+  assertEquals(resolved.length, 2, "both saved skills resolve to real skills");
   const merged = mergeRunSkills(resolved, []);
   assert(merged.some((r) => r.id === "reader-mode" && typeof r.prompt === "string" && r.prompt.length > 0),
     "the saved skill's goal/steps (prompt body) are IN the composition");
   // Falsification: removing the skill from the agent changes the composition.
-  const without = mergeRunSkills(agentSkillIds({ skills: [] }).map((id) => getRecipe(id)).filter(Boolean), []);
+  const without = mergeRunSkills(agentSkillIds({ skills: [] }).map((id) => getSkill(id)).filter(Boolean), []);
   assert(!without.some((r) => r.id === "reader-mode"), "without the saved skill the composition drops it");
   // Dedup: a /skill: reference duplicating a saved skill composes ONCE.
-  const dup = mergeRunSkills(resolved, [getRecipe("reader-mode")]);
+  const dup = mergeRunSkills(resolved, [getSkill("reader-mode")]);
   assertEquals(dup.filter((r) => r.id === "reader-mode").length, 1, "saved skill + same /skill: ref = one composition");
 });
 
@@ -238,34 +238,34 @@ Deno.test("P1-c wiring: named-agent.run resolves saved skills and runTask merges
     "the scheduler fire path routes agent:<slug> schedules as real named-agent runs");
 });
 
-// CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 — a background recipe renders
+// CAP-FB-20260830-AGENT-TEMPLATES-INTEGRATION-01 — a background skill renders
 // as a template card WITHOUT duplicating its data: the adapter is a pure
-// projection, so choosing a recipe card pre-fills the create form through the
+// projection, so choosing a skill card pre-fills the create form through the
 // same templatePrefill path as a curated template (one code path, not two).
-Deno.test("recipeAsTemplate maps a background recipe to a template with mode background and its schedule", async () => {
+Deno.test("skillAsTemplate maps a background skill to a template with mode background and its schedule", async () => {
   const mod: any = await import("../extension/lib/agent-templates.js");
-  const recipeAsTemplate = mod.recipeAsTemplate;
-  assertExists(recipeAsTemplate, "recipeAsTemplate is exported");
-  const recipe: any = RECIPES.find((r: any) => r.mode === "background" && r.schedule?.periodInMinutes);
-  assertExists(recipe);
-  const t: any = recipeAsTemplate({ ...recipe, enabled: false });
+  const skillAsTemplate = mod.skillAsTemplate;
+  assertExists(skillAsTemplate, "skillAsTemplate is exported");
+  const skill: any = SKILLS.find((r: any) => r.mode === "background" && r.schedule?.periodInMinutes);
+  assertExists(skill);
+  const t: any = skillAsTemplate({ ...skill, enabled: false });
   assertExists(t);
-  assertEquals(t.id, recipe.id);
-  assertEquals(t.name, recipe.name);
-  assertEquals(t.description, recipe.description);
+  assertEquals(t.id, skill.id);
+  assertEquals(t.name, skill.name);
+  assertEquals(t.description, skill.description);
   assertEquals(t.mode, "background");
-  assertEquals(t.source, "recipe");
-  assertEquals(t.schedule, { periodInMinutes: recipe.schedule.periodInMinutes, prompt: recipe.prompt });
+  assertEquals(t.source, "skill");
+  assertEquals(t.schedule, { periodInMinutes: skill.schedule.periodInMinutes, prompt: skill.prompt });
   assertEquals(t.skills, []);
   // The prefill the create form applies is the ordinary one — schedule text
   // "every N minutes" comes from the same field the dialog already parses.
   const pre: any = templatePrefill(t);
-  assertEquals(pre.schedule.periodInMinutes, recipe.schedule.periodInMinutes);
-  assertEquals(pre.name, recipe.name);
+  assertEquals(pre.schedule.periodInMinutes, skill.schedule.periodInMinutes);
+  assertEquals(pre.name, skill.name);
   assertEquals(pre.mode, "background");
-  // Not a recipe → null; an on-demand recipe → null (only scheduled work is a
+  // Not a skill → null; an on-demand skill → null (only scheduled work is a
   // scheduled template).
-  assertEquals(recipeAsTemplate(null), null);
-  const onDemand = RECIPES.find((r) => r.mode !== "background");
-  assertEquals(recipeAsTemplate(onDemand), null);
+  assertEquals(skillAsTemplate(null), null);
+  const onDemand = SKILLS.find((r) => r.mode !== "background");
+  assertEquals(skillAsTemplate(onDemand), null);
 });

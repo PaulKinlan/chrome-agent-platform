@@ -20,6 +20,12 @@
 // 93 fake entries landed on 2026-09-05. With skip-on-empty, version numbers
 // are only ever consumed by commits that also write a real user-language entry,
 // which keeps the changelog contiguous by construction.
+//
+// --hook (8nec): the post-commit mode. The note is EXPLICIT — --user-note only,
+// never inferred from the subject — and the bump is once per branch: when the
+// working version no longer matches origin/main's, this branch already carries the
+// bump (or is behind main) and nothing is written. scripts/git-hooks/post-commit
+// is the author interface (a `Release-note:` trailer or CAP_USER_NOTE).
 
 import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync } from "fs";
@@ -57,6 +63,19 @@ function bumpSemver(current, type) {
   }
 }
 
+// The version on origin/main, or null when git or the ref is unavailable. Used only by hook
+// mode: a missing answer skips the branch check rather than guessing (8nec).
+function originMainVersion() {
+  try {
+    const raw = execSync("git show origin/main:extension/manifest.json", {
+      cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+    });
+    return JSON.parse(raw).version || null;
+  } catch {
+    return null;
+  }
+}
+
 // Parse argv: the bump type is the first non-flag arg; --message/-m takes the next value.
 const argv = process.argv.slice(2);
 const type = argv.find((a) => !a.startsWith("-")) || "patch";
@@ -64,8 +83,12 @@ const mi = argv.findIndex((a) => a === "--message" || a === "-m");
 const message = mi >= 0 ? argv[mi + 1] : null;
 const uni = argv.findIndex((a) => a === "--user-note" || a === "--note");
 const userNote = uni >= 0 ? argv[uni + 1] : null;
-const skipIfNoNote = argv.includes("--skip-if-no-note");
-const finalNote = userNote ? userNote.trim() : (message ? message.replace(/^\[[^\]]*\]\s*/, "").trim() : null);
+const skipIfNoNote = argv.includes("--skip-if-no-note") || argv.includes("--hook");
+const hookMode = argv.includes("--hook");
+// 8nec: in hook mode the subject is NOT a note source, not even a fallback. The author
+// states the user-facing copy with --user-note (the hook extracts it from a Release-note:
+// trailer or CAP_USER_NOTE); without it, nothing is bumped.
+const finalNote = userNote ? userNote.trim() : (hookMode || !message ? null : message.replace(/^\[[^\]]*\]\s*/, "").trim());
 
 // Release notes are for the person using the extension, not the VCS: strip
 // conventional-commit prefixes, bare SHAs and CAP-FB tracker ids so the
@@ -119,9 +142,12 @@ if (cleanNote && !isUserFacingEntry(cleanNote)) {
 // placeholder text — that is how 93 fake entries landed on 2026-09-05.
 if (skipIfNoNote && !cleanNote) {
   console.error(
-    `[bump-version] no user-facing note derivable from commit "${(message || "").slice(0, 72)}" — ` +
+    `[bump-version] no user-facing note for commit "${(message || "").slice(0, 72)}" — ` +
     `NOT bumping the version (bookkeeping commits do not consume versions). ` +
-    `If this commit lands user-visible work, bump explicitly: ` +
+    (hookMode
+      ? `Add a "Release-note: <what the user gets>" line to the commit message (or set ` +
+        `CAP_USER_NOTE) and amend, or bump explicitly: `
+      : `If this commit lands user-visible work, bump explicitly: `) +
     `node scripts/bump-version.mjs patch --user-note "<what the user gets>"`
   );
   process.exit(0);
@@ -140,6 +166,22 @@ const pkg = readJson(pkgPath);
 const lock = existsSync(lockPath) ? readJson(lockPath) : null;
 const manifest = readJson(manifestPath);
 const current = manifest.version || pkg.version;
+
+// 8nec (B): one bump per branch, not one per commit. If this branch's version no longer
+// matches origin/main's, the branch either already carries the bump (its changelog entry
+// exists) or is behind main (rebase, then bump). Only git can answer; an unavailable
+// origin/main skips the check rather than guessing.
+if (hookMode) {
+  const onMain = originMainVersion();
+  if (onMain && onMain !== current) {
+    console.error(
+      `[bump-version] this branch carries ${current} while origin/main is at ${onMain} — ` +
+      `NOT bumping again (one bump per branch; rebase first if main has moved).`
+    );
+    process.exit(0);
+  }
+}
+
 const next = bumpSemver(current, type);
 
 pkg.version = next;

@@ -12,6 +12,10 @@
 //   - Dismissed notifications remain discoverable in the task view history.
 //   - Stale/unknown execution IDs fail closed safely without crashing or leaking state.
 
+import { capLog } from "./cap-log.js";
+
+const routingLog = capLog("notification-routing");
+
 export const NOTIFICATION_STATES = Object.freeze({
   CREATED: "created",
   CLICKED: "clicked",
@@ -190,7 +194,7 @@ export class NotificationRegistry {
           .slice(0, NOTIFICATION_LIMITS.maxHistoryEntries);
         await store.set({ [INDEX_KEY]: nextList });
       } catch (e) {
-        console.warn("NotificationRegistry: storage write failed", e?.message ?? e);
+        routingLog.warn("NotificationRegistry: storage write failed", e?.message ?? e);
       }
     }
 
@@ -247,7 +251,7 @@ export class NotificationRegistry {
     if (store?.set) {
       try {
         await store.set({ [`${STORAGE_PREFIX}${notificationId}`]: updated });
-      } catch {}
+      } catch { /* best-effort record update; the read path tolerates a missing entry */ }
     }
 
     return updated;
@@ -263,7 +267,7 @@ export class NotificationRegistry {
         if (Array.isArray(idxData?.[INDEX_KEY])) {
           ids = [...new Set([...idxData[INDEX_KEY], ...ids])];
         }
-      } catch {}
+      } catch { /* best-effort index merge; a corrupt index entry degrades to the new ids */ }
     }
 
     const records = [];
@@ -339,7 +343,7 @@ export async function openOrFocusExtensionUrl(targetUrl, { tabsApi = null, windo
       return { action: "created", tabId: created?.id, url: targetUrl };
     }
   } catch (err) {
-    console.warn("openOrFocusExtensionUrl failed", err?.message ?? err);
+    routingLog.warn("openOrFocusExtensionUrl failed", err?.message ?? err);
   }
 
   return null;

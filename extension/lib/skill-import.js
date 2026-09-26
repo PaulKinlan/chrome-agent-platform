@@ -299,7 +299,7 @@ export async function installImportedSkill(memory, fetched, fileStore = null) {
     mode: "on-demand",
     category: fetched.category || "imported",
     // Metadata only — the body lives in OPFS (small skills read it back via
-    // resolveRecipe; large skills compose a skill_read marker instead).
+    // resolveSkill; large skills compose a skill_read marker instead).
     prompt: "",
     promptBytes,
     fileCount,

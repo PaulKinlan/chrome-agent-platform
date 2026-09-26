@@ -3,7 +3,7 @@
 // The REVISE blocker: tests/bgagent-delete.test.ts only regex-scanned source.
 // This journey proves the real behaviour end to end on the LOADED extension:
 //   1. seed a real CUSTOM background agent through the REAL message bus
-//      (recipe.duplicate → background-agent.set enable → the recipe:<id> task
+//      (background-agent.duplicate → background-agent.set enable → the recipe:<id> task
 //      exists in task.list),
 //   2. find its real summary row on the NTP and click the REAL Delete
 //      control (shared <agent-picker> row + its sibling Delete →
@@ -16,6 +16,7 @@
 //      the unit-level running-task proof lives in tests/alarm-orphan.test.ts).
 //
 //   deno run -A scripts/kat-bgagent-delete.ts <path-to-extension> [<out-dir>]
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -111,7 +112,7 @@ const newView = async (url: string) => {
   const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Runtime.enable", {}, sessionId);
   await send("Page.enable", {}, sessionId);
-  const ev = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)).result?.result?.value;
+  const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId), "k.bgagent-delete");
   const shot = async (path: string) => {
     const { result } = await send("Page.captureScreenshot", { format: "png" }, sessionId);
     await Deno.writeFile(path, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));
@@ -167,14 +168,14 @@ const seed = await ntp.ev(`(async () => {
   const msg = (m) => new Promise((res) => {
     chrome.runtime.sendMessage(m, (r) => { void chrome.runtime.lastError; res(r); });
   });
-  const dup = await msg({ type: "recipe.duplicate", id: "auto-group-by-domain" });
+  const dup = await msg({ type: "background-agent.duplicate", id: "auto-group-by-domain" });
   if (!dup?.ok) return { step: "duplicate", dup };
-  const en = await msg({ type: "background-agent.set", id: dup.recipe.id, enabled: true });
+  const en = await msg({ type: "background-agent.set", id: dup.skill.id, enabled: true });
   if (!en?.ok) return { step: "enable", en };
   const tasks = await msg({ type: "task.list" });
-  const scheduled = (tasks?.tasks ?? tasks ?? []).some?.((t) => t?.name === \`recipe:\${dup.recipe.id}\`)
-    ?? JSON.stringify(tasks ?? {}).includes(\`recipe:\${dup.recipe.id}\`);
-  return { step: "done", id: dup.recipe.id, name: dup.recipe.name, scheduled };
+  const scheduled = (tasks?.tasks ?? tasks ?? []).some?.((t) => t?.name === \`recipe:\${dup.skill.id}\`)
+    ?? JSON.stringify(tasks ?? {}).includes(\`recipe:\${dup.skill.id}\`);
+  return { step: "done", id: dup.skill.id, name: dup.skill.name, scheduled };
 })()`);
 check("journey: the custom background agent seeds + schedules for real", seed?.step === "done" && seed.scheduled === true, seed);
 const agentId = seed?.id;

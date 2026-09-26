@@ -151,7 +151,7 @@ export const OWNER_DIRECT_ACTIONS = new Set([
   // so any non-owner caller fails closed ('operation is not approvable') and
   // cannot trigger a pending approval flow to write server endpoints or credentials.
   "named-agent.set-mcp-servers",
-  "recipe.delete",
+  "background-agent.delete",
   // Per-agent schedule controls (pause/resume/update): the owner's own click in
   // an extension UI document IS the approval — the same owner-direct principle
   // as asset.delete. A MODEL calling the same actions keeps the full

@@ -3,6 +3,7 @@
 // It writes/reads the artifact through the real service-worker routes, renders
 // the exact lazy-protocol result shape through <agent-conversation>, and checks
 // both iframe layers through their own CDP execution contexts.
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -67,7 +68,7 @@ try {
     if (response.result?.exceptionDetails) {
       throw new Error(response.result.exceptionDetails.exception?.description ?? "Runtime.evaluate failed");
     }
-    return response.result?.result?.value;
+    return wireValue<any>(response, "k.artifact-preview");
   };
   await sleep(2500);
 

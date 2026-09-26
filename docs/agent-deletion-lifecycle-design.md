@@ -15,12 +15,12 @@ Exact keys/paths verified against public source `5e5c81e`:
 |---|---|---|---|
 | chrome.storage | `cap:namedAgents` | Named-agent registry (name/role/prompt/model/**embedded `coreAssets`**) — `extension/lib/named-agents.js:20` | YES — authority |
 | chrome.storage | `cap:promptOverrides` + `cap:promptOverrides:quarantine` | Prompt-override audit/quarantine (`extension/lib/system-prompts.js:192-193`) — the delete gate scans these fail-closed | YES — dependency check |
-| chrome.storage | `cap:scheduledTasks` | Scheduled-task payloads (background/recipe runs) — `extension/lib/scheduler.js:8` | recipe lifecycle only |
-| OPFS `memory/master/` (master-memory store: versioned per-key files) | `journal.json` (versioned envelope), `customRecipes.json` (user recipe copies — built-in recipes are code; **no `cap:recipes` key exists**), `threads.json`, `screenshots/*` | master journal + recipes + thread index | threads are agent-agnostic |
+| chrome.storage | `cap:scheduledTasks` | Scheduled-task payloads (background runs) — `extension/lib/scheduler.js:8` | skill lifecycle only |
+| OPFS `memory/master/` (master-memory store: versioned per-key files) | `journal.json` (versioned envelope), `customRecipes.json` (user skill copies — the stored key is a persisted format, e5oe migrates; built-in skills are code; **no `cap:recipes` key exists**), `threads.json`, `screenshots/*` | master journal + skills + thread index | threads are agent-agnostic |
 | OPFS `memory/agents/<encodeURIComponent(slug)>/` (`memory.js:454`) | per-agent store: own versioned `journal.json`, memory keys, threads when scoped | agent-owned | YES — disposal candidate |
 | OPFS `memory/origins/<origin>/` | site memory/tools/journal | site-agent-owned | site `agent.delete` pattern exists |
 | OPFS `memory/master/` | `asset:<id>.json` + `assets.json` | artifact bodies + index | NO ownership link today |
-| chrome.alarms | `task:…`, `recipe:<id>` | scheduled/background runs | recipes only |
+| chrome.alarms | `task:…`, `recipe:<id>` (persisted name, e5oe migrates) | scheduled/background runs | scheduled skills only |
 
 ## 2. Current deletion semantics (exact)
 
@@ -33,7 +33,7 @@ Exact keys/paths verified against public source `5e5c81e`:
 - **Site agent** (`service-worker.js` `agent.delete`): the strongest existing
   pattern — tombstone-first (disenrolled+revoked committed before teardown) →
   `abortWorker` → bridge notify → `allSettled` scripts + memory.
-- **Background agent** (recipe): `task.cancel` clears alarm + payload; the
+- **Background agent** (scheduled skill): `task.cancel` clears alarm + payload; the
   registry derives enabled-state from the schedule store.
 - **In-flight executions** (exact gap): `named-agent.run`
   (service-worker.js:2475-2513) resolves the agent, gets its memory, calls
@@ -140,7 +140,7 @@ are not.)
 
 ### 4.4 Dependency preview (must include embedded core assets)
 
-Before the gate, the owner sees: schedules referencing the agent (recipes —
+Before the gate, the owner sees: schedules referencing the agent (scheduled skills —
 currently none for named agents), threads mentioning it (informational),
 **the embedded `coreAssets` list (name/type/size)** under the registry row,
 and (once the artifact lane lands) artifacts attributed to the agent. The

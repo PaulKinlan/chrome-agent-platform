@@ -18,6 +18,7 @@
 // Uses the mandated launchChrome() (kernel-assigned debug port, read from
 // stderr) — never a fixed port.
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { startMcpTestServer } from "./mcp-test-server.ts";
@@ -66,7 +67,7 @@ async function evalIn(cdp: Cdp, session: string, expression: string) {
   if (r.result?.exceptionDetails) {
     throw new Error(`eval threw: ${JSON.stringify(r.result.exceptionDetails).slice(0, 500)}`);
   }
-  return r.result?.result?.value;
+  return wireValue<any>(r, "k.mcp-transport");
 }
 
 /** A port that is bound then freed → nothing listens there → ECONNREFUSED. */

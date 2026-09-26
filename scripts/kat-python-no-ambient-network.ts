@@ -24,6 +24,7 @@
 //
 //   deno run -A scripts/kat-python-no-ambient-network.ts
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -82,7 +83,7 @@ try {
   const runPython = async (code: string) => {
     const expr = `(async()=>{const r=await chrome.runtime.sendMessage({type:"python.execute",code:${JSON.stringify(code)},stdin:""});return JSON.stringify(r);})()`;
     const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, sess);
-    const raw = r?.result?.result?.value;
+    const raw = wireValue<any>(r, "k.python-no-ambient-network");
     try { return JSON.parse(String(raw)); } catch { return { ok: false, error: String(raw ?? "no response") }; }
   };
 

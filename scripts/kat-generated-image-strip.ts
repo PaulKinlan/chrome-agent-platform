@@ -8,6 +8,7 @@
 // 1" label, and a genuine click opens the artifact viewer tab.
 //
 // Kernel-assigned debugging port via launchChrome() (no fixed port — see CLAUDE.md).
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -57,7 +58,7 @@ try {
   const ev = async (expr: string) => {
     const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true }, page);
     if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description ?? "evaluate failed");
-    return r.result?.result?.value;
+    return wireValue<any>(r, "k.generated-image-strip");
   };
   await sleep(2500);
 

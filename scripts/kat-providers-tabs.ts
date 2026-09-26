@@ -29,6 +29,7 @@
 //
 //   deno run -A scripts/kat-providers-tabs.ts <path-to-extension> [<out-dir>]
 
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -75,7 +76,7 @@ const { result: { targetId } } = await send("Target.createTarget", { url: `chrom
 const { result: { sessionId } } = await send("Target.attachToTarget", { targetId, flatten: true });
 await send("Runtime.enable", {}, sessionId);
 await send("Page.enable", {}, sessionId);
-const ev = async (expr: string) => (await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId)).result?.result?.value;
+const ev = async (expr: string) => wireValue<any>(await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, sessionId), "k.providers-tabs");
 const shot = async (path: string) => {
   const { result } = await send("Page.captureScreenshot", { format: "png" }, sessionId);
   await Deno.writeFile(path, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));
@@ -235,11 +236,12 @@ const tabVisibility = `(() => {
     tab: { left: tr.left, right: tr.right }, strip: { left: sr.left, right: sr.right } };
 })()`;
 // Start from a visible tab so the click below is a real off-screen activation.
-// NOTE (measured 2026-09-22 on base AND fixed trees): a CLICK also focuses,
-// and Chrome's native focus scroll moves the PAGE on this emulated mobile
-// viewport (sy 0 -> ~493 on every tree) — so a click-based "page does not
-// move" assertion cannot isolate the component's scroll from the browser's.
-// The page-move property is asserted on the SILENT path at load below.
+// NOTE (re-measured 2026-09-25 under chrome-agent-platform-ypz0): the
+// component's activation focus now uses focus({preventScroll:true}), so
+// Chrome's native focus scroll no longer moves the page on either path — the
+// click-based page-move assertion below is therefore real, not a near-no-op
+// survivor. (Pre-ypz0 this block passed "page does not move" while native
+// focus scroll dragged sy 0 -> ~493 on every tree — measured 2026-09-22.)
 await ev(`(() => {
   const rail = document.querySelector('#provider-tabs segmented-control');
   rail.shadowRoot.querySelector('[data-val="Gemini"]').click();
@@ -256,26 +258,44 @@ await sleep(300);
 const clicked = await ev(tabVisibility);
 check("at 360px a click-activated off-screen tab scrolls into the strip's viewport",
   clicked?.label === "Local/Ollama" && clicked?.visible === true && clicked?.scrollLeft > 0, clicked);
-// Regression guard (passes on every tree via native focus scroll; the
-// discriminating page-move assertion is the silent re-activation at load).
+// ypz0 (measured): this guard DISCRIMINATES now — with the component reveal
+// removed it goes RED via scrollLeft > 0 (native focus scroll no longer covers
+// for it on either activation path).
 check("activating an off-screen tab scrolls only the strip, never the page",
   clicked !== null && pageBefore !== null && clicked.scrollLeft > 0 &&
   clicked.sx === pageBefore.sx && clicked.sy === pageBefore.sy,
   { before: pageBefore, after: clicked && { sx: clicked.sx, sy: clicked.sy, scrollLeft: clicked.scrollLeft } });
 await shot(`${OUT}/tabs-360px.png`);
-// Keyboard: End jumps to the LAST tab, which is off-screen at 360px — this
-// discriminates, unlike a Home check (the first tab is already visible at
-// scrollLeft 0, so Home passed vacuously on the un-fixed tree).
+// Keyboard: End jumps to the LAST tab, which is off-screen at 360px.
+// chrome-agent-platform-ypz0 (2026-09-25): reworked to ACTUALLY discriminate.
+// The old shape passed vacuously on pre-fix trees: the component's bare
+// focus() let Chrome's native focus scroll reveal the tab with zero component
+// work. Now _focusSelected uses focus({preventScroll:true}), and this driver
+// (a) parks the strip at scrollLeft 0, (b) focuses without scroll side
+// effects, and (c) PROVES the target is off-screen before the key — so any
+// reveal after the End key can only come from _scrollSelectedIntoView().
+// Falsification (measured): with that call's body removed, the End check below
+// goes RED; restoring it returns GREEN.
 await ev(`(() => {
   const rail = document.querySelector('#provider-tabs segmented-control');
   const t = rail.shadowRoot.querySelector('[data-val="Gemini"]');
-  t.focus();
+  document.querySelector('#provider-tabs').scrollLeft = 0;
+  t.focus({ preventScroll: true }); // focus context, no scroll side effects
+  return true;
+})()`);
+await sleep(150);
+const endSetup = await ev(tabVisibility);
+check("setup: End target is off-screen with the strip parked at 0",
+  endSetup?.label === "Local/Ollama" && endSetup?.visible === false && endSetup?.scrollLeft === 0, endSetup);
+await ev(`(() => {
+  const rail = document.querySelector('#provider-tabs segmented-control');
+  const t = rail.shadowRoot.querySelector('[data-val="Gemini"]');
   t.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }));
   return true;
 })()`);
 await sleep(300);
 const endKeyed = await ev(tabVisibility);
-check("at 360px End scrolls the jumped-to tab into the strip's viewport",
+check("at 360px End scrolls the jumped-to tab into the strip's viewport (discriminating — ypz0)",
   endKeyed?.label === "Local/Ollama" && endKeyed?.visible === true && endKeyed?.scrollLeft > 0, endKeyed);
 
 // ---- Load state: the stored default's tab is visible WITHOUT interaction ----

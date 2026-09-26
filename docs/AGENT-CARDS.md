@@ -11,7 +11,7 @@ An **Agent Card** is a portable, declarative blueprint of an agent. It captures 
 ### Core Principles
 1. **Pure Data, Never Code (Constitution §2):** Agent cards are plain JSON data structures. They contain declarative prompt text, identifiers, and configuration—never executable JavaScript, scripts, or runtime expressions.
 2. **Fail Closed (Constitution §4):** Malformed JSON, non-object roots, invalid field types, or unsupported schema versions fail closed with an explicit error.
-3. **Explicit Dependency Auditing:** Skill dependencies are validated against the extension's authoritative recipe registry (`RECIPES`). Unrecognized skills are dropped cleanly with an explicit report (`droppedSkills`).
+3. **Explicit Dependency Auditing:** Skill dependencies are validated against the extension's authoritative skill registry (`SKILLS` in `extension/lib/skill-registry.js`). Unrecognized skills are dropped cleanly with an explicit report (`droppedSkills`).
 4. **Finite Resource Bounds:** Every text field, array length, and file payload is strictly bounded to prevent storage exhaustion or DOM overflow.
 5. **Strict Credential & State Isolation:** Sensitive runtime data (API keys, provider URLs, session cookies, instance IDs, private filesystem paths) are **never** exported into card JSON.
 
@@ -58,7 +58,7 @@ An agent card is a UTF-8 JSON document with the following schema:
 | `name` | `string` | Yes | 1 to 120 chars (`MAX_CARD_NAME_LEN`) | The display name of the agent. Missing or empty names are rejected. |
 | `role` | `string` | Optional | Max 32,000 chars (`MAX_CARD_ROLE_LEN`) | The agent's persona, instructions, and output contract markdown. Bounded on import. |
 | `persona` | `string` | Optional | Max 32,000 chars | Alias for `role`. Export sets both `role` and `persona`; import accepts either. |
-| `skills` | `string[]` | Optional | Max 128 items (`MAX_CARD_SKILLS`) | List of recipe/skill IDs attached to this agent. Verified against `RECIPES`. |
+| `skills` | `string[]` | Optional | Max 128 items (`MAX_CARD_SKILLS`) | List of skill IDs attached to this agent. Verified against `SKILLS`. |
 | `coreAssets` | `object[]` | Optional | Max 8 assets (`MAX_CARD_CORE_ASSETS`), max 128 KiB/file | Core context documents (`{ name, type, content }`) attached to the agent. |
 | `schedule` | `object` | Optional | Valid schedule object | Optional background schedule (`periodInMinutes`, `task`, `at`). |
 | `createdFrom`| `string` | Optional | Max 64 chars (`MAX_CREATED_FROM_LEN`) | Template ID (e.g. `chief-of-staff`) if originated from a built-in template. |
@@ -110,7 +110,7 @@ Importing an agent card via `importAgentCard(cardInput, options)` performs stric
  [6. Persona & Role] ────────── (Extract role/persona, bound to 32,000 chars)
           │
           ▼
-[7. Skill ID Filtering] ─────── (Validate against RECIPES; bounded droppedSkills report)
+[7. Skill ID Filtering] ─────── (Validate against SKILLS; bounded droppedSkills report)
           │
           ▼
 [8. Core Assets Normalization] ─ (Cap at 8 assets, truncate content > 128 KiB)

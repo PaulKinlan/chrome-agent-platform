@@ -1,10 +1,208 @@
 # Changelog
 
+## [0.3.544] — 2026-09-26
+- an empty timeout override means the default, never 0 ms
+
+## [0.3.543] — 2026-09-25
+- C15 resolved — profile-store is the form-filler substrate, retained and documented
+
+## [0.3.542] — 2026-09-25
+- internal: resolve C15 cleanup decision to retain profile-store as the form-filler substrate and document its role
+
+## [0.3.541] — 2026-09-25
+- the passive-detector probe waits for its relay instead of guessing 100 ms
+
+## [0.3.540] — 2026-09-25
+- internal: passive-detector test waits on condition with bounded budget instead of fixed sleep to prevent load flakes
+
+## [0.3.539] — 2026-09-25
+- evaluate MCP Zod peer unification with schema parity tests and evidence
+
+## [0.3.538] — 2026-09-25
+- evaluate MCP Zod peer unification with schema parity tests and evidence
+
+## [0.3.537] — 2026-09-25
+- internal: evaluate MCP Zod peer unification with schema parity tests and evidence (decision: retain separate peers)
+
+## [0.3.536] — 2026-09-25
+- destructive browser tool calls from external agent runs can now be approved directly in the conversation
+
+## [0.3.535] — 2026-09-25
+- destructive browser tool calls from external agent runs can now be approved directly in the conversation
+
+## [0.3.534] — 2026-09-25
+- resolve the picker checkout from the environment and walk .sh in the home-path guard (tgx6)
+
+## [0.3.533] — 2026-09-25
+- share an agent as a .agent.json card and import one back
+
+## [0.3.532] — 2026-09-25
+- you can now share an agent as an agent card file and import one back in the create dialog
+
+## [0.3.531] — 2026-09-25
+- drop the wall-clock bound from the quiesced-screenshot fallback test
+
+## [0.3.530] — 2026-09-25
+- internal: drop wall-clock bound from quiesced-screenshot fallback test to avoid timing flakiness in parallel phase
+
+## [0.3.529] — 2026-09-25
+- use deno run stdin instead of eval for permission flags in Deno 2
+
+## [0.3.528] — 2026-09-25
+- importing the bundled-tool generator is a data read, not a rebuild
+
+## [0.3.527] — 2026-09-25
+- check:dist becomes note:dist — a note named as a note
+
+## [0.3.526] — 2026-09-25
+- check:dist becomes note:dist to clearly indicate it is an informational check, not an enforcement gate
+
+## [0.3.525] — 2026-09-25
+- bump only on an explicit release note, once per branch (8nec)
+
+## [0.3.524] — 2026-09-25
+- count raw value-read sites, not handled files (8ko7)
+
+## [0.3.523] — 2026-09-25
+- route raw console.* through cap-log, annotate bare catches, gate both
+
+## [0.3.522] — 2026-09-25
+- internal: route raw console calls through cap-log, annotate bare catches, and gate both in code-health
+
+## [0.3.521] — 2026-09-25
+- catalog re-collect drift is catalog-stale (not scope-mismatch); the demo site-tool flow retries once
+
+## [0.3.520] — 2026-09-25
+- internal: split catalog generation drift from selection scope mismatch and retry demo model site tool runs once
+
+## [0.3.519] — 2026-09-25
+- internal: extract shared typed cdp-eval helper for evaluating page scripts without swallowing exceptions, and migrate scripts/ drivers
+
+## [0.3.518] — 2026-09-25
+- sync docs/components.js from extension/shared/components.js (ypz0)
+
+## [0.3.517] — 2026-09-25
+- keyboard navigation in tab strips uses non-scrolling focus so component scroll bounds remain discriminating
+
+## [0.3.516] — 2026-09-25
+- remove headed-acceptance.ts — no headed-browser dependency
+
+## [0.3.515] — 2026-09-25
+- internal: remove obsolete scripts/headed-acceptance.ts harness, superseded by permission matrix
+
+## [0.3.514] — 2026-09-25
+- code-diff view limits split from retention budgets so lifting caps cannot OOM the store
+
+## [0.3.513] — 2026-09-25
+- internal: split code diff limits into document intake, retention, and view limits to allow separable view cap lifting
+
+## [0.3.512] — 2026-09-25
+- renaming an agent mid-compose can no longer leave a stale name in the header
+
+## [0.3.511] — 2026-09-25
+- an agent conversation header updates reliably when renamed mid-compose, preventing stale names from persisting
+
+## [0.3.510] — 2026-09-25
+- the residue map names the semicolon escape inside a spawn argument region
+
+## [0.3.509] — 2026-09-25
+- internal: clarify the semicolon escape boundary inside spawn argument regions in test partition residue docs
+
+## [0.3.508] — 2026-09-25
+- a run settles and heartbeats survive even when its durable record vanishes under it
+
+## [0.3.507] — 2026-09-25
+- internal: durable run state reconciles on settling, terminal, and live-run writes if an underlying record is lost, with negative paths pinned
+
+## [0.3.506] — 2026-09-25
+- route serial-phase timeout test to serial and pin wall-clock flake declarations
+
+## [0.3.505] — 2026-09-25
+- internal: route serial-phase timeout test to the serial phase to prevent wall-clock flakiness under load, and pin wall-clock flake declarations
+
+## [0.3.504] — 2026-09-25
+- static pairing guard for chrome-checks, agent-access-checks and run-status-lifecycle check literals against EXPECTED ledgers
+
+## [0.3.503] — 2026-09-25
+- internal: add static pairing guard for journey assertion check() literals against EXPECTED ledgers
+
+## [0.3.502] — 2026-09-25
+- explaining a test no longer makes your file inherit its hazards
+
+## [0.3.501] — 2026-09-25
+- internal: test partition guard restricts hazard inheritance to real module loads and process spawns, ignoring prose mentions
+
+## [0.3.500] — 2026-09-25
+- mark theme-picker as owner-retained (ol11)
+
+## [0.3.499] — 2026-09-25
+- the schema-2 surface is injected, so the decoder can never enter the service worker
+
+## [0.3.498] — 2026-09-25
+- internal: the schema-2 surface is injected into the package authority so the decoder never enters the service worker bundle
+
+## [0.3.497] — 2026-09-25
+- the sweep's three equivalent mutants are recorded at their sites, and A2 is now a killed mutant rather than an unkillable one
+
+## [0.3.496] — 2026-09-25
+- internal: the KAT finalizer records its three equivalent mutants at their sites and guards poison detection independently of cleanup errors
+
+## [0.3.495] — 2026-09-25
+- the Diagnostics probe clicks the control in the panel it names, and says which seam failed
+
+## [0.3.494] — 2026-09-25
+- internal: the diagnostics probe selects the active settings panel and verifies control state before querying the gate
+
+## [0.3.493] — 2026-09-25
+- the summary row's Delete pin reads parentage, not descendant counts
+
+## [0.3.492] — 2026-09-25
+- internal: the agent summary row Delete pin checks direct parentage rather than descendant counts
+
+## [0.3.491] — 2026-09-25
+- the settings picker can never quietly re-offer Demo or Chrome Prompt API
+
+## [0.3.490] — 2026-09-25
+- internal: the settings picker source is guarded against re-offering internal provider cards
+
+## [0.3.489] — 2026-09-25
+- finish recipes to skills rename and sync check EXPECTED ledger
+
+## [0.3.488] — 2026-09-25
+- finish the recipes to skills rename across internal modules, background routes, and acceptance tests
+
+## [0.3.487] — 2026-09-24
+- external agents can call every browser tool, and the ones that need your approval still ask for it
+
+## [0.3.486] — 2026-09-24
+- round 5: the syntax taxonomy is DELETED, and the delimiter class is proved by LOADING
+
+## [0.3.485] — 2026-09-24
+- external agent runs now run and display browser tool calls in the conversation
+
+## [0.3.484] — 2026-09-24
+- the browser.callTool fence is pinned to its wiring
+
+## [0.3.483] — 2026-09-24
+- external agents can now use your browser tools directly to inspect and organize tabs
+
+## [0.3.482] — 2026-09-24
+- skills you reference in the composer now travel with the task to external agent runs
+
+## [0.3.481] — 2026-09-24
+- the changelog jargon filter catches the vocabulary that actually leaks
+
+## [0.3.480] — 2026-09-24
+- changelog rejections now name the matching rule and token
+
+## [0.3.479] — 2026-09-24
+- a truncated /proc walk is retried with room, and still refuses if that fails
+
 ## [0.3.478] — 2026-09-24
-- the v8-pool experiment is INCONCLUSIVE, and the flag does the opposite of its name
+- the a11y audit uses the house profile API, and removes its profile
 
 ## [0.3.477] — 2026-09-24
-- the hang is bounded, and now it leaves a durable record of why
+- agent-opened pages can now open side-by-side with your tab (Tabs Split View, Chrome 155+)
 
 ## [0.3.476] — 2026-09-24
 - test real page reload in agent header rename regression

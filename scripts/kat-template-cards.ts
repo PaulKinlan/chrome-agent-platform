@@ -1,6 +1,7 @@
 // kat-template-cards.ts — create-agent template-select acceptance.
 // Proves the shipped catalogue uses the shared subtle native select, stays
 // behind Advanced, applies an editable template, and saves through real MV3.
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -47,9 +48,9 @@ const page = attached.result.sessionId;
 await send("Runtime.enable", {}, page);
 await send("Page.enable", {}, page);
 await send("Emulation.setDeviceMetricsOverride", { width: 1120, height: 900, deviceScaleFactor: 1, mobile: false }, page);
-const ev = async (expression: string) => (await send("Runtime.evaluate", {
+const ev = async (expression: string) => wireValue<any>(await send("Runtime.evaluate", {
   expression, returnByValue: true, awaitPromise: true,
-}, page)).result?.result?.value;
+}, page), "k.template-cards");
 const shot = async (name: string) => {
   const result = (await send("Page.captureScreenshot", { format: "png" }, page)).result;
   await Deno.writeFile(`${OUT}/${name}.png`, Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0)));

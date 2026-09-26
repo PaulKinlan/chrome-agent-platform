@@ -99,7 +99,7 @@ Deno.test("bgagent delete: the delete control is WIRED to a delete event (stopPr
   assertEquals(emitted.map((e) => e.type), ["delete"]);
 });
 
-Deno.test("bgagent delete: NTP rows are the SHARED summary list; delete goes through recipe.delete NON-BLOCKING with explicit success + focus restore", async () => {
+Deno.test("bgagent delete: NTP rows are the SHARED summary list; delete goes through background-agent.delete NON-BLOCKING with explicit success + focus restore", async () => {
   const src = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
   // The hub's Named/Background rows are rendered by the shared <agent-picker>
   // summary list — with the background Delete — instead of a hand-rolled row
@@ -139,13 +139,13 @@ Deno.test("bgagent delete: NTP rows are the SHARED summary list; delete goes thr
   assertMatch(sitePanel, /function openDiscoverPicker/, "the tab-picker row is still located in this region");
   assertEquals(/open-toggle/.test(src), false, "open-toggle must be fully removed");
   assertEquals(/action", "toggle"/.test(src), false, "the plain toggle action is gone from the hub");
-  // the row's delete flow: confirm → recipe.delete (agent record + schedule
+  // the row's delete flow: confirm → background-agent.delete (agent record + schedule
   // teardown in one authoritative route; NON-BLOCKING — the running task's 5s
   // termination dance must never block the UI)
   assertMatch(
     src,
-    /async function deleteBackgroundAgentFromHub[\s\S]{0,900}?recipe\.delete", \{ id: a\.id \}/,
-    "row delete must confirm then delete via the authoritative recipe.delete route",
+    /async function deleteBackgroundAgentFromHub[\s\S]{0,900}?background-agent\.delete", \{ id: a\.id \}/,
+    "row delete must confirm then delete via the authoritative background-agent.delete route",
   );
   // success is asserted EXPLICITLY (ok === true) — never "anything but false"
   assertMatch(src, /r\?\.ok === true/);
@@ -159,8 +159,8 @@ Deno.test("bgagent delete: NTP rows are the SHARED summary list; delete goes thr
   // the header path has the SAME route + explicit success
   assertMatch(
     src,
-    /else if \(kind === "background"\) \{[\s\S]{0,900}?recipe\.delete", \{ id \}/,
-    "the header delete path uses recipe.delete, never the raw-id task.cancel",
+    /else if \(kind === "background"\) \{[\s\S]{0,900}?background-agent\.delete", \{ id \}/,
+    "the header delete path uses background-agent.delete, never the raw-id task.cancel",
   );
   assertMatch(src, /out\?\.ok === true/);
   // no stale bare/raw-id cancel remains for background agents (task.cancel is
@@ -180,12 +180,12 @@ Deno.test("bgagent delete: the notifications-permission enable-time request is g
   );
 });
 
-Deno.test("bgagent delete: sidepanel routes through recipe.delete with explicit success", async () => {
+Deno.test("bgagent delete: sidepanel routes through background-agent.delete with explicit success", async () => {
   const src = await Deno.readTextFile(new URL("../extension/sidepanel/sidepanel.js", import.meta.url));
   assertMatch(
     src,
-    /kind === "background"[\s\S]{0,700}?recipe\.delete", \{ id \}/,
-    "the sidepanel background delete must use the authoritative recipe.delete route",
+    /kind === "background"[\s\S]{0,700}?background-agent\.delete", \{ id \}/,
+    "the sidepanel background delete must use the authoritative background-agent.delete route",
   );
   assertMatch(src, /out\?\.ok === true/, "success must be explicit (never \"anything but false\")");
   assertMatch(src, /Could not delete/, "a real failure must surface in status");
@@ -195,11 +195,11 @@ Deno.test("bgagent delete: sidepanel routes through recipe.delete with explicit 
 Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", async () => {
   const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
   assertMatch(src, /async "task\.cancelBackground"\(/, "task.cancelBackground must exist");
-  // recipe.delete tears the schedule down NON-BLOCKING (instant-delete contract)
+  // background-agent.delete tears the schedule down NON-BLOCKING (instant-delete contract)
   assertMatch(
     src,
-    /async "recipe\.delete"\([\s\S]{0,2000}?cancelScheduledTaskBackground\(`recipe:\$\{id\}`\)/,
-    "recipe.delete must use the non-blocking cancel",
+    /async "background-agent\.delete"\([\s\S]{0,2000}?cancelScheduledTaskBackground\(`recipe:\$\{id\}`\)/,
+    "background-agent.delete must use the non-blocking cancel",
   );
   // The durable-before-response contract: BOTH routes await the teardown's
   // `marked` stage (store mark + live-run abort) BEFORE responding — the SW
@@ -212,12 +212,12 @@ Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", 
   assertMatch(
     src,
     /cancelScheduledTaskBackground\(`recipe:\$\{id\}`\);[\s\S]{0,200}?await teardown\.marked;/,
-    "recipe.delete must await the durable mark before responding",
+    "background-agent.delete must await the durable mark before responding",
   );
   assertMatch(
     src,
-    /async "recipe\.delete"\([\s\S]{0,2400}?return \{ ok: true, stopping: true \}/,
-    "recipe.delete reports the non-blocking shape",
+    /async "background-agent\.delete"\([\s\S]{0,2400}?return \{ ok: true, stopping: true \}/,
+    "background-agent.delete reports the non-blocking shape",
   );
 });
 

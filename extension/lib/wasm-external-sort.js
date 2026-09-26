@@ -282,7 +282,7 @@ async function sortRange({ source, start, end, singleton, scratchDirectory, name
     run.access.close();
     return Object.freeze({ name, handle: run.handle });
   } catch (error) {
-    try { run.access.close(); } catch {}
+    try { run.access.close(); } catch { /* cleanup must not mask the original error */ }
     throw error;
   }
 }
@@ -318,9 +318,9 @@ async function mergePair({ left, right, scratchDirectory, name, options }) {
     rightAccess.close();
     return Object.freeze({ name, handle: merged.handle });
   } catch (error) {
-    try { merged.access.close(); } catch {}
-    try { leftAccess.close(); } catch {}
-    try { rightAccess.close(); } catch {}
+    try { merged.access.close(); } catch { /* cleanup must not mask the original error */ }
+    try { leftAccess.close(); } catch { /* cleanup must not mask the original error */ }
+    try { rightAccess.close(); } catch { /* cleanup must not mask the original error */ }
     throw error;
   }
 }
@@ -409,11 +409,11 @@ export async function runExternalSort({ wasmBytes, args, job, inputAccess, stdin
     }
     return 0;
   } catch (error) {
-    try { stderr.write(encoder.encode(`sort: ${String(error?.message ?? error)}\n`)); } catch {}
+    try { stderr.write(encoder.encode(`sort: ${String(error?.message ?? error)}\n`)); } catch { /* reporting must not mask the original error */ }
     throw error;
   } finally {
     for (const name of [...scratchNames]) {
-      try { await scratchDirectory.removeEntry(name); } catch {}
+      try { await scratchDirectory.removeEntry(name); } catch { /* scratch cleanup is best-effort; an entry may already be gone */ }
       scratchNames.delete(name);
     }
   }

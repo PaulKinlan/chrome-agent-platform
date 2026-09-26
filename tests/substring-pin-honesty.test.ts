@@ -110,15 +110,16 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const TESTS = `${ROOT}tests/`;
 
 // The partition guard (test-partition-guard.test.ts) classifies a test file by
-// scanning its CONTENT: it inherits the hazard class of every `tests/*.ts` path the
-// file merely MENTIONS (DRIVER_REF_RE reads that file and concatenates it), and any
-// built-dist path literal counts as "reads the built dist". Both are false positives
-// here — this guard spawns nothing, writes nothing, and SKIPS generated output by
-// owner ruling — but naming a serial-phase file (bundled-tool-packages) in an
-// allowlist key or a sentinel was enough to inherit its class and red the partition.
-// So every path this file names is ASSEMBLED at runtime, which is the convention the
-// partition guard itself uses for its detector probes, and no exemption is taken:
-// the partition stays strict for every other file.
+// scanning its CONTENT: it merges in the hazard classes of every `tests/*.ts`
+// driver the file LOADS or SPAWNS, and any built-dist path literal counts as
+// "reads the built dist". Neither applies to real references here — this guard
+// spawns nothing, imports no driver, and SKIPS generated output by owner
+// ruling — so the dist path stays assembled at runtime rather than spelled as
+// the literal the reads-dist detector keys on. (Since 8b8w reference-scoped the
+// inheritance, merely NAMING a sibling test file is safe; the assembly
+// convention stays for the dist literal, which is a presence rule, not a
+// reference rule.) No exemption is taken: the partition stays strict for every
+// other file.
 const tp = (rest: string): string => `tests/${rest}`;
 const distPath = (...parts: string[]): string => ["extension", "dist", ...parts].join("/");
 
@@ -1998,10 +1999,12 @@ Deno.test("guard: the attributed population and its documented exclusions", () =
   // check — those bundles carry the WORD five times as UI copy, and the guard counts API
   // CALLS via scripts/lib/wasm-call-scan.mjs — so it is exactly the class this ruling
   // skips: its verdict would otherwise depend on whether a build had run. 2 + 3 = 5.
-  // (Its filename is deliberately NOT written here: the partition guard treats a
-  // `tests/*.ts` mention as a driver reference and would make THIS file inherit that
-  // file's reads-dist hazard, which is the same exemption-by-assembly reason the dist
-  // path above is built rather than spelled.)
+  // (Since 8b8w reference-scoped the partition guard's driver inheritance, this
+  // comment can name its subject: a PROSE mention of tests/wasm-tree-shaking.test.ts
+  // is no longer a driver reference, so naming it inherits nothing. The dist
+  // path itself is still built rather than spelled — the reads-dist detector
+  // keys on that path as a LITERAL wherever it appears, and THIS file's text
+  // must stay clean of it.)
   assertEquals(stats.skippedBuildArtifact, 5,
     "build-artifact pins are skipped by owner ruling; a change here means dist is being judged");
   // The executable half of that ruling, and the proof behind this file's partition

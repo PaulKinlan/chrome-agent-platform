@@ -13,6 +13,11 @@
 // A NOTE, never a gate: it exits 0 whatever it finds, prints nothing when the
 // build is current or absent, and never touches the tree. It validates the
 // recorded target so a developer/enterprise build is judged against itself.
+// The npm name is `note:dist` (chrome-agent-platform-xru1): the old name
+// `check:dist` read as a gate and its stale-build message read as a verdict,
+// which filed this note as a "check that cannot fail". The REAL enforcement
+// stays the serial phase of `npm test`, which fails on a stale dist.complete
+// at HEAD. tests/dist-note-contract.test.ts pins the never-fail contract.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -35,7 +40,8 @@ try {
 
   await validateDistCompleteMarker({ root, distRoot, expectedTarget: target });
 } catch (error) {
-  console.error(`[dist] the built extension is stale against this tree: ${error?.message ?? error}`);
-  console.error("[dist] rebuild before the gate — npm run build:production  (npm run check:dist re-checks)");
+  console.error(`[dist] NOTE (not a gate): the built extension is stale against this tree: ${error?.message ?? error}`);
+  console.error("[dist] this note exits 0 by contract; the real enforcement is the serial phase of `npm test`, which fails on a stale dist.complete at HEAD");
+  console.error("[dist] rebuild before the gate — npm run build:production  (npm run note:dist re-checks)");
 }
 process.exit(0);

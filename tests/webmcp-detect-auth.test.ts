@@ -6,6 +6,23 @@ const auth = globalThis.CapBridgeAuth;
 const mainSource = await Deno.readTextFile(new URL("../extension/content/webmcp-detect-main.js", import.meta.url));
 const relaySource = await Deno.readTextFile(new URL("../extension/content/webmcp-detect-relay.js", import.meta.url));
 
+/** Wait for a CONDITION with a deliberate, bounded budget — never a fixed
+ *  wall-clock sleep (chrome-agent-platform-jy4e). The genuine relay rides REAL
+ *  timers (the MAIN probe's hook-announcement retries), and the fixed 100 ms
+ *  window this test used produced a 0-vs-1 red under fleet load. A bounded wait
+ *  removes the wall-clock guess while keeping the failure honest: a timeout
+ *  names the condition it never saw instead of reporting a confusing count.
+ *  What stays strict is the NEGATIVE control: a forged snapshot must never be
+ *  relayed, whatever the timing. */
+async function waitForCondition(fn: () => boolean, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fn()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out after ${timeoutMs}ms waiting for ${label} — the box may be too loaded for this probe, but the condition genuinely never arrived`);
+}
+
 Deno.test("passive detector is statically loaded into top-level HTTP pages", async () => {
   const manifest = JSON.parse(await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url)));
   assertEquals(manifest.content_scripts, [
@@ -82,9 +99,18 @@ Deno.test("passive detector rejects forged snapshots and relays the genuine prob
   assertEquals(typeof hookName, "string", "a per-document randomized hook exists");
 
   relayWindow.postMessage({ __cap_webmcp_detect: 1, type: "snapshot", toolCount: 99 }, "*");
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // The forgery PROVOKES the arm and is never relayed; the authenticated MAIN
+  // probe's relay arrives when that arm round-trip completes. Wait for it with a
+  // deliberate budget (5 s is a ceiling, not an expectation — the normal path
+  // settles in ~10 ms) instead of the fixed 100 ms window that produced jy4e.
+  await waitForCondition(() => detections.length > 0, 5_000, "the authenticated MAIN probe's relay");
   assertEquals(detections.length, 1, "nonce-less page forgery must not update the registry");
   assertEquals(detections[0].toolCount, 1, "the authenticated MAIN probe is relayed");
+  assertEquals(
+    detections.some((entry) => entry.toolCount === 99),
+    false,
+    "the forged snapshot is never relayed, under any timing",
+  );
 });
 
 Deno.test("passive detector relay re-arms on the SW's post-grant nudge", async () => {

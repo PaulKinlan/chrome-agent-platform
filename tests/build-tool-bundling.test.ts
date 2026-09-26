@@ -7,18 +7,24 @@
 // @ts-nocheck: subprocess and byte-level fixtures.
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertNotEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { runBoundedChild } from "../scripts/lib/bounded-child.mjs";
+import { boundedChildTimeoutMs, MAX_TIMER_MS, runBoundedChild } from "../scripts/lib/bounded-child.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GENERATOR = `${ROOT}scripts/build-bundled-tool-packages.mjs`;
 const DRIFT_TARGET = `${ROOT}packages/bundled/sqlite3/PROVENANCE.json`;
 
-const CHILD_TIMEOUT_MS = Number(Deno.env.get("CAP_BOUNDED_CHILD_TIMEOUT_MS") ?? 120_000);
+// 61h3: parse the operator's override through the shared helper, where an empty value means
+// "unset" — `Number("") === 0` used to make CAP_BOUNDED_CHILD_TIMEOUT_MS="" a 0 ms bound that
+// killed every child on the first tick.
+const CHILD_TIMEOUT_MS = boundedChildTimeoutMs(Deno.env.toObject());
 // build.mjs runs the generator under its OWN bound (CAP_BUNDLED_TOOL_TIMEOUT_MS,
 // default 120s) and each helper spawn is its own process group, so the outer
 // bound must be LONGER than the inner one: the inner error must surface first,
 // named. An outer kill would leave the inner child holding the pipes.
-const BUILD_TIMEOUT_MS = CHILD_TIMEOUT_MS + 30_000;
+// The outer bound must stay a valid timer delay: the +30 s could exceed the 2^31-1 timer
+// ceiling when the operator sets the inner bound near it, and the runtime would silently clamp
+// it to 1 ms (chrome-agent-platform-61h3 re-review).
+const BUILD_TIMEOUT_MS = Math.min(CHILD_TIMEOUT_MS + 30_000, MAX_TIMER_MS);
 
 /** Bounded child runner — the SAME implementation build.mjs uses
  * (scripts/lib/bounded-child.mjs). The bundled-tool generator can block in a

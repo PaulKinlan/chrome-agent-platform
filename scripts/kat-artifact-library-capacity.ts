@@ -6,6 +6,7 @@
 // stubbing the `asset.capacity` response in the page BEFORE the module loads
 // (addScriptToEvaluateOnNewDocument), which exercises the REAL renderCapacity
 // DOM path — the store's 2 MiB bound cannot be filled in a headless run.
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -62,7 +63,7 @@ async function openPage(url: string, onNewDoc?: string) {
 async function evaluate(page: string, expression: string) {
   const res = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, page);
   if (res.result?.exceptionDetails) throw new Error(res.result.exceptionDetails.exception?.description ?? "evaluate failed");
-  return res.result?.result?.value;
+  return wireValue<any>(res, "k.artifact-library-capacity");
 }
 async function screenshot(page: string, name: string) {
   const shot = await send("Page.captureScreenshot", { format: "png" }, page);

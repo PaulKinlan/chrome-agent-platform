@@ -117,6 +117,43 @@ function mount(attrs = {}) {
   return picker;
 }
 
+/** Every BUTTON under `root` that contains another BUTTON. A button inside a
+ * button is invalid interactive content (the inner control's click is also the
+ * outer button's click), and it is exactly the shape the Delete contract
+ * forbids: the row and its Delete must be siblings. */
+function buttonsInsideButtons(root) {
+  const out = [];
+  const walk = (n) => {
+    if (n.tagName === "BUTTON") {
+      for (const d of n.all()) if (d.tagName === "BUTTON") out.push([n, d]);
+    }
+    for (const c of n.children ?? []) walk(c);
+  };
+  walk(root);
+  return out;
+}
+
+/** The Delete contract's DOM shape: the row and its Delete are SIBLINGS under
+ * `.optwrap`. `byClass` counts DESCENDANTS, so it cannot tell
+ * `wrap.append(opt, del)` from `opt.append(del); wrap.append(opt)` — both
+ * leave one `.opt` and one `.rowdel` under the wrapper. These assertions read
+ * the parent/child edges themselves, so the wrapper shape is pinned and not
+ * merely counted. */
+function assertSiblingDelete(wrap) {
+  const opt = wrap.byClass("opt")[0];
+  const del = wrap.byClass("rowdel")[0];
+  assert(opt, "the wrapper contains its row");
+  assert(del, "the wrapper contains its Delete");
+  assertEquals(wrap.children.filter((c) => c === opt).length, 1, "the row is a DIRECT child of the wrapper, never nested in it");
+  assertEquals(wrap.children.filter((c) => c === del).length, 1, "the Delete is a DIRECT child of the wrapper, never inside the row");
+  assert(!opt.children.includes(del), "the Delete is never a child of the row it deletes");
+  assertEquals(
+    buttonsInsideButtons(wrap).map(([outer, inner]) => `${outer.tagName}>${inner.tagName}`),
+    [],
+    "no button is nested inside another button",
+  );
+}
+
 Deno.test("agent-picker summary: no search combobox, rows are plain buttons", async () => {
   const summary = mount({ summary: "", agents: JSON.stringify(GROUPS) });
   assert(!/role="combobox"/u.test(summary.shadowRoot.innerHTML), "the summary has no search combobox to own the list");
@@ -179,6 +216,7 @@ Deno.test("agent-picker deletable: only the named kinds get a Delete, and deleti
   const picker = mount({ summary: "", deletable: "background", agents: JSON.stringify(GROUPS) });
   const wrappers = picker._list.byClass("optwrap");
   assertEquals(wrappers.length, 1, "only the background row is wrapped with its Delete");
+  assertSiblingDelete(wrappers[0]);
   assertEquals(wrappers[0].byClass("opt").length, 1, "the row is a SIBLING of its Delete, never its parent");
   const dels = wrappers[0].byClass("rowdel");
   assertEquals(dels.length, 1, "the background row carries its Delete");
@@ -200,6 +238,9 @@ Deno.test("agent-picker deletable: only the named kinds get a Delete, and deleti
 Deno.test("agent-picker deletable: a bare attribute covers every kind, no attribute covers none", async () => {
   const every = mount({ summary: "", deletable: "", agents: JSON.stringify(GROUPS) });
   assertEquals(every._list.byClass("rowdel").length, 2, "a bare deletable puts Delete on every row");
+  // Every wrapper, not just the one the named-kinds test mounts: a nesting
+  // mutant that applies on one path only is still a nested button.
+  for (const wrap of every._list.byClass("optwrap")) assertSiblingDelete(wrap);
   const none = mount({ summary: "", agents: JSON.stringify(GROUPS) });
   assertEquals(none._list.byClass("rowdel").length, 0, "no deletable attribute, no Delete");
   // The destructive control is a SUMMARY affordance: a combobox row is a

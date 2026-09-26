@@ -2,6 +2,7 @@
 // `register-task` route and the `schedule_task` agent tool call into this, so
 // validation, persistence, and alarm creation stay in a single place.
 
+import { capLog } from "./cap-log.js";
 import { newId } from "./pure.js";
 import { kvGet, kvSet } from "./kv.js";
 import { assertRunAlive, assertRunOwned } from "./run-fence.js";
@@ -98,15 +99,16 @@ export function formatSchedulerDiagnostic({
     ts: Date.now(),
   };
 }
+const schedDiagLog = capLog("scheduler-diagnostic");
 
 export function logSchedulerDiagnostic(diag, level = "error") {
   const record = formatSchedulerDiagnostic(diag);
   const jsonStr = JSON.stringify(record);
   try {
     if (level === "warn") {
-      console.warn(`${record.tag} ${jsonStr}`);
+      schedDiagLog.warn(`${record.tag} ${jsonStr}`);
     } else {
-      console.error(`${record.tag} ${jsonStr}`);
+      schedDiagLog.error(`${record.tag} ${jsonStr}`);
     }
   } catch {
     /* never throw from diagnostic logger */
@@ -950,7 +952,7 @@ export function cancelScheduledTaskBackground(name) {
     await marked;
     return await finalizeCancellation(name);
   })();
-  // Fire-and-forget callers (recipe teardown after delete, the disable path)
+  // Fire-and-forget callers (skill teardown after delete, the disable path)
   // never await these — mark both handled so a marking failure is not
   // reported as an unhandled rejection, while awaiters still receive it.
   marked.catch(() => {});

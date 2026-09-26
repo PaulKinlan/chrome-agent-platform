@@ -6,6 +6,7 @@
 //      cannot probe a fixed global; the per-document randomized hook IS
 //      present (the detector still injects).
 // deno run -A scripts/kat-fingerprint-surface.ts [extension-dir] [evidence-dir]
+import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -73,7 +74,7 @@ try {
     if (response?.result?.exceptionDetails) {
       throw new Error(JSON.stringify(response.result.exceptionDetails));
     }
-    return response?.result?.result?.value;
+    return wireValue<any>(response, "k.fingerprint-surface");
   };
 
   const worker = await waitForServiceWorker(send, {
