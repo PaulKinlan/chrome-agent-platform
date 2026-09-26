@@ -4037,58 +4037,7 @@ async function runThreadTurn(text, attachments = [], mention = null) {
   const threadAtStart = currentThreadId;
   const owns = () => runSurfaceOwner.owns(owner) && currentAgentId === agentAtStart &&
     currentAgentKind === kindAtStart;
-  const isAcp = mention?.kind === "acp" || kindAtStart === "acp";
   let res;
-  if (isAcp) {
-    if (typeof threadConversation.appendUser === "function") {
-      threadConversation.appendUser(text, Date.now(), attachments);
-    }
-    const opened = await send("acp.journal", {
-      action: "open",
-      task: text,
-      attachments,
-      threadId: threadAtStart,
-      harnessId: mention?.id || agentAtStart || "pi",
-    }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    const acpThreadId = opened?.ok === true ? opened.threadId : null;
-    const acpExecutionId = opened?.executionId || `acp:${threadAtStart || "hub"}:${mention?.id || agentAtStart || "pi"}:${Date.now()}`;
-    liveClientRunId = acpExecutionId;
-    threadConversation?.bindLiveStatusExecution?.(acpExecutionId);
-    const acpTools = [];
-    res = await runAcpTaskTurn({
-      container: threadConversation,
-      task: text,
-      attachments,
-      threadId: acpThreadId ?? threadAtStart,
-      harnessId: mention?.id || agentAtStart || "pi",
-      executionId: acpExecutionId,
-      onRunRegistered: (id) => runSurfaceOwner.commit(owner, () => {
-        liveClientRunId = id;
-        threadConversation?.bindLiveStatusExecution?.(id);
-      }),
-      onStatus: (state) => runSurfaceOwner.commit(owner, () => renderRunStatus(state)),
-      onEvent: (ev) => { if (ev?.kind === "tool") acpTools.push(ev); },
-      isStale: () => !owns(),
-      sessionStore: acpSessionStore,
-      settings: acpSessionStore,
-    });
-    if (acpThreadId) {
-      await send("acp.journal", {
-        action: "result",
-        threadId: acpThreadId,
-        executionId: acpExecutionId,
-        text: res?.result ?? "",
-        ok: res?.ok === true,
-        error: res?.error ?? "",
-        tools: acpTools,
-      }).catch(() => null);
-      res = { ...res, threadId: acpThreadId };
-    } else if (opened?.error) {
-      if (typeof threadConversation.appendSystem === "function") {
-        threadConversation.appendSystem(`This turn could not be saved to your tasks: ${opened.error}`);
-      }
-    }
-  } else {
     res = await runConversationTurn(threadConversation, {
     text,
     attachments,
@@ -4110,7 +4059,6 @@ async function runThreadTurn(text, attachments = [], mention = null) {
     isStale: () => !owns(),
     projectionOwner: owner,
   });
-  }
   // The fence: a superseded run mutates NO global surface state. If THIS run
   // was the last status writer, reset its orphaned "running…" (a run parked
   // in a hanging permission request never reaches its own reset).

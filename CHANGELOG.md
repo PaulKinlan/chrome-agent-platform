@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- connected agents can ask to use browser tools through CAP with approval cards before permitted actions
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 

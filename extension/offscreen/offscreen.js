@@ -15,6 +15,8 @@ import { registerWasmJobHost } from "../lib/wasm-job-host.js";
 import { registerAgentWorkerHost } from "../lib/agent-worker-host.js";
 import { registerPythonHost } from "../lib/python-host.js";
 import { registerTableWorkerHost } from "../lib/table-worker-host.js";
+import { registerAcpModelHost } from "../lib/acp-model-host.js";
+registerAcpModelHost();
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) =>
   handleScriptRunMessage(message, sendResponse, document, "offscreen")

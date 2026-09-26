@@ -260,6 +260,9 @@ import { effectiveMcpServers, normalizeMcpServerList, redactMcpServerList } from
 // client directly.
 import { mountRemoteMcpServers } from "../lib/mcp-client.js";
 import { openAcpTurn, recordAcpTurn } from "../lib/acp-thread-journal.js";
+import { createAcpModelProxy } from "../lib/acp-model-proxy.js";
+import { acpRunConfig } from "../lib/acp-run-config.js";
+import { createAcpRunPermissions } from "../lib/acp-run-permissions.js";
 import { buildMcpRunTools } from "../lib/mcp-run-tools.js";
 import {
   commitThreadTerminal,
@@ -3358,7 +3361,7 @@ function boundedOwnerSiteActivity(value) {
   return { origin, tool };
 }
 
-async function runTask({ id, task, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null, agentTools = null, approvalResolverDocumentId = "", uiRunId = null }) {
+async function runTask({ id, task, harnessId = null, scheduled = false, attachments = [], fence = null, onProgress = null, history = [], scoped = false, memory = null, modelOverride = null, promptScope = null, agentRole = "", agentSkills = [], agentSurfaceRef = null, providerServerAgentId = null, clientCorrelationId = null, threadId = null, scheduleName = null, runKind = null, executionId: resumedExecutionId = null, preallocatedExecutionId = null, admissionFence = null, permissionResume = false, resumeRoute = "runTask", resumeRouteArgs = null, resumeToken = null, providerBinding = null, providerGateConfig = null, allowProviderChange = false, approvalBinding = null, delegation = null, maxIterations = undefined, skipRunLock = false, parentRunId = null, onExecutionStarted = null, journaledSkillIds = null, agentTools = null, approvalResolverDocumentId = "", uiRunId = null }) {
   // skipRunLock is ONLY for the delegation child path (agent.delegate): the
   // child builds a FRESH orchestrator (its own memory + abort controller via
   // the memoryOverride/promptScope/executionId path below), so the shared-
@@ -3371,7 +3374,8 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
     // their own OPFS). The journal + the orchestrator's memory tools then write
     // to that agent's own tier, never the master's.
     const mem = memory ?? masterMemory();
-    const providerConfig = providerGateConfig ?? await getProviderConfig();
+    const acpConfig = harnessId ? await acpRunConfig(harnessId, async (key) => (await kvGet(key))?.[key]) : null;
+    const providerConfig = acpConfig?.providerConfig ?? providerGateConfig ?? await getProviderConfig();
     const currentProviderBinding = resumedExecutionId
       ? providerResumeIdentity(providerConfig)
       : (providerBinding ?? providerResumeIdentity(providerConfig));
@@ -3415,6 +3419,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       journaledSkillIds: structuredClone(Array.isArray(journaledSkillIds) && journaledSkillIds.length > 0 ? journaledSkillIds : []),
       scoped: !!scoped,
       route: resumeRoute,
+      harnessId,
       routeArgs: structuredClone(resumeRouteArgs ?? {}),
       providerBinding: currentProviderBinding,
       idempotencyKey: executionId,
@@ -3824,6 +3829,17 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         .map((a) => ({ grantId: a.grantId, name: a.folderName || a.name || "folder" }));
       setRunContext({ threadId, agentRole, agentSurfaceRef, folderGrants: runFolderGrants });
       if (delegationState) activeDelegationRuns.set(executionId, delegationState);
+      if (acpConfig) {
+        const ready = await ensureOffscreen();
+        if (!ready.ok) throw new Error(ready.error);
+        modelOverride = createAcpModelProxy({
+        ...acpConfig,
+        permissionHandler: (request) => acpRunPermissions.ask({
+          executionId, documentId: approvalResolverDocumentId, harnessId,
+          request, emit: journalingProgress, auto: acpConfig.auto,
+        }),
+        });
+      }
       orch = await ensureOrchestrator(
         journalingProgress,
         scoped,
@@ -3842,6 +3858,7 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
         approvalResolverDocumentId,
       );
       durableRunAborters.set(executionId, () => {
+        acpRunPermissions.cancel(executionId);
         try { orch?.abort?.(); } catch { /* already stopped */ }
       });
       // chrome-agent-platform-afiu: bind the run's steer source (per run, like
@@ -4354,6 +4371,8 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       try { error.executionId = executionId; } catch { /* immutable error */ }
       throw error;
     } finally {
+      if (acpConfig) modelOverride?.close?.();
+      acpRunPermissions.cancel(executionId);
       clearInterval(durableHeartbeat);
       durableRunAborters.delete(executionId);
       const streamCleanup = await releaseRunWasmStreamOutputs(executionId);
@@ -4832,6 +4851,7 @@ async function recordWebmcpPageReport(origin, acceptedTools) {
 // ── owner-bound destructive-operation approvals ──────────────────────────
 const ownerApprovalStore = createApprovalStore();
 const inlinePermissionWaiters = new Map();
+const acpRunPermissions = createAcpRunPermissions({ isActive: (id) => activeExecutions.has(id) });
 const INLINE_PERMISSION_TTL_MS = 60_000;
 
 async function waitForInlinePermissionDecision(executionId, result, onProgress) {
@@ -5500,7 +5520,9 @@ function dispatchRoute(type, body, context) {
 // gated permission request; this boundary means no OTHER extension surface
 // (a conversation page, a compromised renderer surface) can drive them.
 
-const providerRoutes = createProviderRoutes({ invalidateAgent });
+const providerRoutes = createProviderRoutes({ invalidateAgent,
+  harnessConfig: async (id) => (await acpRunConfig(id, async (key) => (await kvGet(key))?.[key])).providerConfig,
+});
 // "Test connection" (Settings MCP servers) connects via the same SDK-backed
 // remote mount the per-run tool injection uses (imported directly above). The
 // unit test injects its own fake mount into createMcpRoutes; the real path is
@@ -6744,6 +6766,8 @@ const handlers = mergeRouteMaps(
     // concurrency finding).
     let threadId = null;
     let threadHistory = m.history ?? [];
+    let harnessId = m.mention?.kind === "acp" ? m.mention.id : m.harnessId ?? null;
+    if (harnessId) await acpRunConfig(harnessId, async (key) => (await kvGet(key))?.[key]);
     // Continuation fidelity: the union of every skill this thread's terminal
     // rows journaled (only exists when the run continues an EXISTING thread).
     let threadJournaledSkills = null;
@@ -6754,7 +6778,7 @@ const handlers = mergeRouteMaps(
       // the run with an explicit, actionable error instead.
       let cont = null;
       try {
-        cont = await continueThread(m.threadId, m.task, m.attachments);
+        cont = await continueThread(m.threadId, m.task, m.attachments, harnessId);
       } catch (e) {
         cont = null;
         pushDiagnostic("error", `[thread] continueThread failed for ${m.threadId}: ${String(e?.message ?? e).slice(0, 200)}`);
@@ -6764,9 +6788,10 @@ const handlers = mergeRouteMaps(
       }
       threadId = cont.thread.id;
       threadHistory = cont.history;
+      harnessId ??= cont.thread.harnessId ?? null;
       threadJournaledSkills = cont?.skills ?? null;
     } else {
-      const thread = await createThread(m.task, m.attachments).catch((e) => {
+      const thread = await createThread(m.task, m.attachments, harnessId).catch((e) => {
         pushDiagnostic("error", `[thread] createThread failed: ${String(e?.message ?? e).slice(0, 200)}`);
         return null;
       });
@@ -6797,7 +6822,7 @@ const handlers = mergeRouteMaps(
     // logs (log-redesign): no post-run replay copies rows into the thread
     // body. See lib/thread-run-view.js + thread.get.
     try {
-      if (mention && !mentionRoute) {
+      if (mention && !mentionRoute && mention.kind !== "acp") {
         result = { ok: false, error: `cannot delegate to ${mention.name}: unknown agent kind ${mention.kind}` };
       } else if (mentionRoute === "agent.delegate") {
         // uiRunId carries the UI attempt's run id so the delegate's progress
@@ -6828,6 +6853,7 @@ const handlers = mergeRouteMaps(
         }, routeContext);
       } else {
       result = await runTask({
+        harnessId,
         id: m.id,
         task: m.task,
         attachments: bounded,
@@ -8461,7 +8487,8 @@ const handlers = mergeRouteMaps(
     if (context?.principal !== "owner-options") return { ok: false, error: "approvals are available only in Settings" };
     return { ok: true, approvals: await ownerApprovalRows() };
   },
-  async "run.resolve-inline-approval"({ requestId, approve }, context) {
+  async "run.resolve-inline-approval"({ requestId, approve, optionId }, context) {
+    if (String(requestId).startsWith("acp:")) return acpRunPermissions.resolve(requestId, optionId, context);
     if (context?.principal !== "extension") return { ok: false, error: "only the originating conversation can resolve this request" };
     const row = inlinePermissionWaiters.get(String(requestId ?? ""));
     if (!row || !activeExecutions.has(row.executionId)) return { ok: false, error: "this permission request expired" };

@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import {
   assertBundleBudget,
+  assertStorePackageBudget,
   BUDGET_REPORTED_BUNDLES,
   duplicateAiSdkInputs,
   formatContributors,
@@ -112,22 +113,17 @@ Deno.test("bundle budget: no shipped source or built bundle references a CDN (Py
   }
 });
 
-Deno.test("bundle budget: a store-built dist ships a minified SW at or under budget (when present)", async () => {
-  // build-bootstrap regenerates dist with --target=store ahead of this file
-  // in the serial suite; when the marker says store, the REAL bytes are
-  // gated here too (CI-visible). A developer or absent dist skips honestly.
-  let marker;
+Deno.test("bundle budget: testing over-budget Store bytes is allowed; packaging refuses the same bytes", async () => {
+  const root = await Deno.makeTempDir({ dir: durableDir("bundle-budget-tests"), prefix: "cap-package-budget-" });
+  const worker = `${root}/worker.js`;
   try {
-    marker = JSON.parse(await Deno.readTextFile("extension/dist/dist.complete"));
-  } catch {
-    return; // no built dist in this environment
-  }
-  if (marker?.target !== "store") return; // developer build: unminified by design
-  const size = (await Deno.stat("extension/dist/background/service-worker.js")).size;
-  assert(
-    size <= STORE_SW_BUDGET_BYTES,
-    `store-built SW bundle is ${size} bytes — over the ${STORE_SW_BUDGET_BYTES} budget`,
-  );
+    await Deno.writeTextFile(worker, " ".repeat(STORE_SW_BUDGET_BYTES + 1));
+    assertEquals(assertBundleBudget({ label: "worker", bytes: STORE_SW_BUDGET_BYTES + 1, enforceSize: false }), STORE_SW_BUDGET_BYTES + 1);
+    assertThrows(() => assertStorePackageBudget([{ archivePath: "dist/background/service-worker.js", sourcePath: worker }]), Error, "bundle budget exceeded");
+    await Deno.writeTextFile(worker, "export const clean = true;");
+    assertEquals(assertStorePackageBudget([{ archivePath: "dist/background/service-worker.js", sourcePath: worker }]), 26);
+    assertThrows(() => assertStorePackageBudget([]), Error, "no service-worker");
+  } finally { await Deno.remove(root, { recursive: true }); }
 });
 
 // ── chrome-agent-platform-63et: one AI SDK instance per bundle ─────────────

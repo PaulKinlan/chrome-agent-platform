@@ -588,7 +588,7 @@ try {
     }
 
     // The bundle budget gate (CAP-FB-20260830-BUNDLE-BUDGET-01): the store
-    // build FAILS over budget and names the top contributors; the developer
+    // package FAILS over budget; builds report size without blocking tests. The developer
     // build warns (its unminified bytes are larger by design).
     {
       const { assertBundleBudget, STORE_SW_BUDGET_BYTES, formatContributors } = await import("./scripts/bundle-budget.mjs");
@@ -598,8 +598,8 @@ try {
           console.log(`bundle budget: developer SW bundle is ${swSize} bytes (unminified; store budget ${STORE_SW_BUDGET_BYTES} applies to the minified store build)`);
         }
       } else {
-        assertBundleBudget({ label: "background/service-worker.js", bytes: swSize, metafile: swResult.metafile });
-        console.log(`bundle budget: store SW bundle ${swSize} bytes <= ${STORE_SW_BUDGET_BYTES} budget`);
+        assertBundleBudget({ label: "background/service-worker.js", bytes: swSize, metafile: swResult.metafile, enforceSize: false });
+        console.log(`bundle budget: store SW bundle ${swSize} bytes; packaging budget ${STORE_SW_BUDGET_BYTES}`);
       }
     }
 

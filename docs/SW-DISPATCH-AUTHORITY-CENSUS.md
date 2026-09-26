@@ -211,7 +211,7 @@ Fenced with `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`). Ca
 | `privacy.statement` | `service-worker.js` | Generates transparency statement |
 | `tools.invoke` | `service-worker.js` | Extension UI invokes an enrolled tool directly |
 | `management.resolve-approval` | `service-worker.js` | Settings resolves a pending approval card |
-| `run.resolve-inline-approval` | `service-worker.js` | Chat resolves an inline approval card |
+| `run.resolve-inline-approval` | `service-worker.js` | Chat resolves an inline approval card; candidate ACP option answers additionally bind the active run and originating document |
 | `approval.detail` | `service-worker.js` | Reads approval card detail with diff |
 | `run.dismissFailed` | `service-worker.js` | Dismisses a failed run notification |
 | `run.cancel` | `service-worker.js` | Cancels an active run |

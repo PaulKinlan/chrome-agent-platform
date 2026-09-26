@@ -25,6 +25,7 @@
  * @property {number} [requestTimeoutMs] - Request timeout in milliseconds (default: 120,000)
  * @property {(permission: AcpPermissionRequest) => Promise<string|null>} [permissionHandler]
  * @property {any} [transport] - Optional explicit transport (for testing)
+ * @property {(method: string, params: any) => Promise<any>} [toolHandler] - Run-owned CAP tool channel
  */
 
 /**
@@ -63,6 +64,7 @@ export class AcpClient {
     this.requestTimeoutMs = options.requestTimeoutMs || 120_000;
     this.permissionHandler = options.permissionHandler || null;
     this.customTransport = options.transport || null;
+    this.toolHandler = options.toolHandler || null;
 
     /** @type {WebSocket|null} */
     this.ws = null;
@@ -287,7 +289,8 @@ export class AcpClient {
       this.pending.set(id, { resolve, reject, deadline });
 
       const msg = { jsonrpc: "2.0", id, method, params };
-      this._send(msg);
+      try { this._send(msg); }
+      catch (error) { clearTimeout(deadline); this.pending.delete(id); reject(error); }
     });
   }
 
@@ -427,6 +430,16 @@ export class AcpClient {
         id: msg.id,
         result: { outcome: { outcome: "selected", optionId: selectedOptionId } },
       });
+      return;
+    }
+
+    if (this.toolHandler && ["_cap/tools/list", "_cap/tools/call"].includes(msg.method)) {
+      try {
+        const result = await this.toolHandler(msg.method, msg.params);
+        this._send({ jsonrpc: "2.0", id: msg.id, result });
+      } catch (error) {
+        if (this.connected) this._send({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: String(error?.message ?? error) } });
+      }
       return;
     }
 

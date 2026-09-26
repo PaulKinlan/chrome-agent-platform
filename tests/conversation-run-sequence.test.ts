@@ -30,6 +30,7 @@ interface FakeSw {
   runHoldMs: number;
   resultText: string;
   lastRunId: string | null;
+  routes?: Array<{ type: string; harnessId?: string }>; 
 }
 
 // conversation.js holds ONE module-level progress port across turns/tests; the
@@ -43,6 +44,7 @@ function installChromeStub(sw: FakeSw) {
     runtime: {
       lastError: null,
       sendMessage(msg: { type: string; runId?: string }, cb: (res: unknown) => void) {
+        sw.routes?.push(msg);
         if (msg.type === "provider.permission-summary") {
           queueMicrotask(() => cb({ ok: true, local: true }));
           return;
@@ -899,4 +901,15 @@ Deno.test("conversation run sequence: hub submit while previous thread follow-up
   assertEquals(bubbles.filter((b) => b.content.includes("slow")).length, 0,
     "fenced slow turn never appends bubbles to successor surface");
   assertEquals(bubbles.map((b) => b.content), ["new hub prompt", "result for new hub prompt"]);
+});
+
+Deno.test("conversation ACP selection dispatches a durable agent.run, not a named agent", async () => {
+  const sw: FakeSw = { runHoldMs: 0, resultText: "harness done", lastRunId: null, routes: [] };
+  installChromeStub(sw);
+  const { runConversationTurn } = await import("../extension/shared/conversation.js");
+  await runConversationTurn(makeContainer([]) as never, {
+    text: "list tabs", agentKind: "acp", agentId: "claude-code",
+  } as never);
+  const routes = sw.routes!.filter(m => m.type.endsWith(".run"));
+  assertEquals(routes.map(m => [m.type, m.harnessId]), [["agent.run", "claude-code"]]);
 });
