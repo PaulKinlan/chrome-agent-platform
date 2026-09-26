@@ -1074,7 +1074,7 @@ No single canonical "Kite browser in wasm" exists. Candidates found:
 ## 58. Python / Pyodide — TIER 1 (built set via loadPackage; per owner scope expansion 2026-09-05)
 
 ### Pyodide core + built packages (pre-bundle tier)
-- **Status:** Core runtime is **BUILT** (`wasm-tools/python/MANIFEST.json`, `extension/lib/python-runtime.js`, `extension/lib/python-host.js`). Built package set is **SPECIFIED, NOT BUILT** (owning bead: `chrome-agent-platform-4p7j` / `pyodide-admission`).
+- **Status:** Core runtime is **BUILT** (`wasm-tools/python/MANIFEST.json`, `extension/lib/python-runtime.js`, `extension/lib/python-host.js`). Built package set is **SPECIFIED, NOT BUILT** (owning bead: `chrome-agent-platform-4p7j`).
 - Docs: https://pyodide.org/en/stable/usage/packages-in-pyodide.html · https://pyodide.org/en/stable/usage/loading-packages.html
 - Pinned Runtime: **Pyodide v0.26.4** (CPython 3.12.1, Emscripten 3.1.58, ABI `2024_0`)
 - License: MPL-2.0 AND PSF-2.0 (Pyodide core and CPython standard library; individual packages retain their upstream licenses — numpy BSD-3, pandas BSD-3, scipy BSD-3, scikit-learn BSD-3, matplotlib PSF-based, regex Apache-2.0, PyYAML MIT, cryptography Apache-2.0/BSD-3)
@@ -1182,4 +1182,4 @@ composition of catalogued tools across Lanes A, B, and C:
 4. **Offline Asset Compression & Storage:**
    - Full-page DOM / MHTML archives → compressed using `cap.bundled.compressops` (Lane A, BUILT) into origin-keyed OPFS storage.
 
-- Verdict for the category itself: **no new bespoke wasm binaries needed**; the core productivity value is realized by composing the catalogued tools across Lanes A, B, and C as detailed above.
+- Verdict for the category itself: **no new bespoke wasm binaries needed**; the core productivity value will be realized by composing the catalogued tools across Lanes A, B, and C once wired as detailed above.

@@ -37,7 +37,7 @@ This deliverable provides the complete architecture and import pipeline specific
 ## 2. Python / Pyodide Three-Tier Architecture (§§58–60)
 
 ### Tier 1: Pinned Built-in Package Set (Pre-bundled Tier)
-- **Status:** Core Pyodide runtime is **BUILT** (`wasm-tools/python/MANIFEST.json`, `extension/lib/python-runtime.js`). Built package set is **SPECIFIED, NOT BUILT** (owning bead: `chrome-agent-platform-4p7j` / `pyodide-admission`).
+- **Status:** Core Pyodide runtime is **BUILT** (`wasm-tools/python/MANIFEST.json`, `extension/lib/python-runtime.js`). Built package set is **SPECIFIED, NOT BUILT** (owning bead: `chrome-agent-platform-4p7j`).
 - Runtime: Pyodide v0.26.4 (CPython 3.12.1, Emscripten 3.1.58, ABI `2024_0`). License: `MPL-2.0 AND PSF-2.0`.
 - Mechanics: `pyodide.loadPackage([...])` from JavaScript in offscreen worker. Packages are pinned in `wasm-tools/python/pyodide-lock.json`. Unpacks into in-memory MEMFS `site-packages` via `unpackArchive` (tested in KAT).
 - 8 Core Packages Hash-Pinned in `pyodide-lock.json`:

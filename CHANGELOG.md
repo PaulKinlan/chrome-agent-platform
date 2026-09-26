@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- resolve review residuals R1 and R4 (future tense in §65 and canonical bead id for Tier 1)
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 
