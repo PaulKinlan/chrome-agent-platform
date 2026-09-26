@@ -14,6 +14,7 @@ import {
   initialAvatar,
   listNamedAgents,
   normalizeCoreAssets,
+  projectUnifiedAgents,
   slugifyAgentId,
   updateNamedAgent,
 } from "../extension/lib/named-agents.js";
@@ -122,13 +123,15 @@ Deno.test("named agents: create → get → update → list → delete", async (
   assertEquals(updated.agent.name, "PR Penguin");
 
   const list = await listNamedAgents();
-  assertEquals(list.length, 1);
-  assertEquals(list[0].name, "PR Penguin");
+  // wz6i: listNamedAgents overlays the built-in background SEEDS — count the
+  // persisted (non-seed) records here.
+  assertEquals(list.filter((a) => !a.seeded).length, 1);
+  assertEquals(list.find((a) => !a.seeded).name, "PR Penguin");
 
   const del = await deleteNamedAgent(id);
   assert(del.ok);
   assertEquals(await getNamedAgent(id), null);
-  assertEquals((await listNamedAgents()).length, 0);
+  assertEquals((await listNamedAgents()).filter((a) => !a.seeded).length, 0);
 });
 
 Deno.test("named agents: full delete clears the agent's memory/OPFS store too", async () => {
@@ -384,4 +387,87 @@ Deno.test("role bounds r2 (Gemini review): the SW update-route normalization lay
   const after = await getNamedAgent(created.agent.id);
   assertEquals(after.role, bigRole.trim(), "the full role survives the update-route patch shape VERBATIM (modulo the intentional edge trim)");
   assertEquals(after.skills.length, 64, ">32 skills survive the route patch shape");
+});
+
+// ── wz6i: built-in background agents are seeded agent-store records ────────
+
+Deno.test("wz6i: listNamedAgents overlays the built-in background SEEDS under the persisted records", async () => {
+  store.clear();
+  const created = await createNamedAgent({ name: "My Own Agent", role: "helps" });
+  assert(created.ok);
+  const list = await listNamedAgents();
+  const persisted = list.filter((a) => !a.seeded);
+  const seeds = list.filter((a) => a.seeded);
+  assertEquals(persisted.length, 1);
+  assert(seeds.length > 0, "the built-in background agents seed the store");
+  const hat = seeds.find((s) => s.id === "auto-group-by-domain");
+  assert(hat, "the Sorting Hat is a seeded agent record");
+  assertEquals(hat.builtin, true);
+  assertEquals(hat.surfaceRef, "background:auto-group-by-domain");
+  assertEquals(hat.memoryKey, "recipe:auto-group-by-domain");
+  assertEquals(hat.defaultSchedule, { periodInMinutes: 30 });
+  // A seed NEVER masquerades as scheduled: no live schedule without a task.
+  assertEquals(hat.schedule, undefined);
+});
+
+Deno.test("wz6i: getNamedAgent falls back to the seed for a built-in background agent", async () => {
+  store.clear();
+  const hat = await getNamedAgent("auto-group-by-domain");
+  assert(hat, "the seed resolves by id");
+  assertEquals(hat.seeded, true);
+  assertEquals(hat.skills[0].id, "auto-group-by-domain");
+  // A persisted record with the same id would win the overlay — but creating
+  // one is refused (below), so the seed is the only record this id can have.
+  assertEquals(await getNamedAgent("no-such-agent"), null);
+});
+
+Deno.test("wz6i: createNamedAgent refuses to shadow a built-in seed id", async () => {
+  store.clear();
+  const r = await createNamedAgent({ id: "auto-group-by-domain", name: "My Hat" });
+  assertEquals(r.ok, false);
+  assert(r.error.includes("built-in background agent"), r.error);
+  // The seed is untouched.
+  const hat = await getNamedAgent("auto-group-by-domain");
+  assertEquals(hat.seeded, true);
+  assertEquals(hat.name, "Sorting Hat");
+});
+
+Deno.test("wz6i: updateNamedAgent refuses a built-in seed (duplicate to customize)", async () => {
+  store.clear();
+  const r = await updateNamedAgent("auto-group-by-domain", { name: "Renamed" });
+  assertEquals(r.ok, false);
+  assert(r.error.includes("duplicate it to customize"), r.error);
+  const hat = await getNamedAgent("auto-group-by-domain");
+  assertEquals(hat.name, "Sorting Hat");
+});
+
+Deno.test("wz6i: deleteNamedAgent refuses a built-in seed BEFORE any teardown", async () => {
+  store.clear();
+  const r = await deleteNamedAgent("auto-group-by-domain");
+  assertEquals(r.ok, false);
+  assert(r.error.includes("can't be deleted"), r.error);
+  // The seed still resolves — derivation is unaffected by the refused delete.
+  assert((await getNamedAgent("auto-group-by-domain"))?.seeded === true);
+});
+
+Deno.test("wz6i: the ONE projection hides a DISABLED seed (a template, not an agent row) and keeps an enabled one", async () => {
+  const disabledSeed = { id: "auto-group-by-domain", name: "Sorting Hat", seeded: true };
+  const enabledSeed = { id: "price-watcher", name: "Price watcher", seeded: true, enabled: true };
+  const persisted = { id: "mine", name: "Mine" };
+  const rows = projectUnifiedAgents([persisted, disabledSeed, enabledSeed], []);
+  const ids = rows.map((r) => r.id).sort();
+  assertEquals(ids, ["mine", "price-watcher"]);
+  // A persisted agent is a row with or without an enabled flag.
+  assertEquals(rows.find((r) => r.id === "mine").kind, "named");
+});
+
+Deno.test("wz6i: the projection fills a seed's enabled flag from the background side", async () => {
+  const seed = { id: "auto-group-by-domain", name: "Sorting Hat", seeded: true };
+  const backgroundRow = { id: "auto-group-by-domain", name: "Sorting Hat", enabled: true, schedule: { periodInMinutes: 30 } };
+  const rows = projectUnifiedAgents([seed], [backgroundRow]);
+  assertEquals(rows.length, 1, "the enabled fill keeps the row visible");
+  assertEquals(rows[0].kind, "named");
+  assertEquals(rows[0].enabled, true);
+  // Both source records stay available to management surfaces.
+  assertEquals(rows[0].backgroundAgent.enabled, true);
 });

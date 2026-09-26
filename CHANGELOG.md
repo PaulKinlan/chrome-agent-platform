@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.545] — 2026-09-26
+- seed built-in background agents into the named-agent store (slices 1-2)
+
 ## [0.3.544] — 2026-09-26
 - an empty timeout override means the default, never 0 ms
 

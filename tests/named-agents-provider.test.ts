@@ -85,10 +85,12 @@ Deno.test("per-agent provider: set + clear round-trips, and list/get are redacte
   assertEquals(full.provider, "deepseek");
   assertEquals(full.apiKey, "sk-test-not-a-real-key");
 
-  // The list/get surfaces are REDACTED (no key).
+  // The list/get surfaces are REDACTED (no key). wz6i: listNamedAgents
+  // overlays the built-in background SEEDS — find the persisted record.
   const listed = await listNamedAgents();
-  assertEquals(listed.length, 1);
-  assert(!("apiKey" in (listed[0].provider ?? {})), "listNamedAgents must redact the key");
+  const listedPaul = listed.find((a) => a.id === "paul");
+  assert(listedPaul, "the persisted agent is listed alongside the seeds");
+  assert(!("apiKey" in (listedPaul.provider ?? {})), "listNamedAgents must redact the key");
   const got = await getNamedAgent("paul");
   assert(!("apiKey" in (got.provider ?? {})), "getNamedAgent must redact the key");
 

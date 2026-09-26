@@ -20,6 +20,12 @@ import { namedAgentMemory, purgeStoreDir } from "./memory.js";
 import { deleteAgentPromptOverride } from "./system-prompts.js";
 import { normalizeCanDelegateTo } from "./agent-delegation.js";
 import {
+  builtinBackgroundSeeds,
+  isSeedId,
+  isVisibleAgentRow,
+  seedOverlay,
+} from "./agent-seeds.js";
+import {
   normalizeMcpServerList,
   preserveExistingMcpTokens,
   redactMcpServerList,
@@ -213,19 +219,26 @@ async function writeAgents(map) {
  * override is REDACTED (no apiKey) — this list crosses into the NTP/sidebar. */
 export async function listNamedAgents() {
   const map = await agentsMap();
-  return Object.values(map)
+  const persisted = Object.values(map)
     .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
     .map(redactAgentRecord);
+  // wz6i: the built-in background agents are agent-store records too — seeded
+  // (derived, never persisted), overlaid UNDER the persisted records so a real
+  // record with the same id always wins.
+  return seedOverlay(persisted, builtinBackgroundSeeds());
 }
 
 /** Fetch one named agent by id (or name). Returns null when absent. The
- * per-agent provider override is REDACTED (no apiKey). */
+ * per-agent provider override is REDACTED (no apiKey). A built-in background
+ * agent with no persisted record resolves to its SEED (wz6i) so the schedule
+ * fire path, the run routes and the management surfaces read ONE store. */
 export async function getNamedAgent(id) {
   const map = await agentsMap();
   const slug = slugifyAgentId(id);
   const agent = map[slug] ?? null;
-  if (!agent) return null;
-  return redactAgentRecord(agent);
+  if (agent) return redactAgentRecord(agent);
+  const seed = builtinBackgroundSeeds().find((s) => s.id === slug) ?? null;
+  return seed;
 }
 
 /** Fetch a named agent's FULL provider override (WITH the apiKey) — the SW
@@ -323,6 +336,15 @@ export async function createNamedAgent(
     const map = await agentsMap();
     const slug = slugifyAgentId(id) || slugifyAgentId(cleanName) || `agent-${Date.now()}`;
     const existing = map[slug];
+    // wz6i: a persisted record may not SHADOW a built-in background seed —
+    // that would silently replace the built-in's identity. Duplicating is
+    // the customize gesture.
+    if (!existing && isSeedId(slug)) {
+      return {
+        ok: false,
+        error: `"${slug}" is a built-in background agent — built-ins can't be replaced; pick another name, or duplicate the built-in to customize it`,
+      };
+    }
     // dptw: no agent-count cap.
     const agent = {
       id: slug,
@@ -381,7 +403,18 @@ export async function updateNamedAgent(id, patch = {}, { gateBeforeMutation = nu
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const existing = map[slug];
-    if (!existing) return { ok: false, error: `no agent ${slug}` };
+    if (!existing) {
+      // wz6i: a built-in background seed is derived, not persisted — there is
+      // nothing to update. Disabling is the schedule path; duplicating is
+      // the customize gesture.
+      if (isSeedId(slug)) {
+        return {
+          ok: false,
+          error: `"${slug}" is a built-in background agent — it can't be edited in place; duplicate it to customize, or change its schedule`,
+        };
+      }
+      return { ok: false, error: `no agent ${slug}` };
+    }
     const next = { ...existing };
     if (patch.name !== undefined) {
       const n = String(patch.name).trim();
@@ -539,6 +572,16 @@ export async function deleteNamedAgent(id, { gateBeforeDelete = null, revokeGran
   return await withAgentsLock(async () => {
     const map = await agentsMap();
     const existing = map[slug];
+    if (!existing && isSeedId(slug)) {
+      // wz6i: a built-in background seed exists by derivation — deleting is
+      // meaningless (it would reappear on the next read). Disabling its
+      // schedule is the off switch. Refuse BEFORE any approval gate or
+      // teardown runs.
+      return {
+        ok: false,
+        error: `"${slug}" is a built-in background agent — built-ins can't be deleted; disable its schedule instead`,
+      };
+    }
     if (!existing) {
       // RETRY-REPAIR: the row may already be gone while namespaces from a
       // partially-failed teardown remain. Take ONLY this slug's pending
@@ -1139,6 +1182,13 @@ export function projectUnifiedAgents(namedAgents = [], backgroundAgents = []) {
       if (!existing.schedule?.periodInMinutes && recipeSchedule) {
         existing.schedule = recipeSchedule;
       }
+      // wz6i: a seed's live enabled flag rides the named-agent.list enrichment;
+      // the background side derives the SAME fact from the task store, so fill
+      // it when the named side has not (enrichment order must not flicker a
+      // row out of the list).
+      if (existing.enabled === undefined && typeof b.enabled === "boolean") {
+        existing.enabled = b.enabled;
+      }
     } else {
       byId.set(b.id, {
         ...b,
@@ -1149,5 +1199,5 @@ export function projectUnifiedAgents(namedAgents = [], backgroundAgents = []) {
       });
     }
   }
-  return [...byId.values()];
+  return [...byId.values()].filter(isVisibleAgentRow);
 }
