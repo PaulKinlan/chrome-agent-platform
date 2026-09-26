@@ -198,7 +198,6 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "live-every-tab.ts": { class: "manual", reason: "needs a real Gemini key (GEMINI_API_KEY); the 30-tab sourced-digest live check for RUN-BUDGET-EVERY-ITEM-01 (arrived from main after the re-inventory; it launches through launchChrome and exits on its own verdict)" },
   "live-run-evidence.ts": { class: "manual", reason: "needs a real provider key; the live model evidence run" },
   "mic-transcript-smoke.ts": { class: "manual", reason: "4/0 at the re-inventory (3 s); the mic transcript smoke, run by hand when the mic path changes" },
-  "p0-repro.ts": { class: "manual", reason: "0/1 at the re-inventory; a repro script for a P0 that has since moved on — kept for bisecting" },
   "page-actions-journey.ts": { class: "manual", reason: "green at the re-inventory (7 s); the page-actions journey standalone, run by hand" },
   "panel-leak-probe.ts": { class: "manual", reason: "a leak probe with an honest verdict since the re-inventory: docs/frames grow only while each of the three panels is first visited, then stay flat for the remaining cycles and 0 options/ targets are retained after a forced GC (PASS); its old unconditional exit is gone" },
   "permission-matrix-acceptance.ts": { class: "manual", reason: "26/0 ATTESTED at the re-inventory (28 s); the permission-matrix acceptance run by hand for evidence" },
