@@ -28,6 +28,25 @@ function snapshot(pid) {
 
 export const DEFAULT_BOUNDED_CHILD_TIMEOUT_MS = 120_000;
 
+/** The longest delay a JS timer can carry: 2^31 - 1 ms (~24.8 days). Node and Deno silently
+ *  clamp a longer setTimeout delay to 1 ms, so an "unscaled" huge override killed a fast child
+ *  after ~5 ms and reported a nonsense bound (chrome-agent-platform-61h3 re-review). */
+export const MAX_TIMER_MS = 2_147_483_647;
+
+/** The operator's bound, or the default. The variable name is a parameter because build.mjs
+ *  guards its own child with CAP_BUNDLED_TOOL_TIMEOUT_MS and must not carry a second copy of
+ *  this parse (chrome-agent-platform-61h3). An absent, empty, whitespace, non-numeric or
+ *  non-positive value means UNSET — `Number("") === 0` used to hand every child a 0 ms bound,
+ *  so it was killed on the first tick and the failure read as a hang. A positive number is the
+ *  operator's value, clamped to what a timer can actually carry. */
+export function boundedChildTimeoutMs(env = process.env, variable = "CAP_BOUNDED_CHILD_TIMEOUT_MS") {
+  const raw = env[variable];
+  if (raw === undefined || String(raw).trim() === "") return DEFAULT_BOUNDED_CHILD_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_BOUNDED_CHILD_TIMEOUT_MS;
+  return Math.min(Math.round(value), MAX_TIMER_MS);
+}
+
 /**
  * @param {string} command
  * @param {string[]} args
@@ -39,7 +58,7 @@ export async function runBoundedChild(command, args, {
   cwd,
   env = process.env,
   stdio = "inherit",
-  timeoutMs = Number(env.CAP_BOUNDED_CHILD_TIMEOUT_MS ?? DEFAULT_BOUNDED_CHILD_TIMEOUT_MS),
+  timeoutMs = boundedChildTimeoutMs(env),
   label = command,
 } = {}) {
   const started = Date.now();

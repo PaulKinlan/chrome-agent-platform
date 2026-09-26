@@ -14,7 +14,12 @@
 //   - A missing command is FAILED TO START, never HUNG: naming a start failure
 //     as a hang is the wrong-cause error this helper exists to prevent.
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { runBoundedChild } from "../scripts/lib/bounded-child.mjs";
+import {
+  boundedChildTimeoutMs,
+  DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
+  MAX_TIMER_MS,
+  runBoundedChild,
+} from "../scripts/lib/bounded-child.mjs";
 
 const FUTEX_WAIT = "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);";
 const TIMEOUT_MS = 2_000;
@@ -52,6 +57,41 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
   // raise in milliseconds, so the bound must actually have elapsed.
   assert(s.ms >= TIMEOUT_MS - 250, `the bound must elapse (>= ${TIMEOUT_MS - 250}ms), got ${s.ms}ms; sample=${report}`);
   assert(s.ms < TIMEOUT_MS + 10_000, `the bound must fire promptly, got ${s.ms}ms; sample=${report}`);
+});
+
+Deno.test("bounded child: an empty or invalid override means the default, never a 0 ms bound (61h3)", () => {
+  // The bug this pins: Number("") is 0, and the old expression passed that straight through as
+  // the child's bound, so every child was killed on the first tick and the error read as a hang.
+  assertEquals(boundedChildTimeoutMs({}), DEFAULT_BOUNDED_CHILD_TIMEOUT_MS);
+  for (const raw of ["", "   ", "0", "-1", "abc", "NaN"]) {
+    assertEquals(
+      boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: raw }),
+      DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
+      JSON.stringify(raw),
+    );
+  }
+  assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "2500" }), 2500);
+  // A delay above the timer ceiling is CLAMPED, not passed through: Node and Deno silently make
+  // a longer setTimeout 1 ms, so 1e12 killed a fast child in ~5 ms and reported a nonsense bound
+  // (cap-k3's repro). Infinity is not a delay at all and falls back to the default.
+  assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "1e12" }), MAX_TIMER_MS);
+  assertEquals(boundedChildTimeoutMs({ CAP_BOUNDED_CHILD_TIMEOUT_MS: "Infinity" }), DEFAULT_BOUNDED_CHILD_TIMEOUT_MS);
+
+  // build.mjs's variable goes through the same parser rather than a second copy of it, and each
+  // caller reads its own variable.
+  assertEquals(
+    boundedChildTimeoutMs({ CAP_BUNDLED_TOOL_TIMEOUT_MS: "2500" }, "CAP_BUNDLED_TOOL_TIMEOUT_MS"),
+    2500,
+  );
+  assertEquals(
+    boundedChildTimeoutMs({ CAP_BUNDLED_TOOL_TIMEOUT_MS: "" }, "CAP_BUNDLED_TOOL_TIMEOUT_MS"),
+    DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
+  );
+  assertEquals(
+    boundedChildTimeoutMs({ CAP_BUNDLED_TOOL_TIMEOUT_MS: "7000", CAP_BOUNDED_CHILD_TIMEOUT_MS: "3000" }),
+    3000,
+    "the default variable is the one read when no name is given",
+  );
 });
 
 Deno.test("bounded child: a fast, successful child raises nothing", async () => {
