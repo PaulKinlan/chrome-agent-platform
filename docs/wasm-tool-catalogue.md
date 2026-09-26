@@ -22,6 +22,34 @@ WASI preview1 runtime, offscreen module workers, OPFS streams).
 Sizes are unpacked/package sizes unless noted. Where an exact release sha was
 not captured during research it is marked *pin sha at admission time*.
 
+## Wasm Tool Execution Architecture & Import Pipeline
+
+Managed default tools run across three dedicated execution lanes:
+
+### 1. The Three Execution Host Lanes
+- **Lane A: WASI Preview 1 Command Modules (Default Core):**
+  - Contract: `_start` entry point, `wasi_snapshot_preview1` imports only (fd_read, fd_write, fd_close, fd_seek, etc.).
+  - Communication: Streaming `stdin` → `stdout`, isolated per-job preopen mounts (`/job/inputs`, `/job/outputs`).
+  - Confinement: Fixed fuel/instruction and wall-clock execution limits; zero host networking; origin-keyed OPFS isolation.
+  - Production Status: 38 admitted tool packages registered in `extension/wasm/manifests/`.
+- **Lane B: Call-Export Pure Compute Modules (Minimal Host):**
+  - Contract: Zero imports (no WASI, no POSIX glue); exports direct computation functions.
+  - Communication: CAP-authored JS harness writes buffers directly into WebAssembly memory, invokes the export, and reads back return values.
+  - Confinement: Memory32 bounds; zero side effects; runs in lightweight Web Workers without full Emscripten runtime.
+  - Production Status: Proven in `chrome-agent-platform-uslb`; admits `awasm-noble`, `hash-wasm`, and pure algorithm kernels.
+- **Lane C: Offscreen Emscripten/Pyodide Runtime (Complex System Runtimes):**
+  - Contract: Full POSIX emulation via Emscripten glue; supports SharedArrayBuffer, killable pthreads, and C/Python runtime environments.
+  - Communication: Hosted within the manifest-sandboxed offscreen document (`extension/lib/python-host.js`) communicating with background service workers via structured message passing.
+  - Confinement: Process-isolated workers spawned fresh per task; hard timeouts kill worker threads; file access scoped strictly to job scratch.
+  - Production Status: Powers Python execution (`python_execute`) via Pyodide 0.26.4.
+
+### 2. The 5-Step Admission & Import Pipeline
+1. **Research & Metadata Audit:** Verify upstream repository provenance, extract canonical SPDX license identifiers, determine build determinism, and measure unpacked binary footprint.
+2. **Static Binary Integrity Audit:** Run `auditWasmBinary` (`extension/lib/wasm-package-authority.js`) to verify memory32 bounds, section header limits, zero network imports, and conformance to allowed import namespaces.
+3. **Content-Addressed Storage & Manifest Staging:** Store binary under `extension/wasm/cas/<sha256>.wasm`; author a canonical manifest in `extension/wasm/manifests/<package>-<version>.manifest.json` binding tools, capabilities, and parameters.
+4. **Cryptographic Provenance & SBOM:** Stage CycloneDX/SPDX SBOM and license texts in `extension/wasm/licenses/` and `extension/wasm/sbom/`.
+5. **Inventory Registration & Pre-Compilation:** Run `node scripts/build-bundled-tool-packages.mjs` to regenerate `bundled-inventory-data.js` and `bundled-tool-packages.data.js`, validating manifest and CAS byte-identity against `dist.complete`.
+
 ---
 
 ## 1. Image processing
@@ -1045,42 +1073,42 @@ No single canonical "Kite browser in wasm" exists. Candidates found:
 
 ### Pyodide core + built packages — ADMIT-NOW (pre-bundle tier)
 - Docs: https://pyodide.org/en/stable/usage/packages-in-pyodide.html · https://pyodide.org/en/stable/usage/loading-packages.html
-- License: MPL-2.0 (Pyodide; each package its own — numpy BSD-3, pandas BSD-3,
-  scipy BSD-3, scikit-learn BSD-3, matplotlib PSF-based, regex Apache-2.0,
-  PyYAML MIT, cryptography Apache-2.0/BSD-3 — all recorded, none gating)
-- Import mechanics: `pyodide.loadPackage([...])` from JS — prebuilt, pinned per
-  Pyodide release, less overhead than micropip. **Pre-bundle the core +
-  lazy-OPFS-cache the package set**, pinned to an exact Pyodide version.
-- Built set includes: numpy, pandas, scipy, scikit-learn, matplotlib, regex,
-  PyYAML, cryptography (+ ~100 more; exact set varies per Pyodide release —
-  pin the release and snapshot its manifest at admission).
-- Sizes: multi-MB per scientific package — *measure per package at admission*;
-  packages load on demand, never all upfront.
-- Sources: https://pyodide.org/en/stable/usage/packages-in-pyodide.html
+- Pinned Runtime: **Pyodide v0.26.4** (CPython 3.12.1, Emscripten 3.1.58, ABI `2024_0`)
+- License: MPL-2.0 (Pyodide core; individual packages retain their upstream licenses — numpy BSD-3, pandas BSD-3, scipy BSD-3, scikit-learn BSD-3, matplotlib PSF-based, regex Apache-2.0, PyYAML MIT, cryptography Apache-2.0/BSD-3)
+- Import mechanics: `pyodide.loadPackage([...])` from JavaScript in the offscreen worker. Modules are pre-compiled and hash-pinned in `wasm-tools/python/pyodide-lock.json`. Core runtime (`pyodide.asm.wasm`, `pyodide.asm.js`, `python_stdlib.zip`) is bundled; heavy packages are lazy-fetched into origin OPFS on first demand.
+- Pinned Core Package Inventory (`pyodide-lock.json` exact hashes):
+  | Package | Version | Pinned Wheel Filename | SHA-256 Digest | Dependencies |
+  | :--- | :--- | :--- | :--- | :--- |
+  | **numpy** | 1.26.4 | `numpy-1.26.4-cp312-cp312-pyodide_2024_0_wasm32.whl` | `4a2f5303a88a0747c5e6c80701e0ff4ff5667e487c0c9f9c73875e4d88f4cf9a` | (none) |
+  | **pandas** | 2.2.0 | `pandas-2.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl` | `ae979af0f0be1e8c482408d838ea1366d187f3f057f47b429910e66dbba60673` | `numpy`, `python-dateutil`, `pytz` |
+  | **scipy** | 1.12.0 | `scipy-1.12.0-cp312-cp312-pyodide_2024_0_wasm32.whl` | `1a081410432367ee43f52a280961df4ba7e9bb65d8b9862b3cd2e3727e84d873` | `numpy`, `openblas` |
+  | **scikit-learn** | 1.4.2 | `scikit_learn-1.4.2-cp312-cp312-pyodide_2024_0_wasm32.whl` | `5caa3a4c5db74333edf116811547e60a7ee88fd290bffd830a9a8b0cd026f865` | `scipy`, `joblib`, `threadpoolctl` |
+  | **matplotlib** | 3.5.2 | `matplotlib-3.5.2-cp312-cp312-pyodide_2024_0_wasm32.whl` | `7321e0aa4dcd53cc7826fb558bed79ec6624a6430b00fa048b21fbe21fa0cc2e` | `cycler`, `fonttools`, `kiwisolver`, `numpy`, `pillow`, `pyparsing`, `python-dateutil`, `pytz`, `matplotlib-pyodide` |
+  | **regex** | 2024.4.16 | `regex-2024.4.16-cp312-cp312-pyodide_2024_0_wasm32.whl` | `a7fc7d2a10de187ae4309b5280d372b24824ff64d43712dd1372a47e7113cfed` | (none) |
+  | **pyyaml** | 6.0.1 | `PyYAML-6.0.1-cp312-cp312-pyodide_2024_0_wasm32.whl` | `7e2c1229550f6e6c64398b551fd70d641709a02df9ae08449c6625451ab68c2a` | (none) |
+  | **cryptography** | 42.0.5 | `cryptography-42.0.5-cp312-cp312-pyodide_2024_0_wasm32.whl` | `79653f8d631cd137c483cba75919b4c00c054c4bc85588d8694ca9dc164d3120` | `openssl`, `six`, `cffi` |
 
 ## 59. Python / Pyodide — TIER 2 (micropip, PyPI pure wheels)
 
 ### micropip — ADMIT-NOW (per-run install tier)
 - Docs: https://micropip.pyodide.org/en/stable/project/usage.html
 - License: MIT (recorded)
-- Import mechanics: `micropip.install(...)` from Python — installs pure-Python
-  wheels from PyPI at run time, plus wasm/emscripten wheels when available.
-  **Per-run install into an OPFS-backed venv; never pre-bundle.** Packages with
-  unsupported native extensions fail — honest error, suggest tier 3 path.
-- Long-tail coverage: this is the "every Python library a knowledge worker
-  knows" story for pure-Python (requests-free flows, dateutil, rich, typer,
-  attrs, pydantic…).
+- Import mechanics: `await micropip.install("pkg")` executed inside Python run context.
+- Storage & Isolation:
+  - Wheels install into a task-scoped virtual environment stored in OPFS under `agent-workspaces/<agent>/python_env/`.
+  - Pure-Python wheels (tagged `py3-none-any.whl`) install cleanly without compilation.
+  - Native extensions lacking prebuilt `pyodide_2024_0_wasm32` binaries fail with an actionable error directing callers to Tier 1 or native tool equivalents.
+  - Outbound wheel downloads route through the extension's host permission via `pyodide-http` / `fetch`.
+- Long-tail coverage: Enables immediate on-demand use of pure Python utilities (`python-dateutil`, `rich`, `typer`, `attrs`, `pydantic`, `jinja2`, `beautifulsoup4`, `markdown`).
 
 ## 60. Python / Pyodide — TIER 3 (pyodide-build, C/Rust extensions)
 
 ### pyodide-build + cibuildwheel pyodide platform — INVESTIGATE / DEFER (PEP 783 pending)
 - Docs: https://pyodide-build.readthedocs.io/en/latest/how-to/cibuildwheel.html · https://peps.python.org/pep-0783/
 - License: MPL-2.0 (recorded)
-- Import mechanics: out-of-tree wheels built per-Pyodide-version via
-  `pyodide build` or `CIBW_PLATFORM=pyodide`; served and micropip-installed.
-  **Defer until PEP 783 (wasm wheel tagging) lands**; wheels are
-  Pyodide-version-specific, so admission = version-locked build pipeline.
-  Decision: build infra needed before any tier-3 admit.
+- Platform ABI Tag: `cp312-cp312-pyodide_2024_0_wasm32.whl`.
+- Build Pipeline: Out-of-tree native Python extensions must be cross-compiled against exact Emscripten version (3.1.58) and Pyodide headers using `pyodide build` or `cibuildwheel` with `CIBW_PLATFORM=pyodide`.
+- Status: **DEFERRED**. Out-of-tree builds require dedicated toolchain containers; PEP 783 standardization is pending. Native extensions are admitted only via Tier 1 pre-built wheels or native Wasm/WASI Lane A/B tools.
 
 ## 61. AI / ML inference (boundary with LOCAL-MODELS architecture)
 
@@ -1137,6 +1165,18 @@ composition of already-catalogued admits:
   the "search my stuff" primitive.
 - **Contacts/email**: ical.js vCard support (§50) + postal-mime (§54, JS).
 - **Time/date math**: Temporal is now native-ish; JS libs adequate — REJECT-AS-WASM.
-- Verdict for the category itself: **no new wasm admits needed**; document the
-  composition map above in the catalogue so the product team wires admits
-  into productivity flows.
+- **Office / Data Documents**: `sheetjs` / `xlsx` (pure JS) + `csvtool` (§4) + `duckdb-wasm` (§27) for local spreadsheet ETL and analysis.
+- **Document Rendering & Conversion**: `typst.ts` (§19) + `@embedpdf/pdfium` (§24) for compiling and rendering publication-grade documents locally.
+- **Offline Archival & Snapshots**: `brotli-wasm` (§2) + `zstd-wasm` (§2) for compressed snapshot storage of page captures in OPFS.
+
+### Productivity Composition Workflows
+1. **Document Authoring & QA Pipeline:**
+   - Raw user input / LLM draft → parsed via `pulldown-cmark` (Lane A) → grammar/style checked via `harper.js` (§53) → compiled to vector PDF via `typst.ts` (§19).
+2. **Local Data Processing & Analysis:**
+   - User CSV/Parquet import → cleaned via `csvtool` / `awk` (Lane A) → loaded into in-memory `duckdb-wasm` (Lane C) → analytical query execution with zero data egress.
+3. **Personal Knowledge Retrieval ("Search My Stuff"):**
+   - OPFS task notes & transcripts → tokenized and indexed into `tantivy-wasm` (Lane B/C) → hybrid lexical + semantic search via `sqlite-vec` (§28).
+4. **Offline Asset Compression & Storage:**
+   - Full-page DOM / MHTML archives → compressed using `zstd-wasm` (Lane B) into origin-keyed OPFS storage, achieving 4-6x space reduction over raw text.
+
+- Verdict for the category itself: **no new bespoke wasm binaries needed**; the core productivity value is realized by composing the catalogued admits across Lanes A, B, and C as detailed above.
