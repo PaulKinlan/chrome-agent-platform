@@ -5629,9 +5629,16 @@ const MESSAGE_BUBBLE_STYLE = `
   :host([role="error"]) .body { color:var(--danger,#b3261e); }
   .err-reason { font-weight:600; margin:0 0 4px; }
   .err-action { color:var(--ink,#1d1b18); margin:0 0 8px; }
+  .err-fix-row { display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap; }
+  .err-retry { font:inherit; font-size:12.5px; font-weight:600; color:var(--btn-fg,#fff); background:var(--accent,#0e6e63); border:1px solid var(--accent,#0e6e63); border-radius:6px; padding:4px 12px; cursor:pointer; }
+  .err-retry:hover { filter:brightness(1.08); }
+  .err-retry:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
   .err-fix { font:inherit; font-size:12.5px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--accent,#0e6e63); border-radius:6px; padding:4px 10px; cursor:pointer; }
   .err-fix:hover { background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
   .err-fix:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+  .msg-copy-btn { font:inherit; font-size:11.5px; font-weight:600; color:var(--muted,#635e56); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:2px 8px; cursor:pointer; align-self:flex-start; margin-top:6px; display:inline-flex; align-items:center; gap:4px; }
+  .msg-copy-btn:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+  .msg-copy-btn:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
   .msg .attach { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
   .msg .attach img { max-width:100%; max-height:260px; border-radius:8px; border:1px solid var(--border,#e3e0d9); display:block; }
   .msg .attach .file-chip { font-size:12.5px; color:var(--muted,#635e56); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:4px 8px; display:inline-flex; align-items:center; gap:6px; }
@@ -5782,7 +5789,7 @@ const MESSAGE_BUBBLE_STYLE = `
 
 class MessageBubble extends Component {
   static get observedAttributes() {
-    return ["role", "content", "attachments", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-detail-note", "tool-duration", "site-activity", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
+    return ["role", "content", "attachments", "streaming", "tool-name", "tool-status", "tool-args", "tool-result", "tool-detail", "tool-detail-note", "tool-duration", "site-activity", "step", "total-steps", "error-reason", "error-action", "error-category", "author", "author-avatar", "ts"];
   }
   // A long agent/system response is COLLAPSED to a preview with a
   // Show-full toggle (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01: the owner
@@ -5791,7 +5798,7 @@ class MessageBubble extends Component {
   static get LONG_PREVIEW_CHARS() { return 4000; }
   static get LONG_COLLAPSED_PX() { return 260; }
   _longResponse(content) {
-    return (this.getAttribute("role") === "agent" || this.getAttribute("role") === "system") &&
+    return (this.getAttribute("role") === "agent" || this.getAttribute("role") === "system" || this.getAttribute("role") === "assistant") &&
       typeof content === "string" && content.length > MessageBubble.LONG_PREVIEW_CHARS;
   }
   _attachments() {
@@ -5832,6 +5839,20 @@ class MessageBubble extends Component {
         try { document.execCommand("copy"); } catch { /* clipboard unavailable */ }
         ta.remove();
       }
+      if (copy) {
+        const orig = copy.textContent;
+        copy.textContent = "Copied";
+        setTimeout(() => {
+          if (copy.isConnected) copy.textContent = orig || "Copy full response";
+        }, 1500);
+      }
+      if (typeof this.dispatchEvent === "function") {
+        this.dispatchEvent(new CustomEvent("copy-message", {
+          bubbles: true,
+          composed: true,
+          detail: { text, role: this.getAttribute("role") || "agent" },
+        }));
+      }
     });
   }
   /** Grow an agent bubble with streamed model text (CAP-FB-20260830-TRANSCRIPT-STREAMING-01).
@@ -5868,7 +5889,8 @@ class MessageBubble extends Component {
     // A full render (a `content` change, or any observed attribute) drops the
     // streamed body: the final text replaces it.
     this._streamEl = null;
-    if (typeof this.removeAttribute === "function") this.removeAttribute("streaming");
+    const isStreaming = this.hasAttribute("streaming");
+    if (!isStreaming && typeof this.removeAttribute === "function") this.removeAttribute("streaming");
     const role = this.getAttribute("role") || "agent";
     const content = this._content();
     let markup;
@@ -6006,17 +6028,21 @@ class MessageBubble extends Component {
       const action = this.getAttribute("error-action") || "";
       const category = this.getAttribute("error-category") || "";
       const fixable = /host-permission|provider-auth|provider-config|model-config|network/i.test(category);
+      const isStreaming = this.hasAttribute("streaming");
       markup = `<div class="msg error"><div class="body">
         <p class="err-reason">${escapeHtml(reason)}</p>
         ${action ? `<p class="err-action">${escapeHtml(action)}</p>` : ""}
-        ${fixable ? `<button type="button" class="err-fix" part="fix">Fix in Settings</button>` : ""}
+        <div class="err-fix-row">
+          ${!isStreaming ? `<button type="button" class="err-retry" part="retry">Retry</button>` : ""}
+          ${fixable ? `<button type="button" class="err-fix" part="fix">Fix in Settings</button>` : ""}
+        </div>
       </div></div>`;
     } else {
       let body;
-      if ((role === "agent" || role === "system") && isHtmlDocument(content)) {
+      if ((role === "agent" || role === "system" || role === "assistant") && isHtmlDocument(content)) {
         body = renderHtmlFrame(content);
       } else {
-        body = (role === "agent" || role === "system" || role === "user") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
+        body = (role === "agent" || role === "system" || role === "user" || role === "assistant") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
       }
       // Inline attachments: image attachments render as a thumbnail so the user
       // can SEE what they attached; other media render as a file chip.
@@ -6034,14 +6060,18 @@ class MessageBubble extends Component {
         });
         attachHtml = `<div class="attach">${pieces.join("")}</div>`;
       }
-      const bubble = `<div class="msg ${role}">${attachHtml}<div class="body">${body}</div></div>`;
+      const isAgentRole = role === "agent" || role === "assistant";
+      const copyBtn = (!isStreaming && isAgentRole && !this._longResponse(content))
+        ? `<button type="button" class="msg-copy-btn" part="copy-btn" aria-label="Copy response" title="Copy response">Copy</button>`
+        : "";
+      const bubble = `<div class="msg ${role}">${attachHtml}<div class="body">${body}</div>${copyBtn}</div>`;
       let bubbleOut = bubble;
       if (this._longResponse(content)) {
         bubbleOut = `<div class="long-response" data-open="0"><div class="body">${body}</div>`
           + `<div class="long-actions"><button type="button" class="long-toggle" part="long-toggle" aria-expanded="false">Show full response</button>`
           + `<button type="button" class="long-copy" part="long-copy">Copy full response</button></div></div>`;
       }
-      if (role === "agent") {
+      if (role === "agent" || role === "assistant") {
         const author = this.getAttribute("author") || "Agent";
         const avatar = this.getAttribute("author-avatar") || "";
         const ts = this.getAttribute("ts") || "";
@@ -6079,12 +6109,61 @@ class MessageBubble extends Component {
     // and offer a copy of the whole response (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01).
     const long = this._root.querySelector(".long-response");
     if (long) this._wireLongResponse(long);
+    const copyBtn = this._root.querySelector(".msg-copy-btn");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", async () => {
+        const text = this._content();
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          const ta = document.createElement("textarea");
+          ta.value = text;
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand("copy"); } catch { /* ignore */ }
+          ta.remove();
+        }
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = "Copied";
+        setTimeout(() => {
+          if (copyBtn.isConnected) copyBtn.textContent = orig || "Copy";
+        }, 1500);
+        if (typeof this.dispatchEvent === "function") {
+          this.dispatchEvent(new CustomEvent("copy-message", {
+            bubbles: true,
+            composed: true,
+            detail: { text, role: this.getAttribute("role") || "agent" },
+          }));
+        }
+      });
+    }
+    this._root.querySelector(".err-retry")?.addEventListener("click", () => {
+      if (typeof this.dispatchEvent === "function") {
+        this.dispatchEvent(new CustomEvent("retry-turn", {
+          bubbles: true,
+          composed: true,
+          detail: {
+            errorReason: this.getAttribute("error-reason") || this._content(),
+            errorAction: this.getAttribute("error-action") || "",
+            errorCategory: this.getAttribute("error-category") || "",
+          },
+        }));
+      }
+    });
     // The "Fix in Settings" button on a provider/config error: open the options
     // page (the provider pane's Test/Use button grants the host permission +
     // tests the key — the actionable path for a provider failure).
     this._root.querySelector(".err-fix")?.addEventListener("click", () => {
-      const ev = new CustomEvent("fix-settings", { bubbles: true, composed: true, cancelable: true });
-      this.dispatchEvent(ev);
+      const fixHref = "options/options.html#provider";
+      const ev = new CustomEvent("fix-settings", {
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+        detail: { href: fixHref },
+      });
+      if (typeof this.dispatchEvent === "function") {
+        this.dispatchEvent(ev);
+      }
       if (!ev.defaultPrevented && typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
         chrome.runtime.openOptionsPage();
       }
@@ -7142,6 +7221,7 @@ class AgentComposer extends Component {
       agent-composer { anchor-scope: --composer-anchor, --composer-attach; }
       agent-composer .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; anchor-name:--composer-anchor; }
       agent-composer .composer:focus-within { border-color:var(--accent,#0e6e63); }
+      agent-composer .composer.drag-over { outline:2px dashed var(--accent,#0e6e63); background:var(--accent-soft,rgba(14,110,99,0.06)); }
       agent-composer .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
         clip:rect(0,0,0,0); white-space:nowrap; border:0; }
       agent-composer .popup { position:absolute; inset:auto; margin:0; left:0; right:0; background:var(--panel,#ffffff);
@@ -7238,6 +7318,10 @@ class AgentComposer extends Component {
     this._popupActive = -1;
     this._popupToken = null;
     this._slashAgentToken = null; // { start, end } while /agent: drives the picker
+    this._composerEl = this.querySelector(".composer");
+    this._sentHistory = [];
+    this._historyIndex = -1;
+    this._historyDraft = "";
     // Resolved command-reference spans in the current input: a second /command
     // typed immediately after one of these opens its picker (CAP-FB-20260831-
     // MULTI-SLASH-COMMANDS-01). Each is { start, end, text } — `text` lets the
@@ -7275,7 +7359,44 @@ class AgentComposer extends Component {
   }
   _wire() {
     this._run?.addEventListener("click", () => this._send());
-    this._input?.addEventListener("input", () => this._onComposerInput());
+    this._input?.addEventListener("input", () => {
+      this._historyIndex = -1;
+      this._historyDraft = "";
+      this._onComposerInput();
+    });
+
+    const handlePaste = async (e) => {
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        e.preventDefault();
+        for (const file of files) {
+          await this._ingestFile(file);
+        }
+      }
+    };
+    this._input?.addEventListener("paste", handlePaste);
+    this._composerEl?.addEventListener("paste", handlePaste);
+
+    this._composerEl?.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      this._composerEl?.classList.add("drag-over");
+    });
+    this._composerEl?.addEventListener("dragleave", (e) => {
+      if (!this._composerEl?.contains(e.relatedTarget)) {
+        this._composerEl?.classList.remove("drag-over");
+      }
+    });
+    this._composerEl?.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      this._composerEl?.classList.remove("drag-over");
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        for (const file of files) {
+          await this._ingestFile(file);
+        }
+      }
+    });
+
     this._input?.addEventListener("keydown", (e) => {
       // The /agent slash picker: the composer text is the query source, so the
       // navigation keys are FORWARDED to the shared <agent-picker> (its one
@@ -7296,6 +7417,35 @@ class AgentComposer extends Component {
         if (e.key === "Tab") { e.preventDefault(); this._selectActive(); return; }
         if (e.key === "Escape") { e.preventDefault(); this._hidePopup(); return; }
         return;
+      }
+      if (!this._popupOpen && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const history = this._sentHistory || [];
+        if (history.length > 0) {
+          if (e.key === "ArrowUp" && (this._historyIndex !== -1 || this._input.value === "")) {
+            e.preventDefault();
+            if (this._historyIndex === -1) {
+              this._historyDraft = this._input.value;
+              this._historyIndex = history.length - 1;
+            } else if (this._historyIndex > 0) {
+              this._historyIndex--;
+            }
+            this._input.value = history[this._historyIndex];
+            this._autoGrow();
+            return;
+          }
+          if (e.key === "ArrowDown" && this._historyIndex !== -1) {
+            e.preventDefault();
+            if (this._historyIndex < history.length - 1) {
+              this._historyIndex++;
+              this._input.value = history[this._historyIndex];
+            } else {
+              this._historyIndex = -1;
+              this._input.value = this._historyDraft ?? "";
+            }
+            this._autoGrow();
+            return;
+          }
+        }
       }
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this._send(); }
     });
@@ -7578,7 +7728,7 @@ class AgentComposer extends Component {
       for (const t of tabs) {
         const row = document.createElement("button");
         row.type = "button";
-        row.className = "tp-row";
+        row.className = "tp-row tab-picker-item";
         row.setAttribute("role", "option");
         const title = document.createElement("span");
         title.className = "tp-title";
@@ -7594,17 +7744,47 @@ class AgentComposer extends Component {
       empty.className = "tp-empty";
       empty.textContent = "No tabs.";
       picker.append(list, empty);
+      picker.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          this._closeTabPicker();
+          this._input?.focus();
+          resolve(null);
+          return;
+        }
+        const buttons = [...list.querySelectorAll("button")];
+        if (!buttons.length) return;
+        const idx = buttons.indexOf(document.activeElement);
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const d = e.key === "ArrowDown" ? 1 : -1;
+          const next = idx < 0 ? (d === 1 ? 0 : buttons.length - 1) : (idx + d + buttons.length) % buttons.length;
+          buttons[next]?.focus();
+        }
+      });
       document.body.append(picker); // fixed positioning, never clipped by the composer
       this._tabPicker = picker;
       placeFloating(this._input, picker, { minWidth: 300 });
-      document.addEventListener("pointerdown", (e) => {
-        if (!picker.contains(e.target)) { this._closeTabPicker(); resolve(null); }
-      }, { once: true });
+      const outsideClick = (e) => {
+        if (this._tabPicker && !this._tabPicker.contains(e.target)) {
+          this._closeTabPicker();
+          resolve(null);
+        }
+      };
+      this._tabPickerOutsideClick = outsideClick;
+      document.addEventListener("pointerdown", outsideClick);
       list.querySelector("button")?.focus();
     });
   }
   _closeTabPicker() {
-    if (this._tabPicker) { this._tabPicker.remove(); this._tabPicker = null; }
+    if (this._tabPickerOutsideClick) {
+      document.removeEventListener("pointerdown", this._tabPickerOutsideClick);
+      this._tabPickerOutsideClick = null;
+    }
+    if (this._tabPicker) {
+      this._tabPicker.remove();
+      this._tabPicker = null;
+    }
   }
 
   /** A "Recording… ▸ Stop" chip so record-screen / record-audio have a visible
@@ -7781,6 +7961,62 @@ class AgentComposer extends Component {
   get input() { return this._input; }
   get value() { return this._input?.value ?? ""; }
   set value(v) { if (this._input) { this._input.value = v; this._autoGrow(); } }
+  async _ingestFile(file) {
+    if (!file) return null;
+    const isImage = file.type?.startsWith("image/");
+    const name = file.name || (isImage ? "pasted-image.png" : "file");
+    const mediaType = file.type || (isImage ? "image/png" : "application/octet-stream");
+    let dataUrl = "";
+    let text = "";
+    if (isImage) {
+      try {
+        dataUrl = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.onerror = () => reject(fr.error);
+          fr.readAsDataURL(file);
+        });
+      } catch { /* read error */ }
+    } else if (isTextLikeAttachment({ name, type: mediaType }) || (typeof file.text === "function" && /^(text\/|application\/(json|xml|javascript))/i.test(mediaType))) {
+      if (typeof file.text === "function") {
+        try {
+          text = await file.text();
+          dataUrl = textToDataUrl(text, mediaType);
+        } catch { /* fallback */ }
+      }
+      if (!dataUrl) {
+        try {
+          dataUrl = await new Promise((resolve, reject) => {
+            const fr = new FileReader();
+            fr.onload = () => resolve(String(fr.result));
+            fr.onerror = () => reject(fr.error);
+            fr.readAsDataURL(file);
+          });
+        } catch { /* read error */ }
+      }
+    } else {
+      try {
+        dataUrl = await new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result));
+          fr.onerror = () => reject(fr.error);
+          fr.readAsDataURL(file);
+        });
+      } catch { /* read error */ }
+    }
+    return this.addAttachment({
+      kind: isImage ? "image" : "file",
+      name,
+      type: mediaType,
+      mediaType,
+      size: file.size ?? 0,
+      dataUrl,
+      dataURL: dataUrl,
+      text,
+      content: text,
+    });
+  }
+
   /** Public: attach something (a reused artifact, an external reference) to the
    * composer — pushes it onto the pending attachments + renders a removable
    * chip, exactly like the + menu does. Returns the stored detail. */
@@ -7788,10 +8024,10 @@ class AgentComposer extends Component {
     if (!detail) return null;
     const d = {
       name: detail.name ?? "attachment",
-      type: detail.type,
+      type: detail.type ?? detail.mediaType,
       size: detail.size,
-      dataURL: detail.dataURL,
-      content: detail.content,
+      dataURL: detail.dataURL ?? detail.dataUrl,
+      content: detail.content ?? detail.text,
       kind: detail.kind ?? "file",
       // local-folder references carry their grant identity through to the
       // run: sanitize + attachmentContext both preserve these (CAP-FB-20260831-FOLDER-COMMAND-01).
@@ -8112,7 +8348,7 @@ class AgentComposer extends Component {
 
   _selectActive() { this._select(this._popupActive); }
 
-  _select(index) {
+  async _select(index) {
     const item = this._popupItems[index];
     const token = this._popupToken;
     const input = this._input;
@@ -8122,6 +8358,25 @@ class AgentComposer extends Component {
       if (item.kind === "files-action") {
         input.setRangeText("", token.start, token.end, "end");
         this._hidePopup();
+        if (typeof this.folderActions?.grant === "function" || typeof this.folderActions?.regrant === "function") {
+          try {
+            const action = item.action === "regrant" ? (this.folderActions.regrant || this.folderActions.grant) : (this.folderActions.grant || this.folderActions.regrant);
+            await action(item);
+            input.focus();
+            return;
+          } catch { /* fall back */ }
+        }
+        const grantEv = new CustomEvent("grant-folder", {
+          bubbles: true,
+          composed: true,
+          cancelable: true,
+          detail: { item, recovery: item.recovery },
+        });
+        this.dispatchEvent(grantEv);
+        if (grantEv.defaultPrevented) {
+          input.focus();
+          return;
+        }
         this._openLocalFoldersSettings(item.recovery);
         input.focus();
         return;
@@ -8166,6 +8421,21 @@ class AgentComposer extends Component {
         return;
       }
       if (item.kind === "capability") {
+        const perm = item.capability || token.ns || item.ns;
+        const chromeApi = globalThis.chrome;
+        if (perm && chromeApi?.permissions?.request) {
+          try {
+            const granted = await chromeApi.permissions.request({ permissions: [perm] });
+            if (granted) {
+              this.setStatus(`Granted ${perm} permission.`);
+              await this._onComposerInput();
+              input.focus();
+              return;
+            }
+          } catch {
+            // fall through to settings
+          }
+        }
         this._hidePopup();
         this.setStatus(`${item.label} — ${item.description}`, false);
         globalThis.chrome?.runtime?.openOptionsPage?.();
@@ -8271,6 +8541,11 @@ class AgentComposer extends Component {
   async _send() {
     const text = this._input?.value.trim();
     if (!text) return;
+    if (!this._sentHistory) this._sentHistory = [];
+    this._sentHistory.push(text);
+    if (this._sentHistory.length > 30) this._sentHistory.shift();
+    this._historyIndex = -1;
+    this._historyDraft = "";
     // A selected agent is revalidated against the LIVE registry before the run:
     // a stale/deleted (or freshly-disabled) selection is REJECTED — the text
     // stays put, the chip clears, and nothing is routed to a ghost agent.
@@ -8299,6 +8574,7 @@ class AgentComposer extends Component {
     // class clears _docListeners only — this element's picker mirror is tracked
     // separately).
     this._teardownPicker();
+    this._closeTabPicker();
     super.disconnectedCallback?.();
   }
 }
@@ -8598,7 +8874,7 @@ class PermissionApprovalCard extends Component {
       .needs { margin:0 0 8px; padding-left:18px; font-size:12.5px; color:var(--ink,#1d1b18); line-height:1.5; }
       .note { margin:0 0 10px; font-size:12px; color:var(--muted,#635e56); }
       .needs code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.92em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:0 4px; }
-      .controls { display:flex; gap:8px; }
+      .controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
       .btn { font:inherit; font-size:12.5px; font-weight:650; border-radius:8px; padding:6px 14px; cursor:pointer; min-height:34px; }
       .allow { background:var(--accent,#0e6e63); color:var(--on-accent,#fff); border:1px solid var(--accent,#0e6e63); }
       .allow:hover { filter:brightness(1.06); }
@@ -8616,7 +8892,8 @@ class PermissionApprovalCard extends Component {
       .hosts li { overflow-wrap:anywhere; }
       .hosts .none { color:var(--muted,#635e56); }
       .dynamic { margin:0 0 12px; font-size:12.5px; font-weight:600; color:var(--danger,#b3261e); }
-      :host([state="granted"]) .card, :host([state="denied"]) .card, :host([state="expired"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
+      :host([state="granted"]) .card, :host([state="denied"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
+      :host([state="expired"]) .card { border-color:var(--border,#e3e0d9); }
     `, `<div class="card" role="group" aria-label="Permission request">
       <p class="title">Permission request</p>
       <p class="reason">The agent wants to ${escapeHtml(reason)}.</p>
@@ -8624,12 +8901,20 @@ class PermissionApprovalCard extends Component {
       ${chromeNote ? `<p class="note">${escapeHtml(chromeNote)}</p>` : ""}
       ${state === "pending"
         ? `<div class="controls"><button type="button" class="btn allow">Allow</button><button type="button" class="btn deny">Not now</button></div>`
-        : `<p class="state ${state}">${escapeHtml(stateText)}</p>`}
+        : state === "expired"
+          ? `<div class="controls"><button type="button" class="btn allow retry-expired">Allow &amp; retry</button><span class="state expired">${escapeHtml(stateText)}</span></div>`
+          : `<p class="state ${state}">${escapeHtml(stateText)}</p>`}
     </div>`);
   }
   _wire() {
-    this._root.querySelector(".allow")?.addEventListener("click", (event) => this._emit("approve", { sourceEvent: event }));
-    this._root.querySelector(".deny")?.addEventListener("click", (event) => this._emit("deny", { sourceEvent: event }));
+    this._root.querySelector(".allow")?.addEventListener("click", (event) => {
+      this._emit("approve", { decision: "allow", sourceEvent: event });
+      this._emit("approval-decision", { decision: "allow", sourceEvent: event });
+    });
+    this._root.querySelector(".deny")?.addEventListener("click", (event) => {
+      this._emit("deny", { decision: "deny", sourceEvent: event });
+      this._emit("approval-decision", { decision: "deny", sourceEvent: event });
+    });
   }
 }
 customElements.define("permission-approval-card", PermissionApprovalCard);
