@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.550] — 2026-09-28
+- Fixed LM Studio connection testing, imported command activation in Skills, and .tar archive restore in Settings.
+
 ## [0.3.549] — 2026-09-28
 - Side Panel conversations now retain tool cards, artifacts, and approval cards when switching tabs, and let you enable site tools in one click.
 

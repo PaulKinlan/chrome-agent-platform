@@ -27,6 +27,7 @@ const OPENAI_COMPATIBLE_IDS = new Set([
   "gemini",
   "deepseek",
   "ollama",
+  "lm-studio",
 ]);
 
 /** Map an HTTP status to a stable error kind so the UI can show a specific,
@@ -251,4 +252,28 @@ export async function testProvider(p, fields = {}, deps = {}) {
       error: safeProviderError(`Unreachable: ${String(e?.message ?? e)}`, apiKey ? [apiKey] : []),
     };
   }
+}
+
+/**
+ * Connection test entrypoint supporting both single-object config ({ provider, baseURL, model, ... })
+ * and preset-based (p, fields, deps) signatures.
+ */
+export async function testProviderConnection(target, fieldsOrDeps = {}, deps = {}) {
+  if (target && typeof target === "object" && "provider" in target) {
+    const id = target.provider;
+    const p = {
+      id,
+      baseURL: target.baseURL,
+      needsKey: target.needsKey ?? (id === "ollama" || id === "lm-studio" || id === "demo" ? false : true),
+      needsModel: target.needsModel ?? true,
+    };
+    const fields = {
+      baseURL: target.baseURL,
+      apiKey: target.apiKey,
+      model: target.model,
+    };
+    const actualDeps = fieldsOrDeps?.fetchImpl || fieldsOrDeps?.listTabs ? fieldsOrDeps : deps;
+    return testProvider(p, fields, actualDeps);
+  }
+  return testProvider(target, fieldsOrDeps, deps);
 }

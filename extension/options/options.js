@@ -13,7 +13,7 @@ import {
   DEVELOPER_FEATURES_KEY,
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
-import { projectUnifiedAgents } from "../lib/agent-projection.js";
+import { projectUnifiedAgents } from "../lib/named-agents.js";
 import { hydrateI18n } from "../shared/i18n.js";
 import { skillAsTemplate } from "../lib/agent-templates.js";
 import {
@@ -29,8 +29,9 @@ import {
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../lib/site-access.js";
-import { createOpfsAdapter } from "../lib/data-archive.js";
+import { createOpfsAdapter, createChromeAlarmsAdapter } from "../lib/data-archive.js";
 import { streamExportArchive } from "../lib/backup-export.js";
+import { streamRestoreArchive } from "../lib/backup-restore.js";
 import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";
 import {
   USAGE_RANGES,
@@ -239,6 +240,7 @@ function boundedSend(type, payload = {}, timeoutMs = 12000) {
     new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), timeoutMs)),
   ]);
 }
+const send = (type, payload = {}) => chrome.runtime.sendMessage({ type, ...payload });
 // Shared key-value access routes through the SERVICE WORKER (the single
 // authority for shared state). If the install-granted storage permission cannot be verified,
 // kv.js's session fallback is realm-local, so a page writing to its OWN fallback
@@ -765,7 +767,7 @@ function buildProviderCard(p, cfg) {
           ? `<label class="field key-field"><span class="field-label">API key</span><input class="api-key" type="password" placeholder="Paste your key" autocomplete="off">${getKeyLink}</label>`
           : ""
       }
-      <details class="provider-advanced">
+      <details class="provider-advanced"${!p.needsKey || !p.models?.length ? " open" : ""}>
         <summary>Advanced</summary>
         <div class="advanced-body">
           <label class="field"><span class="field-label">Base URL</span><input class="base-url" type="text" placeholder="https://…" value="${
@@ -778,6 +780,11 @@ function buildProviderCard(p, cfg) {
   }
     <div class="test-status" role="status" hidden></div>
   `;
+
+  const advDetails = card.querySelector(".provider-advanced");
+  if (advDetails && (!p.needsKey || !p.models?.length)) {
+    advDetails.open = true;
+  }
 
   // ── The Use gate: Use is disabled until Test passes for the CURRENT key +
   // model; any edit to either resets it. A keyless provider and the currently-
@@ -825,9 +832,13 @@ function buildProviderCard(p, cfg) {
     onSaved(outcome) {
       const failed = outcome?.saved && outcome.saved.ok === false;
       // A successful Use of a real keyed provider returns to the hub with the
-      // composer focused (the four-click flow's fourth click). A refusal, or a
-      // local/demo provider, just re-renders in place.
-      if (!failed && p.needsKey) {
+      // composer focused (the four-click flow's fourth click). A keyless local
+      // provider with model present / test passed also returns to the hub
+      // when opened from the first-run flow.
+      const model = effectiveModel(card);
+      const isFirstRunFlow = IS_EMBEDDED_SETTINGS || location.hash === "#providers" || new URLSearchParams(location.search).get("flow") === "first-run" || new URLSearchParams(location.search).get("firstRun") === "1" || new URLSearchParams(location.search).get("firstRun") === "true";
+      const localReady = !p.needsKey && (Boolean(model) || card._testPassed === true);
+      if (!failed && (p.needsKey || (localReady && isFirstRunFlow))) {
         returnToHubComposer();
         return;
       }
@@ -3334,7 +3345,7 @@ importAllFile?.addEventListener("change", async () => {
   if (!file) return;
   importAllFile.value = "";
   try {
-    const bundle = await file.text();
+    const isTar = file.name.toLowerCase().endsWith(".tar") || file.type === "application/x-tar";
     const confirmed = await confirmActionDialog({
       title: "Import this backup?",
       body:
@@ -3348,7 +3359,27 @@ importAllFile?.addEventListener("change", async () => {
     }
     setBackupStatus("Validating and restoring the backup…");
     importAllBtn.disabled = true;
-    const res = await chrome.runtime.sendMessage({ type: "owner.import.all", bundle, overwrite: true });
+
+    if (isTar) {
+      const root = await navigator.storage.getDirectory();
+      const adapter = createOpfsAdapter(root);
+      const res = await streamRestoreArchive({
+        stream: file.stream(),
+        opfs: adapter,
+        kvSet: (items) => chrome.storage.local.set(items),
+        kvRemove: (keys) => chrome.storage.local.remove(keys),
+        kvGet: (key) => chrome.storage.local.get(key ?? null),
+        alarms: createChromeAlarmsAdapter(),
+        onProgress: (p) => setBackupStatus(`Restoring ${p.path || "data"}…`),
+        overwrite: true,
+      });
+      const r = res.report?.restored || res.restored || {};
+      setBackupStatus(`Restored ${r.opfsFiles ?? 0} files, ${r.kvKeys ?? 0} settings keys and ${r.alarms ?? 0} schedules. Re-enter your provider API keys in the Providers section.`);
+      return;
+    }
+
+    const raw = await file.text();
+    const res = await send("owner.import.all", { raw, bundle: raw, overwrite: true });
     if (!res?.ok) throw new Error(res?.error || "Import failed");
     const r = res.report?.restored || {};
     setBackupStatus(`Restored ${r.opfsFiles ?? 0} files, ${r.kvKeys ?? 0} settings keys and ${r.alarms ?? 0} schedules. Re-enter your provider API keys in the Providers section.`);

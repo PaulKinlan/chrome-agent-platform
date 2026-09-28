@@ -9,7 +9,7 @@ import { send } from "../lib/messages.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
-import { projectUnifiedAgents, slugifyAgentId } from "../lib/agent-projection.js";
+import { projectUnifiedAgents, slugifyAgentId } from "../lib/named-agents.js";
 import { exportAgentCardJson, importAgentCard } from "../lib/agent-cards.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
 import { buildMcpServerEditor, mcpServerRow } from "../lib/mcp-server-editor.js";
@@ -5049,8 +5049,9 @@ window.addEventListener("message", async (e) => {
     // task, not run in isolation).
     if (!isPanelFrameSource(e.source)) return;
     const id = String(d.id ?? "").trim();
+    const token = d.ref ? String(d.ref).trim() : `/skill:${id}`;
     goHome({ focusAfter: composer });
-    composer.value = composer.value ? `${composer.value} /skill:${id}` : `/skill:${id}`;
+    composer.value = composer.value ? `${composer.value} ${token}` : token;
     composer.focus();
     return;
   }

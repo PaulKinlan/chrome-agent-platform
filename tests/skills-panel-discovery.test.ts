@@ -259,3 +259,44 @@ Deno.test("kozg.4: import selected sends ONLY the checked entries", async () => 
   ];
   assertEquals(ids.sort(), ["pm-standup-cmd", "pm-triage"]);
 });
+
+// chrome-agent-platform-d885.8 Part C falsification:
+// mountSkillsSection handles the use event on imported command rows without throwing
+// ReferenceError: onUse is not defined and uses view.ref.
+Deno.test("d885.8: clicking use on imported command row does not throw ReferenceError and uses view.ref", async () => {
+  const ui = makeSection();
+  const sendImpl = async (type: string) => {
+    if (type === "command.list") {
+      return {
+        commands: [
+          { id: "my-cmd-id", name: "mycmd", description: "A custom command", argumentHint: "<arg>" },
+        ],
+      };
+    }
+    if (type === "skill.list") return { skills: [], broken: [] };
+    return { ok: true };
+  };
+
+  mountSkillsSection(ui.section as any, { send: sendImpl });
+  await new Promise((r) => setTimeout(r, 10));
+
+  const commandRow = (ui.commandsList.children as any[]).flatMap((c: any) => c.children).find((k: any) => k.tag === "capability-row");
+  assert(commandRow, "imported command row must be rendered");
+
+  let postedMessage: any = null;
+  const originalWindow = (globalThis as any).window;
+  (globalThis as any).window = {
+    parent: {
+      postMessage: (msg: any) => { postedMessage = msg; },
+    },
+  };
+
+  try {
+    // Before fix, this threw "ReferenceError: onUse is not defined"
+    await commandRow.dispatch("use");
+    assertEquals(postedMessage?.type, "use-skill");
+    assertEquals(postedMessage?.ref, "/mycmd <arg>");
+  } finally {
+    (globalThis as any).window = originalWindow;
+  }
+});

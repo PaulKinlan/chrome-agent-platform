@@ -444,7 +444,7 @@
           </p>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
             <label class="muted" for="purge-journal-agent" style="font-size:13px;" data-i18n="options_agent">Agent</label>
-            <select id="purge-journal-agent" class="btn" style="max-width:260px;">
+            <select id="purge-journal-agent" class="input-select" style="max-width:260px;">
               <option value="" data-i18n="options_all_agents">All agents</option>
             </select>
             <button type="button" class="btn" id="purge-journals-btn" data-i18n="options_purge_journals">Purge journals…</button>
@@ -462,7 +462,7 @@
           <button type="button" class="btn" id="import-all-btn" data-i18n="options_import_from_file">Import from file…</button>
           <label style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);" data-i18n="options_import_a_backup_file">
             Import a backup file
-            <input type="file" id="import-all-file" accept=".json,application/json" hidden>
+            <input type="file" id="import-all-file" accept=".tar,.json,application/x-tar,application/json" hidden>
           </label>
           <p id="backup-status" class="hint" role="status" aria-live="polite" hidden></p>
         </div>

@@ -114,12 +114,12 @@ export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = 
  * When Settings is opened as a bare tab (no hub parent), degrade honestly:
  * copy the /skill:<id> reference and confirm inline — never a silent no-op. */
 export function useSkill(skill, { statusEl } = {}) {
-  const ref = `/skill:${skill.refId ?? skill.id}`;
+  const token = skill.ref || `/skill:${skill.refId ?? skill.id ?? skill.name}`;
   try {
-    if (window.parent && window.parent !== window) {
+    if (typeof window !== "undefined" && window.parent && window.parent !== window) {
       // Send the source-qualified refId so the hub pre-fills a collision-proof
       // reference (CAP-FB-20260831-SKILL-LIST-SYNC-01 r2).
-      window.parent.postMessage({ type: "use-skill", id: skill.refId ?? skill.id }, "*");
+      window.parent.postMessage({ type: "use-skill", id: skill.refId ?? skill.id ?? skill.name, ref: token }, "*");
       return;
     }
   } catch {
@@ -127,10 +127,12 @@ export function useSkill(skill, { statusEl } = {}) {
   }
   (async () => {
     try {
-      await navigator.clipboard.writeText(ref);
-      if (statusEl) statusEl.textContent = `Copied ${ref} — paste it in the hub composer to use it.`;
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(token);
+      }
+      if (statusEl) statusEl.textContent = `Copied ${token} — paste it in the hub composer to use it.`;
     } catch {
-      if (statusEl) statusEl.textContent = `Copy this reference to use it: ${ref}`;
+      if (statusEl) statusEl.textContent = `Copy this reference to use it: ${token}`;
     }
   })();
 }
@@ -305,7 +307,7 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
       row.setAttribute("name", view.name);
       row.setAttribute("description", view.description || "imported command");
       row.setAttribute("action", "use-delete");
-      row.addEventListener("use", () => onUse?.(view));
+      row.addEventListener("use", () => useSkill(view, { statusEl: status }));
       row.addEventListener("delete", async () => {
         const res2 = await sendFn("command.delete", { id: view.id }).catch(() => ({ ok: false }));
         if (res2?.ok) await renderCommands();

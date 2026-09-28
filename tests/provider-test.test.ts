@@ -9,6 +9,7 @@ import { assertEquals, assert, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   errorKindForStatus,
   testProvider,
+  testProviderConnection,
 } from "../extension/lib/provider-test.js";
 
 Deno.test("errorKindForStatus maps statuses to actionable kinds", () => {
@@ -192,4 +193,31 @@ Deno.test("a provider 400 key refusal carries the provider's own honest message"
     !/missing, invalid, or revoked/.test(String(res.error)),
     `the provider's own refusal is not the settings key-blame copy, got: ${res.error}`,
   );
+});
+
+// chrome-agent-platform-d885.8 Part A falsification:
+// testProviderConnection supports "lm-studio" as an OpenAI-compatible provider.
+Deno.test("testProviderConnection supports lm-studio as an OpenAI-compatible provider", async () => {
+  let calledUrl = "";
+  let sentBody: any = null;
+  const fetchImpl = async (url: string, init: any) => {
+    calledUrl = url;
+    sentBody = JSON.parse(init.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ message: { content: "ok" } }] }),
+    };
+  };
+
+  const res = await testProviderConnection(
+    { provider: "lm-studio", baseURL: "http://127.0.0.1:1234/v1", model: "local-model" },
+    { fetchImpl },
+  );
+
+  assertEquals(res.ok, true);
+  assertEquals(calledUrl, "http://127.0.0.1:1234/v1/chat/completions");
+  assertEquals(sentBody.model, "local-model");
+  assertEquals(sentBody.max_completion_tokens, 8);
+  assertStringIncludes(res.detail ?? "", "Model \"local-model\" responded");
 });
