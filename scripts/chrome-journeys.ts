@@ -3204,6 +3204,14 @@ async function main() {
       const x = r.x + r.width / 2, y = r.y + r.height / 2;
       const docHit = document.elementFromPoint(x, y);
       const shadowHit = el.shadowRoot.elementFromPoint(x, y);
+      const foot = document.querySelector(".side-foot");
+      const fr = foot?.getBoundingClientRect();
+      const ledgerBox = document.getElementById("activity-ledger-section")?.getBoundingClientRect();
+      const footBtns = [...document.querySelectorAll(".foot-btn")].map((b) => {
+        const r = b.getBoundingClientRect();
+        return { label: b.textContent.trim().slice(0, 12), y: Math.round(r.y), h: Math.round(r.height), covers: x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height };
+      });
+      const aside = document.querySelector("aside.side")?.getBoundingClientRect();
       return {
         x: Math.round(x), y: Math.round(y),
         docHit: docHit ? docHit.tagName + "." + String(docHit.className).slice(0, 40) : null,
@@ -3211,6 +3219,10 @@ async function main() {
         shadowHitIsButton: shadowHit === btn,
         pointerEvents: getComputedStyle(btn).pointerEvents,
         disabled: btn.disabled,
+        ledgerBox: ledgerBox ? { y: Math.round(ledgerBox.y), h: Math.round(ledgerBox.height), bottom: Math.round(ledgerBox.bottom) } : null,
+        footRect: fr ? { y: Math.round(fr.y), h: Math.round(fr.height) } : null,
+        footBtns,
+        asideRect: aside ? { y: Math.round(aside.y), h: Math.round(aside.height) } : null,
         innerW: innerWidth, innerH: innerHeight,
       };
     })()`);
