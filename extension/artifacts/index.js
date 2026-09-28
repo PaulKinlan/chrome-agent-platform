@@ -258,7 +258,7 @@ async function openArtifactDialog(id, origin) {
     frame.style.border = "1px solid var(--border)";
     frame.style.borderRadius = "10px";
     frame.style.overflow = "hidden";
-    frame.style.background = "#fff";
+    frame.style.background = "var(--bg-elevated)";
     frame.style.flex = "1 1 auto";
     frame.style.display = "flex";
     frame.style.flexDirection = "column";

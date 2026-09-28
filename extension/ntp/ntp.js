@@ -3872,7 +3872,7 @@ async function buildAgentConfigDialog(opts) {
   if (importNote) {
     importNote.className = "agent-config-import-note";
     importNote.setAttribute("role", "status");
-    importNote.style.cssText = "display:none;font-size:12px;color:var(--ok,#1b7f4d);line-height:1.4;margin-bottom:6px;";
+    importNote.style.cssText = "display:none;font-size:12px;color:var(--success);line-height:1.4;margin-bottom:6px;";
   }
   if (importBtn && importInput) {
     importBtn.addEventListener("click", () => importInput.click());

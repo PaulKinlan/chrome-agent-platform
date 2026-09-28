@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.553] — 2026-09-28
+- Improved dark-mode contrast, keyboard navigation in composer menus, and activity explorer legibility.
+
 ## [0.3.552] — 2026-09-28
 - Smoother New Tab Hub experience with attachment support in queued runs, faster startup, and in-context Settings navigation.
 

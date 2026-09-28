@@ -279,6 +279,7 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
     mirror.className = "agent-template-selectedcontent";
     const icon = document.createElement("span");
     icon.className = "agent-template-picker-icon";
+    icon.setAttribute("aria-hidden", "true");
     icon.textContent = "▾";
     button.append(mirror, icon);
     select.append(button);
@@ -311,6 +312,7 @@ export function buildTemplateSelect({ host, catalogue, blankLabel = "Custom agen
       mirror.className = "agent-template-selectedcontent";
       const icon = document.createElement("span");
       icon.className = "agent-template-picker-icon";
+      icon.setAttribute("aria-hidden", "true");
       icon.textContent = "▾";
       button.append(mirror, icon);
       select.append(button);

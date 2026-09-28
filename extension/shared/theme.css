@@ -70,6 +70,7 @@
   --secondary-layer: var(--panel-2);
   --warn: var(--warning);
   --bg-subtle: var(--panel-2);
+  --bg-elevated: var(--panel);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* ── Content layout (consistent width & gutters across hub views) ── */

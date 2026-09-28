@@ -416,7 +416,7 @@ input:focus, select:focus, textarea:focus {
 .usage-range[aria-selected="true"] {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent-fg, #fff);
+  color: var(--btn-fg);
   font-weight: 600;
 }
 .usage-cost-note { font-size: 11px; }
@@ -475,7 +475,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 .usage-share-fill { height: 100%; border-radius: 999px; }
 .usage-share-fill-models { background: var(--usage-in, var(--accent)); }
 .usage-share-fill-agents { background: var(--usage-out, color-mix(in oklab, var(--accent) 45%, var(--panel))); }
-.usage-share-fill-tools { background: var(--accent-2, var(--accent)); }
+.usage-share-fill-tools { background: var(--accent2); }
 .usage-share-value { color: var(--text); font-variant-numeric: tabular-nums; min-width: 48px; text-align: right; }
 .usage-share-calls { color: var(--muted); font-size: 11px; min-width: 64px; text-align: right; }
 .usage-stat {
@@ -1477,7 +1477,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   border-bottom-width: 2px;
   border-radius: 4px;
   padding: 2px 6px;
-  background: var(--surface-2, var(--surface));
+  background: var(--panel-2);
   white-space: nowrap;
 }
 .shortcut-list .unbound { font-style: italic; }

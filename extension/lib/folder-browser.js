@@ -192,7 +192,7 @@ export function mountGrantBrowser({ host, grant, send, rootLabel = null }) {
         viewer.replaceChildren();
         const hdr = document.createElement("div");
         hdr.style.marginBottom = "4px";
-        hdr.style.color = "var(--text-muted,#666)";
+        hdr.style.color = "var(--muted)";
         hdr.textContent = `${readRes.name} (${readRes.size} bytes, SHA-256: ${readRes.sha256})`;
         const pre = document.createElement("pre");
         pre.style.margin = "0";

@@ -1229,7 +1229,7 @@ class MicButton extends Component {
       }
       if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       const options = [...menu.querySelectorAll("button[data-device-id]")];
-      const index = options.indexOf(document.activeElement);
+      const index = options.indexOf(this._root?.activeElement || document.activeElement);
       event.preventDefault();
       options[(index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length]?.focus();
     });
@@ -1718,11 +1718,11 @@ class AttachButton extends Component {
     this._menu?.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { e.preventDefault(); this._toggle(false); this._btn?.focus(); return; }
       const items = [...this._menu.querySelectorAll("button[role=menuitem]")];
-      const idx = items.indexOf(document.activeElement);
+      const idx = items.indexOf(this._root?.activeElement || document.activeElement);
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const d = e.key === "ArrowDown" ? 1 : -1;
-        items[(idx + d + items.length) % items.length].focus();
+        items[(idx + d + items.length) % items.length]?.focus();
       }
     });
     this._menu?.addEventListener("click", async (e) => {
@@ -3002,7 +3002,7 @@ class ArtifactCard extends Component {
       :host { display:block; }
       .card { display:flex; flex-direction:column; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px);
-        overflow:hidden; box-shadow:var(--shadow-1, 0 1px 2px rgba(29,27,24,.05)); }
+        overflow:hidden; }
       .preview { position:relative; height:132px; background:var(--panel-2,#efede8);
         overflow:hidden; border-bottom:1px solid var(--border,#e3e0d9); cursor:pointer; }
       .preview .html-frame, .preview .html-frame iframe { width:100%; height:100%; }
@@ -3914,14 +3914,15 @@ class TablePreview extends Component {
     this._page = model.page;
 
     const warnHtml = model.formulaCellCount > 0
-      ? `<div class="formula-warning" role="note"><span class="warn-icon" aria-hidden="true">⚠️</span> <span>Export notice: ${model.formulaCellCount} cell(s) contain spreadsheet formula characters (=, +, -, @, |). They will be protected with leading apostrophes on CSV export.</span></div>`
+      ? `<div class="formula-warning" role="note"><span class="warn-icon" aria-hidden="true">${ICONS.alert || ""}</span> <span>Export notice: ${model.formulaCellCount} cell(s) contain spreadsheet formula characters (=, +, -, @, |). They will be protected with leading apostrophes on CSV export.</span></div>`
       : "";
 
     mountTemplate(this, `
       :host { display:block; inline-size:100%; font-family:var(--font,system-ui,sans-serif); color:var(--text,#1d1b18); }
       .wrapper { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,8px); background:var(--panel,#fff); overflow:hidden; display:flex; flex-direction:column; }
       .formula-warning { display:flex; align-items:center; gap:8px; padding:8px 12px; background:color-mix(in oklab, var(--warning,#b26200) 10%, var(--panel,#fff)); border-block-end:1px solid var(--border,#e3e0d9); font-size:var(--text-xs,12px); }
-      .warn-icon { font-size:14px; }
+      .warn-icon { display:inline-flex; align-items:center; width:16px; height:16px; flex:0 0 auto; color:var(--warning,#b26200); }
+      .warn-icon svg { width:16px; height:16px; }
       .scroller { max-block-size:var(--table-preview-max-height,55vh); overflow:auto; -webkit-overflow-scrolling:touch; outline:none; }
       .scroller:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
       table { inline-size:100%; border-collapse:collapse; font-size:var(--text-xs,12px); font-variant-numeric:tabular-nums; text-align:start; }
@@ -5813,6 +5814,7 @@ class MessageBubble extends Component {
     toggle?.addEventListener("click", () => {
       const open = long.getAttribute("data-open") === "1";
       long.setAttribute("data-open", open ? "0" : "1");
+      toggle.setAttribute("aria-expanded", open ? "false" : "true");
       toggle.textContent = open ? "Show full response" : "Show less";
     });
     copy?.addEventListener("click", async () => {
@@ -5989,7 +5991,7 @@ class MessageBubble extends Component {
       const hasTrace = content && !/^thinking\.\.\.$/i.test(content.trim()) && !/^thinking…$/i.test(content.trim());
       const label = step != null ? `thinking · step ${step}${total ? ` of ${total}` : ""}` : "thinking";
       if (!hasTrace) {
-        markup = `<div class="think" role="status"><summary style="list-style:none;display:flex;align-items:center;gap:8px;color:var(--muted,#635e56);font-size:13px;padding:2px 0;"><span class="spin" aria-hidden="true"></span><span>${escapeHtml(label)}</span></summary></div>`;
+        markup = `<div class="think" role="status"><div class="think-status" style="display:flex;align-items:center;gap:8px;color:var(--muted,#635e56);font-size:13px;padding:2px 0;"><span class="spin" aria-hidden="true"></span><span>${escapeHtml(label)}</span></div></div>`;
       } else {
         markup = `<details class="think"><summary><svg class="caret" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 6 15 12 9 18"/></svg><span>${escapeHtml(label)}</span></summary><div class="trace">${escapeHtml(content)}</div></details>`;
       }
@@ -6036,7 +6038,7 @@ class MessageBubble extends Component {
       let bubbleOut = bubble;
       if (this._longResponse(content)) {
         bubbleOut = `<div class="long-response" data-open="0"><div class="body">${body}</div>`
-          + `<div class="long-actions"><button type="button" class="long-toggle" part="long-toggle">Show full response</button>`
+          + `<div class="long-actions"><button type="button" class="long-toggle" part="long-toggle" aria-expanded="false">Show full response</button>`
           + `<button type="button" class="long-copy" part="long-copy">Copy full response</button></div></div>`;
       }
       if (role === "agent") {
@@ -6326,11 +6328,11 @@ class AgentConversation extends Component {
       /* The live thinking trace (chrome-agent-platform-h0iy): a collapsible
          region under the live-status row, present only while a provider is
          streaming thinking tokens. Muted, monospace-free, bounded height. */
-      agent-conversation .thinking-trace { flex: 0 0 auto; margin-block-start: 4px; border: 1px solid var(--border-subtle, #e3e1dc); border-radius: 8px; background: var(--bg-subtle, #f6f5f2); overflow: hidden; }
-      agent-conversation .thinking-trace-toggle { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 6px 10px; font: inherit; font-size: 12px; color: var(--text-muted, #6b675f); cursor: pointer; text-align: left; }
+      agent-conversation .thinking-trace { flex: 0 0 auto; margin-block-start: 4px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-subtle, #f6f5f2); overflow: hidden; }
+      agent-conversation .thinking-trace-toggle { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 6px 10px; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; text-align: left; }
       agent-conversation .thinking-trace-toggle:hover { color: var(--text, #24231f); }
       agent-conversation .thinking-trace-toggle:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: -2px; }
-      agent-conversation .thinking-trace-body { padding: 0 10px 8px; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; color: var(--text-muted, #6b675f); }
+      agent-conversation .thinking-trace-body { padding: 0 10px 8px; max-height: 160px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; color: var(--muted); }
       agent-conversation .thinking-trace[data-open="false"] .thinking-trace-body { display: none; }
       agent-conversation .thinking-trace[data-open="false"] .thinking-trace-caret { display: inline-block; transform: rotate(0deg); }
       agent-conversation .thinking-trace[data-open="true"] .thinking-trace-caret { display: inline-block; transform: rotate(90deg); }
@@ -7137,6 +7139,7 @@ class AgentComposer extends Component {
          as the blank-toggle bug. Tag-scoping keeps the controls in the LIGHT
          DOM (the CDP journeys hit #task-input/#run-task) while the styles only
          apply within THIS component's subtree. */
+      agent-composer { anchor-scope: --composer-anchor, --composer-attach; }
       agent-composer .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; anchor-name:--composer-anchor; }
       agent-composer .composer:focus-within { border-color:var(--accent,#0e6e63); }
       agent-composer .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
@@ -7157,7 +7160,7 @@ class AgentComposer extends Component {
       agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
       agent-composer .popup .group-label { padding:6px 10px 2px; font-size:11px; font-weight:700;
         color:var(--muted,#635e56); letter-spacing:.01em; }
-      agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:none; overflow-y:hidden; min-height:44px; outline:none; line-height:1.45; }
+      agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:none; overflow-y:hidden; field-sizing:content; min-height:24px; max-height:180px; outline:none; line-height:1.45; }
       agent-composer .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       agent-composer .composer .spacer { flex:1; }
       agent-composer .composer .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
@@ -7482,12 +7485,13 @@ class AgentComposer extends Component {
     // attributes-only observer would miss those transitions and leave a stale
     // active-descendant on the textarea.
     this._apObserver?.disconnect();
+    const pickRoot = this._agentPick?.shadowRoot || this._agentPick?._root || this._agentPick;
     this._apObserver = new MutationObserver(() => {
-      const active = this._agentPick?.querySelector?.('#ap-list [data-active="true"]');
+      const active = pickRoot?.querySelector?.('#ap-list [data-active="true"]');
       if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
       else this._input?.removeAttribute("aria-activedescendant");
     });
-    const apList = this._agentPick?.querySelector?.("#ap-list");
+    const apList = pickRoot?.querySelector?.("#ap-list");
     if (apList) {
       this._apObserver.observe(apList, { attributes: true, attributeFilter: ["data-active"], childList: true, subtree: true });
       // Initial sync: the picker may already have an active option.
@@ -8375,7 +8379,7 @@ class ConversationRunStatus extends Component {
     const elapsed = this._startedAt ? Math.floor((Date.now() - this._startedAt) / 1000) : 0;
     mountTemplate(this, `
       :host { display:block; min-width:0; }
-      .surface { display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 12px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); box-shadow:0 4px 16px rgb(0 0 0 / .06); }
+      .surface { display:flex; align-items:center; gap:12px; min-height:44px; padding:8px 12px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); }
       loading-state { flex:0 0 auto; color:var(--muted,#635e56); }
       .surface[data-tone="accent"] loading-state { color:var(--accent,#0e6e63); }
       .surface[data-tone="success"] loading-state { color:var(--success,#1a7f37); }
@@ -8472,7 +8476,7 @@ class PlanStrip extends Component {
     mountTemplate(this, `
       :host { display:block; position:sticky; top:0; z-index:4; margin:0 0 12px; min-width:0; }
       :host([hidden]) { display:none; }
-      .plan { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); box-shadow:0 4px 16px rgb(0 0 0 / .06); overflow:clip; }
+      .plan { border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); background:var(--panel,#fff); color:var(--text,#1d1b18); overflow:clip; }
       details > summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:10px; min-height:44px; padding:10px 12px; font-size:13px; font-weight:650; color:var(--text,#1d1b18); }
       summary::-webkit-details-marker { display:none; }
       summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; border-radius:var(--radius-md,12px); }
@@ -8587,7 +8591,7 @@ class PermissionApprovalCard extends Component {
           : "";
     mountTemplate(this, `
       :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
-      .card { max-width:88%; border-radius:12px; padding:12px 14px; background:var(--panel,#fff); border:1px solid var(--accent,#0e6e63); box-shadow:0 1px 2px rgba(0,0,0,.05); }
+      .card { max-width:88%; border-radius:12px; padding:12px 14px; background:var(--panel,#fff); border:1px solid var(--accent,#0e6e63); }
       .title { font-size:13px; font-weight:700; color:var(--ink,#1d1b18); margin:0 0 4px; }
       .reason { font-size:13.5px; color:var(--ink,#1d1b18); margin:0 0 6px; line-height:1.45; }
       .needs-title { margin:0 0 2px; font-size:12.5px; font-weight:600; color:var(--muted,#635e56); }
@@ -9036,7 +9040,7 @@ class PromptBar extends Component {
       :host { display:block; }
       .bar { display:flex; align-items:flex-end; gap:8px; border:1px solid var(--border,#e3e0d9); border-radius:14px; background:var(--panel,#ffffff); padding:8px 10px; }
       .bar:focus-within { border-color:var(--accent,#0e6e63); }
-      textarea { flex:1; border:0; background:transparent; resize:none; font:inherit; font-size:14px; line-height:1.5; color:var(--ink,#1d1b18); padding:6px 2px; min-height:24px; max-height:160px; outline:none; }
+      textarea { flex:1; border:0; background:transparent; resize:none; font:inherit; font-size:14px; line-height:1.5; color:var(--ink,#1d1b18); padding:6px 2px; field-sizing:content; min-height:24px; max-height:180px; outline:none; }
       textarea::placeholder { color:var(--muted,#635e56); }
       .tools { display:flex; align-items:center; gap:4px; flex:0 0 auto; }
       .model { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--border,#e3e0d9); border-radius:999px; padding:4px 12px; font:inherit; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); cursor:pointer; background:var(--panel,#ffffff); }
@@ -10046,7 +10050,7 @@ class ModelPicker extends Component {
       .group { padding: 6px 10px 2px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted, #635e56); }
       .group + .group, .opt + .group { margin-top: 4px; border-top: 1px solid var(--border, #e3e0d9); padding-top: 8px; }
       .empty { padding: 8px 10px; font-size: 12px; color: var(--muted, #635e56); }
-      .custom-hint { font-size: 12px; color: var(--secondary, #b45309); }
+      .custom-hint { font-size: 12px; color: var(--accent2); }
       .loading-hint { font-size: 12px; color: var(--muted, #635e56); }
     `, `
       <div class="field">
@@ -10254,19 +10258,31 @@ class AgentNav extends Component {
     const active = this.getAttribute("active") || "hub";
     const tabs = VIEWS.map((v) =>
       `<button type="button" class="tab" data-view="${v.id}" role="tab"
-        aria-selected="${v.id === active}">${escapeHtml(v.label)}</button>`
+        aria-selected="${v.id === active ? "true" : "false"}" tabindex="${v.id === active ? "0" : "-1"}">${escapeHtml(v.label)}</button>`
     ).join("");
+    const markup = `<div class="tabs" role="tablist">${tabs}</div>`;
     mountTemplate(this, `
-      :host { display:inline-flex; gap:4px; border:1px solid var(--border,#e3e0d9); border-radius:10px; padding:4px; background:var(--panel,#ffffff); }
+      :host { display:inline-flex; border:1px solid var(--border,#e3e0d9); border-radius:10px; padding:4px; background:var(--panel,#ffffff); }
+      .tabs { display:inline-flex; gap:4px; }
       .tab { border:0; background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:7px 14px; cursor:pointer; font:inherit; }
       .tab[aria-selected="true"] { background:var(--accent,#0e6e63); color:var(--accent-contrast,#fff); }
       .tab:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
-    `, tabs);
+    `, markup);
   }
   _wire() {
-    this._root.querySelectorAll(".tab").forEach((t) =>
-      t.addEventListener("click", () => this._emit("navigate", { view: t.dataset.view }))
-    );
+    const tabs = [...this._root.querySelectorAll(".tab")];
+    tabs.forEach((t, i) => {
+      t.addEventListener("click", () => this._emit("navigate", { view: t.dataset.view }));
+      t.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          e.preventDefault();
+          const d = e.key === "ArrowRight" ? 1 : -1;
+          const next = tabs[(i + d + tabs.length) % tabs.length];
+          next?.focus();
+          next?.click();
+        }
+      });
+    });
   }
 }
 customElements.define("agent-nav", AgentNav);
@@ -11137,7 +11153,7 @@ class ActivityExplorer extends Component {
           color:var(--text,#1d1b18); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
           border-radius:var(--radius-sm,8px); }
         .aex-search:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
-        .aex-agent { max-width:200px; padding:8px 10px; font:inherit; font-size:13px;
+        select.aex-agent { max-width:200px; padding:8px 10px; font:inherit; font-size:13px;
           color:var(--text,#1d1b18); background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9);
           border-radius:var(--radius-sm,8px); appearance:base-select; }
         .aex-list { display:flex; flex-direction:column; max-height:420px; overflow-y:auto; overflow-x:hidden; }
@@ -11148,8 +11164,8 @@ class ActivityExplorer extends Component {
           align-items:baseline; padding:9px 12px; }
         .aex-entry summary::-webkit-details-marker { display:none; }
         .aex-entry summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
-        .aex-agent { font-size:11.5px; font-weight:600; color:var(--accent,#0e6e63); white-space:nowrap;
-          max-width:150px; overflow:hidden; text-overflow:ellipsis; }
+        span.aex-agent { font-size:11.5px; font-weight:600; color:var(--accent,#0e6e63); white-space:nowrap;
+          max-width:150px; overflow:hidden; text-overflow:ellipsis; background:transparent; border:0; padding:0; }
         .aex-main { min-width:0; min-inline-size:0; }
         .aex-kind { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
           color:var(--muted,#635e56); margin-right:6px; white-space:nowrap; }
@@ -11179,6 +11195,14 @@ class ActivityExplorer extends Component {
         .aex-blocks .tt-block summary:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:-2px; }
         .aex-blocks .tt-block-label { font-weight:600; color:var(--ink,#1d1b18); }
         .aex-blocks .tt-block-meta { color:var(--muted,#635e56); }
+        .aex-blocks .tt-block-controls { margin-inline-start:auto; display:inline-flex; gap:4px; }
+        .aex-blocks .tt-block-controls button { font:inherit; font-size:11px; line-height:1; display:inline-flex; align-items:center; gap:4px;
+          padding:3px 7px; border:1px solid var(--border,#e3e0d9); border-radius:999px;
+          background:var(--panel,#ffffff); color:var(--muted,#635e56); cursor:pointer; }
+        .aex-blocks .tt-block-controls button:hover { border-color:var(--accent,#0e6e63); color:var(--ink,#1d1b18); }
+        .aex-blocks .tt-block-controls button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+        .aex-blocks .tt-block-controls button.on { background:var(--accent,#0e6e63); border-color:transparent; color:var(--btn-fg,#ffffff); }
+        .aex-blocks .tt-btn-ic { display:inline-flex; flex:0 0 auto; }
         .aex-blocks .tt-tree { padding:2px 6px 8px; max-height:260px; overflow:auto; }
         .aex-blocks .tt-row { display:flex; align-items:center; gap:6px; padding:2px 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.5; min-height:22px; }
         .aex-blocks .tt-row:hover { background:var(--panel-2,#efede8); }
@@ -11189,6 +11213,15 @@ class ActivityExplorer extends Component {
         .aex-blocks .tt-toggle .tt-caret { transition:transform .15s ease; }
         .aex-blocks .tt-toggle[aria-expanded="true"] .tt-caret { transform:rotate(90deg); }
         .aex-blocks .tt-ic { width:18px; height:18px; flex:0 0 auto; }
+        .aex-blocks .tt-raw { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+          font-size:11.5px; line-height:1.45; color:var(--ink,#1d1b18); background:var(--panel-2,#efede8);
+          white-space:pre-wrap; word-break:break-word; overflow:auto; max-height:360px; tab-size:2; }
+        .aex-blocks .tt-raw .tt-json-key { color:var(--accent,#0e6e63); font-weight:600; }
+        .aex-blocks .tt-raw .tt-json-string { color:var(--ink,#1d1b18); }
+        .aex-blocks .tt-raw .tt-json-number, .aex-blocks .tt-raw .tt-json-boolean { color:var(--accent,#0e6e63); }
+        .aex-blocks .tt-raw .tt-json-null { color:var(--muted,#635e56); font-style:italic; }
+        .aex-blocks .tt-raw .tt-json-punct { color:var(--muted,#635e56); }
+        .aex-blocks .tt-raw::selection, .aex-blocks .tt-raw *::selection { background:var(--accent,#0e6e63); color:var(--btn-fg,#ffffff); }
         .aex-blocks .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
         .aex-blocks .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
         .aex-blocks .tt-val-number, .aex-blocks .tt-val-boolean { color:var(--accent,#0e6e63); }
@@ -11814,7 +11847,7 @@ class JobsBoard extends Component {
            the tone accent + the uppercase label together carry the state. */
         .jb-badge { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
           padding:1px 6px; border-radius:999px; border:1px solid var(--border,#e3e0d9);
-          color:var(--muted,#635e56); background:var(--surface-2,#f5f2ec); flex:0 0 auto;
+          color:var(--muted,#635e56); background:var(--panel-2); flex:0 0 auto;
           display:inline-flex; align-items:center; gap:5px; }
         .jb-badge::before { content:""; width:6px; height:6px; border-radius:50%;
           background:var(--muted,#635e56); flex:0 0 auto; }
@@ -11843,7 +11876,7 @@ class JobsBoard extends Component {
           text-overflow:ellipsis; white-space:nowrap; min-width:0; max-width:100%; }
         .jb-full { font-size:12.5px; line-height:1.5; color:var(--text,#1d1b18); white-space:pre-wrap;
           word-break:break-word; margin:4px 0 2px; max-height:40vh; overflow:auto;
-          background:var(--surface-2,#f5f2ec); border-radius:var(--radius-sm,6px); padding:8px 10px; }
+          background:var(--panel-2); border-radius:var(--radius-sm,6px); padding:8px 10px; }
         .jb-caret { font-size:11px; color:var(--muted,#635e56); }
         .jb-msg { font-size:12.5px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden;
           display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
@@ -12757,9 +12790,9 @@ class DurableRunRegistry extends Component {
         <div class="summary"><strong>${escapeHtml(short)}</strong><span class="phase">${escapeHtml(phaseLabel)}</span></div>
         ${reason ? `<p class="description" id="${descriptionId}">${escapeHtml(reason)}</p>` : ""}
         <div class="actions">
-          ${this._cancellable(run.phase) ? `<button type="button" data-action="cancel" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>Cancel</button>` : ""}
-          ${this._resumable(run.phase) ? `<button type="button" data-action="resume" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>${run.phase === "paused-side-effect-uncertain" ? "Retry" : "Resume"}</button>` : ""}
-          <button type="button" data-action="logs" aria-describedby="${descriptionId}" ${pending ? "disabled" : ""}>View log</button>
+          ${this._cancellable(run.phase) ? `<button type="button" data-action="cancel"${reason ? ` aria-describedby="${descriptionId}"` : ""} ${pending ? "disabled" : ""}>Cancel</button>` : ""}
+          ${this._resumable(run.phase) ? `<button type="button" data-action="resume"${reason ? ` aria-describedby="${descriptionId}"` : ""} ${pending ? "disabled" : ""}>${run.phase === "paused-side-effect-uncertain" ? "Retry" : "Resume"}</button>` : ""}
+          <button type="button" data-action="logs"${reason ? ` aria-describedby="${descriptionId}"` : ""} ${pending ? "disabled" : ""}>View log</button>
         </div>
         ${logs ? `${this._logTruncated.has(run.executionId) ? '<p class="log-note">Showing the latest 200 log entries.</p>' : ""}<pre class="logs" tabindex="0" aria-label="Retained logs for ${escapeHtml(context)}">${escapeHtml(JSON.stringify(logs, null, 2))}</pre>` : ""}
       </li>`;
@@ -13908,7 +13941,7 @@ export async function renderAgentPermissionsPanel(host, {
     for (const p of permissions) {
       const item = document.createElement("li");
       item.className = "agent-permissions-item";
-      item.textContent = `${p} — granted to the extension`;
+      item.textContent = `${permissionUserLanguage(p) || p} — granted to the extension`;
       list.append(item);
     }
     section.append(list);

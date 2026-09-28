@@ -25,7 +25,7 @@
      indicator: the owner sees a filling library BEFORE a create is refused,
      never as a silent drop. Hidden until the library is meaningfully full. */
   .capacity { margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--border);
-    border-radius: var(--radius-sm, 6px); background: var(--surface-2, transparent);
+    border-radius: var(--radius-sm, 6px); background: var(--panel-2);
     font-size: 12px; color: var(--muted); }
   .capacity[hidden] { display: none; }
   .capacity .cap-row { display: flex; justify-content: space-between; align-items: baseline;
@@ -40,20 +40,20 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+<main class="wrap">
   <!-- Item 54: opened IN-CONTEXT from the hub (the view overlay provides the
        single Back button + the "Artifacts" title), so this page has NO back
        button and NO h1 of its own — a small logo only, matching the skills
        page. The old back + h1 doubled up with the overlay's header. -->
   <header class="head">
-    <div class="logo">Artifacts</div>
+    <h1 class="logo">Artifacts</h1>
   </header>
   <p class="sub">Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it.</p>
   <div class="capacity" id="capacity" role="status" aria-live="polite" hidden></div>
   <div class="status" id="status" aria-live="polite"></div>
   <div class="grid" id="grid"></div>
   <div class="foot" id="foot"></div>
-</div>
+</main>
 <script type="module" src="./index.js"></script>
 </body>
 </html>

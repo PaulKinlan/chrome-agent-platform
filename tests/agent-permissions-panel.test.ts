@@ -140,7 +140,7 @@ Deno.test("agent permissions panel: a named agent sees the extension-wide postur
     const host = new FakeEl("div");
     await renderAgentPermissionsPanel(host, { kind: "named", id: "writer", chromePermissions: perms.seam });
     assert(textOf(host).includes("belong to the extension"), "the extension-wide scope is stated plainly");
-    assert(textOf(host).includes("storage — granted to the extension"));
+    assert(textOf(host).includes("remember settings and memory — granted to the extension"));
     assert(textOf(host).includes("https://a.example/*") && textOf(host).includes("https://b.example/*"), "every granted origin is listed");
     const revokes = buttons(host).filter((b) => b.textContent === "Revoke");
     assertEquals(revokes.length, 2, "one revoke per granted origin");
