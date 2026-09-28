@@ -108,25 +108,31 @@ async function walkCreate(dir, segments) {
 /** Recompute the workspace's true bytes/files used by walking it. Used as
  * the authoritative source for the Settings usage row (there is no quota
  * ledger to reconcile — usage is whatever the workspace holds). */
-export async function measureWorkspace(dir, { walkDepth = 0 } = {}) {
+export async function measureWorkspace(dir, { walkDepth = 0, collectFiles = false } = {}) {
   let bytesUsed = 0;
   let filesUsed = 0;
-  const scan = async (handle, depth) => {
+  const files = [];
+  const scan = async (handle, depth, prefix = "") => {
     if (depth > MAX_WORKSPACE_DEPTH) return;
     for await (const entry of handle.values()) {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.kind === "directory") {
-        await scan(entry, depth + 1);
+        await scan(entry, depth + 1, path);
       } else {
         try {
           const f = await entry.getFile();
           bytesUsed += f.size;
           filesUsed += 1;
-        } catch { /* unreadable file — count the name, zero bytes */ filesUsed += 1; }
+          if (collectFiles) files.push({ path, name: entry.name, size: f.size });
+        } catch { /* unreadable file — count the name, zero bytes */
+          filesUsed += 1;
+          if (collectFiles) files.push({ path, name: entry.name, size: 0 });
+        }
       }
     }
   };
   await scan(dir, walkDepth);
-  return { bytesUsed, filesUsed };
+  return { bytesUsed, filesUsed, files };
 }
 
 /** List entries under a relative path inside the current agent's workspace. */
@@ -363,13 +369,14 @@ export async function getWorkspaceUsageByKey(key) {
     dir = await root.getDirectoryHandle(key);
   } catch {
     // No workspace yet — honest empty usage.
-    return { ok: true, workspace: key, bytesUsed: 0, filesUsed: 0 };
+    return { ok: true, workspace: key, bytesUsed: 0, filesUsed: 0, files: [] };
   }
-  const measured = await measureWorkspace(dir);
+  const measured = await measureWorkspace(dir, { collectFiles: true });
   return {
     ok: true,
     workspace: key,
     bytesUsed: measured.bytesUsed,
     filesUsed: measured.filesUsed,
+    files: measured.files,
   };
 }

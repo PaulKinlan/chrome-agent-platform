@@ -99,11 +99,13 @@ export async function drainQueuedFollowUp({
     };
   }
   const text = String(claim.item.text ?? "");
+  const attachments = Array.isArray(claim.item.attachments) ? claim.item.attachments : [];
+  const agent = claim.item.agent && typeof claim.item.agent === "object" ? claim.item.agent : null;
   const resolverDocumentId = typeof claim.item.resolverDocumentId === "string" && claim.item.resolverDocumentId.length <= 200
     ? claim.item.resolverDocumentId
     : "";
   try {
-    const runPromise = fireRun({ runId: claimRunId, text, resolverDocumentId });
+    const runPromise = fireRun({ runId: claimRunId, text, attachments, agent, resolverDocumentId });
     void Promise.resolve(runPromise).then((result) => {
       if (result?.ok !== true) {
         // Admission refused / failed before a durable run: the message never

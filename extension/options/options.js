@@ -13,7 +13,7 @@ import {
   DEVELOPER_FEATURES_KEY,
   normalizeSettingsSectionId,
 } from "../lib/pure.js";
-import { projectUnifiedAgents } from "../lib/named-agents.js";
+import { projectUnifiedAgents } from "../lib/agent-projection.js";
 import { hydrateI18n } from "../shared/i18n.js";
 import { skillAsTemplate } from "../lib/agent-templates.js";
 import {

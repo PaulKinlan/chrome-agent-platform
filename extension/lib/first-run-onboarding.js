@@ -77,12 +77,13 @@ export function keyedProviderConfigured(config) {
 }
 
 export function providerReadyForFirstTask(config) {
-  const provider = String(config?.provider ?? "");
-  if (
-    !provider || provider === "demo" || provider === "prompt-api" ||
-    provider === "ollama"
-  ) {
+  const provider = String(config?.selectedProvider ?? config?.provider ?? "");
+  if (!provider || provider === "demo" || provider === "prompt-api") {
     return false;
+  }
+  if (provider === "ollama" || provider === "lm-studio") {
+    if (config?.configured === true) return true;
+    return Boolean(config?.model || config?.tested);
   }
   if (config?.configured === true) return true;
   return config?.hasApiKey === true &&

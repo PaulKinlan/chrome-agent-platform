@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.552] — 2026-09-28
+- Smoother New Tab Hub experience with attachment support in queued runs, faster startup, and in-context Settings navigation.
+
 ## [0.3.551] — 2026-09-28
 - Smoother streaming responses and faster thread loading with lazy tool-card rendering and persistent component stylesheets.
 

@@ -5972,8 +5972,8 @@ async function drainThreadQueueForThread(threadId, settledExecutionId) {
       const snapshot = await durableRuns.list();
       return snapshot.runs.find((row) => row.executionId === executionId) ?? null;
     },
-    fireRun: ({ runId, text, resolverDocumentId }) => handlers["agent.run"](
-      { threadId: id, task: text, runId },
+    fireRun: ({ runId, text, attachments, agent, resolverDocumentId }) => handlers["agent.run"](
+      { threadId: id, task: text, attachments, agent, runId },
       { principal: "extension", resolverDocumentId },
     ),
     report: (level, message) => pushDiagnostic(level, message),
@@ -9168,6 +9168,8 @@ const handlers = mergeRouteMaps(
     const threadId = String(m?.threadId ?? "");
     if (!threadId) return ERR_THREAD_ID_REQUIRED;
     return await threadQueues.enqueue(threadId, String(m?.text ?? ""), {
+      attachments: Array.isArray(m?.attachments) ? m.attachments : [],
+      agent: m?.agent && typeof m?.agent === "object" ? m.agent : null,
       resolverDocumentId: approvalResolverDocument(context),
     });
   },

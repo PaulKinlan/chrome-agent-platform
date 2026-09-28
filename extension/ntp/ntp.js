@@ -9,7 +9,7 @@ import { send } from "../lib/messages.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
-import { projectUnifiedAgents, slugifyAgentId } from "../lib/named-agents.js";
+import { projectUnifiedAgents, slugifyAgentId } from "../lib/agent-projection.js";
 import { exportAgentCardJson, importAgentCard } from "../lib/agent-cards.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
 import { buildMcpServerEditor, mcpServerRow } from "../lib/mcp-server-editor.js";
@@ -347,7 +347,10 @@ async function renderPendingChips() {
     chip.title = "Runs after the current task finishes";
     const text = document.createElement("span");
     text.className = "pending-chip-text";
-    text.textContent = String(item.text ?? "");
+    let desc = String(item.text ?? "");
+    if (item.agent?.name || item.agent?.id) desc += ` @${item.agent.name || item.agent.id}`;
+    if (item.attachments?.length) desc += ` (${item.attachments.length} file${item.attachments.length === 1 ? "" : "s"})`;
+    text.textContent = desc;
     chip.appendChild(text);
     const up = document.createElement("button");
     up.type = "button";
@@ -384,33 +387,61 @@ async function renderPendingChips() {
     pendingChipStrip.appendChild(chip);
   });
 }
-/** Route a composer send by the active mode when a run is live. */
-async function runControlSend(text, attachments, agent) {
-  const run = liveSurfaceRun;
-  if (!run) return { ok: false, error: "run_not_live" };
-  const mode = activeRunControlMode();
-  if (mode === "queue") {
-    const res = await send("run.control.queue.enqueue", { threadId: currentThreadId, text }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
-    if (res?.ok === true) {
-      setStatus("Queued — it runs after this task finishes.");
-      await renderPendingChips();
-    } else {
-      setStatus(`Queue failed — ${res?.error ?? "unknown"}`, false);
-    }
-    return res;
+
+export let queuedTurns = [];
+
+export async function enqueueTurn({ text, attachments = [], agent = null } = {}) {
+  const turn = { text, attachments, agent };
+  queuedTurns.push(turn);
+  const res = await send("run.control.queue.enqueue", {
+    threadId: currentThreadId,
+    text,
+    attachments,
+    agent,
+  }).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+  if (res?.ok === true) {
+    setStatus("Queued — it runs after this task finishes.");
+    await renderPendingChips();
+  } else {
+    setStatus(`Queue failed — ${res?.error ?? "unknown"}`, false);
   }
-  if (mode === "send-now") {
-    // Stop the live run cleanly (the SW's cancel settles the durable run —
-    // nothing orphaned), then send as a fresh turn of the same surface.
+  return res;
+}
+
+export async function drainQueuedTurns() {
+  const turns = [...queuedTurns];
+  queuedTurns = [];
+  for (const t of turns) {
+    await runThreadTurn(t.text, t.attachments, t.agent?.ref ? { kind: t.agent.kind, id: t.agent.id, name: t.agent.name } : null);
+  }
+  return turns;
+}
+
+export async function sendNowAndStop({ text, attachments = [], agent = null } = {}) {
+  const run = liveSurfaceRun;
+  if (run) {
     const stopped = await cancelDurableRun(run.executionId, "stopped by owner — send now").catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
     if (stopped?.ok !== true && stopped?.error !== "run_already_terminal") {
       setStatus(`Could not stop the running task — ${stopped?.error ?? "unknown"}`, false);
       return stopped;
     }
-    liveSurfaceRun = null;
-    renderRunControlBar();
-    await runThreadTurn(text, attachments, agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name } : null);
-    return { ok: true };
+  }
+  liveSurfaceRun = null;
+  renderRunControlBar();
+  await runThreadTurn(text, attachments, agent?.ref ? { kind: agent.kind, id: agent.id, name: agent.name } : null);
+  return { ok: true };
+}
+
+/** Route a composer send by the active mode when a run is live. */
+async function runControlSend(text, attachments, agent) {
+  const run = liveSurfaceRun;
+  if (!run) return { ok: false, error: "run_not_live" };
+  const mode = activeRunControlMode();
+  if (mode === "queue" || (mode === "steer" && ((attachments && attachments.length > 0) || agent?.ref))) {
+    return await enqueueTurn({ text, attachments, agent });
+  }
+  if (mode === "send-now") {
+    return await sendNowAndStop({ text, attachments, agent });
   }
   // steer (default): inject into the in-flight run; the message appears in the
   // transcript as an owner interruption (its own visual treatment).
@@ -540,9 +571,15 @@ async function renderFirstRunGuide() {
         send("provider.summary"),
         send("provider.status"),
       ]);
+      const provider = summary?.provider ?? status?.selectedProvider;
       return {
-        provider: summary?.provider,
-        configured: summary?.configured === true && status?.ok === true,
+        provider,
+        selectedProvider: status?.selectedProvider ?? summary?.provider,
+        configured: (summary?.configured === true && status?.ok === true) ||
+          ((provider === "ollama" || provider === "lm-studio") && (status?.ok === true || Boolean(status?.modelId || status?.tested))),
+        model: summary?.model ?? status?.modelId ?? status?.model,
+        tested: status?.tested === true || summary?.tested === true,
+        hasApiKey: Boolean(summary?.hasApiKey),
       };
     },
     listArtifacts: async () => {
@@ -581,6 +618,53 @@ exampleChips?.addEventListener("pick", async (event) => {
       }
     } catch { /* best effort */ }
   }
+
+  // When a starter chip is clicked on the Hub (chrome-extension://.../ntp.html) and no external http(s) tab is targeted
+  // (or when "Summarise this page" is clicked on the Hub), rewrite or route it cleanly.
+  if (text.toLowerCase() === "summarise this page" || text.toLowerCase() === "summarize this page") {
+    let target = null;
+    try {
+      if (typeof chrome !== "undefined" && chrome.tabs?.query) {
+        const tabs = await chrome.tabs.query({ lastFocusedWindow: true }).catch(() => []);
+        target = tabs.find((t) => t.url && /^https?:\/\//.test(t.url));
+        if (!target) {
+          const allTabs = await chrome.tabs.query({}).catch(() => []);
+          target = allTabs.find((t) => t.url && /^https?:\/\//.test(t.url));
+        }
+      }
+    } catch { /* best effort */ }
+
+    if (target?.url) {
+      composer.value = `Summarise ${target.url}`;
+    } else {
+      composer.value = "Summarise my open tabs";
+    }
+    composer.focus();
+    return;
+  }
+
+  if (text.toLowerCase() === "watch this price") {
+    let target = null;
+    try {
+      if (typeof chrome !== "undefined" && chrome.tabs?.query) {
+        const tabs = await chrome.tabs.query({ lastFocusedWindow: true }).catch(() => []);
+        target = tabs.find((t) => t.url && /^https?:\/\//.test(t.url));
+        if (!target) {
+          const allTabs = await chrome.tabs.query({}).catch(() => []);
+          target = allTabs.find((t) => t.url && /^https?:\/\//.test(t.url));
+        }
+      }
+    } catch { /* best effort */ }
+
+    if (target?.url) {
+      composer.value = `Watch the price on ${target.url}`;
+    } else {
+      composer.value = "Watch this price: ";
+    }
+    composer.focus();
+    return;
+  }
+
   composer.value = text;
   composer.focus();
 });
@@ -1645,7 +1729,7 @@ const subscribeAmbientProgress = () => {
       renderJobsBoard();
       return;
     }
-    if (["tool-call", "tool-result", "done", "error", "text"].includes(ev.type)) scheduleRunLogRefresh();
+    if (["tool-call", "tool-result", "done", "error"].includes(ev.type)) scheduleRunLogRefresh();
     // Board changes re-render the sidebar section + the Jobs panel live
     // (post/claim/settle/message).
     if (typeof ev.type === "string" && ev.type.startsWith("board-")) { refreshBoard(); renderJobsBoard(); }
@@ -3302,8 +3386,15 @@ async function buildAgentConfigDialog(opts) {
     wsHint.style.color = "var(--muted,#635e56)";
     wsHint.textContent = "The agent's own files — no owner permission needed inside its sandbox.";
     const wsUsage = document.createElement("span");
+    wsUsage.id = "agent-workspace-usage";
     wsUsage.style.color = "var(--muted,#635e56)";
     wsUsage.textContent = "…";
+    const wsFileList = document.createElement("div");
+    wsFileList.className = "agent-workspace-files";
+    wsFileList.style.fontSize = "12px";
+    wsFileList.style.color = "var(--muted,#635e56)";
+    wsFileList.style.marginTop = "4px";
+    wsFileList.hidden = true;
     const wsClear = document.createElement("button");
     wsClear.type = "button";
     wsClear.className = "btn small";
@@ -3311,9 +3402,30 @@ async function buildAgentConfigDialog(opts) {
     wsClear.style.alignSelf = "flex-start";
     const refreshUsage = async () => {
       const u = await send("agent-workspace.usage", { id: opts.selfId }).catch(() => ({ ok: false }));
-      wsUsage.textContent = u?.ok === true
-        ? `${u.filesUsed} file${u.filesUsed === 1 ? "" : "s"} · ${Math.round((u.bytesUsed || 0) / 1024)} KiB (unlimited — bounded only by the browser's storage)`
-        : "workspace unavailable";
+      if (u?.ok === true) {
+        wsUsage.textContent = `${u.filesUsed} file${u.filesUsed === 1 ? "" : "s"} · ${Math.round((u.bytesUsed || 0) / 1024)} KiB (unlimited — bounded only by the browser's storage)`;
+        if (Array.isArray(u.files) && u.files.length > 0) {
+          wsFileList.textContent = "";
+          wsFileList.hidden = false;
+          const ul = document.createElement("ul");
+          ul.style.margin = "4px 0";
+          ul.style.paddingLeft = "18px";
+          for (const f of u.files) {
+            const li = document.createElement("li");
+            const sizeStr = f.size >= 1024 ? `${Math.round(f.size / 1024)} KiB` : `${f.size} B`;
+            li.textContent = `${f.path || f.name} (${sizeStr})`;
+            ul.appendChild(li);
+          }
+          wsFileList.appendChild(ul);
+        } else {
+          wsFileList.textContent = "";
+          wsFileList.hidden = true;
+        }
+      } else {
+        wsUsage.textContent = "workspace unavailable";
+        wsFileList.textContent = "";
+        wsFileList.hidden = true;
+      }
     };
     wsClear.addEventListener("click", async () => {
       const confirmed = await confirmActionDialog({
@@ -3330,7 +3442,7 @@ async function buildAgentConfigDialog(opts) {
       }
       await refreshUsage();
     });
-    wsRow.append(wsLabel, wsHint, wsUsage, wsClear);
+    wsRow.append(wsLabel, wsHint, wsUsage, wsFileList, wsClear);
     advancedBody.append(wsRow);
     refreshUsage().catch(() => {});
   }
@@ -4163,7 +4275,7 @@ composer.addEventListener("send", async (ev) => {
     // chrome-agent-platform-afiu: when the OPEN task is running the composer
     // offers steer / queue / send-now instead of silently forking another run
     // (plain text only — attachments/@mentions keep the ordinary path).
-    if (runControlBar && !runControlBar.hidden && liveSurfaceRun && !attachments?.length && !agent?.ref) {
+    if (runControlBar && !runControlBar.hidden && liveSurfaceRun) {
       await runControlSend(task, attachments, agent);
       return;
     }
@@ -4209,7 +4321,7 @@ threadComposer.addEventListener("send", async (ev) => {
   const { text, attachments, agent } = ev.detail;
   // chrome-agent-platform-afiu: steer / queue / send-now while the open task
   // runs (the task composer's explicit affordances — plain text only).
-  if (runControlBar && !runControlBar.hidden && liveSurfaceRun && !attachments?.length && !agent?.ref) {
+  if (runControlBar && !runControlBar.hidden && liveSurfaceRun) {
     await runControlSend(text, attachments, agent);
     return;
   }
@@ -4363,7 +4475,6 @@ renderSiteAgents();
 renderSiteOffer();
 renderWebmcpHubStatus();
 renderNamedAgents();
-renderBackgroundAgents();
 renderFirstRunGuide();
 renderTasks();
 renderTimeline();
@@ -4372,6 +4483,8 @@ renderJobsBoard();
 renderHubUsage();
 renderProviderStatus();
 refreshCommandStarters();
+
+const refreshFirstRunGuide = renderFirstRunGuide;
 
 async function refreshCommandStarters() {
   if (!exampleChips) return;
@@ -4424,8 +4537,36 @@ async function renderProviderStatus() {
   }
 }
 document.getElementById("provider-status")?.addEventListener("click", () => {
-  if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+  const statusEl = document.getElementById("provider-status");
+  if (typeof openView === "function") {
+    openView("options/options.html#providers", "Provider settings", statusEl);
+  } else if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+    chrome.runtime.openOptionsPage();
+  }
 });
+
+document.addEventListener?.("fix-settings", (ev) => {
+  ev.preventDefault?.();
+  if (typeof openView === "function") {
+    openView("options/options.html#providers", "Provider settings", ev.target);
+  } else if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+    chrome.runtime.openOptionsPage();
+  }
+});
+
+document.addEventListener?.("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    renderProviderStatus();
+    renderFirstRunGuide();
+  }
+});
+
+if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
+  chrome.storage.onChanged.addListener(() => {
+    renderProviderStatus();
+    renderFirstRunGuide();
+  });
+}
 
 // A durable thread-bound run update means the authoritative thread index may
 // have changed. Refresh from thread.list while the run is still active; run
@@ -4675,14 +4816,22 @@ const panelFrames = new Map();
 let activePanelFrame = null;
 const PANEL_FRAME_CONTAINER = document.getElementById("view");
 function panelFrameFor(path) {
-  let frame = panelFrames.get(path);
+  const [basePath, hash] = String(path ?? "").split("#");
+  let frame = panelFrames.get(basePath);
   if (!frame) {
     frame = document.createElement("iframe");
-    frame.dataset.panelPath = path;
+    frame.dataset.panelPath = basePath;
     frame.title = "view";
     frame.hidden = true;
     PANEL_FRAME_CONTAINER.appendChild(frame);
-    panelFrames.set(path, frame);
+    panelFrames.set(basePath, frame);
+  }
+  if (hash !== undefined && frame.contentWindow) {
+    try {
+      if (frame.contentWindow.location) {
+        frame.contentWindow.location.hash = `#${hash}`;
+      }
+    } catch { /* cross-frame or unready */ }
   }
   return frame;
 }
@@ -4724,6 +4873,7 @@ function openView(path, title, trigger) {
       path = path.slice(0, qi) + (params.length ? `?${params.join("&")}` : "") + path.slice(end);
     }
   }
+  const [basePath, hash] = String(path ?? "").split("#");
   const targetRoute = embeddedViewRoute(path);
   const frame = panelFrameFor(path);
   // Embedded panel documents boot at their exact canonical URL — NO query. The
@@ -4740,6 +4890,12 @@ function openView(path, title, trigger) {
   const frameUrl = chrome.runtime.getURL(String(path ?? ""));
   if (!frame.src || frame.src === "about:blank" || frame.src === location.href) {
     frame.src = frameUrl;
+  } else if (hash !== undefined) {
+    try {
+      if (frame.contentWindow?.location) {
+        frame.contentWindow.location.hash = `#${hash}`;
+      }
+    } catch { /* best effort */ }
   }
   for (const other of panelFrames.values()) other.hidden = other !== frame;
   activePanelFrame = frame;

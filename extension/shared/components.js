@@ -6081,7 +6081,9 @@ class MessageBubble extends Component {
     // page (the provider pane's Test/Use button grants the host permission +
     // tests the key — the actionable path for a provider failure).
     this._root.querySelector(".err-fix")?.addEventListener("click", () => {
-      if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+      const ev = new CustomEvent("fix-settings", { bubbles: true, composed: true, cancelable: true });
+      this.dispatchEvent(ev);
+      if (!ev.defaultPrevented && typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
         chrome.runtime.openOptionsPage();
       }
     });
