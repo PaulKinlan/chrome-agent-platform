@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.547] — 2026-09-28
+- Faster startup and smaller extension bundles across the service worker, Hub, and Settings.
+
 ## [0.3.546] — 2026-09-26
 - Export All streams the profile straight to a .tar file — no caps, no message buffering
 

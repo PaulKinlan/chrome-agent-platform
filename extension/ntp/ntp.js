@@ -9,7 +9,7 @@ import { send } from "../lib/messages.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
-import { projectUnifiedAgents, slugifyAgentId } from "../lib/named-agents.js";
+import { projectUnifiedAgents, slugifyAgentId } from "../lib/agent-projection.js";
 import { exportAgentCardJson, importAgentCard } from "../lib/agent-cards.js";
 import { buildAgentMcpList, normalizeMcpServer } from "../lib/mcp-config.js";
 import { buildMcpServerEditor, mcpServerRow } from "../lib/mcp-server-editor.js";

@@ -21,7 +21,7 @@
 // transports to an http(s) URL are accepted; everything else is rejected.
 
 import { kvGet, kvSet } from "./kv.js";
-import { getNamedAgentMcpServers } from "./named-agents.js";
+import { slugifyAgentId } from "./agent-projection.js";
 
 /** The chrome.storage key for the GLOBAL MCP server list. */
 export const MCP_SERVERS_KEY = "cap:mcpServers";
@@ -249,6 +249,18 @@ export async function setGlobalMcpServers(list) {
 // ── The effective resolver over live storage ────────────────────────────────
 
 /**
+ * Fetch a named agent's per-agent MCP server list from chrome.storage.
+ * Self-contained so this module does not import named-agents.js (which pulls
+ * in backend stores like durable-runs into UI surfaces).
+ */
+export async function getNamedAgentMcpServers(id) {
+  const stored = await kvGet("cap:namedAgents");
+  const map = stored["cap:namedAgents"] ?? {};
+  const slug = slugifyAgentId(id);
+  return normalizeMcpServerList(map[slug]?.mcpServers ?? []);
+}
+
+/**
  * effectiveMcpServers(agentId?) — the stored global list resolved against a
  * named agent's stored per-agent list (when `agentId` is given). Returns FULL
  * servers (with tokens) for the SW-side run/tool-injection path.
@@ -258,3 +270,4 @@ export async function effectiveMcpServers(agentId) {
   const agentList = agentId ? await getNamedAgentMcpServers(agentId) : [];
   return resolveEffectiveMcpServers(global, agentList);
 }
+

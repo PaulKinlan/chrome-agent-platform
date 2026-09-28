@@ -94,6 +94,19 @@ export function nonDenoStoreInputs(metafile) {
     .sort();
 }
 
+/**
+ * Return any .cjs input paths from zod in the metafile.
+ * A CJS entrypoint pulls in CommonJS zod + dozens of locale files that
+ * cannot be tree-shaken and duplicates ESM zod (d885.1). Pure.
+ */
+export function zodCjsInputs(metafile) {
+  const inputs = metafile?.inputs;
+  if (!inputs || typeof inputs !== "object") return [];
+  return Object.keys(inputs)
+    .filter((p) => p.includes("zod") && p.endsWith(".cjs"))
+    .sort();
+}
+
 /** If <root>/node_modules resolves through a symlink, say so in the error —
  * dependency-root layout changes measured bytes (a symlinked root measured
  * 688 bytes over budget with source unchanged, chrome-agent-platform-2eb5),
@@ -138,6 +151,13 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
       throw new Error(
         `bundle budget: non-Deno-store dependency inputs in ${label} (lockfile drift — run deno install; an npm-era install silently changes the shipped bundle):\n` +
         drifted.map((p) => `  ${p}`).join("\n"),
+      );
+    }
+    const cjsZod = zodCjsInputs(metafile);
+    if (cjsZod.length) {
+      throw new Error(
+        `bundle budget: .cjs inputs from zod in ${label} (CJS+ESM double-bundling — CANON_ZOD_V4 in build.mjs must resolve to ESM .js):\n` +
+        cjsZod.map((p) => `  ${p}`).join("\n"),
       );
     }
   }

@@ -26,6 +26,7 @@ import {
   nonDenoStoreInputs,
   STORE_SW_BUDGET_BYTES,
   topContributors,
+  zodCjsInputs,
 } from "../scripts/bundle-budget.mjs";
 
 Deno.test("bundle budget: the store SW budget is exactly the constitution number (3.0 MB)", () => {
@@ -265,5 +266,128 @@ Deno.test("bundle budget: the service-worker bundle carries no Emscripten decode
   assert(
     inputs.some((input) => input.endsWith("wasm-package-authority.js")),
     "the SW bundle must carry the authority — otherwise this exclusion proves nothing",
+  );
+});
+
+// ── d885.1 bundle composition pins ──────────────────────────────────────────
+
+Deno.test("d885.1 zodCjsInputs: flags .cjs files from zod, passes clean ESM inputs", () => {
+  const dirty = { inputs: {
+    "node_modules/zod/v4/index.cjs": { bytes: 100 },
+    "node_modules/zod/v4/locales/en.cjs": { bytes: 50 },
+    "node_modules/zod/v4/index.js": { bytes: 100 },
+  } };
+  assertEquals(zodCjsInputs(dirty), [
+    "node_modules/zod/v4/index.cjs",
+    "node_modules/zod/v4/locales/en.cjs",
+  ]);
+  const clean = { inputs: {
+    "node_modules/zod/v4/index.js": { bytes: 100 },
+    "node_modules/zod/v4/core/schemas.js": { bytes: 100 },
+  } };
+  assertEquals(zodCjsInputs(clean), []);
+  assertEquals(zodCjsInputs(null), []);
+});
+
+Deno.test("bundle budget: zero .cjs inputs from zod in service-worker.js and agent-worker.js (d885.1)", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const swReportPath = join(repo, ".build", "bundle-report.json");
+  const workerReportPath = join(repo, ".build", "bundle-report-worker.json");
+
+  let swMeta: { inputs?: Record<string, unknown> };
+  let workerMeta: { inputs?: Record<string, unknown> };
+  try {
+    swMeta = JSON.parse(await Deno.readTextFile(swReportPath));
+    workerMeta = JSON.parse(await Deno.readTextFile(workerReportPath));
+  } catch {
+    throw new Error(
+      `bundle budget: metafile reports are missing — run \`npm run build:production\` first.`,
+    );
+  }
+
+  const swInputs = Object.keys(swMeta.inputs ?? {});
+  const workerInputs = Object.keys(workerMeta.inputs ?? {});
+
+  assert(swInputs.length > 10, `swMeta must describe real SW bundle (got ${swInputs.length})`);
+  assert(workerInputs.length > 10, `workerMeta must describe real worker bundle (got ${workerInputs.length})`);
+
+  // Assertion 1: Zero .cjs inputs from zod exist in service-worker.js or agent-worker.js metafile inputs
+  const swZodCjs = swInputs.filter((p) => p.includes("zod") && p.endsWith(".cjs"));
+  assertEquals(swZodCjs, [], `service-worker.js must not carry .cjs zod inputs (found: ${swZodCjs.join(", ")})`);
+
+  const workerZodCjs = workerInputs.filter((p) => p.includes("zod") && p.endsWith(".cjs"));
+  assertEquals(workerZodCjs, [], `agent-worker.js must not carry .cjs zod inputs (found: ${workerZodCjs.join(", ")})`);
+
+  // Positive controls: zod ESM (.js) inputs MUST be present
+  assert(swInputs.some((p) => p.includes("zod") && p.endsWith(".js")), "service-worker.js must carry ESM zod inputs");
+  assert(workerInputs.some((p) => p.includes("zod") && p.endsWith(".js")), "agent-worker.js must carry ESM zod inputs");
+});
+
+Deno.test("bundle budget: options.bundle.js does NOT include provider.js or durable-runs.js (d885.1)", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const optReportPath = join(repo, ".build", "bundle-report-options.json");
+
+  let optMeta: { inputs?: Record<string, unknown> };
+  try {
+    optMeta = JSON.parse(await Deno.readTextFile(optReportPath));
+  } catch {
+    throw new Error(
+      `bundle budget: ${optReportPath} is missing — run \`npm run build:production\` first.`,
+    );
+  }
+
+  const optInputs = Object.keys(optMeta.inputs ?? {});
+  assert(optInputs.length > 10, `options metafile must describe real options bundle (got ${optInputs.length})`);
+
+  // Assertion 2: options.bundle.js metafile inputs do NOT include extension/lib/provider.js or extension/lib/durable-runs.js
+  assertEquals(
+    optInputs.some((p) => p.endsWith("extension/lib/provider.js") || p.endsWith("lib/provider.js")),
+    false,
+    "options.bundle.js must NOT include provider.js (AI SDK model layer isolation)",
+  );
+  assertEquals(
+    optInputs.some((p) => p.endsWith("extension/lib/durable-runs.js") || p.endsWith("lib/durable-runs.js")),
+    false,
+    "options.bundle.js must NOT include durable-runs.js (SW store isolation)",
+  );
+
+  // Positive controls: options bundle carries provider-catalog.js and agent-projection.js
+  assert(
+    optInputs.some((p) => p.endsWith("extension/lib/provider-catalog.js") || p.endsWith("lib/provider-catalog.js")),
+    "options.bundle.js must carry provider-catalog.js",
+  );
+  assert(
+    optInputs.some((p) => p.endsWith("extension/lib/agent-projection.js") || p.endsWith("lib/agent-projection.js")),
+    "options.bundle.js must carry agent-projection.js",
+  );
+});
+
+Deno.test("bundle budget: ntp.bundle.js does NOT include durable-runs.js (d885.1)", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const ntpReportPath = join(repo, ".build", "bundle-report-ntp.json");
+
+  let ntpMeta: { inputs?: Record<string, unknown> };
+  try {
+    ntpMeta = JSON.parse(await Deno.readTextFile(ntpReportPath));
+  } catch {
+    throw new Error(
+      `bundle budget: ${ntpReportPath} is missing — run \`npm run build:production\` first.`,
+    );
+  }
+
+  const ntpInputs = Object.keys(ntpMeta.inputs ?? {});
+  assert(ntpInputs.length > 10, `ntp metafile must describe real ntp bundle (got ${ntpInputs.length})`);
+
+  // Assertion 3: ntp.bundle.js metafile inputs do NOT include extension/lib/durable-runs.js
+  assertEquals(
+    ntpInputs.some((p) => p.endsWith("extension/lib/durable-runs.js") || p.endsWith("lib/durable-runs.js")),
+    false,
+    "ntp.bundle.js must NOT include durable-runs.js (SW store isolation)",
+  );
+
+  // Positive control: ntp bundle carries agent-projection.js
+  assert(
+    ntpInputs.some((p) => p.endsWith("extension/lib/agent-projection.js") || p.endsWith("lib/agent-projection.js")),
+    "ntp.bundle.js must carry agent-projection.js",
   );
 });

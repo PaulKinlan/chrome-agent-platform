@@ -20,7 +20,7 @@
 
 import { normalizeHostPattern, requestPermissionBundleFromGesture } from "./permission-orchestration.js";
 import { safeProviderError } from "./pure.js";
-import { effectiveBaseURL, PROVIDER_CHOICES } from "./provider.js";
+import { effectiveBaseURL, PROVIDER_CHOICES } from "./provider-catalog.js";
 import { defaultModelFor } from "./model-catalog.js";
 
 /** Derive the exact host-permission origin pattern for a provider config's

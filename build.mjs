@@ -404,7 +404,11 @@ try {
       { paths: [path.dirname(CANON_ANTHROPIC)] },
       "@ai-sdk/provider-utils@5.0.27 (the anthropic provider context)",
     );
-    const CANON_ZOD_V4 = resolveCanonical("zod/v4", { paths: [ROOT] }, "zod/v4 (the v4 implementation shipped inside zod@3)");
+    const CANON_ZOD_V4 = resolveCanonical(
+      "zod/v4",
+      { paths: [ROOT] },
+      "zod/v4 (the v4 implementation shipped inside zod@3)",
+    ).replace(/\.cjs$/, ".js");
     const capAiSdkDedup = {
       name: "cap-ai-sdk-dedup",
       setup(b) {
@@ -488,8 +492,8 @@ try {
       await mkdir(path.join(ROOT, ".build"), { recursive: true });
       await writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile));
     }
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE });
+    const optResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
+    const ntpResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE });
     await build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE });
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
@@ -504,12 +508,15 @@ try {
     // loop stack is browser-only: fetch/streams).
     const WORKER = path.join(STAGE, "workers/agent-worker.js");
     await mkdir(path.dirname(WORKER), { recursive: true });
-    await build({
+    const workerResult = await build({
       ...shared,
       entryPoints: [path.join(EXT_DIR, "workers/agent-worker.js")],
       outfile: WORKER,
       format: "esm",
     });
+    await writeFile(path.join(ROOT, ".build", "bundle-report-worker.json"), JSON.stringify(workerResult.metafile));
+    await writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(optResult.metafile));
+    await writeFile(path.join(ROOT, ".build", "bundle-report-ntp.json"), JSON.stringify(ntpResult.metafile));
 
     // Scrub + seam-scan IN STAGING over ALL FOUR generated bundles (the SW,
     // the agent-worker bundle — agent-do/ai/mcp-sdk carry a `new Function`/
@@ -593,12 +600,14 @@ try {
     {
       const { assertBundleBudget, STORE_SW_BUDGET_BYTES, formatContributors } = await import("./scripts/bundle-budget.mjs");
       const swSize = (await stat(SW)).size;
+      const workerSize = (await stat(WORKER)).size;
       if (DEBUG_BUILD) {
         if (swSize > STORE_SW_BUDGET_BYTES) {
           console.log(`bundle budget: developer SW bundle is ${swSize} bytes (unminified; store budget ${STORE_SW_BUDGET_BYTES} applies to the minified store build)`);
         }
       } else {
         assertBundleBudget({ label: "background/service-worker.js", bytes: swSize, metafile: swResult.metafile });
+        assertBundleBudget({ label: "workers/agent-worker.js", bytes: workerSize, budgetBytes: 2_000_000, metafile: workerResult.metafile });
         console.log(`bundle budget: store SW bundle ${swSize} bytes <= ${STORE_SW_BUDGET_BYTES} budget`);
       }
     }
