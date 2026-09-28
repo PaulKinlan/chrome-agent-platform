@@ -183,6 +183,7 @@ Deno.test("legibility: a live success card renders the selected tool's result â€
   const card = buildToolCardDom({
     name: "memory_set", status: "done", args: '{"key":"demo","value":"x"}',
     result: "done", detail: LIVE_SUCCESS, duration: "12", expandedState: new Map(),
+    cardExpanded: true,
   });
   const texts = allText(card);
   assertEquals(leaksIn(texts), [], `leaked: ${leaksIn(texts).join(",")}`);

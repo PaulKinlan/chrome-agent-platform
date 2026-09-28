@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.551] — 2026-09-28
+- Smoother streaming responses and faster thread loading with lazy tool-card rendering and persistent component stylesheets.
+
 ## [0.3.550] — 2026-09-28
 - Fixed LM Studio connection testing, imported command activation in Skills, and .tar archive restore in Settings.
 

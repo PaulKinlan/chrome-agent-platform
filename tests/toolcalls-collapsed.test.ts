@@ -91,6 +91,8 @@ Deno.test("toolcalls-collapsed: the args/result live in the body, NOT the summar
   assertEquals(card.open, false);
   const summary = card.children[0];
   assertEquals(summary.children.some((c) => (c.className || "").includes("tool-plain")), false, "the summary carries no body text");
+  card.open = true;
+  card.dispatchEvent({ type: "toggle" });
   const body = card.children[1];
   assertEquals(body.className, "tool-body");
   assert(body.children.length >= 1, "the result block is in the body");
@@ -98,7 +100,7 @@ Deno.test("toolcalls-collapsed: the args/result live in the body, NOT the summar
 
 Deno.test("toolcalls-collapsed: a JSON-string result uses the structured tree", async () => {
   const buildToolCardDom = await loadBuildToolCardDom();
-  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result: '{"tabs":[{"title":"Docs"}]}', detail: null, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result: '{"tabs":[{"title":"Docs"}]}', detail: null, duration: null, expandedState: new Map(), cardExpanded: true });
   const body = card.children[1];
   assert(body.children.some((c) => c.className === "tt-block"), "JSON-looking string renders through the tree viewer");
   assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "title"), "decoded JSON keys are rows, not escaped text");
@@ -107,7 +109,7 @@ Deno.test("toolcalls-collapsed: a JSON-string result uses the structured tree", 
 Deno.test("toolcalls-collapsed: prose and invalid JSON stay readable plain text", async () => {
   const buildToolCardDom = await loadBuildToolCardDom();
   for (const result of ["completed normally", '{"broken":']) {
-    const card = buildToolCardDom({ name: "note", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+    const card = buildToolCardDom({ name: "note", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map(), cardExpanded: true });
     const plain = card.children[1].children.find((c) => c.className === "tool-plain tool-plain-result");
     assertEquals(plain?.textContent, result);
   }
@@ -117,14 +119,14 @@ Deno.test("toolcalls-collapsed: an object result survives the attribute boundary
   const { buildToolCardDom, toolPayloadAttribute } = await loadComponents();
   const result = toolPayloadAttribute({ tabs: [{ title: "Docs" }] });
   assertEquals(result, '{"tabs":[{"title":"Docs"}]}', "object is serialized once, never String(object)");
-  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map(), cardExpanded: true });
   assert(card.children[1].children.some((c) => c.className === "tt-block"), "serialized object renders through the tree viewer");
 });
 
 Deno.test("toolcalls-collapsed: an oversized JSON probe safely falls back to text", async () => {
   const buildToolCardDom = await loadBuildToolCardDom();
   const result = JSON.stringify(["x".repeat(64 * 1024)]);
-  const card = buildToolCardDom({ name: "large", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "large", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map(), cardExpanded: true });
   const plain = card.children[1].children.find((c) => c.className === "tool-plain tool-plain-result");
   assertEquals(plain?.textContent, result, "oversized JSON is not parsed but remains readable");
 });
@@ -132,7 +134,7 @@ Deno.test("toolcalls-collapsed: an oversized JSON probe safely falls back to tex
 Deno.test("toolcalls-collapsed: one modelContent JSON-string layer unwraps into tree rows", async () => {
   const buildToolCardDom = await loadBuildToolCardDom();
   const result = JSON.stringify({ modelContent: JSON.stringify({ ok: true, tabs: [{ title: "Docs" }] }) });
-  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "list_tabs", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map(), cardExpanded: true });
   const body = card.children[1];
   assert(body.children.some((c) => c.className === "tt-block"));
   assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "title"));
@@ -142,7 +144,7 @@ Deno.test("toolcalls-collapsed: one modelContent JSON-string layer unwraps into 
 Deno.test("toolcalls-collapsed: a normal double-wrapped result stays text", async () => {
   const buildToolCardDom = await loadBuildToolCardDom();
   const result = JSON.stringify(JSON.stringify({ a: 1 }));
-  const card = buildToolCardDom({ name: "wrapped", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "wrapped", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map(), cardExpanded: true });
   const body = card.children[1];
   assert(!body.children.some((c) => c.className === "tt-block"));
   const plain = body.children.find((c) => c.className === "tool-plain tool-plain-result");
@@ -156,7 +158,7 @@ Deno.test("toolcalls-collapsed: a second modelContent encoding layer stays text"
   // content, shown as plain text.
   const buildToolCardDom = await loadBuildToolCardDom();
   const result = JSON.stringify({ modelContent: JSON.stringify(JSON.stringify({ a: 1 })) });
-  const card = buildToolCardDom({ name: "wrapped", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "wrapped", status: "done", args: null, result, detail: null, duration: null, expandedState: new Map(), cardExpanded: true });
   const body = card.children[1];
   assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "modelContent"), "the envelope key is transport, never a row");
   const plain = body.children.find((c) => c.className === "tool-plain tool-plain-result");
@@ -172,7 +174,7 @@ Deno.test("toolcalls-collapsed: a second schema-wrapped result encoding layer st
     result: JSON.stringify(JSON.stringify({ a: 1 })),
     schemaSummary: JSON.stringify({ type: "object" }),
   });
-  const card = buildToolCardDom({ name: "execute_tool", status: "done", args: null, result: "done", detail, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "execute_tool", status: "done", args: null, result: "done", detail, duration: null, expandedState: new Map(), cardExpanded: true });
   const body = card.children[1];
   // The envelope's `result` wrapper is unwrapped (§9) — the selected tool's
   // once-decoded string is the content, as plain text; the second layer is
@@ -191,7 +193,7 @@ Deno.test("toolcalls-collapsed: live execute detail consumes its output schema a
     result: JSON.stringify({ assets: [{ id: "asset-1", name: "Notes" }] }),
     schemaSummary: JSON.stringify({ type: "object" }),
   });
-  const card = buildToolCardDom({ name: "execute_tool", status: "done", args: null, result: "Found 1 artifact", detail, duration: null, expandedState: new Map() });
+  const card = buildToolCardDom({ name: "execute_tool", status: "done", args: null, result: "Found 1 artifact", detail, duration: null, expandedState: new Map(), cardExpanded: true });
   const body = card.children[1];
   assert(descendants(body).some((c) => c.className === "tt-key" && c.textContent === "assets"));
   assert(!descendants(body).some((c) => c.className === "tt-key" && c.textContent === "schemaSummary"));

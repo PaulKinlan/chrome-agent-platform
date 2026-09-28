@@ -5334,9 +5334,6 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
   const card = document.createElement("details");
   card.className = "tool";
   card.open = cardExpanded === true;
-  if (typeof onCardToggle === "function") {
-    card.addEventListener("toggle", () => onCardToggle(card.open));
-  }
 
   const summary = document.createElement("summary");
   summary.className = "tool-head";
@@ -5436,41 +5433,6 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
     body.appendChild(note);
   }
 
-  const addBlock = (label, raw) => {
-    if (raw == null || raw === "") return;
-    const parsed = safeParseOnce(raw);
-    if (parsed.kind === "json") {
-      // Strip the protocol envelope before rendering
-      // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). `ok:true` is already said by
-      // the green status chip, and `summary`/`error` are already the card's
-      // headline — rendering them again as tree rows is duplication that costs
-      // vertical space in a transcript.
-      const shown = stripToolEnvelope(parsed.value, status);
-      if (shown === undefined) return;
-      if (typeof shown === "string") {
-        // The envelope held plain text: show it as text, not a one-leaf tree.
-        if (looksLikeBrokenEnvelope(shown)) return;
-        const div = document.createElement("div");
-        div.className = `tool-plain tool-plain-${label}`;
-        div.textContent = shown;
-        body.appendChild(div);
-        return;
-      }
-      const tree = buildTree(shown);
-      if (tree.rows.length >= 1) {
-        body.appendChild(buildToolTreeBlock(label, shown, tree.rows, tree.maxNodes, expandedState));
-        return;
-      }
-    }
-    // A transport envelope that did not parse (a truncated copy) is never
-    // painted: the headline already carries the tool's own words (§10).
-    if (looksLikeBrokenEnvelope(parsed.value ?? raw)) return;
-    const div = document.createElement("div");
-    div.className = `tool-plain tool-plain-${label}`;
-    div.textContent = String(parsed.value ?? raw ?? "");
-    body.appendChild(div);
-  };
-
   // A CAPTURE SHOWS THE PICTURE. The bytes went to the model as an image part
   // and to the screenshots store as a file; the card resolves the file by id so
   // the owner sees exactly what the agent saw
@@ -5484,50 +5446,10 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
     body.appendChild(thumb);
   }
 
-  addBlock("inputs", shownArgs);
-
-  const resultParsed = result != null && result !== "" ? safeParseOnce(result) : null;
-  const detailParsed = detail != null && detail !== "" ? safeParseOnce(detail) : null;
-
-  // ONE result tree, from the AUTHORITATIVE copy. `detail` is the retained
-  // full result (the live event's raw envelope; the durable row's 64 KiB
-  // copy) and `result` the bounded list summary of the SAME call — when both
-  // are structured, only the full copy renders; the summary is never a second
-  // "detail" tree (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). Rows persisted
-  // before the full copy existed carry the structure in `result` alone.
-  const fullParsed = detailParsed && detailParsed.kind === "json"
-    ? detailParsed
-    : (resultParsed && resultParsed.kind === "json" ? resultParsed : null);
-  if (fullParsed) {
-    // Strip the envelope here too: this branch bypasses addBlock, which is why
-    // an error result still rendered `ok false` and repeated its own message as
-    // tree rows under the headline that already said it.
-    const shownResult = stripToolEnvelope(fullParsed.value, status);
-    const tree = shownResult === undefined || typeof shownResult === "string" ? { rows: [], maxNodes: 0 } : buildTree(shownResult);
-    if (tree.rows.length >= 1) {
-      body.appendChild(buildToolTreeBlock("result", shownResult, tree.rows, tree.maxNodes, expandedState));
-    } else if (shownResult === undefined) {
-      // Everything the payload carried is already in the head. Render nothing
-      // rather than an empty block.
-    } else if (!looksLikeBrokenEnvelope(typeof shownResult === "string" ? shownResult : (fullParsed.value ?? ""))) {
-      const div = document.createElement("div");
-      div.className = "tool-plain tool-plain-result";
-      div.textContent = typeof shownResult === "string" ? shownResult : String(fullParsed.value ?? "");
-      body.appendChild(div);
-    }
-    // A structured summary with a DIFFERENT, unstructured detail (plain text
-    // that is not this result's own copy) still reads as text below it.
-    if (fullParsed === resultParsed && detail != null && detail !== "" && detail !== result) {
-      addBlock("detail", detail);
-    }
-  } else {
-    // Neither is JSON -> honest plain text fallback
-    if (result != null && result !== "") addBlock("result", result);
-    if (detail != null && detail !== "" && detail !== result) addBlock("detail", detail);
-  }
   const activity = normalizeSiteActivity(siteActivity);
+  let actions = null;
   if (activity) {
-    const actions = document.createElement("div");
+    actions = document.createElement("div");
     actions.className = "tool-actions";
     const openActivity = document.createElement("button");
     openActivity.type = "button";
@@ -5537,6 +5459,111 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
     actions.appendChild(openActivity);
     body.appendChild(actions);
   }
+
+  let treePopulated = false;
+  const populateTree = () => {
+    if (treePopulated) return;
+    treePopulated = true;
+
+    const insertBlock = (node) => {
+      if (actions && actions.parentNode === body) {
+        body.insertBefore(node, actions);
+      } else {
+        body.appendChild(node);
+      }
+    };
+
+    const addBlock = (label, raw) => {
+      if (raw == null || raw === "") return;
+      const parsed = safeParseOnce(raw);
+      if (parsed.kind === "json") {
+        // Strip the protocol envelope before rendering
+        // (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01). `ok:true` is already said by
+        // the green status chip, and `summary`/`error` are already the card's
+        // headline — rendering them again as tree rows is duplication that costs
+        // vertical space in a transcript.
+        const shown = stripToolEnvelope(parsed.value, status);
+        if (shown === undefined) return;
+        if (typeof shown === "string") {
+          // The envelope held plain text: show it as text, not a one-leaf tree.
+          if (looksLikeBrokenEnvelope(shown)) return;
+          const div = document.createElement("div");
+          div.className = `tool-plain tool-plain-${label}`;
+          div.textContent = shown;
+          insertBlock(div);
+          return;
+        }
+        const tree = buildTree(shown);
+        if (tree.rows.length >= 1) {
+          insertBlock(buildToolTreeBlock(label, shown, tree.rows, tree.maxNodes, expandedState));
+          return;
+        }
+      }
+      // A transport envelope that did not parse (a truncated copy) is never
+      // painted: the headline already carries the tool's own words (§10).
+      if (looksLikeBrokenEnvelope(parsed.value ?? raw)) return;
+      const div = document.createElement("div");
+      div.className = `tool-plain tool-plain-${label}`;
+      div.textContent = String(parsed.value ?? raw ?? "");
+      insertBlock(div);
+    };
+
+    addBlock("inputs", shownArgs);
+
+    const resultParsed = result != null && result !== "" ? safeParseOnce(result) : null;
+    const detailParsed = detail != null && detail !== "" ? safeParseOnce(detail) : null;
+
+    // ONE result tree, from the AUTHORITATIVE copy. `detail` is the retained
+    // full result (the live event's raw envelope; the durable row's 64 KiB
+    // copy) and `result` the bounded list summary of the SAME call — when both
+    // are structured, only the full copy renders; the summary is never a second
+    // "detail" tree (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). Rows persisted
+    // before the full copy existed carry the structure in `result` alone.
+    const fullParsed = detailParsed && detailParsed.kind === "json"
+      ? detailParsed
+      : (resultParsed && resultParsed.kind === "json" ? resultParsed : null);
+    if (fullParsed) {
+      // Strip the envelope here too: this branch bypasses addBlock, which is why
+      // an error result still rendered `ok false` and repeated its own message as
+      // tree rows under the headline that already said it.
+      const shownResult = stripToolEnvelope(fullParsed.value, status);
+      const tree = shownResult === undefined || typeof shownResult === "string" ? { rows: [], maxNodes: 0 } : buildTree(shownResult);
+      if (tree.rows.length >= 1) {
+        insertBlock(buildToolTreeBlock("result", shownResult, tree.rows, tree.maxNodes, expandedState));
+      } else if (shownResult === undefined) {
+        // Everything the payload carried is already in the head. Render nothing
+        // rather than an empty block.
+      } else if (!looksLikeBrokenEnvelope(typeof shownResult === "string" ? shownResult : (fullParsed.value ?? ""))) {
+        const div = document.createElement("div");
+        div.className = "tool-plain tool-plain-result";
+        div.textContent = typeof shownResult === "string" ? shownResult : String(fullParsed.value ?? "");
+        insertBlock(div);
+      }
+      // A structured summary with a DIFFERENT, unstructured detail (plain text
+      // that is not this result's own copy) still reads as text below it.
+      if (fullParsed === resultParsed && detail != null && detail !== "" && detail !== result) {
+        addBlock("detail", detail);
+      }
+    } else {
+      // Neither is JSON -> honest plain text fallback
+      if (result != null && result !== "") addBlock("result", result);
+      if (detail != null && detail !== "" && detail !== result) addBlock("detail", detail);
+    }
+  };
+
+  if (card.open) {
+    populateTree();
+  }
+
+  card.addEventListener("toggle", () => {
+    if (card.open) {
+      populateTree();
+    }
+    if (typeof onCardToggle === "function") {
+      onCardToggle(card.open);
+    }
+  });
+
   card.appendChild(body);
   return card;
 }
@@ -5579,6 +5606,178 @@ class AgentIdentity extends Component {
   }
 }
 customElements.define("agent-identity", AgentIdentity);
+
+const MESSAGE_BUBBLE_STYLE = `
+  :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
+  :host(:last-child) { margin-bottom:0; }
+  :host([role="user"]) { justify-content:flex-end; }
+  :host([role="steer"]) { justify-content:flex-end; }
+  .bubble-wrap { display:contents; }
+  .msg { max-width:78%; border-radius:12px; padding:10px 14px; overflow-wrap:anywhere; }
+  /* An assistant turn: the identity header (avatar · name · time) above the bubble. */
+  .turn { display:flex; flex-direction:column; gap:6px; max-width:78%; min-width:0; }
+  .turn .msg { max-width:100%; }
+  .turn agent-identity { padding-inline-start:2px; }
+  .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
+  .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
+  :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
+  :host([role="steer"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--accent,#0e6e63); }
+  :host([role="steer"]) .steer-label { display:block; font-size:11px; font-weight:600; color:var(--accent,#0e6e63); letter-spacing:.04em; text-transform:uppercase; margin:0 0 4px; }
+  :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
+  :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
+  :host([role="error"]) .body { color:var(--danger,#b3261e); }
+  .err-reason { font-weight:600; margin:0 0 4px; }
+  .err-action { color:var(--ink,#1d1b18); margin:0 0 8px; }
+  .err-fix { font:inherit; font-size:12.5px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--accent,#0e6e63); border-radius:6px; padding:4px 10px; cursor:pointer; }
+  .err-fix:hover { background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
+  .err-fix:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+  .msg .attach { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
+  .msg .attach img { max-width:100%; max-height:260px; border-radius:8px; border:1px solid var(--border,#e3e0d9); display:block; }
+  .msg .attach .file-chip { font-size:12.5px; color:var(--muted,#635e56); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:4px 8px; display:inline-flex; align-items:center; gap:6px; }
+  /* markdown content inside agent/system */
+  .body p { margin:0 0 8px; }
+  .body p:last-child { margin-bottom:0; }
+  .body ul, .body ol { margin:0 0 8px; padding-left:20px; }
+  .body li { margin:2px 0; }
+  .body h1, .body h2, .body h3, .body h4 { margin:12px 0 6px; font-size:1.05em; font-weight:600; line-height:1.3; }
+  .body h1:first-child, .body h2:first-child { margin-top:0; }
+  .body a { color:var(--accent,#0e6e63); text-decoration:underline; text-underline-offset:2px; }
+  .body code.inline-code, .body :not(pre) > code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:1px 5px; }
+  .body strong { font-weight:600; }
+  .body em { font-style:italic; }
+  /* long-response collapse (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01) */
+  .long-response { width:100%; }
+  .long-response .body { max-height:260px; overflow:hidden; position:relative; }
+  .long-response .body::after { content:""; position:absolute; left:0; right:0; bottom:0; height:48px; pointer-events:none; background:linear-gradient(transparent, var(--panel,#ffffff)); }
+  .long-response[data-open="1"] .body { max-height:none; overflow:visible; }
+  .long-response[data-open="1"] .body::after { display:none; }
+  .long-actions { display:flex; gap:8px; margin-top:6px; }
+  .long-toggle, .long-copy { font:inherit; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:3px 10px; cursor:pointer; }
+  .long-toggle:hover, .long-copy:hover { border-color:var(--accent,#0e6e63); }
+  .long-toggle:focus-visible, .long-copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
+  /* rendered HTML output — the sandboxed iframe */
+  .html-frame { margin-top:4px; width:100%; display:flex; flex-direction:column; }
+  .html-frame iframe { width:100%; min-height:360px; height:480px; max-height:80vh; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
+  .genui { width:100%; max-width:840px; }
+  .genui-head { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin:0 0 6px; }
+  .genui .html-frame iframe { width:100%; min-height:360px; height:520px; max-height:80vh; }
+  .genui-raw { margin-top:8px; width:100%; }
+  .genui-raw summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; color:var(--muted,#635e56); font-size:11.5px; padding:4px 0; user-select:none; }
+  .genui-raw summary::-webkit-details-marker { display:none; }
+  .genui-raw summary:hover { color:var(--text,#1d1b18); }
+  .genui-raw .tool-detail-raw { margin-top:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 8px; }
+  /* thinking trace — collapsible, muted, clearly not a wall of text */
+  .think { width:100%; }
+  .think summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
+  .think summary::-webkit-details-marker { display:none; }
+  .think summary:hover { color:var(--text,#1d1b18); }
+  .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; flex:0 0 auto; }
+  .think .caret { transition:transform .15s ease; flex:0 0 auto; }
+  .think[open] .caret { transform:rotate(90deg); }
+  .think .trace { margin-top:8px; padding:8px 12px; border-left:2px solid var(--border,#e3e0d9); color:var(--muted,#635e56); font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.5; }
+  @keyframes sc-think { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } .think .caret { transition: none; } }
+  /* tool card (a per-card <details>: COLLAPSED by default) */
+  .tool { display:flex; flex-direction:column; width:100%; max-width:640px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); overflow:hidden; }
+  .tool summary.tool-head { list-style:none; cursor:pointer; user-select:none; }
+  .tool summary.tool-head::-webkit-details-marker { display:none; }
+  .tool .tool-head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); }
+  .tool:not([open]) .tool-head { border-bottom:0; }
+  .tool .tool-body { display:flex; flex-direction:column; }
+  .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); white-space:nowrap; }
+  /* the collapsed row's human line (what the tool is DOING, not just its id) */
+  .tool .tool-what { font-size:12.5px; color:var(--muted,#635e56); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
+  .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
+  .tool .tool-status::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .tool .tool-status.running { color:var(--muted,#635e56); background:var(--panel,#ffffff); }
+  .tool .tool-status.done { color:var(--success,#1a7f37); background:var(--panel,#ffffff); }
+  .tool .tool-status.error { color:var(--danger,#b3261e); background:var(--panel,#ffffff); }
+  .tool .tool-args { padding:6px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .tool .tool-result { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
+  .tool .tool-detail { padding:0 10px 6px; border-top:1px solid var(--border,#e3e0d9); }
+  .tool .tool-detail summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; color:var(--muted,#635e56); font-size:11.5px; padding:4px 0 0; user-select:none; }
+  .tool .tool-detail summary::-webkit-details-marker { display:none; }
+  .tool .tool-detail summary:hover { color:var(--text,#1d1b18); }
+  .tool .tool-detail .tool-detail-raw { margin-top:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 8px; }
+  /* the structured tool-call tree (tracker item 4) */
+  .tool .tool-duration { margin-left:auto; font-size:11px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
+  .tool .tool-status + .tool-duration { margin-left:8px; }
+  .tool .tt-block { border-top:1px solid var(--border,#e3e0d9); }
+  .tool .tt-block summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:8px; padding:4px 10px; color:var(--muted,#635e56); font-size:12px; user-select:none; }
+  .tool .tt-block summary::-webkit-details-marker { display:none; }
+  .tool .tt-block summary:hover { color:var(--text,#1d1b18); }
+  .tool .tt-block-label { font-weight:600; color:var(--ink,#1d1b18); }
+  .tool .tt-block-meta { color:var(--muted,#635e56); }
+  /* The tree scrolls internally so ONE tool call can never flood the
+     transcript (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §7). At the row
+     density below this cap holds ~9 rows — the same number the old, looser
+     260px cap held, in 60px less. */
+  .tool .tt-tree { padding:2px 6px 6px; max-height:360px; overflow:auto; }
+  /* Show all lifts the inner scroll: a long result reads as one page
+     (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). */
+  .tool .tt-block.tt-unbounded .tt-tree, .tool .tt-block.tt-unbounded .tt-raw { max-height:none; }
+  /* The never-silent truncation note: the retained copy hit its cap. */
+  .tool .tool-note { display:flex; align-items:flex-start; gap:8px; padding:8px 10px; border-top:1px solid var(--border,#e3e0d9);
+    font-size:12px; line-height:1.45; color:var(--muted,#635e56); background:var(--panel-2,#efede8); }
+  .tool .tool-note-ic { flex:0 0 auto; display:inline-flex; margin-top:1px; color:var(--accent,#0e6e63); }
+  .tool .tool-note-text { min-width:0; overflow-wrap:anywhere; }
+  .tool .tt-row { display:flex; align-items:center; gap:6px; padding:0 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.35; min-height:20px; }
+  .tool .tt-row:hover { background:var(--panel-2,#efede8); }
+  .tool .tt-row[hidden] { display:none; }
+  .tool .tt-toggle { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; padding:0; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; border-radius:4px; flex:0 0 auto; }
+  .tool .tt-toggle:hover { color:var(--ink,#1d1b18); background:var(--panel-2,#efede8); }
+  .tool .tt-toggle:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+  .tool .tt-toggle .tt-caret { transition:transform .15s ease; }
+  .tool .tt-toggle[aria-expanded="true"] .tt-caret { transform:rotate(90deg); }
+  .tool .tt-ic { width:18px; height:18px; flex:0 0 auto; }
+  /* The collapsed head reads as a sentence: name, then what happened. */
+  .tool .tool-head { display:flex; align-items:baseline; gap:8px; }
+  .tool .tool-lead { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
+    white-space:nowrap; color:var(--muted,#635e56); font-size:12.5px; }
+  .tool .tool-lead.error { color:var(--danger,#b3261e); }
+  .tool .tt-block-controls { margin-inline-start:auto; display:inline-flex; gap:4px; }
+  .tool .tt-block-controls button { font:inherit; font-size:11px; line-height:1; display:inline-flex; align-items:center; gap:4px;
+    padding:3px 7px; border:1px solid var(--border,#e3e0d9); border-radius:999px;
+    background:var(--panel,#ffffff); color:var(--muted,#635e56); cursor:pointer; }
+  .tool .tt-block-controls button:hover { border-color:var(--accent,#0e6e63); color:var(--ink,#1d1b18); }
+  .tool .tt-block-controls button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+  .tool .tt-block-controls button.on { background:var(--accent,#0e6e63); border-color:transparent; color:var(--btn-fg,#ffffff); }
+  .tool .tt-btn-ic { display:inline-flex; flex:0 0 auto; }
+  /* The complete pretty-printed JSON, coloured from the theme tokens: keys
+     in the accent, strings in ink, numbers/booleans in the accent, null
+     muted — the same vocabulary the tree rows use. */
+  .tool .tt-raw { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:11.5px; line-height:1.45; color:var(--ink,#1d1b18); background:var(--panel-2,#efede8);
+    white-space:pre-wrap; word-break:break-word; overflow:auto; max-height:360px; tab-size:2; }
+  .tool .tt-raw .tt-json-key { color:var(--accent,#0e6e63); font-weight:600; }
+  .tool .tt-raw .tt-json-string { color:var(--ink,#1d1b18); }
+  .tool .tt-raw .tt-json-number, .tool .tt-raw .tt-json-boolean { color:var(--accent,#0e6e63); }
+  .tool .tt-raw .tt-json-null { color:var(--muted,#635e56); font-style:italic; }
+  .tool .tt-raw .tt-json-punct { color:var(--muted,#635e56); }
+  .tool .tt-raw::selection, .tool .tt-raw *::selection { background:var(--accent,#0e6e63); color:var(--btn-fg,#ffffff); }
+  .tool .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
+  .tool .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
+  .tool .tt-val-string { color:var(--ink,#1d1b18); }
+  .tool .tt-val-number, .tool .tt-val-boolean { color:var(--accent,#0e6e63); }
+  .tool .tt-val-null { color:var(--muted,#635e56); font-style:italic; }
+  .tool .tt-kind { color:var(--muted,#635e56); font-size:11px; margin-left:2px; }
+  /* The row's identity. It takes the width so the type label is what gets
+     squeezed on a narrow card, not the content. */
+  .tool .tt-preview { color:var(--fg,#1c1a17); font-size:11px; margin-left:6px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
+  .tool .tt-kind.muted { opacity:.6; flex:0 0 auto; }
+  .tool .tt-copy { margin-left:auto; flex:0 0 auto; font:inherit; font-size:11px; color:var(--muted,#635e56); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; opacity:0; transition:opacity .12s ease; }
+  .tool .tt-row:hover .tt-copy, .tool .tt-copy:focus-visible { opacity:1; }
+  .tool .tt-copy:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
+  .tool .tt-copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
+  .tool .tool-plain { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
+  .tool .tool-actions { display:flex; justify-content:flex-end; padding:7px 10px; border-top:1px solid var(--border,#e3e0d9); }
+  .tool .site-activity { min-block-size:32px; max-inline-size:100%; padding:4px 9px; border:1px solid var(--border,#e3e0d9); border-radius:6px; background:transparent; color:var(--accent,#0e6e63); cursor:pointer; font:inherit; font-size:12px; font-weight:600; white-space:normal; overflow-wrap:anywhere; }
+  .tool .site-activity:hover { border-color:var(--accent,#0e6e63); }
+  .tool .site-activity:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+  .tool .site-activity:disabled { cursor:wait; opacity:.6; }
+  @media (prefers-reduced-motion: reduce) { .tool .tt-toggle .tt-caret { transition:none; } .tool .tt-copy { transition:none; } }
+`;
 
 class MessageBubble extends Component {
   static get observedAttributes() {
@@ -5670,176 +5869,6 @@ class MessageBubble extends Component {
     if (typeof this.removeAttribute === "function") this.removeAttribute("streaming");
     const role = this.getAttribute("role") || "agent";
     const content = this._content();
-    const style = `
-      :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
-      :host(:last-child) { margin-bottom:0; }
-      :host([role="user"]) { justify-content:flex-end; }
-      :host([role="steer"]) { justify-content:flex-end; }
-      .msg { max-width:78%; border-radius:12px; padding:10px 14px; overflow-wrap:anywhere; }
-      /* An assistant turn: the identity header (avatar · name · time) above the bubble. */
-      .turn { display:flex; flex-direction:column; gap:6px; max-width:78%; min-width:0; }
-      .turn .msg { max-width:100%; }
-      .turn agent-identity { padding-inline-start:2px; }
-      .body { font-size:14px; line-height:1.55; color:var(--ink,#1d1b18); }
-      .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
-      :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
-      :host([role="steer"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--accent,#0e6e63); }
-      :host([role="steer"]) .steer-label { display:block; font-size:11px; font-weight:600; color:var(--accent,#0e6e63); letter-spacing:.04em; text-transform:uppercase; margin:0 0 4px; }
-      :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
-      :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
-      :host([role="error"]) .body { color:var(--danger,#b3261e); }
-      .err-reason { font-weight:600; margin:0 0 4px; }
-      .err-action { color:var(--ink,#1d1b18); margin:0 0 8px; }
-      .err-fix { font:inherit; font-size:12.5px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--accent,#0e6e63); border-radius:6px; padding:4px 10px; cursor:pointer; }
-      .err-fix:hover { background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
-      .err-fix:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
-      .msg .attach { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
-      .msg .attach img { max-width:100%; max-height:260px; border-radius:8px; border:1px solid var(--border,#e3e0d9); display:block; }
-      .msg .attach .file-chip { font-size:12.5px; color:var(--muted,#635e56); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:4px 8px; display:inline-flex; align-items:center; gap:6px; }
-      /* markdown content inside agent/system */
-      .body p { margin:0 0 8px; }
-      .body p:last-child { margin-bottom:0; }
-      .body ul, .body ol { margin:0 0 8px; padding-left:20px; }
-      .body li { margin:2px 0; }
-      .body h1, .body h2, .body h3, .body h4 { margin:12px 0 6px; font-size:1.05em; font-weight:600; line-height:1.3; }
-      .body h1:first-child, .body h2:first-child { margin-top:0; }
-      .body a { color:var(--accent,#0e6e63); text-decoration:underline; text-underline-offset:2px; }
-      .body code.inline-code, .body :not(pre) > code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:0.9em; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:4px; padding:1px 5px; }
-      .body strong { font-weight:600; }
-      .body em { font-style:italic; }
-      /* long-response collapse (CAP-FB-20260831-TASK-VIEW-FULL-RESPONSE-01) */
-      .long-response { width:100%; }
-      .long-response .body { max-height:260px; overflow:hidden; position:relative; }
-      .long-response .body::after { content:""; position:absolute; left:0; right:0; bottom:0; height:48px; pointer-events:none; background:linear-gradient(transparent, var(--panel,#ffffff)); }
-      .long-response[data-open="1"] .body { max-height:none; overflow:visible; }
-      .long-response[data-open="1"] .body::after { display:none; }
-      .long-actions { display:flex; gap:8px; margin-top:6px; }
-      .long-toggle, .long-copy { font:inherit; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:3px 10px; cursor:pointer; }
-      .long-toggle:hover, .long-copy:hover { border-color:var(--accent,#0e6e63); }
-      .long-toggle:focus-visible, .long-copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
-      /* rendered HTML output — the sandboxed iframe */
-      .html-frame { margin-top:4px; width:100%; display:flex; flex-direction:column; }
-      .html-frame iframe { width:100%; min-height:360px; height:480px; max-height:80vh; border:1px solid var(--border,#e3e0d9); border-radius:8px; background:#fff; resize:vertical; display:block; }
-      .genui { width:100%; max-width:840px; }
-      .genui-head { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin:0 0 6px; }
-      .genui .html-frame iframe { width:100%; min-height:360px; height:520px; max-height:80vh; }
-      .genui-raw { margin-top:8px; width:100%; }
-      .genui-raw summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; color:var(--muted,#635e56); font-size:11.5px; padding:4px 0; user-select:none; }
-      .genui-raw summary::-webkit-details-marker { display:none; }
-      .genui-raw summary:hover { color:var(--text,#1d1b18); }
-      .genui-raw .tool-detail-raw { margin-top:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 8px; }
-      /* thinking trace — collapsible, muted, clearly not a wall of text */
-      .think { width:100%; }
-      .think summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:8px; color:var(--muted,#635e56); font-size:13px; padding:2px 0; user-select:none; }
-      .think summary::-webkit-details-marker { display:none; }
-      .think summary:hover { color:var(--text,#1d1b18); }
-      .think .spin { width:12px; height:12px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%; animation:sc-think 1s linear infinite; flex:0 0 auto; }
-      .think .caret { transition:transform .15s ease; flex:0 0 auto; }
-      .think[open] .caret { transform:rotate(90deg); }
-      .think .trace { margin-top:8px; padding:8px 12px; border-left:2px solid var(--border,#e3e0d9); color:var(--muted,#635e56); font-size:12.5px; white-space:pre-wrap; overflow-wrap:anywhere; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; line-height:1.5; }
-      @keyframes sc-think { to { transform: rotate(360deg); } }
-      @media (prefers-reduced-motion: reduce) { .think .spin { animation: none; } .think .caret { transition: none; } }
-      /* tool card (a per-card <details>: COLLAPSED by default) */
-      .tool { display:flex; flex-direction:column; width:100%; max-width:640px; border:1px solid var(--border,#e3e0d9); border-radius:10px; background:var(--panel,#ffffff); overflow:hidden; }
-      .tool summary.tool-head { list-style:none; cursor:pointer; user-select:none; }
-      .tool summary.tool-head::-webkit-details-marker { display:none; }
-      .tool .tool-head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); }
-      .tool:not([open]) .tool-head { border-bottom:0; }
-      .tool .tool-body { display:flex; flex-direction:column; }
-      .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); white-space:nowrap; }
-      /* the collapsed row's human line (what the tool is DOING, not just its id) */
-      .tool .tool-what { font-size:12.5px; color:var(--muted,#635e56); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
-      .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
-      .tool .tool-status::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
-      .tool .tool-status.running { color:var(--muted,#635e56); background:var(--panel,#ffffff); }
-      .tool .tool-status.done { color:var(--success,#1a7f37); background:var(--panel,#ffffff); }
-      .tool .tool-status.error { color:var(--danger,#b3261e); background:var(--panel,#ffffff); }
-      .tool .tool-args { padding:6px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; }
-      .tool .tool-result { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
-      .tool .tool-detail { padding:0 10px 6px; border-top:1px solid var(--border,#e3e0d9); }
-      .tool .tool-detail summary { list-style:none; cursor:pointer; display:flex; align-items:center; gap:6px; color:var(--muted,#635e56); font-size:11.5px; padding:4px 0 0; user-select:none; }
-      .tool .tool-detail summary::-webkit-details-marker { display:none; }
-      .tool .tool-detail summary:hover { color:var(--text,#1d1b18); }
-      .tool .tool-detail .tool-detail-raw { margin-top:4px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:11.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9); border-radius:6px; padding:6px 8px; }
-      /* the structured tool-call tree (tracker item 4) */
-      .tool .tool-duration { margin-left:auto; font-size:11px; color:var(--muted,#635e56); font-variant-numeric:tabular-nums; }
-      .tool .tool-status + .tool-duration { margin-left:8px; }
-      .tool .tt-block { border-top:1px solid var(--border,#e3e0d9); }
-      .tool .tt-block summary { list-style:none; cursor:pointer; display:flex; align-items:baseline; gap:8px; padding:4px 10px; color:var(--muted,#635e56); font-size:12px; user-select:none; }
-      .tool .tt-block summary::-webkit-details-marker { display:none; }
-      .tool .tt-block summary:hover { color:var(--text,#1d1b18); }
-      .tool .tt-block-label { font-weight:600; color:var(--ink,#1d1b18); }
-      .tool .tt-block-meta { color:var(--muted,#635e56); }
-      /* The tree scrolls internally so ONE tool call can never flood the
-         transcript (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §7). At the row
-         density below this cap holds ~9 rows — the same number the old, looser
-         260px cap held, in 60px less. */
-      .tool .tt-tree { padding:2px 6px 6px; max-height:360px; overflow:auto; }
-      /* Show all lifts the inner scroll: a long result reads as one page
-         (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01). */
-      .tool .tt-block.tt-unbounded .tt-tree, .tool .tt-block.tt-unbounded .tt-raw { max-height:none; }
-      /* The never-silent truncation note: the retained copy hit its cap. */
-      .tool .tool-note { display:flex; align-items:flex-start; gap:8px; padding:8px 10px; border-top:1px solid var(--border,#e3e0d9);
-        font-size:12px; line-height:1.45; color:var(--muted,#635e56); background:var(--panel-2,#efede8); }
-      .tool .tool-note-ic { flex:0 0 auto; display:inline-flex; margin-top:1px; color:var(--accent,#0e6e63); }
-      .tool .tool-note-text { min-width:0; overflow-wrap:anywhere; }
-      .tool .tt-row { display:flex; align-items:center; gap:6px; padding:0 4px; border-radius:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; line-height:1.35; min-height:20px; }
-      .tool .tt-row:hover { background:var(--panel-2,#efede8); }
-      .tool .tt-row[hidden] { display:none; }
-      .tool .tt-toggle { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; padding:0; border:0; background:transparent; color:var(--muted,#635e56); cursor:pointer; border-radius:4px; flex:0 0 auto; }
-      .tool .tt-toggle:hover { color:var(--ink,#1d1b18); background:var(--panel-2,#efede8); }
-      .tool .tt-toggle:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
-      .tool .tt-toggle .tt-caret { transition:transform .15s ease; }
-      .tool .tt-toggle[aria-expanded="true"] .tt-caret { transform:rotate(90deg); }
-      .tool .tt-ic { width:18px; height:18px; flex:0 0 auto; }
-      /* The collapsed head reads as a sentence: name, then what happened. */
-      .tool .tool-head { display:flex; align-items:baseline; gap:8px; }
-      .tool .tool-lead { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis;
-        white-space:nowrap; color:var(--muted,#635e56); font-size:12.5px; }
-      .tool .tool-lead.error { color:var(--danger,#b3261e); }
-      .tool .tt-block-controls { margin-inline-start:auto; display:inline-flex; gap:4px; }
-      .tool .tt-block-controls button { font:inherit; font-size:11px; line-height:1; display:inline-flex; align-items:center; gap:4px;
-        padding:3px 7px; border:1px solid var(--border,#e3e0d9); border-radius:999px;
-        background:var(--panel,#ffffff); color:var(--muted,#635e56); cursor:pointer; }
-      .tool .tt-block-controls button:hover { border-color:var(--accent,#0e6e63); color:var(--ink,#1d1b18); }
-      .tool .tt-block-controls button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .tool .tt-block-controls button.on { background:var(--accent,#0e6e63); border-color:transparent; color:var(--btn-fg,#ffffff); }
-      .tool .tt-btn-ic { display:inline-flex; flex:0 0 auto; }
-      /* The complete pretty-printed JSON, coloured from the theme tokens: keys
-         in the accent, strings in ink, numbers/booleans in the accent, null
-         muted — the same vocabulary the tree rows use. */
-      .tool .tt-raw { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-        font-size:11.5px; line-height:1.45; color:var(--ink,#1d1b18); background:var(--panel-2,#efede8);
-        white-space:pre-wrap; word-break:break-word; overflow:auto; max-height:360px; tab-size:2; }
-      .tool .tt-raw .tt-json-key { color:var(--accent,#0e6e63); font-weight:600; }
-      .tool .tt-raw .tt-json-string { color:var(--ink,#1d1b18); }
-      .tool .tt-raw .tt-json-number, .tool .tt-raw .tt-json-boolean { color:var(--accent,#0e6e63); }
-      .tool .tt-raw .tt-json-null { color:var(--muted,#635e56); font-style:italic; }
-      .tool .tt-raw .tt-json-punct { color:var(--muted,#635e56); }
-      .tool .tt-raw::selection, .tool .tt-raw *::selection { background:var(--accent,#0e6e63); color:var(--btn-fg,#ffffff); }
-      .tool .tt-key { color:var(--accent,#0e6e63); font-weight:600; white-space:nowrap; }
-      .tool .tt-val { color:var(--ink,#1d1b18); overflow-wrap:anywhere; min-width:0; }
-      .tool .tt-val-string { color:var(--ink,#1d1b18); }
-      .tool .tt-val-number, .tool .tt-val-boolean { color:var(--accent,#0e6e63); }
-      .tool .tt-val-null { color:var(--muted,#635e56); font-style:italic; }
-      .tool .tt-kind { color:var(--muted,#635e56); font-size:11px; margin-left:2px; }
-      /* The row's identity. It takes the width so the type label is what gets
-         squeezed on a narrow card, not the content. */
-      .tool .tt-preview { color:var(--fg,#1c1a17); font-size:11px; margin-left:6px;
-        overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
-      .tool .tt-kind.muted { opacity:.6; flex:0 0 auto; }
-      .tool .tt-copy { margin-left:auto; flex:0 0 auto; font:inherit; font-size:11px; color:var(--muted,#635e56); background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:5px; padding:1px 7px; cursor:pointer; opacity:0; transition:opacity .12s ease; }
-      .tool .tt-row:hover .tt-copy, .tool .tt-copy:focus-visible { opacity:1; }
-      .tool .tt-copy:hover { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
-      .tool .tt-copy:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
-      .tool .tool-plain { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
-      .tool .tool-actions { display:flex; justify-content:flex-end; padding:7px 10px; border-top:1px solid var(--border,#e3e0d9); }
-      .tool .site-activity { min-block-size:32px; max-inline-size:100%; padding:4px 9px; border:1px solid var(--border,#e3e0d9); border-radius:6px; background:transparent; color:var(--accent,#0e6e63); cursor:pointer; font:inherit; font-size:12px; font-weight:600; white-space:normal; overflow-wrap:anywhere; }
-      .tool .site-activity:hover { border-color:var(--accent,#0e6e63); }
-      .tool .site-activity:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
-      .tool .site-activity:disabled { cursor:wait; opacity:.6; }
-      @media (prefers-reduced-motion: reduce) { .tool .tt-toggle .tt-caret { transition:none; } .tool .tt-copy { transition:none; } }
-    `;
     let markup;
     if (role === "tool") {
       const name = this.getAttribute("tool-name") || "tool";
@@ -6019,10 +6048,28 @@ class MessageBubble extends Component {
         markup = bubbleOut;
       }
     }
-    mountTemplate(this, style, markup);
-    if (this._cardDom) {
-      this._root.appendChild(this._cardDom);
-      this._cardDom = null;
+    if (typeof this._root.appendChild === "function" && (this._root.nodeType !== undefined || this._root._children !== undefined || this._root.children !== undefined)) {
+      if (!this._styleEl || !this._bodyWrap || this._styleEl.parentNode !== this._root || this._bodyWrap.parentNode !== this._root) {
+        this._root.innerHTML = "";
+        this._styleEl = document.createElement("style");
+        this._styleEl.textContent = MESSAGE_BUBBLE_STYLE;
+        this._root.appendChild(this._styleEl);
+        this._bodyWrap = document.createElement("div");
+        this._bodyWrap.className = "bubble-wrap";
+        if (this._bodyWrap.style) this._bodyWrap.style.display = "contents";
+        this._root.appendChild(this._bodyWrap);
+      }
+      this._bodyWrap.innerHTML = markup;
+      if (this._cardDom) {
+        this._bodyWrap.appendChild(this._cardDom);
+        this._cardDom = null;
+      }
+    } else {
+      mountTemplate(this, MESSAGE_BUBBLE_STYLE, markup);
+      if (this._cardDom) {
+        if (typeof this._root.appendChild === "function") this._root.appendChild(this._cardDom);
+        this._cardDom = null;
+      }
     }
   }
   _wire() {
@@ -6243,6 +6290,7 @@ class AgentConversation extends Component {
     ensureStyle("sc-agent-conversation-style", `
       agent-conversation { display:flex; flex-direction:column; min-height:0; }
       agent-conversation .empty { color:var(--muted,#635e56); font-size:var(--text-sm,13px); padding:2px 0; }
+      agent-conversation .run-group { content-visibility: auto; contain-intrinsic-size: auto 64px; }
       agent-conversation .ts-gap { align-self:center; margin:10px 0 4px; font-size:var(--text-xs,12px); color:var(--muted,#635e56); letter-spacing:.02em; user-select:none; }
       agent-conversation .citation-sources { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin:2px 0 6px 8px; font-size:var(--text-xs,12px); }
       agent-conversation .citation-sources-label { color:var(--muted,#635e56); font-weight:600; margin-right:2px; }

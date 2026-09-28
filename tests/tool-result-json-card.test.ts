@@ -123,6 +123,7 @@ Deno.test("json card: the tree is built ONCE from the full retained result — a
   const card = buildToolCardDom({
     name: "execute_tool", status: "done", args: '{"url":"https://example.com"}',
     result: BOUNDED_300, detail: FULL, duration: "220", expandedState: new Map(),
+    cardExpanded: true,
   });
   const blocks = findAll(card, (e) => hasClass(e, "tt-block"));
   const labels = blocks.map((b) => findAll(b, (e) => hasClass(e, "tt-block-label"))[0]?.textContent);
