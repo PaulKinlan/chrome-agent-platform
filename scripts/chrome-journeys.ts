@@ -3164,6 +3164,31 @@ async function main() {
       "Activity ledger: retained the activity-surface screenshot",
       ledgerShot !== null && ledgerShot.length > 200,
     );
+    // chrome-agent-platform-co35: rows inside a CLOSED <details> are laid out
+    // but neither painted nor hit-testable — the Undo button held a real ghost
+    // rect over the sidebar foot's Directory button and every hit-tested click
+    // landed on the foot. The product now OPENS the disclosure when activity
+    // arrives on a hidden section; this leg asserts that visibility with a real
+    // hit-test before clicking, so a regression is the click-dead signature
+    // again, not a mystery.
+    const visibility = await evalIn(cdp, ntpSession, `(() => {
+      const section = document.getElementById("activity-ledger-section");
+      const el = document.getElementById("side-action-ledger");
+      const undo = el?.shadowRoot?.querySelector(".al-undo");
+      if (!section || !undo) return null;
+      const r = undo.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      const hit = document.elementFromPoint(cx, cy);
+      return { open: section.open, hidden: section.hidden,
+        hitChainTop: hit ? hit.tagName + "." + String(hit.className).slice(0, 30) : null,
+        hitIsLedger: hit === el };
+    })()`);
+    check(
+      "Activity ledger: the disclosure auto-opens when activity arrives and the Undo button is hit-testable (co35)",
+      visibility !== null && visibility.open === true && visibility.hidden === false &&
+        visibility.hitIsLedger === true,
+      visibility,
+    );
     // A REAL Undo — a genuine click on the button in the component's shadow DOM.
     // It calls actions.undo, which re-runs delete_named_agent through the SAME
     // executor (owner-direct via the clicking document's identity).

@@ -143,20 +143,7 @@
        `[hidden]` rule, so — like every other collapsible sidebar section — it
        needs its own explicit `[hidden]` display:none (the pattern documented at
        `.view-head .back[hidden]`). */
-    .side-activity {
-      flex: 0 0 auto;
-      max-block-size: 40%;
-      overflow-y: auto;
-      /* Painted and hit-tested ABOVE the sidebar foot: the foot is the last
-         flex child and wins the default paint order, so any transient layout
-         state that extends the ledger's box to the sidebar's bottom edge put
-         the foot's buttons on top of the ledger's Undo — the foot ate every
-         real click (measured, chrome-agent-platform-co35: elementFromPoint at
-         the Undo button's centre returned .side-foot .foot-btn, the component's
-         undo handler never fired). The ledger owns its own hit area. */
-      position: relative;
-      z-index: 1;
-    }
+    .side-activity { flex: 0 0 auto; max-block-size: 40%; overflow-y: auto; }
     .side-activity > summary { cursor: pointer; list-style: none; }
     .side-activity > summary::-webkit-details-marker { display: none; }
     .harness-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 12px 8px; }
