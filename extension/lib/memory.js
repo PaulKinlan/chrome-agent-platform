@@ -76,32 +76,79 @@ async function legacyGenerationFloor(dir) {
   return max;
 }
 
-/** Issue the next durable generation for a store directory. The caller holds
- * the global write mutex (atomic). Returns the generation. */
-async function issueVersion(dir) {
-  let genRaw;
-  try {
-    genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
-  } catch {
-    // The authority file is corrupt — fail closed, never reset the sequence.
-    throw new Error("the durable generation authority is corrupt");
+const dirKeys = new WeakMap(); // directory handle → "seg/seg/…" path key
+function tagDir(dir, segments) {
+  if (dir && typeof dir === "object") dirKeys.set(dir, segments.join("/"));
+  return dir;
+}
+
+function getDirKey(dirOrPath) {
+  if (Array.isArray(dirOrPath)) return dirOrPath.join("/");
+  if (dirOrPath && typeof dirOrPath === "object") {
+    return dirKeys.get(dirOrPath) ?? null;
   }
-  const prev = genRaw == null ? await legacyGenerationFloor(dir) : genRaw.gen;
-  if (!Number.isSafeInteger(prev) || prev < 0) {
-    throw new Error("the durable generation authority is corrupt");
+  if (typeof dirOrPath === "string") return dirOrPath;
+  return null;
+}
+
+let genCache = new Map();
+let tombsCache = new Map();
+
+function invalidateDirCache(pathOrKey) {
+  const key = typeof pathOrKey === "string" ? pathOrKey : getDirKey(pathOrKey);
+  if (!key) return;
+  for (const k of genCache.keys()) {
+    if (k === key || k.startsWith(`${key}/`)) genCache.delete(k);
+  }
+  for (const k of tombsCache.keys()) {
+    if (k === key || k.startsWith(`${key}/`)) tombsCache.delete(k);
+  }
+}
+
+/** Issue the next durable generation for a store directory. The caller holds
+ * the write mutex (atomic). Returns the generation. */
+async function issueVersion(dir) {
+  const dirKey = getDirKey(dir);
+  let prev;
+  if (dirKey && genCache.has(dirKey)) {
+    prev = genCache.get(dirKey);
+  } else {
+    let genRaw;
+    try {
+      genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true });
+    } catch {
+      // The authority file is corrupt — fail closed, never reset the sequence.
+      throw new Error("the durable generation authority is corrupt");
+    }
+    prev = genRaw == null ? await legacyGenerationFloor(dir) : genRaw.gen;
+    if (!Number.isSafeInteger(prev) || prev < 0) {
+      throw new Error("the durable generation authority is corrupt");
+    }
   }
   if (prev >= Number.MAX_SAFE_INTEGER) {
     throw new Error("the durable generation authority is exhausted");
   }
   const gen = prev + 1;
   await writeJson(dir, GEN_FILE, { gen });
+  if (dirKey) {
+    genCache.set(dirKey, gen);
+  }
   return gen;
 }
 
 /** Read the bounded tombstone authority: { map: {key→gen}, floor } or null. */
 async function readTombs(dir) {
+  const dirKey = getDirKey(dir);
+  if (dirKey && tombsCache.has(dirKey)) {
+    const cached = tombsCache.get(dirKey);
+    return { map: new Map(cached.map), floor: cached.floor };
+  }
   const raw = await readJsonStrict(dir, TOMBS_FILE, { allowAbsent: true });
-  if (raw == null) return { map: new Map(), floor: 0 };
+  if (raw == null) {
+    const res = { map: new Map(), floor: 0 };
+    if (dirKey) tombsCache.set(dirKey, { map: new Map(), floor: 0 });
+    return res;
+  }
   if (typeof raw !== "object" || raw.map == null || typeof raw.map !== "object" ||
       (raw.floor != null && (!Number.isSafeInteger(raw.floor) || raw.floor < 0))) {
     throw new Error("the tombstone authority is corrupt");
@@ -111,7 +158,11 @@ async function readTombs(dir) {
     if (!Number.isSafeInteger(v) || v < 0) throw new Error("the tombstone authority is corrupt");
     map.set(k, v);
   }
-  return { map, floor: Number.isSafeInteger(raw.floor) ? raw.floor : 0 };
+  const floor = Number.isSafeInteger(raw.floor) ? raw.floor : 0;
+  if (dirKey) {
+    tombsCache.set(dirKey, { map: new Map(map), floor });
+  }
+  return { map, floor };
 }
 
 /** Persist the bounded tombstone authority (map + floor), folding the oldest
@@ -129,7 +180,12 @@ async function writeTombs(dir, tombs) {
   const obj = {};
   for (const [k, v] of entries) obj[k] = v;
   await writeJson(dir, TOMBS_FILE, { map: obj, floor });
-  return { map: new Map(entries), floor };
+  const result = { map: new Map(entries), floor };
+  const dirKey = getDirKey(dir);
+  if (dirKey) {
+    tombsCache.set(dirKey, { map: new Map(entries), floor });
+  }
+  return result;
 }
 
 /** The current durable version of a key:
@@ -534,11 +590,6 @@ async function openDirOptional(segments) {
 //   - a mutation through an untagged handle, a negative total, or a swapped
 //     storage root invalidates the ledger (reseed on next use).
 // Nothing new is persisted: the ledger lives only in the SW's memory.
-const dirKeys = new WeakMap(); // directory handle → "seg/seg/…" path key
-function tagDir(dir, segments) {
-  if (dir && typeof dir === "object") dirKeys.set(dir, segments.join("/"));
-  return dir;
-}
 const ledger = {
   seeded: false,
   seeding: null, // the in-flight seed promise (concurrent checks share it)
@@ -698,7 +749,11 @@ async function assertQuota(storeDir, grow, storeBoundBytes = null) {
 
 /** Ledger inspection (tests + the seeded perf gate) — a read/reseed surface, never a product API. */
 export const usageLedgerInspector = {
-  reset: ledgerInvalidate,
+  reset: () => {
+    ledgerInvalidate();
+    genCache.clear();
+    tombsCache.clear();
+  },
   seed: ledgerSeed,
   isSeeded: () => ledger.seeded,
   walks: () => ledger.walks,
@@ -711,14 +766,45 @@ export const usageLedgerInspector = {
 /** The shared write path: bounds + reserved-key protection + aggregate quotas.
  * `trusted` bypasses the reserved-key protection (internal authority writes)
  * but NOT the byte/key quotas. */
-// A global write mutex serializes the check-then-write of the aggregate quotas
-// (per-store + global byte/key budgets). Without it, two concurrent writes each
-// observe the available quota and jointly exceed it (the round-16 quota race).
-let writeMutex = Promise.resolve();
-function withWriteLock(fn) {
-  const run = writeMutex.then(fn, fn);
-  writeMutex = run.then(() => {}, () => {});
+// Per-directory write mutexes serialize the check-then-write of the aggregate quotas
+// so writes to durable-runs, threads, master, and per-origin/agent stores do not block
+// unrelated stores.
+const writeMutexes = new Map();
+
+function dirMutexKey(path) {
+  if (Array.isArray(path)) return path.join("/");
+  if (path && typeof path === "object") {
+    const key = dirKeys.get(path);
+    if (key !== undefined) return key;
+  }
+  return String(path ?? "global");
+}
+
+function withWriteLock(pathOrFn, maybeFn) {
+  const fn = typeof pathOrFn === "function" ? pathOrFn : maybeFn;
+  const path = typeof pathOrFn === "function" ? "global" : pathOrFn;
+  const key = dirMutexKey(path);
+  const prev = writeMutexes.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  const next = run.then(() => {}, () => {});
+  writeMutexes.set(key, next);
+  next.finally(() => {
+    if (writeMutexes.get(key) === next) {
+      writeMutexes.delete(key);
+    }
+  });
   return run;
+}
+
+export async function resetAllStores() {
+  while (writeMutexes.size > 0) {
+    const active = Array.from(writeMutexes.values());
+    await Promise.allSettled(active);
+  }
+  writeMutexes.clear();
+  genCache.clear();
+  tombsCache.clear();
+  ledgerInvalidate();
 }
 
 /** UTF-8 byte length of a string (quota accounting must use BYTES, not UTF-16
@@ -786,7 +872,7 @@ async function setValueInner(path, key, value, { isMaster, trusted = false, stor
 }
 
 async function setValue(path, key, value, { isMaster, trusted = false, storeBoundBytes = null }) {
-  return withWriteLock(() => setValueInner(path, key, value, { isMaster, trusted, storeBoundBytes }));
+  return withWriteLock(path, () => setValueInner(path, key, value, { isMaster, trusted, storeBoundBytes }));
 }
 
 /** Compare-and-swap on a single key, under the global write mutex (atomic with
@@ -805,7 +891,7 @@ async function setValue(path, key, value, { isMaster, trusted = false, storeBoun
  * recreation blocker). A write that DOES land creates the directory only for the
  * actual mutation. */
 async function compareAndSet(path, key, expectedVersion, nextValue, { isMaster }) {
-  return withWriteLock(async () => {
+  return withWriteLock(path, async () => {
     const dir = await openDirOptional(path);
     const cur = dir ? await currentVersion(dir, key) : 0;
     if (cur !== expectedVersion) {
@@ -907,7 +993,7 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
     /** Atomic value/existence/version receipt under the same write mutex used by
      * all trusted writes and CAS compensation. */
     async snapshot(key) {
-      return await withWriteLock(async () => {
+      return await withWriteLock(path, async () => {
         const dir = await openDirOptional(path);
         if (!dir) return { exists: false, value: null, version: 0 };
         const tombs = await readTombs(dir);
@@ -969,7 +1055,7 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
     async delete(key) {
       // Plain delete is serialized and publishes the durable tombstone before
       // removing the value. A tombstone failure therefore leaves the live value.
-      await withWriteLock(async () => {
+      await withWriteLock(path, async () => {
         const dir = await openDir(path);
         const deletedGen = await issueVersion(dir);
         const tombs = await readTombs(dir);
@@ -985,10 +1071,15 @@ function memoryStoreAt(path, { isMaster, origin, storeBoundBytes = null }) {
       // AND every per-key TOMBSTONE — a stale expected-0 token can never land
       // after never-created → create → clear → absent (the reviewer's ABA
       // finding: clear reopened expected-0).
-      await withWriteLock(async () => {
+      await withWriteLock(path, async () => {
         const dir = await openDir(path);
         let genRaw = null;
-        try { genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); } catch { genRaw = null; }
+        const dirKey = getDirKey(dir);
+        if (dirKey && genCache.has(dirKey)) {
+          genRaw = { gen: genCache.get(dirKey) };
+        } else {
+          try { genRaw = await readJsonStrict(dir, GEN_FILE, { allowAbsent: true }); } catch { genRaw = null; }
+        }
         const removedKeys = [];
         for await (const [name] of dir.entries()) {
           if (name === GEN_FILE || name === TOMBS_FILE || name === "__epoch.json") continue;
@@ -1183,7 +1274,9 @@ export async function forgetDurableThread(threadId) {
   const root = await openDirOptional([ROOT, DURABLE_ROOT, "threads"]);
   if (!root) return false;
   try {
-    await removeTracked(root, encodeURIComponent(String(threadId)), { recursive: true });
+    const leaf = encodeURIComponent(String(threadId));
+    await removeTracked(root, leaf, { recursive: true });
+    invalidateDirCache([ROOT, DURABLE_ROOT, "threads", leaf]);
     return true;
   } catch {
     return false; // already gone
@@ -1356,7 +1449,10 @@ export function durableRunMemory() {
     },
     async clear() {
       const parent = await openDir([ROOT]);
-      try { await removeTracked(parent, DURABLE_ROOT, { recursive: true }); } catch { /* absent */ }
+      try {
+        await removeTracked(parent, DURABLE_ROOT, { recursive: true });
+        invalidateDirCache([ROOT, DURABLE_ROOT]);
+      } catch { /* absent */ }
     },
   };
 }
@@ -1716,16 +1812,12 @@ export async function saveScreenshot(mem, { url, dataURL }) {
   if (!dataURL || !String(dataURL).startsWith("data:image/")) {
     throw new Error("screenshot must be a data:image/* dataURL");
   }
-  return withWriteLock(async () => {
+  const indexPath = mem.isMaster
+    ? [ROOT, MASTER]
+    : [ROOT, "origins", encodeOrigin(mem.origin)];
+  return withWriteLock(indexPath, async () => {
     const id = newId("shot");
     const dir = await openDir([ROOT, MASTER, "screenshots"]);
-    // The metadata index lives on the same store `mem` points at (master). The
-    // index write must NOT re-acquire the global write mutex (it is already held
-    // by the surrounding withWriteLock) — call setValueInner directly with the
-    // store's own path + trusted (the round-19 re-entrant deadlock).
-    const indexPath = mem.isMaster
-      ? [ROOT, MASTER]
-      : [ROOT, "origins", encodeOrigin(mem.origin)];
     try {
       // Write the blob first, under ONE lock acquisition.
       await writeJson(dir, `${id}.json`, { url, dataURL, at: Date.now() });

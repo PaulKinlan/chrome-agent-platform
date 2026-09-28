@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.548] — 2026-09-28
+- Faster tool execution and file search with per-store OPFS locking, metadata caching, and automatic skipping of .git and node_modules.
+
 ## [0.3.547] — 2026-09-28
 - Faster startup and smaller extension bundles across the service worker, Hub, and Settings.
 

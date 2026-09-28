@@ -27,12 +27,15 @@ const ENCODER = new TextEncoder();
 
 /** Re-chunk a byte stream into at-most `chunkSize` pieces (last one short).
  * Backpressured: chunks are pulled only as the encoder writes them. */
-function rechunk(stream, chunkSize) {
-  const reader = stream.getReader();
+export function rechunk(stream, chunkSize) {
+  let reader = null;
   let carry = null;
   return new ReadableStream({
     async pull(controller) {
       try {
+        if (!reader) {
+          reader = stream.getReader();
+        }
         while (true) {
           if (carry) {
             if (carry.byteLength <= chunkSize) {
@@ -63,7 +66,10 @@ function rechunk(stream, chunkSize) {
     },
     cancel(reason) {
       try {
-        reader.cancel(reason);
+        if (reader) {
+          return reader.cancel(reason);
+        }
+        return stream.cancel(reason);
       } catch {
         // the source may already be gone
       }

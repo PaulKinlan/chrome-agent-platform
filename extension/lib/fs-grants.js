@@ -41,6 +41,9 @@ const STORE_NAME = "grants";
 const memoryGrantsStore = new Map();
 const activeWatchers = new Map();
 
+export const DEFAULT_IGNORED_DIRS = new Set([".git", "node_modules", ".deno"]);
+
+
 export function cleanRelativePath(pathStr) {
   if (typeof pathStr !== "string" || !pathStr.trim()) return [];
   const raw = pathStr.trim();
@@ -434,7 +437,7 @@ export async function listFsGrantEntries(
  */
 export async function searchFsGrantFiles(
   query = "",
-  { limit = null, maxScanned = null } = {},
+  { limit = null, maxScanned = null, includeIgnored = false } = {},
   { customIdb = null } = {},
 ) {
   const q = String(query ?? "").trim().toLowerCase();
@@ -508,6 +511,9 @@ export async function searchFsGrantFiles(
           const name = String(handle?.name ?? "");
           const path = prefix ? `${prefix}/${name}` : name;
           if (handle?.kind === "directory") {
+            if (!includeIgnored && DEFAULT_IGNORED_DIRS.has(name)) {
+              continue;
+            }
             scanned += 1;
             await walk(handle, path, depth + 1);
           } else {
@@ -751,7 +757,7 @@ export async function readFsGrantFile(
  */
 export async function grepFsGrant(
   grantId,
-  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = null, maxDepth = null } = {},
+  { query = "", relativePath = "", regex = false, ignoreCase = false, maxMatches = null, maxDepth = null, includeIgnored = false } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -812,11 +818,9 @@ export async function grepFsGrant(
     } catch { return; }
     if (!buffer) return;
     const bytes = new Uint8Array(buffer);
-    // Skip binary files: a NUL or an unexpected control byte means "not text".
-    const hasBinaryControls = bytes.some((byte) =>
-      byte === 0 || (byte < 32 && byte !== 9 && byte !== 10 && byte !== 13) || byte === 127
-    );
-    if (hasBinaryControls) return;
+    // Skip binary files: check binary control bytes on the first 8192 bytes.
+    const probe = bytes.subarray(0, 8192);
+    if (probe.some((b) => b === 0)) return;
     let text;
     try {
       text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
@@ -859,6 +863,7 @@ export async function grepFsGrant(
         const path = prefix ? `${prefix}/${name}` : name;
         const kind = handle?.kind || (handle?.getFile ? "file" : "directory");
         if (kind === "directory") {
+          if (!includeIgnored && DEFAULT_IGNORED_DIRS.has(name)) continue;
           await walk(handle, path, depth + 1);
         } else {
           await scanFile(handle, path);
@@ -1000,7 +1005,7 @@ export async function writeFsGrantFile(
  */
 export async function scanFsGrantManifest(
   grantId,
-  { maxEntries = null, maxDepth = null } = {},
+  { maxEntries = null, maxDepth = null, includeIgnored = false } = {},
   { customIdb = null } = {},
 ) {
   const grant = await getFsGrant(grantId, { customIdb });
@@ -1034,10 +1039,13 @@ export async function scanFsGrantManifest(
       : [];
 
     for await (const entry of iter) {
-      totalCount++;
       const item = Array.isArray(entry) ? entry[1] : entry;
-      const relPath = currentPath ? `${currentPath}/${item.name}` : item.name;
       const kind = item.kind || (item.getFile ? "file" : "directory");
+      if (kind === "directory" && !includeIgnored && DEFAULT_IGNORED_DIRS.has(item.name)) {
+        continue;
+      }
+      totalCount++;
+      const relPath = currentPath ? `${currentPath}/${item.name}` : item.name;
 
       let size = 0;
       let lastModified = 0;

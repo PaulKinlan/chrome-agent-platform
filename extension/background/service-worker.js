@@ -11197,12 +11197,29 @@ recoverOnBoot().catch((e) =>
 // recovery self-cancels once the journal is consumed. Skipped where the
 // storage surface does not exist (test harness contexts).
 if (navigator?.storage?.getDirectory) {
-  navigator.storage
-    .getDirectory()
-    .then((root) =>
-      recoverPendingImport({ kvGet, kvSet, kvRemove, opfs: createOpfsAdapter(root), alarms: createChromeAlarmsAdapter() }),
-    )
-    .catch((e) => swLog.error("import recovery:", e?.message ?? e));
+  const checkPendingImport = async () => {
+    try {
+      let pendingVal = null;
+      if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+        const stored = await chrome.storage.local.get("cap:importBackup");
+        pendingVal = stored?.["cap:importBackup"];
+      } else {
+        pendingVal = await kvGet("cap:importBackup");
+      }
+      if (!pendingVal) return;
+      const root = await navigator.storage.getDirectory();
+      await recoverPendingImport({
+        kvGet,
+        kvSet,
+        kvRemove,
+        opfs: createOpfsAdapter(root),
+        alarms: createChromeAlarmsAdapter(),
+      });
+    } catch (e) {
+      swLog.error("import recovery:", e?.message ?? e);
+    }
+  };
+  checkPendingImport();
 }
 reconcileEnrolledOriginScriptsOnBoot().catch((e) =>
   swLog.error("reconcileEnrolledOriginScriptsOnBoot:", e?.message ?? e)
