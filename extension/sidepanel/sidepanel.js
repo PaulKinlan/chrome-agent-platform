@@ -28,6 +28,8 @@ import {
   cancelDurableRun,
   appendBubble,
   projectThreadMessages,
+  projectThreadWithRunLogs,
+  wireReplayApprovals,
 } from "../shared/conversation.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
@@ -135,20 +137,62 @@ async function renderTools(origin) {
     setToolState("error");
     return;
   }
-  const names = res.tools ?? [];
+  const rawTools = res.tools ?? [];
   if (!res.enrolled) {
     setToolState("not-added");
+    if (origin && /^https?:\/\//.test(origin)) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn-ghost enable-site-tools-btn";
+      btn.textContent = "Enable site tools";
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Enabling…";
+        try {
+          const permOrigin = origin.endsWith("/") ? `${origin}*` : `${origin}/*`;
+          const granted = await chrome.permissions?.request?.({
+            permissions: ["scripting"],
+            origins: [permOrigin],
+          });
+          if (granted) {
+            await send("agent.enroll-origin", { origin });
+            if (currentTabId != null && chrome.tabs?.reload) {
+              await chrome.tabs.reload(currentTabId);
+            }
+            await renderTools(origin);
+          } else {
+            btn.disabled = false;
+            btn.textContent = "Enable site tools";
+          }
+        } catch {
+          btn.disabled = false;
+          btn.textContent = "Enable site tools";
+        }
+      });
+      toolStateEl?.append?.(" ", btn);
+    }
     return;
   }
-  if (names.length === 0) {
+  if (rawTools.length === 0) {
     setToolState("empty");
     return;
   }
-  setToolState("tools", names.length);
-  for (const name of names) {
-    const chip = document.createElement("span");
+  setToolState("tools", rawTools.length);
+  for (const raw of rawTools) {
+    const t = typeof raw === "string" ? { name: raw } : (raw || {});
+    const name = t.name || "";
+    const chip = document.createElement("button");
+    chip.type = "button";
     chip.className = "tool-chip";
     chip.textContent = name;
+    chip.title = t.description ? `${name} — ${t.description}` : name;
+    chip.addEventListener("click", () => {
+      if (!pageComposer) return;
+      const prompt = `Use ${name}`;
+      const current = pageComposer.value ? pageComposer.value.trim() : "";
+      pageComposer.value = current ? `${current} ${prompt}` : prompt;
+      pageComposer.focus?.();
+    });
     toolsEl.append(chip);
   }
 }
@@ -203,18 +247,42 @@ let currentTabOrigin = null;
 let pageThreadId = null;
 
 const PAGE_THREADS_KEY = "cap:sidepanel:page-threads";
-function loadPageThreads() {
+function readPageThreads() {
   try { return JSON.parse(sessionStorage.getItem(PAGE_THREADS_KEY) || "{}") || {}; }
   catch { return {}; }
 }
+const loadPageThreads = readPageThreads;
+
+function writePageThreads(map) {
+  try {
+    const data = map || {};
+    sessionStorage.setItem(PAGE_THREADS_KEY, JSON.stringify(data));
+    chrome.storage?.session?.set?.({ [PAGE_THREADS_KEY]: data })?.catch?.(() => {});
+  } catch { /* sessionStorage / storage.session may be unavailable — persistence is best-effort */ }
+}
+
 function savePageThread(tabId, threadId) {
   if (tabId == null) return;
-  try {
-    const m = loadPageThreads();
-    if (threadId) m[String(tabId)] = threadId; else delete m[String(tabId)];
-    sessionStorage.setItem(PAGE_THREADS_KEY, JSON.stringify(m));
-  } catch { /* sessionStorage may be unavailable — persistence is best-effort */ }
+  const m = readPageThreads();
+  if (threadId) m[String(tabId)] = threadId; else delete m[String(tabId)];
+  writePageThreads(m);
 }
+
+// Hydrate from chrome.storage.session on boot so closing and reopening the Side Panel restores threads
+(async function hydratePageThreads() {
+  try {
+    const res = await chrome.storage?.session?.get?.(PAGE_THREADS_KEY);
+    const stored = res?.[PAGE_THREADS_KEY];
+    if (stored && typeof stored === "object") {
+      const current = readPageThreads();
+      const merged = { ...stored, ...current };
+      sessionStorage.setItem(PAGE_THREADS_KEY, JSON.stringify(merged));
+      if (currentTabId != null && !pageThreadId && merged[String(currentTabId)]) {
+        await loadTabThread(currentTabId);
+      }
+    }
+  } catch { /* best-effort */ }
+})();
 
 function hostFromUrl(url) {
   try { const u = new URL(url); return u.host || u.protocol.replace(/:$/, ""); }
@@ -250,13 +318,24 @@ faviconEl?.addEventListener("error", () => {
 /** Render an existing tab thread into the page conversation (full transcript
  *  via the shared projection). Clears when the tab has no thread yet. */
 async function loadTabThread(tabId) {
-  const threads = loadPageThreads();
+  const threads = readPageThreads();
   pageThreadId = tabId != null ? (threads[String(tabId)] || null) : null;
   pageHistory?.clear?.();
   if (pageThreadId) {
-    const res = await send("thread.get", { id: pageThreadId }).catch(() => null);
-    if (res?.thread) pageHistory?.setMessages?.(projectThreadMessages(res.thread));
-    else { pageThreadId = null; savePageThread(tabId, null); }
+    const [res, logsRes] = await Promise.all([
+      send("thread.get", { id: pageThreadId }).catch(() => null),
+      send("run.thread-logs", { threadId: pageThreadId }).catch(() => null),
+    ]);
+    if (res?.thread) {
+      const executions = logsRes?.ok && Array.isArray(logsRes.executions) ? logsRes.executions : [];
+      const messages = executions.length > 0
+        ? (projectThreadWithRunLogs(res.thread, executions)?.messages ?? projectThreadMessages(res.thread))
+        : projectThreadMessages(res.thread);
+      pageHistory?.setMessages?.(messages);
+    } else {
+      pageThreadId = null;
+      savePageThread(tabId, null);
+    }
   }
   if (continueHubBtn) continueHubBtn.hidden = !pageThreadId;
 }
@@ -285,8 +364,40 @@ async function refreshActiveTab() {
   if (tabChanged) await loadTabThread(tabId);
 }
 
+function wireConversationHistory(history, composer) {
+  if (!history) return;
+  wireReplayApprovals(history);
+  history.addEventListener("open-tab", (e) => {
+    const url = e.detail?.url || (e.detail?.id ? chrome.runtime?.getURL?.(`artifact/artifact.html?id=${encodeURIComponent(e.detail.id)}&origin=${encodeURIComponent(e.detail.origin ?? "master")}`) : "");
+    if (url) {
+      if (chrome.tabs?.create) {
+        chrome.tabs.create({ url });
+      } else {
+        send("browser.open-tab", { url }).catch(() => {});
+      }
+    }
+  });
+  history.addEventListener("reuse", (e) => {
+    const text = typeof e.detail === "string" ? e.detail : (e.detail?.text || e.detail?.prompt || (e.detail?.name ? `Use artifact "${e.detail.name}"` : ""));
+    if (composer) {
+      if (text) composer.value = text;
+      if (typeof e.detail === "object" && e.detail?.id && composer.addAttachment) {
+        composer.addAttachment(e.detail);
+      }
+      composer.focus?.();
+    }
+  });
+  history.addEventListener("approval-decision", async (e) => {
+    const d = e.detail;
+    if (d?.requestId && !d?.requirement) {
+      await send("run.resolve-inline-approval", { requestId: d.requestId, approve: d.approve !== false }).catch(() => null);
+    }
+  });
+}
+
 // The inline live-status row's recovery action + Stop, for the page
 // conversation (same pattern as the agent detail conversation below).
+wireConversationHistory(pageHistory, pageComposer);
 pageHistory?.addEventListener("action", (ev) => {
   if (!ev.target?.classList?.contains?.("live-status")) return;
   // "Budget reached — Continue": a new turn on the same page thread
@@ -400,6 +511,7 @@ const detailName = document.getElementById("agent-detail-name");
 const detailKind = document.getElementById("agent-detail-kind");
 const historyEl = document.getElementById("agent-history");
 const agentComposer = document.getElementById("agent-composer");
+wireConversationHistory(historyEl, agentComposer);
 let latestDurableRuns = [];
 let liveClientRunId = null;
 

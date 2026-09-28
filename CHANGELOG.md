@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.549] — 2026-09-28
+- Side Panel conversations now retain tool cards, artifacts, and approval cards when switching tabs, and let you enable site tools in one click.
+
 ## [0.3.548] — 2026-09-28
 - Faster tool execution and file search with per-store OPFS locking, metadata caching, and automatic skipping of .git and node_modules.
 
