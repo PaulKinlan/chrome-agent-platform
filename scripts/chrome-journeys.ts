@@ -699,6 +699,7 @@ const EXPECTED = [
   "Activity ledger: the ledger row for the run-created agent carries its undo",
   "Activity ledger: the hub sidebar renders the sentence and an Undo button",
   "Activity ledger: retained the activity-surface screenshot",
+  "Activity ledger: the disclosure auto-opens when activity arrives and the Undo button is hit-testable (co35)",
   "Activity ledger: a real Undo deletes the agent and marks the row undone",
   "Activity ledger: retained the after-undo screenshot",
   "Activity ledger: a seeded close_tab row renders 'Closed …' with Undo",
