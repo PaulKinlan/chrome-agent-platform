@@ -125,3 +125,36 @@ change (the runtime lives in OPFS, not the extension bundle).
 3. The `python` tool KATs: in/out caps, non-eval refusal (a JS-eval-shaped input path
    is refused), memory bound, termination fence, fresh-per-run.
 4. Zero permissions/keys/network/manifest changes.
+
+## 8. Network: none ambient, some granted (beads chrome-agent-platform-4p7j.1 / .2)
+
+Section 5 above says "no network at runtime". That was written when it was true by
+accident rather than by construction, and it was measured false on 2026-09-06: through
+the real `python.execute` route, `import js` exposed `fetch`, `XMLHttpRequest`,
+`WebSocket`, `EventSource`, `importScripts` and `Worker`, and a real cross-origin request
+returned a status — it left the browser, with the extension's `<all_urls>` privileges and
+nothing in the record. Two stages fixed it, and together they are what "no network" now
+means precisely:
+
+**S0 — no AMBIENT network (`chrome-agent-platform-4p7j.1`).** Those globals are replaced
+in the worker's scope with functions that throw a readable refusal, after `loadPyodide`
+resolves (it needs `fetch` to read its own wasm) and before any Python runs. Python cannot
+reach any origin on its own. Gate: `scripts/kat-python-no-ambient-network.ts`.
+
+**S0.5 — a GRANTED, recorded route (`chrome-agent-platform-4p7j.2`).** `await
+cap.fetch(url)` posts a message out of the worker; the SERVICE WORKER is the only network
+actor. It checks the owner's per-origin grants (Settings → Permissions → Python network
+access), then fetches with `credentials: "omit"` and `redirect: "manual"` — a granted
+origin buys ANONYMOUS access, never the owner's logged-in session there, and a redirect
+away from the granted origin is refused rather than followed. GET/HEAD/POST only.
+Loopback and private addresses are refused whatever is granted, through the same
+predicate the script sandbox's `cap:fetch` uses (`lib/fetch-policy.js`). Every request
+AND every refusal is recorded by the service worker — not by the program — and travels
+back attached to the tool result, so a program that catches the refusal and prints
+nothing cannot hide it. Gate: `scripts/kat-python-permissioned-fetch.ts`.
+
+So the honest statement is: **the interpreter has no network of its own, and no network at
+all until the owner grants an origin; what a grant buys is one anonymous, unredirected,
+recorded request at a time to that origin.** The build lane's other "no network" claims —
+the runtime bytes come from the extension package, nothing is fetched from a CDN — are
+unchanged.

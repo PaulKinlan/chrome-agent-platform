@@ -33,7 +33,7 @@ export function getPythonRuntimeProvider() {
 /** The ONE bounded python tool (top-level only, non-eval entrypoint, fresh per run, no network). */
 export const pythonExecuteTool = tool({
   description:
-    "Run a Python program in the in-browser Pyodide runtime. Input is Python source code (code: string) and optional standard input (stdin: string). Output is captured standard output. The runtime is isolated, fresh per run, has no network, and runs sandboxed.",
+    "Run a Python program in the in-browser Pyodide runtime. Input is Python source code (code: string) and optional standard input (stdin: string). Output is captured standard output. The runtime is isolated, fresh per run, and sandboxed. It has NO ambient network: fetch/urllib/requests cannot reach anything. To make a request, `await cap.fetch(url)` inside an async block — it reaches only origins the owner has granted, GET/HEAD/POST, no cookies, and every request and refusal is recorded and shown to the owner.",
   inputSchema: z.object({
     code: z.string().min(1).describe("the Python program source, top-level only"),
     stdin: z.string().optional().describe("optional standard input passed to the Python program"),
@@ -44,8 +44,16 @@ export const pythonExecuteTool = tool({
       return { error: "python unavailable — the bounded Python runtime is not admitted yet (see docs/PYODIDE-BOUNDED-BUILD.md); no result was fabricated" };
     }
     const result = await runPython(runtime, { code, stdin: stdin ?? "" });
-    if (!result.ok) return { error: result.error };
-    return { ok: true, stdout: result.stdout, stdoutBytes: new TextEncoder().encode(result.stdout).byteLength };
+    // The network records travel with the result, on BOTH paths (bead
+    // chrome-agent-platform-4p7j.2): every request the proxy made or refused on
+    // this run's behalf, so the transcript shows them beside the run the way it
+    // shows a tool call. A failed run keeps its records — that is often the run
+    // whose requests matter most.
+    const network = Array.isArray(result.network) && result.network.length
+      ? { network: result.network, ...(result.networkDropped ? { networkDropped: result.networkDropped } : {}) }
+      : {};
+    if (!result.ok) return { error: result.error, ...network };
+    return { ok: true, stdout: result.stdout, stdoutBytes: new TextEncoder().encode(result.stdout).byteLength, ...network };
   },
 });
 

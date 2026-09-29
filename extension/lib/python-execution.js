@@ -64,6 +64,23 @@ export async function runPython(runtime, { code = "", stdin = "", timeoutMs = PY
     return { ok: false, error: "python_unavailable" };
   }
   let out = "";
+  // The run's network records (bead chrome-agent-platform-4p7j.2). They are
+  // written by the service worker's "python.fetch" proxy — the actor — and read
+  // back here whether the run succeeded or raised, because a run that ended in
+  // a traceback is exactly the one whose requests the owner wants to see. A
+  // runtime without the network bridge (the KAT mocks, any future host) simply
+  // has no such method and the result is unchanged.
+  const takeNetwork = () => {
+    if (typeof runtime.takeNetworkRecords !== "function") return null;
+    try {
+      const taken = runtime.takeNetworkRecords();
+      const records = Array.isArray(taken?.records) ? taken.records : [];
+      if (records.length === 0 && !taken?.dropped) return null;
+      return { network: records, ...(taken?.dropped ? { networkDropped: taken.dropped } : {}) };
+    } catch {
+      return null;
+    }
+  };
   try {
     // Wire the bounded stdout + stdin into the interpreter BEFORE running, so
     // the capture is the interpreter's actual output — never a JS-level echo.
@@ -93,10 +110,11 @@ export async function runPython(runtime, { code = "", stdin = "", timeoutMs = PY
   } catch (error) {
     // Fail closed: a JS-level throw (including any accidental eval path) is a
     // bounded error, never a raw exception escape.
-    return { ok: false, error: String(error?.message ?? error).slice(0, 200) };
+    return { ok: false, error: String(error?.message ?? error).slice(0, 200), ...(takeNetwork() ?? {}) };
   }
+  const network = takeNetwork() ?? {};
   if (utf8Bytes(out).byteLength > PYTHON_EXEC_BOUNDS.maxStdoutBytes) {
-    return { ok: false, error: "python_stdout_over_budget" };
+    return { ok: false, error: "python_stdout_over_budget", ...network };
   }
-  return { ok: true, stdout: out };
+  return { ok: true, stdout: out, ...network };
 }
