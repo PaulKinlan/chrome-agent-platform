@@ -9,7 +9,17 @@
 // deletes the pin's occurrence.
 
 import { assert, assertArrayIncludes, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../extension/lib/site-access.js";
+import {
+  declaredManifestOrigins,
+  revokeSiteOrigin,
+  siteAccessLabel,
+  siteAccessScope,
+  siteAccessState,
+} from "../extension/lib/site-access.js";
+
+const realManifest = JSON.parse(
+  await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url)),
+);
 
 function chromeWith(origins: unknown, fail = false) {
   return {
@@ -25,6 +35,34 @@ function chromeWith(origins: unknown, fail = false) {
 Deno.test("site access: the install grant reads as a fixed row, not revocable", async () => {
   const st = await siteAccessState(chromeWith(["<all_urls>"]), ["<all_urls>"]);
   assertEquals(st, { ok: true, fixed: ["<all_urls>"], revocable: [] });
+});
+
+Deno.test("site access: content_scripts[].matches from the manifest are install-fixed, while runtime origins stay revocable (nnzy)", async () => {
+  // Stock install: Chrome returns host_permissions + content_scripts[].matches.
+  // Neither http://*/* nor https://*/* may be offered as revocable.
+  const stock = await siteAccessState(
+    chromeWith(["<all_urls>", "http://*/*", "https://*/*"]),
+    realManifest,
+  );
+  assertEquals(stock, {
+    ok: true,
+    fixed: ["<all_urls>", "http://*/*", "https://*/*"],
+    revocable: [],
+  });
+
+  // With a runtime-granted origin added: the manifest patterns stay fixed and
+  // only the runtime origin is revocable.
+  const declared = declaredManifestOrigins(realManifest);
+  assertArrayIncludes(declared, ["<all_urls>", "http://*/*", "https://*/*"]);
+  const withRuntime = await siteAccessState(
+    chromeWith(["<all_urls>", "http://*/*", "https://*/*", "https://api.example.com/*"]),
+    declared,
+  );
+  assertEquals(withRuntime, {
+    ok: true,
+    fixed: ["<all_urls>", "http://*/*", "https://*/*"],
+    revocable: ["https://api.example.com/*"],
+  });
 });
 
 Deno.test("site access: a runtime origin grant is revocable and never mistaken for install", async () => {
@@ -116,7 +154,13 @@ const options = await Deno.readTextFile(new URL("../extension/options/options.js
 
 Deno.test("options.js renders the verified site-access group from the real Chrome state", () => {
   // The CALL — deleting the construct deletes this occurrence (import is not a call site).
-  assertStringIncludes(options, 'await siteAccessState(chrome, chrome.runtime.getManifest().host_permissions ?? [])');
+  // chrome-agent-platform-nnzy: passes declaredManifestOrigins(chrome.runtime.getManifest())
+  // so content_scripts[].matches are classified as install-granted alongside host_permissions.
+  assertStringIncludes(options, "await siteAccessState(chrome, declaredManifestOrigins(chrome.runtime.getManifest()))");
+  assert(
+    !options.includes("siteAccessState(chrome, chrome.runtime.getManifest().host_permissions"),
+    "options.js must not pass only host_permissions to siteAccessState",
+  );
   // It renders as its own group, separate from the capability groups.
   assertStringIncludes(options, '"site-access", "Chrome site access"');
 });

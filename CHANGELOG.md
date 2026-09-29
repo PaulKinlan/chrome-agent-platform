@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.556] — 2026-09-29
+- Marks content-script match patterns (All HTTP/HTTPS sites) as granted at install rather than offering a non-functional Revoke button in Settings.
+
 ## [0.3.555] — 2026-09-29
 - Adds consistent line-art Cap logo icon to NTP, Settings, Privacy, and Gallery headers, and updates extension manifest icons and favicon to the new CAP badge.
 

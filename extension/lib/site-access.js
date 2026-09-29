@@ -8,10 +8,10 @@
  *
  * Two kinds of row, and the difference is what the owner can do about it:
  *
- * - an INSTALL grant (a pattern in the manifest's `host_permissions`) cannot be
- *   revoked from inside the extension — `chrome.permissions.remove` refuses a
- *   required permission — so its row is state only and names chrome://extensions,
- *   the surface Chrome owns.
+ * - an INSTALL grant (a pattern in the manifest's `host_permissions` or
+ *   `content_scripts[].matches`) cannot be revoked from inside the extension —
+ *   `chrome.permissions.remove` refuses a required permission — so its row is
+ *   state only and names chrome://extensions, the surface Chrome owns.
  * - a RUNTIME grant (an approval prompt's exact origin, under an
  *   optional-host model) is revocable here, from the owner's genuine click:
  *   `chrome.permissions.remove` with exactly that pattern, nothing broader.
@@ -70,6 +70,31 @@ export function siteAccessScope(pattern) {
 }
 
 /**
+ * All match patterns declared as required at install in `manifest`:
+ * `host_permissions` plus every `content_scripts[].matches` entry. Chrome
+ * returns both from `chrome.permissions.getAll().origins` and refuses
+ * `chrome.permissions.remove` on either (`chrome-agent-platform-nnzy`).
+ * Also accepts a flat pattern array/Set so callers with a pre-built pattern
+ * list work unchanged.
+ */
+export function declaredManifestOrigins(manifestOrPatterns) {
+  if (!manifestOrPatterns) return [];
+  if (Array.isArray(manifestOrPatterns) || manifestOrPatterns instanceof Set) {
+    return [...new Set(manifestOrPatterns)];
+  }
+  if (typeof manifestOrPatterns !== "object") return [];
+  const hostPermissions = Array.isArray(manifestOrPatterns.host_permissions)
+    ? manifestOrPatterns.host_permissions
+    : [];
+  const contentScriptMatches = Array.isArray(manifestOrPatterns.content_scripts)
+    ? manifestOrPatterns.content_scripts.flatMap((cs) =>
+      Array.isArray(cs?.matches) ? cs.matches : []
+    )
+    : [];
+  return [...new Set([...hostPermissions, ...contentScriptMatches])];
+}
+
+/**
  * The verified site-access view. `ok: false` means the read itself failed —
  * the caller shows honest words rather than a silently absent group.
  */
@@ -80,7 +105,7 @@ export async function siteAccessState(chromeApi, manifestPatterns) {
   } catch {
     return { ok: false, fixed: [], revocable: [] };
   }
-  const declared = new Set(manifestPatterns ?? []);
+  const declared = new Set(declaredManifestOrigins(manifestPatterns));
   const fixed = [];
   const revocable = [];
   for (const pattern of origins) {
