@@ -9,6 +9,7 @@
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -43,7 +44,7 @@ const { proc, wsUrl } = await launchChrome({
     `--disable-extensions-except=${EXT}`,
     `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
-    `--user-data-dir=${OUT}/profile-${Date.now()}`,
+    `--user-data-dir=${chromeProfileDir("kat-fingerprint-surface")}`,
     "about:blank",
   ],
 });
