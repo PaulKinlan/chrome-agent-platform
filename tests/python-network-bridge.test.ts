@@ -10,7 +10,7 @@
 // with no explanation), that the record survives a FAILED run, and that the
 // service worker route keeps its confused-deputy defaults.
 // @ts-nocheck
-import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { registerPythonHost } from "../extension/lib/python-host.js";
 import { createPythonRuntimeProvider } from "../extension/lib/python-runtime.js";
 import { createPythonNetworkLedger } from "../extension/lib/python-network.js";
@@ -18,6 +18,59 @@ import { runPython } from "../extension/lib/python-execution.js";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
+
+function stripJsComments(src) {
+  return src.replace(
+    /("(?:\\[\s\S]|[^"\\\n])*"|'(?:\\[\s\S]|[^'\\\n])*'|`(?:\\[\s\S]|[^`\\])*`)|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+    (match, quoted) => (quoted ? quoted : match.replace(/[^\n]/g, " ")),
+  );
+}
+
+function extractRuntimeBody(uncommentedSrc) {
+  const decl = /(?:async\s+)?function\s+runtime\s*\([^)]*\)\s*\{/.exec(uncommentedSrc);
+  assert(decl !== null, "runtime() function declaration missing in python-worker.js");
+  const openBrace = decl.index + decl[0].length - 1;
+  let depth = 0;
+  let quote = "";
+  for (let i = openBrace; i < uncommentedSrc.length; i++) {
+    const ch = uncommentedSrc[i];
+    if (quote) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { quote = ch; continue; }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return uncommentedSrc.slice(openBrace + 1, i);
+    }
+  }
+  throw new Error("unclosed runtime() body in python-worker.js");
+}
+
+function stmtOffset(body, pattern) {
+  const m = pattern.exec(body);
+  return m ? m.index : -1;
+}
+
+export function assertRuntimeInitOrder(workerSrc) {
+  const uncommented = stripJsComments(workerSrc);
+  const runtimeBody = extractRuntimeBody(uncommented);
+
+  const stripNetwork = stmtOffset(runtimeBody, /^\s*stripAmbientNetwork\(\);\s*$/m);
+  const stripStorage = stmtOffset(runtimeBody, /^\s*stripAmbientStorage\(\);\s*$/m);
+  const register = stmtOffset(runtimeBody, /^\s*pyodide\.registerJsModule\(\s*["_']_cap_net["_'][^\n]*;\s*$/m);
+  const install = stmtOffset(runtimeBody, /^\s*installCapModule\(pyodide\);\s*$/m);
+
+  assert(stripNetwork > 0, "the S0 network strip call moved or vanished");
+  assert(stripStorage > 0, "the S0.3 storage strip call moved or vanished");
+  assert(register > stripNetwork, "the bridge must be installed after the network strip, never before");
+  assert(register > stripStorage, "the bridge must be installed after the storage strip too");
+  assert(install > stripNetwork, "cap must be installed after the network strip");
+  assert(install > stripStorage, "cap must be installed after the storage strip");
+  assert(install > register, "cap is installed after its bridge exists");
+}
 
 // A fake worker that plays the part of the Pyodide worker: it asks for one
 // fetch, then reports its run.
@@ -188,19 +241,41 @@ Deno.test("the service worker's python.fetch route keeps every confused-deputy d
 Deno.test("the worker hands back the granted reach only AFTER the ambient reach is gone", async () => {
   const worker = await Deno.readTextFile(`${ROOT}wasm-tools/python/python-worker.js`);
   // 4p7j.3 (landed after this pin was written) adds the STORAGE strip between the
-  // network strip and the bridge, so the pin is anchored on the CALLS (a
-  // definition has no trailing `();`) and requires the bridge after BOTH — the
-  // property is unchanged and now covers the later strip too.
-  const stripNetwork = worker.indexOf("stripAmbientNetwork();");
-  const stripStorage = worker.indexOf("stripAmbientStorage();");
-  const register = worker.indexOf('registerJsModule("_cap_net"');
-  const install = worker.indexOf("installCapModule(pyodide);"); // the CALL, not the definition
-  assert(stripNetwork > 0, "the S0 network strip call moved or vanished");
-  assert(stripStorage > 0, "the S0.3 storage strip call moved or vanished");
-  assert(register > stripNetwork, "the bridge must be installed after the network strip, never before");
-  assert(register > stripStorage, "the bridge must be installed after the storage strip too");
-  assert(install > register, "cap is installed after its bridge exists");
+  // network strip and the bridge, and o8ul anchors the pin on comment-stripped
+  // statement lines inside runtime()'s body so an earlier comment cannot satisfy it.
+  assertRuntimeInitOrder(worker);
+
+  // Falsification (chrome-agent-platform-o8ul):
+  // Mutant A: moving stripAmbientStorage(); below installCapModule(pyodide); in runtime() fails.
+  const mutantA = worker
+    .replace(/^\s*stripAmbientStorage\(\);\s*\n/m, "")
+    .replace(
+      /^(\s*installCapModule\(pyodide\);)/m,
+      "$1\n      stripAmbientStorage();",
+    );
+  assert(mutantA !== worker, "mutantA must alter the worker source");
+  assertThrows(
+    () => assertRuntimeInitOrder(mutantA),
+    Error,
+    "the bridge must be installed after the storage strip too",
+  );
+
+  // Mutant B: Mutant A PLUS line and block comments naming stripAmbientStorage();
+  // at the top of the file and at the top of runtime() still fails.
+  const mutantB =
+    "// stripAmbientStorage();\n/* stripAmbientStorage(); */\n" +
+    mutantA.replace(
+      /(function\s+runtime\s*\(\)\s*\{)/,
+      "$1\n  // stripAmbientStorage();\n  /* stripAmbientStorage(); */",
+    );
+  assertThrows(
+    () => assertRuntimeInitOrder(mutantB),
+    Error,
+    "the bridge must be installed after the storage strip too",
+  );
+
   // The worker decides nothing: no allow-list, no credential policy, no log.
   assert(!/credentials\s*:/.test(worker), "the worker must not hold a credential policy");
   assert(!/allowlist|allowList/i.test(worker), "the allow-list lives in the service worker, not here");
 });
+
