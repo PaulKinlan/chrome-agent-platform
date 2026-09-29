@@ -132,6 +132,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-background-run-transcript.ts": { class: "kat" },
   "kat-back-stack.ts": { class: "kat" },
   "kat-bgagent-delete.ts": { class: "kat" },
+  "kat-background-agent-store.ts": { class: "kat" },
   "kat-composer-grow.ts": { class: "kat" },
   "kat-composer-slash-commands.ts": { class: "kat", ...RED("4/5", "the /tabs picker lists '(untitled)' rows and selecting one inserts no reference") },
   "kat-dark-scheme.ts": { class: "kat", ...RED("33/4", "options/dark and sidepanel/dark .btn contrast 2.88 and the artifact-noid light probe samples too few styles", "CAP-FB-20260827-SETTINGS-MONOLITH-01 (the accent-on-fill ink token)") },
