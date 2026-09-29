@@ -600,6 +600,15 @@ const ran = new Set();
 // assertion was re-pinned to the post-dptw truth (unlimited retention) and
 // PASSES live. The mechanism stays for future honest ownership.
 const EXPECTED_RED = new Map<string, string>([]);
+function checkShutdown(name, cond) {
+  // Shutdown checks run in the run's finally block — on an ABORT they fire
+  // mid-sequence (out of band), so they report honestly but never enter the
+  // ordered `ran` sequence: polluting it turned every abort into a misleading
+  // "ORDER mismatch @N" that named the cleanup instead of the real failure
+  // (chrome-agent-platform-co35 triage, 2026-09-28).
+  results.push({ name, pass: !!cond });
+  console.log(`${cond ? "PASS" : "FAIL"}: ${name} (shutdown)`);
+}
 function check(name, cond) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   ran.add(name);
@@ -8342,8 +8351,8 @@ async function main() {
       clean = false;
       console.error("cleanup failure:", String(e?.message ?? e));
     }
-    check("profile removed (no leak)", removed);
-    check("cleanup hard-failed on descendants (none survived)", clean);
+    checkShutdown("profile removed (no leak)", removed);
+    checkShutdown("cleanup hard-failed on descendants (none survived)", clean);
 
     // Temporary (non-retained) evidence is caller-owned temp output and must NOT
     // be left behind. Retained runs write to test-artifacts/ (kept + committed).
@@ -8354,7 +8363,7 @@ async function main() {
         () => false,
       ));
     }
-    check("no leftover temporary evidence dir", tempEvidenceGone);
+    checkShutdown("no leftover temporary evidence dir", tempEvidenceGone);
 
     // Fixed assertion set: every expected check ran exactly once (no missing,
     // no extra) AND in the EXPECTED order. This is the invariant that prevents
@@ -8379,8 +8388,11 @@ async function main() {
     // (a reordered suite is a gate failure, not just a different summary).
     const ranNames = [...ran].filter((n) => !META_CHECKS.has(n));
     const expectedOrdered = EXPECTED.filter((n) => !META_CHECKS.has(n));
-    const orderOk = ranNames.length === expectedOrdered.length &&
-      ranNames.every((n, i) => n === expectedOrdered[i]);
+    // Prefix-tolerant: an aborted run has honestly run a PREFIX of EXPECTED
+    // (its real failure is already reported by the failing check or the crash);
+    // the shutdown checks no longer pollute the sequence. Missing entries still
+    // fail FINAL_CHECK above, so an abort can never masquerade as green.
+    const orderOk = ranNames.every((n, i) => n === expectedOrdered[i]);
     if (!orderOk) {
       for (let i = 0; i < Math.max(ranNames.length, expectedOrdered.length); i++) {
         if (ranNames[i] !== expectedOrdered[i]) {
