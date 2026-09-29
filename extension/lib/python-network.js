@@ -211,20 +211,143 @@ export function isRedirect(response) {
  * Refusals are recorded as loudly as successes. A denied origin is exactly what
  * an owner wants to see.
  */
-export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN } = {}) {
+export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN, maxTakenIds = 500 } = {}) {
   const runs = new Map();
+  const takenIds = new Set();
+
+  function rememberTaken(id) {
+    if (!id) return;
+    if (takenIds.has(id)) takenIds.delete(id);
+    takenIds.add(id);
+    while (takenIds.size > maxTakenIds) {
+      const oldest = takenIds.values().next().value;
+      if (oldest === undefined) break;
+      takenIds.delete(oldest);
+    }
+  }
+
+  function ensureRow(id) {
+    let row = runs.get(id);
+    if (!row) {
+      row = { records: [], dropped: 0, inFlight: new Set(), settled: false };
+      runs.set(id, row);
+    }
+    return row;
+  }
+
+  function abortInFlight(id, now = Date.now()) {
+    const row = runs.get(id);
+    if (!row) return 0;
+    row.settled = true;
+    let count = 0;
+    for (const inflight of row.inFlight) {
+      if (inflight.settled) continue;
+      inflight.settled = true;
+      count += 1;
+      const ms = Math.max(0, now - inflight.startedAt);
+      if (inflight.index >= 0 && inflight.index < row.records.length) {
+        row.records[inflight.index] = Object.freeze({
+          method: inflight.method,
+          url: inflight.url,
+          ...(inflight.origin ? { origin: inflight.origin } : {}),
+          ok: false,
+          aborted: true,
+          outcome: "aborted",
+          ms,
+          error: `fetch to ${inflight.origin ?? inflight.url} aborted when the Python run settled after ${ms}ms`,
+        });
+      }
+      try {
+        inflight.controller?.abort?.("run_settled");
+      } catch { /* controller already closed */ }
+    }
+    row.inFlight.clear();
+    return count;
+  }
 
   return Object.freeze({
+    /** Begin an in-flight request at dispatch time (bead chrome-agent-platform-gtc8).
+     * Registers its per-run AbortController and writes a dispatch-time record that
+     * is completed when fetch() settles or marked aborted with duration if the
+     * Python run settles first. */
+    begin(runId, { method = "GET", url = "", origin = null, startedAt = Date.now(), controller = null } = {}) {
+      const id = String(runId ?? "");
+      if (!id) {
+        return Object.freeze({ complete: () => false, isSettled: () => false });
+      }
+      if (takenIds.has(id) || runs.get(id)?.settled) {
+        try {
+          controller?.abort?.("run_settled");
+        } catch { /* ignore */ }
+        return Object.freeze({ complete: () => false, isSettled: () => true });
+      }
+      const row = ensureRow(id);
+      const m = String(method ?? "GET").toUpperCase();
+      const u = String(url ?? "");
+      const start = Number.isFinite(startedAt) ? Number(startedAt) : Date.now();
+      let index = -1;
+      if (row.records.length >= maxPerRun) {
+        row.dropped += 1;
+      } else {
+        index = row.records.length;
+        row.records.push(Object.freeze({
+          method: m,
+          url: u,
+          ...(origin ? { origin } : {}),
+          ok: false,
+          inFlight: true,
+          ms: 0,
+        }));
+      }
+      const inflight = {
+        index,
+        method: m,
+        url: u,
+        origin: origin ?? null,
+        startedAt: start,
+        controller,
+        settled: false,
+      };
+      row.inFlight.add(inflight);
+      return Object.freeze({
+        complete(finalEntry = {}, now = Date.now()) {
+          if (inflight.settled || row.settled || takenIds.has(id)) return false;
+          inflight.settled = true;
+          row.inFlight.delete(inflight);
+          if (inflight.index >= 0 && inflight.index < row.records.length) {
+            const ms = Number.isFinite(finalEntry?.ms)
+              ? Number(finalEntry.ms)
+              : Math.max(0, now - inflight.startedAt);
+            row.records[inflight.index] = Object.freeze({
+              method: inflight.method,
+              url: inflight.url,
+              ...(inflight.origin ? { origin: inflight.origin } : {}),
+              ms,
+              ...finalEntry,
+            });
+          }
+          return true;
+        },
+        isSettled() {
+          return inflight.settled;
+        },
+      });
+    },
+
+    /** Abort any in-flight fetches for `runId` and finalize their records with
+     * duration before `take(runId)`. */
+    abortRun(runId, { now = Date.now() } = {}) {
+      const id = String(runId ?? "");
+      if (!id) return 0;
+      return abortInFlight(id, now);
+    },
+
     /** Record one attempt. `record` is already the owner-facing shape:
      * { method, url, origin, ok, status?, bytes?, ms, error?, refusedHeaders? } */
     record(runId, entry) {
       const id = String(runId ?? "");
-      if (!id) return;
-      let row = runs.get(id);
-      if (!row) {
-        row = { records: [], dropped: 0 };
-        runs.set(id, row);
-      }
+      if (!id || takenIds.has(id) || runs.get(id)?.settled) return;
+      const row = ensureRow(id);
       if (row.records.length >= maxPerRun) {
         row.dropped += 1; // honest count, never a silent truncation
         return;
@@ -234,13 +357,16 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN } = 
 
     /** Take (and forget) a run's records. Called once when the run settles, so
      * a finished run holds no memory in a service worker that may live for
-     * days. */
-    take(runId) {
+     * days. Aborts and finalizes any in-flight fetches for `runId` first. */
+    take(runId, { now = Date.now() } = {}) {
       const id = String(runId ?? "");
+      if (!id) return { records: [], dropped: 0 };
+      rememberTaken(id);
+      abortInFlight(id, now);
       const row = runs.get(id);
       runs.delete(id);
       if (!row) return { records: [], dropped: 0 };
-      return { records: row.records, dropped: row.dropped };
+      return { records: Object.freeze([...row.records]), dropped: row.dropped };
     },
 
     /** Live count, for tests and for a run still in flight. */
@@ -249,3 +375,4 @@ export function createPythonNetworkLedger({ maxPerRun = MAX_RECORDS_PER_RUN } = 
     },
   });
 }
+

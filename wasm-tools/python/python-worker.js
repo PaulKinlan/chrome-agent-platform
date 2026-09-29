@@ -278,9 +278,10 @@ WHAT YOU CAN COUNT ON
   * Only origins the owner has granted. An ungranted origin raises
     cap.NetworkRefused naming the origin - it is not an outage and retrying will
     not help; the owner has to grant it.
-  * Requests are ANONYMOUS. No cookies and no credentials are ever attached, and
-    you cannot set Cookie or Authorization headers. A granted origin buys
-    anonymous access, never the owner's logged-in session there.
+  * Requests carry NO CREDENTIALS. No cookies and no logins are ever attached,
+    and you cannot set Cookie or Authorization headers; on POST requests Chrome
+    sends this extension's Origin (chrome-extension://<id>) to the granted
+    origin. A granted origin never receives the owner's logged-in session there.
   * Redirects are NOT followed. A granted origin that redirects elsewhere is
     refused, because the owner granted an origin and not a starting point.
   * EVERY request and every refusal is recorded and shown to the owner: method,

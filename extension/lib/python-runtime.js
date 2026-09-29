@@ -49,7 +49,7 @@ export const PYTHON_RUNTIME_PIN = Object.freeze({
     "pyodide.asm.wasm": Object.freeze({ sha256: "b7e66a19427a55010ac3367c1b6c64b893f9826f783412945fdf0c3337f3bc94", bytes: 10088051 }),
     "python_stdlib.zip": Object.freeze({ sha256: "72894522b791858b9d613ac786b951d8b5094035dcf376313ea24a466810f336", bytes: 2341872 }),
     "pyodide-lock.json": Object.freeze({ sha256: "cd50b49de944c579045e122fe8628b31f9ce446379f032f36c05e273d38766e0", bytes: 106335 }),
-    "python-worker.js": Object.freeze({ sha256: "350ae711199fd6d8daeb6c5db293cde7d793c8dfeb68277567ce4fa9f9dcdc6c", bytes: 24263 }),
+    "python-worker.js": Object.freeze({ sha256: "d3c945c6fc7e4044a8a364136b63148a9e7d985a4bb29e8d6cef88456179e9c0", bytes: 24358 }),
   }),
 });
 
@@ -139,6 +139,15 @@ export function createPythonRuntimeProvider({
     // reads them back through takeNetworkRecords() and the python tool puts
     // them in its result, where the transcript shows them beside the run.
     let networkRecords = { records: [], dropped: 0 };
+    let currentRunId = null;
+    let currentRunTaken = false;
+    const ensureRunRecordsTaken = () => {
+      if (currentRunTaken || !currentRunId || !networkLedger) return;
+      currentRunTaken = true;
+      try {
+        networkRecords = networkLedger.take(currentRunId);
+      } catch { /* never fail a run over its own log */ }
+    };
     const oneShotStdin = () => {
       if (stdinGiven) return undefined; // EOF — the whole input arrives once
       stdinGiven = true;
@@ -154,19 +163,19 @@ export function createPythonRuntimeProvider({
       /** The run's network records: every request the proxy made or refused.
        * Empty for a run that asked for nothing — which is most runs. */
       takeNetworkRecords() {
+        ensureRunRecordsTaken();
         const taken = networkRecords;
         networkRecords = { records: [], dropped: 0 };
         return taken;
       },
       runPythonAsync: async (code) => {
         const runId = newId("python");
+        currentRunId = runId;
+        currentRunTaken = false;
         // Whatever happens below — a settled run, a timeout, a dead host — the
         // ledger entry for this run id is taken exactly once. A run id left in
         // the ledger is a slow leak in a service worker that can live for days.
-        const takeRecords = () => {
-          if (!networkLedger) return;
-          try { networkRecords = networkLedger.take(runId); } catch { /* never fail a run over its own log */ }
-        };
+        const takeRecords = () => ensureRunRecordsTaken();
         const ready = await ensureHostReady();
         if (!ready) throw new Error("python_unavailable_host");
         let response;

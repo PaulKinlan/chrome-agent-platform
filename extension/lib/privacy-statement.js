@@ -129,7 +129,7 @@ export function buildPrivacyStatement({ outboundHosts = [], retentionPolicy = nu
     },
     {
       id: "python-fetch",
-      description: "Python an agent writes can reach only the origins you allowed in Settings, sends no cookies or logins, and every request it makes or is refused is shown to you in the run.",
+      description: "Python an agent writes can reach only the origins you allowed in Settings, sends no cookies or logins (POST requests still send this extension's Origin header), and every request it makes or is refused is shown to you in the run.",
     },
     {
       id: "nothing-else",

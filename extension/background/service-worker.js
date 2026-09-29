@@ -6461,6 +6461,7 @@ const handlers = mergeRouteMaps(
     }
     const originSet = activePythonFetches.get(originKey);
     originSet.add(controller);
+    let inflight = null;
 
     try {
       const hasHost = await chrome.permissions?.contains?.({
@@ -6469,6 +6470,24 @@ const handlers = mergeRouteMaps(
       if (hasHost === false) {
         const error = `network access to ${u.host} is not granted by Chrome — host access is granted at install (<all_urls>); if Settings → Permissions shows it missing, reinstall the extension`;
         record({ ok: false, origin: verdict.origin, error });
+        return { ok: false, error };
+      }
+      // Record the request at dispatch with its per-run AbortController (bead
+      // chrome-agent-platform-gtc8): if the 30s run fence fires while fetch() is
+      // still in flight, pythonNetworkLedger.take(id) aborts controller and
+      // finalizes this dispatch-time record as aborted with its duration BEFORE
+      // returning the run's records.
+      try {
+        inflight = pythonNetworkLedger.begin(id, {
+          method: m,
+          url: String(url ?? ""),
+          origin: verdict.origin,
+          startedAt: started,
+          controller,
+        });
+      } catch { /* a ledger failure must never become a network failure */ }
+      if (controller.signal.aborted) {
+        const error = `fetch to ${verdict.origin} aborted: the Python run already settled`;
         return { ok: false, error };
       }
       const init = {
@@ -6482,7 +6501,11 @@ const handlers = mergeRouteMaps(
       const res = await fetch(u.href, init);
       if (isRedirectResponse(res)) {
         const error = `fetch to ${verdict.origin} refused: the response redirected elsewhere. A granted origin is an origin, not a starting point — grant the destination if you meant to reach it.`;
-        record({ ok: false, origin: verdict.origin, refused: true, status: res.status || 0, error });
+        if (inflight) {
+          inflight.complete({ ok: false, origin: verdict.origin, refused: true, status: res.status || 0, error });
+        } else {
+          record({ ok: false, origin: verdict.origin, refused: true, status: res.status || 0, error });
+        }
         return { ok: false, error };
       }
       // Bodies are one-shot streams: read once, then measure what we read.
@@ -6492,13 +6515,18 @@ const handlers = mergeRouteMaps(
       try {
         for (const [k, v] of res.headers) responseHeaders[k] = v;
       } catch { /* some header sets are not iterable in older runtimes */ }
-      record({
+      const okEntry = {
         ok: true,
         origin: verdict.origin,
         status: res.status,
         bytes,
         ...(refusedHeaders.length ? { refusedHeaders } : {}),
-      });
+      };
+      if (inflight) {
+        inflight.complete(okEntry);
+      } else {
+        record(okEntry);
+      }
       // The body is untrusted web content. It reaches the model as the return
       // value of cap.fetch inside Python, i.e. as data the program chose to
       // read — the same trust level as any fetched text.
@@ -6512,11 +6540,25 @@ const handlers = mergeRouteMaps(
         refusedHeaders,
       };
     } catch (e) {
-      const wasRevoked = controller.signal.aborted;
-      const error = wasRevoked
+      const wasAborted = controller.signal.aborted;
+      const runSettled = Boolean(inflight?.isSettled?.());
+      const wasRevoked = wasAborted && !runSettled;
+      const error = runSettled
+        ? `fetch to ${verdict.origin} aborted when the Python run settled`
+        : wasRevoked
         ? `fetch to ${verdict.origin} refused: grant was revoked mid-run`
         : `fetch to ${verdict.origin} failed: ${e?.message ?? e}`;
-      record({ ok: false, origin: verdict.origin, refused: wasRevoked, error });
+      if (inflight) {
+        inflight.complete({
+          ok: false,
+          origin: verdict.origin,
+          refused: wasRevoked,
+          ...(runSettled ? { aborted: true, outcome: "aborted" } : {}),
+          error,
+        });
+      } else {
+        record({ ok: false, origin: verdict.origin, refused: wasRevoked, error });
+      }
       return { ok: false, error };
     } finally {
       originSet.delete(controller);

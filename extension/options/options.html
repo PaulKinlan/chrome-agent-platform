@@ -308,7 +308,7 @@
         <div id="permission-list" class="permission-list"></div>
 
         <h3 data-i18n="options_python_network_access">Python network access</h3>
-        <p class="muted" data-i18n="options_python_network_access_help">Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies, and every request and refusal is shown to you in the run. Remove an origin to stop it immediately.</p>
+        <p class="muted" data-i18n="options_python_network_access_help">Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies or logins (POST requests still send this extension's Origin header), and every request and refusal is shown to you in the run. Remove an origin to stop it immediately.</p>
         <div class="python-net-add">
           <label for="python-net-origin" data-i18n="options_origin">Origin</label>
           <input id="python-net-origin" type="text" placeholder="https://api.example.com" autocomplete="off" spellcheck="false">

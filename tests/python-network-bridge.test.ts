@@ -231,11 +231,86 @@ Deno.test("the service worker's python.fetch route keeps every confused-deputy d
   // Granting is an owner gesture, never something a run does for itself.
   const grant = sw.slice(sw.indexOf('async "python.network.grant"'));
   assertStringIncludes(grant.slice(0, 400), 'context?.principal !== "owner-options"');
-  // In-flight abort: revocation cuts in-flight requests by origin immediately.
+  // In-flight abort: revocation cuts in-flight requests by origin immediately,
+  // and dispatch-time begin() tracks each request per run so a run timeout
+  // aborts in-flight requests and records their duration (gtc8).
   assertStringIncludes(route, "signal: controller.signal");
+  assertStringIncludes(route, "pythonNetworkLedger.begin(");
+  assertStringIncludes(route, "inflight.complete(");
   const revoke = sw.slice(sw.indexOf('async "python.network.revoke"'), sw.indexOf('async "capabilities.status"'));
   assertStringIncludes(revoke, "activePythonFetches.get");
   assertStringIncludes(revoke, "ctrl.abort()");
+});
+
+Deno.test("a TIMED-OUT run aborts its in-flight cap.fetch and carries the aborted record with duration (gtc8)", async () => {
+  const ledger = createPythonNetworkLedger();
+  const slowController = new AbortController();
+  let inflightHandle = null;
+
+  const { provider } = createPythonRuntimeProvider({
+    ensureHost: async () => ({ ok: true }),
+    timeoutMs: 30,
+    networkLedger: ledger,
+    sendMessage: (message) => new Promise((resolve) => {
+      // Simulate a cap.fetch dispatched 20ms ago that stalls past the run fence.
+      inflightHandle = ledger.begin(message.runId, {
+        method: "POST",
+        url: "https://api.example.com/slow",
+        origin: "https://api.example.com",
+        startedAt: Date.now() - 20,
+        controller: slowController,
+      });
+      slowController.signal.addEventListener("abort", () => {
+        // Simulate the SW fetch() catch block firing after the run settled:
+        // must not overwrite the aborted record or recreate an orphaned ledger row.
+        inflightHandle.complete({ ok: false, error: "late abort catch" });
+        ledger.record(message.runId, {
+          method: "POST",
+          url: "https://api.example.com/slow",
+          origin: "https://api.example.com",
+          ok: false,
+          ms: 999,
+          error: "late record",
+        });
+        resolve({ ok: false, error: "python_run_timeout" });
+      });
+    }),
+  });
+
+  const runtime = await provider();
+  const result = await runPython(runtime, { code: "await cap.fetch('https://api.example.com/slow')", timeoutMs: 30 });
+  assertEquals(result.ok, false);
+  assertEquals(result.error, "python_run_timeout");
+  assertEquals(slowController.signal.aborted, true, "the stalled in-flight fetch is aborted when the run times out");
+  assert(Array.isArray(result.network) && result.network.length === 1, "the timed-out run carries the aborted request record");
+  assertEquals(result.network[0].method, "POST");
+  assertEquals(result.network[0].url, "https://api.example.com/slow");
+  assertEquals(result.network[0].origin, "https://api.example.com");
+  assertEquals(result.network[0].ok, false);
+  assertEquals(result.network[0].aborted, true);
+  assertEquals(result.network[0].outcome, "aborted");
+  assert(typeof result.network[0].ms === "number" && result.network[0].ms >= 20, `expected duration >= 20ms, got ${result.network[0].ms}`);
+  assertEquals(ledger.size(), 0, "the ledger holds no orphaned row for the timed-out run afterwards");
+});
+
+Deno.test("all three texts disclose that POST requests send the extension's Origin header while cookies and logins are never sent (2h4f)", async () => {
+  const worker = await Deno.readTextFile(`${ROOT}wasm-tools/python/python-worker.js`);
+  const optionsHtml = await Deno.readTextFile(`${ROOT}extension/options/options.html`);
+  const { buildPrivacyStatement } = await import("../extension/lib/privacy-statement.js");
+
+  // 1. cap.py docstring in wasm-tools/python/python-worker.js
+  assert(!worker.includes("Requests are ANONYMOUS"), "cap.py docstring must not claim requests are anonymous when POST sends Origin");
+  assertStringIncludes(worker, "Requests carry NO CREDENTIALS");
+  assertStringIncludes(worker, "Origin (chrome-extension://<id>)");
+
+  // 2. Settings → Permissions → Python network access help copy
+  assertStringIncludes(optionsHtml, "without your cookies or logins (POST requests still send this extension's Origin header)");
+
+  // 3. Privacy statement python-fetch row
+  const statement = buildPrivacyStatement();
+  const pythonRow = statement.sent.find((row) => row.id === "python-fetch");
+  assert(pythonRow !== undefined, "privacy statement must include python-fetch row");
+  assertStringIncludes(pythonRow.text, "sends no cookies or logins (POST requests still send this extension's Origin header)");
 });
 
 Deno.test("the worker hands back the granted reach only AFTER the ambient reach is gone", async () => {

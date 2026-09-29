@@ -176,3 +176,59 @@ Deno.test("a runaway program truncates the ledger with an honest count, never si
   assertEquals(taken.records.length, 3);
   assertEquals(taken.dropped, 7);
 });
+
+Deno.test("an in-flight fetch at the run fence is aborted, recorded as aborted with duration, and leaves no orphaned row (gtc8)", () => {
+  const ledger = createPythonNetworkLedger();
+  const fastCtrl = new AbortController();
+  const fast = ledger.begin("run-timeout", {
+    method: "GET",
+    url: "https://api.example.com/fast",
+    origin: "https://api.example.com",
+    startedAt: 500,
+    controller: fastCtrl,
+  });
+  assertEquals(fast.complete({ ok: true, status: 200, bytes: 12 }, 620), true);
+  assertEquals(fastCtrl.signal.aborted, false);
+
+  const slowCtrl = new AbortController();
+  const slow = ledger.begin("run-timeout", {
+    method: "POST",
+    url: "https://api.example.com/slow",
+    origin: "https://api.example.com",
+    startedAt: 1000,
+    controller: slowCtrl,
+  });
+  assertEquals(slow.isSettled(), false);
+
+  // The 30s run fence fires at t=31000 while /slow is still in flight.
+  const taken = ledger.take("run-timeout", { now: 31000 });
+  assertEquals(slowCtrl.signal.aborted, true, "take() must abort the run's in-flight AbortController");
+  assertEquals(slow.isSettled(), true);
+  assertEquals(taken.records.length, 2, "both the settled and the stalled in-flight request appear in the run's records");
+  assertEquals(taken.records[0].status, 200);
+  assertEquals(taken.records[0].ms, 120);
+  assertEquals(taken.records[1].method, "POST");
+  assertEquals(taken.records[1].url, "https://api.example.com/slow");
+  assertEquals(taken.records[1].origin, "https://api.example.com");
+  assertEquals(taken.records[1].ok, false);
+  assertEquals(taken.records[1].aborted, true);
+  assertEquals(taken.records[1].outcome, "aborted");
+  assertEquals(taken.records[1].ms, 30000, "the stalled duration up to the fence is recorded");
+  assertEquals(ledger.size(), 0, "the ledger holds no row after take()");
+
+  // Late settlement after take() must NOT recreate an orphaned row for run-timeout.
+  assertEquals(slow.complete({ ok: true, status: 200, bytes: 99 }, 32000), false);
+  ledger.record("run-timeout", { method: "GET", url: "https://api.example.com/late", ok: true, status: 200, bytes: 1, ms: 1 });
+  const lateCtrl = new AbortController();
+  const lateBegin = ledger.begin("run-timeout", { method: "GET", url: "https://api.example.com/late2", controller: lateCtrl });
+  assertEquals(lateCtrl.signal.aborted, true, "a request arriving for an already-taken run is immediately aborted");
+  assertEquals(lateBegin.isSettled(), true);
+  assertEquals(ledger.size(), 0, "late settlements never re-create an orphaned ledger row");
+
+  // Falsification: without dispatch-time begin() (recording only when fetch settles
+  // after the fence), take() at the fence sees 0 records and the late record leaks a row.
+  const unpatchedLedger = createPythonNetworkLedger();
+  const unpatchedTakenAtFence = unpatchedLedger.take("run-without-begin");
+  assertEquals(unpatchedTakenAtFence.records.length, 0, "falsification: without dispatch-time begin(), the stalled request is missing at take()");
+});
+

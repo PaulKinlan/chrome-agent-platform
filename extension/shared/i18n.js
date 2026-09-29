@@ -128,7 +128,7 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_providers_1": "Providers",
   "options_purge_journals": "Purge journals…",
   "options_python_network_access": "Python network access",
-  "options_python_network_access_help": "Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies, and every request and refusal is shown to you in the run. Remove an origin to stop it immediately.",
+  "options_python_network_access_help": "Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies or logins (POST requests still send this extension's Origin header), and every request and refusal is shown to you in the run. Remove an origin to stop it immediately.",
   "options_read": "Read",
   "options_read_only": "Read-only",
   "options_read_page_text_list_tabs_allowed_after_consent_nev": "Read page text, list tabs. Allowed after consent — never interrupts.",
