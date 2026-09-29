@@ -8,7 +8,7 @@
 // SAME component set the standalone page used — no fork, no iframe.
 
 import { send } from "../lib/messages.js";
-import { SKILL_ICON } from "../shared/skill-icons.js";
+import { SKILL_ICON, SKILL_ICON_FALLBACK } from "../shared/skill-icons.js";
 
 /** A skill = the shared capability-row (consistent layout) + a collapsed
  * "how it works" details for the documentation. The action is "Use in a task"
@@ -26,7 +26,7 @@ function skillCard(r, onUse, onDelete, sendFn = send) {
   const row = document.createElement("capability-row");
   row.setAttribute("name", r.name);
   row.setAttribute("description", baseDesc);
-  row.setAttribute("icon", SKILL_ICON[r.icon] ?? "");
+  row.setAttribute("icon", SKILL_ICON[r.icon] ?? SKILL_ICON_FALLBACK);
   row.setAttribute("action", isImported ? "use-delete" : "use");
   row.addEventListener("use", () => onUse?.(r));
   if (isImported) {

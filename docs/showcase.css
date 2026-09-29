@@ -17,7 +17,7 @@ h1 .accent { color: var(--accent, #0969da); }
 .meta-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
 
 h2.section { font-size: 18px; margin: 40px 0 16px; border-top: 1px solid var(--border, #d0d7de); padding-top: 24px; }
-h3.spec { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted, #57606a); margin: 0 0 12px; }
+h3.spec { font-size: 13px; color: var(--muted, #57606a); margin: 0 0 12px; }
 .specimen {
   border: 1px solid var(--border, #d0d7de);
   border-radius: 12px;

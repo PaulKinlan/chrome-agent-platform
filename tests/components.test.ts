@@ -1825,3 +1825,88 @@ Deno.test("attach menu (dptw D1 + review P1): no 8 MiB refuse — a generous tra
   if (!/file\.readError[\s\S]*?_emit\("attach-error"/.test(handler[0])) throw new Error("a read failure does not emit an honest attach-error");
   if (/catch \{ \/\* non-fatal/.test(pick[0])) throw new Error("the silent catch is back");
 });
+
+Deno.test("wp6u: every icon name declared in skill-registry.js resolves in SKILL_ICON and SKILL_ICON_FALLBACK is exported", async () => {
+  const { SKILLS } = await import("../extension/lib/skill-registry.js");
+  const skillIconsMod: any = await import("../extension/shared/skill-icons.js");
+  const { SKILL_ICON, SKILL_ICON_FALLBACK } = skillIconsMod;
+  if (!Array.isArray(SKILLS) || SKILLS.length === 0) throw new Error("SKILLS registry must not be empty");
+  const missing: string[] = [];
+  for (const skill of SKILLS) {
+    const iconName = skill.icon;
+    const svg = SKILL_ICON?.[iconName];
+    if (typeof svg !== "string" || !svg.trim().startsWith("<svg") || !svg.includes("currentColor") || !svg.includes('aria-hidden="true"')) {
+      missing.push(`${skill.id}:${iconName}`);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(`skills with missing or invalid SKILL_ICON entries: ${missing.join(", ")}`);
+  }
+  if (
+    typeof SKILL_ICON_FALLBACK !== "string" ||
+    !SKILL_ICON_FALLBACK.trim().startsWith("<svg") ||
+    !SKILL_ICON_FALLBACK.includes("currentColor") ||
+    !SKILL_ICON_FALLBACK.includes('aria-hidden="true"')
+  ) {
+    throw new Error("SKILL_ICON_FALLBACK must be an inline currentColor SVG with aria-hidden=\"true\"");
+  }
+  const panelSrc = await Deno.readTextFile("extension/skills/skills-panel.js");
+  if (!panelSrc.includes("SKILL_ICON[r.icon] ?? SKILL_ICON_FALLBACK")) {
+    throw new Error("skills-panel.js must fall back to SKILL_ICON_FALLBACK instead of an empty string");
+  }
+});
+
+Deno.test("wp6u: attach-button menu items each render an inline svg icon from the shared map", async () => {
+  await import("../extension/shared/components.js");
+  const cmdMod: any = await import("../extension/shared/composer-commands.js");
+  const { ATTACH_MENU_ICONS } = cmdMod;
+  if (!ATTACH_MENU_ICONS || typeof ATTACH_MENU_ICONS !== "object") {
+    throw new Error("composer-commands.js must export ATTACH_MENU_ICONS");
+  }
+  const Klass = globalThis.customElements.get("attach-button");
+  if (!Klass) throw new Error("attach-button must be registered");
+  const el: any = Object.create(Klass.prototype);
+  el._attrs = new Map();
+  el._root = { innerHTML: "", querySelector: () => null, querySelectorAll: () => [] };
+  el._render();
+  const html = String(el._root.innerHTML);
+  const expectedKinds = [
+    ["file", "Add file"],
+    ["record-audio", "Record audio"],
+    ["capture-camera", "Capture camera"],
+    ["record-screen", "Record screen"],
+    ["grab-screenshot", "Grab screenshot"],
+    ["add-tab", "Add tab"],
+    ["choose-agent", "Choose agent"],
+  ];
+  for (const [kind, label] of expectedKinds) {
+    const iconSvg = ATTACH_MENU_ICONS[kind];
+    if (typeof iconSvg !== "string" || !iconSvg.startsWith("<svg") || !iconSvg.includes('aria-hidden="true"')) {
+      throw new Error(`ATTACH_MENU_ICONS[${kind}] must be an aria-hidden inline SVG`);
+    }
+    const itemRe = new RegExp(`<button[^>]*role="menuitem"[^>]*data-kind="${kind}"[^>]*>([\\s\\S]*?)<\\/button>`);
+    const m = itemRe.exec(html);
+    if (!m) throw new Error(`missing attach menuitem for ${kind}`);
+    if (!m[1].includes("<svg") || !m[1].includes(label)) {
+      throw new Error(`attach menuitem ${kind} must contain an inline <svg> and label "${label}" (got: ${m[1]})`);
+    }
+  }
+});
+
+Deno.test("wp6u: gallery specimen headings (h3.spec) are sentence-case, not uppercase kickers", async () => {
+  const css = await Deno.readTextFile("docs/showcase.css");
+  const specRule = /h3\.spec\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+  if (!specRule) throw new Error("h3.spec rule not found in docs/showcase.css");
+  if (/text-transform\s*:\s*uppercase/i.test(specRule)) {
+    throw new Error(`h3.spec must not apply text-transform: uppercase (got: ${specRule.trim()})`);
+  }
+  const html = await Deno.readTextFile("docs/components.html");
+  const headings = [...html.matchAll(/<h3 class="spec">([\s\S]*?)<\/h3>/g)].map((m) => m[1]);
+  if (headings.length < 38) throw new Error(`expected at least 38 h3.spec headings in docs/components.html, got ${headings.length}`);
+  for (const h of headings) {
+    if (/\bREAD-ONLY\b|\bthe ONE\b/.test(h)) {
+      throw new Error(`h3.spec heading contains uppercase kicker wording: ${h}`);
+    }
+  }
+});
+
