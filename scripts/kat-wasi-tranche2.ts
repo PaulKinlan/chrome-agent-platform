@@ -5,6 +5,7 @@
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -18,7 +19,7 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
   ok ? pass++ : fail++;
 };
 
-const PROFILE_DIR = `${OUT}/profile-${Date.now()}`;
+const PROFILE_DIR = chromeProfileDir("kat-wasi-tranche2");
 // Self-healing: a prior run's browser children can outlive its cleanup window.
 // Sweep the stale profiles BEFORE launching (evidence files are never touched).
 for (const entry of Deno.readDirSync(OUT)) {

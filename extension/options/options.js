@@ -28,7 +28,7 @@ import {
   capabilityStatus,
 } from "../lib/capabilities.js";
 import { requestProviderHostAccess } from "../lib/provider-gate.js";
-import { revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../lib/site-access.js";
+import { declaredManifestOrigins, revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../lib/site-access.js";
 import { createOpfsAdapter, createChromeAlarmsAdapter } from "../lib/data-archive.js";
 import { streamExportArchive } from "../lib/backup-export.js";
 import { streamRestoreArchive } from "../lib/backup-restore.js";
@@ -2487,11 +2487,12 @@ async function renderPermissions() {
   // ── Chrome site access: what Chrome ACTUALLY holds ──
   // Read live from chrome.permissions.getAll(), separate from the capability
   // switches above (those are agent/task policy; this group is Chrome state).
-  // The install grant (<all_urls>) is state only — only chrome://extensions can
-  // revoke a manifest host permission. A runtime origin grant carries a real
-  // Revoke: chrome.permissions.remove with exactly that pattern, from this
-  // click (chrome-agent-platform-4dg).
-  const access = await siteAccessState(chrome, chrome.runtime.getManifest().host_permissions ?? []);
+  // The install grants (host_permissions + content_scripts[].matches) are state
+  // only — only chrome://extensions can revoke a required manifest permission.
+  // A runtime origin grant carries a real Revoke: chrome.permissions.remove
+  // with exactly that pattern, from this click (chrome-agent-platform-4dg,
+  // chrome-agent-platform-nnzy).
+  const access = await siteAccessState(chrome, declaredManifestOrigins(chrome.runtime.getManifest()));
   const accessCount = access.fixed.length + access.revocable.length;
   const { details: accessDetails, rows: accessRows } = permissionGroupShell(
     "site-access", "Chrome site access",

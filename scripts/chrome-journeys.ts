@@ -601,23 +601,44 @@ const ran = new Set();
 // PASSES live. The mechanism stays for future honest ownership.
 const EXPECTED_RED = new Map<string, string>([]);
 const shutdownRan = new Set<string>();
-function checkShutdown(name, cond) {
+function formatCheckDetail(detail) {
+  if (detail === undefined) return "";
+  let serialized;
+  try {
+    serialized = JSON.stringify(detail);
+  } catch {
+    try {
+      serialized = String(detail);
+    } catch {
+      serialized = "[unserializable detail]";
+    }
+  }
+  if (serialized === undefined) {
+    try {
+      serialized = String(detail);
+    } catch {
+      serialized = "[unserializable detail]";
+    }
+  }
+  return ` — ${serialized}`;
+}
+function checkShutdown(name, cond, detail) {
   // Shutdown checks run in the run's finally block — on an ABORT they fire
   // mid-sequence (out of band), so they report honestly but never enter the
   // ordered `ran` sequence: polluting it turned every abort into a misleading
   // "ORDER mismatch @N" that named the cleanup instead of the real failure
   // (chrome-agent-platform-co35 triage, 2026-09-28).
   shutdownRan.add(name);
-  results.push({ name, pass: !!cond });
-  console.log(`${cond ? "PASS" : "FAIL"}: ${name} (shutdown)`);
+  results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
+  console.log(`${cond ? "PASS" : "FAIL"}: ${name} (shutdown)${cond ? "" : formatCheckDetail(detail)}`);
 }
-function check(name, cond) {
+function check(name, cond, detail) {
   if (ran.has(name)) throw new Error(`duplicate assertion: ${name}`);
   ran.add(name);
   const owner = EXPECTED_RED.get(name);
   if (owner && !cond) {
-    results.push({ name, pass: false, expectedRed: owner });
-    console.log(`EXPECTED-RED (${owner}): ${name}`);
+    results.push(detail === undefined ? { name, pass: false, expectedRed: owner } : { name, pass: false, expectedRed: owner, detail });
+    console.log(`EXPECTED-RED (${owner}): ${name}${formatCheckDetail(detail)}`);
     return;
   }
   if (owner && cond) {
@@ -625,8 +646,8 @@ function check(name, cond) {
     console.log(`UNEXPECTED-GREEN: ${name} — now passes; remove it from EXPECTED_RED (${owner})`);
     return;
   }
-  results.push({ name, pass: !!cond });
-  console.log(`${cond ? "PASS" : "FAIL"}: ${name}`);
+  results.push(!cond && detail !== undefined ? { name, pass: false, detail } : { name, pass: !!cond });
+  console.log(`${cond ? "PASS" : "FAIL"}: ${name}${cond ? "" : formatCheckDetail(detail)}`);
 }
 
 /** The exact, ordered set of assertions this suite must run. */
@@ -3242,12 +3263,6 @@ async function main() {
       undoClicked && agentGone && rowUndone,
       { undoClicked, agentGone, rowUndone, createdAgentId, agentIdsAfter: lastAgentIds, rowAfter: lastRow },
     );
-    // check() discards its third argument (a harness-wide gap — other call
-    // sites pass diagnostics that never print), so the leg evidence is printed
-    // HERE or it does not exist (chrome-agent-platform-co35).
-    if (!(undoClicked && agentGone && rowUndone)) {
-      console.log("[co35 undo leg]", JSON.stringify({ undoClicked, agentGone, rowUndone, createdAgentId, agentIdsAfter: lastAgentIds, rowAfter: lastRow }));
-    }
     const undoShot = await captureShot(cdp, ntpSession);
     if (undoShot) await writeEvidence("ntp-activity-ledger-undone.png", undoShot);
     // Restore Activity's collapsed default so the later legs see the page a
@@ -8660,7 +8675,7 @@ async function demoPathJourney() {
   // Every check is reported exactly once, whatever fails — a thrown step FAILS
   // the remaining checks honestly instead of leaving them "not reached".
   const reported = new Set();
-  const report = (name, cond) => { reported.add(name); check(name, cond); };
+  const report = (name, cond, detail) => { reported.add(name); check(name, cond, detail); };
   const STEP1_NAME = "demo-path: step 1 groups tabs and renders sentences";
   const ONE_CARD_NAME = "demo-path: step 1 shows exactly one permission card";
   const STEP4_NAME = "demo-path: step 4 hub shows the scheduled run summary";
@@ -9013,7 +9028,7 @@ async function factoryResetJourney() {
   let ws = null;
   let cdp = null;
   const reported = new Set();
-  const report = (name, cond) => { reported.add(name); check(name, cond); };
+  const report = (name, cond, detail) => { reported.add(name); check(name, cond, detail); };
   const PRIVACY_RENDERS = "privacy page: renders the lists and the host-access sentence";
   const PRIVACY_COMPLETE = "privacy page: names every outbound host and every storage class the code declares";
   const PRIVACY_LINKED = "privacy page: linked from Settings → About";
