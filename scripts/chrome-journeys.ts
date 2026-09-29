@@ -3239,6 +3239,17 @@ async function main() {
     }
     const undoShot = await captureShot(cdp, ntpSession);
     if (undoShot) await writeEvidence("ntp-activity-ledger-undone.png", undoShot);
+    // Restore Activity's collapsed default so the later legs see the page a
+    // user sees (co35 re-review, uplift-opus: leaving the disclosure open cost
+    // five downstream Thread-view checks). Guarded: only click when the leg
+    // actually opened it, so a failed leg is not compounded by opening it.
+    if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`)) {
+      await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+      for (let i = 0; i < 12; i++) {
+        if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open !== true`)) break;
+        await sleep(200);
+      }
+    }
     check(
       "Activity ledger: retained the after-undo screenshot",
       undoShot !== null && undoShot.length > 200,
