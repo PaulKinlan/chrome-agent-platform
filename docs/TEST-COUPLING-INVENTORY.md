@@ -80,6 +80,11 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   longer REQUIRED for the partition's sake, though machine-path-honesty's allowlist keeps
   the convention for its own reasons. What still inherits: a real module specifier or spawn
   argument — including a COMMENTED-OUT one (fail-closed).
+- **The build-artifact rule (comment-stripped by o4m2):** `classifyHazards` strips JS
+  comments (`//` to any ECMAScript LineTerminator and `/* ... */` block comments, with
+  full string/template/interpolation/regex awareness) before scanning for `build.mjs` /
+  `build-bundled-tool-packages.mjs` references, aligning it with the driver rule so
+  prose comments explaining build variables never force a pure test into `EXEMPTIONS`.
 - **Subject moves:** LOUD, naming file and hazard classes.
 
 ## 4. tests/docs-process-truth.test.ts

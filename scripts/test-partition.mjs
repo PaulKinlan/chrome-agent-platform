@@ -76,20 +76,18 @@ export const EXEMPTIONS = {
   // (freshScratch wipes it per case) — the repo tree is never read or written. The assertions are
   // exit code 0 (the never-fail contract) and the note's wording.
   "tests/dist-note-contract.test.ts": "runs the note script inside a durableDir scratch; extension/dist is a scratch-relative path, not a repo write",
-  // 4lc0 round 5: the rule is now "naming the generator at all is a hazard", so these five are the
-  // OVER-DECLARATION it costs. Each was read before being exempted: none of them loads or executes
-  // anything — they read the build script's TEXT, list it as a path to scan, assert that package
-  // scripts or documents MENTION it, or say its name in a comment. Reading build.mjs is not loading
-  // it (the script is source, not generated output), and executing the generator is the hazard.
+  // 4lc0 round 5 + o4m2: naming the generator in CODE (including string/template literals) is a
+  // hazard, while comment prose is stripped before scanning (o4m2 aligned the build-artifact
+  // detector with 8b8w's comment-ignoring driver rule). Each remaining entry was read before being
+  // exempted: none of these four loads or executes anything — they read the build script's TEXT,
+  // list it as a path to scan, or assert that package scripts or documents mention it in a string
+  // literal. (tests/zod-jitless-fallback.test.ts and tests/bounded-child.test.ts were exempted
+  // here until o4m2 stripped comments before scanning; with comment prose no longer classified as
+  // a hazard, both files classify with NO hazard classes and their dead exemptions were retired.)
   "tests/changelog-shipping.test.ts": "reads ../build.mjs as TEXT to check what the changelog ships; never loads or runs it",
   "tests/file-url-root-guard.test.ts": "lists ROOT/build.mjs as a path to scan and pins the generator path as a STRING; no import, require or execution",
   "tests/package-scripts-exist.test.ts": "asserts a package.json script REFERENCE to build.mjs resolves; it never imports the generator",
   "tests/risk-register-contract.test.ts": "asserts the risk register CITES build.mjs for the bundle budget; documentation text only",
-  "tests/zod-jitless-fallback.test.ts": "mentions build.mjs in a comment describing how the pipeline scrubs; no load",
-  // 0efa: bounded-child names build.mjs only in a PROSE comment describing the
-  // harness timeout helper it borrows ("build.mjs's variable goes through the
-  // same parser"); the file never spawns, imports, or loads the generator.
-  "tests/bounded-child.test.ts": "names build.mjs in a prose comment only; the timeout-helper test never loads or spawns it",
   // (tests/durable-root.test.ts was exempted here until 8b8w reference-scoped
   // the driver inheritance: with prose mentions no longer inheriting, the file
   // classifies with NO hazard classes and there is nothing left to exempt —
@@ -145,46 +143,261 @@ export function realDriverRefs(text) {
   return [...refs];
 }
 
+// o4m2: strip JS comments (`//` to any ECMAScript LineTerminator: LF, CR, U+2028,
+// U+2029; and `/* ... */` block comments) with full lexical awareness of single/double
+// quoted strings, template literals, `${...}` template interpolations, and regex
+// literals (including `\/` escapes, `[...]` character classes, and `if/while/for/with (...)`
+// condition parens). A naive regex comment-stripper in 4lc0 round 2/3 failed when a regex
+// literal `/\/\//` or `/"/` was misread as a comment/string or when CR/LS/PS terminated a
+// line comment; this single-pass O(n) scanner handles all four ECMAScript LineTerminators
+// and preserves strings, templates, interpolations, and regex literals verbatim while
+// replacing comment spans with whitespace so comment prose mentioning `build.mjs` or
+// `build-bundled-tool-packages.mjs` never forces a pure test into SERIAL or EXEMPTIONS.
+const REGEX_OK_SIG = new Set([
+  "(", ",", "=", ":", "[", "!", "&", "|", "?", "{", "}",
+  ";", "+", "-", "*", "/", "%", "~", "^", "<", ">",
+]);
+const REGEX_OK_WORD = new Set([
+  "return", "typeof", "instanceof", "in", "of", "new",
+  "delete", "void", "throw", "do", "else", "yield", "await", "case",
+]);
+const REGEX_PAREN_WORDS = new Set(["if", "while", "for", "with"]);
+
+function isLineTerminator(c) {
+  return c === "\n" || c === "\r" || c === "\u2028" || c === "\u2029";
+}
+
+function scanQuoted(text, i) {
+  const q = text[i];
+  let j = i + 1;
+  const n = text.length;
+  while (j < n) {
+    const c = text[j];
+    if (c === "\\") { j += 2; continue; }
+    if (isLineTerminator(c)) return j;
+    if (c === q) return j + 1;
+    j++;
+  }
+  return n;
+}
+
+function scanRegex(text, i) {
+  const n = text.length;
+  let j = i + 1;
+  let inClass = false;
+  while (j < n) {
+    const c = text[j];
+    if (isLineTerminator(c)) return null;
+    if (c === "\\") {
+      if (j + 1 < n && isLineTerminator(text[j + 1])) return null;
+      j += 2;
+      continue;
+    }
+    if (inClass) {
+      if (c === "]") inClass = false;
+    } else if (c === "[") {
+      inClass = true;
+    } else if (c === "/") {
+      j++;
+      while (j < n && /[a-z]/i.test(text[j])) j++;
+      return j;
+    }
+    j++;
+  }
+  return null;
+}
+
+function stripTemplate(text, i) {
+  const n = text.length;
+  const parts = ["`"];
+  let j = i + 1;
+  while (j < n) {
+    const c = text[j];
+    if (c === "\\") {
+      parts.push(text.slice(j, j + 2));
+      j += 2;
+      continue;
+    }
+    if (c === "`") {
+      parts.push("`");
+      return { out: parts.join(""), next: j + 1 };
+    }
+    if (c === "$" && text[j + 1] === "{") {
+      const inner = stripCodeRange(text, j + 2, true);
+      parts.push("${", inner.out);
+      j = inner.next;
+      continue;
+    }
+    parts.push(c);
+    j++;
+  }
+  return { out: parts.join(""), next: n };
+}
+
+function stripCodeRange(text, start, stopAtClosingBrace) {
+  const n = text.length;
+  const parts = [];
+  let i = start;
+  let braceDepth = stopAtClosingBrace ? 1 : 0;
+  let prevSig = "";
+  let prevWord = "";
+  let afterRegexParen = false;
+  let noRegexBefore = -1;
+  const parenStack = [];
+  const isWordChar = (c) => /[A-Za-z0-9_$]/.test(c);
+
+  while (i < n) {
+    const c = text[i];
+    if (/\s/.test(c)) {
+      parts.push(c);
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const j = scanQuoted(text, i);
+      parts.push(text.slice(i, j));
+      prevSig = c;
+      prevWord = "";
+      afterRegexParen = false;
+      i = j;
+      continue;
+    }
+    if (c === "`") {
+      const tpl = stripTemplate(text, i);
+      parts.push(tpl.out);
+      prevSig = "`";
+      prevWord = "";
+      afterRegexParen = false;
+      i = tpl.next;
+      continue;
+    }
+    if (c === "/") {
+      if (text[i + 1] === "/") {
+        let j = i + 2;
+        while (j < n && !isLineTerminator(text[j])) j++;
+        parts.push(" ");
+        i = j;
+        continue;
+      }
+      if (text[i + 1] === "*") {
+        const k = text.indexOf("*/", i + 2);
+        const j = k < 0 ? n : k + 2;
+        const raw = text.slice(i + 2, k < 0 ? n : k);
+        parts.push(/[\n\r\u2028\u2029]/.test(raw) ? "\n" : " ");
+        i = j;
+        continue;
+      }
+      const allow =
+        afterRegexParen ||
+        (prevSig === "" && !prevWord) ||
+        REGEX_OK_WORD.has(prevWord) ||
+        (!prevWord && REGEX_OK_SIG.has(prevSig));
+      if (allow && i >= noRegexBefore) {
+        const j = scanRegex(text, i);
+        if (j !== null) {
+          parts.push(text.slice(i, j));
+          prevSig = "/";
+          prevWord = "";
+          afterRegexParen = false;
+          i = j;
+          continue;
+        }
+        let eol = i + 1;
+        while (eol < n && !isLineTerminator(text[eol])) eol++;
+        noRegexBefore = eol;
+      }
+      parts.push("/");
+      prevSig = "/";
+      prevWord = "";
+      afterRegexParen = false;
+      i++;
+      continue;
+    }
+    if (c === "(") {
+      parenStack.push(REGEX_PAREN_WORDS.has(prevWord));
+      parts.push("(");
+      prevSig = "(";
+      prevWord = "";
+      afterRegexParen = false;
+      i++;
+      continue;
+    }
+    if (c === ")") {
+      afterRegexParen = parenStack.pop() === true;
+      parts.push(")");
+      prevSig = ")";
+      prevWord = "";
+      i++;
+      continue;
+    }
+    if (c === "{") {
+      if (stopAtClosingBrace) braceDepth++;
+      parts.push("{");
+      prevSig = "{";
+      prevWord = "";
+      afterRegexParen = false;
+      i++;
+      continue;
+    }
+    if (c === "}") {
+      if (stopAtClosingBrace) {
+        braceDepth--;
+        if (braceDepth === 0) {
+          parts.push("}");
+          return { out: parts.join(""), next: i + 1 };
+        }
+      }
+      parts.push("}");
+      prevSig = "}";
+      prevWord = "";
+      afterRegexParen = false;
+      i++;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(c)) {
+      let j = i + 1;
+      while (j < n && isWordChar(text[j])) j++;
+      prevWord = text.slice(i, j);
+      prevSig = prevWord[prevWord.length - 1];
+      afterRegexParen = false;
+      parts.push(prevWord);
+      i = j;
+      continue;
+    }
+    if (/[0-9]/.test(c)) {
+      let j = i + 1;
+      while (j < n && (isWordChar(text[j]) || text[j] === ".")) j++;
+      const num = text.slice(i, j);
+      prevWord = "";
+      prevSig = num[num.length - 1];
+      afterRegexParen = false;
+      parts.push(num);
+      i = j;
+      continue;
+    }
+    parts.push(c);
+    prevWord = "";
+    prevSig = c;
+    afterRegexParen = false;
+    i++;
+  }
+  return { out: parts.join(""), next: n };
+}
+
+export function stripComments(text) {
+  return stripCodeRange(text, 0, false).out;
+}
+
 const SPAWN_RE = /Deno\.Command\s*\(|spawnSync\s*\(|execFileSync\s*\(|execSync\s*\(|\.spawn\s*\(|\bspawn\s*\(/;
 const BUILD_REF_RE = /build\.mjs|build-bundled-tool-packages/;
-// 4lc0: a test that IMPORTS a build module runs it — module side effects are the same hazard
-// as spawning it, and the SPAWN_RE rule above cannot see the shape that let
-// tests/tool-descriptions.test.ts join the parallel phase while regenerating
-// extension/wasm/cas on import.
-//
-// THE FIRST VERSION OF THIS RULE MATCHED ONE LINE SHAPE and was evadable: an independent review
-// (cap-astra, 2026-09-24, ~/cap-evidence/4lc0-astra-review-20260924/REVIEW.md) took the SAME live
-// import, split it over three lines, and the guard went 5/0 while the real partition put that
-// file in the parallel phase and reproduced 8 CAS NotFound failures — the known writer stayed
-// correctly serial throughout, so the containment held and only the DETECTOR was blind. So the
-// rule is written against the SPECIFIER, not against a line shape:
-//   import … from "<build module>"   (any wrapping between the clause and `from`)
-//   import "<build module>"          (bare side-effect import)
-//   import("<build module>")         (dynamic import, literal specifier)
-//   require("<build module>")        (CJS)
-// RESIDUE, stated so it is not implied away: a specifier built at RUNTIME (`import(someVar)`) is
-// not visible to any text detector, and a COMMENTED-OUT import DOES match (fail-closed: the cost
-// is a declaration the lane did not need, never a silent parallel writer — a bare mention in
-// prose does not match). The bounded
-// `[\s\S]{0,400}?` window keeps the match linear and local to one statement region.
-// SPACING IS NOT A RULE EITHER (cap-astra re-review, 2026-09-24): the first version required
-// whitespace after `import`, so a MINIFIED import — `import{AGENT_DESCRIPTIONS}from"…"` — went
-// undetected (guard 6/0) while a fresh instance of it ran in the parallel phase and reproduced 8
-// CAS NotFound failures. `\\bimport\\b` plus `from\\s*` covers every spacing including none, and the
-// bare form is no longer line-anchored for the same reason (a minifier puts it mid-line).
-const BUILD_MODULE_SPEC = `["'][^"'\n]*(?:build\\.mjs|build-bundled-tool-packages)[^"'\n]*["']`;
-// A STRING NAMING THE GENERATOR IS A HAZARD, WHATEVER SYNTAX CARRIES IT (cap-astra round 5, coord-
-// endorsed). Every earlier version of this rule modelled WHICH syntax could load the generator — the
-// line shape, then spacing, then comments, then quote delimiters — and each round found the shape
-// that was not modelled. Round 5's was a NO-SUBSTITUTION TEMPLATE: `import(`build-…`)` loads the
-// module exactly like a quoted string, the quote-only class called it safe, and the reviewer planted
-// one that reproduced EIGHT CAS NotFound in the parallel phase while this census reported 6/0.
-//
-// The taxonomy is therefore GONE rather than extended. If the file names the generator or build.mjs
-// at all — in an import, a require, a re-export, a bare string, a template, a comment, docs prose —
-// it is a hazard and must be declared SERIAL or exempted with a reason. That over-declares, which is
-// the correct direction: the cost is a declaration a lane did not need; the alternative is a
-// generator running in the parallel phase.
+// 4lc0 + o4m2: a test that IMPORTS or SPAWNS a build module runs it — module side effects are the
+// same hazard as spawning it, and the SPAWN_RE rule above cannot see an import/re-export/require
+// (including a no-substitution template specifier `import(`../scripts/build-bundled-tool-packages.mjs`)`).
+// Rather than modelling every JS import syntax, any CODE reference to `build.mjs` or
+// `build-bundled-tool-packages` (after stripping comments via `stripComments(text)`) is flagged and
+// must be declared SERIAL or exempted with a reason. Stripping comments first (o4m2) aligns this
+// detector with `realDriverRefs` (8b8w/f94p): prose comments explaining how `build.mjs` works no
+// longer force pure unit tests into `EXEMPTIONS`.
 const GENERATOR_NAME_RE = /(?:build\.mjs|build-bundled-tool-packages)/;
 const WRITE_CALL_RE = /(?:writeTextFile|writeFileSync|writeFile|mkdirSync|mkdir|removeSync|remove|copyFile|rename)\s*\(/g;
 const TREE_LITERAL_RE = /["'`][^"'`\n]*(?:extension|packages)\/[^"'`\n]*["'`]/;
@@ -206,13 +419,15 @@ function writesTree(text) {
 
 // Classify one test file's content (optionally merged with the text of local
 // drivers it spawns). Returns the matched hazard class names; empty = safe,
-// defaults to the parallel phase.
+// defaults to the parallel phase. Comments are stripped first (o4m2) so prose
+// comments never trigger hazard classes.
 export function classifyHazards(text) {
+  const code = stripComments(text);
   const classes = [];
-  if (SPAWN_RE.test(text) && BUILD_REF_RE.test(text)) classes.push("spawns build.mjs or the bundled-tool generator");
-  if (GENERATOR_NAME_RE.test(text)) classes.push("names build.mjs or the bundled-tool generator (a load hazard whatever the syntax)");
-  if (writesTree(text)) classes.push("writes under extension/ or packages/");
-  if (READ_RE.test(text) && DIST_LITERAL_RE.test(text)) classes.push("reads extension/dist");
+  if (SPAWN_RE.test(code) && BUILD_REF_RE.test(code)) classes.push("spawns build.mjs or the bundled-tool generator");
+  if (GENERATOR_NAME_RE.test(code)) classes.push("names build.mjs or the bundled-tool generator (a load hazard whatever the syntax)");
+  if (writesTree(code)) classes.push("writes under extension/ or packages/");
+  if (READ_RE.test(code) && DIST_LITERAL_RE.test(code)) classes.push("reads extension/dist");
   return classes;
 }
 
