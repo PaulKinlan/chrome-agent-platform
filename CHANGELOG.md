@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.558] — 2026-09-29
+- Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
+
+## [0.3.557] — 2026-09-29
+- Adds inline SVG icons for all built-in skills and composer attach-menu items, and uses sentence case for component gallery specimen headings.
+
 ## [0.3.556] — 2026-09-29
 - Marks content-script match patterns (All HTTP/HTTPS sites) as granted at install rather than offering a non-functional Revoke button in Settings.
 

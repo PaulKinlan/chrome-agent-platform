@@ -431,6 +431,16 @@ async function main() {
     check("gallery: no visible specimen renders at zero width", widths?.specimens?.length > 0 && zeroWidth.length === 0, zeroWidth);
     check("tool-directory-card specimen renders wider than 200px", widths?.card !== null && widths.card.w > 200, widths?.card);
 
+    // CAP-FB-20260830-ICONOGRAPHY-GAPS-01 (chrome-agent-platform-wp6u):
+    // DESIGN.md bans uppercase tracked kickers; no gallery heading may have
+    // computed text-transform: uppercase.
+    const uppercaseHeadings = await evl(s.sessionId, `(()=>{
+      return [...document.querySelectorAll('h1, h2, h3, h4')]
+        .filter((h) => getComputedStyle(h).textTransform === 'uppercase')
+        .map((h) => h.textContent?.trim() ?? '');
+    })()`);
+    check("gallery: zero uppercase headings", Array.isArray(uppercaseHeadings) && uppercaseHeadings.length === 0, uppercaseHeadings);
+
     // The BeautifulUI-inspired primitives render their shadow content (not
     // empty/blank) + expose the key affordances.
     const bui = await evl(s.sessionId, `(()=>{

@@ -45,6 +45,7 @@ import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, tu
 // rewrites this to ./diff-core.bundle.js). Only <artifact-diff> uses it.
 import { lineDiffSummary } from "./diff-core.bundle.js";
 import {
+  ATTACH_MENU_ICONS,
   COMMAND_NAMESPACES as ALL_COMMAND_NAMESPACES,
   loadComposerCommandItems,
   resolveComposerCommandSelection,
@@ -1705,20 +1706,21 @@ class AttachButton extends Component {
         .menu { position:fixed; bottom:auto; left:auto; }
       }
       .menu[hidden] { display:none; }
-      .menu button { display:block; width:100%; text-align:left; background:transparent; border:0;
+      .menu button { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:0;
         color:var(--text,#1d1b18); padding:8px 12px; border-radius:var(--radius-sm,6px); cursor:pointer; font:inherit; }
+      .menu button svg { flex:0 0 auto; display:block; color:var(--muted,#635e56); }
       .menu button:hover, .menu button:focus-visible { background:var(--bg,#f7f6f3); outline:none; }
       .note { font-size:var(--text-xs,12px); color:var(--muted,#635e56); margin:6px 0 2px; max-width:220px; }
     `, `<button part="button" class="plus" type="button" aria-haspopup="menu"
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
       <div class="menu" role="menu" aria-label="${escapeHtml(label)}" popover="manual"${open ? "" : " hidden"}>
-        <button type="button" role="menuitem" data-kind="file">Add file</button>
-        <button type="button" role="menuitem" data-kind="record-audio">Record audio</button>
-        <button type="button" role="menuitem" data-kind="capture-camera">Capture camera</button>
-        <button type="button" role="menuitem" data-kind="record-screen">Record screen</button>
-        <button type="button" role="menuitem" data-kind="grab-screenshot">Grab screenshot</button>
-        <button type="button" role="menuitem" data-kind="add-tab">Add tab</button>
-        <button type="button" role="menuitem" data-kind="choose-agent">Choose agent</button>
+        <button type="button" role="menuitem" data-kind="file">${ATTACH_MENU_ICONS["file"]}Add file</button>
+        <button type="button" role="menuitem" data-kind="record-audio">${ATTACH_MENU_ICONS["record-audio"]}Record audio</button>
+        <button type="button" role="menuitem" data-kind="capture-camera">${ATTACH_MENU_ICONS["capture-camera"]}Capture camera</button>
+        <button type="button" role="menuitem" data-kind="record-screen">${ATTACH_MENU_ICONS["record-screen"]}Record screen</button>
+        <button type="button" role="menuitem" data-kind="grab-screenshot">${ATTACH_MENU_ICONS["grab-screenshot"]}Grab screenshot</button>
+        <button type="button" role="menuitem" data-kind="add-tab">${ATTACH_MENU_ICONS["add-tab"]}Add tab</button>
+        <button type="button" role="menuitem" data-kind="choose-agent">${ATTACH_MENU_ICONS["choose-agent"]}Choose agent</button>
         <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data (multimodal where the provider supports it).</p>
       </div>`);
     this._btn = this._root.querySelector(".plus");

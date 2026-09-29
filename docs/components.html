@@ -466,7 +466,7 @@
       </div>
 
       <div class="specimen">
-        <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — the ONE unified agent picker</h3>
+        <h3 class="spec"><code class="tag">&lt;agent-picker&gt;</code> — the one unified agent picker</h3>
         <div class="stage column" style="max-width:420px">
           <agent-picker id="picker" label="Choose an agent" selected="named:reader"
             agents='[{"id":"named","label":"Named agents","agents":[{"ref":"named:reader","id":"reader","kind":"named","name":"Reader","summary":"reads articles aloud","skills":["reading","summary"],"status":"ready","enabled":true},{"ref":"named:pr-reviewer","id":"pr-reviewer","kind":"named","name":"PR Reviewer","summary":"reviews pull requests","skills":["github"],"status":"ready","enabled":true}]},{"id":"background","label":"Background agents","agents":[{"ref":"background:sorting-hat","id":"sorting-hat","kind":"background","name":"Sorting Hat","summary":"groups related tabs","status":"every 15 min","enabled":true}]},{"id":"site","label":"Site agents","agents":[{"ref":"site:https://github.com","id":"https://github.com","kind":"site","name":"@github.com","summary":"2 tools · Site Agent","skills":["list_prs","create_issue"],"status":"enrolled","enabled":true}]}]'></agent-picker>
@@ -523,7 +523,7 @@
       </div>
 
       <div class="specimen" id="tool-library-specimen">
-        <h3 class="spec"><code class="tag">&lt;tool-library&gt;</code> — READ-ONLY tool catalog diagnostics (panel-1 slice)</h3>
+        <h3 class="spec"><code class="tag">&lt;tool-library&gt;</code> — read-only tool catalog diagnostics (panel-1 slice)</h3>
         <div class="stage column" style="max-width:720px">
           <tool-library id="tl-ready"></tool-library>
           <tool-library id="tl-rows"></tool-library>
@@ -584,7 +584,7 @@
       <h2 class="section">Composed — a mini hub</h2>
       <div class="grid-2">
         <div class="specimen">
-          <h3 class="spec">hub surface (composer + skills + conversation + agents)</h3>
+          <h3 class="spec">Hub surface (composer + skills + conversation + agents)</h3>
           <div class="stage column">
             <agent-composer id="hub-composer" placeholder="Ask anything…" send-label="Run task"></agent-composer>
             <agent-picker label="Agents"
@@ -593,7 +593,7 @@
           </div>
         </div>
         <div class="specimen">
-          <h3 class="spec">events + states</h3>
+          <h3 class="spec">Events + states</h3>
           <div class="stage column">
             <agent-nav id="nav2" active="chat"></agent-nav>
             <run-task-button label="Run" loading></run-task-button>

@@ -77,12 +77,16 @@ async function runOne(file: string, budgetMs: number): Promise<{ code: number; m
 }
 
 // Chrome profiles live outside the repo now (chrome-agent-platform-9t1b), and
-// harnesses have never cleaned up after themselves, so the durable profile dir
-// self-prunes once per run. A profile in use is minutes old, never hours: this
-// cannot touch a live browser, and a removal failure is hygiene, not a red gate.
+// lockless profiles older than 6 h self-prune once per run. Profiles with a
+// live SingletonLock are never touched; locked profiles whose owner cannot be
+// verified (including dead-PID locks from crashed browsers) are retained and
+// counted in `unknown` so crashed residue is visible (z5ym / xvco).
 const pruned = await pruneChromeProfileDirs();
-if (pruned.removed > 0 || pruned.errors.length > 0) {
-  console.log(`kat-runner: pruned ${pruned.removed} stale Chrome profile(s), kept ${pruned.kept}${pruned.errors.length ? `, ${pruned.errors.length} error(s): ${pruned.errors.slice(0, 3).join("; ")}` : ""}`);
+if (pruned.removed > 0 || pruned.unknown > 0 || pruned.errors.length > 0) {
+  console.log(
+    `kat-runner: pruned ${pruned.removed} stale Chrome profile(s), kept ${pruned.kept} (${pruned.unknown} unknown lock(s) retained)` +
+      `${pruned.errors.length ? `, ${pruned.errors.length} error(s): ${pruned.errors.slice(0, 3).join("; ")}` : ""}`,
+  );
 }
 
 console.log(`kat-runner: ${kats.length} KATs (${Object.keys(expectedRed).length} owned reds) — logs in ${LOG_DIR}`);

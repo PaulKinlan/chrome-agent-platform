@@ -716,9 +716,13 @@ the retired markdown trackers (`TASKS.md`, `KNOWN-ISSUES.md` — history only).
   `--user-data-dir=${ROOT}.cache/…`; `tests/chrome-profile-location.test.ts`
   scans every launch site and copies the whole tree under a live browser to
   prove it. KAT evidence dirs (screenshots, verdicts) may stay under `.cache/` —
-  a file written once is not a directory a browser churns. Stale profiles
-  self-prune: `pruneChromeProfileDirs()` runs once per `scripts/kat-runner.ts`
-  run (6 h threshold, so a live browser is never touched).
+  a file written once is not a directory a browser churns. Lockless profiles
+  older than 6 h self-prune once per `scripts/kat-runner.ts` run via
+  `pruneChromeProfileDirs()`: a profile with a live `SingletonLock` is never
+  touched at any threshold, and a locked profile whose owner cannot be verified
+  (`unknown`, including dead-PID locks from crashed browsers) is retained and
+  logged in the `unknown` count (`chrome-agent-platform-z5ym`,
+  `chrome-agent-platform-xvco`).
 - **Scripts and tests route evidence, Chrome profiles, and big scratch copies through
   `scripts/lib/durable-root.mjs`** (`durableRoot()`/`durableDir()`; default `$HOME/cap-evidence`,
   override `CAP_DURABLE_ROOT`). The helper REFUSES a RAM-backed target rather than silently
