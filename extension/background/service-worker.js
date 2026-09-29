@@ -545,6 +545,7 @@ function cancelTableExecution(runId) {
 // records travel back attached to the tool result and a program cannot suppress
 // its own record by catching the refusal.
 const pythonNetworkLedger = createPythonNetworkLedger();
+const activePythonFetches = new Map(); // origin -> Set<AbortController>
 
 const scriptRunPolicies = new Map();
 const SCRIPT_RUN_POLICY_TTL_MS = 60_000;
@@ -6453,6 +6454,14 @@ const handlers = mergeRouteMaps(
 
     const { headers: safeHeaders, refused: refusedHeaders } = sanitizePythonRequestHeaders(headers);
     const u = new URL(verdict.url);
+    const controller = new AbortController();
+    const originKey = verdict.origin;
+    if (!activePythonFetches.has(originKey)) {
+      activePythonFetches.set(originKey, new Set());
+    }
+    const originSet = activePythonFetches.get(originKey);
+    originSet.add(controller);
+
     try {
       const hasHost = await chrome.permissions?.contains?.({
         origins: [`${u.protocol}//${u.host}/*`],
@@ -6467,6 +6476,7 @@ const handlers = mergeRouteMaps(
         credentials: "omit", // never the owner's session — see the note above
         redirect: "manual", // a 3xx is refused below, never followed
         headers: safeHeaders,
+        signal: controller.signal,
       };
       if (m === "POST") init.body = typeof body === "string" ? body : "";
       const res = await fetch(u.href, init);
@@ -6502,9 +6512,15 @@ const handlers = mergeRouteMaps(
         refusedHeaders,
       };
     } catch (e) {
-      const error = `fetch to ${verdict.origin} failed: ${e?.message ?? e}`;
-      record({ ok: false, origin: verdict.origin, error });
+      const wasRevoked = controller.signal.aborted;
+      const error = wasRevoked
+        ? `fetch to ${verdict.origin} refused: grant was revoked mid-run`
+        : `fetch to ${verdict.origin} failed: ${e?.message ?? e}`;
+      record({ ok: false, origin: verdict.origin, refused: wasRevoked, error });
       return { ok: false, error };
+    } finally {
+      originSet.delete(controller);
+      if (originSet.size === 0) activePythonFetches.delete(originKey);
     }
   },
   /** The owner's grant list, for Settings → Permissions. */
@@ -6543,6 +6559,15 @@ const handlers = mergeRouteMaps(
       const result = removePythonNetworkGrant(rows, origin);
       if (!result.ok) return { ok: false, error: result.error };
       await kvSet({ [PYTHON_NETWORK_GRANTS_KEY]: result.grants });
+      // In-flight abort: revoke immediately cuts any active fetch for this origin
+      const inFlight = activePythonFetches.get(result.origin);
+      if (inFlight) {
+        for (const ctrl of inFlight) {
+          try { ctrl.abort(); } catch {}
+        }
+        inFlight.clear();
+        activePythonFetches.delete(result.origin);
+      }
       return { ok: true, origin: result.origin, removed: result.removed, grants: result.grants };
     } catch (e) {
       return { ok: false, error: String(e?.message ?? e) };

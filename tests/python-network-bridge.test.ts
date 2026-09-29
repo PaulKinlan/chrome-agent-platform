@@ -15,8 +15,9 @@ import { registerPythonHost } from "../extension/lib/python-host.js";
 import { createPythonRuntimeProvider } from "../extension/lib/python-runtime.js";
 import { createPythonNetworkLedger } from "../extension/lib/python-network.js";
 import { runPython } from "../extension/lib/python-execution.js";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 // A fake worker that plays the part of the Pyodide worker: it asks for one
 // fetch, then reports its run.
@@ -177,6 +178,11 @@ Deno.test("the service worker's python.fetch route keeps every confused-deputy d
   // Granting is an owner gesture, never something a run does for itself.
   const grant = sw.slice(sw.indexOf('async "python.network.grant"'));
   assertStringIncludes(grant.slice(0, 400), 'context?.principal !== "owner-options"');
+  // In-flight abort: revocation cuts in-flight requests by origin immediately.
+  assertStringIncludes(route, "signal: controller.signal");
+  const revoke = sw.slice(sw.indexOf('async "python.network.revoke"'), sw.indexOf('async "capabilities.status"'));
+  assertStringIncludes(revoke, "activePythonFetches.get");
+  assertStringIncludes(revoke, "ctrl.abort()");
 });
 
 Deno.test("the worker hands back the granted reach only AFTER the ambient reach is gone", async () => {

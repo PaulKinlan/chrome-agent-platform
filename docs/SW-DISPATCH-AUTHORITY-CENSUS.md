@@ -148,6 +148,8 @@ Restricted strictly to the Settings surface (`principal === "owner-options"`). G
 | `tool-stream.remove` | `service-worker.js` | Removes stream reference | `wasmStreamOwner` |
 | `tool-stream.discard` | `service-worker.js` | Discards active stream | `wasmStreamOwner` |
 | `tool-stream.tabular-transform`| `service-worker.js`| Runs tabular transform on stream | `wasmStreamOwner` |
+| `python.network.grant` | `service-worker.js` | Grants network access to origin for Python | `principal === "owner-options"` |
+| `python.network.revoke` | `service-worker.js` | Revokes network access to origin for Python | `principal === "owner-options"` |
 
 ---
 
@@ -244,6 +246,7 @@ Triggers or manages interactive runs, background worker processes, and sandboxed
 | `run-task` | `service-worker.js` | Runs scheduled alarm task |
 | `task.retry` | `routes/scheduler.js` | Retries failed scheduled task |
 | `python.execute` | `service-worker.js` | Sandboxed Python execution via Pyodide |
+| `python.fetch` | `service-worker.js` | Proxies permissioned network request for Python worker |
 | `table.run` | `service-worker.js` | Sandboxed spreadsheet tool execution (run-bound) |
 | `agent-worker.alive` | `routes/agent-worker.js` | Heartbeat from offscreen worker |
 | `agent-worker.progress` | `routes/agent-worker.js` | Worker stream progress event |
@@ -341,7 +344,7 @@ These routes perform state mutations (modifying storage, memory, agents, threads
 ### 4.10 Read-Only / Status / Telemetry Routes (88 routes)
 These routes perform no state mutations and return status, listings, configuration summaries, or diagnostics.
 
-`actions.list`, `activity.list`, `agent-workspace.usage`, `agent.directory`, `agent.discoverable-tabs`, `agent.get`, `agent.history-view`, `agent.list`, `agent.listAll`, `agent.orchestrator`, `agent.registry`, `agent.tool-offers`, `alarms.permission-granted`, `asset.capacity`, `asset.get`, `asset.list`, `asset.version-get`, `asset.versions`, `background-agent.history`, `background-agent.list`, `browser-control.get`, `cap:fetch`, `capabilities.status`, `capability.request`, `capture.tab`, `command.list`, `diagnostics.list`, `diagnostics.report`, `fs-grant.get`, `fs-grant.grep`, `fs-grant.list`, `fs-grant.list-entries`, `fs-grant.read-file`, `fs-grant.scan`, `fs-grant.search`, `hooks.status`, `invalidate-agent`, `mcp.servers.get`, `mcp.servers.global-redacted`, `memory.origins`, `memory.overview`, `memory.stores`, `named-agent.get`, `named-agent.grep`, `named-agent.history`, `named-agent.list`, `named-agent.delegations`, `observability.clearTrace`, `observability.dumpTrace`, `observability.page-measures`, `observability.setVerbosity`, `prompt.attest`, `prompt.attestRun`, `prompt.describe`, `provider.models`, `provider.permission-summary`, `provider.status`, `provider.summary`, `background-agent.custom-list`, `run-log.list`, `run.dismissedFailed`, `run.list`, `schedules.list`, `screenshots.get`, `screenshots.list`, `script.get`, `script.list`, `security.state`, `sidepanel.getTarget`, `sidepanel.getTools`, `sidepanel.openPage`, `site-skills.get`, `skill.discover`, `skill.list`, `skills.all`, `skills.get`, `task.list`, `task.nextRun`, `thread.get`, `thread.list`, `tools.allOrigins`, `tools.consent.states`, `tools.policies`, `usage.get`, `webmcp.status`.
+`actions.list`, `activity.list`, `agent-workspace.usage`, `agent.directory`, `agent.discoverable-tabs`, `agent.get`, `agent.history-view`, `agent.list`, `agent.listAll`, `agent.orchestrator`, `agent.registry`, `agent.tool-offers`, `alarms.permission-granted`, `asset.capacity`, `asset.get`, `asset.list`, `asset.version-get`, `asset.versions`, `background-agent.history`, `background-agent.list`, `browser-control.get`, `cap:fetch`, `capabilities.status`, `capability.request`, `capture.tab`, `command.list`, `diagnostics.list`, `diagnostics.report`, `fs-grant.get`, `fs-grant.grep`, `fs-grant.list`, `fs-grant.list-entries`, `fs-grant.read-file`, `fs-grant.scan`, `fs-grant.search`, `hooks.status`, `invalidate-agent`, `mcp.servers.get`, `mcp.servers.global-redacted`, `memory.origins`, `memory.overview`, `memory.stores`, `named-agent.get`, `named-agent.grep`, `named-agent.history`, `named-agent.list`, `named-agent.delegations`, `observability.clearTrace`, `observability.dumpTrace`, `observability.page-measures`, `observability.setVerbosity`, `prompt.attest`, `prompt.attestRun`, `prompt.describe`, `provider.models`, `provider.permission-summary`, `provider.status`, `provider.summary`, `background-agent.custom-list`, `run-log.list`, `run.dismissedFailed`, `run.list`, `schedules.list`, `screenshots.get`, `screenshots.list`, `script.get`, `script.list`, `security.state`, `sidepanel.getTarget`, `sidepanel.getTools`, `sidepanel.openPage`, `site-skills.get`, `skill.discover`, `skill.list`, `skills.all`, `skills.get`, `task.list`, `task.nextRun`, `thread.get`, `thread.list`, `tools.allOrigins`, `tools.consent.states`, `tools.policies`, `usage.get`, `webmcp.status`, `python.network.grants`.
 
 ---
 

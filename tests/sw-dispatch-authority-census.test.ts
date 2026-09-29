@@ -49,6 +49,7 @@ export const CENSUS_CATEGORIES = {
     "tool-stream.output.read", "tool-stream.output.receipt", "tool-stream.stage-attachment",
     "tool-stream.stage-asset", "tool-stream.promote-output", "tool-stream.remove", "tool-stream.discard",
     "tool-stream.tabular-transform",
+    "python.network.grant", "python.network.revoke",
   ]),
   OWNER_APPROVAL_DIRECT: new Set([
     "named-agent.update", "named-agent.delete", "named-agent.set-schedule", "named-agent.set-mcp-servers",
@@ -74,7 +75,7 @@ export const CENSUS_CATEGORIES = {
   EXECUTION_AND_WORKER_ORCHESTRATION: new Set([
     "agent.run", "named-agent.run", "named-agent.delegate", "agent.delegate",
     "background-agent.run", "skill.run", "register-task", "run-task", "task.retry",
-    "python.execute", "table.run", "agent-worker.alive", "agent-worker.progress",
+    "python.execute", "python.fetch", "table.run", "agent-worker.alive", "agent-worker.progress",
     "agent-worker.result", "agent-worker.ensure", "agent-worker.run", "agent-worker.dispatch",
     "agent-worker.tool", "agent-worker.close", "agent-worker.steer", "agent-worker.journal-append",
     "acp.journal",
@@ -121,6 +122,7 @@ export const CENSUS_CATEGORIES = {
     "skill.discover", "skill.list", "skills.all", "skills.get", "task.list", "task.nextRun",
     "thread.get", "thread.list", "tools.allOrigins", "tools.consent.states",
     "tools.policies", "usage.get", "webmcp.status",
+    "python.network.grants",
   ]),
 };
 
@@ -185,9 +187,9 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 259", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 263", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 259, `registered routes population must equal 259 (got ${registered.size})`);
+  assertEquals(registered.size, 263, `registered routes population must equal 263 (got ${registered.size})`);
 });
 
 Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {

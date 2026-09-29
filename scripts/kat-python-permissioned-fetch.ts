@@ -23,9 +23,10 @@
 
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
-const EXT = `${ROOT}extension`;
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const EXT = `${ROOT}/extension`;
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -105,6 +106,9 @@ try {
   };
   const evaluate = async (sess: string, expression: string) => {
     const r = await send("Runtime.evaluate", { expression, awaitPromise: true, returnByValue: true }, sess);
+    if (r?.result?.exceptionDetails) {
+      throw new Error(`Evaluation threw: ${JSON.stringify(r.result.exceptionDetails)}`);
+    }
     return r?.result?.result?.value;
   };
 
