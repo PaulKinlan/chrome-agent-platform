@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.554] — 2026-09-28
+- Paste or drop files directly into the composer, recall previous prompts with Up arrow, retry expired approvals in one click, and copy or retry turns inline.
+
 ## [0.3.553] — 2026-09-28
 - Improved dark-mode contrast, keyboard navigation in composer menus, and activity explorer legibility.
 
