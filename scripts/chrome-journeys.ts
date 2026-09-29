@@ -699,7 +699,7 @@ const EXPECTED = [
   "Activity ledger: the ledger row for the run-created agent carries its undo",
   "Activity ledger: the hub sidebar renders the sentence and an Undo button",
   "Activity ledger: retained the activity-surface screenshot",
-  "Activity ledger: the disclosure auto-opens when activity arrives and the Undo button is hit-testable (co35)",
+  "Activity ledger: opening the disclosure makes the Undo button hit-testable (co35)",
   "Activity ledger: a real Undo deletes the agent and marks the row undone",
   "Activity ledger: retained the after-undo screenshot",
   "Activity ledger: a seeded close_tab row renders 'Closed …' with Undo",
@@ -3168,101 +3168,47 @@ async function main() {
     // chrome-agent-platform-co35: rows inside a CLOSED <details> are laid out
     // but neither painted nor hit-testable — the Undo button held a real ghost
     // rect over the sidebar foot's Directory button and every hit-tested click
-    // landed on the foot. The product now OPENS the disclosure when activity
-    // arrives on a hidden section; this leg asserts that visibility with a real
-    // hit-test before clicking, so a regression is the click-dead signature
-    // again, not a mystery.
+    // landed on the foot (the l0r 3/3 red). That was a JOURNEY artifact, not a
+    // product defect: a real owner opens the disclosure first (uplift-opus's
+    // review, measured on the base build — the Undo was never click-dead for a
+    // user). The product stays collapsed-by-default; this leg drives the REAL
+    // owner gesture — a genuine click on the summary — then asserts the button
+    // is hit-testable before clicking it, so a regression is the click-dead
+    // signature again, not a mystery.
+    const summaryClicked = await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+    let sectionOpen = false;
+    for (let i = 0; i < 12 && !sectionOpen; i++) {
+      sectionOpen = await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`);
+      if (!sectionOpen) await sleep(200);
+    }
     const visibility = await evalIn(cdp, ntpSession, `(() => {
       const section = document.getElementById("activity-ledger-section");
       const el = document.getElementById("side-action-ledger");
       const undo = el?.shadowRoot?.querySelector(".al-undo");
       if (!section || !undo) return null;
+      // Scroll FIRST: in a shorter window the button can be out of view, and
+      // elementFromPoint then returns null for no product reason (uplift-opus).
+      undo.scrollIntoView({ block: "center", inline: "center" });
       const r = undo.getBoundingClientRect();
       const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
-      const hit = document.elementFromPoint(cx, cy);
+      // The shadow-root hit test is the honest one: document.elementFromPoint
+      // returns the shadow HOST for any point inside it, padding included.
+      const shadowHit = el.shadowRoot.elementFromPoint(cx, cy);
       return { open: section.open, hidden: section.hidden,
-        hitChainTop: hit ? hit.tagName + "." + String(hit.className).slice(0, 30) : null,
-        hitIsLedger: hit === el };
+        visible: undo.checkVisibility?.() ?? null,
+        shadowHitIsButton: shadowHit === undo,
+        shadowHitTag: shadowHit ? shadowHit.tagName + "." + String(shadowHit.className).slice(0, 30) : null };
     })()`);
     check(
-      "Activity ledger: the disclosure auto-opens when activity arrives and the Undo button is hit-testable (co35)",
-      visibility !== null && visibility.open === true && visibility.hidden === false &&
-        visibility.hitIsLedger === true,
+      "Activity ledger: opening the disclosure makes the Undo button hit-testable (co35)",
+      summaryClicked === true && sectionOpen === true &&
+        visibility !== null && visibility.open === true && visibility.hidden === false &&
+        visibility.visible === true && visibility.shadowHitIsButton === true,
       visibility,
     );
     // A REAL Undo — a genuine click on the button in the component's shadow DOM.
     // It calls actions.undo, which re-runs delete_named_agent through the SAME
     // executor (owner-direct via the clicking document's identity).
-    // chrome-agent-platform-co35: the l0r runs went 3/3 red here with the leg
-    // unnamed. Capture the component's own undo outcome — _undo emits
-    // action-undo / action-undo-error with the backend's refusal text, which
-    // nothing surfaced before — so one quiet-window run names the failing leg
-    // (click not delivered / agent survived / row not marked / SW refusal).
-    // The listeners attach BEFORE the click (sotw-gemini re-review): an event
-    // fired before the capture window existed would be exactly the silent
-    // loss this instrumentation exists to end.
-    const undoEvents: Array<{ kind: string; id?: string; error?: string }> = [];
-    await evalIn(cdp, ntpSession, `(() => {
-      const el = document.getElementById("side-action-ledger");
-      if (!el) return false;
-      el.addEventListener("action-undo", (e) => window.__co35UndoEvents.push({ kind: "undo", id: e.detail?.id }));
-      el.addEventListener("action-undo-error", (e) => window.__co35UndoEvents.push({ kind: "error", id: e.detail?.id, error: e.detail?.error }));
-      window.__co35UndoEvents = window.__co35UndoEvents ?? [];
-      return true;
-    })()`);
-    // co35 probe v2: mark the exact button node the click targets. The
-    // component's _paint() rebuilds the whole list on every refresh, so a
-    // refresh landing between the coordinate read and the CDP click replaces
-    // the node — press and release then land on different elements, no click
-    // event fires, and the undo silently vanishes. If the marked node is gone
-    // after the click, that race is the mechanism.
-    // co35 probe v3: replicate clickShadow's coordinate math, then ask what the
-    // hit test ACTUALLY returns at that point (document level + the component's
-    // own shadow root), plus the button's pointer-events/disabled state.
-    const clickCoords = await evalIn(cdp, ntpSession, `(() => {
-      const host = [...document.querySelectorAll("#side-action-ledger")].pop();
-      const el = document.getElementById("side-action-ledger");
-      const btn = el?.shadowRoot?.querySelector(".al-undo");
-      if (!btn) return null;
-      btn.dataset.co35Probe = "marked";
-      btn.scrollIntoView({ block: "center", inline: "center" });
-      const r = btn.getBoundingClientRect();
-      const x = r.x + r.width / 2, y = r.y + r.height / 2;
-      const docHit = document.elementFromPoint(x, y);
-      const shadowHit = el.shadowRoot.elementFromPoint(x, y);
-      const foot = document.querySelector(".side-foot");
-      const fr = foot?.getBoundingClientRect();
-      const ledgerBox = document.getElementById("activity-ledger-section")?.getBoundingClientRect();
-      const footBtns = [...document.querySelectorAll(".foot-btn")].map((b) => {
-        const r = b.getBoundingClientRect();
-        return { label: b.textContent.trim().slice(0, 12), y: Math.round(r.y), h: Math.round(r.height), covers: x >= r.x && x <= r.x + r.width && y >= r.y && y <= r.y + r.height };
-      });
-      const aside = document.querySelector("aside.side")?.getBoundingClientRect();
-      return {
-        x: Math.round(x), y: Math.round(y),
-        docHit: docHit ? docHit.tagName + "." + String(docHit.className).slice(0, 40) : null,
-        shadowHitTag: shadowHit ? shadowHit.tagName + "." + String(shadowHit.className).slice(0, 40) : null,
-        shadowHitIsButton: shadowHit === btn,
-        pointerEvents: getComputedStyle(btn).pointerEvents,
-        disabled: btn.disabled,
-        ledgerBox: ledgerBox ? { y: Math.round(ledgerBox.y), h: Math.round(ledgerBox.height), bottom: Math.round(ledgerBox.bottom) } : null,
-        footRect: fr ? { y: Math.round(fr.y), h: Math.round(fr.height) } : null,
-        footBtns,
-        asideRect: aside ? { y: Math.round(aside.y), h: Math.round(aside.height) } : null,
-        innerW: innerWidth, innerH: innerHeight,
-      };
-    })()`);
-    console.log("[co35 hit test]", JSON.stringify(clickCoords));
-    await evalIn(cdp, ntpSession, `(() => {
-      const el = document.getElementById("side-action-ledger");
-      const btn = el?.shadowRoot?.querySelector(".al-undo");
-      if (!btn) return false;
-      btn.dataset.co35Probe = "marked";
-      window.__co35Refreshes = 0;
-      const orig = el.refresh?.bind(el);
-      if (orig) el.refresh = async (...a) => { window.__co35Refreshes += 1; return orig(...a); };
-      return true;
-    })()`);
     const undoClicked = await clickShadow(cdp, ntpSession, "#side-action-ledger", ".al-undo");
     let agentGone = false;
     let rowUndone = false;
@@ -3280,21 +3226,16 @@ async function main() {
       if (agentGone && rowUndone) break;
       await sleep(250);
     }
-    const undoEventLog = await evalIn(cdp, ntpSession, `(() => {
-      const el = document.getElementById("side-action-ledger");
-      const btn = el?.shadowRoot?.querySelector(".al-undo");
-      return { events: window.__co35UndoEvents ?? [], markedNodeStillInDom: btn?.dataset?.co35Probe === "marked", refreshesDuringClick: window.__co35Refreshes ?? null };
-    })()`);
     check(
       "Activity ledger: a real Undo deletes the agent and marks the row undone",
       undoClicked && agentGone && rowUndone,
-      { undoClicked, agentGone, rowUndone, createdAgentId, undoEvents: undoEventLog.events ?? undoEventLog, agentIdsAfter: lastAgentIds, rowAfter: lastRow, markedNodeStillInDom: undoEventLog.markedNodeStillInDom, refreshesDuringClick: undoEventLog.refreshesDuringClick },
+      { undoClicked, agentGone, rowUndone, createdAgentId, agentIdsAfter: lastAgentIds, rowAfter: lastRow },
     );
     // check() discards its third argument (a harness-wide gap — other call
     // sites pass diagnostics that never print), so the leg evidence is printed
     // HERE or it does not exist (chrome-agent-platform-co35).
     if (!(undoClicked && agentGone && rowUndone)) {
-      console.log("[co35 undo leg]", JSON.stringify({ undoClicked, agentGone, rowUndone, createdAgentId, undoEvents: undoEventLog, agentIdsAfter: lastAgentIds, rowAfter: lastRow }));
+      console.log("[co35 undo leg]", JSON.stringify({ undoClicked, agentGone, rowUndone, createdAgentId, agentIdsAfter: lastAgentIds, rowAfter: lastRow }));
     }
     const undoShot = await captureShot(cdp, ntpSession);
     if (undoShot) await writeEvidence("ntp-activity-ledger-undone.png", undoShot);

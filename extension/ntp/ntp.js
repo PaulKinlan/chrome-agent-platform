@@ -1590,15 +1590,10 @@ function renderActionLedger() {
   if (!actionLedgerEl || !section) return;
   actionLedgerEl.addEventListener("entries-change", (ev) => {
     const count = Number(ev.detail?.count ?? 0);
-    const wasHidden = section.hidden;
+    // co35 (uplift-opus review): Activity stays collapsed-by-default as
+    // ntp.html declares it — the Undo leg was a JOURNEY artifact (it clicked
+    // inside a closed <details>), never a product defect. No auto-open here.
     section.hidden = count === 0;
-    // Activity arriving on a hidden section OPENS the disclosure: rows inside a
-    // closed <details> are laid out but neither painted nor hit-testable, so an
-    // unopened section left the Undo button click-dead — its ghost rect sat
-    // exactly where the sidebar foot's buttons render and every real click
-    // landed on Directory instead (chrome-agent-platform-co35, measured in the
-    // journeys suite). The owner's own collapse is respected afterwards.
-    if (count > 0 && wasHidden) section.open = true;
     const countEl = document.getElementById("side-activity-count");
     if (countEl) countEl.textContent = count ? `(${count})` : "";
   });
