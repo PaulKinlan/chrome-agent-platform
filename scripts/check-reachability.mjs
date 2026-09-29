@@ -51,6 +51,8 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
 
+  "lib/acp-port.js":
+    "Streaming MessageChannel transport for the in-browser sandboxed ACP harness (qnd4, cap-k3 design): the options.js wiring + sandbox harness page are the NEXT slice on the branch; tests/acp-port.test.ts pins the handshake/framing contract meanwhile.",
   // ── owner directives (TASKS.md CAP-FB-20260830-DEAD-CODE-CUT-01 Acceptance, 2026-08-30) ──
   // (lib/agent-cards.js was RETAINED here per the same directive; pu7n wired it
   // into ntp.js — Share/Import agent — so it is REACHED from an entry point now
