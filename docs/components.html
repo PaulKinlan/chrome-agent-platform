@@ -10,7 +10,13 @@
   <body>
     <div class="wrap">
       <header class="masthead">
-        <h1>Chrome <span class="accent">Agent</span> Platform — Component Gallery</h1>
+        <h1>
+          <svg class="masthead-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="28" height="28" aria-hidden="true" style="color:var(--accent); vertical-align:-5px; margin-right:8px;">
+            <path d="M2.5 14.5c0-5 3.8-9 8.5-9 4.2 0 7 2.5 7.5 6.5l3.8 1.5c.8.3.8 1.2 0 1.5-2.2.8-5.8 1-7.8 1-2 0-8.5 0-12-1.5z"/>
+            <path d="M11 5.5v9"/>
+            <path d="M11 5.5c-2.8 1.2-5 4-5.5 9"/>
+            <path d="M10 4.5c.5-.7 1.5-.7 2 0"/>
+          </svg>Chrome <span class="accent">Agent</span> Platform — Component Gallery</h1>
         <p class="sub">Every UI element as a native Web Component, testable in isolation (mocked backend, no extension). The extension pages use these same components.</p>
         <div class="meta-row">
           <theme-picker id="themer" theme="sunlit"></theme-picker>
@@ -20,6 +26,18 @@
 
       <!-- ── Atomic ─────────────────────────────────────────────── -->
       <h2 class="section">Atomic components</h2>
+
+      <div class="specimen">
+        <h3 class="spec"><code class="tag">&lt;cap-logo&gt;</code> — the CAP line-art logo mark</h3>
+        <div class="stage" style="display:flex; align-items:center; gap:16px;">
+          <cap-logo size="16"></cap-logo>
+          <cap-logo size="20"></cap-logo>
+          <cap-logo size="24"></cap-logo>
+          <cap-logo size="32"></cap-logo>
+          <cap-logo size="48"></cap-logo>
+        </div>
+        <p class="caption">The Chrome Agent Platform (CAP) cap line-art logo mark. Size attribute sets pixel width/height (defaults to 20). Themed via currentColor / <code>--accent</code>.</p>
+      </div>
 
       <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;first-run-guide&gt;</code> — the first-run banner</h3>

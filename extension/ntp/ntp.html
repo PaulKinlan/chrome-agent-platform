@@ -207,6 +207,7 @@
     .brand {
       display: flex;
       align-items: center;
+      gap: 8px;
       inline-size: 100%;
       block-size: 36px;
       border: 0;
@@ -220,6 +221,11 @@
       padding: 0 8px;
       text-align: start;
       transition: opacity .18s ease, visibility .18s ease, background .15s ease, color .15s ease;
+    }
+    .brand .brand-logo {
+      color: var(--accent);
+      flex-shrink: 0;
+      display: block;
     }
     .brand:hover { background: var(--panel-2); }
     .brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -1145,7 +1151,15 @@
 
     <aside class="side" id="side" aria-label="Sidebar">
       <div class="brand-row">
-        <button class="brand" id="home" type="button" aria-label="Home" title="Home"><span>Chrome <span class="brand-accent">Agent</span> Platform</span></button>
+        <button class="brand" id="home" type="button" aria-label="Home" title="Home">
+          <svg class="brand-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">
+            <path d="M2.5 14.5c0-5 3.8-9 8.5-9 4.2 0 7 2.5 7.5 6.5l3.8 1.5c.8.3.8 1.2 0 1.5-2.2.8-5.8 1-7.8 1-2 0-8.5 0-12-1.5z"/>
+            <path d="M11 5.5v9"/>
+            <path d="M11 5.5c-2.8 1.2-5 4-5.5 9"/>
+            <path d="M10 4.5c.5-.7 1.5-.7 2 0"/>
+          </svg>
+          <span class="brand-text">Chrome <span class="brand-accent">Agent</span> Platform</span>
+        </button>
       </div>
       <section class="side-section side-harness" aria-labelledby="harness-label">
         <div class="side-label-row">

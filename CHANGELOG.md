@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.555] — 2026-09-29
+- Adds consistent line-art Cap logo icon to NTP, Settings, Privacy, and Gallery headers, and updates extension manifest icons and favicon to the new CAP badge.
+
 ## [0.3.554] — 2026-09-28
 - Paste or drop files directly into the composer, recall previous prompts with Up arrow, retry expired approvals in one click, and copy or retry turns inline.
 

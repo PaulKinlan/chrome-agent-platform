@@ -101,6 +101,7 @@ export const ICONS = {
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
   external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
   activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
+  cap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M2.5 14.5c0-5 3.8-9 8.5-9 4.2 0 7 2.5 7.5 6.5l3.8 1.5c.8.3.8 1.2 0 1.5-2.2.8-5.8 1-7.8 1-2 0-8.5 0-12-1.5z"/><path d="M11 5.5v9"/><path d="M11 5.5c-2.8 1.2-5 4-5.5 9"/><path d="M10 4.5c.5-.7 1.5-.7 2 0"/></svg>',
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -928,6 +929,19 @@ class RunTaskButton extends Component {
   }
 }
 customElements.define("run-task-button", RunTaskButton);
+
+/* <cap-logo size="20"> — the Chrome Agent Platform line-art Cap logo mark. */
+class CapLogo extends Component {
+  static get observedAttributes() { return ["size"]; }
+  _render() {
+    const size = Number(this.getAttribute("size")) || 20;
+    mountTemplate(this, `
+      :host { display: inline-flex; align-items: center; justify-content: center; line-height: 0; color: var(--accent, #0e6e63); flex-shrink: 0; }
+      svg { width: ${size}px; height: ${size}px; display: block; }
+    `, `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="${size}" height="${size}" aria-hidden="true"><path d="M2.5 14.5c0-5 3.8-9 8.5-9 4.2 0 7 2.5 7.5 6.5l3.8 1.5c.8.3.8 1.2 0 1.5-2.2.8-5.8 1-7.8 1-2 0-8.5 0-12-1.5z"/><path d="M11 5.5v9"/><path d="M11 5.5c-2.8 1.2-5 4-5.5 9"/><path d="M10 4.5c.5-.7 1.5-.7 2 0"/></svg>`);
+  }
+}
+customElements.define("cap-logo", CapLogo);
 
 const MIC_METER_DEVICE_KEY = "mic-meter-device-id";
 

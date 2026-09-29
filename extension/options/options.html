@@ -13,7 +13,15 @@
   <body>
     <div class="options-shell">
       <aside class="side" aria-label="Settings navigation">
-      <div class="brand" data-i18n="options_chrome">Chrome <span data-i18n="options_agent">Agent</span data-i18n="options_platform"> Platform</div>
+      <div class="brand">
+        <svg class="brand-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20" aria-hidden="true">
+          <path d="M2.5 14.5c0-5 3.8-9 8.5-9 4.2 0 7 2.5 7.5 6.5l3.8 1.5c.8.3.8 1.2 0 1.5-2.2.8-5.8 1-7.8 1-2 0-8.5 0-12-1.5z"/>
+          <path d="M11 5.5v9"/>
+          <path d="M11 5.5c-2.8 1.2-5 4-5.5 9"/>
+          <path d="M10 4.5c.5-.7 1.5-.7 2 0"/>
+        </svg>
+        <span class="brand-text">Chrome <span data-i18n="options_agent">Agent</span> Platform</span>
+      </div>
       <nav>
         <a href="#providers" class="nav-item" data-section="providers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M12 2a10 10 0 0 0-10 10c0 5.5 4.5 10 10 10s10-4.5 10-10A10 10 0 0 0 12 2z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg data-i18n="options_providers">
@@ -480,7 +488,15 @@
       <section id="about" class="panel">
         <h2 data-i18n="options_about_1">About</h2>
         <div class="about-card">
-          <div class="about-brand" id="about-brand-home" role="link" tabindex="0" title="Back to home" style="cursor:pointer" data-i18n="options_chrome_agent_platform">Chrome Agent Platform</div>
+          <div class="about-brand" id="about-brand-home" role="link" tabindex="0" title="Back to home" style="cursor:pointer" data-i18n="options_chrome_agent_platform">
+            <svg class="about-brand-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22" aria-hidden="true">
+              <path d="M2.5 14.5c0-5 3.8-9 8.5-9 4.2 0 7 2.5 7.5 6.5l3.8 1.5c.8.3.8 1.2 0 1.5-2.2.8-5.8 1-7.8 1-2 0-8.5 0-12-1.5z"/>
+              <path d="M11 5.5v9"/>
+              <path d="M11 5.5c-2.8 1.2-5 4-5.5 9"/>
+              <path d="M10 4.5c.5-.7 1.5-.7 2 0"/>
+            </svg>
+            <span class="about-brand-text">Chrome Agent Platform</span>
+          </div>
           <p class="muted">Chrome as the agent platform — a new-tab hub, Site Agents (WebMCP), origin-keyed memory, skills, generative UI, and scripts.</p>
           <div class="about-meta">
             <span data-i18n="options_version">Version <strong id="about-version">v0.0.0</strong></span>

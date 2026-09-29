@@ -32,12 +32,22 @@ body {
   box-sizing: border-box;
 }
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 700;
   font-size: 16px;
   padding: 4px 8px 16px;
 }
+.brand .brand-logo {
+  color: var(--accent);
+  flex-shrink: 0;
+}
 .brand span {
   color: var(--accent);
+}
+.brand .brand-text {
+  color: var(--text);
 }
 nav {
   display: flex;
@@ -1153,9 +1163,16 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   margin-bottom: 20px;
 }
 .about-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: var(--text-lg, 18px);
   font-weight: 700;
   margin-bottom: 6px;
+}
+.about-brand .about-brand-logo {
+  color: var(--accent);
+  flex-shrink: 0;
 }
 .about-meta {
   margin-top: 12px;

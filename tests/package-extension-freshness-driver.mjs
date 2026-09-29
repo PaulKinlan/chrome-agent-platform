@@ -455,12 +455,20 @@ Deno.test("package archive preserves final and cleans unique stage/temp after ZI
     await Deno.mkdir(`${root}/out`, { recursive: true });
     await Deno.writeTextFile(archive, "POISONED_FINAL_MUST_SURVIVE_FAILURE\n");
     const before = await Deno.readTextFile(archive);
+    const falseCmd = (() => {
+      try {
+        Deno.statSync("/bin/false");
+        return "/bin/false";
+      } catch {
+        return "/usr/bin/false";
+      }
+    })();
     await assertRejects(
       () =>
         packageExtensionArchive({
           root,
           archive,
-          zipCommand: "/bin/false",
+          zipCommand: falseCmd,
         }),
       Error,
       "zip exited",
