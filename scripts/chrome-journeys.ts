@@ -600,12 +600,14 @@ const ran = new Set();
 // assertion was re-pinned to the post-dptw truth (unlimited retention) and
 // PASSES live. The mechanism stays for future honest ownership.
 const EXPECTED_RED = new Map<string, string>([]);
+const shutdownRan = new Set<string>();
 function checkShutdown(name, cond) {
   // Shutdown checks run in the run's finally block — on an ABORT they fire
   // mid-sequence (out of band), so they report honestly but never enter the
   // ordered `ran` sequence: polluting it turned every abort into a misleading
   // "ORDER mismatch @N" that named the cleanup instead of the real failure
   // (chrome-agent-platform-co35 triage, 2026-09-28).
+  shutdownRan.add(name);
   results.push({ name, pass: !!cond });
   console.log(`${cond ? "PASS" : "FAIL"}: ${name} (shutdown)`);
 }
@@ -708,6 +710,7 @@ const EXPECTED = [
   "Activity ledger: the ledger row for the run-created agent carries its undo",
   "Activity ledger: the hub sidebar renders the sentence and an Undo button",
   "Activity ledger: retained the activity-surface screenshot",
+  "Activity ledger: opening the disclosure makes the Undo button hit-testable (co35)",
   "Activity ledger: a real Undo deletes the agent and marks the row undone",
   "Activity ledger: retained the after-undo screenshot",
   "Activity ledger: a seeded close_tab row renders 'Closed …' with Undo",
@@ -3173,18 +3176,63 @@ async function main() {
       "Activity ledger: retained the activity-surface screenshot",
       ledgerShot !== null && ledgerShot.length > 200,
     );
+    // chrome-agent-platform-co35: rows inside a CLOSED <details> are laid out
+    // but neither painted nor hit-testable — the Undo button held a real ghost
+    // rect over the sidebar foot's Directory button and every hit-tested click
+    // landed on the foot (the l0r 3/3 red). That was a JOURNEY artifact, not a
+    // product defect: a real owner opens the disclosure first (uplift-opus's
+    // review, measured on the base build — the Undo was never click-dead for a
+    // user). The product stays collapsed-by-default; this leg drives the REAL
+    // owner gesture — a genuine click on the summary — then asserts the button
+    // is hit-testable before clicking it, so a regression is the click-dead
+    // signature again, not a mystery.
+    const summaryClicked = await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+    let sectionOpen = false;
+    for (let i = 0; i < 12 && !sectionOpen; i++) {
+      sectionOpen = await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`);
+      if (!sectionOpen) await sleep(200);
+    }
+    const visibility = await evalIn(cdp, ntpSession, `(() => {
+      const section = document.getElementById("activity-ledger-section");
+      const el = document.getElementById("side-action-ledger");
+      const undo = el?.shadowRoot?.querySelector(".al-undo");
+      if (!section || !undo) return null;
+      // Scroll FIRST: in a shorter window the button can be out of view, and
+      // elementFromPoint then returns null for no product reason (uplift-opus).
+      undo.scrollIntoView({ block: "center", inline: "center" });
+      const r = undo.getBoundingClientRect();
+      const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+      // The shadow-root hit test is the honest one: document.elementFromPoint
+      // returns the shadow HOST for any point inside it, padding included.
+      const shadowHit = el.shadowRoot.elementFromPoint(cx, cy);
+      return { open: section.open, hidden: section.hidden,
+        visible: undo.checkVisibility?.() ?? null,
+        shadowHitIsButton: shadowHit === undo,
+        shadowHitTag: shadowHit ? shadowHit.tagName + "." + String(shadowHit.className).slice(0, 30) : null };
+    })()`);
+    check(
+      "Activity ledger: opening the disclosure makes the Undo button hit-testable (co35)",
+      summaryClicked === true && sectionOpen === true &&
+        visibility !== null && visibility.open === true && visibility.hidden === false &&
+        visibility.visible === true && visibility.shadowHitIsButton === true,
+      visibility,
+    );
     // A REAL Undo — a genuine click on the button in the component's shadow DOM.
     // It calls actions.undo, which re-runs delete_named_agent through the SAME
     // executor (owner-direct via the clicking document's identity).
     const undoClicked = await clickShadow(cdp, ntpSession, "#side-action-ledger", ".al-undo");
     let agentGone = false;
     let rowUndone = false;
+    let lastAgentIds = null;
+    let lastRow = null;
     for (let i = 0; i < 24; i++) {
       const list = await msgValue({ type: "named-agent.list" });
       const ids = (list?.agents ?? []).map((a) => a.id);
+      lastAgentIds = ids;
       agentGone = createdAgentId !== null && !ids.includes(createdAgentId);
       const r = await msgValue({ type: "actions.list", limit: 20 });
       const row = (r?.rows ?? []).find((x) => x.id === createRow?.id);
+      lastRow = row ?? null;
       rowUndone = row?.undone === true;
       if (agentGone && rowUndone) break;
       await sleep(250);
@@ -3192,9 +3240,27 @@ async function main() {
     check(
       "Activity ledger: a real Undo deletes the agent and marks the row undone",
       undoClicked && agentGone && rowUndone,
+      { undoClicked, agentGone, rowUndone, createdAgentId, agentIdsAfter: lastAgentIds, rowAfter: lastRow },
     );
+    // check() discards its third argument (a harness-wide gap — other call
+    // sites pass diagnostics that never print), so the leg evidence is printed
+    // HERE or it does not exist (chrome-agent-platform-co35).
+    if (!(undoClicked && agentGone && rowUndone)) {
+      console.log("[co35 undo leg]", JSON.stringify({ undoClicked, agentGone, rowUndone, createdAgentId, agentIdsAfter: lastAgentIds, rowAfter: lastRow }));
+    }
     const undoShot = await captureShot(cdp, ntpSession);
     if (undoShot) await writeEvidence("ntp-activity-ledger-undone.png", undoShot);
+    // Restore Activity's collapsed default so the later legs see the page a
+    // user sees (co35 re-review, uplift-opus: leaving the disclosure open cost
+    // five downstream Thread-view checks). Guarded: only click when the leg
+    // actually opened it, so a failed leg is not compounded by opening it.
+    if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open === true`)) {
+      await clickSel(cdp, ntpSession, "#activity-ledger-section > summary");
+      for (let i = 0; i < 12; i++) {
+        if (await evalIn(cdp, ntpSession, `document.getElementById("activity-ledger-section")?.open !== true`)) break;
+        await sleep(200);
+      }
+    }
     check(
       "Activity ledger: retained the after-undo screenshot",
       undoShot !== null && undoShot.length > 200,
@@ -3407,9 +3473,15 @@ async function main() {
       permPanel?.rows > 0 && permPanel?.enableButtons > 0 && permPanel?.states === permPanel?.rows &&
         permPanel?.mandatoryRows >= 3,
     );
+    // chrome-agent-platform-co35: the panel grew a FIFTH group — "Chrome site
+    // access" (voicebox-beads-4dg lineage, reads chrome.permissions.getAll) —
+    // appended after the mandatory group. The old exact-match on four groups
+    // turned deterministic-red the day that landed; re-pinned to the post-fix
+    // truth with the fifth group named, so the next new group still trips this.
     check(
       "permissions: the rows are grouped Browsing · Content · System · Always on",
-      JSON.stringify(permPanel?.groups) === JSON.stringify(["Browsing", "Content", "System", "Always on"]),
+      JSON.stringify(permPanel?.groups) === JSON.stringify(["Browsing", "Content", "System", "Always on", "Chrome site access"]),
+      { groups: permPanel?.groups },
     );
 
     // tabs + notifications are OPTIONAL now — verified NOT granted at boot.
@@ -8373,7 +8445,7 @@ async function main() {
       "assertion order matches EXPECTED",
     ]);
     const FINAL_CHECK = "assertion set exact (no missing/extra checks)";
-    const missing = EXPECTED.filter((n) => !META_CHECKS.has(n) && !ran.has(n));
+    const missing = EXPECTED.filter((n) => !META_CHECKS.has(n) && !ran.has(n) && !shutdownRan.has(n));
     const extra = [...ran].filter((n) => !EXPECTED.includes(n));
     for (const n of missing) {
       console.log(`FAIL: ${n} (not reached)`);

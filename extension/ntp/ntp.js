@@ -1590,6 +1590,9 @@ function renderActionLedger() {
   if (!actionLedgerEl || !section) return;
   actionLedgerEl.addEventListener("entries-change", (ev) => {
     const count = Number(ev.detail?.count ?? 0);
+    // co35 (uplift-opus review): Activity stays collapsed-by-default as
+    // ntp.html declares it — the Undo leg was a JOURNEY artifact (it clicked
+    // inside a closed <details>), never a product defect. No auto-open here.
     section.hidden = count === 0;
     const countEl = document.getElementById("side-activity-count");
     if (countEl) countEl.textContent = count ? `(${count})` : "";

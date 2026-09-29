@@ -153,7 +153,7 @@ export function extractLedgerAndCalls(rawSource, filePath = "unknown") {
 
   // Helper to extract calls in a source segment
   function extractCallsInSegment(segment) {
-    const callRegex = /\b(?:check|report)\s*\(\s*(?:"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`|([A-Za-z0-9_$]+))/g;
+    const callRegex = /\b(?:check|checkShutdown|report)\s*\(\s*(?:"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`|([A-Za-z0-9_$]+))/g;
     const calls = [];
     let m;
     while ((m = callRegex.exec(segment))) {
