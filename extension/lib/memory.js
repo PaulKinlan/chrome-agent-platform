@@ -561,7 +561,7 @@ async function writeEntry(dir, name, value, version) {
  * or a failed CAS can never RECREATE a directory that cleanup just removed
  * (the round-27 cleanup-recreation blocker: `openDir(create:true)` inside a CAS
  * resurrected a deleted origin directory even when the CAS mutated nothing). */
-async function openDirOptional(segments) {
+export async function openDirOptional(segments) {
   let dir = await rootDir();
   for (const seg of segments) {
     try {

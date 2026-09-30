@@ -101,7 +101,7 @@ Deno.test("subscribe a permission-free hook succeeds", async () => {
   const subs = await getHookSubscriptions();
   assertEquals(subs.length, 1);
   assertEquals(subs[0].hookId, "runtime.onStartup");
-  assertEquals(subs[0].recipeId, "auto-group-by-domain");
+  assertEquals(subs[0].skillId, "auto-group-by-domain");
 });
 
 Deno.test("subscribe is idempotent for the same (hook, skill)", async () => {
@@ -162,7 +162,7 @@ Deno.test("unsubscribe removes only the matching entry", async () => {
   await unsubscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
   const subs = await getHookSubscriptions();
   assertEquals(subs.length, 1);
-  assertEquals(subs[0].recipeId, "auto-pin-favorites");
+  assertEquals(subs[0].skillId, "auto-pin-favorites");
 });
 
 Deno.test("hookStatus reflects deny + subscribers", async () => {
@@ -223,7 +223,7 @@ Deno.test("concurrent subscribes of DISTINCT skills do not last-write-wins (the 
     subscribeHook({ hookId: "runtime.onStartup", recipeId: "page-summary" }),
   ]);
   const subs = await getHookSubscriptions();
-  const ids = subs.map((s) => s.recipeId);
+  const ids = subs.map((s) => s.skillId);
   assert(ids.includes("tab-hygiene"), "tab-hygiene subscription must survive");
   assert(ids.includes("page-summary"), "page-summary subscription must survive");
 });

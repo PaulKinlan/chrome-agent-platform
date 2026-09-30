@@ -2417,7 +2417,14 @@ export async function sweepOrphanAgentData({ listAgents, listTasks, registry = n
   for (const slug of backgroundIds) {
     let decoded = slug;
     try { decoded = decodeURIComponent(slug); } catch { /* compare raw */ }
-    const owned = [...liveTaskNames].some((name) => backgroundAgentSlug(name) === slug || backgroundAgentSlug(name) === decoded);
+    const owned = [...liveTaskNames].some((name) => {
+      if (backgroundAgentSlug(name) === slug || backgroundAgentSlug(name) === decoded) return true;
+      const m = /^(?:skill|recipe):(.+)$/.exec(name);
+      if (!m) return false;
+      const skillSlug = backgroundAgentSlug(`skill:${m[1]}`);
+      const legacySlug = backgroundAgentSlug(`recipe:${m[1]}`);
+      return slug === skillSlug || decoded === skillSlug || slug === legacySlug || decoded === legacySlug;
+    });
     if (owned) continue;
     try {
       const purged = await reg.purgeForTarget(`background:${decoded}`);

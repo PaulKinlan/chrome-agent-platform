@@ -25,13 +25,12 @@ export const SCHEDULED_REPORT_MAX_SUMMARY = 4000;
 export const SCHEDULED_REPORT_KEY_PREFIX = "scheduled-report:";
 
 /** Recover the agent slug from a schedule/alarm name (`agent:<slug>`,
- * `recipe:<id>`, `background:<id>`, `named:<slug>`) or fall back to the raw
- * task id. The slug keys the rolling report, so it must be stable per agent. */
+ * `skill:<id>`, `recipe:<id>`, `background:<id>`, `named:<slug>`) or fall back
+ * to the raw task id. The slug keys the rolling report, so it must be stable per agent. */
 export function scheduledReportSlug(scheduleName, fallback = "run") {
   const s = String(scheduleName ?? "").trim();
-  // "recipe:" is a persisted schedule-name prefix (chrome-agent-platform-e5oe
-  // owns its migration), kept here so legacy rows still project honestly.
-  for (const prefix of ["agent:", "recipe:", "background:", "named:"]) {
+  // "recipe:" is retained alongside "skill:" so legacy pre-migration rows still project honestly.
+  for (const prefix of ["agent:", "skill:", "recipe:", "background:", "named:"]) {
     if (s.startsWith(prefix)) {
       const rest = s.slice(prefix.length).trim();
       if (rest) return rest;

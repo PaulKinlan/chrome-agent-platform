@@ -434,22 +434,29 @@ export function managementToolset({ callRoute }) {
     }),
     subscribe_hook: tool({
       description:
-        "Subscribe a background skill (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its install-granted permission cannot be verified. recipeId may be omitted to subscribe the master agent.",
+        "Subscribe a background skill (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its install-granted permission cannot be verified. skillId may be omitted to subscribe the master agent.",
       inputSchema: z.object({
         hookId: z.string().describe("the hook id, e.g. tabs.onCreated"),
-        recipeId: z.string().optional().describe("a background skill id, or omit for the master agent"),
+        skillId: z.string().optional().describe("a background skill id, or omit for the master agent"),
+        recipeId: z.string().optional().describe("legacy alias for skillId"),
         promptTemplate: z.string().optional().describe("a prompt template; {{payload}} is replaced with the event payload"),
       }),
-      execute: ({ hookId, recipeId, promptTemplate }) =>
-        call("hooks.subscribe", { hookId, recipeId, promptTemplate }),
+      execute: ({ hookId, skillId, recipeId, promptTemplate }) => {
+        const resolvedSkillId = skillId ?? recipeId;
+        return call("hooks.subscribe", { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId, promptTemplate });
+      },
     }),
     unsubscribe_hook: tool({
       description: "Unsubscribe an agent/skill from a system event.",
       inputSchema: z.object({
         hookId: z.string(),
+        skillId: z.string().optional(),
         recipeId: z.string().optional(),
       }),
-      execute: ({ hookId, recipeId }) => call("hooks.unsubscribe", { hookId, recipeId }),
+      execute: ({ hookId, skillId, recipeId }) => {
+        const resolvedSkillId = skillId ?? recipeId;
+        return call("hooks.unsubscribe", { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId });
+      },
     }),
 
     // ---- generative UI (the co-do double-iframe) ----

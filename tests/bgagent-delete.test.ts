@@ -198,7 +198,7 @@ Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", 
   // background-agent.delete tears the schedule down NON-BLOCKING (instant-delete contract)
   assertMatch(
     src,
-    /async "background-agent\.delete"\([\s\S]{0,2000}?cancelScheduledTaskBackground\(`recipe:\$\{id\}`\)/,
+    /async "background-agent\.delete"\([\s\S]{0,2000}?cancelScheduledTaskBackground\(`skill:\$\{id\}`\)/,
     "background-agent.delete must use the non-blocking cancel",
   );
   // The durable-before-response contract: BOTH routes await the teardown's
@@ -211,7 +211,7 @@ Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", 
   );
   assertMatch(
     src,
-    /cancelScheduledTaskBackground\(`recipe:\$\{id\}`\);[\s\S]{0,200}?await teardown\.marked;/,
+    /cancelScheduledTaskBackground\(`skill:\$\{id\}`\);[\s\S]{0,300}?await Promise\.all\(\[teardown\.marked, legacyTeardown\.marked\]\);/,
     "background-agent.delete must await the durable mark before responding",
   );
   assertMatch(

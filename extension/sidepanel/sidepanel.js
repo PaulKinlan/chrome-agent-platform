@@ -811,7 +811,7 @@ async function renderTasks() {
     });
     row.addEventListener("open", () => {
       // A skill task belongs to its background agent — open its conversation.
-      const m = /^recipe:(.+)$/.exec(String(t.name ?? ""));
+      const m = /^(?:skill|recipe):(.+)$/.exec(String(t.name ?? ""));
       if (!m) return;
       openAgentByRef(`background:${m[1]}`);
     });

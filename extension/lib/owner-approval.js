@@ -413,8 +413,9 @@ export function canonicalOperationTarget(kind, parts = Object.create(null)) {
     }
     case "hook": {
       const hookId = typeof parts.hookId === "string" ? parts.hookId.trim() : "";
-      const recipeId = parts.recipeId == null ? "" : (typeof parts.recipeId === "string" ? parts.recipeId.trim() : "");
-      values = [hookId, recipeId];
+      const rawSkillId = parts.skillId !== undefined ? parts.skillId : parts.recipeId;
+      const skillId = rawSkillId == null ? "" : (typeof rawSkillId === "string" ? rawSkillId.trim() : "");
+      values = [hookId, skillId];
       break;
     }
     default:

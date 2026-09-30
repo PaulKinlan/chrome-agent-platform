@@ -6,6 +6,7 @@ import { capLog } from "./cap-log.js";
 import { newId } from "./pure.js";
 import { kvGet, kvSet } from "./kv.js";
 import { assertRunAlive, assertRunOwned } from "./run-fence.js";
+import { migrateSkillIdentities } from "./skill-identity-migration.js";
 
 const TASK_KEY = "cap:scheduledTasks";
 const INFLIGHT_KEY = "cap:scheduledInflight";
@@ -155,6 +156,7 @@ function withLock(fn) {
   mutex = run.then(() => {}, () => {});
   return run;
 }
+export const withSchedulerLock = withLock;
 
 export const SCHEDULED_TASK_KEY = TASK_KEY;
 
@@ -1159,10 +1161,14 @@ let bootRecoveryPromise = null;
 let bootRecoveryTimer = null;
 export function recoverOnBoot() {
   if (bootRecoveryPromise) return bootRecoveryPromise;
-  // NOTE: clearStaleInflight + reconcileScheduledTasks each take the lock
-  // themselves; do NOT wrap them in another withLock (nested lock = deadlock).
+  // NOTE: clearStaleInflight + migrateSkillIdentities + reconcileScheduledTasks
+  // each take the lock themselves; do NOT wrap them in another withLock (nested lock = deadlock).
   bootRecoveryPromise = (async () => {
     await clearStaleInflight();
+    await migrateSkillIdentities({
+      withLock,
+      isTaskActive: (name) => activeRuns.has(name),
+    });
     return await reconcileScheduledTasks();
   })().catch((err) => {
     bootRecoveryPromise = null; // reset so a later call retries

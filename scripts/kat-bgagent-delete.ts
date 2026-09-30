@@ -173,8 +173,8 @@ const seed = await ntp.ev(`(async () => {
   const en = await msg({ type: "background-agent.set", id: dup.skill.id, enabled: true });
   if (!en?.ok) return { step: "enable", en };
   const tasks = await msg({ type: "task.list" });
-  const scheduled = (tasks?.tasks ?? tasks ?? []).some?.((t) => t?.name === \`recipe:\${dup.skill.id}\`)
-    ?? JSON.stringify(tasks ?? {}).includes(\`recipe:\${dup.skill.id}\`);
+  const scheduled = (tasks?.tasks ?? tasks ?? []).some?.((t) => t?.name === \`skill:\${dup.skill.id}\` || t?.name === \`recipe:\${dup.skill.id}\`)
+    ?? (JSON.stringify(tasks ?? {}).includes(\`skill:\${dup.skill.id}\`) || JSON.stringify(tasks ?? {}).includes(\`recipe:\${dup.skill.id}\`));
   return { step: "done", id: dup.skill.id, name: dup.skill.name, scheduled };
 })()`);
 check("journey: the custom background agent seeds + schedules for real", seed?.step === "done" && seed.scheduled === true, seed);
@@ -287,17 +287,18 @@ for (let i = 0; i < 60 && rowGoneMs < 0; i++) {
 check("journey: the row disappears from the DOM after accepting", rowGoneMs > 0, { rowGoneMs });
 check("journey: the delete round-trip is prompt (non-blocking UI, < 5s)", rowGoneMs > 0 && rowGoneMs < 5000, { rowGoneMs });
 
-// The task store must lose the recipe:<id> task (async teardown completes).
+// The task store must lose the skill:<id> (and legacy recipe:<id>) task (async teardown completes).
 let taskGone = false;
 for (let i = 0; i < 40 && !taskGone; i++) {
   await sleep(250);
   taskGone = await ntp.ev(`(async () => {
     const msg = (m) => new Promise((res) => chrome.runtime.sendMessage(m, (r) => { void chrome.runtime.lastError; res(r); }));
     const tasks = await msg({ type: "task.list" });
-    return !JSON.stringify(tasks ?? {}).includes("recipe:${agentId}");
+    const raw = JSON.stringify(tasks ?? {});
+    return !raw.includes("skill:${agentId}") && !raw.includes("recipe:${agentId}");
   })()`) === true;
 }
-check("journey: the recipe:<id> task is GONE from the task store", taskGone === true, { agentId });
+check("journey: the skill:<id> task is GONE from the task store", taskGone === true, { agentId });
 
 // The custom recipe record must be gone from the registry (a full delete).
 const registryAfter = await ntp.ev(`(async () => {

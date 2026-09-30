@@ -494,8 +494,8 @@ check("the collision row is the NAMED agent (avatar + its own 60-min schedule ch
   collision?.mainHasAvatar === true && collision?.mainChip === "Scheduled · every 60 min", collision);
 check("the sidebar renders the collision once, with no 'background' label",
   collision?.sideRows === 1 && collision?.sideHasBackgroundLabel === false, collision);
-const bothAlarms = (await alarms()).filter((a: any) => a.name === "agent:price-watcher" || a.name === "recipe:price-watcher");
-check("both schedules genuinely exist under the hood (agent: + recipe: families)",
+const bothAlarms = (await alarms()).filter((a: any) => a.name === "agent:price-watcher" || a.name === "skill:price-watcher" || a.name === "recipe:price-watcher");
+check("both schedules genuinely exist under the hood (agent: + skill: families)",
   bothAlarms.length === 2, bothAlarms);
 const countText = await ev(`document.getElementById('agent-count')?.textContent ?? ''`);
 check("the agent count is unified (no named/background split)", /agents? ·/.test(countText) && !/background/.test(countText), countText);

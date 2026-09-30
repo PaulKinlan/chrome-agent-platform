@@ -414,10 +414,10 @@ export async function checkHookAllowed(hookId) {
 
 // ---- subscriptions (the registry) ----
 
-/** All subscriptions: [{ hookId, recipeId|null, promptTemplate, enabled, at }].
- * `recipeId` is the PERSISTED field name in cap:hooks (the l0r rename stopped
- * at code vocabulary; the stored field + the hooks.subscribe tool schema move
- * together in chrome-agent-platform-e5oe's storage migration). */
+/** All subscriptions: [{ hookId, skillId|null, promptTemplate, enabled, at }].
+ * Legacy records written before chrome-agent-platform-e5oe may carry `recipeId`;
+ * `migrateHookSubscriptions` re-keys them to `skillId` on boot and all read
+ * paths accept `s.skillId ?? s.recipeId ?? null`. */
 export async function getHookSubscriptions() {
   const stored = await kvGet(SUBSCRIPTIONS_KEY);
   const list = stored[SUBSCRIPTIONS_KEY];
@@ -429,31 +429,71 @@ async function writeSubscriptions(list) {
 }
 
 /**
+ * Idempotently migrate legacy `recipeId` fields in `cap:hooks` to `skillId`.
+ * Runs under the hook mutex so concurrent subscribe/unsubscribe calls serialize.
+ */
+export async function migrateHookSubscriptions() {
+  return withHookLock(async () => {
+    const stored = await kvGet(SUBSCRIPTIONS_KEY);
+    const list = stored[SUBSCRIPTIONS_KEY];
+    if (!Array.isArray(list)) return { migrated: 0 };
+    let migrated = 0;
+    const next = [];
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object") continue;
+      const resolvedSkillId = raw.skillId ?? raw.recipeId ?? null;
+      const hadLegacyField = Object.prototype.hasOwnProperty.call(raw, "recipeId");
+      const missingSkillId = !Object.prototype.hasOwnProperty.call(raw, "skillId");
+      const normalized = {
+        ...raw,
+        skillId: resolvedSkillId,
+      };
+      delete normalized.recipeId;
+      if (hadLegacyField || missingSkillId) migrated += 1;
+      const dupIdx = next.findIndex(
+        (s) => s.hookId === normalized.hookId && (s.skillId ?? null) === resolvedSkillId,
+      );
+      if (dupIdx >= 0) {
+        next[dupIdx] = normalized;
+      } else {
+        next.push(normalized);
+      }
+    }
+    if (migrated > 0 || next.length !== list.length) {
+      await writeSubscriptions(next);
+    }
+    return { migrated };
+  });
+}
+
+/**
  * Subscribe an agent/skill to a hook. Data only (never eval). The deny-list is
  * checked FIRST (fail-closed): a denied hook, or a hook whose optional
  * permission is absent, is refused.
  *
  * @param {string} hookId  the HOOKS catalog id
- * @param {string|null} recipeId  a skill id, or null for the master hub agent
+ * @param {string|null} [skillId]  a skill id, or null for the master hub agent
+ * @param {string|null} [recipeId]  legacy alias for skillId
  * @param {string} promptTemplate  a prompt template; the event payload is
  *   serialized into `{{payload}}` when the hook fires (default: the skill's
  *   own prompt + the payload appended)
  */
 export async function subscribeHook(
-  { hookId, recipeId = null, promptTemplate = "" },
+  { hookId, skillId = null, recipeId = null, promptTemplate = "" },
   { gateOnReplace = null } = {},
 ) {
   const allowed = await checkHookAllowed(hookId);
   if (!allowed.ok) return allowed;
-  // VALIDATE the recipeId: null (the master hub agent) or a KNOWN skill id.
-  // An arbitrary/unknown recipeId must not create a distinct fan-out row that a
+  const targetSkillId = skillId ?? recipeId ?? null;
+  // VALIDATE the targetSkillId: null (the master hub agent) or a KNOWN skill id.
+  // An arbitrary/unknown skillId must not create a distinct fan-out row that a
   // single event can enqueue.
-  if (recipeId != null) {
-    if (typeof recipeId !== "string" || !recipeId || recipeId.length > 128) {
-      return { ok: false, error: "invalid recipeId" };
+  if (targetSkillId != null) {
+    if (typeof targetSkillId !== "string" || !targetSkillId || targetSkillId.length > 128) {
+      return { ok: false, error: "invalid skillId" };
     }
-    if (!getSkill(recipeId)) {
-      return { ok: false, error: `unknown skill: ${recipeId}` };
+    if (!getSkill(targetSkillId)) {
+      return { ok: false, error: `unknown skill: ${targetSkillId}` };
     }
   }
   const template = typeof promptTemplate === "string" ? promptTemplate : "";
@@ -464,11 +504,11 @@ export async function subscribeHook(
     const list = await getHookSubscriptions();
     // Idempotent: re-subscribing the same (hook, skill) replaces the entry.
     const existing = list.find(
-      (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
+      (s) => s.hookId === hookId && (s.skillId ?? s.recipeId ?? null) === targetSkillId,
     );
     const entry = {
       hookId,
-      recipeId: recipeId ?? null,
+      skillId: targetSkillId,
       promptTemplate: template,
       enabled: true,
       at: new Date().toISOString(),
@@ -478,33 +518,35 @@ export async function subscribeHook(
       if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
     }
     if (existing) {
+      delete existing.recipeId;
       Object.assign(existing, entry);
     } else {
       list.push(entry);
     }
     await writeSubscriptions(list);
-    return { ok: true, hookId, recipeId: recipeId ?? null };
+    return { ok: true, hookId, skillId: targetSkillId, recipeId: targetSkillId };
   });
 }
 
 export async function unsubscribeHook(
-  { hookId, recipeId = null },
+  { hookId, skillId = null, recipeId = null },
   { gateBeforeDelete = null } = {},
 ) {
+  const targetSkillId = skillId ?? recipeId ?? null;
   return withHookLock(async () => {
     const list = await getHookSubscriptions();
     const existing = list.find(
-      (s) => s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null),
+      (s) => s.hookId === hookId && (s.skillId ?? s.recipeId ?? null) === targetSkillId,
     );
     if (existing && typeof gateBeforeDelete === "function") {
       const gate = await gateBeforeDelete({ existing: { ...existing } });
       if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
     }
     const next = list.filter(
-      (s) => !(s.hookId === hookId && (s.recipeId ?? null) === (recipeId ?? null)),
+      (s) => !(s.hookId === hookId && (s.skillId ?? s.recipeId ?? null) === targetSkillId),
     );
     await writeSubscriptions(next);
-    return { ok: true, hookId, recipeId: recipeId ?? null };
+    return { ok: true, hookId, skillId: targetSkillId, recipeId: targetSkillId };
   });
 }
 
@@ -515,7 +557,7 @@ export async function hookStatus() {
   const byHook = new Map();
   for (const s of subs) {
     if (!byHook.has(s.hookId)) byHook.set(s.hookId, []);
-    byHook.get(s.hookId).push(s.recipeId ?? "master");
+    byHook.get(s.hookId).push(s.skillId ?? s.recipeId ?? "master");
   }
   return HOOKS.map((h) => ({
     id: h.id,
