@@ -22,6 +22,7 @@ import {
   selectionFromAgentCandidate,
   shouldApplyRegistrySnapshot,
 } from "./agent-registry.js";
+import { harnessMarkKey, harnessMonogram } from "./harness-marks.js";
 import { parseMentionToken, parseSlashCommand } from "./command-parser.js";
 import { skillMatchesUrl } from "./match-patterns.js";
 // The hub's activity allowlist — the SERVER (routes/activity.js) is the single
@@ -9798,6 +9799,34 @@ class AgentPicker extends Component {
       .current-badge { border:1px solid var(--accent,#0e6e63); color:var(--accent,#0e6e63); border-radius:999px;
         padding:1px 8px; font-size:10px; font-weight:700; }
       .sel { color:var(--accent,#0e6e63); display:inline-flex; }
+      .status.paired {
+        background: var(--success-bg, rgba(27, 135, 63, 0.1));
+        color: var(--success, #1b873f);
+        border: 1px solid var(--success, #1b873f);
+        border-radius: 999px;
+        padding: 1px 7px;
+        font-weight: 600;
+        font-size: 10px;
+      }
+      .unpaired-harnesses { margin: 6px 4px 4px; font-size: 12px; }
+      .unpaired-summary {
+        cursor: pointer; color: var(--accent, #0e6e63); font-weight: 500;
+        padding: 6px 8px; border-radius: 6px; user-select: none;
+        list-style: none; display: flex; align-items: center; gap: 6px;
+      }
+      .unpaired-summary::-webkit-details-marker { display: none; }
+      .unpaired-summary::before {
+        content: ""; display: inline-block; width: 0; height: 0;
+        border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+        border-left: 5px solid currentColor; transition: transform 0.15s ease;
+      }
+      .unpaired-harnesses[open] > .unpaired-summary::before {
+        transform: rotate(90deg);
+      }
+      .unpaired-summary:hover { background: var(--panel-2, #efede8); }
+      .unpaired-summary:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: 1px; }
+      .unpaired-list { margin-top: 4px; padding-left: 4px; }
+      @media (prefers-reduced-motion: reduce) { .unpaired-summary::before { transition: none; } }
       .state { padding:12px 10px; font-size:12.5px; color:var(--muted,#635e56); display:flex; align-items:center; gap:8px; }
       .state.error { color:var(--danger,#b3261e); }
       .retry { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
@@ -9908,11 +9937,14 @@ class AgentPicker extends Component {
         gHead.textContent = groupLabel;
         group.appendChild(gHead);
       }
-      for (const a of g.agents) {
+      const renderAgentOpt = (a, parent) => {
         const ref = a.ref ?? canonicalRef(a.kind, a.id);
         const isSelected = !!selected && ref === selected;
         const isCurrent = !!currentId && String(a.id).toLowerCase() === currentId.toLowerCase();
-        const initial = (String(a.name || a.id || "?").trim()[0] || "?").toUpperCase();
+        const isHarness = a.kind === "acp" || !!harnessMarkKey(a.id);
+        const monogram = isHarness
+          ? harnessMonogram(a.id, a.name)
+          : (String(a.name || a.id || "?").trim()[0] || "?").toUpperCase();
         const skills = Array.isArray(a.skills) && a.skills.length
           ? ` · ${a.skills.slice(0, 3).join(", ")}${a.skills.length > 3 ? "…" : ""}`
           : "";
@@ -9923,6 +9955,7 @@ class AgentPicker extends Component {
         // The row's canonical ref, so a host that re-renders the list can find
         // its successor row after a delete (no positional guessing).
         opt.dataset.ref = String(ref);
+        if (isHarness) opt.dataset.harness = String(a.id);
         // Combobox mode is a listbox of options; the summary presentation has no
         // search input to own them, so the rows stay plain buttons (a role=option
         // outside a listbox is the invalid half of the pair).
@@ -9942,7 +9975,7 @@ class AgentPicker extends Component {
           img.alt = "";
           avatar.appendChild(img);
         } else {
-          avatar.textContent = initial;
+          avatar.textContent = monogram;
         }
         opt.appendChild(avatar);
         const who = document.createElement("span");
@@ -9959,10 +9992,16 @@ class AgentPicker extends Component {
         opt.appendChild(who);
         const meta = document.createElement("span");
         meta.className = "meta";
+        const isPaired = a.paired === true || (a.status && ["paired", "connected", "ready", "online"].includes(String(a.status).toLowerCase().trim()));
         if (a.status) {
           const status = document.createElement("span");
-          status.className = "status";
+          status.className = isPaired ? "status paired" : "status";
           status.textContent = String(a.status);
+          meta.appendChild(status);
+        } else if (isHarness && isPaired) {
+          const status = document.createElement("span");
+          status.className = "status paired";
+          status.textContent = "Paired";
           meta.appendChild(status);
         }
         if (isCurrent) {
@@ -9996,11 +10035,54 @@ class AgentPicker extends Component {
           const wrap = document.createElement("div");
           wrap.className = "optwrap";
           wrap.append(opt, del);
-          group.appendChild(wrap);
+          parent.appendChild(wrap);
         } else {
-          group.appendChild(opt);
+          parent.appendChild(opt);
         }
         idx++;
+      };
+
+      if (g.id === "acp") {
+        const paired = [];
+        const unpaired = [];
+        for (const a of g.agents) {
+          const isPaired = a.paired === true || (a.status && ["paired", "connected", "ready", "online"].includes(String(a.status).toLowerCase().trim()));
+          if (isPaired) paired.push(a);
+          else unpaired.push(a);
+        }
+        for (const a of paired) {
+          renderAgentOpt(a, group);
+        }
+        if (unpaired.length > 0) {
+          const disc = document.createElement("details");
+          disc.className = "unpaired-harnesses";
+          if (this._query) disc.open = true;
+          const summ = document.createElement("summary");
+          summ.className = "unpaired-summary";
+          const linkText = document.createElement("span");
+          linkText.className = "unpaired-link-text";
+          linkText.textContent = "Pair a local CLI agent in Settings \u2192";
+          linkText.title = "Open Settings to pair a local agent harness";
+          linkText.addEventListener("click", (e) => {
+            if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+              chrome.runtime.openOptionsPage();
+            }
+          });
+          summ.appendChild(linkText);
+          disc.appendChild(summ);
+
+          const list = document.createElement("div");
+          list.className = "unpaired-list";
+          for (const a of unpaired) {
+            renderAgentOpt(a, list);
+          }
+          disc.appendChild(list);
+          group.appendChild(disc);
+        }
+      } else {
+        for (const a of g.agents) {
+          renderAgentOpt(a, group);
+        }
       }
       this._list.appendChild(group);
     }

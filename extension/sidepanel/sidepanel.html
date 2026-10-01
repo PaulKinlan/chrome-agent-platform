@@ -54,6 +54,16 @@
 
   /* the conversation for this tab is the main, scrolling surface */
   #page-history { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; }
+  #page-history:empty { display: none; }
+  .page-empty-state { display:flex; flex-direction:column; gap:8px; padding:16px 14px; margin: 12px 0 8px; }
+  .page-empty-state[hidden] { display:none; }
+  .empty-lead { margin:0; font-size:12px; color:var(--muted); line-height:1.4; }
+  .suggestion-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip-suggestion { display:inline-flex; align-items:center; min-height:28px; padding:3px 10px;
+    border:1px solid var(--border,#e3e0d9); border-radius:999px; background:var(--panel,#fff);
+    color:var(--text,#1d1b18); font:inherit; font-size:12px; cursor:pointer; }
+  .chip-suggestion:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+  .chip-suggestion:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
 
   .ledger-sect { padding: 10px 14px 12px; border-top: 1px solid var(--border); }
   .tasks-h { font-size: 11px; font-weight: 700; letter-spacing: .01em; color: var(--muted); margin: 0 0 6px; }
@@ -171,7 +181,15 @@
     <div class="status" id="status" role="status" aria-live="polite" aria-atomic="true"></div>
     <div class="tools" id="tools" aria-label="Available tools on this page"></div>
     <agent-conversation id="page-history" role="log" aria-live="polite" aria-relevant="additions"></agent-conversation>
-    <div class="harness-quick" id="harness-quick-page" aria-label="Harness agents"></div>
+    <div class="page-empty-state" id="page-empty-state">
+      <p class="empty-lead">Ask anything about this page or pick a suggested action.</p>
+      <div class="suggestion-chips" role="group" aria-label="Suggestions">
+        <button type="button" class="chip-suggestion" data-prompt="Summarize this page">Summarize page</button>
+        <button type="button" class="chip-suggestion" data-prompt="Find key takeaways from this page">Key takeaways</button>
+        <button type="button" class="chip-suggestion" data-prompt="Explain this page">Explain page</button>
+      </div>
+    </div>
+    <div class="harness-quick agent-strip" id="harness-quick-page" aria-label="Harness agents"></div>
     <div class="page-composer">
       <agent-composer id="page-composer" placeholder="Ask about this page, or ask the agent to act on it…" send-label="Ask" label="Ask the agent about this page"></agent-composer>
     </div>
@@ -189,9 +207,6 @@
 
   <section id="agents-view" role="tabpanel" aria-labelledby="tab-agents" hidden>
     <div id="agents-list-pane">
-      <!-- One-click access to the external harness agents (ACP): the entries
-           come from the same agent.registry route as the picker below. -->
-      <div class="harness-quick" id="harness-quick" aria-label="Harness agents"></div>
       <agent-picker id="agents-picker" label="Agents" callable-only></agent-picker>
       <div class="tasks-sect">
         <h2 class="tasks-h agent-section-h">Scheduled tasks</h2>
