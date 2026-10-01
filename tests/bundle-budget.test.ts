@@ -491,3 +491,53 @@ Deno.test("9epn.5 dynamic evaluator gate covers all surface bundles without dyna
     assertNoDynamicEvaluators(source, b);
   }
 });
+
+Deno.test("9epn.5 self-contained single bundles: zero runtime relative imports to ../lib/ or ../shared/ (1 JS file instead of 18–22 unbundled requests)", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const surfaceBundles = [
+    "artifacts.bundle.js",
+    "directory.bundle.js",
+    "artifact.bundle.js",
+    "privacy.bundle.js",
+    "offscreen.bundle.js",
+  ];
+
+  for (const bundleName of surfaceBundles) {
+    const bundlePath = join(repo, "extension", "dist", bundleName);
+    const source = await Deno.readTextFile(bundlePath);
+
+    // Verify bundle has zero runtime import statements targeting relative lib/ or shared/ modules
+    const relativeImportPattern = /(?:import|export)\s+(?:(?:[\w*\s{},]*)\s+from\s+)?["'](\.\.\/(?:lib|shared)\/[^"']+)["']/g;
+    const matches = [...source.matchAll(relativeImportPattern)].map((m) => m[1]);
+    assertEquals(
+      matches,
+      [],
+      `${bundleName} must not contain relative imports to ../lib/ or ../shared/ (found: ${matches.join(", ")})`,
+    );
+
+    // Also check dynamic import(...) expressions targeting ../lib/ or ../shared/
+    const dynamicImportPattern = /import\s*\(\s*["'](\.\.\/(?:lib|shared)\/[^"']+)["']\s*\)/g;
+    const dynamicMatches = [...source.matchAll(dynamicImportPattern)].map((m) => m[1]);
+    assertEquals(
+      dynamicMatches,
+      [],
+      `${bundleName} must not contain dynamic relative imports to ../lib/ or ../shared/ (found: ${dynamicMatches.join(", ")})`,
+    );
+
+    // Metafile output verification: verify from esbuild metafile that output declares zero external imports to lib/ or shared/
+    const reportName = bundleName.replace(".bundle.js", "");
+    const reportPath = join(repo, ".build", `bundle-report-${reportName}.json`);
+    const meta = JSON.parse(await Deno.readTextFile(reportPath));
+    for (const output of Object.values(meta.outputs ?? {}) as any[]) {
+      const externalImports = (output.imports ?? []).filter((imp: any) =>
+        imp.kind === "import-statement" && (imp.path.includes("lib/") || imp.path.includes("shared/"))
+      );
+      assertEquals(
+        externalImports,
+        [],
+        `${bundleName} metafile outputs must declare 0 imports to lib/ or shared/`,
+      );
+    }
+  }
+});
+

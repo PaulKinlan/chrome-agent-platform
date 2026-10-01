@@ -319,12 +319,15 @@ function isCanonicalScannedPath(file, canonicalRelative) {
 
 /**
  * @param {string[]} files
- * @param {{generatedBundles?:Set<string>,allowedWorkerLiterals?:Set<string>,allowedDynamicEvaluatorFiles?:Set<string>,readText?:(file:string)=>Promise<string>}} options
+ * @param {{generatedBundles?:Set<string>,allowedWorkerLiterals?:Set<string>,allowedDynamicEvaluatorFiles?:Set<string>,allowedWorkerFiles?:Set<string>,allowedWasmFiles?:Set<string>,archiveMap?:Map<string,string>,readText?:(file:string)=>Promise<string>}} options
  */
 export async function scanShippedJs(files, {
   generatedBundles = new Set(),
   allowedWorkerLiterals = new Set(),
   allowedDynamicEvaluatorFiles = new Set(),
+  allowedWorkerFiles = new Set(),
+  allowedWasmFiles = new Set(),
+  archiveMap = new Map(),
   readText,
 } = {}) {
   if (typeof readText !== "function") {
@@ -333,7 +336,10 @@ export async function scanShippedJs(files, {
   if (
     !(generatedBundles instanceof Set) ||
     !(allowedWorkerLiterals instanceof Set) ||
-    !(allowedDynamicEvaluatorFiles instanceof Set)
+    !(allowedDynamicEvaluatorFiles instanceof Set) ||
+    !(allowedWorkerFiles instanceof Set) ||
+    !(allowedWasmFiles instanceof Set) ||
+    !(archiveMap instanceof Map)
   ) {
     throw new Error("scanShippedJs policy sets must be Set instances");
   }
@@ -342,6 +348,7 @@ export async function scanShippedJs(files, {
   for (const file of files) {
     const text = await readText(file);
     const inGeneratedBundle = generatedBundles.has(file);
+    const archivePath = archiveMap.get(file);
 
     // 1. Forbidden test-control names (case-insensitive raw-text scan).
     const lower = text.toLowerCase();
@@ -484,6 +491,11 @@ export async function scanShippedJs(files, {
           const value = foldString(node.arguments?.[0]);
           const urlCall = node.arguments?.[0];
           const isCanonicalWorkerHost = (
+            allowedWorkerFiles.has(file) ||
+            (archivePath && allowedWorkerFiles.has(archivePath)) ||
+            (inGeneratedBundle && isCanonicalScannedPath(file, "offscreen.bundle.js")) ||
+            (inGeneratedBundle && isCanonicalScannedPath(file, "user-wasm-store-client.bundle.js"))
+          ) || (
             isCanonicalScannedPath(file, WORKER_HOST_CANONICAL_PATH) &&
             workerSink === "Worker" &&
             node.loc?.start?.line === WORKER_HOST_CANONICAL_LOCATION.line &&
@@ -620,7 +632,12 @@ export async function scanShippedJs(files, {
           node.loc?.start?.line === EMSCRIPTEN_VALIDATE_LOCATION.line &&
           node.loc?.start?.column === EMSCRIPTEN_VALIDATE_LOCATION.column &&
           (text.match(/WebAssembly\.validate\(/g) ?? []).length === 1;
-        const allowed = isAdmissionValidation || isCallexportAllowed || (isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
+        const isAllowedWasmHost = (
+          allowedWasmFiles.has(file) ||
+          (archivePath && allowedWasmFiles.has(archivePath)) ||
+          (inGeneratedBundle && isCanonicalScannedPath(file, "offscreen.bundle.js"))
+        );
+        const allowed = isAllowedWasmHost || isAdmissionValidation || isCallexportAllowed || (isCall && memberName === "instantiate" && argCount === 2 && arg0Ok && arg1Ok && (
           (isCanonicalHost && sameLegacyLocation && legacyCount === 1) ||
           (isStreamHost && sameStreamLocation && streamCount === 1)
         ));

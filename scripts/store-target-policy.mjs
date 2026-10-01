@@ -28,6 +28,30 @@ export const STORE_SANDBOX_CSP =
 export const STORE_WASM_LANE = "bundled-reviewed-only";
 export const STORE_ALLOWED_WORKER_LITERALS = Object.freeze([]);
 
+export const BUNDLE_ARCHIVE_MAP = Object.freeze(new Map([
+  ["dist/background/service-worker.js", "background/service-worker.js"],
+  ["dist/options.bundle.js", "options/options.js"],
+  ["dist/ntp.bundle.js", "ntp/ntp.js"],
+  ["dist/sidepanel.bundle.js", "sidepanel/sidepanel.js"],
+  ["dist/shared/diff-core.bundle.js", "shared/diff-core.js"],
+  ["dist/artifacts.bundle.js", "artifacts/index.js"],
+  ["dist/artifact.bundle.js", "artifact/artifact.js"],
+  ["dist/directory.bundle.js", "directory/directory.js"],
+  ["dist/privacy.bundle.js", "privacy/privacy.js"],
+  ["dist/offscreen.bundle.js", "offscreen/offscreen.js"],
+  ["dist/user-wasm-store-client.bundle.js", "lib/user-wasm-store-client.js"],
+]));
+
+export const STORE_BOUNDARY_ALLOWLIST = Object.freeze({
+  allowedWorkerBundles: Object.freeze([
+    "dist/offscreen.bundle.js",
+    "dist/user-wasm-store-client.bundle.js",
+  ]),
+  allowedWasmBundles: Object.freeze([
+    "dist/offscreen.bundle.js",
+  ]),
+});
+
 const MAX_POLICY_FILES = 2_048;
 const MAX_TEXT_FILE_BYTES = 8 * 1024 * 1024;
 const REMOTE_SCRIPT_URL_RE = /^(?:[a-z][a-z0-9+.-]*:|\/\/)/iu;
@@ -205,12 +229,28 @@ export async function assertStoreTargetBoundary({
       entry.archivePath === "sandbox/script-sandbox.js"
     ).map((entry) => entry.sourcePath),
   );
+  const allowedWorkerFiles = new Set(
+    jsEntries.filter((entry) =>
+      STORE_BOUNDARY_ALLOWLIST.allowedWorkerBundles.includes(entry.archivePath)
+    ).map((entry) => entry.sourcePath),
+  );
+  const allowedWasmFiles = new Set(
+    jsEntries.filter((entry) =>
+      STORE_BOUNDARY_ALLOWLIST.allowedWasmBundles.includes(entry.archivePath)
+    ).map((entry) => entry.sourcePath),
+  );
+  const archiveMap = new Map(
+    jsEntries.map((entry) => [entry.sourcePath, entry.archivePath]),
+  );
   const jsViolations = await scanShippedJs(
     jsEntries.map((entry) => entry.sourcePath),
     {
       generatedBundles,
       allowedWorkerLiterals: new Set(STORE_ALLOWED_WORKER_LITERALS),
       allowedDynamicEvaluatorFiles,
+      allowedWorkerFiles,
+      allowedWasmFiles,
+      archiveMap,
       readText: async (file) => {
         const entry = jsEntries.find((candidate) =>
           candidate.sourcePath === file
@@ -275,6 +315,8 @@ export async function assertStoreTargetBoundary({
     canLoadOwnerPackages: false,
     canLoadNetworkPackages: false,
     allowedWorkerLiterals: STORE_ALLOWED_WORKER_LITERALS,
+    bundleArchiveMap: BUNDLE_ARCHIVE_MAP,
+    boundaryAllowlist: STORE_BOUNDARY_ALLOWLIST,
     filesScanned: inventory.length,
     jsScanned: jsEntries.length,
     htmlScanned: htmlEntries.length,
