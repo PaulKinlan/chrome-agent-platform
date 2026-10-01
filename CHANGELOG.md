@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Reopening a thread that is waiting for permission now restores the approval card and shows the honest waiting status.
+
 ## [0.3.558] — 2026-09-29
+- Reopening a thread that is waiting for permission now restores the approval card and shows the honest waiting status.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29

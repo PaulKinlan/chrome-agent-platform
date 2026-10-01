@@ -20,7 +20,8 @@ import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summa
 import { formatBudgetProgress, formatContinuationStop } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
 import { artifactIdentityFromPayloads } from "./thread-view.js";
-import { isAuthoritativeThreadResultProjected } from "./thread-projection-authority.js";
+import { isAuthoritativeThreadResultProjected, projectThreadRunState } from "./thread-projection-authority.js";
+import { approvalEventKey, createPendingApprovalTracker } from "../lib/pending-approval-replay.js";
 
 // ── the live progress port ────────────────────────────────────────────────
 // A single long-lived port per page. The SW broadcasts progress to every
@@ -58,6 +59,21 @@ function dispatchRunUpdate(message) {
   }
 }
 
+// ── the still-unanswered approval requests (chrome-agent-platform-716s.1) ──
+// An `approval-request` arrives on the port ONCE (live, or replayed by the
+// worker when this page connected after the card was published). A surface
+// that opens later — the owner clicks the paused task in a second tab — has no
+// event to render from, so the page keeps every unanswered request here until
+// its `approval-settled` (or its run's `done`) arrives. Read by the sidebar dot,
+// the hub timeline and the reopened conversation through the one projection in
+// shared/thread-projection-authority.js, and replayed into renderRunTranscript.
+const pendingApprovalCache = createPendingApprovalTracker();
+
+/** The page's still-unanswered approval-request events (newest last). */
+export function pendingApprovalRequests() {
+  return pendingApprovalCache.replayable();
+}
+
 function ensurePort() {
   if (port) return port;
   try {
@@ -67,6 +83,7 @@ function ensurePort() {
   }
   port.onMessage.addListener((msg) => {
     if (msg?.type === "progress" && msg.event) {
+      pendingApprovalCache.observe(msg.event);
       for (const fn of [...listeners]) {
         try {
           fn(msg.event);
@@ -93,9 +110,14 @@ function ensurePort() {
 }
 
 /** Subscribe to live progress events. Returns an unsubscribe function. */
-export function subscribeProgress(fn) {
+export function subscribeProgress(fn, { replayPending = true } = {}) {
   listeners.add(fn);
   ensurePort();
+  if (replayPending && pendingApprovalCache) {
+    for (const ev of pendingApprovalCache.replayable()) {
+      try { fn(ev); } catch { /* a listener error must not kill the dispatch */ }
+    }
+  }
   return () => listeners.delete(fn);
 }
 
@@ -140,7 +162,19 @@ export function wireReplayApprovals(container) {
     const d = ev?.detail;
     if (!d || !d.requirement || !d.card) return;
     const card = d.card;
+    const requestId = typeof d.requestId === "string" && d.requestId ? d.requestId : null;
     if (d.approve !== true) {
+      // "Not now" on a card that is still holding a paused tool call (a
+      // re-mounted in-flight request — chrome-agent-platform-716s.1) releases
+      // THAT call with the owner's denial through the same route the live
+      // card uses; the worker's waiter must never be left to expire on its
+      // own. A persisted-denial replay (no requestId) has nothing to release.
+      if (requestId) {
+        await send("run.resolve-inline-approval", { requestId, approve: false }).catch(() => null);
+      }
+      if (d.requirement.approvals?.length) {
+        await resolveApprovalRequirement(d.requirement, false).catch(() => null);
+      }
       card.setAttribute?.("state", "denied");
       return;
     }
@@ -151,11 +185,14 @@ export function wireReplayApprovals(container) {
       card.setAttribute?.("detail", (outcome?.errors ?? []).join("; ") || "the approval could not be completed");
       return;
     }
-    if (typeof d.requestId === "string" && d.requestId) {
-      await send("run.resolve-inline-approval", { requestId: d.requestId, approve: true }).catch(() => null);
-    }
     let resumed = false;
-    if (typeof d.executionId === "string" && d.executionId) {
+    if (requestId) {
+      // The paused tool call is still inside its run: resolving the request
+      // IS the continuation (the same waiter the live card was bound to).
+      const resolved = await send("run.resolve-inline-approval", { requestId, approve: true }).catch(() => null);
+      resumed = resolved?.ok === true;
+    }
+    if (!resumed && typeof d.executionId === "string" && d.executionId) {
       const res = await resumePermissionPausedRun(d.executionId, { ownerConfirmed: true }).catch(() => null);
       resumed = res?.ok === true;
     }
@@ -364,20 +401,53 @@ export function renderRunTranscript(container, executionId, { onStatus = null, c
     unsub();
   };
 
-  // The live progress for THIS run (near-real time).
-  unsub = subscribeProgress((ev) => {
+  // The approval cards this projection mounted, by decision key, so a later
+  // `approval-settled` (answered in another tab, expired, cancelled) lands on
+  // the right card (chrome-agent-platform-716s.1).
+  const approvalCards = new Map();
+  const matchesRun = (ev) => ev.runId === executionId ||
+    ev.executionId === executionId ||
+    (clientCorrelationId && ev.runId === clientCorrelationId) ||
+    (threadId && ev.threadId === threadId);
+  const mountApproval = (ev) => {
+    const spec = approvalCardSpecFromRequest(ev);
+    if (!spec || typeof c.appendApproval !== "function") return;
+    const card = c.appendApproval({
+      ...spec,
+      executionId: ev.executionId ?? executionId,
+      requestId: ev.requestId ?? null,
+      approvalId: ev.approvalId ?? null,
+    });
+    const key = approvalEventKey(ev);
+    if (card && key) approvalCards.set(key, card);
+    // The status row reads the SAME projection the sidebar dot and the hub
+    // timeline read for this run — "Waiting for permission — …", never
+    // "Working" while a card is pending.
+    const projected = projectThreadRunState({
+      run: { phase: "running", executionId: ev.executionId ?? executionId },
+      pendingApprovals: [ev],
+    });
+    if (projected.status) onStatus?.(projected.status);
+  };
+  const onEvent = (ev) => {
     if (!ev || typeof ev !== "object") return;
     if (ev.type === "disconnect") { terminal.onPortError(); return; }
-    const matchesRun = ev.runId === executionId ||
-      ev.executionId === executionId ||
-      (clientCorrelationId && ev.runId === clientCorrelationId) ||
-      (threadId && ev.threadId === threadId);
-    if (!matchesRun) return;
+    if (!matchesRun(ev)) return;
     switch (ev.type) {
       case "approval-request": {
-        const req = ev.result?.permissionRequirement ?? ev.permissionRequirement;
-        if (req && typeof c.appendApproval === "function") {
-          c.appendApproval({ requirement: req, executionId: ev.executionId ?? executionId, requestId: ev.requestId ?? null });
+        mountApproval(ev);
+        break;
+      }
+      case "approval-settled": {
+        const key = approvalEventKey(ev) ?? "";
+        let card = approvalCards.get(key);
+        if (!card && typeof c?._approvalKeys?.get === "function") {
+          card = c._approvalKeys.get(key);
+        }
+        if (card && ["granted", "denied", "expired", "cancelled"].includes(ev.state)) {
+          card.setAttribute?.("state", ev.state);
+          if (ev.state === "expired") card.setAttribute?.("detail", "The request expired after 60 seconds. The action was not performed.");
+          else if (ev.state === "cancelled") card.setAttribute?.("detail", "The run was cancelled. The action was not performed.");
         }
         break;
       }
@@ -489,9 +559,73 @@ export function renderRunTranscript(container, executionId, { onStatus = null, c
       default:
         break;
     }
-  });
+  };
+
+  // The live progress for THIS run (near-real time)…
+  unsub = subscribeProgress(onEvent);
+  // …and the approval cards the run is ALREADY waiting on, which were
+  // published before this surface attached (a reopened thread, a second hub
+  // tab). Same event, same decision key — answering here wakes the same
+  // paused tool call the live card was bound to.
+  for (const ev of pendingApprovalRequests()) {
+    if (unsubscribed) break;
+    if (ev?.type === "approval-request" && matchesRun(ev)) mountApproval(ev);
+  }
 
   return unsubscribe;
+}
+
+/**
+ * Replay any still-unanswered approval-request events that belong to a specific
+ * thread into a conversation container, mounting their approval cards.
+ */
+export function replayPendingApprovalsForThread(container, threadId, executionId = null) {
+  if (!container || typeof container.appendApproval !== "function" || !threadId) return [];
+  const mounted = [];
+  for (const ev of pendingApprovalRequests()) {
+    if (!ev || ev.type !== "approval-request") continue;
+    const matches = ev.threadId === threadId ||
+      (executionId && (ev.executionId === executionId || ev.runId === executionId));
+    if (!matches) continue;
+    const spec = approvalCardSpecFromRequest(ev);
+    if (!spec) continue;
+    const card = container.appendApproval({
+      ...spec,
+      executionId: ev.executionId ?? executionId ?? null,
+      requestId: ev.requestId ?? null,
+      approvalId: ev.approvalId ?? null,
+    });
+    if (card) mounted.push(card);
+  }
+  return mounted;
+}
+
+/** The card a surface renders for one in-flight `approval-request` event: the
+ * normalized requirement (the dedupe key, the exact permissions/origins), plus
+ * — for an owner-approval action — the words of the live card (title, body,
+ * labels, the bounded script/site detail), so a card re-mounted in a second tab
+ * is the SAME card the first tab shows. Null when the event carries no valid
+ * requirement (a forged shape never becomes a card). */
+export function approvalCardSpecFromRequest(ev) {
+  const result = ev?.result && typeof ev.result === "object"
+    ? ev.result
+    : ev?.permissionRequirement
+      ? { waitingForPermission: true, permissionRequirement: ev.permissionRequirement }
+      : null;
+  const requirement = normalizePermissionRequirement(result);
+  if (!requirement) return null;
+  const approval = requirement.approvals[0] ?? null;
+  if (!approval) return { requirement };
+  const siteTool = approval.action === "webmcp.use-tool" && approval.detail?.kind === "webmcp-tool";
+  return {
+    requirement,
+    title: approvalCardTitle(approval.action, approval.detail),
+    body: siteTool
+      ? `Site: ${approval.detail.origin}\nTool: ${approval.detail.tool}\nAllow saves automatic use for this exact site tool in this browser profile. Deny blocks this exact tool on this site until you choose Allow / try again in Settings.`
+      : `Action: ${approval.action}\nTarget reference: ${approval.targetRef || requirement.reason.split(": ").slice(1).join(": ")}`,
+    ...(siteTool ? { approveLabel: "Allow automatically", denyLabel: "Deny" } : {}),
+    ...(!siteTool && approval.detail ? { cardDetail: approval.detail } : {}),
+  };
 }
 
 // ── the run flow ───────────────────────────────────────────────────────────

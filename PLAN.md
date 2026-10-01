@@ -280,6 +280,13 @@ the permission-state matrix acceptance lane (supersedes the headed lane); `scrip
 spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes after the
 demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
 
+### State fidelity & paused run reopening (chrome-agent-platform-716s.1)
+- **Reopening a thread waiting for permission**: Reopening a thread waiting on an
+  approval card now derives the honest waiting state and re-mounts the in-flight
+  approval card rather than showing "Working — run in progress…". The sidebar dot,
+  hub timeline row, and conversation status row read from the unified projection
+  authority (`projectThreadRunState`), ensuring state agreement across tabs and views.
+
 ### Known open defect classes
 - **WebMCP discovery — passive registry acceptance candidate in review.** The owner rejected
   the temporary all-web-tabs picker: detection-only MAIN + isolated scripts run on every
