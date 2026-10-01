@@ -22,14 +22,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 /** The unbundled pages (relative to the repo root). The gallery and the
- * bundled pages are not here on purpose: bundled pages have a store ceiling. */
-export const UNBUNDLED_PAGES = Object.freeze([
-  "extension/artifact/artifact.html",
-  "extension/artifacts/index.html",
-  "extension/directory/directory.html",
-  "extension/privacy/privacy.html",
-  "extension/offscreen/offscreen.html",
-]);
+ * bundled pages are not here on purpose: bundled pages have a store ceiling.
+ * As of 9epn.5, all 5 former unbundled pages (artifact, artifacts, directory,
+ * privacy, offscreen) are bundled into dist/*.bundle.js. */
+export const UNBUNDLED_PAGES = Object.freeze([]);
 
 const MODULE_SCRIPT_RE = /<script\b[^>]*\btype\s*=\s*["']module["'][^>]*>/giu;
 const SRC_RE = /\bsrc\s*=\s*["']([^"']+)["']/iu;

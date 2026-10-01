@@ -34,16 +34,10 @@ import {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** The pinned ceilings: exactly the bytes measured on the tree that
- * introduced the census (2026-10-01). A move in either direction is named in
- * the change that makes it. */
-const PAGE_CEILING_BYTES: Record<string, number> = {
-  "extension/artifact/artifact.html": 1_001_011,
-  "extension/artifacts/index.html": 1_003_626,
-  "extension/directory/directory.html": 995_981,
-  "extension/privacy/privacy.html": 1_034_582,
-  "extension/offscreen/offscreen.html": 675_729,
-};
+/** The pinned ceilings: post-9epn.5 all five pages are bundled into
+ * dist/*.bundle.js (covered by STORE_BUNDLE_BUDGETS). The census remains active
+ * to ensure any newly added unbundled page is detected and pinned. */
+const PAGE_CEILING_BYTES: Record<string, number> = {};
 
 Deno.test("9epn.4 page census: staticImportSpecifiers sees every static form and nothing else", () => {
   const source = [
