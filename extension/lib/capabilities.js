@@ -51,8 +51,8 @@ export const CAPABILITIES = [
     group: "browsing",
     permissions: ["contextMenus"],
     label: "Context menus",
-    hint: "Create the agent's right-click menu entries. Without the grant, menu tools are refused.",
-    gates: "Gates: context menu create/remove tools.",
+    hint: "Adds “Ask agent about this page / selection / link / image” to your right-click menu, and lets the agent create its own menu entries. Without the grant, neither exists.",
+    gates: "Gates: the Ask agent right-click entries; context menu create/remove tools.",
     chromeOsOnly: false,
   },
   {

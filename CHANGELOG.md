@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Right-click any page, selection, link, or image to ask the agent about it in the side panel with fenced context, or press Alt+Shift+A to attach the current page.
+
 ## [0.3.558] — 2026-09-29
+- Right-click any page, selection, link, or image to ask the agent about it, or press Alt+Shift+A to attach the current page.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29

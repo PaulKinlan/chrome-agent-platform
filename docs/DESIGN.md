@@ -613,7 +613,10 @@ composer comes first, so Tab #1 lands in the task input and the composer is
 fully visible at 1024x700. Above it, `<first-run-guide>` is a slim banner — one
 sentence and ONE action ("Connect a model" → Settings → Providers) with the
 dismiss control last in the tab order — shown only while no provider is
-connected and no artifact exists; with a provider it renders nothing. Browser
+connected and no artifact exists; with a provider it renders nothing. Once a
+model is connected and if contextMenus is ungranted, the same banner in generic
+form offers to add “Ask agent” to the right-click menu, requesting the
+permission only on the owner's click. Browser
 control is asked for in context by the approval card at the moment a task needs
 it, never up front. Under the composer, `<example-chips>` offers three example
 tasks; a chip prefills the composer and focuses it — it never runs anything.

@@ -11,8 +11,10 @@ import { parseNtpHash } from "../extension/lib/navigation-controller.js";
 
 const getURL = (p: string) => `chrome-extension://cap/${p}`;
 
-Deno.test("commands: the declared set is exactly the three shipped ids", () => {
-  assertEquals(KEYBOARD_COMMANDS, ["open-hub", "new-task", "open-side-panel"]);
+Deno.test("commands: the declared set is exactly the four shipped ids", () => {
+  // chrome-agent-platform-3p3e.2 added "ask-about-page" (Alt+Shift+A): the
+  // side panel with the active tab attached — see tests/ask-agent-entry.test.ts.
+  assertEquals(KEYBOARD_COMMANDS, ["open-hub", "new-task", "open-side-panel", "ask-about-page"]);
 });
 
 Deno.test("commands: the manifest declares exactly those ids, with descriptions", async () => {

@@ -816,11 +816,27 @@ function mountTemplate(host, style, markup) {
  * task needs it. It never runs a task or requests a permission itself: the
  * owner actions are emitted for the hub to wire (`open-settings`,
  * `dismiss-guide`). With a provider connected it renders nothing.
- * The dismiss control is LAST in the tab order — the action comes first. */
+ * The dismiss control is LAST in the tab order — the action comes first.
+ *
+ * Generic form — <first-run-guide headline="…" body="…" action-label="…"
+ * dismiss-label="…">: the SAME one-sentence/one-action banner for any other
+ * single suggestion the hub makes (the "Ask agent" right-click entry asks for
+ * the contextMenus grant this way). When `action-label` is set the banner
+ * renders the given copy (escaped), emits `action` for the button and
+ * `dismiss-guide` for the close control, and ignores `provider-ready` — the
+ * host decides when it is shown. */
 class FirstRunGuide extends Component {
-  static get observedAttributes() { return ["storage-ready", "provider-ready", "browser-ready", "browser-choice"]; }
+  static get observedAttributes() {
+    return ["storage-ready", "provider-ready", "browser-ready", "browser-choice", "headline", "body", "action-label", "dismiss-label"];
+  }
+  get _generic() { return !!String(this.getAttribute("action-label") ?? "").trim(); }
   _render() {
     const providerReady = this.hasAttribute("provider-ready");
+    const generic = this._generic;
+    const headline = escapeHtml(String(this.getAttribute("headline") ?? "").trim());
+    const body = escapeHtml(String(this.getAttribute("body") ?? "").trim());
+    const actionLabel = escapeHtml(String(this.getAttribute("action-label") ?? "").trim());
+    const dismissLabel = escapeHtml(String(this.getAttribute("dismiss-label") ?? "").trim() || "Dismiss suggestion");
     mountTemplate(this, `
       :host { display:block; margin-block-end:16px; color:var(--text,#1d1b18); }
       :host([hidden]) { display:none; }
@@ -840,20 +856,27 @@ class FirstRunGuide extends Component {
       .dismiss svg { width:16px; height:16px; }
       @media (max-width:640px) { .banner { grid-template-columns:minmax(0,1fr) auto; }
         .banner > p { grid-column:1 / -1; } }
-    `, providerReady ? "" : `<section class="banner" aria-labelledby="first-run-title">
+    `, !generic ? (providerReady ? "" : `<section class="banner" aria-labelledby="first-run-title">
       <p id="first-run-title"><strong>No model connected yet.</strong> Tab tasks already work — connect a model for everything else.</p>
       <button class="primary connect-model" type="button">Connect a model</button>
       <button class="dismiss" type="button" aria-label="Dismiss first-run setup">${ICONS.close}</button>
+    </section>`) : `<section class="banner" aria-labelledby="first-run-title">
+      <p id="first-run-title">${headline ? `<strong>${headline}</strong> ` : ""}${body}</p>
+      <button class="primary action" type="button">${actionLabel}</button>
+      <button class="dismiss" type="button" aria-label="${dismissLabel}">${ICONS.close}</button>
     </section>`);
   }
   _wire() {
     this._root.querySelector(".connect-model")?.addEventListener("click", (sourceEvent) =>
       this._emit("open-settings", { sourceEvent }));
+    this._root.querySelector(".action")?.addEventListener("click", (sourceEvent) =>
+      this._emit("action", { sourceEvent }));
     this._root.querySelector(".dismiss")?.addEventListener("click", (sourceEvent) =>
       this._emit("dismiss-guide", { sourceEvent }));
   }
   focusNextAction() {
     this._root.querySelector(".connect-model")?.focus();
+    this._root.querySelector(".action")?.focus();
   }
 }
 customElements.define("first-run-guide", FirstRunGuide);
@@ -8049,6 +8072,13 @@ class AgentComposer extends Component {
       // run: sanitize + attachmentContext both preserve these (CAP-FB-20260831-FOLDER-COMMAND-01).
       grantId: typeof detail.grantId === "string" ? detail.grantId : undefined,
       folderName: typeof detail.folderName === "string" ? detail.folderName : undefined,
+      // Page-derived attachments (the "Ask agent" right-click / shortcut
+      // prefill, lib/ask-agent-entry.js) carry the untrusted tag + their
+      // reference so the run fences them and the model sees what was picked.
+      ...(detail.untrusted === true ? { untrusted: true } : {}),
+      ...(typeof detail.url === "string" && detail.url ? { url: detail.url } : {}),
+      ...(typeof detail.srcUrl === "string" && detail.srcUrl ? { srcUrl: detail.srcUrl } : {}),
+      ...(Number.isInteger(detail.tabId) ? { tabId: detail.tabId } : {}),
     };
     this.attachments.push(d);
     this._addChip(d);

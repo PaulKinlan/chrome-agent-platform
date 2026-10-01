@@ -37,6 +37,8 @@ const FILES = [
   ["extension/lib/tool-summary.js", "docs/tool-summary.js"],
   // Attachment classification/encoding used by the composer's /files flow.
   ["extension/lib/attachments.js", "docs/attachments.js"],
+  // Untrusted content fence tokens and wrapping (attachments.js imports it).
+  ["extension/lib/untrusted-fence.js", "docs/untrusted-fence.js"],
   // The bundled diff core (jsdiff via extension/shared/diff-core.js). The
   // source here is BUILD OUTPUT, so `npm run build` must run first; when the
   // bundle is absent the entry is reported and skipped rather than failing

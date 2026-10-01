@@ -43,8 +43,13 @@
         <h3 class="spec"><code class="tag">&lt;first-run-guide&gt;</code> — the first-run banner</h3>
         <div class="stage column" style="max-width:760px">
           <first-run-guide storage-ready></first-run-guide>
+          <first-run-guide
+            headline="Add “Ask agent” to your right-click menu."
+            body="Right-click any page, selection, link or image to ask the agent about it (Alt+Shift+A does the same for the current page)."
+            action-label="Add to right-click menu"
+            dismiss-label="Dismiss right-click menu suggestion"></first-run-guide>
         </div>
-        <p class="caption">One sentence, one action. Shown above the hub composer only while no model is connected; with <code>provider-ready</code> it renders nothing. The dismiss control is last in the tab order. It never requests a permission itself.</p>
+        <p class="caption">One sentence, one action. Shown above the hub composer only while no model is connected, or in generic form for contextual suggestions (e.g. right-click menu grant). With <code>provider-ready</code> the model banner renders nothing. The dismiss control is last in the tab order. It never requests a permission itself without an owner click.</p>
       </div>
 
       <div class="specimen">

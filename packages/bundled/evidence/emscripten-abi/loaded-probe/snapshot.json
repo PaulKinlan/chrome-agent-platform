@@ -16,7 +16,7 @@
       "version",
       "version_name"
     ],
-    "nonReleaseContractSha256": "c2c1889f9826a6f6d2fc824350f6f0db01e1195f3a654ed24a542f37d9ffcde9",
+    "nonReleaseContractSha256": "bd71af3164dd1c8df4bd494392037f9a2b46a0b3a6493aff8621b96ae0e48253",
     "extensionPagesCsp": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; frame-src 'self' about: blob: data:"
   },
   "sourcePins": [

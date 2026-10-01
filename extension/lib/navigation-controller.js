@@ -201,6 +201,7 @@ export function createNavigationController({
  *   - "#view=<path>" -> { route: "view", path: "<path>" }
  *   - "#omnibox=<mode>:<query>" -> { route: "omnibox", mode: "<mode>", query: "<query>" }
  *   - "#compose" -> { route: "compose" }  (hub, with the task composer focused)
+ *   - "#ask-agent=<tabId>" -> { route: "ask-agent", tabId }  (hub fallback for the Ask-agent entry)
  */
 export function parseNtpHash(hash) {
   if (typeof hash !== "string" || !hash || hash === "#") {
@@ -230,6 +231,12 @@ export function parseNtpHash(hash) {
 
   const mOmnibox = /^omnibox=([^:]+):(.+)$/.exec(clean);
   if (mOmnibox) return { route: "omnibox", mode: decodeURIComponent(mOmnibox[1]), query: decodeURIComponent(mOmnibox[2]) };
+
+  // The "Ask agent" right-click / Alt+Shift+A fallback when the side panel
+  // cannot open: the hub consumes the storage.session prefill for that tab.
+  // Only the tab id travels in the URL — never page text.
+  const mAsk = /^ask-agent=(\d{1,9})$/.exec(clean);
+  if (mAsk) return { route: "ask-agent", tabId: Number(mAsk[1]) };
 
   return { route: "hub" };
 }
