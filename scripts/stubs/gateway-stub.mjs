@@ -14,6 +14,7 @@ export class GatewayDisabledError extends GatewayError {
   constructor(message = "@ai-sdk/gateway is disabled in store builds") {
     super(message);
     this.name = "GatewayDisabledError";
+    this.code = "gateway_disabled_in_extension";
   }
 }
 

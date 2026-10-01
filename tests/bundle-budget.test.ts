@@ -14,7 +14,7 @@
 // only match unminified code.
 // @ts-nocheck
 
-import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -430,8 +430,31 @@ Deno.test("bundle budget: store service-worker and worker metafiles contain zero
 
 Deno.test("bundle budget: @ai-sdk/gateway stub throws GatewayDisabledError (9epn.7)", async () => {
   const { gateway, createGateway, GatewayDisabledError, GatewayError } = await import("../scripts/stubs/gateway-stub.mjs");
-  assertThrows(() => gateway(), GatewayDisabledError, "@ai-sdk/gateway is disabled in store builds");
+  const err = assertThrows(() => gateway(), GatewayDisabledError, "@ai-sdk/gateway is disabled in store builds");
+  assertEquals(err.code, "gateway_disabled_in_extension");
   assertThrows(() => createGateway(), GatewayDisabledError, "@ai-sdk/gateway is disabled in store builds");
   assert(new GatewayDisabledError() instanceof GatewayError);
 });
+
+Deno.test("bundle budget: @vercel/oidc stub throws VercelOidcDisabledError (9epn.7)", async () => {
+  const {
+    getContext,
+    getVercelOidcToken,
+    getVercelOidcTokenSync,
+    getVercelToken,
+    VercelOidcDisabledError,
+  } = await import("../scripts/stubs/vercel-oidc-stub.mjs");
+
+  const err = await assertRejects(() => getVercelOidcToken(), VercelOidcDisabledError);
+  assertEquals(err.code, "vercel_oidc_disabled_in_extension");
+
+  const syncErr = assertThrows(() => getContext(), VercelOidcDisabledError);
+  assertEquals(syncErr.code, "vercel_oidc_disabled_in_extension");
+
+  const syncTokenErr = assertThrows(() => getVercelOidcTokenSync(), VercelOidcDisabledError);
+  assertEquals(syncTokenErr.code, "vercel_oidc_disabled_in_extension");
+
+  await assertRejects(() => getVercelToken(), VercelOidcDisabledError);
+});
+
 
