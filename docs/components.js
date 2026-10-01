@@ -62,7 +62,7 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify, prettyJson, t
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
 import { redactSecrets } from "./pure.js";
-import { filterTimeline } from "./hub-timeline.js";
+import { filterTimeline, timelineMatchesFilter } from "./hub-timeline.js";
 // The single-sourced shared helpers (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01).
 import { escapeHtml, timeAgo, sleep } from "./pure.js";
 import { describeToolCall, redactToolResult, toolResultErrorText } from "./tool-summary.js";
@@ -4080,7 +4080,7 @@ class SegmentedControl extends Component {
       .tabs { display:inline-flex; gap:2px; padding:3px; border:1px solid var(--border,#e3e0d9);
         border-radius:var(--radius-sm,8px); background:var(--panel-2,#efede8); }
       button { appearance:none; border:0; background:transparent; color:var(--muted,#635e56);
-        font:inherit; font-size:13px; font-weight:550; line-height:1; min-block-size:30px; padding:0 14px;
+        font:inherit; font-size:13px; font-weight:550; line-height:1; min-block-size:var(--control, 36px); padding:0 14px;
         border-radius:6px; cursor:pointer; white-space:nowrap; transition:color .15s ease, background .15s ease; }
       button:hover { color:var(--text,#1d1b18); }
       button[aria-selected="true"], button[aria-pressed="true"] { background:var(--panel,#fff); color:var(--accent,#0e6e63);
@@ -12062,6 +12062,20 @@ class AgentTimeline extends Component {
     const bounded = this._entries.slice(0, this._limit());
     const filter = this.filter;
     const rows = filterTimeline(bounded, filter);
+    const hooksCount = bounded.filter((e) => timelineMatchesFilter(e, "hooks")).length;
+    const pagesCount = bounded.filter((e) => timelineMatchesFilter(e, "pages")).length;
+    const spentCount = bounded.filter((e) => timelineMatchesFilter(e, "spent")).length;
+    const secondaryCount = hooksCount + pagesCount + spentCount;
+    const moreHiddenAttr = secondaryCount === 0 ? " hidden" : "";
+    const moreDisclosure = `<details class="tl-more"${moreHiddenAttr}>
+      <summary class="tl-more-btn" aria-label="More filters">More (${secondaryCount})</summary>
+      <div class="tl-more-menu" role="menu">
+        <button type="button" class="tl-more-item" data-filter="Hooks" role="menuitem">Hooks</button>
+        <button type="button" class="tl-more-item" data-filter="Pages" role="menuitem">Pages</button>
+        <button type="button" class="tl-more-item" data-filter="Spent" role="menuitem">Spent</button>
+      </div>
+    </details>`;
+    const controls = `<div class="tl-controls"${secondaryCount === 0 ? " hidden" : ""}>${moreDisclosure}</div>`;
     const items = rows.map((e) => {
       const status = ["running", "paused", "failed", "done"].includes(e.status) ? e.status : "idle";
       const word = TIMELINE_STATUS_WORD[status] || "";
@@ -12099,6 +12113,12 @@ class AgentTimeline extends Component {
         emptyText = "Nothing made yet.";
       } else if (f === "scheduled") {
         emptyText = "No scheduled runs yet.";
+      } else if (f === "hooks") {
+        emptyText = "No hooks yet.";
+      } else if (f === "pages") {
+        emptyText = "No pages yet.";
+      } else if (f === "spent") {
+        emptyText = "Nothing spent yet.";
       }
     }
     const body = rows.length
@@ -12107,6 +12127,21 @@ class AgentTimeline extends Component {
     mountTemplate(this, `
       :host { display:block; }
       :host([hidden]) { display:none; }
+      .tl-controls { display:flex; justify-content:flex-end; padding:4px 14px; }
+      .tl-controls[hidden] { display:none !important; }
+      .tl-more { position:relative; display:inline-block; }
+      .tl-more[hidden] { display:none !important; }
+      .tl-more-btn { appearance:none; border:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8);
+        color:var(--muted,#635e56); font:inherit; font-size:12px; font-weight:550; min-block-size:var(--control, 36px); padding:0 12px;
+        border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; list-style:none; }
+      .tl-more-btn::-webkit-details-marker { display:none; }
+      .tl-more-btn:hover { color:var(--text,#1d1b18); }
+      .tl-more-menu { position:absolute; top:calc(100% + 4px); right:0; z-index:20; background:var(--panel,#fff);
+        border:1px solid var(--border,#e3e0d9); border-radius:6px; box-shadow:var(--shadow-1,0 2px 8px rgba(0,0,0,.08));
+        padding:4px; display:flex; flex-direction:column; gap:2px; min-width:110px; }
+      .tl-more-item { appearance:none; border:0; background:transparent; color:var(--text,#1d1b18);
+        font:inherit; font-size:12px; padding:6px 12px; border-radius:4px; text-align:left; cursor:pointer; }
+      .tl-more-item:hover { background:var(--bg,#f7f6f3); color:var(--accent,#0e6e63); }
       .tl { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; }
       .tl-item { min-inline-size:0; }
       .tl-row { display:grid; grid-template-columns:10px minmax(0,1fr) auto 20px; gap:12px; align-items:center;
@@ -12138,11 +12173,24 @@ class AgentTimeline extends Component {
       .tl-chev svg { width:16px; height:16px; display:block; }
       .tl-row:hover .tl-chev, .tl-row:focus-visible .tl-chev { color:var(--accent,#0e6e63); }
       .tl-empty { margin:0; padding:12px 14px; font-size:13px; color:var(--muted,#635e56); }
-    `, body);
+    `, `${controls}${body}`);
   }
   _wire() {
-    for (const row of this._root.querySelectorAll(".tl-row")) {
-      row.addEventListener("click", () => this._emit("open", { id: row.dataset.id }));
+    for (const row of this._root?.querySelectorAll?.(".tl-row") ?? []) {
+      row.addEventListener?.("click", () => this._emit("open", { id: row.dataset?.id }));
+    }
+    const moreMenu = this._root?.querySelector?.(".tl-more");
+    if (moreMenu) {
+      for (const item of moreMenu.querySelectorAll?.(".tl-more-item") ?? []) {
+        item.addEventListener?.("click", () => {
+          const f = item.dataset?.filter;
+          if (f) {
+            this.filter = f;
+            moreMenu.removeAttribute?.("open");
+            this._emit("filter-change", { filter: f });
+          }
+        });
+      }
     }
   }
 }

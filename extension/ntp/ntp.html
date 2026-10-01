@@ -732,8 +732,69 @@
       padding: 10px 14px 6px;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 8px;
       border-bottom: 1px solid var(--border);
+    }
+    .timeline-overflow {
+      position: relative;
+      display: inline-block;
+    }
+    .timeline-overflow[hidden] {
+      display: none !important;
+    }
+    .timeline-overflow-btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+      color: var(--muted);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 550;
+      min-block-size: var(--control, 36px);
+      padding: 0 12px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      list-style: none;
+    }
+    .timeline-overflow-btn::-webkit-details-marker {
+      display: none;
+    }
+    .timeline-overflow-btn:hover {
+      color: var(--text);
+    }
+    .timeline-overflow-menu {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      z-index: 20;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow-1, 0 2px 8px rgba(0, 0, 0, 0.08));
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 110px;
+    }
+    .timeline-overflow-item {
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      padding: 6px 12px;
+      border-radius: 4px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .timeline-overflow-item:hover {
+      background: var(--bg);
+      color: var(--accent);
     }
     .panel-head {
       display: flex;
@@ -1108,6 +1169,14 @@
             <div class="panel-body">
               <div class="timeline-filters-row">
                 <segmented-control id="timeline-filters" items="All,Runs,Waiting,Made,Scheduled" value="All" label="Filter timeline" role="toolbar"></segmented-control>
+                <details id="timeline-overflow" class="timeline-overflow" hidden>
+                  <summary class="timeline-overflow-btn" id="timeline-overflow-btn" aria-label="More filters">More (0)</summary>
+                  <div class="timeline-overflow-menu" role="menu">
+                    <button type="button" class="timeline-overflow-item" data-val="Hooks" role="menuitem">Hooks</button>
+                    <button type="button" class="timeline-overflow-item" data-val="Pages" role="menuitem">Pages</button>
+                    <button type="button" class="timeline-overflow-item" data-val="Spent" role="menuitem">Spent</button>
+                  </div>
+                </details>
               </div>
               <agent-timeline id="hub-timeline" limit="40" aria-label="Timeline of tasks and agent runs"></agent-timeline>
             </div>

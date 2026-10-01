@@ -197,9 +197,14 @@ export function timelineMatchesFilter(entry, filter = "All") {
       return (
         entry.status === "paused" ||
         entry.status === "waiting" ||
+        entry.status === "approval-pending" ||
+        entry.status === "waiting-for-permission" ||
+        entry.status === "blocked" ||
+        entry.kind === "approval-pending" ||
+        entry.kind === "waiting-for-permission" ||
+        entry.kind === "blocked" ||
         entry.kind === "approval-requested" ||
         entry.kind === "permission" ||
-        entry.kind === "blocked" ||
         entry.blocked === true
       );
     case "made":

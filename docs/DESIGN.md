@@ -50,6 +50,7 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 
 ## Hub activity timeline & filters
 - The New Tab Hub timeline presents recent task and agent activity with a compact filter row (`All · Runs · Waiting · Made · Scheduled`) implemented via the shared `<segmented-control>` component.
+- Secondary facets (`Hooks · Pages · Spent`) overflow into a disclosure menu ("More (N)") when non-zero items exist, remaining hidden when all three have 0 items.
 - The filter selection persists across reloads via `localStorage` (`cap:hub:timeline-filter`).
 - Empty states are context-specific and honest: when rows exist overall but none match the active filter, clear copy explains the absence (`Nothing waiting on you.`, `No runs yet.`, `Nothing made yet.`, `No scheduled runs yet.`).
 - Screen-reader status text (`.tl-sr`) is deduplicated with the visible outcome to prevent redundant announcements while preserving full accessibility.

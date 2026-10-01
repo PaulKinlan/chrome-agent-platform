@@ -61,7 +61,7 @@ import {
   shouldDispatchForNavigationType,
 } from "../lib/navigation-controller.js";
 import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface, runsForSurface } from "../lib/run-scope.js";
-import { buildTimeline } from "../lib/hub-timeline.js";
+import { buildTimeline, timelineMatchesFilter } from "../lib/hub-timeline.js";
 import {
   SITE_AGENT_COPY,
   enrollOutcomeState,
@@ -1362,6 +1362,25 @@ function noteAgentName(agentId, name) {
     agentNameById.set(agentId, name);
   }
 }
+function updateTimelineSecondaryOverflow(entries) {
+  const bounded = Array.isArray(entries) ? entries.slice(0, 40) : [];
+  const hooks = bounded.filter((e) => timelineMatchesFilter(e, "hooks")).length;
+  const pages = bounded.filter((e) => timelineMatchesFilter(e, "pages")).length;
+  const spent = bounded.filter((e) => timelineMatchesFilter(e, "spent")).length;
+  const total = hooks + pages + spent;
+  const overflowEl = document.getElementById("timeline-overflow");
+  const overflowBtn = document.getElementById("timeline-overflow-btn");
+  if (!overflowEl) return;
+  if (total > 0) {
+    overflowEl.hidden = false;
+    overflowEl.removeAttribute("hidden");
+    if (overflowBtn) overflowBtn.textContent = `More (${total})`;
+  } else {
+    overflowEl.hidden = true;
+    overflowEl.setAttribute("hidden", "");
+  }
+}
+
 async function refreshTimeline() {
   if (!timelineEl) timelineEl = document.getElementById("hub-timeline");
   if (!timelineEl) return;
@@ -1369,10 +1388,12 @@ async function refreshTimeline() {
     send("thread.list").catch(() => ({ threads: [] })),
   ]);
   const threads = Array.isArray(threadsRes?.threads) ? threadsRes.threads : [];
-  timelineEl.entries = buildTimeline(threads, latestDurableRuns, {
+  const entries = buildTimeline(threads, latestDurableRuns, {
     agentNames: agentNameById,
     limit: 40,
   });
+  timelineEl.entries = entries;
+  updateTimelineSecondaryOverflow(entries);
 }
 const TIMELINE_FILTER_KEY = "cap:hub:timeline-filter";
 let timelineFilterEl = null;
@@ -1396,14 +1417,35 @@ function renderTimeline() {
       try {
         localStorage.setItem(TIMELINE_FILTER_KEY, val);
       } catch { /* storage unavailable */ }
+      const overflowEl = document.getElementById("timeline-overflow");
+      if (overflowEl) overflowEl.removeAttribute("open");
     });
+  }
+
+  const overflowEl = document.getElementById("timeline-overflow");
+  if (overflowEl) {
+    for (const btn of overflowEl.querySelectorAll(".timeline-overflow-item")) {
+      btn.addEventListener("click", () => {
+        const val = btn.dataset.val;
+        if (val) {
+          timelineEl.filter = val;
+          try {
+            localStorage.setItem(TIMELINE_FILTER_KEY, val);
+          } catch { /* storage unavailable */ }
+          overflowEl.removeAttribute("open");
+        }
+      });
+    }
   }
 
   // Reveal/hide the section through the same seen-once machinery every hub
   // section uses (a fresh profile shows nothing here).
-  timelineEl.addEventListener("entries-change", (ev) =>
-    noteHubData("timeline", "runs", (ev.detail?.count ?? 0) > 0));
+  timelineEl.addEventListener("entries-change", (ev) => {
+    noteHubData("timeline", "runs", (ev.detail?.count ?? 0) > 0);
+    updateTimelineSecondaryOverflow(timelineEl.entries);
+  });
   timelineEl.addEventListener("open", (ev) => openTimelineEntry(ev.detail?.id));
+  updateTimelineSecondaryOverflow(timelineEl.entries);
   refreshTimeline();
 }
 // A timeline row's Open target: a task thread opens its conversation; a

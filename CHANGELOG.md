@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
-- Streamlined activity filter bar with All, Runs, Waiting, Made, and Scheduled views.
+- Streamlined activity filter bar with All, Runs, Waiting, Made, and Scheduled views, approval/blocked matching in Waiting, and More overflow for secondary facets.
 
 ## [0.3.558] — 2026-09-29
 - Streamlined activity filter bar with All, Runs, Waiting, Made, and Scheduled views.

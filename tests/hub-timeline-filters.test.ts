@@ -309,3 +309,85 @@ Deno.test("716s.6: SegmentedControl supports role=toolbar with roving tabindex",
   assertEquals(allBtn.getAttribute("aria-selected"), "false");
   assertEquals(allBtn.tabIndex, -1);
 });
+
+// ── Part 8: Waiting filter matches approval-pending, waiting-for-permission, and blocked
+Deno.test("716s.6: Waiting filter matches approval-pending, waiting-for-permission, and blocked statuses and kinds", () => {
+  // Test statuses
+  assertEquals(timelineMatchesFilter({ status: "approval-pending" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ status: "waiting-for-permission" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ status: "blocked" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ status: "paused" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ status: "waiting" }, "Waiting"), true);
+
+  // Test kinds
+  assertEquals(timelineMatchesFilter({ kind: "approval-pending" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ kind: "waiting-for-permission" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ kind: "blocked" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ kind: "approval-requested" }, "Waiting"), true);
+  assertEquals(timelineMatchesFilter({ kind: "permission" }, "Waiting"), true);
+
+  // Test non-waiting items do not match
+  assertEquals(timelineMatchesFilter({ status: "running", kind: "task" }, "Waiting"), false);
+  assertEquals(timelineMatchesFilter({ status: "done", kind: "task" }, "Waiting"), false);
+});
+
+// ── Part 9: More (N) disclosure visibility in AgentTimeline
+Deno.test("716s.6: More (N) disclosure visibility in AgentTimeline is visible when secondary items exist, hidden when 0", async () => {
+  await import("../extension/shared/components.js");
+  const AgentTimeline = globalThis.customElements.get("agent-timeline");
+  const timeline = new AgentTimeline();
+  timeline._rendered = true;
+
+  // Zero secondary items: disclosure element has hidden attribute
+  timeline.entries = fixtureRows;
+  let html = timeline._root.innerHTML;
+  assert(
+    html.includes('class="tl-more" hidden') || html.includes('class="tl-more"  hidden') || html.includes('<details class="tl-more" hidden>'),
+    `Expected tl-more disclosure to be hidden when 0 secondary items, got: ${html}`,
+  );
+
+  // With secondary items: disclosure is visible with More (N)
+  timeline.entries = [
+    ...fixtureRows,
+    { id: "h-1", kind: "hook", title: "Tab hook", time: 8000 },
+    { id: "p-1", kind: "page", title: "Page view", time: 7000 },
+    { id: "s-1", kind: "spent", title: "Spent credits", time: 6000 },
+  ];
+  html = timeline._root.innerHTML;
+  assert(
+    !html.includes('<details class="tl-more" hidden>') && !html.includes('class="tl-more" hidden'),
+    `Expected tl-more disclosure to not be hidden when secondary items exist, got: ${html}`,
+  );
+  assert(
+    html.includes("More (3)"),
+    `Expected More (3) disclosure text, got: ${html}`,
+  );
+
+  // Test single secondary item
+  timeline.entries = [
+    ...fixtureRows,
+    { id: "h-1", kind: "hook", title: "Tab hook", time: 8000 },
+  ];
+  html = timeline._root.innerHTML;
+  assert(
+    html.includes("More (1)"),
+    `Expected More (1) disclosure text, got: ${html}`,
+  );
+});
+
+// ── Part 10: SegmentedControl button min-block-size: var(--control, 36px)
+Deno.test("716s.6: SegmentedControl button min-block-size is var(--control, 36px)", async () => {
+  const componentsJs = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
+  const scBlock = componentsJs.slice(
+    componentsJs.indexOf("class SegmentedControl"),
+    componentsJs.indexOf("customElements.define(\"segmented-control\"", componentsJs.indexOf("class SegmentedControl")),
+  );
+  assert(
+    scBlock.includes("min-block-size:var(--control, 36px)") || scBlock.includes("min-block-size: var(--control, 36px)"),
+    `SegmentedControl must declare min-block-size: var(--control, 36px)`,
+  );
+  assert(
+    !scBlock.includes("min-block-size:30px") && !scBlock.includes("min-block-size: 30px"),
+    "SegmentedControl must not use min-block-size: 30px",
+  );
+});
