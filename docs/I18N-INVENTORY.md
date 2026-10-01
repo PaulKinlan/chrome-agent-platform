@@ -65,9 +65,65 @@ string used by several components gets one key, reused.
   catalogue only; Chrome selects it from the browser language with zero code
   change (the fallback serves the default English everywhere else).
 
-## Migrated / remaining (updated at stage 5)
+## Catalogue contract and the honesty check (chrome-agent-platform-716s.2)
 
-Filled in by the migration stages below.
+The first Settings migration generated the catalogue from the markup by keying
+on the first words and keeping only the text that preceded the first child
+element. Twelve-plus messages shipped as a truncated or HTML-escaped prefix of
+their sentence (`"Version "`, `"Connect a remote "`, `"Backup &amp; restore"`),
+and hydration wrote them over the markup — About lost its version number and
+its logo, the Data & memory heading rendered the entity literally, the MCP and
+Skills leads ended mid-sentence, and the hidden backup `<input type="file">`
+was discarded. The drift pin compared the catalogue to the broken markup byte
+for byte, so nothing in the suite could see it. The contract is now:
 
-- Migrated: (pending)
-- Remaining: (pending — each class justified)
+- **The catalogue holds text, never markup.** No HTML entities (`&amp;` is
+  written in the markup fallback, `&` in the catalogue), no `<`, no padding
+  whitespace or embedded newlines, and no message that ends in a dash or an
+  article (the shape a cut sentence takes).
+- **A leaf** (`data-i18n` on an element with no child elements) hydrates with
+  `textContent`; its message renders identically to the markup fallback
+  (entities decoded, whitespace collapsed).
+- **Mixed content** (`data-i18n` on an element WITH child elements) carries one
+  `$n` placeholder per direct child, in sentence order: `"Version $1"`,
+  `"Connect a remote $1 server … over an $2 URL. …"`. `hydrateI18n` resolves
+  the message with the slots marked, splits it, and places the element's
+  EXISTING child nodes back between text nodes — moved, never cloned or
+  re-parsed, so ids (`#about-version`), listeners and inline `<code>`/`<abbr>`
+  survive, and there is no innerHTML path. A message that does not place every
+  child leaves the markup untouched rather than destroying it.
+- **`data-i18n` on an end tag** (`</svg data-i18n=…>`) is a parse error the
+  browser drops; it is a defect, not a wiring.
+- **Every key is used** somewhere (`data-i18n`, `data-i18n-attr`, or a
+  `t("key")` literal).
+
+`scripts/check-i18n.mjs` (`npm run check:i18n`) enforces all of it over every
+`extension/_locales/*/messages.json` and every `extension/**/*.html`, and
+`tests/i18n-catalogue-honesty.test.ts` executes the same check under `npm test`
+— alongside the fixtures that prove each rule fires on the exact defective
+entries that shipped. Run against the pre-fix tree it reported 72 findings
+across 28 keys; the fixed tree reports none.
+
+## Migrated / remaining (updated at stage 5, revised 716s.2)
+
+- Migrated: 125 Settings leaves (`options_*`), the artifact-preview component
+  strings (`components_*`), and — since 716s.2 — the six mixed-content Settings
+  sentences (`options_version`, `options_mcp_lead`,
+  `options_site_agents_host_access`, `options_diagnostics_logs_help`,
+  `options_skills_lead`, plus the brand text span) through the `$n` slot
+  contract above.
+- Remaining in Settings, each with its class:
+  - **Nav labels and icon buttons** (`Providers … About` in the left nav; `Add
+    server`, `Add folder`, `Add file`): a text run beside an inline SVG. The
+    generated `data-i18n` sat on the `</svg>` end tag and never hydrated; those
+    dead attributes and their 17 keys are removed. Wire them either as a mixed
+    message (`"$1 Providers"`, the icon as the slot) or by moving the label
+    into a `<span data-i18n>`; the second is kinder to translators but touches
+    every Settings harness that reads `.nav-item` text — tracked as a
+    follow-up bead.
+  - **The Backup & restore export paragraph, the About tagline and the
+    developer-features description**: static leaves the first migration did
+    not reach; plain `data-i18n` leaves when picked up.
+- Remaining elsewhere (ntp, sidepanel, components.js, options.js rendered
+  rows): the quoted-string candidates in the table above; each surface is its
+  own migration stage.

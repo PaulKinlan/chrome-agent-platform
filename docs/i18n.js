@@ -31,24 +31,18 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "components_preview_initial_note": "Preview showing initial 64 KiB. Complete file is retained in OPFS stream ($1 bytes).",
   "components_sandbox_preview_opened": "Interactive preview opened in a restricted sandbox.",
   "components_table_preview_opened": "Interactive table preview opened.",
-  "options_about": "\n        About",
   "options_about_1": "About",
   "options_access_mode": "Access Mode",
   "options_act": "Act",
   "options_action_policy": "Action policy",
   "options_add_a_site_agent": "Add a Site Agent",
-  "options_add_file": "\n              Add file\n            ",
-  "options_add_folder": "\n              Add folder\n            ",
   "options_add_rule": "Add rule",
-  "options_add_server": "\n            Add server\n          ",
   "options_add_site_agent": "Add Site Agent",
   "options_adding_origins_scopes_control_to_the_listed_sites_": "Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on.",
-  "options_advanced": "\n        Advanced",
   "options_advanced_1": "Advanced",
   "options_agent": "Agent",
   "options_agent_data_maintenance": "Agent data maintenance",
   "options_agent_scope": "Agent scope",
-  "options_agents": "\n        Agents",
   "options_agents_1": "Agents",
   "options_agents_that_may_use_provider_run_tools": "Agents that may use provider-run tools",
   "options_all_agents": "All agents",
@@ -59,10 +53,8 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_allowed_origins": "Allowed origins",
   "options_always_ask_recommended": "Always ask (recommended)",
   "options_auto_close_run_tabs": "Auto-close run tabs",
-  "options_backup_amp_restore": "Backup &amp; restore",
-  "options_board_permissions": "\n        Board permissions",
+  "options_backup_restore": "Backup & restore",
   "options_board_permissions_1": "Board permissions",
-  "options_browser_control": "\n        Browser control",
   "options_browser_control_1": "Browser control",
   "options_by_agent": "By agent",
   "options_by_model": "By model",
@@ -70,16 +62,12 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_changes_save_automatically": "Changes save automatically.",
   "options_check_what_each_enrolled_site_reports_when_a_tool_": "Check what each enrolled site reports when a tool you expect is missing.",
   "options_choose_verbose_to_see_every_tool_call_start_and_ou": "Choose Verbose to see every tool-call start and outcome in the extension console.",
-  "options_chrome": "Chrome ",
   "options_chrome_agent_platform": "Chrome Agent Platform",
   "options_chrome_api": "Chrome API",
-  "options_chrome_grants": "Chrome grants ",
   "options_clean_up_leftover_files": "Clean up leftover files…",
-  "options_connect_a_remote": "Connect a remote ",
   "options_console": "Console",
   "options_console_logging": "Console logging",
   "options_cost": "Cost:",
-  "options_data_memory": "\n        Data & memory",
   "options_data_memory_1": "Data & memory",
   "options_deny_all": "Deny all",
   "options_destructive": "Destructive",
@@ -87,27 +75,26 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_developer_features": "Developer features",
   "options_diagnostics": "Diagnostics",
   "options_diagnostics_logs": "Diagnostics logs",
+  "options_diagnostics_logs_help": "Write a $1 line to the page's DevTools console each time a site's tools are checked.",
   "options_event": "Event",
   "options_every_named_agent_and_the_hub_can_post_and_claim_j": "Every named agent and the hub can post and claim jobs on the shared board. A rule blocks one specific edge.",
   "options_every_site_you_allow_keeps_its_own_grant_turn_one_": "Every site you allow keeps its own grant; turn one off without touching the others.",
   "options_export_all_data": "Export all data…",
   "options_factory_reset": "Factory reset",
-  "options_file_system_access_api_is_unavailable_in_this_brow": "\n            File System Access API is unavailable in this browser environment\n          ",
+  "options_file_system_access_api_is_unavailable_in_this_brow": "File System Access API is unavailable in this browser environment",
   "options_full_detail_in_local_logs": "Full detail in local logs",
   "options_full_release_notes": "Full release notes",
-  "options_hooks": "\n        Hooks",
   "options_import": "Import",
-  "options_import_a_backup_file": "\n            Import a backup file\n            ",
+  "options_import_a_backup_file": "Import a backup file",
   "options_import_from_file": "Import from file…",
   "options_keep_every_run_log": "Keep every run log",
   "options_keyboard_shortcuts": "Keyboard shortcuts",
   "options_let_the_hub_hand_parts_of_a_task_to_your_site_agen": "Let the hub hand parts of a task to your Site Agents.",
   "options_loading_shortcuts": "Loading shortcuts…",
   "options_loading_the_changelog": "Loading the changelog…",
-  "options_local_folders": "\n        Local folders",
   "options_local_folders_files": "Local folders & files",
   "options_log_verbosity": "Log verbosity",
-  "options_mcp_servers": "\n        MCP servers",
+  "options_mcp_lead": "Connect a remote $1 server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an $2 URL. An auth token stays on this device only — never in the bundle, logs, or receipts — and is never shown again after you save it.",
   "options_mcp_servers_1": "MCP servers",
   "options_multiple_agents": "Multiple agents",
   "options_never_allow": "Never allow",
@@ -119,12 +106,9 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_open_navigate_and_manage_tabs_groups_bookmarks_and": "Open, navigate and manage tabs, groups, bookmarks and page actions. Asks once per site, then runs automatically.",
   "options_open_the_captured_entries_copy_them_for_a_bug_repo": "Open the captured entries, copy them for a bug report, or clear them.",
   "options_origin": "Origin",
-  "options_permissions": "\n        Permissions",
   "options_permissions_1": "Permissions",
-  "options_platform": " Platform",
   "options_privacy": "Privacy",
   "options_provider_server_tools": "Provider server tools",
-  "options_providers": "\n        Providers",
   "options_providers_1": "Providers",
   "options_purge_journals": "Purge journals…",
   "options_python_network_access": "Python network access",
@@ -134,32 +118,29 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_read_page_text_list_tabs_allowed_after_consent_nev": "Read page text, list tabs. Allowed after consent — never interrupts.",
   "options_read_write": "Read/Write",
   "options_reset_all_data": "Reset all data…",
-  "options_reusable_capabilities_each_documented_below_a_skil": "\n          Reusable capabilities, each documented below. A skill is included in a\n          task — type ",
   "options_run_logs": "Run logs",
   "options_settings": "Settings",
   "options_settings_chrome_agent_platform": "Settings — Chrome Agent Platform",
   "options_show_detail": "Show detail",
   "options_show_developer_features": "Show developer features",
   "options_site_agent_diagnostics": "Site Agent diagnostics",
+  "options_site_agents_host_access": "Chrome grants $1 host access when the extension is installed; page tools require it. The capabilities in Permissions are separate optional permissions, requested only when you enable or use them.",
   "options_site_origin": "Site origin",
   "options_site_tool_permissions": "Site tool permissions",
   "options_site_tool_permissions_help": "A Site Agent can report tools after enrollment, but the first model use of each exact tool asks you. Allowed tools run automatically until you disable them here; denied tools stay blocked until you allow or reset them.",
-  "options_skills": "\n        Skills",
   "options_skills_1": "Skills",
+  "options_skills_lead": "Reusable capabilities, each documented below. A skill is included in a task — type $1 anywhere in the composer on the hub, or attach it to an agent. Use one here to start a task with it pre-filled.",
   "options_system_hooks": "System hooks",
   "options_system_prompts": "System prompts",
   "options_tokens_per_day": "Tokens per day",
   "options_tool_calls": "Tool calls",
-  "options_tool_library": "\n        Tool library",
   "options_tool_library_1": "Tool library",
-  "options_usage": "\n        Usage",
   "options_usage_1": "Usage",
   "options_verbose": "Verbose",
-  "options_version": "Version ",
+  "options_version": "Version $1",
   "options_what_s_new": "What's new",
   "options_what_the_agent_may_do_once_browser_control_is_on_i": "What the agent may do once Browser control is on, in three classes.",
   "options_what_this_extension_sends_and_stores": "What this extension sends and stores",
-  "options_write_a": "Write a ",
 });
 // SYNC:i18n-fallback:end
 
@@ -190,16 +171,61 @@ export function t(key, ...subs) {
   return args.length ? substitute(message, args) : message;
 }
 
+// U+FFFC OBJECT REPLACEMENT CHARACTER brackets each child slot while a mixed
+// message is resolved: it never occurs in copy, survives chrome.i18n's
+// substitution untouched, and is split back out before anything is rendered.
+const SLOT = "\uFFFC";
+const SLOT_RE = /\uFFFC([1-9])\uFFFC/;
+
+/** Hydrate ONE element whose message places its child elements with `$1..$n`
+ * (chrome-agent-platform-716s.2). The children are the element's EXISTING
+ * nodes — moved, never cloned or re-parsed — so ids, listeners and inline
+ * markup (`<code>`, `<abbr>`, `<strong id="about-version">`) survive and no
+ * innerHTML path exists. A message that does not place every child, or names
+ * a slot that is not there, leaves the markup fallback untouched: losing the
+ * About logo or a file `<input>` is worse than keeping English, and
+ * scripts/check-i18n.mjs fails the build on that mismatch so it is never
+ * silent. */
+function hydrateMixed(el, key, children) {
+  const message = t(key, children.map((_, i) => `${SLOT}${i + 1}${SLOT}`));
+  const parts = String(message).split(SLOT_RE);
+  const doc = el.ownerDocument || (typeof document !== "undefined" ? document : null);
+  if (!doc?.createTextNode || typeof el.replaceChildren !== "function") return;
+  const placed = new Set();
+  const nodes = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      if (parts[i]) nodes.push(doc.createTextNode(parts[i]));
+      continue;
+    }
+    const child = children[Number(parts[i]) - 1];
+    if (!child || placed.has(child)) return;
+    placed.add(child);
+    nodes.push(child);
+  }
+  if (placed.size !== children.length) return;
+  el.replaceChildren(...nodes);
+}
+
 /** Hydrate static HTML: fill `data-i18n` text content and `data-i18n-attr`
  * attributes from the catalogue. Attribute form:
  * `data-i18n-attr="aria-label:key;title:key2"` (attribute:key pairs).
  * Elements keep their English text in the markup as the no-JS fallback; the
- * catalogue value is byte-identical so rendering is unchanged. */
+ * catalogue value says the same thing (entities decoded, whitespace
+ * collapsed) so rendering is unchanged.
+ *
+ * A leaf (no child elements) gets `textContent = t(key)`. An element WITH
+ * child elements is mixed content: its message carries one `$n` per child
+ * (`"Version $1"`, `"Connect a remote $1 server … over an $2 URL."`) and the
+ * children are placed back into the resolved text — see hydrateMixed. */
 export function hydrateI18n(root = document) {
   if (!root?.querySelectorAll) return;
   for (const el of root.querySelectorAll("[data-i18n]")) {
     const key = el.getAttribute("data-i18n");
-    if (key) el.textContent = t(key);
+    if (!key) continue;
+    const children = el.children ? Array.from(el.children) : [];
+    if (children.length === 0) el.textContent = t(key);
+    else hydrateMixed(el, key, children);
   }
   for (const el of root.querySelectorAll("[data-i18n-attr]")) {
     const spec = el.getAttribute("data-i18n-attr") || "";

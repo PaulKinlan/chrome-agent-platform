@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Settings copy reads as whole sentences again — About shows the installed version, the Backup & restore heading no longer shows a stray "&amp;", and the MCP servers and Skills introductions are complete.
+
 ## [0.3.558] — 2026-09-29
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 

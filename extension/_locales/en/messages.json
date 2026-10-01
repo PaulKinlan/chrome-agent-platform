@@ -28,9 +28,6 @@
   "components_table_preview_opened": {
     "message": "Interactive table preview opened."
   },
-  "options_about": {
-    "message": "\n        About"
-  },
   "options_about_1": {
     "message": "About"
   },
@@ -46,26 +43,14 @@
   "options_add_a_site_agent": {
     "message": "Add a Site Agent"
   },
-  "options_add_file": {
-    "message": "\n              Add file\n            "
-  },
-  "options_add_folder": {
-    "message": "\n              Add folder\n            "
-  },
   "options_add_rule": {
     "message": "Add rule"
-  },
-  "options_add_server": {
-    "message": "\n            Add server\n          "
   },
   "options_add_site_agent": {
     "message": "Add Site Agent"
   },
   "options_adding_origins_scopes_control_to_the_listed_sites_": {
     "message": "Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on."
-  },
-  "options_advanced": {
-    "message": "\n        Advanced"
   },
   "options_advanced_1": {
     "message": "Advanced"
@@ -79,9 +64,6 @@
   "options_agent_scope": {
     "message": "Agent scope"
   },
-  "options_agents": {
-    "message": "\n        Agents"
-  },
   "options_agents_1": {
     "message": "Agents"
   },
@@ -90,6 +72,9 @@
   },
   "options_all_agents": {
     "message": "All agents"
+  },
+  "options_allow": {
+    "message": "Allow"
   },
   "options_allow_more_origins_one_per_line": {
     "message": "Allow more origins (one per line):"
@@ -109,17 +94,11 @@
   "options_auto_close_run_tabs": {
     "message": "Auto-close run tabs"
   },
-  "options_backup_amp_restore": {
-    "message": "Backup &amp; restore"
-  },
-  "options_board_permissions": {
-    "message": "\n        Board permissions"
+  "options_backup_restore": {
+    "message": "Backup & restore"
   },
   "options_board_permissions_1": {
     "message": "Board permissions"
-  },
-  "options_browser_control": {
-    "message": "\n        Browser control"
   },
   "options_browser_control_1": {
     "message": "Browser control"
@@ -142,23 +121,14 @@
   "options_choose_verbose_to_see_every_tool_call_start_and_ou": {
     "message": "Choose Verbose to see every tool-call start and outcome in the extension console."
   },
-  "options_chrome": {
-    "message": "Chrome "
-  },
   "options_chrome_agent_platform": {
     "message": "Chrome Agent Platform"
   },
   "options_chrome_api": {
     "message": "Chrome API"
   },
-  "options_chrome_grants": {
-    "message": "Chrome grants "
-  },
   "options_clean_up_leftover_files": {
     "message": "Clean up leftover files…"
-  },
-  "options_connect_a_remote": {
-    "message": "Connect a remote "
   },
   "options_console": {
     "message": "Console"
@@ -168,9 +138,6 @@
   },
   "options_cost": {
     "message": "Cost:"
-  },
-  "options_data_memory": {
-    "message": "\n        Data & memory"
   },
   "options_data_memory_1": {
     "message": "Data & memory"
@@ -193,6 +160,10 @@
   "options_diagnostics_logs": {
     "message": "Diagnostics logs"
   },
+  "options_diagnostics_logs_help": {
+    "message": "Write a $1 line to the page's DevTools console each time a site's tools are checked.",
+    "description": "$1 is the inline code [WebMCP]"
+  },
   "options_event": {
     "message": "Event"
   },
@@ -209,7 +180,7 @@
     "message": "Factory reset"
   },
   "options_file_system_access_api_is_unavailable_in_this_brow": {
-    "message": "\n            File System Access API is unavailable in this browser environment\n          "
+    "message": "File System Access API is unavailable in this browser environment"
   },
   "options_full_detail_in_local_logs": {
     "message": "Full detail in local logs"
@@ -217,14 +188,11 @@
   "options_full_release_notes": {
     "message": "Full release notes"
   },
-  "options_hooks": {
-    "message": "\n        Hooks"
-  },
   "options_import": {
     "message": "Import"
   },
   "options_import_a_backup_file": {
-    "message": "\n            Import a backup file\n            "
+    "message": "Import a backup file"
   },
   "options_import_from_file": {
     "message": "Import from file…"
@@ -244,17 +212,15 @@
   "options_loading_the_changelog": {
     "message": "Loading the changelog…"
   },
-  "options_local_folders": {
-    "message": "\n        Local folders"
-  },
   "options_local_folders_files": {
     "message": "Local folders & files"
   },
   "options_log_verbosity": {
     "message": "Log verbosity"
   },
-  "options_mcp_servers": {
-    "message": "\n        MCP servers"
+  "options_mcp_lead": {
+    "message": "Connect a remote $1 server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an $2 URL. An auth token stays on this device only — never in the bundle, logs, or receipts — and is never shown again after you save it.",
+    "description": "$1 is the inline abbreviation MCP; $2 is the inline code https://"
   },
   "options_mcp_servers_1": {
     "message": "MCP servers"
@@ -286,14 +252,11 @@
   "options_open_the_captured_entries_copy_them_for_a_bug_repo": {
     "message": "Open the captured entries, copy them for a bug report, or clear them."
   },
-  "options_permissions": {
-    "message": "\n        Permissions"
+  "options_origin": {
+    "message": "Origin"
   },
   "options_permissions_1": {
     "message": "Permissions"
-  },
-  "options_platform": {
-    "message": " Platform"
   },
   "options_privacy": {
     "message": "Privacy"
@@ -301,14 +264,17 @@
   "options_provider_server_tools": {
     "message": "Provider server tools"
   },
-  "options_providers": {
-    "message": "\n        Providers"
-  },
   "options_providers_1": {
     "message": "Providers"
   },
   "options_purge_journals": {
     "message": "Purge journals…"
+  },
+  "options_python_network_access": {
+    "message": "Python network access"
+  },
+  "options_python_network_access_help": {
+    "message": "Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies or logins (POST requests still send this extension's Origin header), and every request and refusal is shown to you in the run. Remove an origin to stop it immediately."
   },
   "options_read": {
     "message": "Read"
@@ -324,9 +290,6 @@
   },
   "options_reset_all_data": {
     "message": "Reset all data…"
-  },
-  "options_reusable_capabilities_each_documented_below_a_skil": {
-    "message": "\n          Reusable capabilities, each documented below. A skill is included in a\n          task — type "
   },
   "options_run_logs": {
     "message": "Run logs"
@@ -346,6 +309,10 @@
   "options_site_agent_diagnostics": {
     "message": "Site Agent diagnostics"
   },
+  "options_site_agents_host_access": {
+    "message": "Chrome grants $1 host access when the extension is installed; page tools require it. The capabilities in Permissions are separate optional permissions, requested only when you enable or use them.",
+    "description": "$1 is the inline code <all_urls>"
+  },
   "options_site_origin": {
     "message": "Site origin"
   },
@@ -355,11 +322,12 @@
   "options_site_tool_permissions_help": {
     "message": "A Site Agent can report tools after enrollment, but the first model use of each exact tool asks you. Allowed tools run automatically until you disable them here; denied tools stay blocked until you allow or reset them."
   },
-  "options_skills": {
-    "message": "\n        Skills"
-  },
   "options_skills_1": {
     "message": "Skills"
+  },
+  "options_skills_lead": {
+    "message": "Reusable capabilities, each documented below. A skill is included in a task — type $1 anywhere in the composer on the hub, or attach it to an agent. Use one here to start a task with it pre-filled.",
+    "description": "$1 is the inline example /skill:name"
   },
   "options_system_hooks": {
     "message": "System hooks"
@@ -373,14 +341,8 @@
   "options_tool_calls": {
     "message": "Tool calls"
   },
-  "options_tool_library": {
-    "message": "\n        Tool library"
-  },
   "options_tool_library_1": {
     "message": "Tool library"
-  },
-  "options_usage": {
-    "message": "\n        Usage"
   },
   "options_usage_1": {
     "message": "Usage"
@@ -389,7 +351,8 @@
     "message": "Verbose"
   },
   "options_version": {
-    "message": "Version "
+    "message": "Version $1",
+    "description": "$1 is the installed version read from the manifest, e.g. v0.3.560"
   },
   "options_what_s_new": {
     "message": "What's new"
@@ -399,20 +362,5 @@
   },
   "options_what_this_extension_sends_and_stores": {
     "message": "What this extension sends and stores"
-  },
-  "options_write_a": {
-    "message": "Write a "
-  },
-  "options_python_network_access": {
-    "message": "Python network access"
-  },
-  "options_python_network_access_help": {
-    "message": "Python code an agent writes has no network of its own. It can reach only the origins you list here, one request at a time, without your cookies or logins (POST requests still send this extension's Origin header), and every request and refusal is shown to you in the run. Remove an origin to stop it immediately."
-  },
-  "options_allow": {
-    "message": "Allow"
-  },
-  "options_origin": {
-    "message": "Origin"
   }
 }
