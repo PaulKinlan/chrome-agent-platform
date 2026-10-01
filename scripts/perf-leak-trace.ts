@@ -61,7 +61,7 @@ async function findSw(cdp: Cdp): Promise<{ id: string; extId: string }> {
   for (let i = 0; i < 60; i++) {
     try {
       const targets = await (await fetch(`http://127.0.0.1:${cdp.port}/json/list`)).json();
-      const sw = (targets as any[]).find((t) => t.type === "service_worker");
+      const sw = (targets as any[]).find((t) => t.type === "service_worker" && t.url?.includes("dist/background/service-worker.js"));
       if (sw) return { id: sw.id, extId: sw.url.split("/")[2] };
     } catch { /* retry */ }
     await sleep(100);
@@ -75,6 +75,18 @@ async function pageLoad(cdp: Cdp, url: string): Promise<{ ms: number; sessionId:
   const sessionId = s.result?.sessionId ?? s.sessionId;
   await cdp.send("Runtime.enable", {}, sessionId);
   await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", {
+    source: `
+      window.__capLongTasks = [];
+      try {
+        new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            window.__capLongTasks.push({ duration: entry.duration, startTime: entry.startTime, name: entry.name });
+          }
+        }).observe({ entryTypes: ['longtask'] });
+      } catch {}
+    `,
+  }, sessionId);
   const t0 = Date.now();
   await cdp.send("Page.navigate", { url }, sessionId);
   // wait for the document to be ready + a paint settle
@@ -216,8 +228,10 @@ async function main() {
       const boot = measures.find(m => m.name.includes("ntp:boot→composer-ready"));
       const thread = measures.find(m => m.name.includes("ntp:thread-list-hydrated"));
       const agents = measures.find(m => m.name.includes("ntp:agents-panel-hydrated"));
-      const longTasks = performance.getEntriesByType("longtask") || [];
-      const severeLongTasks = longTasks.filter(t => t.duration > 50);
+      const obsLongTasks = Array.isArray(window.__capLongTasks) ? window.__capLongTasks : [];
+      const perfLongTasks = performance.getEntriesByType("longtask") || [];
+      const allLongTasks = [...obsLongTasks, ...perfLongTasks];
+      const severeLongTasks = allLongTasks.filter(t => t.duration > 50);
 
       let cls = 0;
       const layoutShifts = performance.getEntriesByType("layout-shift") || [];
