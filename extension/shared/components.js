@@ -12325,9 +12325,9 @@ class JobsBoard extends Component {
 
     const isEmpty = !open.length && !claimed.length && !blocked.length && !settled.length && !messages.length;
     this._emptyEl.hidden = !isEmpty;
-    this.toggleAttribute("data-empty", isEmpty);
+    if (typeof this.toggleAttribute === "function") this.toggleAttribute("data-empty", isEmpty); else if (isEmpty) this.setAttribute("data-empty", ""); else this.removeAttribute("data-empty");
     if (this.parentElement) this.parentElement.setAttribute("data-empty", String(isEmpty));
-    const sec = this.closest("section");
+    const sec = typeof this.closest === "function" ? this.closest("section") : null;
     if (sec) sec.setAttribute("data-empty", String(isEmpty));
     if (isEmpty) {
       // An unreadable board is an HONEST error, never a false "empty".

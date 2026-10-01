@@ -59,7 +59,7 @@ Deno.test("716s.5: single provider status statement — provider-pill hidden whe
   const html = await read("./extension/ntp/ntp.html");
   const ntpJs = await read("./extension/ntp/ntp.js");
 
-  assert(html.includes("provider-pill"), "provider-pill identifier/class must be present in topbar");
+  assert(html.includes("provider-pill"), "provider-pill identifier/class must be present in top-actions");
   assert(html.includes("timeline-empty"), "timeline-empty container must be present");
   assert(ntpJs.includes("isFirstRunVisible") || ntpJs.includes("firstRunGuide") && ntpJs.includes("slot.hidden = true"),
     "renderProviderStatus must hide status pill when onboarding banner is visible");
