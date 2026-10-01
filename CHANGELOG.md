@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Allows reopening recently closed tabs and listing synced devices via the optional "sessions" permission with in-context approvals.
+
 ## [0.3.558] — 2026-09-29
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 

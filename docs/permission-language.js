@@ -21,6 +21,7 @@ export const PERMISSION_USER_LANGUAGE = Object.freeze({
   contentSettings: "change site content settings",
   bookmarks: "read and change bookmarks",
   history: "read and change browsing history",
+  sessions: "see and restore recently closed tabs",
   sidePanel: "change the side panel",
   management: "manage extensions",
   userScripts: "run user scripts on sites",

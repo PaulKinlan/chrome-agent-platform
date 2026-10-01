@@ -402,6 +402,12 @@ function chromeApi(name) {
   return typeof chrome !== "undefined" && chrome[name] ? chrome[name] : null;
 }
 
+/** Chrome's `sessions.MAX_SESSION_RESULTS`: getRecentlyClosed REJECTS a
+ * larger `maxResults` ("Value must be at most 25") — the pre-3p3e.1 code asked
+ * for 100, which the live browser threw on (found by the CfT journey the day the
+ * permission became real). Pinned here so the schema and the call agree. */
+const SESSIONS_MAX_RESULTS = 25;
+
 async function hasPermission(perm) {
   try {
     if (typeof chrome === "undefined" || !chrome.permissions) return false;
@@ -4791,27 +4797,34 @@ export function browserToolset(readOnly = false, {
       },
     }),
     // ── T7 sessions + history ──
-    // chrome.sessions needs NO manifest permission (available to every
-    // extension); chrome.history uses the ALREADY-DECLARED "history" optional
-    // permission, checked on demand (the SW never calls permissions.request —
-    // only a genuine owner gesture in Settings may grant). Restoring a closed
-    // session reopens its tab(s), so the MUTATION rides the SAME product
-    // browser-control grant as its tabs/window siblings: the grant must cover
-    // EVERY origin being restored (a window restore is every tab's restore);
-    // an origin-less restore requires a GLOBAL grant. History writes/deletes
-    // mutate the global history store: per-URL ops are destination-origin
-    // scoped, range/all wipes require a GLOBAL grant, and clear_all_history
-    // additionally refuses without an explicit confirm:true.
+    // chrome.sessions REQUIRES the "sessions" optional permission (chrome-
+    // agent-platform-3p3e.1: without it the namespace is undefined in the
+    // service worker, and the old "needs NO manifest permission" comment
+    // made three catalogued tools a promise that always failed). Like
+    // chrome.history's ALREADY-DECLARED "history" permission it is checked on
+    // demand: a missing grant returns the standard structured denial that the
+    // conversation renders as the in-context Allow card (the SW never calls
+    // permissions.request — only a genuine owner gesture may grant). Restoring
+    // a closed session reopens its tab(s), so the MUTATION rides the SAME
+    // product browser-control grant as its tabs/window siblings: the grant
+    // must cover EVERY origin being restored (a window restore is every tab's
+    // restore); an origin-less restore requires a GLOBAL grant. History
+    // writes/deletes mutate the global history store: per-URL ops are
+    // destination-origin scoped, range/all wipes require a GLOBAL grant, and
+    // clear_all_history additionally refuses without an explicit confirm:true.
     list_recently_closed: tool({
       description:
-        "List recently closed tabs and windows (sessionId, kind, url, title, lastModified) so they can be restored with restore_closed.",
+        "List recently closed tabs and windows (sessionId, kind, url, title, lastModified) so they can be restored with restore_closed. Requires the sessions permission. Chrome keeps at most 25 entries.",
       inputSchema: z.object({
-        maxResults: z.number().int().min(1).max(100).optional(),
+        maxResults: z.number().int().min(1).max(SESSIONS_MAX_RESULTS).optional(),
       }),
-      execute: async ({ maxResults = 25 }) => {
+      execute: async ({ maxResults = SESSIONS_MAX_RESULTS }) => {
+        if (!(await hasPermission("sessions"))) {
+          return permissionDeniedResult("sessions", { reason: "list your recently closed tabs" });
+        }
         const api = chromeApi("sessions");
         if (!api) return { error: "sessions API not available in this browser context" };
-        const closed = await api.getRecentlyClosed({ maxResults: 100 });
+        const closed = await api.getRecentlyClosed({ maxResults: SESSIONS_MAX_RESULTS });
         const items = [];
         for (const s of Array.isArray(closed) ? closed : []) {
           if (s?.tab) {
@@ -4839,17 +4852,23 @@ export function browserToolset(readOnly = false, {
     }),
     restore_closed: tool({
       description:
-        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required. " +
+        "Restore a recently closed tab or window by sessionId (from list_recently_closed). Requires the sessions permission and browser-control permission (scoped + expiring) covering every origin being restored; if ANY restored entry has no canonical origin (chrome://, data:, file:, about:, view-source:, or a missing url) — or the set has no origins — a GLOBAL grant is required. " +
         cleanupGuidanceFor("restore_closed"),
       inputSchema: z.object({ sessionId: z.string().min(1).max(128) }),
       execute: async ({ sessionId }) =>
         await withGrantLock(async () => {
+          // The permission comes FIRST: the restored origins (which decide the
+          // browser-control ask below) can only be read from the session
+          // store once the sessions permission is held.
+          if (!(await hasPermission("sessions"))) {
+            return permissionDeniedResult("sessions", { reason: "restore a recently closed tab" });
+          }
           const api = chromeApi("sessions");
           if (!api) return { error: "sessions API not available in this browser context" };
           // Re-read the closed sessions INSIDE the grant lock (a close/restore
           // since any earlier read must not smuggle an unauthorized origin past
           // the check).
-          const closed = await api.getRecentlyClosed({ maxResults: 100 });
+          const closed = await api.getRecentlyClosed({ maxResults: SESSIONS_MAX_RESULTS });
           const item = (Array.isArray(closed) ? closed : []).find(
             (s) => (s?.tab?.sessionId ?? s?.window?.sessionId) === sessionId,
           );
@@ -4923,9 +4942,12 @@ export function browserToolset(readOnly = false, {
     }),
     list_synced_devices: tool({
       description:
-        "List devices synced to this Chrome profile and their recently closed sessions. Requires Chrome sign-in with sync enabled.",
+        "List devices synced to this Chrome profile and their recently closed sessions. Requires the sessions permission and Chrome sign-in with sync enabled.",
       inputSchema: z.object({}),
       execute: async () => {
+        if (!(await hasPermission("sessions"))) {
+          return permissionDeniedResult("sessions", { reason: "list your synced devices" });
+        }
         const api = chromeApi("sessions");
         if (!api) return { error: "sessions API not available in this browser context" };
         const devices = await api.getDevices();

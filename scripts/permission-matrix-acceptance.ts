@@ -376,12 +376,12 @@ async function main() {
   // ── PHASE B — variant pre-held grant path (warned permissions) ──────────
   const variantDir = durableDir(`cap-perm-matrix-variant-${Date.now()}`);
   const build2 = new Deno.Command("node", {
-    args: [`${ROOT}scripts/permission-variant.mjs`, "--out", variantDir, "--permissions", "tabGroups,history"],
+    args: [`${ROOT}scripts/permission-variant.mjs`, "--out", variantDir, "--permissions", "tabGroups,history,sessions"],
     stdout: "piped",
     stderr: "piped",
   }).spawn();
   const build2Out = await build2.output();
-  check("matrix[variant]: permission-variant build succeeded (tabGroups + history pre-held)", build2Out.code === 0,
+  check("matrix[variant]: permission-variant build succeeded (tabGroups + history + sessions pre-held)", build2Out.code === 0,
     new TextDecoder().decode(build2Out.stderr).trim());
   const integrity = build2Out.code === 0
     ? JSON.parse(await Deno.readTextFile(`${variantDir}/VARIANT-INTEGRITY.json`))
@@ -442,12 +442,22 @@ async function main() {
     const historyWorks = await evalIn(rigB.cdp, optsB,
       `chrome.history.search({ text: "", maxResults: 1 }).then((r) => Array.isArray(r)).catch(() => false)`);
     check("matrix-variant[history]: the grant is API-functional (chrome.history.search resolves)", historyWorks === true);
+    // chrome-agent-platform-3p3e.1: `sessions` is a real optional permission.
+    // Pre-held it is granted at install AND the namespace is injected — the
+    // pre-fix tree had no `sessions` declaration at all, so chrome.sessions
+    // was undefined in every context and the three sessions tools could never run.
+    const seState = await until(async () =>
+      (await containsPerm(rigB.cdp, optsB, "sessions")) === true ? true : null, 10000);
+    check("matrix-variant[sessions]: granted at install", seState === true);
+    const sessionsWorks = await evalIn(rigB.cdp, optsB,
+      `typeof chrome.sessions?.getRecentlyClosed === "function" ? chrome.sessions.getRecentlyClosed({ maxResults: 1 }).then((r) => Array.isArray(r)).catch(() => false) : false`);
+    check("matrix-variant[sessions]: the grant is API-functional (chrome.sessions.getRecentlyClosed resolves)", sessionsWorks === true);
     const rows = await evalIn(rigB.cdp, optsB, `(() => {
       const labels = [...document.querySelectorAll('#permission-list capability-row')].map((n) => n.getAttribute('name'));
-      return { tabGroups: labels.includes("Tab groups"), history: labels.includes("History"), count: labels.length };
+      return { tabGroups: labels.includes("Tab groups"), history: labels.includes("History"), sessions: labels.includes("Recently closed tabs"), count: labels.length };
     })()`);
     check("matrix-variant: install-granted capabilities render NO optional row (no bogus Turn off Chrome would refuse)",
-      rows?.tabGroups === false && rows?.history === false, rows);
+      rows?.tabGroups === false && rows?.history === false && rows?.sessions === false, rows);
     const shot2 = await captureShot(rigB.cdp, optsB);
     if (shot2) await writeEvidence("permission-matrix-variant-granted.png", shot2);
   } finally {

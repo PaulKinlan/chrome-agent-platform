@@ -28,6 +28,10 @@ function reset() {
   granted.clear();
   granted.add("storage");
   granted.add("tabs");
+  // The sessions permission is held at baseline (chrome-agent-platform-3p3e.1)
+  // so the restore tests below exercise the browser-control grant gate; the
+  // permission gate itself is proven by the test that clears it.
+  granted.add("sessions");
   recentlyClosed = [];
   devices = [];
   historyDb.clear();
@@ -131,13 +135,23 @@ Deno.test("T7 schema bounds: hostile/oversized args are rejected before any chro
   assertEquals(t.delete_history_range.inputSchema.safeParse({ startTime: 5 }).success, false, "both bounds required");
 });
 
-Deno.test("T7 sessions reads need NO permission: recently-closed + synced devices render bounded metadata", async () => {
+Deno.test("T7 sessions reads need the sessions permission: denied with the Allow-card shape without it; bounded metadata with it", async () => {
   reset();
-  granted.clear(); // NO permissions at all — sessions reads must still work
+  granted.clear(); // NO permissions at all — the reads must deny with the card shape, never the "not available" string
   recentlyClosed = [
     { tab: { sessionId: "s-tab-1", url: "https://a.example/x", title: "A" }, lastModified: 1700000001 },
     { window: { sessionId: "s-win-1", tabs: [{ url: "https://b.example/y", title: "B" }, { url: "https://c.example/z", title: "C" }] }, lastModified: 1700000002 },
   ];
+  for (const [name, args] of [["list_recently_closed", {}], ["list_synced_devices", {}]]) {
+    const denied = await tools()[name].execute(args);
+    assertEquals(denied.permissionRequired?.capability, "sessions", `${name}: the denial names the sessions permission`);
+    assertEquals(denied.waitingForPermission, true, `${name}: the denial drives the in-context Allow card`);
+    assertEquals(denied.permissionRequirement?.permissions, ["sessions"], `${name}: the card requests exactly sessions`);
+    assert(!/not available/i.test(denied.error), `${name}: never the dead-end "not available" string: ${denied.error}`);
+    assertEquals(denied.closed, undefined, `${name}: no data leaks past the gate`);
+  }
+
+  granted.add("sessions");
   const rc = await tools().list_recently_closed.execute({});
   assertEquals(rc.total, 2);
   assertEquals(rc.closed[0], { kind: "tab", sessionId: "s-tab-1", url: "https://a.example/x", title: "A", lastModified: 1700000001 });

@@ -96,7 +96,7 @@ alarms) and acts on untrusted page content + model output. Threat vectors:
   decision Q18, 2026-08-31, option (a)): the manifest declares four required
   boot-critical permissions (`alarms`, `offscreen`, `sidePanel`, `storage`);
   every other capability permission (`tabs`, `scripting`, `notifications`, … —
-  31 in all) is an `optional_permission`, requested just-in-time from a real
+  32 in all, `sessions` joining at chrome-agent-platform-3p3e.1) is an `optional_permission`, requested just-in-time from a real
   owner gesture (Settings → Permissions, or the in-context approval card — the
   SW never requests). Host access is install-granted: the manifest declares
   `host_permissions: ["<all_urls>"]` plus two content scripts on every http(s)
