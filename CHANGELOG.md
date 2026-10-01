@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Faster rendering of long conversations and tool lists by sharing cached stylesheets across UI components.
+
 ## [0.3.558] — 2026-09-29
+- Faster rendering of long conversations and tool lists by sharing cached stylesheets across UI components.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29

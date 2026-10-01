@@ -278,7 +278,7 @@ the permission-state matrix acceptance lane (supersedes the headed lane); `scrip
 
 **P2.** The whole Wasm tool platform lane — runtime probe, owner install, bundled tranche,
 spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes after the
-demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
+demo. Performance program (`chrome-agent-platform-9epn`): constructable stylesheets for shadow components (`chrome-agent-platform-9epn.8`) memoizes one `CSSStyleSheet` per element style via `adoptedStyleSheets`, eliminating per-instance `<style>` elements across conversations and lists with transparent fallback for mock-DOM test harnesses. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
 
 ### Known open defect classes
 - **WebMCP discovery — passive registry acceptance candidate in review.** The owner rejected
