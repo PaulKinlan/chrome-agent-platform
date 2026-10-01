@@ -5417,6 +5417,29 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
   statusEl.setAttribute("role", "status");
   statusEl.textContent = status === "done" ? "done" : status === "error" ? "error" : "running";
   summary.appendChild(statusEl);
+  const unwrapOnDevice = (v) => {
+    if (!v) return false;
+    if (typeof v === "object") {
+      if (v.onDevice === true) return true;
+      if (v.result?.onDevice === true) return true;
+      if (v.value?.onDevice === true) return true;
+    } else if (typeof v === "string") {
+      try {
+        const parsed = JSON.parse(v);
+        if (parsed?.onDevice === true || parsed?.result?.onDevice === true || parsed?.value?.onDevice === true) return true;
+      } catch { /* ignore non-JSON string */ }
+    }
+    return false;
+  };
+  const isOnDevice = unwrapOnDevice(result) || unwrapOnDevice(detail);
+  if (isOnDevice) {
+    const onDeviceEl = document.createElement("span");
+    onDeviceEl.className = "tool-status on-device";
+    onDeviceEl.setAttribute("role", "status");
+    onDeviceEl.setAttribute("aria-label", "Executed on-device");
+    onDeviceEl.textContent = "On-device";
+    summary.appendChild(onDeviceEl);
+  }
   const dur = formatToolDurationMs(duration);
   if (dur) {
     const durEl = document.createElement("span");
@@ -5716,6 +5739,7 @@ const MESSAGE_BUBBLE_STYLE = `
   .tool .tool-status.running { color:var(--muted,#635e56); background:var(--panel,#ffffff); }
   .tool .tool-status.done { color:var(--success,#1a7f37); background:var(--panel,#ffffff); }
   .tool .tool-status.error { color:var(--danger,#b3261e); background:var(--panel,#ffffff); }
+  .tool .tool-status.on-device { color:var(--accent,#0e6e63); background:var(--panel,#ffffff); }
   .tool .tool-args { padding:6px 10px; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; }
   .tool .tool-result { padding:6px 10px; font-size:12.5px; color:var(--muted,#635e56); white-space:pre-wrap; overflow-wrap:anywhere; border-top:1px solid var(--border,#e3e0d9); }
   .tool .tool-detail { padding:0 10px 6px; border-top:1px solid var(--border,#e3e0d9); }

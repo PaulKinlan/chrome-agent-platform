@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Private on-device text summarization, language detection, and translation using Chrome Built-in AI.
+
+## [0.3.559] — 2026-10-01
+- Private on-device text summarization, language detection, and translation using Chrome Built-in AI.
+
 ## [0.3.558] — 2026-09-29
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 

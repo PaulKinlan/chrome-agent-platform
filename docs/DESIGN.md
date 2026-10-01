@@ -137,8 +137,12 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   `/artifacts`, `/bookmarks`, and `/history` open searchable, keyboard-operable
   lists backed by the corresponding live Chrome/library authority; a selection
   leaves both a readable reference and a removable context chip. `/agent` opens
-  its shared picker directly. Commands for removed or unclear product concepts
+  its shared picker directly. `/summarise` and `/translate <lang>` trigger
+  on-device execution via Chrome's built-in AI models with zero provider roundtrips.
+  Commands for removed or unclear product concepts
   do not remain as inert suggestions.
+- Tool cards in the transcript display a distinct `.tool-status.on-device` chip
+  labelled "On-device" when the execution completed via Chrome's local built-in models.
 - The composer `/files` palette is progressive enhancement: it is absent when
   `showDirectoryPicker` is unavailable, uses the existing listbox keyboard
   contract, and turns a selected file into the same removable attachment chip

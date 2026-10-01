@@ -47,6 +47,12 @@ export function fenceUntrustedText(text, token) {
   return `${untrustedOpen(token)}\n${String(text ?? "")}\n${untrustedClose(token)}`;
 }
 
+/** Wrap untrusted content (string or value) in the boundary. */
+export function wrapUntrustedContent(content, token = UNTRUSTED_TOKEN_PLACEHOLDER) {
+  if (typeof content === "string") return fenceUntrustedText(content, token);
+  return fenceUntrustedValue(content, token);
+}
+
 /** Wrap EVERY non-empty string inside a projected result (recursively, bounded
  * depth) — the shape is preserved so structured renderers keep working; only
  * the string leaves carry the boundary. Non-string leaves pass through. */
