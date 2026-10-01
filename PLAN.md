@@ -168,6 +168,14 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       built-in-AI download never succeeded) with the architecture logged in
       docs/LOCAL-MODELS-ARCHITECTURE.md for a future OPFS-file-handle rebuild.
       Ollama/LM Studio remain as local OpenAI-compatible endpoints.
+- [x] **One MCP SDK per bundle (2026-10-01 performance audit, `chrome-agent-platform-9epn.3`)** —
+      the service worker and agent worker shipped `@modelcontextprotocol/sdk@1.30.0` twice
+      (the extension's zod@3 peer context and agent-do's zod@4 one), with zod-to-json-schema
+      twice and the whole zod@4 major behind the second copy, while the build's duplicate
+      guard only watched three AI SDK packages. Every SDK import now pins to the one
+      zod@3-bound instance (store SW 2,696,520 → 2,539,813 B; agent worker 991,185 →
+      907,142 B), and `scripts/bundle-budget.mjs` fails the store build on a same-version
+      `_N` duplicate of ANY package.
 
 ### The Wasm tool platform — what actually ships vs what is proven
 Owner-uploaded files are a separate storage/UI increment from tool registration

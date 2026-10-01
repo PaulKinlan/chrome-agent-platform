@@ -160,8 +160,10 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   changes require explicit review before building.
 - **Performance budgets**: the SW must register fast (<500ms); the NTP/chat
   render fast (<1s); the agent loop doesn't block the UI thread; bundles stay
-  reasonable (the minified store SW bundle is hard-capped at 3.0 MB — 2.97 MB
-  as of 2026-09-06; ONE ai/zod/provider-utils instance per bundle, enforced
+  reasonable (the minified store SW bundle is hard-capped at 3.0 MB — 2.54 MB
+  as of 2026-10-01; ONE instance per exact version of EVERY dependency per
+  bundle — ai/zod/provider-utils since 2026-09-06, every package including
+  @modelcontextprotocol/sdk since 2026-10-01 — enforced
   by the build — see scripts/bundle-budget.mjs). On a seeded profile (5 agents,
   50 artifacts, 60 runs): `agent.run` p50 < 400ms, `thread.get` < 40ms,
   `run.list` < 40ms, composer-ready < 150ms, data-visible < 250ms, zero long tasks > 50ms,

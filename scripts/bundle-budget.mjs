@@ -44,27 +44,40 @@ export function formatContributors(metafile, limit = 15) {
   return rows.map((r) => `  ${String(r.bytes).padStart(9)}  ${r.input}`).join("\n");
 }
 
-/** The AI SDK packages whose duplicated Deno-store instances the
- * chrome-agent-platform-63et guard refuses to bundle. */
-const AI_SDK_DUPLICATE_RE = /\.deno\/(ai|zod|@ai-sdk\+provider-utils)@([^/]+)\//;
+/**
+ * Every Deno-store package instance in a metafile input path:
+ * `node_modules/.deno/<name>@<version>[_N]/…`. Scoped packages are stored as
+ * `@scope+name`; `_N` is Deno's suffix for a second peer-context instantiation
+ * of the SAME exact version. Captures: [1] the store name, [2] the version
+ * (suffix included).
+ *
+ * chrome-agent-platform-9epn.3: this used to match only
+ * `ai|zod|@ai-sdk+provider-utils` (the 63et packages), so the build's "one
+ * instance per exact version" invariant (docs/CONSTITUTION.md §performance)
+ * was silently violated by @modelcontextprotocol/sdk@1.30.0 + _1 and
+ * zod-to-json-schema@3.25.2 + _1 both shipping in the service worker. The
+ * detector now covers EVERY package.
+ */
+const DENO_STORE_INSTANCE_RE = /\.deno\/(@?[^/@]+)@([^/]+)\//;
 
 /**
- * chrome-agent-platform-63et: group the AI SDK Deno-store instances in a
- * metafile per package and return only SAME-VERSION peer-context duplicates
- * — the `_N`-suffixed second instantiations of one exact version (the same
- * code bundled twice, ~500KB minified of pure duplication on 2026-09-06).
+ * chrome-agent-platform-63et (widened by 9epn.3 to every package): group the
+ * Deno-store instances in a metafile per package and return only SAME-VERSION
+ * peer-context duplicates — the `_N`-suffixed second instantiations of one
+ * exact version (the same code bundled twice, ~500KB minified of pure
+ * duplication on 2026-09-06; ~175KB pre-minify of SDK on 2026-10-01).
  * DISTINCT versions of a package are legitimate (the providers pin
  * incompatible provider-utils lines; zod majors are an owner-scope decision)
  * and are not flagged. Pure and fixture-testable: takes the metafile object,
  * returns { ["name@version"]: [".deno/name@version", ".deno/name@version_N"]
  * } for duplicated packages only (empty object when clean).
  */
-export function duplicateAiSdkInputs(metafile) {
+export function duplicateStoreInputs(metafile) {
   const inputs = metafile?.inputs;
   if (!inputs || typeof inputs !== "object") return {};
   const groups = {};
   for (const input of Object.keys(inputs)) {
-    const m = input.match(AI_SDK_DUPLICATE_RE);
+    const m = input.match(DENO_STORE_INSTANCE_RE);
     if (!m) continue;
     const pkg = m[1].replaceAll("+", "/");
     const base = m[2].replace(/_\d+$/, "");
@@ -76,6 +89,10 @@ export function duplicateAiSdkInputs(metafile) {
   }
   return duplicates;
 }
+
+/** The 63et name, kept so existing callers and tests read unchanged — it is
+ * the same (now package-wide) detector. */
+export const duplicateAiSdkInputs = duplicateStoreInputs;
 
 /**
  * chrome-agent-platform-63et lockfile-drift guard: every dependency input in
@@ -132,14 +149,17 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
     throw new Error(`bundle budget: ${label} size is not measurable (${bytes})`);
   }
   if (metafile) {
-    // chrome-agent-platform-63et fail-closed guards: a duplicated AI SDK
+    // chrome-agent-platform-63et fail-closed guards (9epn.3: the duplicate
+    // guard covers EVERY package): a duplicated same-version Deno-store
     // instance or a drifted (non-Deno-store) dependency input must fail the
     // build even when the byte total still fits the budget — a mis-install
-    // silently changed the shipped bundle once already.
-    const duplicates = duplicateAiSdkInputs(metafile);
+    // silently changed the shipped bundle once already, and a second
+    // @modelcontextprotocol/sdk@1.30.0 shipped for weeks under a guard that
+    // only watched three packages.
+    const duplicates = duplicateStoreInputs(metafile);
     if (Object.keys(duplicates).length) {
       throw new Error(
-        `bundle budget: duplicated same-version AI SDK instances in ${label} — ` +
+        `bundle budget: duplicated same-version package instances in ${label} — ` +
         Object.entries(duplicates)
           .map(([pkg, instances]) => `${pkg}: ${instances.join(", ")}`)
           .join("; ") +

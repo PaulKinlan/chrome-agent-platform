@@ -20,7 +20,7 @@ import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, ut
 import path, { join, extname } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { boundedChildTimeoutMs, runBoundedChild } from "./scripts/lib/bounded-child.mjs";
 import { syncGallery } from "./scripts/sync-gallery.mjs";
@@ -366,7 +366,7 @@ try {
     // carry `_N`-suffixed second store instances (ai@7.0.66_1,
     // provider-utils@5.0.27_1) that esbuild then bundles twice.
     //
-    // Three mechanisms, all live-resolved and fail-closed:
+    // Four mechanisms, all live-resolved and fail-closed:
     // 1. ai imports resolve importer-anchored with any `_N` store suffix
     //    stripped — same-version peer duplicates collapse onto one instance.
     // 2. @ai-sdk/provider-utils is pinned to ONE line (5.0.27, anthropic's
@@ -376,10 +376,14 @@ try {
     //    (A blanket alias to 5.0.33 was tried first and hard-errored.)
     // 3. agent-do's bare zod imports resolve to the full v4 implementation
     //    shipped inside zod@3 (zod/v4 — its verified-compatible runtime
-    //    subset), so the zod@4.4.3 major does not ship for agent-do. The
-    //    @modelcontextprotocol/sdk keeps its genuine zod@4 peer.
-    // The metafile-side same-version duplicate + lockfile-drift guards in
-    // scripts/bundle-budget.mjs (assertBundleBudget) are the tripwires.
+    //    subset), so the zod@4.4.3 major does not ship for agent-do.
+    // 4. (chrome-agent-platform-9epn.3) every @modelcontextprotocol/sdk import
+    //    is pinned to the ONE store instance whose zod peer is that same zod@3
+    //    line — agent-do's MCP client used to pull a second SDK@1.30.0 (`_1`,
+    //    zod@4 context) and with it zod-to-json-schema twice and all of zod@4.
+    // The metafile-side same-version duplicate guard (EVERY package since
+    // 9epn.3) + lockfile-drift guard in scripts/bundle-budget.mjs
+    // (assertBundleBudget) are the tripwires.
     const requireFromRoot = createRequire(path.join(ROOT, "package.json"));
     function resolveCanonical(spec, opts, what) {
       try {
@@ -409,6 +413,49 @@ try {
       { paths: [ROOT] },
       "zod/v4 (the v4 implementation shipped inside zod@3)",
     ).replace(/\.cjs$/, ".js");
+    // chrome-agent-platform-63et: @modelcontextprotocol/sdk is a Deno-store
+    // package (package.json pins 1.30.0; agent-do also depends on it). Deno
+    // instantiates it ONCE PER PEER CONTEXT: the root context binds zod@3.25.76
+    // (`@modelcontextprotocol+sdk@1.30.0`), agent-do's context binds zod@4.4.3
+    // (`…@1.30.0_1`). Without a pin esbuild bundled BOTH — the same SDK
+    // version twice, plus zod-to-json-schema twice and the whole zod@4 major
+    // behind the second copy (chrome-agent-platform-9epn.3, 2026-10-01 audit).
+    //
+    // The canonical instance is chosen by its ZOD PEER, not by readdir order:
+    // the one whose node_modules/zod is the extension's own zod line (the
+    // context lib/mcp-client.js always built against — the KAT-proven flavor;
+    // agent-do's bare `zod` imports already resolve to that same zod via
+    // CANON_ZOD_V4, so its MCP client now shares one zod with the rest of its
+    // stack). Live-resolved and fail-closed: no matching instance, no build.
+    const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
+    const CANON_ZOD_DIR = realpathSync(path.join(ROOT, "node_modules", "zod"));
+    const mcpStoreCandidates = readdirSync(denoStoreDir)
+      .filter((d) => d.startsWith("@modelcontextprotocol+sdk@"))
+      .sort()
+      .map((entry) => {
+        let zodPeer = null;
+        try { zodPeer = realpathSync(path.join(denoStoreDir, entry, "node_modules", "zod")); } catch { /* no zod peer linked */ }
+        return { entry, zodPeer };
+      });
+    if (mcpStoreCandidates.length === 0) {
+      throw new Error(
+        `cap-deno-store-resolve: no @modelcontextprotocol+sdk@* instance in ${denoStoreDir} — run deno install. ` +
+        `The build refuses to guess.`,
+      );
+    }
+    const mcpStoreEntry = mcpStoreCandidates.find((c) => c.zodPeer === CANON_ZOD_DIR)?.entry;
+    if (!mcpStoreEntry) {
+      throw new Error(
+        `cap-ai-sdk-dedup: no @modelcontextprotocol/sdk store instance is bound to the extension's zod (${CANON_ZOD_DIR}). ` +
+        `Candidates: ${mcpStoreCandidates.map((c) => `${c.entry} → zod ${c.zodPeer ?? "(none)"}`).join("; ")}. ` +
+        `The SDK must share one zod with lib/mcp-client.js and agent-do; run deno install and retry.`,
+      );
+    }
+    const denoStoreNodeModules = path.join(denoStoreDir, mcpStoreEntry, "node_modules");
+    const CANON_MCP_SDK_DIR = realpathSync(path.join(denoStoreNodeModules, "@modelcontextprotocol", "sdk"));
+    // Marker for the re-entrant resolve below: esbuild hands pluginData back
+    // to onResolve, so the pin can tell its own lookup from an importer's.
+    const MCP_SDK_PIN = "cap-mcp-sdk-pin";
     const capAiSdkDedup = {
       name: "cap-ai-sdk-dedup",
       setup(b) {
@@ -426,27 +473,33 @@ try {
         // already means zod@3 — leaving them alone preserves exactly the
         // semantics each importer compiled against.
         b.onResolve({ filter: /^zod$/ }, (a) => (a.importer.includes("/agent-do") ? { path: CANON_ZOD_V4 } : undefined));
+
+        // 4. (9epn.3) Every `@modelcontextprotocol/sdk[/subpath]` import —
+        //    lib/mcp-client.js's AND agent-do's — resolves from the canonical
+        //    instance's own directory, so the SDK's exports map still picks
+        //    the browser/ESM `.js` subpaths natively and its internal
+        //    `zod` / `zod-to-json-schema` edges land on the canonical peers.
+        //    A result outside that instance is a build error, never a silent
+        //    second copy.
+        b.onResolve({ filter: /^@modelcontextprotocol\/sdk(\/|$)/ }, async (a) => {
+          if (a.pluginData === MCP_SDK_PIN) return undefined;
+          const r = await b.resolve(a.path, {
+            kind: a.kind,
+            importer: a.importer,
+            resolveDir: CANON_MCP_SDK_DIR,
+            pluginData: MCP_SDK_PIN,
+          });
+          if (r.errors.length) return { errors: r.errors, warnings: r.warnings };
+          if (!r.path.startsWith(CANON_MCP_SDK_DIR + path.sep)) {
+            return { errors: [{ text: `cap-ai-sdk-dedup: ${a.path} (importer ${a.importer}) resolved outside the canonical @modelcontextprotocol/sdk instance: ${r.path}` }] };
+          }
+          return { path: r.path, sideEffects: r.sideEffects };
+        });
       },
     };
-    // chrome-agent-platform-63et: @modelcontextprotocol/sdk is a deno.lock
-    // TRANSITIVE (agent-do's MCP client) — it is NOT in package.json, so a
-    // conforming install places it ONLY under node_modules/.deno/…, which
-    // esbuild's node_modules walk-up cannot see. Past builds resolved it
-    // through npm-era leftovers in node_modules/ (install drift — exactly
-    // what the new lockfile-drift guard refuses). nodePaths hands esbuild
-    // the store instance's node_modules dir as a fallback search path: the
-    // SDK's own exports map then resolves the .js-suffixed subpaths natively
-    // (browser/ESM conditions — the KAT-proven flavor), live-resolved and
-    // fail-closed if the store copy is ever absent.
-    const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
-    const mcpStoreEntry = readdirSync(denoStoreDir).find((d) => d.startsWith("@modelcontextprotocol+sdk@"));
-    if (!mcpStoreEntry) {
-      throw new Error(
-        `cap-deno-store-resolve: no @modelcontextprotocol+sdk@* instance in ${denoStoreDir} — run deno install. ` +
-        `The SDK is a deno.lock transitive; the build refuses to guess.`,
-      );
-    }
-    const denoStoreNodeModules = path.join(denoStoreDir, mcpStoreEntry, "node_modules");
+    // nodePaths hands esbuild the canonical SDK instance's node_modules dir as
+    // a fallback search path (63et): the SDK's own exports map then resolves
+    // the .js-suffixed subpaths natively (browser/ESM conditions).
     const shared = {
       bundle: true, format: "esm", target: "chrome120", platform: "browser",
       logLevel: "silent", sourcemap: DEBUG_BUILD, legalComments: "none",

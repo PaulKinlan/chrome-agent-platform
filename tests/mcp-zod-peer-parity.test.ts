@@ -7,7 +7,8 @@
 // preminify converter contribution is 2,460 bytes, not the large source-input
 // sum (108,530 bytes).
 //
-// This test suite proves why Zod peer contexts MUST BE RETAINED separate:
+// This test suite documents why Zod 3 and Zod 4 schemas MUST NOT be mixed
+// through the SDK and why the zod@3 context is the one to keep:
 // 1. Zod compatibility: mixing Zod 3 and Zod 4 in object shapes throws.
 // 2. Runtime conversion: zod-to-json-schema fails silently on Zod 4 schemas
 //    (emits empty schema with no properties).
@@ -17,7 +18,17 @@
 //    constraint keywords (minLength, maxLength, minimum, maximum, minItems).
 // 5. Preminify converter contribution: verified at 2,460 bytes in output.
 //
-// No production change authorized by chrome-agent-platform-mx1g.
+// No production change authorized by chrome-agent-platform-mx1g (its RETAIN
+// verdict). chrome-agent-platform-9epn.3 (2026-10-01 performance audit) then
+// collapsed the SHIPPED bundles onto ONE SDK instance — the zod@3.25.76-bound
+// `@modelcontextprotocol+sdk@1.30.0` that extension/lib/mcp-client.js always
+// built against — because agent-do's `_1` (zod@4.4.3-bound) copy was the same
+// SDK version twice plus the whole zod@4 major (−156,707 B minified SW). CAP
+// never passes zod schemas INTO the SDK (its MCP path is client-only), so the
+// facts below are unchanged and still executed; they now describe why the
+// zod@3 context was the one to keep, not why two had to ship. The install
+// keeps both peer contexts; tests/bundle-budget.test.ts pins that only one
+// reaches a bundle.
 
 import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import * as z3 from "npm:zod@3.25.76";
