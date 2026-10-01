@@ -409,6 +409,9 @@ try {
       { paths: [ROOT] },
       "zod/v4 (the v4 implementation shipped inside zod@3)",
     ).replace(/\.cjs$/, ".js");
+    const isStoreBuild = BUILD_TARGET === "store";
+    const GATEWAY_STUB = path.join(ROOT, "scripts/stubs/gateway-stub.mjs");
+    const OIDC_STUB = path.join(ROOT, "scripts/stubs/vercel-oidc-stub.mjs");
     const capAiSdkDedup = {
       name: "cap-ai-sdk-dedup",
       setup(b) {
@@ -426,6 +429,14 @@ try {
         // already means zod@3 — leaving them alone preserves exactly the
         // semantics each importer compiled against.
         b.onResolve({ filter: /^zod$/ }, (a) => (a.importer.includes("/agent-do") ? { path: CANON_ZOD_V4 } : undefined));
+
+        // chrome-agent-platform-9epn.7: alias unused @ai-sdk/gateway and
+        // @vercel/oidc out of store builds into minimal throwing stubs so
+        // tree-shaking drops ~100 KB from store SW and agent-worker bundles.
+        if (isStoreBuild) {
+          b.onResolve({ filter: /^@ai-sdk\/gateway(\/.*)?$/ }, () => ({ path: GATEWAY_STUB }));
+          b.onResolve({ filter: /^@vercel\/oidc(\/.*)?$/ }, () => ({ path: OIDC_STUB }));
+        }
       },
     };
     // chrome-agent-platform-63et: @modelcontextprotocol/sdk is a deno.lock
