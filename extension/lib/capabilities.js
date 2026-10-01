@@ -47,6 +47,15 @@ export const CAPABILITIES = [
     chromeOsOnly: false,
   },
   {
+    id: "sessions",
+    group: "browsing",
+    permissions: ["sessions"],
+    label: "Recently closed tabs",
+    hint: "See and restore recently closed tabs and windows, and list your synced devices. Without the grant, the recently-closed tools are refused with an Enable affordance. Restoring a tab also needs the Browser control grant for its site.",
+    gates: "Gates: listing and restoring recently closed tabs/windows, and listing synced devices.",
+    chromeOsOnly: false,
+  },
+  {
     id: "contextMenus",
     group: "browsing",
     permissions: ["contextMenus"],

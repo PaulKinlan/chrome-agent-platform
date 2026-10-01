@@ -253,6 +253,14 @@ defaults in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
       pages (artifact / artifacts / directory / privacy / offscreen, ~1 MB of static
       imports each, `components.js` 772 kB of it) are pinned at zero headroom so growth is
       visible until 9epn.6 splits `components.js` and ratchets the ceilings down.
+- [ ] **Recently closed tabs are real** (`chrome-agent-platform-3p3e.1`, candidate in
+      review) — `chrome.sessions` needs the `sessions` permission, which the manifest never
+      declared, so `list_recently_closed` / `restore_closed` / `list_synced_devices` (and the
+      activity ledger's close-tab Undo that rides `restore_closed`) always failed with
+      "sessions API not available". `sessions` is now an optional permission (32 optional in
+      all), the three tools deny with the standard Allow-card shape until it is granted,
+      Settings → Permissions carries a **Recently closed tabs** row, and the permission
+      matrix pre-holds it in the variant leg.
 
 The claimable frontier is `bd ready`; in flight is `bd list --status in_progress`; waiting is `bd blocked`
 (the **Open work queue** table in `TASKS.md` is retired history).

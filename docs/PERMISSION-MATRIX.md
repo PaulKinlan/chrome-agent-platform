@@ -10,7 +10,16 @@ permission-state behavior the product owns is attested headless by
 |---|---|---|---|
 | Warningless | `contextMenus`, `scripting`, … | `chrome.permissions.request` **auto-grants** from a trusted CDP click | Full JIT lifecycle: Enable → granted → Turn off → absent → retry Enable → granted |
 | Warned | `tabGroups`, `history`, `bookmarks`, … | The request **pends** (no prompt shown); closing the requesting page cancels it | Honest deny path: pending → cancel → settled absent → retry affordance intact on a fresh Settings page |
-| Variant pre-held | any optional permission | Moving it to manifest `permissions[]` grants it **at install**, no prompt, no display | Granted state + API-functional (`chrome.history.search` resolves) + honest panel (no bogus Turn off) |
+| Variant pre-held | any optional permission (the run pre-holds `tabGroups`, `history`, `sessions`) | Moving it to manifest `permissions[]` grants it **at install**, no prompt, no display | Granted state + API-functional (`chrome.history.search` and `chrome.sessions.getRecentlyClosed` resolve) + honest panel (no bogus Turn off) |
+
+`sessions` joined the matrix with chrome-agent-platform-3p3e.1: `chrome.sessions`
+requires the `sessions` permission (the namespace is undefined without it), so the
+recently-closed tools (`list_recently_closed`, `restore_closed`,
+`list_synced_devices`) gate on it like the history tools gate on `history` — a
+missing grant returns the standard denial that renders the in-context Allow card
+("see and restore recently closed tabs"), and Settings → Permissions carries a
+**Recently closed tabs** row in the Browsing group. The restore keeps its
+browser-control grant covering every restored origin.
 
 The variant builder is `scripts/permission-variant.mjs`: byte-identical
 extension copy with the chosen permissions moved, a `VARIANT-INTEGRITY.json`

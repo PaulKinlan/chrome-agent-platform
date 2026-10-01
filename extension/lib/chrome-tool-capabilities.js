@@ -430,14 +430,16 @@ const rows = [
   record("remove_reading_list_entry", "chrome-api", ["chrome.reading-list.remove"], ["readingList"], "none", "mutating", false, "mutating", "browser.reading-list"),
   record("save_page_as_mhtml", "chrome-api", ["chrome.host.exact-origin", "chrome.page-capture.save.tab-origin"], ["pageCapture", "tabs"], "tab-scoped", "read-only", false, "read", "browser.capture"),
   // Tranche-7 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
-  // sessions (no manifest permission) + history (already-declared optional
-  // permission). Restore rides the product browser-control grant covering every
-  // restored origin; per-URL history writes/deletes are destination-origin
-  // scoped; range/all wipes require a GLOBAL grant (clear_all also needs an
-  // explicit confirm:true).
-  record("list_recently_closed", "chrome-api", ["chrome.sessions.list-recently-closed"], [], "none", "read-only", false, "read", "browser.sessions"),
-  record("restore_closed", "chrome-api", ["chrome.sessions.restore.tab-origin"], [], "tab-scoped", "mutating", false, "mutating", "browser.sessions"),
-  record("list_synced_devices", "chrome-api", ["chrome.sessions.list-devices"], [], "none", "read-only", false, "read", "browser.sessions"),
+  // sessions + history, both already-declared optional permissions
+  // (chrome-agent-platform-3p3e.1: `chrome.sessions` DOES require the
+  // "sessions" permission — the namespace is undefined without it, so the
+  // old "no manifest permission" rows could never run). Restore rides the
+  // product browser-control grant covering every restored origin; per-URL
+  // history writes/deletes are destination-origin scoped; range/all wipes
+  // require a GLOBAL grant (clear_all also needs an explicit confirm:true).
+  record("list_recently_closed", "chrome-api", ["chrome.sessions.list-recently-closed"], ["sessions"], "none", "read-only", false, "read", "browser.sessions"),
+  record("restore_closed", "chrome-api", ["chrome.sessions.restore.tab-origin"], ["sessions"], "tab-scoped", "mutating", false, "mutating", "browser.sessions"),
+  record("list_synced_devices", "chrome-api", ["chrome.sessions.list-devices"], ["sessions"], "none", "read-only", false, "read", "browser.sessions"),
   record("search_history", "chrome-api", ["chrome.history.search"], ["history"], "none", "read-only", false, "read", "browser.history"),
   record("get_history_visits", "chrome-api", ["chrome.history.visits.list"], ["history"], "none", "read-only", false, "read", "browser.history"),
   record("add_history_url", "chrome-api", ["chrome.history.add.destination-origin"], ["history"], "destination-origin", "mutating", false, "mutating", "browser.history"),
