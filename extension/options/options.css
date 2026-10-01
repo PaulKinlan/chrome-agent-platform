@@ -231,6 +231,8 @@ code {
   color: var(--accent);
   text-decoration: none;
   width: max-content;
+  min-height: 24px;
+  padding: 4px 0;
 }
 .get-key:hover { text-decoration: underline; }
 .get-key:focus-visible {
@@ -737,7 +739,8 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 /* Buttons — the base .btn + .btn.ghost live in theme.css (consistent 36px
    control height + radius tokens). Only the settings page's additions below. */
 .btn.small {
-  height: 30px;
+  height: 32px;
+  min-height: 32px;
   padding: 0 12px;
   font-size: 13px;
 }
@@ -1229,7 +1232,13 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   margin: 10px 0 0;
   font-size: var(--text-sm);
 }
-.changelog-full-link a { color: var(--accent, #1a73e8); }
+.privacy-link a,
+.changelog-full-link a {
+  color: var(--accent, #1a73e8);
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
 
 /* Per-agent provider override rows (the Agents section). A responsive grid
    that WRAPS at narrow card widths (the final review's overflow finding): the

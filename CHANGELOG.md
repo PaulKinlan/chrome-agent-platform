@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Larger click targets and uninterrupted Tab keyboard navigation across the new-tab hub.
+
 ## [0.3.558] — 2026-09-29
+- Larger touch and click targets across New Tab Hub, Settings, and Sidepanel controls, and continuous Tab keyboard navigation across the new-tab page.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29

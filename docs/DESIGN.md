@@ -63,7 +63,11 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - Elevation: hairline border OR a soft offset shadow, never both (no ghost cards).
 
 ## Components
-- `--control: 36px` hit targets; `--control-icon: 18px` stroke icons.
+- Primary control floor: `--control: 36px` hit targets; `--control-icon: 18px` stroke icons.
+- Secondary control floor: chips, icon buttons, and secondary row actions enforce a minimum 32px hit height (`min-height: 32px; min-width: 32px;`).
+- Switches: 40×24px track with 18×18px knob and ≥ 24×24px hit area.
+- Inline and standalone links: minimum 24px hit target height (`min-height: 24px; display: inline-flex; align-items: center;`).
+- Focus rings and navigation: all controls use high-contrast outline focus rings (`outline: 2px solid var(--accent); outline-offset: 2px;`); keyboard tab traversal flows uninterrupted through all interactive elements with no dead-stops on `body`.
 - Every interactive component: default / hover / focus / active / disabled /
   loading / error.
 - `<mic-button>` treats speech recognition as the primary action and the live
