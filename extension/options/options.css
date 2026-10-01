@@ -121,6 +121,21 @@ nav {
 .panel.active {
   display: block;
 }
+/* Below-the-fold panel rendering optimization (chrome-agent-platform-9epn.9).
+   content-visibility: auto skips layout and painting for offscreen panels,
+   reducing initial load cost and DOM style recalc overhead. */
+.panel:not(:first-of-type),
+section[id]:not(:first-of-type),
+section:not(:first-of-type) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 480px;
+}
+section:target,
+section:focus-within,
+section[data-active="true"],
+.panel.active {
+  content-visibility: visible;
+}
 .panel h2 {
   margin: 0 0 8px;
   font-size: var(--text-lg);
