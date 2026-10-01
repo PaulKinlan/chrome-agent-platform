@@ -15,13 +15,33 @@ import { lstatSync, readlinkSync } from "node:fs";
 /** Store-target service-worker budget: 3.0 MB minified. */
 export const STORE_SW_BUDGET_BYTES = 3_000_000;
 
+/**
+ * Store-target ceilings for EVERY generated bundle (minified bytes), keyed by
+ * dist-relative path (chrome-agent-platform-9epn.4, perf audit #5). Before
+ * this table only the SW and the agent worker had a number; ntp / sidepanel /
+ * options / diff-core grew unobserved (832 867 / 635 119 / 841 261 B in the
+ * 2026-10-01 audit). The UI ceilings were measured on the store build of the
+ * tree that introduced them (ntp 830 013, sidepanel 633 728, options 839 829,
+ * diff-core 16 611 B) and set at that size + 5 % headroom, rounded DOWN to the
+ * nearest 10 kB (1 kB for diff-core). Lowering a ceiling is a ratchet (the
+ * splitting bead 9epn.6 owns the next one); RAISING one is an owner decision
+ * named in the change's report — never a silent edit.
+ *
+ * The build fails the STORE target when a bundle exceeds its ceiling
+ * (build.mjs → assertBundleBudget); tests/bundle-budget.test.ts asserts the
+ * same ceilings against the sizes recorded in dist/dist.complete.
+ */
+export const STORE_BUNDLE_BUDGETS = Object.freeze({
+  "background/service-worker.js": STORE_SW_BUDGET_BYTES,
+  "workers/agent-worker.js": 2_000_000,
+  "options.bundle.js": 880_000,
+  "ntp.bundle.js": 870_000,
+  "sidepanel.bundle.js": 660_000,
+  "shared/diff-core.bundle.js": 17_000,
+});
+
 /** The bundle outputs the budget report covers (relative to dist/). */
-export const BUDGET_REPORTED_BUNDLES = Object.freeze([
-  "background/service-worker.js",
-  "options.bundle.js",
-  "workers/agent-worker.js",
-  "shared/diff-core.bundle.js",
-]);
+export const BUDGET_REPORTED_BUNDLES = Object.freeze(Object.keys(STORE_BUNDLE_BUDGETS));
 
 /**
  * The top contributor inputs of an esbuild metafile, largest first.

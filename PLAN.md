@@ -235,6 +235,15 @@ defaults in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
       progressive disclosure, deterministic English interval parsing, the shared
       native template select, user-bubble dark contrast and JSON tool-response dark
       contrast are in the candidate; full gates and required review remain.
+- [ ] **Performance program from the 2026-10-01 audit** (`chrome-agent-platform-9epn`, epic) —
+      hub RPC storm, bundle size per surface, boot long task, duplicate SDKs, Settings
+      mount cost, journal growth. **Landed first (9epn.4): a store ceiling for EVERY
+      generated bundle**, not just the SW — options 880 kB, NTP 870 kB, side panel 660 kB,
+      diff-core 17 kB, agent worker 2.0 MB, SW 3.0 MB (`STORE_BUNDLE_BUDGETS`); the build
+      fails over any of them, `dist.complete` records all six sizes, and the raw-module
+      pages (artifact / artifacts / directory / privacy / offscreen, ~1 MB of static
+      imports each, `components.js` 772 kB of it) are pinned at zero headroom so growth is
+      visible until 9epn.6 splits `components.js` and ratchets the ceilings down.
 
 The claimable frontier is `bd ready`; in flight is `bd list --status in_progress`; waiting is `bd blocked`
 (the **Open work queue** table in `TASKS.md` is retired history).

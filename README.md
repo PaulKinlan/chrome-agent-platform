@@ -181,7 +181,8 @@ combines Git-tracked regular files with the current generated `dist` and the
 byte-identical generated changelog, rejects symlinks/special files, verifies a
 fresh ZIP's exact names and hashes, then atomically replaces the final archive.
 `dist.complete` v2 is canonical JSON bound to the Git commit, current indexed
-source bytes, exact generated bundle hashes, and the declared `store` target;
+source bytes, the exact hash + size of EVERY generated bundle (service worker,
+options, NTP, side panel, diff-core, agent worker), and the declared `store` target;
 lock owners, PIDs, stage paths and wall-clock timestamps remain build custody
 and never enter package bytes. The target is an intent/mismatch gate, not proof
 of content. The package step revalidates the marker around inventory hashing,
@@ -266,7 +267,7 @@ This README is the overview. The document map, in precedence order:
 | **[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md)** | History: the 2026-08-21 architectural review, superseded by the 2026-08-30 one. Its *delivery* diagnosis has since been acted on (`0.2.105 → 0.2.319`); read it for the method, not for current status. |
 | [TASKS.md](TASKS.md), [TASKS-DONE.md](TASKS-DONE.md), [KNOWN-ISSUES.md](KNOWN-ISSUES.md), [docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md) | **Retired** markdown trackers (2026-09-02) — kept as git history only, never consulted or updated for state. Each opens with a banner that says so and points at `bd`. |
 
-**Current gate status:** build clean (store SW bundle budget ≤ 3.0 MB) · full test suite
+**Current gate status:** build clean (store bundle ceilings on every surface — SW ≤ 3.0 MB, agent worker ≤ 2.0 MB, options ≤ 880 kB, NTP ≤ 870 kB, side panel ≤ 660 kB, diff-core ≤ 17 kB) · full test suite
 green (`npm test` per-file runner over 445+ test files, 4100+ tests) · Chrome journeys **127/127** ·
 security suite **PASS**. The journey suite had been red at 26/127 from `0.2.313` until
 `0.2.320`; the causes are at the top of [PLAN.md](PLAN.md).

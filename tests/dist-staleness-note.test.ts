@@ -24,7 +24,7 @@ import { spawnSync } from "node:child_process";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-import { validateDistCompleteMarker, writeDistCompleteMarker } from "../scripts/dist-complete.mjs";
+import { DIST_COMPLETE_OUTPUTS, validateDistCompleteMarker, writeDistCompleteMarker } from "../scripts/dist-complete.mjs";
 
 const HERE = path.dirname(fileURLToPath(new URL(import.meta.url)));
 const NOTE_SCRIPT = path.join(HERE, "..", "scripts", "dist-staleness-note.mjs");
@@ -50,12 +50,14 @@ async function scratchRepo(): Promise<string> {
   return root;
 }
 
-/** The two generated outputs the marker binds, plus the marker itself. */
+/** Every generated output the marker binds, plus the marker itself. */
 async function buildScratchDist(root: string): Promise<string> {
   const distRoot = path.join(root, "extension", "dist");
-  await mkdir(path.join(distRoot, "background"), { recursive: true });
-  await writeFile(path.join(distRoot, "background", "service-worker.js"), "console.log('sw');\n");
-  await writeFile(path.join(distRoot, "options.bundle.js"), "console.log('options');\n");
+  for (const output of DIST_COMPLETE_OUTPUTS) {
+    const file = path.join(distRoot, ...output.split("/"));
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, `console.log(${JSON.stringify(output)});\n`);
+  }
   await writeDistCompleteMarker({ root, distRoot, target: "store" });
   return distRoot;
 }
@@ -129,9 +131,11 @@ Deno.test("dist staleness note: a built tree that is current stays quiet for a d
   const root = await scratchRepo();
   try {
     const distRoot = path.join(root, "extension", "dist");
-    await mkdir(path.join(distRoot, "background"), { recursive: true });
-    await writeFile(path.join(distRoot, "background", "service-worker.js"), "console.log('dev');\n");
-    await writeFile(path.join(distRoot, "options.bundle.js"), "console.log('dev options');\n");
+    for (const output of DIST_COMPLETE_OUTPUTS) {
+      const file = path.join(distRoot, ...output.split("/"));
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, `console.log('dev ${output}');\n`);
+    }
     await writeDistCompleteMarker({ root, distRoot, target: "developer" });
     const result = runNote(root);
     assertEquals(result.status, 0);
