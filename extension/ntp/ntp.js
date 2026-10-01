@@ -1374,9 +1374,31 @@ async function refreshTimeline() {
     limit: 40,
   });
 }
+const TIMELINE_FILTER_KEY = "cap:hub:timeline-filter";
+let timelineFilterEl = null;
+
 function renderTimeline() {
   timelineEl = document.getElementById("hub-timeline");
+  timelineFilterEl = document.getElementById("timeline-filters");
   if (!timelineEl) return;
+
+  // Restore persisted filter selection (localStorage key documented: cap:hub:timeline-filter).
+  let savedFilter = "All";
+  try {
+    savedFilter = localStorage.getItem(TIMELINE_FILTER_KEY) || "All";
+  } catch { /* storage unavailable */ }
+  timelineEl.filter = savedFilter;
+  if (timelineFilterEl) {
+    timelineFilterEl.value = savedFilter;
+    timelineFilterEl.addEventListener("change", (ev) => {
+      const val = ev.detail?.value || "All";
+      timelineEl.filter = val;
+      try {
+        localStorage.setItem(TIMELINE_FILTER_KEY, val);
+      } catch { /* storage unavailable */ }
+    });
+  }
+
   // Reveal/hide the section through the same seen-once machinery every hub
   // section uses (a fresh profile shows nothing here).
   timelineEl.addEventListener("entries-change", (ev) =>

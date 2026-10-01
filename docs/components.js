@@ -62,6 +62,7 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify, prettyJson, t
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
 import { redactSecrets } from "./pure.js";
+import { filterTimeline } from "./hub-timeline.js";
 // The single-sourced shared helpers (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01).
 import { escapeHtml, timeAgo, sleep } from "./pure.js";
 import { describeToolCall, redactToolResult, toolResultErrorText } from "./tool-summary.js";
@@ -4082,13 +4083,15 @@ class SegmentedControl extends Component {
         font:inherit; font-size:13px; font-weight:550; line-height:1; min-block-size:30px; padding:0 14px;
         border-radius:6px; cursor:pointer; white-space:nowrap; transition:color .15s ease, background .15s ease; }
       button:hover { color:var(--text,#1d1b18); }
-      button[aria-selected="true"] { background:var(--panel,#fff); color:var(--accent,#0e6e63);
+      button[aria-selected="true"], button[aria-pressed="true"] { background:var(--panel,#fff); color:var(--accent,#0e6e63);
         box-shadow:var(--shadow-1,0 1px 2px rgba(29,27,24,.06)); }
       button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @media (prefers-reduced-motion: reduce) { button { transition:none; } }
     `, `<div class="tabs" role="tablist"></div>`);
     const list = this._root.querySelector(".tabs");
-    const label = this.getAttribute("label");
+    const roleAttr = this.getAttribute?.("role");
+    if (roleAttr) list.setAttribute("role", roleAttr);
+    const label = this.getAttribute?.("label");
     if (label) list.setAttribute("aria-label", label);
     for (const item of items) {
       const b = document.createElement("button");
@@ -4102,6 +4105,7 @@ class SegmentedControl extends Component {
       }
       const selected = item === value;
       b.setAttribute("aria-selected", selected ? "true" : "false");
+      b.setAttribute("aria-pressed", selected ? "true" : "false");
       b.tabIndex = selected ? 0 : -1;
       b.textContent = item;
       list.appendChild(b);
@@ -4162,6 +4166,7 @@ class SegmentedControl extends Component {
     for (const b of this._root?.querySelectorAll?.('[role="tab"]') ?? []) {
       const selected = b.dataset.val === value;
       b.setAttribute("aria-selected", selected ? "true" : "false");
+      b.setAttribute("aria-pressed", selected ? "true" : "false");
       b.tabIndex = selected ? 0 : -1;
     }
   }
@@ -12028,10 +12033,11 @@ const TIMELINE_STATUS_WORD = {
   done: "Done",
 };
 class AgentTimeline extends Component {
-  static get observedAttributes() { return ["limit"]; }
+  static get observedAttributes() { return ["limit", "filter"]; }
   constructor() {
     super();
     this._entries = [];
+    this._filter = "All";
   }
   set entries(value) {
     this._entries = Array.isArray(value) ? value : [];
@@ -12039,12 +12045,23 @@ class AgentTimeline extends Component {
     this._emit("entries-change", { count: this._entries.length });
   }
   get entries() { return this._entries; }
+  set filter(val) {
+    const next = String(val || "All").trim();
+    if (this._filter === next) return;
+    this._filter = next;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get filter() {
+    return this.getAttribute("filter") || this._filter || "All";
+  }
   _limit() {
     const n = Number.parseInt(this.getAttribute("limit") ?? "", 10);
     return Number.isFinite(n) && n > 0 ? n : 40;
   }
   _render() {
-    const rows = this._entries.slice(0, this._limit());
+    const bounded = this._entries.slice(0, this._limit());
+    const filter = this.filter;
+    const rows = filterTimeline(bounded, filter);
     const items = rows.map((e) => {
       const status = ["running", "paused", "failed", "done"].includes(e.status) ? e.status : "idle";
       const word = TIMELINE_STATUS_WORD[status] || "";
@@ -12054,21 +12071,39 @@ class AgentTimeline extends Component {
       const t = Number(e.time) || 0;
       const iso = t ? new Date(t).toISOString() : "";
       const full = t ? new Date(t).toLocaleString() : "";
+      // Dedupe screen-reader text: only render .tl-sr when the status word
+      // is not already conveyed in the visible outcome or fallback text.
+      const visibleOutcome = e.outcome || (agent ? "" : word);
+      const alreadyHasWord = word && visibleOutcome.toLowerCase().includes(word.toLowerCase());
+      const srWord = (!alreadyHasWord && word) ? `<span class="tl-sr">${escapeHtml(word)}</span>` : "";
       return `<li class="tl-item">
         <button type="button" class="tl-row" data-id="${escapeHtml(String(e.id ?? ""))}" aria-label="Open ${escapeHtml(String(e.title ?? "item"))}">
           <span class="tl-dot ${status}" aria-hidden="true"></span>
           <span class="tl-body">
             <span class="tl-title">${escapeHtml(String(e.title ?? "Task"))}</span>
-            <span class="tl-meta">${agent}${sep}${outcome || (agent ? "" : `<span class="tl-outcome">${escapeHtml(word)}</span>`)}<span class="tl-sr">${escapeHtml(word)}</span></span>
+            <span class="tl-meta">${agent}${sep}${outcome || (agent ? "" : `<span class="tl-outcome">${escapeHtml(word)}</span>`)}${srWord}</span>
           </span>
           <time class="tl-time" datetime="${escapeHtml(iso)}" title="${escapeHtml(full)}">${escapeHtml(timeAgo(t))}</time>
           <span class="tl-chev" aria-hidden="true">${ICONS.chevron}</span>
         </button>
       </li>`;
     }).join("");
+    let emptyText = "Nothing yet. Your tasks and your agents’ runs will appear here.";
+    if (bounded.length > 0 && rows.length === 0) {
+      const f = filter.toLowerCase();
+      if (f === "waiting") {
+        emptyText = "Nothing waiting on you.";
+      } else if (f === "runs") {
+        emptyText = "No runs yet.";
+      } else if (f === "made") {
+        emptyText = "Nothing made yet.";
+      } else if (f === "scheduled") {
+        emptyText = "No scheduled runs yet.";
+      }
+    }
     const body = rows.length
       ? `<ol class="tl" role="list">${items}</ol>`
-      : `<p class="tl-empty">Nothing yet. Your tasks and your agents’ runs will appear here.</p>`;
+      : `<p class="tl-empty">${escapeHtml(emptyText)}</p>`;
     mountTemplate(this, `
       :host { display:block; }
       :host([hidden]) { display:none; }

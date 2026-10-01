@@ -728,6 +728,13 @@
       overflow: hidden;
       background: var(--panel);
     }
+    .timeline-filters-row {
+      padding: 10px 14px 6px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+    }
     .panel-head {
       display: flex;
       align-items: center;
@@ -1099,6 +1106,9 @@
               <span class="hint" id="hub-usage">what happened</span>
             </div>
             <div class="panel-body">
+              <div class="timeline-filters-row">
+                <segmented-control id="timeline-filters" items="All,Runs,Waiting,Made,Scheduled" value="All" label="Filter timeline" role="toolbar"></segmented-control>
+              </div>
               <agent-timeline id="hub-timeline" limit="40" aria-label="Timeline of tasks and agent runs"></agent-timeline>
             </div>
           </div>

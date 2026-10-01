@@ -48,6 +48,12 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 ## Run-log affordance
 - A task or agent surface keeps a plainly labelled **Run logs** action after a run settles. Its existing durable registry pages ten retained runs at a time so every run remains reachable without unbounded DOM growth; each row has **View log** and displays at most the latest 200 retained timeline entries with an honest truncation note.
 
+## Hub activity timeline & filters
+- The New Tab Hub timeline presents recent task and agent activity with a compact filter row (`All · Runs · Waiting · Made · Scheduled`) implemented via the shared `<segmented-control>` component.
+- The filter selection persists across reloads via `localStorage` (`cap:hub:timeline-filter`).
+- Empty states are context-specific and honest: when rows exist overall but none match the active filter, clear copy explains the absence (`Nothing waiting on you.`, `No runs yet.`, `Nothing made yet.`, `No scheduled runs yet.`).
+- Screen-reader status text (`.tl-sr`) is deduplicated with the visible outcome to prevent redundant announcements while preserving full accessibility.
+
 ## Content layout tokens
 - `--content-max: 1040px`: shared maximum content width for all primary hub view surfaces (Artifacts, Directory, Skills, Settings).
 - `--content-gutter: clamp(16px, 4vw, 40px)`: responsive inline padding ensuring consistent left-edge alignment across views at all viewports (e.g. 1024px and 1440px).
