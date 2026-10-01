@@ -113,6 +113,7 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       and the side-panel Agents view.
 - [x] Persistent local folder handles — Settings owns the picker, live permission state,
       re-grant and forget controls; the composer `/files` command searches granted trees
+- [x] Hub RPC coalescing layer (`rpc-cache`: single-flight deduplication, micro-TTL read cache, debounced progress event fan-out, and narrowed storage change listener reducing cold boot RPCs 54 → 22, idle 11 → 0, thread open 14–21 → 2).
       with bounded results and attaches bounded text or metadata-only binary references.
 - [x] Durable run authority — service-worker/OPFS run registry, outbox projection,
       bounded recovery, reload persistence. docs/DURABLE-RUN-ARCHITECTURE.md.

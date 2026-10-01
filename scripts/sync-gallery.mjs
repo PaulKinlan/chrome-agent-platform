@@ -16,6 +16,7 @@ import { pathToFileURL } from "node:url";
 // src (canonical) → dst (generated deploy copy), both relative to the repo root.
 const FILES = [
   ["extension/shared/components.js", "docs/components.js"],
+  ["extension/shared/rpc-cache.js", "docs/rpc-cache.js"],
   // The i18n lookup seam + embedded default catalogue (components.js imports
   // it; the gallery renders through the same byte-identical fallback).
   ["extension/shared/i18n.js", "docs/i18n.js"],

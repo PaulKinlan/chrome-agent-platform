@@ -6,6 +6,7 @@
 //   and the hub lists every prior thread (auto-named).
 
 import { send } from "../lib/messages.js";
+import { handleBroadcastEvent } from "../shared/rpc-cache.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
@@ -2246,6 +2247,8 @@ function renderTaskRows(threads, activeId = null) {
     // Open button below is the only open affordance and a sibling of Delete.
     const item = document.createElement("div");
     item.className = "thread-item";
+    if (item.dataset) item.dataset.threadId = t.id;
+    item.setAttribute?.("data-thread-id", t.id);
     // A hover tooltip for the collapsed icon-rail (and the full name on hover).
     item.title = (t.name || "Task") + (t.preview ? " — " + t.preview : "");
     if (activeId && t.id === activeId) item.setAttribute("aria-current", "true");
@@ -2296,6 +2299,24 @@ function renderTaskRows(threads, activeId = null) {
     el.append(item);
   }
   span.end();
+}
+
+function highlightTaskSidebarRow(activeId) {
+  const sidebar = document.getElementById("thread-sidebar");
+  if (!sidebar) return false;
+  const items = sidebar.querySelectorAll(".thread-item");
+  if (!items.length) return false;
+  let found = false;
+  for (const item of items) {
+    const threadId = item.dataset?.threadId ?? item.getAttribute?.("data-thread-id");
+    if (activeId && threadId === activeId) {
+      item.setAttribute("aria-current", "true");
+      found = true;
+    } else {
+      item.removeAttribute("aria-current");
+    }
+  }
+  return found;
 }
 
 // ── the full-screen thread surface ────────────────────────────────────────
@@ -2642,7 +2663,7 @@ async function openThread(id) {
     : budgetStop
       ? { state: "failed", errorCategory: "budget", errorReason: budgetStop.reason, message: budgetStop.content, ...(budgetStop.executionId ? { executionId: budgetStop.executionId } : {}) }
       : { state: "idle" });
-  renderTasks(id);
+  if (!highlightTaskSidebarRow(id)) renderTasks(id);
   // chrome-agent-platform-afiu: an open task surfaces its persisted queued
   // follow-ups (the chips above the composer survive reloads).
   void renderPendingChips();
@@ -4565,7 +4586,16 @@ document.addEventListener?.("visibilitychange", () => {
 });
 
 if (typeof chrome !== "undefined" && chrome.storage?.onChanged) {
-  chrome.storage.onChanged.addListener(() => {
+  chrome.storage.onChanged.addListener((changes) => {
+    const keys = Object.keys(changes || {});
+    const relevant = keys.some((k) =>
+      k.startsWith("provider") ||
+      k.startsWith("cap:provider") ||
+      k.startsWith("firstRun") ||
+      k.startsWith("first-run") ||
+      k.startsWith("cap:firstRun")
+    );
+    if (!relevant) return;
     renderProviderStatus();
     renderFirstRunGuide();
   });
@@ -4584,33 +4614,55 @@ subscribeRunRegistry((snapshot) => {
 // page reload. The SW broadcasts a named-agent-changed progress event on
 // create/update/delete (the registry lives in the all-optional storage, so
 // chrome.storage.onChanged may never fire).
-subscribeProgress((ev) => {
-  if (ev?.type === "named-agent-changed") renderNamedAgents();
-  // A page's passive detector just reported tools, or the open tabs changed
-  // (a page opened/closed/navigated) — re-project the composer chip AND the
-  // Site Agents panel (its discovered-pages banner and the section's
-  // visibility) so the offer appears while the owner is looking at the hub,
-  // without polling.
-  if (ev?.type === "site-tools-detected" || ev?.type === "open-tabs-changed") {
-    renderSiteOffer();
-    renderSiteAgents();
-  }
-  if (ev?.type === "agent-registry-changed") {
-    void renderSidebarHarnessRows();
-    renderSiteOffer();
-    // The unified registry changed (named/background/site) — refresh every
-    // agent surface + revalidate any composer's selected-agent chip live
-    // (a deleted/disabled agent clears its chip; a rename updates it).
-    renderNamedAgents();
-    renderBackgroundAgents();
-    renderSiteAgents();
+// Progress event fan-out is debounced to one microtask batch per burst so rapid
+// event arrival does not fire duplicate parallel renders.
+let pendingProgressBatch = null;
+const pendingProgressTypes = new Set();
+
+function dispatchProgressBatch() {
+  const types = new Set(pendingProgressTypes);
+  pendingProgressTypes.clear();
+  pendingProgressBatch = null;
+
+  const has = (t) => types.has(t);
+  const hasAgentRegistry = has("agent-registry-changed");
+  const hasNamed = has("named-agent-changed");
+  const hasSiteOrTabs = has("site-tools-detected") || has("open-tabs-changed");
+  const hasCommands = has("commands-changed");
+
+  const onHub = activeViewRoute === VIEW_ROUTE.HUB && (threadView ? threadView.hidden : true) && (viewOverlay ? viewOverlay.hidden : true);
+
+  if (hasAgentRegistry) {
     composer.revalidateSelectedAgent?.();
     threadComposer.revalidateSelectedAgent?.();
     revalidateOpenAgent();
-    refreshCommandStarters();
+    if (onHub) {
+      void renderSidebarHarnessRows();
+      renderSiteOffer();
+      renderNamedAgents();
+      renderBackgroundAgents();
+      renderSiteAgents();
+      refreshCommandStarters();
+    }
+  } else {
+    if (hasNamed && onHub) renderNamedAgents();
+    if (hasSiteOrTabs && onHub) {
+      renderSiteOffer();
+      renderSiteAgents();
+    }
+    if (hasCommands && onHub) {
+      refreshCommandStarters();
+    }
   }
-  if (ev?.type === "commands-changed") {
-    refreshCommandStarters();
+}
+
+subscribeProgress((ev) => {
+  if (ev?.type) {
+    handleBroadcastEvent(ev.type);
+    pendingProgressTypes.add(ev.type);
+    if (!pendingProgressBatch) {
+      pendingProgressBatch = Promise.resolve().then(dispatchProgressBatch);
+    }
   }
 });
 
