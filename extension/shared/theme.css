@@ -314,10 +314,10 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 .mcp-server-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .mcp-server-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .mcp-server-name { font-weight: 600; }
-.mcp-server-tag { font-weight: 600; font-size: 10px; letter-spacing: 0.02em; text-transform: uppercase; padding: 1px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
+.mcp-server-tag { font-weight: 600; font-size: 12px; padding: 1px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
 .mcp-server-meta { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); min-width: 0; }
 .mcp-server-url { text-overflow: ellipsis; white-space: nowrap; overflow-x: auto; }
-.mcp-badge { flex: 0 0 auto; font-size: 10px; font-weight: 600; letter-spacing: 0.02em; padding: 1px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
+.mcp-badge { flex: 0 0 auto; font-size: 12px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm); border: 1px solid var(--border); color: var(--muted); }
 .mcp-server-actions { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
 .mcp-remove { color: var(--danger, #b3261e); }
 .mcp-editor { border: 1px solid var(--accent); border-radius: var(--radius-md); padding: var(--space-4); background: var(--panel); margin-bottom: var(--space-3); }

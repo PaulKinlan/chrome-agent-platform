@@ -1957,7 +1957,7 @@ class PermissionRow extends Component {
       .info { flex:1; min-width:0; }
       .name { font-weight:600; }
       .desc { font-size:12px; color:var(--muted,#635e56); }
-      .state { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted,#635e56); }
+      .state { font-size:12px; font-weight:600; color:var(--muted,#635e56); }
       .state.granted { color:var(--accent2,#34d399); }
       .state.warned { color:var(--warn,#f59e0b); }
       .btn { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:6px 12px; cursor:pointer; font:inherit; }
@@ -4369,7 +4369,7 @@ class ArtifactQuickDrawer extends Component {
       .close:focus-visible, .action:focus-visible, .browse:focus-visible, .retry:focus-visible,
       input:focus-visible, select:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .controls { display:grid; grid-template-columns:minmax(0,1fr) 112px; gap:8px; padding:12px 14px; }
-      label { display:flex; flex-direction:column; gap:4px; min-inline-size:0; font-size:11px; font-weight:600; color:var(--muted,#635e56); }
+      label { display:flex; flex-direction:column; gap:4px; min-inline-size:0; font-size:12px; font-weight:600; color:var(--muted,#635e56); }
       input, select { min-inline-size:0; min-block-size:40px; border:1px solid var(--border,#e3e0d9);
         border-radius:var(--radius-sm,6px); background:var(--bg,#f7f6f3); color:var(--text,#1d1b18);
         font:inherit; font-size:13px; padding:0 10px; }
@@ -4381,7 +4381,7 @@ class ArtifactQuickDrawer extends Component {
       .name { flex:1; min-inline-size:0; font-weight:650; font-size:13px; line-height:1.35;
         overflow-wrap:anywhere; }
       .type { flex:0 0 auto; border:1px solid var(--border,#e3e0d9); border-radius:999px;
-        padding:1px 7px; color:var(--muted,#635e56); font-size:10px; text-transform:uppercase; }
+        padding:1px 7px; color:var(--muted,#635e56); font-size:12px; font-weight:600; }
       dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 10px; margin:7px 0 8px; }
       dl div { min-inline-size:0; }
       dt { color:var(--muted,#635e56); font-size:10px; }
@@ -5639,7 +5639,7 @@ const MESSAGE_BUBBLE_STYLE = `
   .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
   :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
   :host([role="steer"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--accent,#0e6e63); }
-  :host([role="steer"]) .steer-label { display:block; font-size:11px; font-weight:600; color:var(--accent,#0e6e63); letter-spacing:.04em; text-transform:uppercase; margin:0 0 4px; }
+  :host([role="steer"]) .steer-label { display:block; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); margin:0 0 4px; }
   :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
   :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
   :host([role="error"]) .body { color:var(--danger,#b3261e); }
@@ -7254,8 +7254,8 @@ class AgentComposer extends Component {
       agent-composer .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       agent-composer .popup .item .dsc { flex:1; text-align:right; font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
-      agent-composer .popup .group-label { padding:6px 10px 2px; font-size:11px; font-weight:700;
-        color:var(--muted,#635e56); letter-spacing:.01em; }
+      agent-composer .popup .group-label { padding:6px 10px 2px; font-size:12px; font-weight:600;
+        color:var(--muted,#635e56); }
       agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:none; overflow-y:hidden; field-sizing:content; min-height:24px; max-height:180px; outline:none; line-height:1.45; }
       agent-composer .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       agent-composer .composer .spacer { flex:1; }
@@ -9351,7 +9351,7 @@ class PromptBar extends Component {
       .pop.open { display:block; }
       .pop button { display:block; width:100%; text-align:left; background:transparent; border:0; border-radius:7px; padding:7px 10px; font:inherit; font-size:13px; color:var(--ink,#1d1b18); cursor:pointer; }
       .pop button:hover, .pop button[aria-selected="true"] { background:var(--panel-2,#efede8); }
-      .pop .head { font-size:11px; font-weight:600; text-transform:none; color:var(--muted,#635e56); padding:4px 10px 6px; }
+      .pop .head { font-size:12px; font-weight:600; text-transform:none; color:var(--muted,#635e56); padding:4px 10px 6px; }
     `, `<div class="bar">
         <textarea id="pb-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Prompt"
           aria-description="Type @ to mention any named, background, or Site Agent."></textarea>
@@ -9768,7 +9768,7 @@ class AgentPicker extends Component {
       .search { flex:1; min-width:0; min-height:44px; background:transparent; border:0; color:var(--text,#1d1b18);
         font:inherit; outline:none; }
       .list { display:flex; flex-direction:column; gap:2px; max-height:320px; overflow-y:auto; }
-      .group-h { font-size:11px; font-weight:700; letter-spacing:.01em; color:var(--muted,#635e56);
+      .group-h { font-size:12px; font-weight:600; color:var(--muted,#635e56);
         padding:8px 10px 2px; }
       .opt { display:flex; align-items:center; gap:10px; min-height:44px; padding:6px 10px; border-radius:8px;
         border:1px solid transparent; cursor:pointer; text-align:start; background:transparent; font:inherit;
@@ -10348,7 +10348,7 @@ class ModelPicker extends Component {
       }
       .opt:hover { background: color-mix(in oklab, var(--accent, #0e6e63) 8%, transparent); }
       .opt[aria-selected="true"] { background: color-mix(in oklab, var(--accent, #0e6e63) 14%, transparent); font-weight: 600; }
-      .group { padding: 6px 10px 2px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted, #635e56); }
+      .group { padding: 6px 10px 2px; font-size: 12px; font-weight: 600; color: var(--muted, #635e56); }
       .group + .group, .opt + .group { margin-top: 4px; border-top: 1px solid var(--border, #e3e0d9); padding-top: 8px; }
       .empty { padding: 8px 10px; font-size: 12px; color: var(--muted, #635e56); }
       .custom-hint { font-size: 12px; color: var(--accent2); }
@@ -10686,7 +10686,7 @@ class PanelButton extends Component {
       .console .line { display:flex; gap:8px; padding:3px 14px; align-items:baseline; border-left:2px solid transparent; }
       .console .line:hover { background:var(--panel-2,#efede8); }
       .console .ts { flex:0 0 auto; color:var(--muted,#635e56); }
-      .console .lv { flex:0 0 auto; width:44px; text-transform:uppercase; font-size:10px; font-weight:700; letter-spacing:.04em; }
+      .console .lv { flex:0 0 auto; width:44px; font-size:12px; font-weight:600; }
       .console .lvl-error { border-left-color:var(--danger,#b3261e); } .console .lvl-error .lv { color:var(--danger,#b3261e); }
       .console .lvl-error .msg { color:var(--danger,#b3261e); }
       .console .lvl-warn { border-left-color:var(--warning,#9a6700); } .console .lvl-warn .lv { color:var(--warning,#9a6700); }
@@ -10697,7 +10697,7 @@ class PanelButton extends Component {
       .console .line-copy:hover { color:var(--text,#1d1b18); background:var(--panel-2,#efede8); }
       .shield-body .sect { padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .shield-body .sect:last-child { border-bottom:0; }
-      .shield-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:8px; }
+      .shield-body .sect-h { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin-bottom:8px; }
       .shield-body .chips { display:flex; flex-wrap:wrap; gap:6px; }
       .shield-body .chip { font-size:12px; padding:3px 9px; border-radius:999px; border:1px solid var(--border,#e3e0d9); }
       .shield-body .chip.ok { background:var(--on-accent-muted,#d7f0ea); border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); display:inline-flex; align-items:center; gap:6px; }
@@ -10708,32 +10708,32 @@ class PanelButton extends Component {
       .shield-body .chip.muted { color:var(--muted,#635e56); }
       .shield-body .viol { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
       .shield-body .viol li { display:flex; gap:8px; align-items:baseline; font-size:12px; }
-      .shield-body .vkind { flex:0 0 auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--warning,#9a6700); }
+      .shield-body .vkind { flex:0 0 auto; font-size:12px; font-weight:600; color:var(--warning,#9a6700); }
       .shield-body .vmsg { flex:1; word-break:break-word; }
       .shield-body .vts { flex:0 0 auto; color:var(--muted,#635e56); }
       .diag-body .sect { padding:10px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .diag-body .sect:last-child { border-bottom:0; }
-      .diag-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:6px; }
+      .diag-body .sect-h { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin-bottom:6px; }
       .diag-metrics { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       @media (max-width: 480px) { .diag-metrics { grid-template-columns:repeat(2, 1fr); } }
       .diag-card { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:8px 6px; background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9); border-radius:8px; text-align:center; }
       .diag-card-num { font-size:18px; font-weight:700; color:var(--text,#1d1b18); }
       .diag-card-num.has-error { color:var(--danger,#b3261e); }
       .diag-card-num.has-running { color:var(--accent,#0e6e63); }
-      .diag-card-label { font-size:11px; color:var(--muted,#635e56); margin-top:2px; }
+      .diag-card-label { font-size:12px; color:var(--muted,#635e56); margin-top:2px; }
       .diag-tools-list { display:flex; flex-wrap:wrap; gap:6px; }
       .diag-tool-chip { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); color:var(--text,#1d1b18); }
       .diag-tool-chip .count { font-weight:600; color:var(--accent,#0e6e63); margin-left:4px; }
       .diag-errors-list { display:flex; flex-direction:column; gap:4px; }
       .diag-error-row { display:flex; gap:8px; font-size:12px; align-items:baseline; padding:2px 0; }
       .diag-error-time { flex:0 0 auto; color:var(--muted,#635e56); font-size:11px; }
-      .diag-error-level { flex:0 0 auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+      .diag-error-level { flex:0 0 auto; font-size:12px; font-weight:600; }
       .lvl-error .diag-error-level { color:var(--danger,#b3261e); }
       .lvl-warn .diag-error-level { color:var(--warning,#9a6700); }
       .diag-error-msg { flex:1; word-break:break-word; }
       .diag-active-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
       .diag-active-item { display:flex; gap:8px; align-items:center; font-size:12px; }
-      .diag-active-badge { font-size:10px; font-weight:600; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--on-accent-muted,#d7f0ea); color:var(--accent,#0e6e63); }
+      .diag-active-badge { font-size:12px; font-weight:600; padding:1px 6px; border-radius:4px; background:var(--on-accent-muted,#d7f0ea); color:var(--accent,#0e6e63); }
       .diag-active-preview { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       @media (prefers-reduced-motion: reduce) { .panel { transition:none; } }
     `, `
@@ -10993,15 +10993,15 @@ class DiagnosticsPanel extends PanelButton {
           </div>
         </div>
         <div class="sect" id="diag-active-sect" hidden>
-          <div class="sect-h">Active Runs</div>
+          <div class="sect-h">Active runs</div>
           <ul class="diag-active-list"></ul>
         </div>
         <div class="sect">
-          <div class="sect-h">Tool Usage</div>
+          <div class="sect-h">Tool usage</div>
           <div class="diag-tools-list"></div>
         </div>
         <div class="sect">
-          <div class="sect-h">Errors & Warnings</div>
+          <div class="sect-h">Errors & warnings</div>
           <div class="diag-errors-list"></div>
         </div>
       </div>`;
@@ -11468,7 +11468,7 @@ class ActivityExplorer extends Component {
         span.aex-agent { font-size:11.5px; font-weight:600; color:var(--accent,#0e6e63); white-space:nowrap;
           max-width:150px; overflow:hidden; text-overflow:ellipsis; background:transparent; border:0; padding:0; }
         .aex-main { min-width:0; min-inline-size:0; }
-        .aex-kind { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+        .aex-kind { font-size:12px; font-weight:600;
           color:var(--muted,#635e56); margin-right:6px; white-space:nowrap; }
         .aex-kind.task, .aex-kind.started { color:var(--accent,#0e6e63); }
         .aex-kind.finished { color:var(--accent,#0e6e63); }
@@ -12133,7 +12133,7 @@ class JobsBoard extends Component {
            blank space (a fresh board is just the empty line, no dead air). */
         .jb-open:empty, .jb-claimed:empty, .jb-blocked:empty, .jb-settled:empty, .jb-msgs:empty { display:none; }
         .jb-group { display:flex; flex-direction:column; }
-        .jb-head { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+        .jb-head { font-size:12px; font-weight:600;
           color:var(--muted,#635e56); padding:0 2px 5px; display:flex; align-items:baseline; gap:6px; }
         .jb-head .jb-n { font-weight:600; color:var(--muted,#635e56); }
         .jb-row { display:flex; flex-direction:column; gap:3px; padding:8px 0;
@@ -12144,9 +12144,9 @@ class JobsBoard extends Component {
           overflow-wrap:anywhere; }
         .jb-meta { font-size:11.5px; color:var(--muted,#635e56); display:flex; gap:6px 8px; align-items:baseline;
           flex-wrap:wrap; }
-        /* The status WORD is a text badge — never colour alone. A left border in
-           the tone accent + the uppercase label together carry the state. */
-        .jb-badge { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+        /* The status word is a text badge — never colour alone. A left border in
+           the tone accent carries the state with a sentence-case label. */
+        .jb-badge { font-size:12px; font-weight:600;
           padding:1px 6px; border-radius:999px; border:1px solid var(--border,#e3e0d9);
           color:var(--muted,#635e56); background:var(--panel-2); flex:0 0 auto;
           display:inline-flex; align-items:center; gap:5px; }
@@ -12160,7 +12160,7 @@ class JobsBoard extends Component {
         /* One unbroken line by design, but bounded so it cannot hold the board's column
            open or overflow the row now that the column is allowed to be narrow. */
         .jb-party { white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
-        .jb-outcome { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+        .jb-outcome { font-size:12px; font-weight:600; }
         .jb-outcome.completed { color:var(--accent,#0e6e63); }
         .jb-outcome.failed { color:var(--danger,#b3261e); }
         /* Settled row is a real button that expands its result in place. The

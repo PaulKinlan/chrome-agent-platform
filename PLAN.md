@@ -278,7 +278,7 @@ the permission-state matrix acceptance lane (supersedes the headed lane); `scrip
 
 **P2.** The whole Wasm tool platform lane — runtime probe, owner install, bundled tranche,
 spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes after the
-demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
+demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker, and UI kicker label normalization (`chrome-agent-platform-716s.10`: uppercase tracked kickers replaced by sentence-case 12–13px muted labels across all surfaces).
 
 ### Known open defect classes
 - **WebMCP discovery — passive registry acceptance candidate in review.** The owner rejected
