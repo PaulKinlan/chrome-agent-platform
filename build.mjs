@@ -456,6 +456,10 @@ try {
     // Marker for the re-entrant resolve below: esbuild hands pluginData back
     // to onResolve, so the pin can tell its own lookup from an importer's.
     const MCP_SDK_PIN = "cap-mcp-sdk-pin";
+
+    const isStoreBuild = BUILD_TARGET === "store";
+    const GATEWAY_STUB = path.join(ROOT, "scripts/stubs/gateway-stub.mjs");
+    const OIDC_STUB = path.join(ROOT, "scripts/stubs/vercel-oidc-stub.mjs");
     const capAiSdkDedup = {
       name: "cap-ai-sdk-dedup",
       setup(b) {
@@ -495,6 +499,14 @@ try {
           }
           return { path: r.path, sideEffects: r.sideEffects };
         });
+
+        // chrome-agent-platform-9epn.7: alias unused @ai-sdk/gateway and
+        // @vercel/oidc out of store builds into minimal throwing stubs so
+        // tree-shaking drops ~100 KB from store SW and agent-worker bundles.
+        if (isStoreBuild) {
+          b.onResolve({ filter: /^@ai-sdk\/gateway(\/.*)?$/ }, () => ({ path: GATEWAY_STUB }));
+          b.onResolve({ filter: /^@vercel\/oidc(\/.*)?$/ }, () => ({ path: OIDC_STUB }));
+        }
       },
     };
     // nodePaths hands esbuild the canonical SDK instance's node_modules dir as

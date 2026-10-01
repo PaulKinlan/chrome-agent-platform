@@ -14,7 +14,7 @@
 // only match unminified code.
 // @ts-nocheck
 
-import { assert, assertEquals, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -586,3 +586,70 @@ Deno.test("bundle budget: ntp.bundle.js does NOT include durable-runs.js (d885.1
     "ntp.bundle.js must carry agent-projection.js",
   );
 });
+
+// ── chrome-agent-platform-9epn.7: tree-shake @ai-sdk/gateway from store SW/worker ───
+
+Deno.test("bundle budget: store service-worker and worker metafiles contain zero @ai-sdk/gateway or @vercel/oidc inputs (9epn.7)", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const swReportPath = join(repo, ".build", "bundle-report.json");
+  const workerReportPath = join(repo, ".build", "bundle-report-worker.json");
+
+  let swMeta: { inputs?: Record<string, unknown> };
+  let workerMeta: { inputs?: Record<string, unknown> };
+  try {
+    swMeta = JSON.parse(await Deno.readTextFile(swReportPath));
+    workerMeta = JSON.parse(await Deno.readTextFile(workerReportPath));
+  } catch {
+    throw new Error(
+      `bundle budget: metafile reports are missing — run \`npm run build:production\` first.`,
+    );
+  }
+
+  const swInputs = Object.keys(swMeta.inputs ?? {});
+  const workerInputs = Object.keys(workerMeta.inputs ?? {});
+
+  assert(swInputs.length > 10, `swMeta must describe real SW bundle (got ${swInputs.length})`);
+  assert(workerInputs.length > 10, `workerMeta must describe real worker bundle (got ${workerInputs.length})`);
+
+  // Assertion: @ai-sdk/gateway and @vercel/oidc inputs are absent in store builds
+  const swForbidden = swInputs.filter((p) => p.includes("@ai-sdk/gateway") || p.includes("@vercel/oidc"));
+  assertEquals(swForbidden, [], `service-worker.js must not carry @ai-sdk/gateway or @vercel/oidc inputs (found: ${swForbidden.join(", ")})`);
+
+  const workerForbidden = workerInputs.filter((p) => p.includes("@ai-sdk/gateway") || p.includes("@vercel/oidc"));
+  assertEquals(workerForbidden, [], `agent-worker.js must not carry @ai-sdk/gateway or @vercel/oidc inputs (found: ${workerForbidden.join(", ")})`);
+
+  // Positive control: ai package IS present
+  assert(swInputs.some((p) => p.includes("/ai/")), "service-worker.js must carry ai package inputs");
+  assert(workerInputs.some((p) => p.includes("/ai/")), "agent-worker.js must carry ai package inputs");
+});
+
+Deno.test("bundle budget: @ai-sdk/gateway stub throws GatewayDisabledError (9epn.7)", async () => {
+  const { gateway, createGateway, GatewayDisabledError, GatewayError } = await import("../scripts/stubs/gateway-stub.mjs");
+  const err = assertThrows(() => gateway(), GatewayDisabledError, "@ai-sdk/gateway is disabled in store builds");
+  assertEquals(err.code, "gateway_disabled_in_extension");
+  assertThrows(() => createGateway(), GatewayDisabledError, "@ai-sdk/gateway is disabled in store builds");
+  assert(new GatewayDisabledError() instanceof GatewayError);
+});
+
+Deno.test("bundle budget: @vercel/oidc stub throws VercelOidcDisabledError (9epn.7)", async () => {
+  const {
+    getContext,
+    getVercelOidcToken,
+    getVercelOidcTokenSync,
+    getVercelToken,
+    VercelOidcDisabledError,
+  } = await import("../scripts/stubs/vercel-oidc-stub.mjs");
+
+  const err = await assertRejects(() => getVercelOidcToken(), VercelOidcDisabledError);
+  assertEquals(err.code, "vercel_oidc_disabled_in_extension");
+
+  const syncErr = assertThrows(() => getContext(), VercelOidcDisabledError);
+  assertEquals(syncErr.code, "vercel_oidc_disabled_in_extension");
+
+  const syncTokenErr = assertThrows(() => getVercelOidcTokenSync(), VercelOidcDisabledError);
+  assertEquals(syncTokenErr.code, "vercel_oidc_disabled_in_extension");
+
+  await assertRejects(() => getVercelToken(), VercelOidcDisabledError);
+});
+
+
