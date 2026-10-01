@@ -138,7 +138,14 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   lists backed by the corresponding live Chrome/library authority; a selection
   leaves both a readable reference and a removable context chip. `/agent` opens
   its shared picker directly. Commands for removed or unclear product concepts
-  do not remain as inert suggestions.
+  do not remain as inert suggestions. The autocomplete popup is constrained to
+  `min(440px, calc(100% - 24px))` (`max-width: 480px`), anchored to the inline
+  start with `--shadow-md` elevation. Unfiltered or multi-category listings group
+  commands under quiet category headings (Attach context, Run & switch, Session),
+  align command descriptions adjacently on one line, and display a persistent
+  `↑↓ Navigate · ↵ Select · Esc Dismiss` keyboard footer. The composer attach
+  menu shares the `--shadow-md` elevation token without border outlines and
+  presents plain-English capability notes.
 - The composer `/files` palette is progressive enhancement: it is absent when
   `showDirectoryPicker` is unavailable, uses the existing listbox keyboard
   contract, and turns a selected file into the same removable attachment chip
