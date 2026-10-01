@@ -33,17 +33,119 @@ h1 {
   letter-spacing: -0.02em;
   margin: 0 0 10px;
 }
-.lede {
+.lede,
+p.lead,
+.measure {
   margin: 0;
   color: var(--muted);
   font-size: 15px;
   line-height: 1.5;
+  max-width: 65ch;
 }
 .status {
-  margin: 0 0 20px;
+  margin: 10px 0 20px;
   color: var(--danger);
   font-size: 14px;
 }
+.status.success {
+  color: var(--accent);
+}
+.privacy-data-section {
+  margin-top: 36px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.privacy-data-section h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.privacy-data-section p {
+  max-width: 65ch;
+  line-height: 1.55;
+  font-size: 14px;
+}
+.privacy-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 18px 0;
+}
+.technical-storage-details {
+  margin: 14px 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.technical-storage-details summary {
+  cursor: pointer;
+}
+.technical-storage-details summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.technical-storage-details ul {
+  margin: 8px 0 0 18px;
+  padding: 0;
+}
+.technical-storage-details li {
+  margin-bottom: 4px;
+}
+
+/* Secondary destructive buttons: calm danger outline */
+.btn-danger,
+.btn.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: var(--radius-sm, 8px);
+  padding: 0 14px;
+  min-height: 36px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+.btn-danger:hover,
+.btn.danger:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-danger:focus-visible,
+.btn.danger:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+/* Solid danger fill is reserved strictly for final confirmation */
+.btn-danger-fill,
+.btn.danger.filled,
+.btn-danger.confirmed,
+.cap-confirm-accept.destructive {
+  background: var(--danger);
+  color: var(--btn-fg, #ffffff);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm, 8px);
+  padding: 0 14px;
+  min-height: 36px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn-danger-fill:hover,
+.btn.danger.filled:hover,
+.btn-danger.confirmed:hover,
+.cap-confirm-accept.destructive:hover {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+}
+
 .foot {
   display: flex;
   gap: 8px;

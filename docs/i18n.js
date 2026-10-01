@@ -160,6 +160,15 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_what_the_agent_may_do_once_browser_control_is_on_i": "What the agent may do once Browser control is on, in three classes.",
   "options_what_this_extension_sends_and_stores": "What this extension sends and stores",
   "options_write_a": "Write a ",
+  "privacy_lead_summary": "Everything below is read from the extension's own lists, so it changes when the extension does.",
+  "privacy_data_management_title": "Data & memory on this device",
+  "privacy_data_management_lead": "Your data stays on your device. Each agent's memory and site data are kept isolated per site, so one site can never inspect or access another site's memory or tools.",
+  "privacy_storage_summary": "Settings, agent conversations, site permissions, and cached models remain under your control and never leave this device unless you explicitly export them.",
+  "privacy_technical_storage_summary": "Technical storage details",
+  "privacy_clear_site_memory": "Clear site memory",
+  "privacy_clear_threads": "Clear threads",
+  "privacy_clear_permissions": "Clear permissions",
+  "privacy_factory_reset": "Reset all data…",
 });
 // SYNC:i18n-fallback:end
 

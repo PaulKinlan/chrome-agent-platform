@@ -27,7 +27,7 @@ one mechanically; the first four are the design pass on every touched string.
 
 `discovery` · `diagnostics` · `catalog` · `generation` · `registry` ·
 `attestation` · `alarm(s)` · `runtime` · `lifecycle` · `chars` · `override(s)` ·
-`has not run` — plus the noun rules from CAP-FB-20260828-NOUN-DISCIPLINE-01
+`has not run` · `OPFS` · `Master` — plus the noun rules from CAP-FB-20260828-NOUN-DISCIPLINE-01
 (`asset`, `recipe`, `starter task`, "host access is optional").
 
 Protocol vocabulary (`modelContent`, `search_tools`, `selectionRef`,
@@ -52,3 +52,7 @@ the demo model is reachable only behind the developer flag.
 | Host access and the core runtime permissions are granted at install. | Host access and the permissions the extension needs to run are granted at install. |
 | …memory, alarms, downloaded models… | …memory, schedules, downloaded models… |
 | show more (N more chars) | show more (N more characters) |
+| Per-origin memory is stored in OPFS, keyed by origin — one site can never read another. | Each agent's memory is kept on this device, apart per site — one site can never read another. |
+| Master (the hub) | The hub |
+| Off: full detail for the newest N runs… | Full detail for the newest N runs… |
+| Purge journals… / Clean up leftover files… as filled primaries | Calm secondary danger outline with confirm |

@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Clearer Data & memory page with plain-language explanations and calmer destructive action styling.
+
 ## [0.3.558] — 2026-09-29
+- Clearer Data & memory page with plain-language explanations and calmer destructive action styling.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29

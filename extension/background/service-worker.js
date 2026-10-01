@@ -6610,7 +6610,7 @@ const handlers = mergeRouteMaps(
       const inFlight = activePythonFetches.get(result.origin);
       if (inFlight) {
         for (const ctrl of inFlight) {
-          try { ctrl.abort(); } catch {}
+          try { ctrl.abort(); } catch { /* controller may already have aborted or closed */ }
         }
         inFlight.clear();
         activePythonFetches.delete(result.origin);
@@ -9212,7 +9212,7 @@ const handlers = mergeRouteMaps(
     // it), or orphan (read-write; a real dead dir).
     const { classifyAgentMemoryDirs } = await import("../lib/named-agents.js");
     const classified = classifyAgentMemoryDirs({ dirs: namedIds, agents: named });
-    const stores = [{ key: "master", label: "Master (the hub)", kind: "master" }];
+    const stores = [{ key: "master", label: "The hub", kind: "master" }];
     for (const c of classified) {
       const label = nameByInstance.get(c.dir) ?? nameById.get(slugifyAgentId(c.dir)) ?? c.dir;
       const store = namedAgentMemory(c.dir);
