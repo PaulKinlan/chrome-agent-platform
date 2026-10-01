@@ -13,6 +13,7 @@
 // docs/ keeps a synced copy (see build.mjs → copy:docs).
 
 import { t } from "./i18n.js";
+import { cachedRpc } from "./rpc-cache.js";
 import {
   canonicalRef,
   candidatesFromGroups,
@@ -638,7 +639,7 @@ export function currentFramePreference() {
 const RUNTIME_SEND = (() => {
   try {
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-      return (type, payload = {}, timeoutMs = 12000) => new Promise((resolve) => {
+      const rawSend = (type, payload = {}, timeoutMs = 12000) => new Promise((resolve) => {
         let settled = false;
         const finish = (value) => {
           if (settled) return;
@@ -658,6 +659,7 @@ const RUNTIME_SEND = (() => {
           } else finish(res ?? { ok: true });
         });
       });
+      return (type, payload = {}, timeoutMs = 12000) => cachedRpc(type, payload, { timeoutMs, send: rawSend });
     }
   } catch { /* no chrome */ }
   return null;
