@@ -114,6 +114,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "webmcp-realsite-probe.ts": { class: "manual", reason: "network-dependent diagnostic (chrome-agent-platform-ajcc): drives the REAL search_docs on beads.gascity.com through production enrollment + invocation with the diagnostics channel on, capturing the raw page-side error the bridge redaction strips; run by hand when the dispatch path changes" },
 
   // ── KATs (npm run test:kat via scripts/kat-runner.ts) ───────────────────
+  "kat-attention-badge.ts": { class: "kat" },
   "kat-activity-explorer.ts": { class: "kat", ...RED("7/5", "the backend 'ok' scenario renders 1 row with options ['', 'master']") },
   "kat-agent-board.ts": { class: "kat" },
   // 61/0 since CAP-FB-20260902-KAT-AGENT-DELEGATION-RED-01 re-baselined the over-cap

@@ -2238,6 +2238,15 @@ export function createDurableRunRegistry({
     return detach;
   }
 
+  /** The in-worker change hook: `listener(event)` for every `run-update` the
+   * registry emits (the same public record a port receives). Returns the
+   * unsubscribe. An observer error never breaks authority (see emit). */
+  function subscribe(listener) {
+    if (typeof listener !== "function") return () => {};
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+  }
+
   /** Agent-teardown purge: remove EVERY durable trace of one journal target
    * (`agent:<slug>` / `background:<slug>`) — registry rows, the INDEX entries,
    * the executions' OPFS dirs, and the agent's thread reverse-index entries
@@ -2330,6 +2339,7 @@ export function createDurableRunRegistry({
     list,
     activeByJournalTarget,
     attachPort,
+    subscribe,
     // A cancelling (cancel-authority recorded, not yet terminal) execution is
     // still a live writer for fence purposes (review P1-1).
     isActive: (executionId) => active.has(executionId) || cancelling.has(executionId),

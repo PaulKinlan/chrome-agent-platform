@@ -18,7 +18,7 @@ import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { resolveAgentSaveResult } from "../lib/agent-config-save.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
-import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool, reportViewedSurface } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
@@ -63,7 +63,7 @@ import {
   resolveEntryMeta,
   shouldDispatchForNavigationType,
 } from "../lib/navigation-controller.js";
-import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface, runsForSurface } from "../lib/run-scope.js";
+import { actionableRunsForSurface, isSettledLiveRunRecord, latestRunForSurface, runsForSurface, runSurfaceIdentity } from "../lib/run-scope.js";
 import { buildTimeline } from "../lib/hub-timeline.js";
 import {
   SITE_AGENT_COPY,
@@ -134,6 +134,13 @@ function setRunDebugOpen(open, { pin = false, focusToggle = false } = {}) {
 }
 
 function syncConversationRunControls() {
+  // Every surface switch lands here: tell the worker what is open so the
+  // toolbar's "waiting on you" badge excludes it (chrome-agent-platform-3p3e.6).
+  reportViewedSurface(runSurfaceIdentity({
+    threadId: currentThreadId,
+    agentId: currentAgentId,
+    agentKind: currentAgentKind,
+  }));
   if (!durableRunRegistry) return;
   // Run logs remain reachable after settlement; filtering to actionable phases
   // made the affordance disappear the moment a successful run completed.

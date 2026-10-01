@@ -215,6 +215,40 @@ Deno.test("handleNotificationClick: routes to default task thread and focuses/cr
   assertEquals(res.navigation.tabId, 101);
 });
 
+Deno.test("handleNotificationClick: an attention (\"waiting on you\") notification's click opens exactly that run's thread (chrome-agent-platform-3p3e.6)", async () => {
+  const { buildAttentionNotification } = await import("../extension/lib/attention-badge.js");
+  const spec = buildAttentionNotification({
+    executionId: "exec_att_7",
+    kind: "task",
+    threadId: "thread-att-7",
+    phase: "terminal",
+    terminal: { ok: true, result: "Here is the summary." },
+    taskPreview: "summarise the report",
+  }, "settled");
+  const registry = new NotificationRegistry();
+  await registry.registerNotification({
+    notificationId: spec.notificationId,
+    executionId: spec.executionId,
+    threadId: spec.threadId,
+    title: spec.title,
+    message: spec.message,
+    action: spec.action,
+  });
+  const stored = await registry.getNotification("cap:attention:exec_att_7");
+  assertEquals(stored.action, { type: NOTIFICATION_ACTION_TYPES.OPEN_THREAD, threadId: "thread-att-7" });
+  let createdUrl = null;
+  const res = await handleNotificationClick("cap:attention:exec_att_7", {
+    registry,
+    notificationsApi: { clear: async () => true },
+    tabsApi: { query: async () => [], create: async ({ url }) => { createdUrl = url; return { id: 7, url }; } },
+  });
+  assert(res.ok);
+  assertEquals(res.action, NOTIFICATION_ACTION_TYPES.OPEN_THREAD);
+  assertStringIncludes(res.targetUrl, "ntp/ntp.html#omnibox=thread:thread-att-7");
+  assertEquals(createdUrl, res.targetUrl);
+  assertEquals(res.resume, null, "a finished run is opened, never resumed");
+});
+
 Deno.test("handleNotificationClick: focuses existing extension tab when available", async () => {
   const registry = new NotificationRegistry();
   await registry.registerNotification({

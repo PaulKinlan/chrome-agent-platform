@@ -14,6 +14,7 @@ import {
   NOTIFICATION_STATES,
   NOTIFICATION_ACTION_TYPES,
 } from "../lib/notification-action-routing.js";
+import { createAttentionTracker, ATTENTION_BADGE_TEXT_COLOR } from "../lib/attention-badge.js";
 import {
   providerRunGate,
   recordProviderFailure,
@@ -1200,13 +1201,87 @@ function bumpDiagnosticsRevision() {
 onDiagnosticsChanged(bumpDiagnosticsRevision);
 onUsageChanged(bumpDiagnosticsRevision);
 
+// ---- "Waiting on you" (chrome-agent-platform-3p3e.6) ----
+// The toolbar action badge counts the runs that need the owner while no
+// surface shows them: a run paused on a permission, a running execution
+// holding a live Allow card, or an interactive run that finished while nobody
+// was looking. The projection is pure (lib/attention-badge.js); this binding
+// supplies the real badge and notification APIs. The badge write is coalesced
+// (250 ms) and happens only when the text/colour changes; the tracker is fed
+// by the registry's in-memory change hook — never a per-change storage read.
+const attention = createAttentionTracker({
+  setBadge({ text, color }) {
+    const action = chrome.action;
+    if (!action?.setBadgeText) return;
+    const swallow = (p) => { if (p && typeof p.catch === "function") p.catch(() => {}); };
+    try { swallow(action.setBadgeText({ text })); } catch { /* no action in this realm */ }
+    if (text) {
+      try { swallow(action.setBadgeBackgroundColor?.({ color })); } catch { /* optional */ }
+      try { swallow(action.setBadgeTextColor?.({ color: ATTENTION_BADGE_TEXT_COLOR })); } catch { /* Chrome 110+ */ }
+    }
+  },
+  notify(spec) {
+    raiseAttentionNotification(spec).catch((e) => swLog.warn("attention notification failed", e?.message ?? e));
+  },
+});
+async function raiseAttentionNotification(spec) {
+  // `notifications` is OPTIONAL — absent, skip silently (Settings → Permissions
+  // is the grant moment). `chrome.notifications` is always defined in MV3, so
+  // the honest check is permissions.contains, exactly as the scheduled path.
+  let canNotify = false;
+  try {
+    canNotify = chrome.permissions?.contains
+      ? await chrome.permissions.contains({ permissions: ["notifications"] })
+      : false;
+  } catch { canNotify = false; }
+  if (!canNotify || !chrome.notifications?.create) return false;
+  await notificationRegistry.registerNotification({
+    notificationId: spec.notificationId,
+    executionId: spec.executionId,
+    threadId: spec.threadId,
+    agentId: spec.agentId,
+    title: spec.title,
+    message: spec.message,
+    action: spec.action,
+  });
+  await chrome.notifications.create(spec.notificationId, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL(spec.iconPath),
+    title: spec.title,
+    message: spec.message,
+  });
+  return true;
+}
+// Seed ONCE from the registry after recovery; the change hook carries every
+// later write. Both are no-ops in a router/unit import (no OPFS, no action).
+durableRuns.subscribe((event) => attention.onRunUpdate(event));
+durableRecoveryReady
+  .then(() => durableRuns.list())
+  .then((snapshot) => attention.seed(snapshot?.runs ?? []))
+  .catch(() => attention.seed([]));
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "agent-progress") return;
   progressPorts.add(port);
   // Register/buffer/snapshot/drain is owned by the durable registry. Existing
   // live progress remains available, while reconnect receives durable truth.
   durableRuns.attachPort(port);
-  port.onDisconnect.addListener(() => progressPorts.delete(port));
+  const url = port?.sender?.url ? String(port.sender.url) : "";
+  const isConversationSurface = !url || url.includes("/ntp/") || url.includes("/sidepanel/");
+  if (isConversationSurface) {
+    attention.portConnected(port);
+    // A surface tells the worker WHICH thread/agent it is showing so the
+    // "waiting on you" badge never counts what the owner is already looking at.
+    port.onMessage?.addListener?.((msg) => {
+      if (msg?.type === "attention.viewing") attention.portViewing(port, msg.surface ?? null);
+    });
+    port.onDisconnect.addListener(() => {
+      attention.portDisconnected(port);
+    });
+  }
+  port.onDisconnect.addListener(() => {
+    progressPorts.delete(port);
+  });
 });
 
 // ---- alarm scheduler (persists the full task payload) ----
@@ -4883,6 +4958,7 @@ async function waitForInlinePermissionDecision(executionId, result, onProgress) 
       settled = true;
       clearTimeout(timer);
       inlinePermissionWaiters.delete(requestId);
+      attention.cardClosed(executionId, requestId);
       resolve(decision);
     };
     const timer = setTimeout(() => {
@@ -4890,6 +4966,7 @@ async function waitForInlinePermissionDecision(executionId, result, onProgress) 
       finish("expired");
     }, INLINE_PERMISSION_TTL_MS);
     inlinePermissionWaiters.set(requestId, { executionId, finish });
+    attention.cardOpened(executionId, requestId);
     try {
       await onProgress({
         type: "approval-request",
@@ -5013,6 +5090,10 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
     // during card publication can then settle cancellation durably instead of
     // racing a waiter that does not exist yet.
     const decisionWait = waitForApprovalDecision(ownerApprovalStore, pending.approvalId);
+    // The card is "waiting on you" from now until the decision settles — every
+    // exit (approve / deny / timeout / cancel / failed publish) resolves it.
+    attention.cardOpened(executionId, pending.approvalId);
+    decisionWait.finally(() => attention.cardClosed(executionId, pending.approvalId)).catch(() => {});
     try {
       context.onApprovalPending?.(pending.approvalId);
       await context.onApprovalEvent({
