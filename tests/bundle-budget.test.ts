@@ -22,6 +22,7 @@ import {
   assertBundleBudget,
   BUDGET_REPORTED_BUNDLES,
   duplicateAiSdkInputs,
+  duplicateStoreInputs,
   formatContributors,
   nonDenoStoreInputs,
   STORE_SW_BUDGET_BYTES,
@@ -191,7 +192,7 @@ Deno.test("63et assertBundleBudget fails closed on a duplicated AI SDK instance 
   const error = assertThrows(() =>
     assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile })
   );
-  assertStringIncludes(error.message, "duplicated same-version AI SDK instances");
+  assertStringIncludes(error.message, "duplicated same-version package instances");
   assertStringIncludes(error.message, "ai@7.0.66: .deno/ai@7.0.66, .deno/ai@7.0.66_1");
 });
 
@@ -203,6 +204,128 @@ Deno.test("63et assertBundleBudget fails closed on lockfile drift (non-Deno-stor
   assertStringIncludes(error.message, "lockfile drift");
   assertStringIncludes(error.message, "node_modules/ai/dist/index.js");
 });
+
+// ── chrome-agent-platform-9epn.3: the duplicate gate covers EVERY package ──
+// The 63et detector matched only ai|zod|@ai-sdk/provider-utils, so the
+// 2026-10-01 audit found @modelcontextprotocol+sdk@1.30.0 AND …@1.30.0_1 (the
+// same SDK twice, 175KB pre-minify each) plus zod-to-json-schema@3.25.2 twice
+// in the store SW with the gate green. One instance per exact version is the
+// invariant for ALL packages; the fixture below is the falsifier the bead
+// names (foo@1.0.0 + foo@1.0.0_1 must fail).
+
+Deno.test("9epn.3 duplicateStoreInputs: a same-version _N duplicate of ANY package is flagged (foo@1.0.0 + foo@1.0.0_1); distinct versions pass", () => {
+  const metafile = { inputs: {
+    "node_modules/.deno/foo@1.0.0/node_modules/foo/index.js": { bytes: 1 },
+    "node_modules/.deno/foo@1.0.0_1/node_modules/foo/index.js": { bytes: 1 },
+    // scoped package, same version, _2 suffix — flagged with the scope restored
+    "node_modules/.deno/@modelcontextprotocol+sdk@1.30.0/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js": { bytes: 1 },
+    "node_modules/.deno/@modelcontextprotocol+sdk@1.30.0_2/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js": { bytes: 1 },
+    // distinct versions of an arbitrary package — legitimate
+    "node_modules/.deno/bar@2.0.0/node_modules/bar/index.js": { bytes: 1 },
+    "node_modules/.deno/bar@2.1.0/node_modules/bar/index.js": { bytes: 1 },
+    // prerelease version with a suffix — the suffix is what is stripped, not the prerelease tag
+    "node_modules/.deno/baz@3.0.0-beta.1/node_modules/baz/index.js": { bytes: 1 },
+    "node_modules/.deno/baz@3.0.0-beta.1_1/node_modules/baz/index.js": { bytes: 1 },
+    "extension/lib/agent.js": { bytes: 1 },
+  } };
+  const dups = duplicateStoreInputs(metafile);
+  assertEquals(Object.keys(dups).sort(), ["@modelcontextprotocol/sdk@1.30.0", "baz@3.0.0-beta.1", "foo@1.0.0"]);
+  assertEquals(dups["foo@1.0.0"], [".deno/foo@1.0.0", ".deno/foo@1.0.0_1"]);
+  assertEquals(dups["@modelcontextprotocol/sdk@1.30.0"], [".deno/@modelcontextprotocol+sdk@1.30.0", ".deno/@modelcontextprotocol+sdk@1.30.0_2"]);
+  assertEquals(dups["baz@3.0.0-beta.1"], [".deno/baz@3.0.0-beta.1", ".deno/baz@3.0.0-beta.1_1"]);
+  // The 63et name is the same detector.
+  assertEquals(duplicateAiSdkInputs(metafile), dups);
+});
+
+Deno.test("9epn.3 assertBundleBudget fails closed on a duplicated NON-AI-SDK package (foo@1.0.0 + foo@1.0.0_1) even under budget", () => {
+  const metafile = { inputs: {
+    "node_modules/.deno/foo@1.0.0/node_modules/foo/index.js": { bytes: 10 },
+    "node_modules/.deno/foo@1.0.0_1/node_modules/foo/index.js": { bytes: 10 },
+  } };
+  const error = assertThrows(() =>
+    assertBundleBudget({ label: "background/service-worker.js", bytes: 100, metafile })
+  );
+  assertStringIncludes(error.message, "foo@1.0.0: .deno/foo@1.0.0, .deno/foo@1.0.0_1");
+});
+
+/** Read a .build metafile the production build wrote, or refuse. */
+async function readBuildReport(name: string): Promise<{ inputs: Record<string, { bytes: number; imports?: { path: string; original?: string }[] }> }> {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const report = join(repo, ".build", name);
+  let metafile;
+  try {
+    metafile = JSON.parse(await Deno.readTextFile(report));
+  } catch {
+    throw new Error(`bundle budget: ${report} is missing — run \`npm run build:production\` first; a check that cannot read its subject must refuse rather than pass.`);
+  }
+  assert(Object.keys(metafile.inputs ?? {}).length > 10, `${name} must describe a real bundle`);
+  return metafile;
+}
+
+/** The distinct `.deno/<store-name>@<version>` prefixes of one package in a metafile. */
+function storeInstances(metafile: { inputs: Record<string, unknown> }, storeName: string): string[] {
+  const re = new RegExp(`\\.deno/(${storeName.replaceAll("+", "\\+")}@[^/]+)/`);
+  const seen = new Set<string>();
+  for (const input of Object.keys(metafile.inputs)) {
+    const m = input.match(re);
+    if (m) seen.add(m[1]);
+  }
+  return [...seen].sort();
+}
+
+for (const report of ["bundle-report.json", "bundle-report-worker.json"]) {
+  Deno.test(`9epn.3 ${report}: exactly ONE @modelcontextprotocol+sdk and ONE zod-to-json-schema instance ship, and zero same-version duplicates of any package`, async () => {
+    const metafile = await readBuildReport(report);
+    const sdk = storeInstances(metafile, "@modelcontextprotocol+sdk");
+    assertEquals(sdk.length, 1, `${report}: one SDK instance (got ${sdk.join(", ") || "none"})`);
+    const z2j = storeInstances(metafile, "zod-to-json-schema");
+    assertEquals(z2j.length, 1, `${report}: one zod-to-json-schema instance (got ${z2j.join(", ") || "none"})`);
+    // The package-wide invariant on the real bundle — the gate the build runs.
+    assertEquals(duplicateStoreInputs(metafile), {}, `${report}: no same-version duplicate of ANY package`);
+  });
+
+  Deno.test(`9epn.3 ${report}: agent-do's MCP path resolves into the same single SDK instance as the extension's, on the same zod`, async () => {
+    const metafile = await readBuildReport(report);
+    const [sdkInstance] = storeInstances(metafile, "@modelcontextprotocol+sdk");
+    assert(sdkInstance, `${report} must carry the SDK`);
+    const sdkPrefix = `node_modules/.deno/${sdkInstance}/`;
+    // agent-do's MCP client is IN the bundle (positive control: this test
+    // cannot pass on a bundle that simply dropped agent-do's mcp.js)…
+    const agentDoMcp = Object.entries(metafile.inputs).find(([p]) => p.endsWith("/agent-do/dist/src/mcp.js"));
+    assert(agentDoMcp, `${report}: agent-do/dist/src/mcp.js is an input`);
+    const agentDoSdkEdges = (agentDoMcp[1].imports ?? []).filter((i) => i.original?.startsWith("@modelcontextprotocol/sdk/"));
+    assert(agentDoSdkEdges.length >= 3, `${report}: agent-do's mcp.js imports the SDK client, sse and streamableHttp (got ${agentDoSdkEdges.length})`);
+    for (const edge of agentDoSdkEdges) {
+      assert(edge.path.startsWith(sdkPrefix), `${report}: agent-do's ${edge.original} must resolve into ${sdkInstance}, got ${edge.path}`);
+    }
+    // …and in the SW the extension's own client resolves into the SAME instance.
+    if (report === "bundle-report.json") {
+      const capClient = metafile.inputs["extension/lib/mcp-client.js"];
+      assert(capClient, "extension/lib/mcp-client.js is an SW input");
+      const capEdges = (capClient.imports ?? []).filter((i) => i.original?.startsWith("@modelcontextprotocol/sdk/"));
+      assert(capEdges.length >= 3, "lib/mcp-client.js imports the SDK client, sse and streamableHttp");
+      for (const edge of capEdges) {
+        assert(edge.path.startsWith(sdkPrefix), `lib/mcp-client.js's ${edge.original} must resolve into ${sdkInstance}, got ${edge.path}`);
+      }
+    }
+    // The SDK's zod edges land on the zod store dir agent-do itself uses: one
+    // zod for the agent loop and its MCP client (the peer the extension's
+    // client was always KAT-proven against).
+    const zodDirOf = (p: string) => p.match(/node_modules\/\.deno\/(zod@[^/]+)\//)?.[1] ?? null;
+    const agentDoZod = new Set<string>();
+    const sdkZod = new Set<string>();
+    for (const [input, info] of Object.entries(metafile.inputs)) {
+      for (const edge of info.imports ?? []) {
+        const z = zodDirOf(edge.path);
+        if (!z) continue;
+        if (input.includes("/agent-do/")) agentDoZod.add(z);
+        if (input.startsWith(sdkPrefix)) sdkZod.add(z);
+      }
+    }
+    assertEquals([...agentDoZod].length, 1, `${report}: agent-do imports exactly one zod store dir (got ${[...agentDoZod].join(", ")})`);
+    assertEquals([...sdkZod], [...agentDoZod], `${report}: the SDK's zod peer is agent-do's zod`);
+  });
+}
 
 Deno.test("2eb5: an oversize error names a symlinked node_modules — and stays silent with a real one", async () => {
   // The environmental-vs-product distinction must cost zero gate runs: a
