@@ -806,6 +806,133 @@ function mountTemplate(host, style, markup) {
   return root;
 }
 
+// Deferred custom element registration on NTP to eliminate boot long tasks
+// (CONSTITUTION §4, bead 9epn.2).
+export const NON_HUB_ELEMENTS = new Set([
+  "tool-library",
+  "system-prompt-editor",
+  "activity-explorer",
+  "model-picker",
+  "webmcp-consent-manager",
+  "user-wasm-manager",
+  "agent-picker",
+  "agent-config-form",
+  "agent-template-gallery",
+  "agent-template-card",
+  "tool-directory-card",
+  "artifact-inspector",
+  "artifact-diff",
+  "table-preview",
+  "segmented-control",
+  "code-block",
+  "agent-dialog",
+  "provider-select",
+  "agent-nav",
+  "error-console",
+  "privacy-statement",
+  "permission-row",
+  "origin-grant-row",
+  "capability-row",
+  "artifact-card",
+  "switch-toggle",
+  "prompt-bar",
+  "skill-builder",
+  "cron-builder",
+  "persona-editor",
+  "workspace-usage-meter",
+  "approval-card",
+  "permission-approval-card",
+  "plan-strip",
+  "screenshot-strip",
+  "screenshot-thumb",
+  "theme-picker",
+  "thinking-trace",
+  "tool-chips",
+  "loading-state",
+  "message-bubble",
+  "conversation-run-status",
+  "attach-button",
+  "mic-button",
+  "agent-identity",
+  "run-task-button",
+]);
+
+export const isNtpPage = typeof location !== "undefined" && typeof location.pathname === "string" && (location.pathname.endsWith("ntp.html") || location.pathname.includes("/ntp/"));
+export const deferredComponentRegistry = new Map();
+let _rawCustomElementsDefine = null;
+
+if (typeof customElements !== "undefined" && typeof customElements.define === "function" && isNtpPage) {
+  _rawCustomElementsDefine = customElements.define.bind(customElements);
+  customElements.define = function (tag, constructor, options) {
+    if (NON_HUB_ELEMENTS.has(tag)) {
+      deferredComponentRegistry.set(tag, { constructor, options });
+      return;
+    }
+    return _rawCustomElementsDefine(tag, constructor, options);
+  };
+
+  if (typeof document !== "undefined" && typeof document.createElement === "function") {
+    const _rawCreateElement = document.createElement.bind(document);
+    document.createElement = function (tagName, options) {
+      if (typeof tagName === "string") {
+        const lower = tagName.toLowerCase();
+        if (deferredComponentRegistry.has(lower)) {
+          const entry = deferredComponentRegistry.get(lower);
+          deferredComponentRegistry.delete(lower);
+          const alreadyDefined = typeof customElements?.get === "function" && customElements.get(lower);
+          if (!alreadyDefined && _rawCustomElementsDefine) {
+            _rawCustomElementsDefine(lower, entry.constructor, entry.options);
+          }
+        }
+      }
+      return _rawCreateElement(tagName, options);
+    };
+  }
+
+  const scheduleDeferredFlush = () => {
+    const defineBatch = (deadline) => {
+      let count = 0;
+      for (const [tag, entry] of Array.from(deferredComponentRegistry.entries())) {
+        if ((deadline && typeof deadline.timeRemaining === "function" && deadline.timeRemaining() < 10) || count >= 5) {
+          if (typeof requestIdleCallback !== "undefined") {
+            requestIdleCallback(defineBatch, { timeout: 3000 });
+          } else {
+            setTimeout(defineBatch, 50);
+          }
+          return;
+        }
+        deferredComponentRegistry.delete(tag);
+        if (!customElements.get(tag)) {
+          _rawCustomElementsDefine(tag, entry.constructor, entry.options);
+        }
+        count++;
+      }
+    };
+    if (typeof requestIdleCallback !== "undefined") {
+      requestIdleCallback(defineBatch, { timeout: 3000 });
+    } else {
+      setTimeout(defineBatch, 50);
+    }
+  };
+
+  if (document.readyState === "complete") {
+    scheduleDeferredFlush();
+  } else {
+    window.addEventListener("load", scheduleDeferredFlush, { once: true });
+  }
+}
+
+export function flushDeferredComponents() {
+  const defineFn = _rawCustomElementsDefine || (typeof customElements !== "undefined" ? customElements.define.bind(customElements) : null);
+  if (!defineFn) return;
+  for (const [tag, entry] of Array.from(deferredComponentRegistry.entries())) {
+    deferredComponentRegistry.delete(tag);
+    if (!customElements.get(tag)) {
+      defineFn(tag, entry.constructor, entry.options);
+    }
+  }
+}
+
 /* ──────────────────────────────────────────────────────────────────────────
  * Atomic components
  * ────────────────────────────────────────────────────────────────────────── */
@@ -14286,7 +14413,8 @@ export async function renderAgentPermissionsPanel(host, {
 }
 
 export function registerComponents() {
-  // All components are defined at module load via customElements.define above.
+  flushDeferredComponents();
+  // All components are defined at module load via customElements.define above (or deferred on NTP).
   // This function exists as the single, idempotent entry point for clarity and
   // for the showcase page to call explicitly.
   return true;

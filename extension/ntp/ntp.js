@@ -31,7 +31,9 @@ import {
   wireHtmlFramePreference,
   currentFramePreference,
   deleteAgentDialog,
+  flushDeferredComponents,
 } from "../shared/components.js";
+import { runStagedBoot } from "./ntp-boot-scheduler.js";
 import { sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
@@ -1747,8 +1749,6 @@ const subscribeAmbientProgress = () => {
     }
   });
 };
-subscribeAmbientProgress();
-subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
 
 // A small usage summary on the hub (the recent calls/tokens/cost) — reads the
 // SW's single-authority usage aggregate, so you see at a glance how much the
@@ -4495,18 +4495,42 @@ threadTitle.addEventListener("keydown", (e) => {
   }
 });
 
-renderSiteAgents();
-renderSiteOffer();
-renderWebmcpHubStatus();
-renderNamedAgents();
-renderFirstRunGuide();
-renderTasks();
-renderTimeline();
-renderActionLedger();
-renderJobsBoard();
-renderHubUsage();
-renderProviderStatus();
-refreshCommandStarters();
+export const bootPipelinePromise = runStagedBoot({
+  stage1: {
+    factoryReset: () => handleFactoryResetBoot(),
+    sidebar: () => restoreSidebar(),
+    tasks: () => renderTasks(),
+    firstRunGuide: () => renderFirstRunGuide(),
+    timeline: () => renderTimeline(),
+    ready: () => {
+      setStatus("ready");
+      bootComposerSpan.end();
+      send("observability.page-measures", { page: "ntp", measures: perfSummary().measures }).catch(() => {});
+    },
+  },
+  stage2A: {
+    ambientProgress: () => {
+      subscribeAmbientProgress();
+      subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
+    },
+    providerStatus: () => renderProviderStatus(),
+    commandStarters: () => refreshCommandStarters(),
+    webmcpStatus: () => renderWebmcpHubStatus(),
+    siteAgents: () => renderSiteAgents(),
+    siteOffer: () => renderSiteOffer(),
+    namedAgents: () => renderNamedAgents(),
+  },
+  stage2B: {
+    actionLedger: () => renderActionLedger(),
+    jobsBoard: () => renderJobsBoard(),
+    hubUsage: () => renderHubUsage(),
+    diagnostics: () => {
+      installPageDiagnostics();
+      startDiagnosticSubscription();
+    },
+    routes: () => bootNtpRoutes(),
+  },
+});
 
 const refreshFirstRunGuide = renderFirstRunGuide;
 
@@ -4838,7 +4862,6 @@ async function restoreSidebar() {
   }
   applySidebarForWidth();
 }
-restoreSidebar();
 
 // The "+" new-task button is a destination, not Back: replace the current
 // deep route with Home, close the task/agent surface, then focus a fresh hub
@@ -4908,6 +4931,7 @@ function embeddedViewRoute(path) {
 }
 
 function openView(path, title, trigger) {
+  flushDeferredComponents();
   // Skills moved INTO Settings (owner directive): any residual skills deep
   // link (an old #view=recipes/index.html history entry or a stale caller)
   // lands on Settings' Skills section — a redirect, never a dead end.
@@ -5288,17 +5312,7 @@ window.addEventListener("message", (ev) => {
   renderProviderStatus();
 });
 
-setStatus("ready");
-bootComposerSpan.end();
-send("observability.page-measures", { page: "ntp", measures: perfSummary().measures }).catch(() => {});
 
-// Transparency surface: capture the page's own errors/CSP violations into the
-// shared console + keep the shield/console badges live. Push-driven: the SW
-// bumps `cap:diagnosticsRevision` in session storage on every change and the
-// subscription refreshes on it (once now, then per change while visible) — no
-// timer, so an idle hub never wakes the worker (CAP-FB-20260830-HUB-POLLING-01).
-installPageDiagnostics();
-startDiagnosticSubscription();
 
 // ---- omnibox entry (keyword → a task) --------------------------------
 // The SW opens the hub with `#omnibox=<mode>:<query>`; on load we run the task
@@ -5323,9 +5337,10 @@ async function handleOmniboxEntry() {
 async function bootNtpRoutes() {
   await handleOmniboxEntry().catch((e) => ntpLog.error("omnibox entry failed", e?.message ?? e));
   // At boot/startup: restore current hash route (#view=, #thread=, #agent=) on reload
-  await applyCurrentHashRoute(false).catch((e) => ntpLog.error("boot route failed", e?.message ?? e));
+  if (typeof location !== "undefined" && location.hash && location.hash !== "#") {
+    await applyCurrentHashRoute(false).catch((e) => ntpLog.error("boot route failed", e?.message ?? e));
+  }
 }
-bootNtpRoutes();
 
 // ---- agent-script host (the on-demand fallback) ---------------------
 // The SW announces `cap:script-run-announce` then addresses the source to the

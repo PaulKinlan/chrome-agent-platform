@@ -6,6 +6,7 @@
 - Smaller background bundle by removing unused cloud gateway dependencies.
 - Faster loading for Artifacts, Directory, Privacy, and offscreen pages via pre-bundled scripts.
 - Faster New Tab Hub startup and thread switching with deduplicated background queries.
+- Smoother new-tab opening with staged rendering that eliminates startup main-thread stalls.
 
 ## [0.3.558] — 2026-09-29
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.

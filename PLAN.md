@@ -288,6 +288,9 @@ it structurally — is in [PRODUCT.md](PRODUCT.md), "Where the product is going"
 Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review with the falsification gates) and
 `CAP-FB-20260821-WORKTREE-HYGIENE-01` (it protects the evidence everything else cites).
 
+### Performance program (2026-10-01 audit)
+- **`chrome-agent-platform-9epn.2`** — NTP boot long task elimination: orders boot renders, yields between stages, defers non-hub element definitions, achieving 0 long tasks > 50ms on new tab load.
+
 **P1.** Template picker visual cards (`CAP-FB-20260829-TEMPLATE-CARDS-01`, candidate in
 review); dialog consolidation (five implementations, three hand-rolled outside the component
 system); Settings sectioning (12,837 px, 8.8 screens, all twelve panels rendered at once);
