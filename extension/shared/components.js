@@ -36,7 +36,8 @@ import { partiesOf, projectBoard, statusOf } from "../lib/board-view-model.js";
 // authority shared by <next-run> and the NTP routine row, so a routine's next
 // fire reads identically everywhere. The gallery sync rewrites this path to
 // ./next-run-label.js beside the deploy copy.
-import { nextRunLabel, lastRunLabel, NEXT_RUN_TICK_MS } from "../lib/next-run-label.js";
+import { nextRunLabel, lastRunLabel, NEXT_RUN_TICK_MS, formatCadenceMinutes } from "../lib/next-run-label.js";
+export { formatCadenceMinutes };
 // Local Set view (the explorer filters in-memory against it; the server also
 // enforces the same list, default-deny).
 const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
@@ -2194,7 +2195,7 @@ class AgentTemplateCard extends Component {
     const overflow = skills.length - shownSkills.length;
     const minutes = Number(template.schedule?.periodInMinutes);
     const cadence = !blank && template.mode === "background" && Number.isFinite(minutes) && minutes > 0
-      ? `every ${minutes} min`
+      ? formatCadenceMinutes(minutes)
       : "";
     const titleId = `template-title-${Math.random().toString(36).slice(2)}`;
     const personaId = `${titleId}-persona`;
@@ -2228,11 +2229,11 @@ class AgentTemplateCard extends Component {
       .cadence { background:transparent; border:1px solid var(--border,#e3e0d9); font-variant-numeric:tabular-nums; }
       .cadence svg { inline-size:12px; block-size:12px; }
       .overflow { border:1px solid var(--border,#e3e0d9); background:transparent; font-weight:700; }
-      .use { display:inline-flex; align-items:center; gap:6px; justify-self:start; min-block-size:36px; padding:0 14px; border:0; border-radius:var(--radius-sm,6px);
-        background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit;
-        transition:background-color 150ms ease-out; }
-      .use:hover { background:var(--accent-hover,#0a5c53); }
-      .use[aria-pressed="true"] { background:transparent; color:var(--accent,#0e6e63); box-shadow:inset 0 0 0 1px var(--accent,#0e6e63); }
+      .use { display:inline-flex; align-items:center; gap:6px; justify-self:start; min-block-size:36px; padding:0 14px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
+        background:transparent; color:var(--text,#1d1b18); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit;
+        transition:background-color 150ms ease-out, border-color 150ms ease-out; }
+      .use:hover { background:var(--panel-2,#efede8); border-color:var(--muted,#635e56); }
+      .use[aria-pressed="true"] { background:transparent; color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); box-shadow:inset 0 0 0 1px var(--accent,#0e6e63); }
       .use svg { inline-size:14px; block-size:14px; }
       .use:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @media (prefers-reduced-motion:reduce) { article, .use { transition:none; } }

@@ -272,7 +272,7 @@ Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review w
 
 **P1.** Template picker visual cards (`CAP-FB-20260829-TEMPLATE-CARDS-01`, candidate in
 review); dialog consolidation (five implementations, three hand-rolled outside the component
-system); Settings sectioning (12,837 px, 8.8 screens, all twelve panels rendered at once);
+system); Settings sectioning (six-group IA, accordion keyboard nav, collapsed templates disclosure, human cadence formatter landed under `chrome-agent-platform-716s.4`);
 permission-remediation UX; semantic tool search; Store release path; owner export/import;
 the permission-state matrix acceptance lane (supersedes the headed lane); `scripts/ui-integration.ts` red; the UI flash/relayout.
 

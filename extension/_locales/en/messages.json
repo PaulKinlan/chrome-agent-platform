@@ -118,6 +118,9 @@
   "options_board_permissions_1": {
     "message": "Board permissions"
   },
+  "options_browse_starter_templates": {
+    "message": "Browse starter templates…"
+  },
   "options_browser_control": {
     "message": "\n        Browser control"
   },
@@ -261,6 +264,24 @@
   },
   "options_multiple_agents": {
     "message": "Multiple agents"
+  },
+  "options_nav_group_agents": {
+    "message": "Agents"
+  },
+  "options_nav_group_automation": {
+    "message": "Automation"
+  },
+  "options_nav_group_data_backup": {
+    "message": "Data & backup"
+  },
+  "options_nav_group_models_spend": {
+    "message": "Models & spend"
+  },
+  "options_nav_group_permissions_folders": {
+    "message": "Permissions & folders"
+  },
+  "options_nav_group_skills_tools": {
+    "message": "Skills & tools"
   },
   "options_never_allow": {
     "message": "Never allow"

@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Organized Settings navigation into six clear groups, collapsed starter template galleries by default, and replaced raw minute intervals with plain English cadence labels.
+
 ## [0.3.558] — 2026-09-29
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 

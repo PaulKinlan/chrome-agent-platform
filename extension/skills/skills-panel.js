@@ -146,12 +146,42 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
   const status = sectionEl.querySelector(".import-status");
   const urlInput = sectionEl.querySelector(".import-url");
   const importBtn = sectionEl.querySelector(".import-btn");
+  const searchInput = sectionEl.querySelector(".skills-search");
+  const countEl = sectionEl.querySelector(".skills-count");
 
-  const refresh = () => renderSkillList(list, {
-    onUse: (r) => useSkill(r, { statusEl: status }),
-    onDelete: () => refresh(),
-    send: sendFn,
-  });
+  const updateFilter = () => {
+    const q = searchInput?.value?.trim().toLowerCase() ?? "";
+    const skillEls = list?.querySelectorAll?.(".skill") ?? [];
+    let visible = 0;
+
+    for (const sk of skillEls) {
+      const match = !q || (sk.textContent?.toLowerCase().includes(q));
+      sk.hidden = !match;
+      if (match) visible++;
+    }
+
+    const intentGroups = list?.querySelectorAll?.(".intent-group") ?? [];
+    for (const grp of intentGroups) {
+      const hasVisible = Array.from(grp.querySelectorAll?.(".skill") ?? []).some((s) => !s.hidden);
+      grp.hidden = !hasVisible;
+    }
+
+    if (countEl) {
+      countEl.textContent = `${visible} skill${visible === 1 ? "" : "s"}`;
+    }
+  };
+
+  searchInput?.addEventListener?.("input", updateFilter);
+
+  const refresh = async () => {
+    const res = await renderSkillList(list, {
+      onUse: (r) => useSkill(r, { statusEl: status }),
+      onDelete: () => refresh(),
+      send: sendFn,
+    });
+    updateFilter();
+    return res;
+  };
   sectionEl._refreshSkills = refresh;
 
   const doImport = async () => {
