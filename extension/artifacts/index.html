@@ -18,6 +18,7 @@
   .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
     gap: 12px; }
+  .grid:has(empty-state) { display: block; }
   .empty { color: var(--muted); padding: 24px 0; }
   .status { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
   .foot { margin-top: 24px; color: var(--muted); font-size: 12px; }
@@ -46,9 +47,9 @@
        button and NO h1 of its own — a small logo only, matching the skills
        page. The old back + h1 doubled up with the overlay's header. -->
   <header class="head">
-    <h1 class="logo">Artifacts</h1>
+    <h1 class="logo" data-i18n="artifacts_title">Artifacts</h1>
   </header>
-  <p class="sub">Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it.</p>
+  <p class="sub" data-i18n="artifacts_sub">Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it.</p>
   <div class="capacity" id="capacity" role="status" aria-live="polite" hidden></div>
   <div class="status" id="status" aria-live="polite"></div>
   <div class="grid" id="grid"></div>

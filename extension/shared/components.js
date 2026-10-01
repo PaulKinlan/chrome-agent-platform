@@ -944,6 +944,69 @@ class CapLogo extends Component {
 }
 customElements.define("cap-logo", CapLogo);
 
+/* <empty-state title="Nothing here yet" description="…" action-label="…" action-href="…">
+ * The canonical empty state (chrome-agent-platform-716s.7): calm, framed or centered card,
+ * owner voice (what can be done next), bounded copy width (~46ch), and an optional primary
+ * action button or link. Emits "action" on button click if action-href is not specified. */
+class EmptyState extends Component {
+  static get observedAttributes() {
+    return ["title", "description", "action-label", "action-href", "action-target"];
+  }
+  _render() {
+    const title = this.getAttribute("title") || "";
+    const description = this.getAttribute("description") || "";
+    const actionLabel = this.getAttribute("action-label") || "";
+    const actionHref = this.getAttribute("action-href") || "";
+    const actionTarget = this.getAttribute("action-target") || "";
+
+    mountTemplate(this, `
+      :host { display: block; margin: 24px auto; max-width: 48ch; width: 100%; box-sizing: border-box; }
+      :host([hidden]) { display: none; }
+      .card {
+        display: flex; flex-direction: column; align-items: center; text-align: center;
+        padding: 32px 24px; border: 1px solid var(--border, #e3e0d9);
+        border-radius: var(--radius-md, 12px); background: var(--panel, #fff);
+        box-sizing: border-box;
+      }
+      .title { margin: 0 0 8px; font-size: var(--text-lg, 16px); font-weight: 600; color: var(--text, #1d1b18); }
+      .description { margin: 0; font-size: var(--text-sm, 13px); line-height: 1.5; color: var(--muted, #635e56); text-wrap: pretty; }
+      .action-row { margin-top: 20px; display: flex; justify-content: center; }
+      .btn {
+        display: inline-flex; align-items: center; justify-content: center;
+        min-height: var(--control, 36px); padding: 0 16px; border-radius: var(--radius-sm, 6px);
+        border: 1px solid var(--accent, #0e6e63); background: var(--accent, #0e6e63);
+        color: var(--btn-fg, #fff); font: inherit; font-size: var(--text-sm, 13px);
+        font-weight: 600; text-decoration: none; cursor: pointer;
+        transition: background 150ms ease, border-color 150ms ease;
+      }
+      .btn:hover { background: var(--accent-hover, #0a564d); border-color: var(--accent-hover, #0a564d); text-decoration: none; }
+      .btn:focus-visible { outline: 2px solid var(--accent, #0e6e63); outline-offset: 2px; }
+      @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+      @media (forced-colors: active) {
+        .card, .btn { border: 1px solid CanvasText; forced-color-adjust: auto; }
+      }
+    `, `<div class="card" role="region" aria-label="${escapeHtml(title || "Empty state")}">
+      ${title ? `<h2 class="title">${escapeHtml(title)}</h2>` : ""}
+      ${description ? `<p class="description">${escapeHtml(description)}</p>` : ""}
+      ${actionLabel ? `
+        <div class="action-row">
+          ${actionHref
+            ? `<a class="btn" href="${escapeHtml(actionHref)}"${actionTarget ? ` target="${escapeHtml(actionTarget)}"` : ""}>${escapeHtml(actionLabel)}</a>`
+            : `<button class="btn action-btn" type="button">${escapeHtml(actionLabel)}</button>`
+          }
+        </div>` : ""
+      }
+    </div>`);
+  }
+  _wire() {
+    this._root.querySelector("button.action-btn")?.addEventListener("click", (sourceEvent) => {
+      this._emit("action", { sourceEvent });
+    });
+  }
+}
+customElements.define("empty-state", EmptyState);
+
+
 const MIC_METER_DEVICE_KEY = "mic-meter-device-id";
 
 /* <mic-button listening> — self-contained Web Speech toggle + live waveform.

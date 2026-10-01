@@ -305,4 +305,6 @@ Agents create things for the user in the context of a task (generated pages, fil
 data). All four pieces are in: the per-task artifact view in the conversation, the master
 artifacts view in the hub, open/preview/use (now full-window and openable in a new tab,
 `0.2.318`), and attach-an-existing-artifact from the + menu. Artifacts are origin-keyed
-per agent with a master index; a generated UI IS an artifact.
+per agent with a master index; a generated UI IS an artifact. Empty states use the shared
+`<empty-state>` component with owner voice and direct actions (`chrome-agent-platform-716s.7`).
+
