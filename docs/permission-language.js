@@ -69,3 +69,19 @@ export function siteLabel(origin) {
   } catch { /* not a URL */ }
   return String(origin ?? "");
 }
+
+/** Human-facing tool label mapping (plain user-understandable action names). */
+export const TOOL_USER_LANGUAGE = Object.freeze({
+  capture_page: "Save page as readable note",
+});
+
+export const TOOL_LABELS = TOOL_USER_LANGUAGE;
+
+/** Get human-facing label for a tool name. */
+export function toolUserLanguage(toolName) {
+  return TOOL_USER_LANGUAGE[toolName] ?? toolName;
+}
+
+export function toolLabel(toolName) {
+  return toolUserLanguage(toolName);
+}

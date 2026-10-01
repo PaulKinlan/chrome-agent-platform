@@ -663,6 +663,21 @@ a control at 360 px (`.btn`, the tabs and the header host are `white-space:
 nowrap`, and a container query collapses the disclosure's Open button to its icon
 under 360 px). The numbered instruction card is removed.
 
+## Reader-mode page capture → Markdown artifact (`capture_page`)
+*(chrome-agent-platform-3p3e.4)* `capture_page` performs pure/DOM reader-mode
+extraction on the active or target tab (`extension/lib/page-reader.js`). It strips
+boilerplate elements (`<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, `<aside>`,
+`[role="navigation"]`, `[aria-hidden="true"]`), and converts headings, paragraphs,
+lists, code blocks, blockquotes, links, and tables into structured Markdown with YAML
+frontmatter (`title`, `source_url`, `captured_at`, `word_count`). Output is bounded
+to ≤ 512 kB markdown and ≤ 500 links, with untrusted web text fenced via
+`wrapUntrustedContent` when returned to the model. Passing `asArtifact: true`
+persists the capture as a Markdown document in the Artifacts library (`kind: "document"`,
+`mimeType: "text/markdown"`). Optional screenshots (`includeScreenshot: true` or
+`screenshot: "viewport" | "full"`) attach a bounded capture (max height 16384px).
+The composer attach menu (`+`) exposes "Capture this page", and `/capture` provides
+direct slash-command execution.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

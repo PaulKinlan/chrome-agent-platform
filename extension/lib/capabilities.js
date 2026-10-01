@@ -499,3 +499,11 @@ export async function requestOriginHost(origin) {
     return false;
   }
 }
+
+/**
+ * Capture active or target tab into a persistent Markdown artifact.
+ */
+export async function capturePageToArtifact({ tabId, asArtifact = true, includeScreenshot = false, screenshot = "none" } = {}) {
+  const { capturePage } = await import("./browser-tools.js");
+  return await capturePage(tabId, { asArtifact, includeScreenshot, screenshot });
+}

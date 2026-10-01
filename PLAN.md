@@ -306,3 +306,9 @@ data). All four pieces are in: the per-task artifact view in the conversation, t
 artifacts view in the hub, open/preview/use (now full-window and openable in a new tab,
 `0.2.318`), and attach-an-existing-artifact from the + menu. Artifacts are origin-keyed
 per agent with a master index; a generated UI IS an artifact.
+
+## Feature: Reader-mode page capture → Artifacts (3p3e.4) — implemented
+`capture_page` tool (`extension/lib/page-reader.js`, `extension/lib/browser-tools.js`)
+extracts clean structured Markdown with YAML frontmatter from tabs and persists to the
+Artifacts store with `asArtifact: true`. Composer `+` attach menu provides "Capture this page",
+and `/capture` provides slash-command execution.

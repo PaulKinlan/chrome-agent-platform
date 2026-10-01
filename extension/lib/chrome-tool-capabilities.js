@@ -7,9 +7,9 @@
 import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
-  browserTools: 138,
+  browserTools: 139,
   managementTools: 50,
-  totalTools: 188,
+  totalTools: 189,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -32,6 +32,7 @@ export const BROWSER_TOOL_NAMES = Object.freeze([
   "open_tab",
   "navigate_tab",
   "read_page",
+  "capture_page",
   "capture_screenshot",
   "list_tabs",
   "close_tab",
@@ -314,6 +315,7 @@ const rows = [
   record("open_tab", "chrome-api", ["chrome.tabs.open.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("navigate_tab", "chrome-api", ["chrome.tabs.navigate.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
   record("read_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),
+  record("capture_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),
   record("capture_screenshot", "chrome-api", ["chrome.host.exact-origin", "chrome.screenshot.capture.tab-origin", "chrome.screenshot.capture.owner-gesture-alternative"], ["activeTab", "tabs"], "tab-scoped", "read-only", false, "read", "browser.capture"),
   record("list_tabs", "chrome-api", ["chrome.tabs.list"], ["tabs"], "none", "read-only", false, "read", "browser.tabs"),
   record("close_tab", "chrome-api", ["chrome.tabs.close.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),

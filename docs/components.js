@@ -1719,6 +1719,7 @@ class AttachButton extends Component {
         <button type="button" role="menuitem" data-kind="capture-camera">${ATTACH_MENU_ICONS["capture-camera"]}Capture camera</button>
         <button type="button" role="menuitem" data-kind="record-screen">${ATTACH_MENU_ICONS["record-screen"]}Record screen</button>
         <button type="button" role="menuitem" data-kind="grab-screenshot">${ATTACH_MENU_ICONS["grab-screenshot"]}Grab screenshot</button>
+        <button type="button" role="menuitem" data-kind="capture-page">${ATTACH_MENU_ICONS["capture-page"]}Capture this page</button>
         <button type="button" role="menuitem" data-kind="add-tab">${ATTACH_MENU_ICONS["add-tab"]}Add tab</button>
         <button type="button" role="menuitem" data-kind="choose-agent">${ATTACH_MENU_ICONS["choose-agent"]}Choose agent</button>
         <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data (multimodal where the provider supports it).</p>
@@ -1758,11 +1759,9 @@ class AttachButton extends Component {
         return;
       }
       if (kind === "record-screen" || kind === "grab-screenshot" ||
-          kind === "add-tab") {
+          kind === "capture-page" || kind === "add-tab") {
         // Browser-context actions (the + menu's screen-recording / screenshot /
-        // tab-picker options) — emitted for the host composer/page to wire (they
-        // need the OPTIONAL browser permissions, which the page requests/handles
-        // with a graceful error).
+        // capture-page / tab-picker options) — emitted for the host composer/page to wire
         this._emit("attach-context", { kind });
         return;
       }
@@ -7858,6 +7857,35 @@ class AgentComposer extends Component {
         const dataURL = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
         this._attachMedia({ name: `screenshot-${Date.now()}.png`, type: "image/png", size: Math.round((dataURL.length * 3) / 4), dataURL, kind: "image" });
         this.setStatus("attached a screenshot of " + (tab.title || "the tab"));
+        return;
+      }
+      if (kind === "capture-page") {
+        const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+        const targetTab = tabs[0];
+        if (!targetTab?.id) { this.setStatus("no active tab to capture.", false); return; }
+        this.setStatus("Capturing page as readable note...");
+        let res;
+        if (typeof globalThis.chrome?.runtime?.sendMessage === "function") {
+          res = await globalThis.chrome.runtime.sendMessage({
+            type: "page.capture",
+            tabId: targetTab.id,
+            asArtifact: true,
+          }).catch((err) => ({ ok: false, error: String(err?.message ?? err) }));
+        }
+        if (res && res.ok !== false && (res.artifactId || res.markdown)) {
+          this.setStatus(`Captured “${res.title || targetTab.title || 'page'}” as readable artifact`);
+          this._emit("command", {
+            namespace: "capture",
+            item: {
+              id: res.artifactId ? `artifact:${res.artifactId}` : "captured-page",
+              label: res.title || "Captured page",
+              kind: "artifact",
+              artifactId: res.artifactId,
+            },
+          });
+        } else {
+          this.setStatus(`Could not capture page: ${res?.error || "unknown error"}`, false);
+        }
         return;
       }
       if (kind === "record-screen") {

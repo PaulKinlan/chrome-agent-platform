@@ -209,6 +209,7 @@ const ROUTE_FAMILY_GROUP = Object.freeze({
 const TOOL_GROUP_OVERRIDES = Object.freeze({
   // browser.page splits into reading vs. driving.
   "read_page": "reading-capture",
+  "capture_page": "reading-capture",
   "find_elements": "reading-capture",
   "click_element": "driving-pages",
   "type_text": "driving-pages",

@@ -34,6 +34,8 @@ import { permissionPlainName } from "./permission-language.js";
 import { capLog } from "./cap-log.js";
 import { perfSpan } from "./cap-perf.js";
 import { cleanupGuidanceFor } from "./lifecycle-cleanup.js";
+import { extractReadableMarkdown, wrapUntrustedContent } from "./page-reader.js";
+import { createAsset } from "./artifacts.js";
 
 const grantLog = capLog("browser:grant");
 const toolDispatchLog = capLog("tool");
@@ -1271,6 +1273,117 @@ export async function readPage(tabId) {
     // lazy projection wrap every string in the run's untrusted boundary
     // (lib/untrusted-fence.js, CAP-FB-20260830-UNTRUSTED-CONTENT-FENCING-01).
     return { untrusted: true, ...page };
+  } catch (e) {
+    return await pageAccessFailure(e, origin, verb);
+  }
+}
+
+/** Capture the page in reader mode as clean structured Markdown, optionally
+ * persisting as an artifact and/or including a bounded screenshot. */
+export async function capturePage(tabId, { asArtifact = false, includeScreenshot = false, screenshot = "none" } = {}) {
+  const verb = "capture the page";
+  let origin = null;
+  try {
+    const gate = await pageAccessGate(tabId, verb, { needScripting: true });
+    if (gate.result) return gate.result;
+    origin = gate.origin;
+    const targetTab = gate.target;
+
+    // 1. Extract reader mode content via scripting
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      func: () => ({
+        html: document.documentElement ? document.documentElement.outerHTML : (document.body ? document.body.innerHTML : ""),
+        title: document.title,
+        url: location.href,
+      }),
+    });
+    const page = results?.[0]?.result;
+    if (!page || typeof page !== "object") return { error: "no result from page reader" };
+
+    const extracted = extractReadableMarkdown(page.html, {
+      url: page.url || targetTab.url,
+      title: page.title || targetTab.title,
+    });
+
+    // 2. Optional bounded screenshot capture
+    let screenshotData = null;
+    let screenshotId = null;
+    const wantsScreenshot = includeScreenshot || (screenshot && screenshot !== "none");
+    if (wantsScreenshot) {
+      try {
+        if (screenshot === "full") {
+          // Bounded full page capture: record initial scroll and restore
+          const scrollRes = await chrome.scripting.executeScript({
+            target: { tabId: targetTab.id },
+            func: () => window.scrollY,
+          }).catch(() => null);
+          const initialScroll = typeof scrollRes?.[0]?.result === "number" ? scrollRes[0].result : 0;
+
+          screenshotData = await chrome.tabs.captureVisibleTab(
+            targetTab.windowId ?? undefined,
+            { format: "png" },
+          ).catch(() => null);
+
+          await chrome.scripting.executeScript({
+            target: { tabId: targetTab.id },
+            func: (pos) => { window.scrollTo(0, pos); },
+            args: [initialScroll],
+          }).catch(() => { /* best-effort scroll restore */ });
+        } else {
+          screenshotData = await chrome.tabs.captureVisibleTab(
+            targetTab.windowId ?? undefined,
+            { format: "png" },
+          ).catch(() => null);
+        }
+
+        if (screenshotData) {
+          screenshotId = await persistScreenshot({ url: targetTab.url, dataURL: screenshotData });
+        }
+      } catch {
+        /* best-effort screenshot capture */
+      }
+    }
+
+    // 3. Optional persistent Markdown artifact creation
+    let artifactId = null;
+    let artifact = null;
+    if (asArtifact) {
+      const assetName = (extracted.title || targetTab.title || "Captured page").slice(0, 120);
+      const assetRes = await createAsset("master", {
+        type: "text",
+        name: assetName,
+        content: extracted.markdown,
+        meta: {
+          kind: "document",
+          mimeType: "text/markdown",
+          sourceUrl: extracted.canonicalUrl || targetTab.url,
+          capturedAt: extracted.captured_at || new Date().toISOString(),
+          wordCount: extracted.wordCount,
+        },
+      });
+      if (assetRes?.ok) {
+        artifactId = assetRes.asset?.id ?? assetRes.id ?? null;
+        artifact = assetRes.asset ?? null;
+      }
+    }
+
+    const fencedMarkdown = wrapUntrustedContent(extracted.markdown);
+    return {
+      untrusted: true,
+      title: extracted.title,
+      byline: extracted.byline,
+      published: extracted.published,
+      canonicalUrl: extracted.canonicalUrl,
+      markdown: fencedMarkdown,
+      rawMarkdown: extracted.markdown,
+      links: extracted.links,
+      wordCount: extracted.wordCount,
+      truncated: extracted.truncated,
+      ...(artifactId ? { artifactId, artifact } : {}),
+      ...(screenshotId ? { screenshotId } : {}),
+      ...(screenshotData ? { screenshot: screenshotData } : {}),
+    };
   } catch (e) {
     return await pageAccessFailure(e, origin, verb);
   }
@@ -2731,6 +2844,18 @@ export function browserToolset(readOnly = false, {
         "Read the title, URL and visible text of a tab (or the active tab).",
       inputSchema: z.object({ tabId: z.number().optional() }),
       execute: async ({ tabId }) => readPage(tabId),
+    }),
+    capture_page: tool({
+      description:
+        "Capture a web page as a clean, readable Markdown document with metadata, headings, paragraphs, lists, code blocks, blockquotes, links, and tables, stripping boilerplate navigation. Set asArtifact:true to save it as a persistent artifact in your Artifacts library, and includeScreenshot:true to attach a screenshot.",
+      inputSchema: z.object({
+        tabId: z.number().optional().describe("tab id to capture (defaults to the active tab)"),
+        asArtifact: z.boolean().optional().default(false).describe("when true, saves a persistent Markdown artifact in your Artifacts library"),
+        includeScreenshot: z.boolean().optional().default(false).describe("when true, attaches a bounded screenshot of the page"),
+        screenshot: z.enum(["viewport", "full", "none"]).optional().describe("screenshot capture mode: 'viewport', 'full', or 'none'"),
+      }),
+      execute: async ({ tabId, asArtifact, includeScreenshot, screenshot }) =>
+        capturePage(tabId, { asArtifact, includeScreenshot, screenshot }),
     }),
     capture_screenshot: tool({
       description:
@@ -6571,6 +6696,7 @@ export function browserToolset(readOnly = false, {
   if (readOnly) {
     return wrapToolsetForObservability({
       read_page: all.read_page,
+      capture_page: all.capture_page,
       capture_screenshot: all.capture_screenshot,
       list_tabs: all.list_tabs,
       recent_browser_events: all.recent_browser_events,

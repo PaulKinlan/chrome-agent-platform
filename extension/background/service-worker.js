@@ -366,6 +366,7 @@ import { runWorkflowRoute } from "../lib/workflows.js";
 import {
   browserToolset,
   runBrowserToolCall,
+  capturePage,
   captureTabScreenshot,
   getBrowserControlGrantIdentity,
   isBrowserControlGranted,
@@ -6610,7 +6611,7 @@ const handlers = mergeRouteMaps(
       const inFlight = activePythonFetches.get(result.origin);
       if (inFlight) {
         for (const ctrl of inFlight) {
-          try { ctrl.abort(); } catch {}
+          try { ctrl.abort(); } catch { /* in-flight fetch may already be aborted or closed */ }
         }
         inFlight.clear();
         activePythonFetches.delete(result.origin);
@@ -8757,6 +8758,18 @@ const handlers = mergeRouteMaps(
     const detail = getStagedApprovalDetail(ownerApprovalStore, String(approvalId ?? ""));
     if (!detail) return { ok: false, error: "no staged detail for this approval" };
     return { ok: true, detail };
+  },
+
+  async "page.capture"({ tabId, asArtifact = true, includeScreenshot = false, screenshot = "none" } = {}) {
+    return await capturePage(tabId, { asArtifact, includeScreenshot, screenshot });
+  },
+
+  async "capture.page"(args = {}) {
+    return await capturePage(args.tabId, {
+      asArtifact: args.asArtifact ?? true,
+      includeScreenshot: args.includeScreenshot ?? false,
+      screenshot: args.screenshot ?? "none",
+    });
   },
 
   // ---- artifacts (asset) management (the hub agent's create_asset / etc.) ----
