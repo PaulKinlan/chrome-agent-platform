@@ -35,6 +35,7 @@ if (!globalThis.customElements) {
 import { runStagedBoot } from "../extension/ntp/ntp-boot-scheduler.js";
 const { NON_HUB_ELEMENTS, flushDeferredComponents } = await import("../extension/shared/components.js");
 import { launchChrome, openCdp, waitForServiceWorker } from "../scripts/lib/chrome-launch.ts";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT_DIR = `${ROOT}/extension`;
@@ -82,6 +83,7 @@ Deno.test("ntp-boot-staging: runStagedBoot executes Stage 1 before Stage 2 and y
   // Stage 2B executed last
   assertEquals(log.slice(6, 9), ["stage2B:actionLedger", "stage2B:jobsBoard", "stage2B:hubUsage"]);
   assertEquals(result.executionOrder.length, 9);
+  assertEquals(result.yields, [3, 6], "result.yields must record batch boundaries");
 });
 
 Deno.test("ntp-boot-staging: runStagedBoot tolerates failing stage functions without aborting", async () => {
@@ -121,7 +123,7 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
     return;
   }
 
-  const tmp = await Deno.makeTempDir({ prefix: "cap-ntp-boot-" });
+  const tmp = durableDir(`cap-ntp-boot-${Date.now()}`);
   const lockPath = `${tmp}/chrome.lock`;
 
   let chrome = null;

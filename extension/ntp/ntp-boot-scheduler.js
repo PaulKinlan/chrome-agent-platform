@@ -3,11 +3,13 @@
 // the browser between batches, eliminating the input-blocking 50+ ms long task
 // (CONSTITUTION §4).
 
+import { sleep } from "../lib/pure.js";
+
 export async function defaultYield() {
   if (typeof window !== "undefined" && window.scheduler && typeof window.scheduler.yield === "function") {
     await window.scheduler.yield();
   } else {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await sleep(0);
   }
 }
 

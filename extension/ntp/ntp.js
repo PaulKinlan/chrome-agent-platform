@@ -550,6 +550,7 @@ function handleFactoryResetBoot() {
     } catch { /* replaceState can throw on opaque origins; cosmetic URL tidy only */ }
   }
 }
+handleFactoryResetBoot();
 ensureNtpHistoryRoot(window);
 
 function firstRunDismissed() {
@@ -5284,7 +5285,9 @@ async function handleOmniboxEntry() {
 async function bootNtpRoutes() {
   await handleOmniboxEntry().catch((e) => ntpLog.error("omnibox entry failed", e?.message ?? e));
   // At boot/startup: restore current hash route (#view=, #thread=, #agent=) on reload
-  await applyCurrentHashRoute(false).catch((e) => ntpLog.error("boot route failed", e?.message ?? e));
+  if (typeof location !== "undefined" && location.hash && location.hash !== "#") {
+    await applyCurrentHashRoute(false).catch((e) => ntpLog.error("boot route failed", e?.message ?? e));
+  }
 }
 
 // ---- agent-script host (the on-demand fallback) ---------------------

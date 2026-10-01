@@ -877,7 +877,8 @@ if (typeof customElements !== "undefined" && typeof customElements.define === "f
         if (deferredComponentRegistry.has(lower)) {
           const entry = deferredComponentRegistry.get(lower);
           deferredComponentRegistry.delete(lower);
-          if (!customElements.get(lower)) {
+          const alreadyDefined = typeof customElements?.get === "function" && customElements.get(lower);
+          if (!alreadyDefined && _rawCustomElementsDefine) {
             _rawCustomElementsDefine(lower, entry.constructor, entry.options);
           }
         }
