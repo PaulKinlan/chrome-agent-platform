@@ -832,6 +832,7 @@ class FirstRunGuide extends Component {
       button { min-height:var(--control,36px); border-radius:var(--radius-sm,6px); padding:0 14px;
         border:1px solid var(--accent,#0e6e63); background:var(--accent,#0e6e63); color:var(--btn-fg,#fff);
         font:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+      button.primary, button.onboarding-cta { border:1px solid var(--accent,#0e6e63); background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
       button:hover { filter:brightness(1.08); }
       button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .dismiss { width:36px; padding:0; display:inline-flex; align-items:center; justify-content:center;
@@ -840,14 +841,19 @@ class FirstRunGuide extends Component {
       .dismiss svg { width:16px; height:16px; }
       @media (max-width:640px) { .banner { grid-template-columns:minmax(0,1fr) auto; }
         .banner > p { grid-column:1 / -1; } }
-    `, providerReady ? "" : `<section class="banner" aria-labelledby="first-run-title">
+    `, providerReady ? "" : `<section class="banner onboarding-card" id="onboarding" aria-labelledby="first-run-title">
       <p id="first-run-title"><strong>No model connected yet.</strong> Tab tasks already work — connect a model for everything else.</p>
       <button class="primary connect-model" type="button">Connect a model</button>
       <button class="dismiss" type="button" aria-label="Dismiss first-run setup">${ICONS.close}</button>
     </section>`);
   }
   _wire() {
-    this._root.querySelector(".connect-model")?.addEventListener("click", (sourceEvent) =>
+    const btn = this._root.querySelector(".connect-model");
+    if (btn) {
+      btn.id = "onboarding-settings";
+      btn.classList.add("onboarding-cta");
+    }
+    btn?.addEventListener("click", (sourceEvent) =>
       this._emit("open-settings", { sourceEvent }));
     this._root.querySelector(".dismiss")?.addEventListener("click", (sourceEvent) =>
       this._emit("dismiss-guide", { sourceEvent }));
@@ -7219,7 +7225,7 @@ class AgentComposer extends Component {
           <mic-button id="${this.id ? `${this.id}-mic` : `mic-${this._uid}`}"></mic-button>
           <attach-button id="${this.id ? `${this.id}-attach` : `attach-${this._uid}`}"></attach-button>
           <span class="spacer"></span>
-          <button id="${this.id ? `${this.id}-send` : `cmp-send-${this._uid}`}" class="btn send" data-composer-send type="button">${escapeHtml(sendLabel)}</button>
+          <button id="${this.id ? `${this.id}-send` : `cmp-send-${this._uid}`}" class="btn send composer-send" data-composer-send type="button" disabled>${escapeHtml(sendLabel)}</button>
         </div>
         <div class="agent-pop" popover="manual" hidden>
           <agent-picker callable-only label="Run with agent"
@@ -7271,6 +7277,13 @@ class AgentComposer extends Component {
         background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); border:0; border-radius:8px;
         font:inherit; font-weight:600; cursor:pointer; }
       agent-composer .composer .send:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      agent-composer .composer .send:disabled,
+      agent-composer .composer .send.composer-send:disabled {
+        background: var(--surface-hover, var(--panel-2, #efede8)) !important;
+        color: var(--muted, #635e56) !important;
+        border: 1px solid var(--border, #d9d4c9) !important;
+        cursor: not-allowed;
+      }
       agent-composer > .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#635e56); }
       agent-composer > .composer-status:empty { display:none; }
       /* the recording chip (record-screen / record-audio) — a visible start/stop */
@@ -7374,6 +7387,11 @@ class AgentComposer extends Component {
     input.style.overflowY = natural > cap ? "auto" : "hidden";
   }
   _wire() {
+    const hasText = !!this._input?.value?.trim();
+    if (this._run) {
+      this._run.disabled = !hasText;
+      this._run.classList.toggle("has-input", hasText);
+    }
     this._run?.addEventListener("click", () => this._send());
     this._input?.addEventListener("input", () => {
       this._historyIndex = -1;
@@ -7976,7 +7994,17 @@ class AgentComposer extends Component {
   }
   get input() { return this._input; }
   get value() { return this._input?.value ?? ""; }
-  set value(v) { if (this._input) { this._input.value = v; this._autoGrow(); } }
+  set value(v) {
+    if (this._input) {
+      this._input.value = v;
+      this._autoGrow();
+      const hasText = !!String(v ?? "").trim();
+      if (this._run) {
+        this._run.disabled = !hasText;
+        this._run.classList.toggle("has-input", hasText);
+      }
+    }
+  }
   async _ingestFile(file) {
     if (!file) return null;
     const isImage = file.type?.startsWith("image/");
@@ -8152,6 +8180,11 @@ class AgentComposer extends Component {
     const input = this._input;
     if (!input) return;
     this._autoGrow();
+    const hasText = !!input.value?.trim();
+    if (this._run) {
+      this._run.disabled = !hasText;
+      this._run.classList.toggle("has-input", hasText);
+    }
     const text = input.value;
     const caret = input.selectionStart ?? text.length;
 
@@ -8575,6 +8608,10 @@ class AgentComposer extends Component {
     // recording; only the accepted path tears the mic down.
     (this._mic ?? this.querySelector("mic-button"))?.stop?.();
     if (this._input) { this._input.value = ""; this._autoGrow(); }
+    if (this._run) {
+      this._run.disabled = true;
+      this._run.classList.remove("has-input");
+    }
     this._resolvedSpans = []; // the input is cleared — the recorded boundaries are gone
     const pending = this.attachments.splice(0);
     this._clearChips();
@@ -12288,6 +12325,10 @@ class JobsBoard extends Component {
 
     const isEmpty = !open.length && !claimed.length && !blocked.length && !settled.length && !messages.length;
     this._emptyEl.hidden = !isEmpty;
+    this.toggleAttribute("data-empty", isEmpty);
+    if (this.parentElement) this.parentElement.setAttribute("data-empty", String(isEmpty));
+    const sec = this.closest("section");
+    if (sec) sec.setAttribute("data-empty", String(isEmpty));
     if (isEmpty) {
       // An unreadable board is an HONEST error, never a false "empty".
       this._emptyEl.textContent = this._loadError

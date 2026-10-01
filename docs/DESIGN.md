@@ -610,11 +610,22 @@ A fresh profile opens on the composer, not on onboarding
 (CAP-FB-20260827-HUB-FIRST-RUN-01). The hub's `<main>` precedes the sidebar in
 the DOM (`.side { order: -1 }` keeps it painted on the left), and inside it the
 composer comes first, so Tab #1 lands in the task input and the composer is
-fully visible at 1024x700. Above it, `<first-run-guide>` is a slim banner — one
-sentence and ONE action ("Connect a model" → Settings → Providers) with the
+fully visible at 1024x700. Above it, `<first-run-guide>` (`.onboarding-card`) is a slim banner — one
+sentence and ONE action ("Connect a model" / `.onboarding-cta` → Settings → Providers) with the
 dismiss control last in the tab order — shown only while no provider is
-connected and no artifact exists; with a provider it renders nothing. Browser
-control is asked for in context by the approval card at the moment a task needs
+connected and no artifact exists; with a provider it renders nothing.
+
+To avoid competing accents above the fold, the banner CTA is the sole solid accent primary button
+until a model is connected or text is typed; the disabled `.composer-send` button is demoted to a
+quiet surface outline (`background: var(--surface-hover); color: var(--muted)`). The topbar's
+`#provider-status` pill is hidden while the first-run banner is visible to provide a single,
+un-duplicated provider status statement on initial load. In the sidebar, the brand wordmark wraps
+cleanly without single-line ellipsis clipping at the 240px rail width, and Harness agents are positioned
+below Tasks, auto-collapsing when zero harnesses are paired. When the background jobs list has zero active
+items (`data-empty="true"`), the work column collapses (`display: none`) and `.hub-columns` expands the
+activity feed to full width (`grid-template-columns: minmax(0, 1fr)`).
+
+Browser control is asked for in context by the approval card at the moment a task needs
 it, never up front. Under the composer, `<example-chips>` offers three example
 tasks; a chip prefills the composer and focuses it — it never runs anything.
 The Agents / Jobs / Recent artifacts / Recent activity sections are `hidden`
