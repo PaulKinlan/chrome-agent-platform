@@ -27,6 +27,7 @@ import { isAuthoritativeThreadResultProjected } from "./thread-projection-author
 // connected port; the page's handler renders only what it cares about (the
 // master run is serialized, so a page receives events for its own run).
 let port = null;
+let viewedSurface = null; // see reportViewedSurface
 const listeners = new Set();
 const runListeners = new Set();
 const runRecords = new Map();
@@ -89,6 +90,8 @@ function ensurePort() {
       try { fn({ type: "disconnect" }); } catch { /* a listener error must not kill the dispatch */ }
     }
   });
+  // A fresh port starts with no surface on the worker side: re-report ours.
+  if (viewedSurface) postViewedSurface(port);
   return port;
 }
 
@@ -97,6 +100,25 @@ export function subscribeProgress(fn) {
   listeners.add(fn);
   ensurePort();
   return () => listeners.delete(fn);
+}
+
+// The surface this page is showing — `{ type: "thread"|"agent", id }` or null
+// — reported to the worker over the progress port so the toolbar's "waiting on
+// you" badge never counts a run the owner is already looking at
+// (chrome-agent-platform-3p3e.6). Remembered here so a reconnected port (the
+// worker restarted) re-reports it without the page having to notice.
+function postViewedSurface(p) {
+  try { p?.postMessage?.({ type: "attention.viewing", surface: viewedSurface }); } catch { /* port closing */ }
+}
+
+/** Tell the worker which thread/agent this surface shows (null = none). */
+export function reportViewedSurface(surface) {
+  const type = String(surface?.type ?? "");
+  const id = typeof surface?.id === "string" ? surface.id : "";
+  viewedSurface = id && (type === "thread" || type === "agent") ? { type, id } : null;
+  const existing = port;
+  const p = ensurePort();
+  if (existing) postViewedSurface(p); // a port ensurePort just created was reported at creation
 }
 
 /** Subscribe to bounded durable run snapshots. Newer per-run revisions replace

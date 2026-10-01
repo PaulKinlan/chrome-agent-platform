@@ -306,3 +306,10 @@ data). All four pieces are in: the per-task artifact view in the conversation, t
 artifacts view in the hub, open/preview/use (now full-window and openable in a new tab,
 `0.2.318`), and attach-an-existing-artifact from the + menu. Artifacts are origin-keyed
 per agent with a master index; a generated UI IS an artifact.
+
+## Feature: Attention Badging & Completion Notifications (chrome-agent-platform-3p3e.6) — shipped
+Toolbar action badge counts runs waiting on the owner while no surface displays them:
+paused on an inline permission/Allow card, or settled while unfocused/closed. Accented with
+the design petrol-teal (`#0e6e63`), debounced (250 ms), cleared on viewing or answering.
+When no hub or side panel is open, an attention notification is registered and emitted
+with direct click-routing to the task thread (`#omnibox=thread:<id>`).

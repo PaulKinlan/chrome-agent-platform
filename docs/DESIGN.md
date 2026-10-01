@@ -48,6 +48,16 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 ## Run-log affordance
 - A task or agent surface keeps a plainly labelled **Run logs** action after a run settles. Its existing durable registry pages ten retained runs at a time so every run remains reachable without unbounded DOM growth; each row has **View log** and displays at most the latest 200 retained timeline entries with an honest truncation note.
 
+## Attention Badging & Completion Notifications ("Waiting on you")
+- **Action Badge**: The browser toolbar action badge counts runs that require owner attention while no surface is displaying them:
+  - Runs paused on an inline permission card (`paused-permission`).
+  - Active executions holding an unresolved Allow/Deny approval card.
+  - Interactive runs that completed/settled while no hub or side-panel surface was open viewing that thread.
+- **Badge Color**: Design accent `#0e6e63` (petrol teal, RGB `[14, 110, 99, 255]`) for standard attention states. Danger red (`#dc2626`) is used only if an unseen settled run ended in an error. Text color is white (`#ffffff`).
+- **Coalescing & Lifecycle**: Badge updates are debounced and coalesced over a 250 ms window (`ATTENTION_COALESCE_MS`) to eliminate storage storms and render churn.
+- **Clearance**: The badge count decrements and clears to `""` immediately when the owner views the relevant thread/agent surface in the hub or side panel (`reportViewedSurface`), or when the approval card is resolved.
+- **Desktop Notifications**: When an interactive run settles or pauses with zero hub/sidepanel ports connected, an attention notification (`cap:attention:<execId>`) is registered in `NotificationRegistry` and emitted via `chrome.notifications.create` (if the optional `notifications` permission is granted). Clicking the notification routes directly to the specific task thread (`#omnibox=thread:<id>`).
+
 ## Content layout tokens
 - `--content-max: 1040px`: shared maximum content width for all primary hub view surfaces (Artifacts, Directory, Skills, Settings).
 - `--content-gutter: clamp(16px, 4vw, 40px)`: responsive inline padding ensuring consistent left-edge alignment across views at all viewports (e.g. 1024px and 1440px).

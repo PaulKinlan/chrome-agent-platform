@@ -30,6 +30,7 @@ import {
   projectThreadMessages,
   projectThreadWithRunLogs,
   wireReplayApprovals,
+  reportViewedSurface,
 } from "../shared/conversation.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
 import { BUDGET_CONTINUE_TASK } from "../lib/run-budget.js";
@@ -37,7 +38,7 @@ import { findAgentByRef } from "../shared/agent-registry.js";
 import { deleteAgentDialog, renderAgentPermissionsPanel } from "../shared/components.js"; // registers <agent-picker>, <agent-composer>, <agent-conversation>, <task-row>
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { capLog } from "../lib/cap-log.js";
-import { actionableRunsForSurface } from "../lib/run-scope.js";
+import { actionableRunsForSurface, runSurfaceIdentity } from "../lib/run-scope.js";
 
 capLog("sidepanel").info("side panel evaluated");
 
@@ -338,6 +339,7 @@ async function loadTabThread(tabId) {
     }
   }
   if (continueHubBtn) continueHubBtn.hidden = !pageThreadId;
+  reportSidepanelSurface();
 }
 
 // Re-entrancy fence: a burst of tab events must not race two refreshes into an
@@ -455,6 +457,7 @@ async function runPageTurn(text, attachments, mention) {
     pageThreadId = newThreadId;
     savePageThread(currentTabId, pageThreadId);
     if (continueHubBtn) continueHubBtn.hidden = false;
+    reportSidepanelSurface();
   }
   // A run may have mutated this tab — refresh the ledger + the tool list.
 
@@ -564,6 +567,14 @@ const SESSION_KEY = "cap:sidepanel:selected-agent";
 
 // The currently-open agent (null = the list view). { ref, kind, id, name }.
 let openAgent = null;
+// What the panel is showing, for the toolbar's "waiting on you" badge
+// (chrome-agent-platform-3p3e.6): an open agent conversation wins, else the
+// current tab's page thread, else nothing.
+function reportSidepanelSurface() {
+  reportViewedSurface(openAgent
+    ? runSurfaceIdentity({ agentId: openAgent.id, agentKind: openAgent.kind })
+    : runSurfaceIdentity({ threadId: pageThreadId }));
+}
 
 function switchView(which) {
   const agents = which === "agents";
@@ -650,6 +661,7 @@ async function openAgentDetail(agent) {
   openAgent = { ref: agent.ref, kind: agent.kind, id: agent.id, name: agent.name || agent.id };
   liveClientRunId = null;
   persistSelection();
+  reportSidepanelSurface();
   detailName.textContent = openAgent.name;
   detailKind.textContent = KIND_LABELS[openAgent.kind] ?? "Agent";
   setDetailStatus("");
@@ -688,6 +700,7 @@ async function openAgentDetail(agent) {
 function closeAgentDetail() {
   openAgent = null;
   persistSelection();
+  reportSidepanelSurface();
   detailPane.hidden = true;
   listPane.hidden = false;
   picker?.focusSearch?.();
