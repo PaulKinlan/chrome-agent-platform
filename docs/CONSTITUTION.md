@@ -160,11 +160,22 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   changes require explicit review before building.
 - **Performance budgets**: the SW must register fast (<500ms); the NTP/chat
   render fast (<1s); the agent loop doesn't block the UI thread; bundles stay
-  reasonable (the minified store SW bundle is hard-capped at 3.0 MB — 2.54 MB
-  as of 2026-10-01; ONE instance per exact version of EVERY dependency per
+  reasonable. **Every generated bundle has a store ceiling the build enforces**
+  (`STORE_BUNDLE_BUDGETS` in scripts/bundle-budget.mjs; the store build FAILS
+  over any of them, and `dist/dist.complete` records every bundle's size +
+  sha256 so tests/bundle-budget.test.ts holds the same numbers against the
+  shipped bytes): service worker 3.0 MB (2.54 MB as of 2026-10-01), agent
+  worker 2.0 MB, options 880 kB, NTP 870 kB, side panel 660 kB, diff-core
+  17 kB — the UI ceilings are the 2026-10-01 measured size + 5 % headroom,
+  rounded down; ONE instance per exact version of EVERY dependency per
   bundle — ai/zod/provider-utils since 2026-09-06, every package including
   @modelcontextprotocol/sdk since 2026-10-01 — enforced
-  by the build — see scripts/bundle-budget.mjs). On a seeded profile (5 agents,
+  by the build — see scripts/bundle-budget.mjs. The pages that
+  still load raw modules (artifact, artifacts, directory, privacy, offscreen)
+  are pinned at their measured static-import byte totals with zero headroom
+  (tests/unbundled-page-census.test.ts) until they are bundled. Lowering a
+  ceiling is a ratchet; raising one is an owner decision named in the change.
+  On a seeded profile (5 agents,
   50 artifacts, 60 runs): `agent.run` p50 < 400ms, `thread.get` < 40ms,
   `run.list` < 40ms, composer-ready < 150ms, data-visible < 250ms, zero long tasks > 50ms,
   CLS 0, and hub CPU non-idle < 150ms.

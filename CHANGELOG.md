@@ -2,6 +2,7 @@
 
 ## [0.3.559] — 2026-10-01
 - Smaller extension bundles — the MCP client library now ships once instead of twice, trimming the background worker by about 150 KB.
+- Every part of the extension now has a size ceiling the release build enforces, so the New Tab hub, side panel and Settings cannot grow unnoticed.
 
 ## [0.3.558] — 2026-09-29
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.

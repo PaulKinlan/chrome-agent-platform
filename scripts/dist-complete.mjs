@@ -17,9 +17,19 @@ export const DIST_COMPLETE_TARGETS = Object.freeze([
   "developer",
   "enterprise",
 ]);
+// Every generated bundle the build emits, in a fixed order (the marker's
+// canonical byte contract depends on it). chrome-agent-platform-9epn.4: the
+// marker used to bind only the SW + options; ntp / sidepanel / diff-core / the
+// agent worker were shipped unrecorded, so their sizes could not be gated from
+// the marker. Now `outputs[i].size` is the number tests/bundle-budget.test.ts
+// holds against scripts/bundle-budget.mjs STORE_BUNDLE_BUDGETS.
 export const DIST_COMPLETE_OUTPUTS = Object.freeze([
   "background/service-worker.js",
   "options.bundle.js",
+  "ntp.bundle.js",
+  "sidepanel.bundle.js",
+  "shared/diff-core.bundle.js",
+  "workers/agent-worker.js",
 ]);
 export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
   "docs/diff-core.bundle.js",

@@ -547,13 +547,13 @@ try {
     }
     const optResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
     const ntpResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE });
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE });
+    const sidepanelResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE });
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
     // component / the SW imports this single build by relative path.
     const DIFF_CORE = path.join(STAGE, "shared/diff-core.bundle.js");
     await mkdir(path.dirname(DIFF_CORE), { recursive: true });
-    await build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE });
+    const diffCoreResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE });
     // PHASE-2 agent worker bundle: the per-agent shared worker runs the
     // agent-do loop (lib/agent-loop.js → agent-do + ai) — those live in
     // node_modules, so the worker MUST be bundled (native ESM can't resolve
@@ -570,6 +570,8 @@ try {
     await writeFile(path.join(ROOT, ".build", "bundle-report-worker.json"), JSON.stringify(workerResult.metafile));
     await writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(optResult.metafile));
     await writeFile(path.join(ROOT, ".build", "bundle-report-ntp.json"), JSON.stringify(ntpResult.metafile));
+    await writeFile(path.join(ROOT, ".build", "bundle-report-sidepanel.json"), JSON.stringify(sidepanelResult.metafile));
+    await writeFile(path.join(ROOT, ".build", "bundle-report-diff-core.json"), JSON.stringify(diffCoreResult.metafile));
 
     // Scrub + seam-scan IN STAGING over ALL FOUR generated bundles (the SW,
     // the agent-worker bundle — agent-do/ai/mcp-sdk carry a `new Function`/
@@ -647,21 +649,34 @@ try {
       assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
     }
 
-    // The bundle budget gate (CAP-FB-20260830-BUNDLE-BUDGET-01): the store
-    // build FAILS over budget and names the top contributors; the developer
-    // build warns (its unminified bytes are larger by design).
+    // The bundle budget gate (CAP-FB-20260830-BUNDLE-BUDGET-01, extended to
+    // every surface by chrome-agent-platform-9epn.4): the store build FAILS
+    // when ANY generated bundle exceeds its ceiling in STORE_BUNDLE_BUDGETS
+    // and names the top contributors of that bundle; the developer build warns
+    // (its unminified bytes are larger by design).
     {
-      const { assertBundleBudget, STORE_SW_BUDGET_BYTES, formatContributors } = await import("./scripts/bundle-budget.mjs");
+      const { assertBundleBudget, STORE_BUNDLE_BUDGETS, STORE_SW_BUDGET_BYTES } = await import("./scripts/bundle-budget.mjs");
+      const metafileFor = {
+        "background/service-worker.js": swResult.metafile,
+        "workers/agent-worker.js": workerResult.metafile,
+        "options.bundle.js": optResult.metafile,
+        "ntp.bundle.js": ntpResult.metafile,
+        "sidepanel.bundle.js": sidepanelResult.metafile,
+        "shared/diff-core.bundle.js": diffCoreResult.metafile,
+      };
       const swSize = (await stat(SW)).size;
-      const workerSize = (await stat(WORKER)).size;
       if (DEBUG_BUILD) {
         if (swSize > STORE_SW_BUDGET_BYTES) {
           console.log(`bundle budget: developer SW bundle is ${swSize} bytes (unminified; store budget ${STORE_SW_BUDGET_BYTES} applies to the minified store build)`);
         }
       } else {
-        assertBundleBudget({ label: "background/service-worker.js", bytes: swSize, metafile: swResult.metafile });
-        assertBundleBudget({ label: "workers/agent-worker.js", bytes: workerSize, budgetBytes: 2_000_000, metafile: workerResult.metafile });
-        console.log(`bundle budget: store SW bundle ${swSize} bytes <= ${STORE_SW_BUDGET_BYTES} budget`);
+        for (const [rel, budgetBytes] of Object.entries(STORE_BUNDLE_BUDGETS)) {
+          const metafile = metafileFor[rel];
+          if (!metafile) throw new Error(`bundle budget: ${rel} has a ceiling but no build result — build.mjs must bundle every budgeted surface`);
+          const size = (await stat(path.join(STAGE, rel))).size;
+          assertBundleBudget({ label: rel, bytes: size, budgetBytes, metafile });
+          console.log(`bundle budget: store ${rel} ${size} bytes <= ${budgetBytes} budget`);
+        }
       }
     }
 

@@ -162,9 +162,17 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   (`scripts/dist-complete.mjs`); consumers: `tests/build-bootstrap.test.ts` and
   `tests/build-debug-mode.test.ts` (produce markers), `tests/bundle-budget.test.ts`,
   `tests/package-extension-freshness-driver.mjs` (writes the marker),
+  `tests/dist-staleness-note.test.ts` (writes scratch markers),
   `tests/tool-exec-preview.test.ts` (revalidates REAL shipped bytes), plus
   `scripts/package-archive.mjs`, `scripts/emscripten-abi-loaded.ts`,
   `scripts/evidence-runner.sh`.
+  **Since chrome-agent-platform-9epn.4 the marker binds SIX outputs**
+  (`DIST_COMPLETE_OUTPUTS`: SW, options, ntp, sidepanel, diff-core, agent worker),
+  and `STORE_BUNDLE_BUDGETS` in `scripts/bundle-budget.mjs` must name the SAME set
+  (`tests/bundle-budget.test.ts` "every generated bundle has a ceiling"). Both scratch
+  fixtures above iterate `DIST_COMPLETE_OUTPUTS`, so adding a bundle to the build means
+  adding it to BOTH lists and nothing else; a scratch fixture that hand-writes two
+  files will fail with `generated output is missing or special: <path>`.
 - **Owed by a re-anchor:** ANY edit under `extension/` owes a rebuild before a test that
   reads dist; a whole `npm test` rebuilds and re-indexes first, which is why
   "dist.complete validation failed: marker indexed source authority is stale" appears
@@ -172,6 +180,22 @@ whole-suite mutant run); **inspection** means read from the source, not executed
   not a kill (AGENTS.md mode 4, measured).
 - **Subject moves:** LOUD-BY-ACCIDENT: the message names marker authority, not your edit.
   This is also why those files are serial-phase: the marker is shared state.
+
+## 9a. The per-surface bundle ceilings and the unbundled-page census (9epn.4)
+
+- **Watches:** `STORE_BUNDLE_BUDGETS` (scripts/bundle-budget.mjs) — the store build
+  fails over any ceiling and `tests/bundle-budget.test.ts` holds the sizes recorded in
+  `dist.complete` against the same table. `tests/unbundled-page-census.test.ts` pins
+  the transitive STATIC-import byte total of each raw-module page (artifact, artifacts,
+  directory, privacy, offscreen) at its measured value with **zero headroom**.
+- **Owed by a re-anchor:** any byte added to a module in those graphs — above all
+  `extension/shared/components.js`, which every page imports — reds the census. That is
+  the design (growth must be accepted consciously), not a flake: re-measure with
+  `node scripts/lib/page-import-census.mjs . --modules`, move the pin, and NAME the move
+  in the report. Subset gates do not select the census (it reads files dynamically);
+  only `npm test` shows it. The bundling bead ratchets the pins down.
+- **Subject moves:** LOUD: the assertion names the page, the new total, the pin, the
+  delta and the re-measure command.
 
 ## 10. tests/quiet-window.test.ts + scripts/lib/quiet-window.ts + the registry
 

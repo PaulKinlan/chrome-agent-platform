@@ -11,6 +11,7 @@ import {
   verifyPackageArchive,
 } from "../scripts/package-archive.mjs";
 import {
+  DIST_COMPLETE_OUTPUTS,
   validateDistCompleteMarker,
   writeDistCompleteMarker,
 } from "../scripts/dist-complete.mjs";
@@ -40,6 +41,20 @@ async function write(root, relative, value) {
   const file = `${root}/${relative}`;
   await Deno.mkdir(file.slice(0, file.lastIndexOf("/")), { recursive: true });
   await Deno.writeTextFile(file, value);
+}
+
+/** Every generated output the marker binds, stamped with a generation tag.
+ * The SW and options bytes keep the shapes the assertions below read back
+ * (`dist-<gen>` / `options-<gen>`); the rest carry their own path. */
+async function writeGeneratedOutputs(root, generation) {
+  for (const output of DIST_COMPLETE_OUTPUTS) {
+    const tag = output === "background/service-worker.js"
+      ? `dist-${generation}`
+      : output === "options.bundle.js"
+      ? `options-${generation}`
+      : `${output}-${generation}`;
+    await write(root, `extension/dist/${output}`, `console.log('${tag}');\n`);
+  }
 }
 
 async function fixture() {
@@ -103,16 +118,7 @@ async function fixture() {
     "extension/CHANGELOG.md",
     await Deno.readTextFile(`${root}/CHANGELOG.md`),
   );
-  await write(
-    root,
-    "extension/dist/background/service-worker.js",
-    "console.log('dist-v1');\n",
-  );
-  await write(
-    root,
-    "extension/dist/options.bundle.js",
-    "console.log('options-v1');\n",
-  );
+  await writeGeneratedOutputs(root, "v1");
   await writeDistCompleteMarker({
     root,
     distRoot: `${root}/extension/dist`,
@@ -218,16 +224,7 @@ Deno.test("package archive replaces poison from exact tracked + generated invent
     // any entry from the prior ZIP and must carry current dist bytes.
     await command(root, "git", ["rm", "-q", "extension/remove-after-first.js"]);
     await Deno.remove(`${root}/extension/options/options.bundle.js`);
-    await write(
-      root,
-      "extension/dist/background/service-worker.js",
-      "console.log('dist-v2-current');\n",
-    );
-    await write(
-      root,
-      "extension/dist/options.bundle.js",
-      "console.log('options-v2-current');\n",
-    );
+    await writeGeneratedOutputs(root, "v2-current");
     await refreshMarker(root);
 
     const second = await packageExtensionArchive({ root, archive });

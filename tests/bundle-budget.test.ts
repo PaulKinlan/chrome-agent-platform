@@ -25,10 +25,12 @@ import {
   duplicateStoreInputs,
   formatContributors,
   nonDenoStoreInputs,
+  STORE_BUNDLE_BUDGETS,
   STORE_SW_BUDGET_BYTES,
   topContributors,
   zodCjsInputs,
 } from "../scripts/bundle-budget.mjs";
+import { DIST_COMPLETE_OUTPUTS } from "../scripts/dist-complete.mjs";
 
 Deno.test("bundle budget: the store SW budget is exactly the constitution number (3.0 MB)", () => {
   assertEquals(STORE_SW_BUDGET_BYTES, 3_000_000);
@@ -77,8 +79,10 @@ Deno.test("bundle budget: build.mjs wires the metafile report, the store gate, a
   // source maps (CAP-FB-20260826-OBSERVABILITY-01).
   assertStringIncludes(source, "if (!DEBUG_BUILD) {");
   assertStringIncludes(source, "minify: true");
-  // The gate calls the shared module with the SW size.
-  assertStringIncludes(source, 'assertBundleBudget({ label: "background/service-worker.js"');
+  // The gate iterates the ONE budget table and holds every bundle against its
+  // own ceiling with its own metafile (9epn.4).
+  assertStringIncludes(source, "for (const [rel, budgetBytes] of Object.entries(STORE_BUNDLE_BUDGETS))");
+  assertStringIncludes(source, "assertBundleBudget({ label: rel, bytes: size, budgetBytes, metafile })");
   // SAFETY ORDER: the eval scrub (textual, unminified-only patterns) runs
   // BEFORE minification, and the minified output is re-scanned.
   const scrubAt = source.indexOf("new Function\\s*\\(");
@@ -130,6 +134,74 @@ Deno.test("bundle budget: a store-built dist ships a minified SW at or under bud
     size <= STORE_SW_BUDGET_BYTES,
     `store-built SW bundle is ${size} bytes — over the ${STORE_SW_BUDGET_BYTES} budget`,
   );
+});
+
+// ── chrome-agent-platform-9epn.4: a ceiling for EVERY surface ──────────────
+// Only the SW (3.0 MB) and the worker (2.0 MB) had a number; ntp / sidepanel /
+// options / diff-core grew unobserved. The table STORE_BUNDLE_BUDGETS is the
+// one place every ceiling lives, the store build gates each entry, and the
+// marker records each bundle's size so this file can hold the SAME numbers
+// against the bytes that actually shipped.
+
+Deno.test("9epn.4 bundle budget: every generated bundle has a ceiling and the gate bites per entry", () => {
+  const entries = Object.entries(STORE_BUNDLE_BUDGETS);
+  assertEquals(
+    [...Object.keys(STORE_BUNDLE_BUDGETS)].sort(),
+    [...DIST_COMPLETE_OUTPUTS].sort(),
+    "the budget table and the marker's output list name the SAME bundles — a bundle recorded without a ceiling (or a ceiling for a bundle the marker does not record) is the gap this bead closed",
+  );
+  assertEquals(BUDGET_REPORTED_BUNDLES, Object.keys(STORE_BUNDLE_BUDGETS));
+  // The six surfaces by name: agreement between two lists is not a pin if
+  // both can lose the same entry.
+  assertEquals(
+    [...Object.keys(STORE_BUNDLE_BUDGETS)].sort(),
+    ["background/service-worker.js", "ntp.bundle.js", "options.bundle.js", "shared/diff-core.bundle.js", "sidepanel.bundle.js", "workers/agent-worker.js"],
+  );
+  for (const [surface, budget] of entries) {
+    assert(Number.isSafeInteger(budget) && budget > 0, `${surface} has a positive integer ceiling (got ${budget})`);
+  }
+  for (const [label, budgetBytes] of entries) {
+    // At the ceiling: passes and returns the size.
+    assertEquals(assertBundleBudget({ label, bytes: budgetBytes, budgetBytes }), budgetBytes, `${label}: the exact ceiling passes`);
+    // One byte over: throws, naming the bundle, the size and the ceiling.
+    const error = assertThrows(() => assertBundleBudget({ label, bytes: budgetBytes + 1, budgetBytes }));
+    assertStringIncludes(error.message, label, `${label}: the failure names the bundle`);
+    assertStringIncludes(error.message, String(budgetBytes + 1), `${label}: the failure names the actual size`);
+    assertStringIncludes(error.message, String(budgetBytes), `${label}: the failure names the ceiling`);
+  }
+});
+
+Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, each at or under its ceiling (store build)", async () => {
+  // build-bootstrap regenerates dist with --target=store ahead of this file in
+  // the serial suite. An ABSENT marker is a failure here, not a skip: a budget
+  // check that cannot read its subject must refuse rather than pass.
+  let marker;
+  try {
+    marker = JSON.parse(await Deno.readTextFile("extension/dist/dist.complete"));
+  } catch {
+    throw new Error("9epn.4: dist.complete is missing — run `npm run build:production` first; the per-surface ceilings are held against the sizes the marker records.");
+  }
+  const recorded = Array.isArray(marker?.outputs) ? marker.outputs : [];
+  assertEquals(
+    recorded.map((o) => o.path),
+    [...DIST_COMPLETE_OUTPUTS],
+    "dist.complete lists every generated bundle in the marker's fixed order",
+  );
+  const sizeOf = new Map(recorded.map((o) => [o.path, o.size]));
+  for (const [path, size] of sizeOf) {
+    assert(Number.isSafeInteger(size) && size > 0, `${path}: the marker records a positive byte size (got ${size})`);
+    assertEquals(size, (await Deno.stat(`extension/dist/${path}`)).size, `${path}: the recorded size is the shipped file's size`);
+  }
+  if (marker.target !== "store") return; // developer build: unminified by design; the ceilings measure the store bytes
+  // One assertion per budgeted entry, held against the RECORDED store size.
+  for (const [path, budget] of Object.entries(STORE_BUNDLE_BUDGETS)) {
+    const size = sizeOf.get(path);
+    assert(size !== undefined, `${path}: budgeted but not recorded in dist.complete`);
+    assert(
+      size <= budget,
+      `${path}: the store build shipped ${size} bytes — over its ${budget} ceiling (STORE_BUNDLE_BUDGETS in scripts/bundle-budget.mjs). Cut the growth, or raise the ceiling as a named owner decision.`,
+    );
+  }
 });
 
 // ── chrome-agent-platform-63et: one AI SDK instance per bundle ─────────────
