@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.559] — 2026-10-01
+- Cleaner section navigation in Settings and fewer false-alarm error counts in the hub Diagnostics badge.
+
 ## [0.3.558] — 2026-09-29
+- Suppresses programmatic heading focus outlines when switching sections in Settings, and excludes keyless setup nudges and optional permission requests from the Diagnostics badge.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29

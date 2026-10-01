@@ -125,6 +125,20 @@ nav {
   margin: 0 0 8px;
   font-size: var(--text-lg);
 }
+/* Suppress programmatic focus ring on section headings (716s.13).
+   options.js focuses section h2/h3 with tabindex="-1" on sidebar nav click
+   so screen readers announce the panel, but static text must not paint a
+   visible teal focus rectangle while keeping :focus-visible for keyboard nav. */
+.panel h2[tabindex="-1"]:focus,
+.panel h3[tabindex="-1"]:focus,
+section > h2[tabindex="-1"]:focus,
+section > h3[tabindex="-1"]:focus,
+.panel h2:focus:not(:focus-visible),
+.panel h3:focus:not(:focus-visible),
+section > h2:focus:not(:focus-visible),
+section > h3:focus:not(:focus-visible) {
+  outline: none;
+}
 /* Section anchor (CAP-FB-20260823-SECTION-ANCHOR-LINKS-01): hover-revealed,
    keyboard-reachable (# copy button beside every panel heading). */
 .panel h2 .section-anchor {

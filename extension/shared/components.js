@@ -37,6 +37,7 @@ import { partiesOf, projectBoard, statusOf } from "../lib/board-view-model.js";
 // fire reads identically everywhere. The gallery sync rewrites this path to
 // ./next-run-label.js beside the deploy copy.
 import { nextRunLabel, lastRunLabel, NEXT_RUN_TICK_MS } from "../lib/next-run-label.js";
+import { countDiagnosticsBadgeErrors, isExcludedDiagnosticBadgeEntry } from "../lib/diagnostics-badge.js";
 // Local Set view (the explorer filters in-memory against it; the server also
 // enforces the same list, default-deny).
 const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
@@ -11047,8 +11048,7 @@ class DiagnosticsPanel extends PanelButton {
 
     const runningRuns = runs.filter((r) => ["running", "settling", "active"].includes(r.phase));
     const completedRuns = runs.filter((r) => ["completed", "done"].includes(r.phase));
-    const errorEntries = entries.filter((e) => e.level === "error" || e.level === "warn");
-    const errorCount = errorEntries.length || entries.length;
+    const errorCount = countDiagnosticsBadgeErrors(entries);
     const toolCallCount = tools.reduce((sum, t) => sum + (Number(t.calls) || 0), 0) || Number(totals.calls) || 0;
 
     const runningEl = this._panel.querySelector("#diag-metric-running");
@@ -11102,13 +11102,17 @@ class DiagnosticsPanel extends PanelButton {
     const errorsList = this._panel.querySelector(".diag-errors-list");
     if (errorsList) {
       if (entries.length > 0) {
-        errorsList.innerHTML = entries.slice(0, 10).map((e) => `
-          <div class="diag-error-row lvl-${escapeHtml(e.level || "info")}">
+        errorsList.innerHTML = entries.slice(0, 10).map((e) => {
+          const isExcluded = isExcludedDiagnosticBadgeEntry(e);
+          const displayLevel = isExcluded ? "info" : (e.level || "info");
+          return `
+          <div class="diag-error-row lvl-${escapeHtml(displayLevel)}">
             <span class="diag-error-time">${escapeHtml(fmtTime(e.ts))}</span>
-            <span class="diag-error-level">${escapeHtml(e.level || "info")}</span>
+            <span class="diag-error-level">${escapeHtml(displayLevel)}</span>
             <span class="diag-error-msg">${escapeHtml(e.message || "")}</span>
           </div>
-        `).join("");
+        `;
+        }).join("");
       } else {
         errorsList.innerHTML = `<div class="empty">No errors or warnings captured.</div>`;
       }
@@ -11126,7 +11130,7 @@ class DiagnosticsPanel extends PanelButton {
   async _copyAll() {
     const running = this._runs ? this._runs.filter((r) => ["running", "settling", "active"].includes(r.phase)).length : 0;
     const completed = this._runs ? this._runs.filter((r) => ["completed", "done"].includes(r.phase)).length : 0;
-    const errors = this._entries ? this._entries.length : 0;
+    const errors = countDiagnosticsBadgeErrors(this._entries);
     const toolCalls = this._tools ? this._tools.reduce((sum, t) => sum + (Number(t.calls) || 0), 0) : (this._totals?.calls ?? 0);
 
     const lines = [
