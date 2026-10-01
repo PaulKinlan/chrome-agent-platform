@@ -20,7 +20,7 @@ export function emptyPlan() {
   return { steps: [], state: "idle" };
 }
 
-const STEP_STATUSES = new Set(["active", "done", "error"]);
+const STEP_STATUSES = new Set(["active", "done", "error", "skipped"]);
 
 function normalizeLabel(value, fallback) {
   const s = typeof value === "string" ? value.trim() : "";
@@ -48,7 +48,7 @@ export function reducePlan(plan, ev) {
       const i = steps.findIndex((s) => s.status === "active");
       if (i >= 0) {
         if (typeof ev.label === "string" && ev.label.trim()) steps[i].label = ev.label.trim();
-        steps[i].status = ev.status === "error" ? "error" : "done";
+        steps[i].status = ev.status === "skipped" ? "skipped" : (ev.status === "error" ? "error" : "done");
       }
       break;
     }
@@ -82,9 +82,11 @@ export function planFromEvents(events) {
 export function planSummary(plan) {
   const steps = plan && Array.isArray(plan.steps) ? plan.steps : [];
   const total = steps.length;
-  const resolved = steps.filter((s) => s.status === "done" || s.status === "error").length;
+  const resolved = steps.filter((s) => s.status === "done" || s.status === "error" || s.status === "skipped").length;
   const active = steps.find((s) => s.status === "active") ?? null;
   const errored = steps.some((s) => s.status === "error");
+  const allSkipped = total > 0 && steps.every((s) => s.status === "skipped");
+  const anySkipped = steps.some((s) => s.status === "skipped");
   return {
     total,
     resolved,
@@ -93,6 +95,8 @@ export function planSummary(plan) {
     current: active ? Math.min(resolved + 1, total) : resolved,
     activeLabel: active ? active.label : null,
     errored,
+    allSkipped,
+    anySkipped,
   };
 }
 
@@ -101,3 +105,4 @@ export function planSummary(plan) {
 export function isPlanStepStatus(value) {
   return STEP_STATUSES.has(value);
 }
+

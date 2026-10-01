@@ -77,7 +77,8 @@ Deno.test("toolcalls-collapsed: the tool card renders COLLAPSED by default — n
   assertEquals(summary.tagName, "SUMMARY");
   assertEquals(summary.className, "tool-head");
   const name = summary.children.find((c) => c.className === "tool-name");
-  assertEquals(name.textContent, "memory_read", "the collapsed summary names the tool");
+  assertEquals(name.textContent, "Read saved memory", "the collapsed summary names the tool in human language");
+  assertEquals(card.getAttribute("data-raw-tool"), "memory_read", "the card retains the raw tool name");
   const status = summary.children.find((c) => (c.className || "").includes("tool-status"));
   assertEquals(status.textContent, "done", "the collapsed summary shows the status");
   const body = card.children[1];

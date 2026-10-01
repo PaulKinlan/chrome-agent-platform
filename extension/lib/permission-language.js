@@ -69,3 +69,60 @@ export function siteLabel(origin) {
   } catch { /* not a URL */ }
   return String(origin ?? "");
 }
+
+/** The user-language names for internal tool names. Maps camelCase and
+ * snake_case tool identifiers to readable actions. */
+export const TOOL_USER_LANGUAGE = Object.freeze({
+  browser_list_tabs: "List open tabs",
+  listTabs: "List open tabs",
+  list_tabs: "List open tabs",
+  capture_region: "Capture page region",
+  captureRegion: "Capture page region",
+  capture_screenshot: "Capture page screenshot",
+  captureScreenshot: "Capture page screenshot",
+  screenshot: "Capture page screenshot",
+  read_page: "Read current page",
+  readPage: "Read current page",
+  get_page_text: "Read current page",
+  getPageText: "Read current page",
+  click: "Click on page",
+  browser_click: "Click on page",
+  browserClick: "Click on page",
+  fill: "Fill form field",
+  type_text: "Fill form field",
+  typeText: "Fill form field",
+  navigate: "Open web page",
+  open_tab: "Open web page",
+  openTab: "Open web page",
+  memory_read: "Read saved memory",
+  memoryRead: "Read saved memory",
+  recall_memory: "Read saved memory",
+  recallMemory: "Read saved memory",
+  memory_write: "Save to memory",
+  memoryWrite: "Save to memory",
+  save_memory: "Save to memory",
+  saveMemory: "Save to memory",
+  group_tabs: "Group tabs",
+  groupTabs: "Group tabs",
+});
+
+/** Return a readable sentence-case label for a tool name.
+ * Maps known tool names from TOOL_USER_LANGUAGE, falling back to converting
+ * camelCase or snake_case to sentence case. */
+export function humanToolLabel(rawName) {
+  if (!rawName || typeof rawName !== "string") return "";
+  const trimmed = rawName.trim();
+  if (!trimmed) return "";
+  if (TOOL_USER_LANGUAGE[trimmed]) return TOOL_USER_LANGUAGE[trimmed];
+  const lowered = trimmed.toLowerCase();
+  if (TOOL_USER_LANGUAGE[lowered]) return TOOL_USER_LANGUAGE[lowered];
+  const words = trimmed
+    .replace(/[._-]+/g, " ")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!words) return "";
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
