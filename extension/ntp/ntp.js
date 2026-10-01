@@ -18,7 +18,7 @@ import { schedulePreviewText } from "../lib/schedule-preview.js";
 import { resolveAgentSaveResult } from "../lib/agent-config-save.js";
 import { parseEnglishSchedule } from "../shared/schedule-parser.js";
 import { selectFailedRuns } from "../lib/run-retry.js";
-import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool, reportViewedSurface } from "../shared/conversation.js";
+import { runConversationTurn, subscribeProgress, subscribeRunRegistry, cancelDurableRun, resumePermissionPausedRun, loadDurableRunLogs, appendBubble, pairToolJournal, pendingApprovalRequests, replayPendingApprovalsForThread, projectThreadMessages, renderRunTranscript, wireReplayApprovals, isProtocolTool, reportViewedSurface } from "../shared/conversation.js";
 import { createRunSurfaceOwner } from "../shared/run-surface-owner.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { cancelRunFromRenderedStop, projectConversationRunStatus } from "../shared/run-status.js";
@@ -45,6 +45,8 @@ import { createTaskSidebarLifecycle, loadThreadsWithOneRestartRetry } from "../l
 import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-projection-lifecycle.js";
 import {
   clearAuthoritativeThreadProjection,
+  projectThreadRunState,
+  projectThreadTitle,
   recordAuthoritativeThreadProjection,
 } from "../shared/thread-projection-authority.js";
 import { createViewFocusController } from "../lib/view-focus.js";
@@ -180,14 +182,14 @@ function stopRunTranscript() {
   runTranscriptExecutionId = null;
 }
 
-function projectSurfaceRunTranscript() {
+function projectSurfaceRunTranscript({ force = false } = {}) {
   const run = latestRunForSurface(latestDurableRuns, {
     threadId: currentAgentId === null ? currentThreadId : null,
     agentId: currentAgentId,
     agentKind: currentAgentKind,
   });
   const nextId = run?.executionId ?? null;
-  if (nextId === runTranscriptExecutionId) return run; // already subscribed to THIS run
+  if (!force && nextId === runTranscriptExecutionId) return run; // already subscribed to THIS run
   stopRunTranscript(); // teardown FIRST — it nulls the guard; assign AFTER so the guard actually holds
   runTranscriptExecutionId = nextId;
   if (!nextId || !threadConversation) return run;
@@ -227,6 +229,13 @@ if (durableRunRegistry) {
     // open surface's LIVE run (the same durable row the Stop button binds).
     liveSurfaceRun = boundRun ?? null;
     if (runControlReady) renderRunControlBar();
+    // The sidebar dots and the live view's title read the registry too
+    // (chrome-agent-platform-716s.1): a run that starts, pauses or settles
+    // re-projects the dots in place, and a NEW task adopts its thread's name
+    // as soon as the durable row names the thread (the reopened view already
+    // showed it; the live view said "New task" until the run settled).
+    syncTaskRowDots();
+    if (runControlReady) void syncLiveThreadTitle(boundRun);
     // Terminal reconciliation for the live status row: the registry is the
     // durable authority. When the open surface's latest run has SETTLED and
     // nothing actionable remains, resolve the row — the live terminal event
@@ -1431,6 +1440,7 @@ async function refreshTimeline() {
   timelineEl.entries = buildTimeline(threads, latestDurableRuns, {
     agentNames: agentNameById,
     limit: 40,
+    pendingApprovals: pendingApprovalRequests(),
   });
 }
 function renderTimeline() {
@@ -2273,6 +2283,41 @@ async function refreshFailedRuns() {
   }
 }
 
+/** The sidebar dot for a task row — the ONE projection the hub timeline row
+ * and the conversation status row also read (chrome-agent-platform-716s.1):
+ * the thread's latest durable run plus the page's unanswered approval
+ * requests, so a run waiting on a card is "paused" in all three places. */
+function sidebarDotState(thread) {
+  const run = latestRunForSurface(latestDurableRuns, { threadId: thread?.id ?? null });
+  return projectThreadRunState({ thread, run, pendingApprovals: pendingApprovalRequests() }).dot;
+}
+let lastSidebarDotSig = "";
+/** Re-project the rendered rows' dots in place when a run or an approval
+ * request moves without the thread index changing (the thread list is the
+ * row authority; the dot is a run-state view of it). */
+function syncTaskRowDots() {
+  const el = document.getElementById("thread-sidebar");
+  const rows = Array.from(el?.children ?? []).filter((row) => row?.className === "thread-item");
+  if (!rows.length) return;
+  const sig = rows.map((row) => {
+    const id = row.getAttribute?.("data-thread-id") ?? "";
+    const run = latestRunForSurface(latestDurableRuns, { threadId: id || null });
+    return `${id}:${projectThreadRunState({ run, pendingApprovals: pendingApprovalRequests() }).dot}`;
+  }).join("|");
+  if (sig === lastSidebarDotSig) return;
+  lastSidebarDotSig = sig;
+  for (const row of rows) {
+    const id = row.getAttribute?.("data-thread-id") ?? "";
+    const run = latestRunForSurface(latestDurableRuns, { threadId: id || null });
+    if (!run) continue; // no run → the row keeps the dot thread.list gave it
+    const dot = projectThreadRunState({ run, pendingApprovals: pendingApprovalRequests() }).dot;
+    for (const node of row.querySelectorAll?.(".dot, .t-dot") ?? []) {
+      const base = node.classList?.contains?.("t-dot") ? "t-dot" : "dot";
+      node.className = base + (dot ? " " + dot : "");
+    }
+  }
+}
+
 function renderTaskRows(threads, activeId = null) {
   const span = perfSpan("ntp:thread-list-hydrated");
   const el = document.getElementById("thread-sidebar");
@@ -2303,13 +2348,12 @@ function renderTaskRows(threads, activeId = null) {
     // Open button below is the only open affordance and a sibling of Delete.
     const item = document.createElement("div");
     item.className = "thread-item";
-    if (item.dataset) item.dataset.threadId = t.id;
-    item.setAttribute?.("data-thread-id", t.id);
+    if (item.dataset) item.dataset.threadId = String(t.id ?? "");
+    item.setAttribute?.("data-thread-id", String(t.id ?? ""));
     // A hover tooltip for the collapsed icon-rail (and the full name on hover).
     item.title = (t.name || "Task") + (t.preview ? " — " + t.preview : "");
     if (activeId && t.id === activeId) item.setAttribute("aria-current", "true");
-    const dotState =
-      t.status === "running" ? "running" : t.status === "error" ? "error" : "";
+    const dotState = sidebarDotState(t);
     // A standalone status dot that stays visible when the sidebar collapses
     // (the .t-name dot is hidden with the label).
     const railDot = document.createElement("span");
@@ -2605,7 +2649,7 @@ function hideThreadView({
 
 let threadProjectionGeneration = 0;
 function renderThreadProjection(thread, owner = runSurfaceOwner.current()) {
-  threadTitle.textContent = thread?.name || "Task";
+  threadTitle.textContent = projectThreadTitle(thread);
   const messages = Array.isArray(thread?.messages) ? thread.messages : [];
   // The projection transform is the PURE, unit-tested projectThreadMessages
   // (shared/conversation.js): every persisted user/assistant row renders, and
@@ -2624,11 +2668,18 @@ function renderThreadProjection(thread, owner = runSurfaceOwner.current()) {
   } else {
     clearAuthoritativeThreadProjection(threadConversation);
   }
+  if (thread?.id) {
+    replayPendingApprovalsForThread(threadConversation, thread.id);
+  }
 }
 
 const terminalThreadProjectionLifecycle = createTerminalThreadProjectionLifecycle({
   loadThread: (id) => send("thread.get", { id }),
-  commitThread: (thread, _run, owner) => renderThreadProjection(thread, owner),
+  commitThread: (thread, _run, owner) => {
+    renderThreadProjection(thread, owner);
+    const run = projectSurfaceRunTranscript({ force: true });
+    replayPendingApprovalsForThread(threadConversation, thread?.id ?? currentThreadId, run?.executionId ?? null);
+  },
   getOpenOwnerThreadId: () => !threadView.hidden && currentAgentId === null ? currentThreadId : null,
   captureSurfaceOwner: () => runSurfaceOwner.current(),
   ownsSurfaceOwner: (owner) => runSurfaceOwner.owns(owner),
@@ -2642,7 +2693,8 @@ async function refreshOpenThreadFromStore(id) {
   if (!res?.ok || !res.thread) return;
   if (!runSurfaceOwner.owns(owner) || currentThreadId !== id || currentAgentId !== null) return;
   renderThreadProjection(res.thread, owner);
-  projectSurfaceRunTranscript();
+  const run = projectSurfaceRunTranscript({ force: true });
+  replayPendingApprovalsForThread(threadConversation, id, run?.executionId ?? null);
 }
 
 async function openThread(id) {
@@ -2706,7 +2758,8 @@ async function openThread(id) {
   // retained history + live continuation without duplicating or losing either;
   // a run that starts/settles while the view is open re-projects via the run
   // registry subscription below.
-  const restoredRun = projectSurfaceRunTranscript();
+  const restoredRun = projectSurfaceRunTranscript({ force: true });
+  replayPendingApprovalsForThread(threadConversation, id, restoredRun?.executionId ?? null);
   showThreadView();
   const live = restoredRun != null
     && actionableRunsForSurface(latestDurableRuns, { threadId: id }).length > 0;
@@ -2715,7 +2768,7 @@ async function openThread(id) {
   // thread exactly as from the live one (CAP-FB-20260901-RUN-BUDGET-EVERY-ITEM-01).
   const budgetStop = live ? null : budgetStopOfThread(thread);
   renderRunStatus(live
-    ? { state: "running", activity: "run in progress" }
+    ? reopenedRunStatus(restoredRun)
     : budgetStop
       ? { state: "failed", errorCategory: "budget", errorReason: budgetStop.reason, message: budgetStop.content, ...(budgetStop.executionId ? { executionId: budgetStop.executionId } : {}) }
       : { state: "idle" });
@@ -2724,6 +2777,39 @@ async function openThread(id) {
   // follow-ups (the chips above the composer survive reloads).
   void renderPendingChips();
   openSpan.end("ok");
+}
+
+/** The live view's title from the SAME source as the reopened view
+ * (chrome-agent-platform-716s.1): once the durable run row names the thread a
+ * new task created, read that thread's name and replace the "New task"
+ * placeholder — the title the owner sees while the run is paused on a card is
+ * then the title a second tab shows for the same thread. Owner-fenced like
+ * every other title write; one read per thread. */
+let liveTitleThreadId = null;
+async function syncLiveThreadTitle(run) {
+  const threadId = typeof run?.threadId === "string" ? run.threadId : "";
+  if (!threadId || currentAgentId !== null || !threadView || threadView.hidden) return;
+  if (currentThreadId && currentThreadId !== threadId) return;
+  if (threadTitle.textContent !== "New task" || liveTitleThreadId === threadId) return;
+  liveTitleThreadId = threadId;
+  const owner = runSurfaceOwner.current();
+  const res = await send("thread.get", { id: threadId }).catch(() => null);
+  if (!res?.ok || !res.thread) { liveTitleThreadId = null; return; }
+  if (!runSurfaceOwner.owns(owner) || currentAgentId !== null || (currentThreadId && currentThreadId !== threadId)) return;
+  if (threadTitle.textContent !== "New task") return;
+  threadTitle.textContent = projectThreadTitle(res.thread, { placeholder: "New task" });
+}
+
+/** The status row for a reopened thread whose latest run is still actionable
+ * — from the ONE projection the sidebar dot and the hub timeline read
+ * (chrome-agent-platform-716s.1). A run waiting on an approval card (an
+ * unanswered request the page holds, or a durable pause) reopens as
+ * "Waiting for permission — …", never as "Working — run in progress…"; the
+ * card itself is re-mounted by the transcript projection from the same
+ * pending request. */
+function reopenedRunStatus(run) {
+  const projected = projectThreadRunState({ run, pendingApprovals: pendingApprovalRequests() });
+  return projected.status ?? { state: "running", activity: "run in progress" };
 }
 
 /** The thread's LAST persisted row when it is a budget stop (the durable
@@ -4328,7 +4414,7 @@ async function runThreadTurn(text, attachments = [], mention = null) {
         // while the thread title loaded.
         if (!owns()) return res;
         if (t.thread?.name) {
-          runSurfaceOwner.commit(owner, () => { threadTitle.textContent = t.thread.name; });
+          runSurfaceOwner.commit(owner, () => { threadTitle.textContent = projectThreadTitle(t.thread); });
         }
       }
       await renderTasks(currentThreadId);
@@ -4743,6 +4829,15 @@ subscribeProgress((ev) => {
     if (!pendingProgressBatch) {
       pendingProgressBatch = Promise.resolve().then(dispatchProgressBatch);
     }
+  }
+  // An approval card appeared or was answered (here, in another tab, or by
+  // expiry): the sidebar dot and the hub timeline row for that run move
+  // between "paused" and "running" through the one projection
+  // (chrome-agent-platform-716s.1). The open conversation's own card and
+  // status row are handled by its transcript subscription.
+  if (ev?.type === "approval-request" || ev?.type === "approval-settled") {
+    syncTaskRowDots();
+    refreshTimeline().catch(() => {});
   }
 });
 

@@ -33,6 +33,7 @@ import {
   serverToolSpecForProvider,
 } from "../lib/provider-server-tools.js";
 import { dispatchDurableProviderRun } from "../lib/durable-provider-dispatch.js";
+import { approvalEventKey, createPendingApprovalTracker } from "../lib/pending-approval-replay.js";
 import {
   closeAgentWorkerFor,
   createActivityRoutes,
@@ -1152,12 +1153,38 @@ const durableRecoveryReady = typeof globalThis.navigator?.storage?.getDirectory 
   ? migrateLegacyDurableRunMemory().then(() => durableRuns.recover())
   : Promise.resolve({ recoveredOutboxes: 0, orphaned: [] });
 durableRecoveryReady.catch(() => {});
+// The approval cards still waiting on the owner (chrome-agent-platform-716s.1).
+// An approval-request is broadcast once, to the ports connected at that moment;
+// a hub opened afterwards (a second tab, a reload) rendered the paused run as
+// "Working" with nothing to click. The tracker remembers each published request
+// by its decision key until it settles, and onConnect replays the live ones to
+// the new port — the SAME event, so Allow there wakes the SAME waiter.
+const pendingApprovalReplay = createPendingApprovalTracker();
 function broadcastProgress(event) {
+  pendingApprovalReplay.observe(event);
   for (const port of progressPorts) {
     try {
       port.postMessage({ type: "progress", event });
     } catch { /* port closing — ignore */ }
   }
+}
+/** The approval requests a freshly connected port must see: still inside
+ * their TTL and still backed by a live waiter (an inline permission request
+ * the worker is awaiting, or a pending owner approval bound to a live run). */
+function replayablePendingApprovals(now = Date.now()) {
+  return pendingApprovalReplay.replayable({
+    now,
+    isLive: (event) => {
+      const key = approvalEventKey(event);
+      if (!key) return false;
+      if (typeof event.requestId === "string" && event.requestId) {
+        const row = inlinePermissionWaiters.get(event.requestId);
+        return Boolean(row && activeExecutions.has(row.executionId));
+      }
+      const approval = ownerApprovalStore.approvals.get(key);
+      return Boolean(approval?.status === "pending" && activeExecutions.has(approval.runId));
+    },
+  });
 }
 // The unified agent registry changed (a named agent created/renamed/deleted, a
 // background agent enabled/disabled/duplicated/updated/deleted, a Site Agent
@@ -1278,6 +1305,14 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onDisconnect.addListener(() => {
       attention.portDisconnected(port);
     });
+  }
+  // A page that connects while a run is already waiting on the owner gets
+  // that run's unanswered approval cards replayed (chrome-agent-platform-
+  // 716s.1): the same stamped events, so the page's run filter accepts them
+  // and a decision there resolves the same request id.
+  const replay = replayablePendingApprovals();
+  for (const event of replay) {
+    try { port.postMessage({ type: "progress", event }); } catch { /* port closing — ignore */ }
   }
   port.onDisconnect.addListener(() => {
     progressPorts.delete(port);
@@ -8813,6 +8848,11 @@ const handlers = mergeRouteMaps(
     const row = inlinePermissionWaiters.get(String(requestId ?? ""));
     if (!row || !activeExecutions.has(row.executionId)) return { ok: false, error: "this permission request expired" };
     row.finish(approve === true ? "approved" : "denied");
+    // Every other page showing this card (a second hub tab) learns the
+    // decision the moment it lands — and the replay memory forgets the
+    // request, so a tab opened afterwards never sees a dead card.
+    const settled = pendingApprovalReplay.settledEvent(String(requestId), approve === true ? "granted" : "denied");
+    if (settled) broadcastProgress(settled);
     return { ok: true, decision: approve === true ? "approved" : "denied" };
   },
   async "management.resolve-approval"({ approvalId, approve }, context) {

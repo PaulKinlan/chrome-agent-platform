@@ -6901,13 +6901,32 @@ class AgentConversation extends Component {
       ? req.key
       : JSON.stringify([req.permissions ?? [], req.grantOrigins ?? [], req.grantGlobal === true, req.hostOrigins ?? []]);
     if (!this._approvalKeys) this._approvalKeys = new Map();
-    if (this._approvalKeys.has(key)) return this._approvalKeys.get(key);
-    const card = document.createElement("permission-approval-card");
-    card.setAttribute("reason", String(req.reason ?? "perform this action").slice(0, 240));
-    if (Array.isArray(req.permissions) && req.permissions.length) card.setAttribute("permissions", JSON.stringify(req.permissions.slice(0, 8)));
-    if (Array.isArray(req.grantOrigins) && req.grantOrigins.length) card.setAttribute("origins", JSON.stringify(req.grantOrigins.slice(0, 50)));
-    if (Array.isArray(req.hostOrigins) && req.hostOrigins.length) card.setAttribute("host-origins", JSON.stringify(req.hostOrigins.slice(0, 50)));
-    if (req.grantGlobal === true) card.setAttribute("global", "true");
+    // ONE card per requirement — but a card a re-projection detached (the
+    // thread was rebuilt from the store while the run still waits) is dead;
+    // the next mount renders a live one (chrome-agent-platform-716s.1).
+    const existing = this._approvalKeys.get(key);
+    if (existing && existing.isConnected !== false) return existing;
+    // An owner-approval ACTION (a script to save/run, a site tool) is the same
+    // <approval-card> the live run shows — its title/body/labels/detail come
+    // from the caller (shared/conversation.js approvalCardSpecFromRequest), so
+    // a card re-mounted in another tab says exactly what the first tab's did.
+    const actionApproval = Array.isArray(req.approvals) && req.approvals.length > 0;
+    const card = document.createElement(actionApproval ? "approval-card" : "permission-approval-card");
+    if (actionApproval) {
+      card.setAttribute("title", String(m.title ?? `Approve ${req.approvals[0]?.action ?? "this action"}?`).slice(0, 240));
+      if (typeof m.body === "string" && m.body) card.setAttribute("body", m.body.slice(0, 2000));
+      if (typeof m.approveLabel === "string" && m.approveLabel) card.setAttribute("approve-label", m.approveLabel.slice(0, 60));
+      if (typeof m.denyLabel === "string" && m.denyLabel) card.setAttribute("deny-label", m.denyLabel.slice(0, 60));
+      // The script source + hosts are a PROPERTY (rendered with textContent
+      // inside the card), never an attribute.
+      if (m.cardDetail && typeof m.cardDetail === "object") card.detail = m.cardDetail;
+    } else {
+      card.setAttribute("reason", String(req.reason ?? "perform this action").slice(0, 240));
+      if (Array.isArray(req.permissions) && req.permissions.length) card.setAttribute("permissions", JSON.stringify(req.permissions.slice(0, 8)));
+      if (Array.isArray(req.grantOrigins) && req.grantOrigins.length) card.setAttribute("origins", JSON.stringify(req.grantOrigins.slice(0, 50)));
+      if (Array.isArray(req.hostOrigins) && req.hostOrigins.length) card.setAttribute("host-origins", JSON.stringify(req.hostOrigins.slice(0, 50)));
+      if (req.grantGlobal === true) card.setAttribute("global", "true");
+    }
     if (typeof m.state === "string" && m.state) card.setAttribute("state", m.state);
     if (typeof m.detail === "string" && m.detail) card.setAttribute("detail", m.detail);
     const emit = (approve, ev) => this.dispatchEvent(new CustomEvent("approval-decision", {
@@ -6917,6 +6936,7 @@ class AgentConversation extends Component {
         requirement: req,
         executionId: m.executionId ?? null,
         requestId: m.requestId ?? null,
+        approvalId: m.approvalId ?? null,
         toolCallId: m.toolCallId ?? null,
         card,
         sourceEvent: ev?.detail?.sourceEvent ?? null,

@@ -202,7 +202,10 @@
     /* when hovering a collapsed item, the dot hides so the centred delete X is clear */
     .side.collapsed .thread-item:hover .t-dot,
     .side.collapsed .thread-item:focus-within .t-dot { visibility: hidden; }
-    .side.collapsed .thread-item .t-dot.running { background: var(--accent2); }
+    /* One state vocabulary with the hub timeline's dots (chrome-agent-platform-716s.1):
+       running = accent, paused (waiting for you) = accent2, failed = danger. */
+    .side.collapsed .thread-item .t-dot.running { background: var(--accent); }
+    .side.collapsed .thread-item .t-dot.paused { background: var(--accent2); }
     .side.collapsed .thread-item .t-dot.error { background: var(--danger); }
     .brand {
       display: flex;
@@ -416,7 +419,8 @@
       flex: 0 0 auto;
       background: var(--muted);
     }
-    .thread-item .t-name .dot.running { background: var(--accent2); }
+    .thread-item .t-name .dot.running { background: var(--accent); }
+    .thread-item .t-name .dot.paused { background: var(--accent2); }
     .thread-item .t-name .dot.error { background: var(--danger); }
     .thread-item .t-title {
       overflow: hidden;

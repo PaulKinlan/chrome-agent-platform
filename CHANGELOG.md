@@ -10,8 +10,10 @@
 - Allows reopening recently closed tabs and listing synced devices via the optional "sessions" permission with in-context approvals.
 - Right-click any page, selection, link, or image to ask the agent about it in the side panel with fenced context, or press Alt+Shift+A to attach the current page.
 - Toolbar badge count and optional notifications when a background or unfocused run needs your approval or finishes.
+- Reopening a thread that is waiting for permission now restores the approval card and shows the honest waiting status.
 
 ## [0.3.558] — 2026-09-29
+- Reopening a thread that is waiting for permission now restores the approval card and shows the honest waiting status.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29
