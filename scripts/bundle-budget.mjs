@@ -21,6 +21,14 @@ export const BUDGET_REPORTED_BUNDLES = Object.freeze([
   "options.bundle.js",
   "workers/agent-worker.js",
   "shared/diff-core.bundle.js",
+  "ntp.bundle.js",
+  "sidepanel.bundle.js",
+  "artifacts.bundle.js",
+  "artifact.bundle.js",
+  "directory.bundle.js",
+  "privacy.bundle.js",
+  "offscreen.bundle.js",
+  "user-wasm-store-client.bundle.js",
 ]);
 
 /**

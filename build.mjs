@@ -121,7 +121,7 @@ async function walkJs(dir, out = []) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
     // generated artifacts (dist pointer/version trees/archives) are not shipped SOURCE
-    if (entry.isDirectory() && (entry.name === 'dist' || entry.name === 'dist-versions' || entry.name === 'dist-archives')) continue;
+    if (entry.isDirectory() && (entry.name === 'dist' || entry.name === 'dist-versions' || entry.name === 'dist-archives' || entry.name.startsWith('.'))) continue;
     if (entry.isDirectory()) await walkJs(p, out);
     else if (entry.isFile() && (extname(p) === ".js" || extname(p) === ".mjs")) out.push(p);
   }
@@ -130,7 +130,7 @@ async function walkJs(dir, out = []) {
 async function walkWasm(dir, out = []) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const p = join(dir, entry.name);
-    if (entry.isDirectory() && (entry.name === 'dist' || entry.name === 'dist-versions' || entry.name === 'dist-archives')) continue;
+    if (entry.isDirectory() && (entry.name === 'dist' || entry.name === 'dist-versions' || entry.name === 'dist-archives' || entry.name.startsWith('.'))) continue;
     if (entry.isDirectory()) await walkWasm(p, out);
     else if (entry.isFile() && extname(p) === ".wasm") out.push(p);
   }
@@ -495,6 +495,39 @@ try {
     const optResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
     const ntpResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE });
     await build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE });
+    // chrome-agent-platform-9epn.5: the remaining UI documents and the offscreen
+    // document were the LAST raw native-ESM loads — artifacts / artifact /
+    // directory / privacy each pulled shared/components.js + its graph as
+    // 18–22 unminified module requests (≈1 MB), offscreen.html 31 requests
+    // (685 KB) on every ensure, and options/user-wasm-panel.js dynamic-imported
+    // a raw lib file — all bypassing minify, the eval scrub and the evaluator
+    // gate. They are real entries now: one request each, same `shared` config,
+    // and every loop below (scrub → minify → evaluator gate → budget → mode →
+    // dist.complete) covers them. Name → entry → output; the output name is
+    // what the HTML / dynamic import references under dist/.
+    const ARTIFACTS_BUNDLE = path.join(STAGE, "artifacts.bundle.js");
+    const ARTIFACT_BUNDLE = path.join(STAGE, "artifact.bundle.js");
+    const DIRECTORY_BUNDLE = path.join(STAGE, "directory.bundle.js");
+    const PRIVACY_BUNDLE = path.join(STAGE, "privacy.bundle.js");
+    const OFFSCREEN_BUNDLE = path.join(STAGE, "offscreen.bundle.js");
+    const USER_WASM_STORE_CLIENT_BUNDLE = path.join(STAGE, "user-wasm-store-client.bundle.js");
+
+    const artifactsResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifacts/index.js")], outfile: ARTIFACTS_BUNDLE });
+    const artifactResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifact/artifact.js")], outfile: ARTIFACT_BUNDLE });
+    const directoryResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "directory/directory.js")], outfile: DIRECTORY_BUNDLE });
+    const privacyResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "privacy/privacy.js")], outfile: PRIVACY_BUNDLE });
+    const offscreenResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "offscreen/offscreen.js")], outfile: OFFSCREEN_BUNDLE });
+    const userWasmClientResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "lib/user-wasm-store-client.js")], outfile: USER_WASM_STORE_CLIENT_BUNDLE });
+
+    const SURFACE_BUNDLES = [
+      { name: "artifacts", entry: "artifacts/index.js", out: "artifacts.bundle.js", path: ARTIFACTS_BUNDLE, result: artifactsResult, budget: 600_000 },
+      { name: "artifact", entry: "artifact/artifact.js", out: "artifact.bundle.js", path: ARTIFACT_BUNDLE, result: artifactResult, budget: 600_000 },
+      { name: "directory", entry: "directory/directory.js", out: "directory.bundle.js", path: DIRECTORY_BUNDLE, result: directoryResult, budget: 600_000 },
+      { name: "privacy", entry: "privacy/privacy.js", out: "privacy.bundle.js", path: PRIVACY_BUNDLE, result: privacyResult, budget: 600_000 },
+      { name: "offscreen", entry: "offscreen/offscreen.js", out: "offscreen.bundle.js", path: OFFSCREEN_BUNDLE, result: offscreenResult, budget: 250_000 },
+      { name: "user-wasm-store-client", entry: "lib/user-wasm-store-client.js", out: "user-wasm-store-client.bundle.js", path: USER_WASM_STORE_CLIENT_BUNDLE, result: userWasmClientResult, budget: 10_000 },
+    ];
+    const SURFACE_BUNDLE_PATHS = SURFACE_BUNDLES.map((s) => s.path);
     // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
     // node_modules, so the ONE wrapper module is bundled and every page /
     // component / the SW imports this single build by relative path.
@@ -517,6 +550,11 @@ try {
     await writeFile(path.join(ROOT, ".build", "bundle-report-worker.json"), JSON.stringify(workerResult.metafile));
     await writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(optResult.metafile));
     await writeFile(path.join(ROOT, ".build", "bundle-report-ntp.json"), JSON.stringify(ntpResult.metafile));
+    // 9epn.5: one report per surface bundle (.build/bundle-report-<name>.json)
+    // for the composition + budget tests.
+    for (const s of SURFACE_BUNDLES) {
+      await writeFile(path.join(ROOT, ".build", `bundle-report-${s.name}.json`), JSON.stringify(s.result.metafile));
+    }
 
     // Scrub + seam-scan IN STAGING over ALL FOUR generated bundles (the SW,
     // the agent-worker bundle — agent-do/ai/mcp-sdk carry a `new Function`/
@@ -533,7 +571,7 @@ try {
     let zodProbes = 0;
     let zodDocCompiles = 0;
     const { denyZodDocCompiles } = await import("./scripts/lib/scrub-zod-doc.mjs");
-    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
+    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS]) {
       let bundle = await readFile(scrubPath, "utf8");
       if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
         throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
@@ -562,7 +600,7 @@ try {
     // only reliable on unminified code, and minification never reintroduces
     // them (globals are never renamed). The developer build is untouched.
     if (!DEBUG_BUILD) {
-      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
+      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS]) {
         const source = await readFile(minifyPath, "utf8");
         const minified = await transform(source, {
           minify: true,
@@ -590,7 +628,7 @@ try {
     // as a separately reviewed, manifest-hash-pinned blob lane
     // (scripts/store-target-policy.mjs), not generated JavaScript.
     const { assertNoDynamicEvaluators } = await import("./scripts/lib/dynamic-evaluator-scan.mjs");
-    for (const gatePath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE]) {
+    for (const gatePath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS]) {
       assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
     }
 
@@ -608,6 +646,10 @@ try {
       } else {
         assertBundleBudget({ label: "background/service-worker.js", bytes: swSize, metafile: swResult.metafile });
         assertBundleBudget({ label: "workers/agent-worker.js", bytes: workerSize, budgetBytes: 2_000_000, metafile: workerResult.metafile });
+        for (const s of SURFACE_BUNDLES) {
+          const sSize = (await stat(s.path)).size;
+          assertBundleBudget({ label: s.out, bytes: sSize, budgetBytes: s.budget, metafile: s.result.metafile });
+        }
         console.log(`bundle budget: store SW bundle ${swSize} bytes <= ${STORE_SW_BUDGET_BYTES} budget`);
       }
     }
@@ -644,7 +686,7 @@ try {
       console.log(`build: admitted Pyodide runtime staged (${runtimeFiles.length} files, sha256-verified against MANIFEST.json)`);
     }
 
-    for (const rel of ["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js"]) {
+    for (const rel of ["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js", ...SURFACE_BUNDLES.map((s) => s.out)]) {
       const mode = await prevMode(rel);
       if (mode != null) await chmod(path.join(STAGE, rel), mode); // mode failure = publish failure (fatal)
     }

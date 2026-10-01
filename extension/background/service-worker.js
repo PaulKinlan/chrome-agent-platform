@@ -6610,7 +6610,7 @@ const handlers = mergeRouteMaps(
       const inFlight = activePythonFetches.get(result.origin);
       if (inFlight) {
         for (const ctrl of inFlight) {
-          try { ctrl.abort(); } catch {}
+          try { ctrl.abort(); } catch { /* best-effort abort */ }
         }
         inFlight.clear();
         activePythonFetches.delete(result.origin);

@@ -3,7 +3,7 @@ import { confirmActionDialog } from "../shared/components.js";
 // Keep the reviewed Worker constructor in its canonical packaged source file,
 // not duplicated inside the options bundle (same pattern as the runtime hosts).
 async function runUserWasmStore(...args) {
-  const client = await import(chrome.runtime.getURL("lib/user-wasm-store-client.js"));
+  const client = await import(chrome.runtime.getURL("dist/user-wasm-store-client.bundle.js"));
   return await client.runOwnerBlobStore(...args);
 }
 
