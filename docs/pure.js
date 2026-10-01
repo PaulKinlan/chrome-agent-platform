@@ -1513,11 +1513,15 @@ export function parseOmniboxContent(content) {
 /** The manifest `commands` ids, in the order Settings lists them. Kept beside
  * the parser so the UI, the service worker and the tests share ONE list — a
  * hand-copied second list is exactly how the composer/+menu duplicates drifted. */
-export const KEYBOARD_COMMANDS = ["open-hub", "new-task", "open-side-panel"];
+export const KEYBOARD_COMMANDS = ["open-hub", "new-task", "open-side-panel", "ask-about-page"];
 
 /** The hub URL a keyboard command should open. "new-task" lands on "#compose",
  * which parseNtpHash routes to the hub with the task composer focused. No
- * command ever carries a payload — a shortcut must not inject task text. */
+ * command ever carries page text — a shortcut must not inject task text.
+ * "ask-about-page" is handled by the service worker (it opens the side panel
+ * with the ACTIVE TAB attached, via a storage.session hand-off keyed by tab
+ * id — see lib/ask-agent-entry.js); its hub URL is the plain hub, used only
+ * when the side panel cannot open. */
 export function hubUrlForCommand(command, getURL) {
   const base = getURL("ntp/ntp.html");
   return command === "new-task" ? `${base}#compose` : base;

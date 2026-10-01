@@ -38,6 +38,7 @@ import { deleteAgentDialog, renderAgentPermissionsPanel } from "../shared/compon
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { capLog } from "../lib/cap-log.js";
 import { actionableRunsForSurface } from "../lib/run-scope.js";
+import { applyAskAgentPrefill, askAgentPrefillTabId, takeAskAgentPrefill } from "../lib/ask-agent-entry.js";
 
 capLog("sidepanel").info("side panel evaluated");
 
@@ -343,6 +344,7 @@ async function loadTabThread(tabId) {
 // Re-entrancy fence: a burst of tab events must not race two refreshes into an
 // inconsistent header/thread pair (last query wins).
 let refreshSeq = 0;
+let askAgentPrefillSeq = 0; // the ask-agent prefill take in flight (see consumeAskAgentPrefill)
 async function refreshActiveTab() {
   const seq = ++refreshSeq;
   let tab = null;
@@ -362,6 +364,9 @@ async function refreshActiveTab() {
   else setToolState("none");
   if (seq !== refreshSeq) return;
   if (tabChanged) await loadTabThread(tabId);
+  if (seq !== refreshSeq) return;
+  // A right-click / Alt+Shift+A prefill waiting for THIS tab (see below).
+  await consumeAskAgentPrefill(tabId);
 }
 
 function wireConversationHistory(history, composer) {
@@ -479,6 +484,29 @@ chrome.tabs?.onUpdated?.addListener((tabId, changeInfo) => {
 });
 chrome.windows?.onFocusChanged?.addListener(() => { refreshActiveTab(); });
 refreshActiveTab();
+
+// ── "Ask agent" prefill (right-click menu / Alt+Shift+A) ───────────────────
+// The service worker opens this panel and writes { text, attachments } to
+// chrome.storage.session under cap:askAgent:prefill:<tabId> (never a URL
+// payload). Take it ONCE for the tab this panel is on — on boot / tab switch,
+// and when it lands while the panel is already open — and put it in the page
+// composer: text + chips, focused, NOT sent. The owner presses Send.
+async function consumeAskAgentPrefill(tabId) {
+  if (!pageComposer || tabId == null) return false;
+  const seq = ++askAgentPrefillSeq;
+  const record = await takeAskAgentPrefill(chrome, tabId);
+  if (!record || seq !== askAgentPrefillSeq || tabId !== currentTabId) return false;
+  switchView("page");
+  applyAskAgentPrefill(pageComposer, record);
+  return true;
+}
+chrome.storage?.onChanged?.addListener((changes, area) => {
+  if (area !== "session") return;
+  for (const key of Object.keys(changes ?? {})) {
+    if (!changes[key]?.newValue) continue; // our own removal
+    if (askAgentPrefillTabId(key) === currentTabId) { consumeAskAgentPrefill(currentTabId); break; }
+  }
+});
 
 // NOTE: there is deliberately NO runtime.onMessage listener that opens tabs
 // (no "navigate"/"sidepanel.navigate" local path). The wider-goal review found

@@ -127,7 +127,10 @@ const KV_EPHEMERAL = new Set([
   "cap:scheduledInflight", "cap:pendingCleanup", "cap:threadQueues",
   "agents-pending-teardown", "cap:notifications:index",
 ]);
-const KV_EPHEMERAL_PREFIXES = ["cap:notification:"];
+// cap:askAgent:prefill:<tabId> — the storage.session hand-off for the "Ask
+// agent" right-click / shortcut entry (lib/ask-agent-entry.js): consumed once,
+// expires in minutes, meaningless on another device.
+const KV_EPHEMERAL_PREFIXES = ["cap:notification:", "cap:askAgent:prefill:"];
 const KV_DENY_UNION = new Set([
   "cap:hooksDeny", "cap:destructiveActionPolicy",
 ]);
@@ -146,6 +149,7 @@ const KV_PORTABLE = new Set([
   "cap:sidepanel:page-threads", "cap:sidepanel:selected-agent",
   "cap:siteActivityFocus", "cap:first-run-browser-choice",
   "cap:first-run-guide-dismissed", "cap:webmcpDiagnostics", "cap:runRetention",
+  "cap:ask-agent-menu-banner-dismissed",
 ]);
 const KV_PORTABLE_PREFIXES = ["cap:hub-seen:"];
 

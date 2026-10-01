@@ -111,6 +111,16 @@ import {
 } from "../lib/data-archive.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
+import {
+  ASK_AGENT_COMMAND,
+  askAgentHubUrl,
+  askAgentPrefillForTab,
+  askAgentPrefillFromClick,
+  hydrateAskAgentImage,
+  registerProductContextMenus,
+  removeProductContextMenus,
+  storeAskAgentPrefill,
+} from "../lib/ask-agent-entry.js";
 import { appendRunEndCleanupNote, autoCloseTabPlan, createLifecycleTracker, liveLifecycleSnapshot } from "../lib/lifecycle-cleanup.js";
 import {
   canonicalOrigin,
@@ -3963,6 +3973,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
           size: a?.size ?? 0,
           kind: a?.kind ?? "file",
           dataURL: typeof a?.dataURL === "string" ? a.dataURL : "",
+          ...(a?.untrusted === true ? { untrusted: true } : {}),
+          ...(typeof a?.url === "string" && a.url ? { url: a.url.slice(0, 2048) } : {}),
+          ...(typeof a?.srcUrl === "string" && a.srcUrl ? { srcUrl: a.srcUrl.slice(0, 2048) } : {}),
         })) : undefined,
       };
       // The receipt-capable task append is committed before orch.run reaches
@@ -3975,7 +3988,9 @@ async function runTask({ id, task, scheduled = false, attachments = [], fence = 
       // before — the round-19 blocker: journal ownership was checked before the
       // awaited commit, never after).
       await fence?.assertOwned?.();
-      const context = attachmentContext(attachments);
+      // Untrusted (page-derived) attachments are fenced with THIS run's token —
+      // the same one the master's untrusted-content policy layer names.
+      const context = attachmentContext(attachments, { untrustedToken: orch?.untrustedToken ?? null });
       // Include any /skill:<id> references from the task string: each
       // referenced skill's FULL prompt body is composed into the run's system
       // prompt as a skills layer BEFORE the protected runtime policy (the
@@ -10663,7 +10678,7 @@ const handlers = mergeRouteMaps(
         });
         // Thread the captured generation and attachments into a.run. Text attachments
         // are formatted into context; images become vision parts in a multimodal task.
-        const delegateContext = attachmentContext(validAttachments);
+        const delegateContext = attachmentContext(validAttachments, { untrustedToken: a?.untrustedToken ?? null });
         const promptTask = buildMultimodalTask(task, validAttachments);
         return await a.run(
           promptTask,
@@ -11505,7 +11520,7 @@ setPythonRuntimeProvider(
 );
 
 // ---- keyboard commands (manifest `commands`) ---------------------------
-// Three deliberately memorable shortcuts for a tool the owner returns to many
+// Four deliberately memorable shortcuts for a tool the owner returns to many
 // times a day. Deliberate constraints, all enforced below:
 //   - NONE of them is destructive and NONE requests a permission. A key chord
 //     is not an owner gesture aimed at a specific grant, so a shortcut that
@@ -11514,8 +11529,10 @@ setPythonRuntimeProvider(
 //     extension page never needs `tabs`; the side-panel command is the one that
 //     genuinely needs `sidePanel`, and it fails closed with a readable reason
 //     rather than asking for it.
-//   - No shortcut carries a payload. "New task" focuses the composer; it never
-//     injects task text.
+//   - No shortcut carries page text. "New task" focuses the composer; it never
+//     injects task text. "Ask about page" (Alt+Shift+A) attaches the ACTIVE
+//     TAB as an untrusted reference and prefills a prompt the owner can edit
+//     — nothing is sent (see the ask-agent entry points below).
 // Remapping is Chrome's own chrome://extensions/shortcuts (Settings → About
 // links to it). A user who clears a binding simply has no shortcut.
 // KEYBOARD_COMMANDS + hubUrlForCommand live in lib/pure.js so Settings, this
@@ -11564,9 +11581,103 @@ async function openSidePanelForCommand() {
   }
 }
 
+// ---- ask-agent entry points (right-click menu + Alt+Shift+A) ----------
+// The product's OWN "Agent → Ask agent about this page / selection / link /
+// image" context-menu entries (lib/ask-agent-entry.js owns the ids, titles
+// and the click → prefill projection) and the fourth keyboard command.
+// Constraints, all enforced here:
+//   - `contextMenus` is OPTIONAL. The entries exist only while the owner has
+//     granted it (Settings → Permissions, or the hub banner's button — an
+//     owner gesture on the page that asks). This worker never requests it:
+//     a menu click / key chord is not consent for a grant.
+//   - Registration is idempotent and runs on boot, on install, and on grant;
+//     revoke removes exactly our ids (model-created menus from the
+//     create_context_menu tool belong to the hook path).
+//   - The hand-off carries NO page text in a URL. The click builds a prefill
+//     ({ text, attachments tagged untrusted:true }) and stores it in
+//     chrome.storage.session under cap:askAgent:prefill:<tabId>; the side
+//     panel (or, as a fallback, the hub at #ask-agent=<tabId>) takes it once.
+//   - Nothing is sent. The composer is prefilled and focused; the owner
+//     presses Send.
+let askAgentClickListenerBound = false;
+function ensureAskAgentClickListener() {
+  if (askAgentClickListenerBound) return;
+  const onClicked = chrome.contextMenus?.onClicked;
+  if (typeof onClicked?.addListener !== "function") return;
+  askAgentClickListenerBound = true;
+  onClicked.addListener((info, tab) => {
+    handleAskAgentClick(info, tab).catch((e) => {
+      pushDiagnostic("error", `ask agent (menu) failed: ${e?.message ?? e}`, "commands", "runtime");
+    });
+  });
+}
+
+async function registerAskAgentMenus(trigger) {
+  ensureAskAgentClickListener();
+  const r = await registerProductContextMenus(chrome);
+  if (!r.ok && /unavailable|not granted/.test(String(r.reason ?? ""))) return r; // expected without the grant
+  if (!r.ok) pushDiagnostic("warn", `ask agent menu (${trigger}) not registered: ${r.reason}`, "commands", "runtime");
+  return r;
+}
+
+/** Deliver a prefill: side panel first (the click/chord is the gesture that
+ * lets sidePanel.open succeed), hub tab as the fallback. The prefill is stored
+ * AFTER the open attempt so the panel's boot read and its onChanged listener
+ * both see it; an image's bytes are fetched (bounded) before storing. */
+async function deliverAskAgentPrefill(prefill, source) {
+  if (!prefill || prefill.tabId == null) {
+    pushDiagnostic("warn", `ask agent (${source}): no tab to attach`, "commands", "runtime");
+    return { ok: false, error: "no tab" };
+  }
+  let panelOpen = false;
+  try {
+    await chrome.sidePanel.setOptions({ tabId: prefill.tabId, path: "sidepanel/sidepanel.html", enabled: true });
+    await chrome.sidePanel.open({ tabId: prefill.tabId });
+    panelOpen = true;
+  } catch { panelOpen = false; }
+  for (const att of prefill.attachments ?? []) {
+    if (att?.kind === "image" && att.srcUrl && !att.dataURL) await hydrateAskAgentImage(att);
+  }
+  const stored = await storeAskAgentPrefill(chrome, prefill);
+  if (!stored.ok) {
+    pushDiagnostic("warn", `ask agent (${source}): prefill not stored: ${stored.error}`, "commands", "runtime");
+    return { ok: false, error: stored.error };
+  }
+  if (!panelOpen) {
+    await chrome.tabs.create({ url: askAgentHubUrl((p) => chrome.runtime.getURL(p), prefill.tabId), active: true });
+  }
+  return { ok: true, panel: panelOpen, degraded: stored.degraded === true };
+}
+
+async function handleAskAgentClick(info, tab) {
+  const prefill = askAgentPrefillFromClick(info, tab);
+  if (!prefill) return { ok: false, error: "not an ask-agent item" }; // a model-created menu: the hook path's
+  return await deliverAskAgentPrefill(prefill, `menu:${prefill.variant}`);
+}
+
+async function askAboutPageForCommand() {
+  const tabs = await chrome.tabs?.query?.({ active: true, currentWindow: true }).catch(() => []) ?? [];
+  const active = Array.isArray(tabs) ? tabs[0] : null;
+  if (active?.id == null) return { ok: false, error: "no active tab" };
+  return await deliverAskAgentPrefill(askAgentPrefillForTab(active), "command");
+}
+
+// Boot: Chrome keeps menu items across worker restarts but not across an
+// extension reload/update, and the click listener must be bound on every
+// worker evaluation. Register (idempotently) when the API is present.
+registerAskAgentMenus("boot").catch(() => {});
+chrome.runtime.onInstalled.addListener(() => { registerAskAgentMenus("install").catch(() => {}); });
+chrome.permissions?.onAdded?.addListener((perms) => {
+  if (perms?.permissions?.includes("contextMenus")) registerAskAgentMenus("grant").catch(() => {});
+});
+chrome.permissions?.onRemoved?.addListener((perms) => {
+  if (perms?.permissions?.includes("contextMenus")) removeProductContextMenus(chrome).catch(() => {});
+});
+
 async function handleKeyboardCommand(command) {
   if (!KEYBOARD_COMMANDS.includes(command)) return { ok: false, error: `unknown command: ${command}` };
   if (command === "open-side-panel") return await openSidePanelForCommand();
+  if (command === ASK_AGENT_COMMAND) return await askAboutPageForCommand();
   return await openHubForCommand(command);
 }
 

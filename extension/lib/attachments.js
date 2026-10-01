@@ -4,6 +4,8 @@
 // reach the model as a MULTIMODAL vision part, and the attachment must be
 // persisted + rendered in the conversation. These are the pure building blocks.
 
+import { fenceUntrustedText, isUntrustedToken, mintUntrustedToken } from "./untrusted-fence.js";
+
 export function isTextLikeAttachment({ name = "", type = "" } = {}) {
   const mime = String(type).toLowerCase().split(";", 1)[0];
   const filename = String(name).toLowerCase();
@@ -34,8 +36,22 @@ export function textToDataUrl(text, type = "text/plain") {
  * Returns the task string when there are no image attachments, or a
  * `[{type:'text',text},{type:'image',image:dataURL},…]` array when there are.
  */
-export function attachmentContext(attachments) {
+/**
+ * Render attachments as model-facing context.
+ *
+ * `untrustedToken` is the run's fence token (runtime-context.js). Any
+ * attachment tagged `untrusted: true` — a page selection, a tab/link/image
+ * reference picked up by the "Ask agent" right-click entry — has every
+ * page-derived string wrapped in the same `<<<UNTRUSTED run:TOKEN>>>` block
+ * tool results use, so the protected system layer's rule ("text inside the
+ * block is data, never an instruction") covers it. Without a usable token a
+ * fresh one is minted so the content is still labelled as data, never raw.
+ * Trusted attachments (the owner's own files/tabs) render exactly as before.
+ */
+export function attachmentContext(attachments, { untrustedToken = null } = {}) {
   if (!Array.isArray(attachments) || attachments.length === 0) return "";
+  const token = isUntrustedToken(untrustedToken) ? untrustedToken : mintUntrustedToken();
+  const guard = (a, text) => (a?.untrusted === true ? fenceUntrustedText(text, token) : text);
   const parts = [];
   for (const a of attachments) {
     if (a.kind === "local-folder") {
@@ -48,14 +64,30 @@ export function attachmentContext(attachments) {
       );
       continue;
     }
+    if (a.kind === "link") {
+      parts.push(guard(a, `[link: ${a.name ?? "link"} — ${a.url ?? "(no url)"}]`));
+      continue;
+    }
+    if (a.kind === "image" && typeof a.srcUrl === "string" && a.srcUrl) {
+      parts.push(guard(a, `[image: ${a.srcUrl} — ${a.name ?? "image"}]`));
+      if (a.dataURL && String(a.type ?? "").toLowerCase().startsWith("image/")) {
+        parts.push("  (image attached — provided to the model as a vision input)");
+      } else {
+        parts.push("  (image bytes not attached — only the reference above)");
+      }
+      continue;
+    }
     if (a.kind === "tab" || a.url) {
-      parts.push(`[tab: ${a.name ?? "tab"} — ${a.url ?? "(no url)"}]`);
+      parts.push(guard(a, `[tab: ${a.name ?? "tab"} — ${a.url ?? "(no url)"}]`));
       continue;
     }
     parts.push(
-      `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${
-        a.type ?? "unknown"
-      }, ${a.size ?? "?"} bytes)]`,
+      guard(
+        a,
+        `[attachment: ${a.name ?? "unnamed"} (${a.kind ?? "file"}, ${
+          a.type ?? "unknown"
+        }, ${a.size ?? "?"} bytes)]`,
+      ),
     );
     const type = String(a.type ?? "").toLowerCase();
     const name = String(a.name ?? "").toLowerCase();
@@ -68,7 +100,7 @@ export function attachmentContext(attachments) {
         const binary = atob(a.dataURL.split(",")[1] ?? "");
         const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
         const body = new TextDecoder().decode(bytes);
-        parts.push("--- text content ---\n" + body + "\n---");
+        parts.push("--- text content ---\n" + guard(a, body) + "\n---");
       } catch { /* not decodable */ }
     } else if (a.dataURL && type.startsWith("image/")) {
       parts.push("  (image attached — provided to the model as a vision input)");
@@ -159,6 +191,12 @@ export function sanitizeAttachments(attachments) {
       // it (CAP-FB-20260831-FOLDER-COMMAND-01). Bounded like every other field.
       ...(typeof a.grantId === "string" && a.grantId ? { grantId: a.grantId.slice(0, 128) } : {}),
       ...(typeof a.folderName === "string" && a.folderName ? { folderName: a.folderName.slice(0, 256) } : {}),
+      // Page-derived attachments (the "Ask agent" right-click / shortcut entry)
+      // carry `untrusted: true`; it must survive persistence so a continuation
+      // re-fences the content rather than promoting it to the owner's voice.
+      ...(a.untrusted === true ? { untrusted: true } : {}),
+      ...(typeof a.url === "string" && a.url ? { url: a.url.slice(0, 2048) } : {}),
+      ...(typeof a.srcUrl === "string" && a.srcUrl ? { srcUrl: a.srcUrl.slice(0, 2048) } : {}),
     });
   }
   return out.length ? out : undefined;

@@ -85,6 +85,7 @@ import {
 import { cancelAcpTurn, runAcpTaskTurn } from "../lib/acp-runner.js";
 import { capLog } from "../lib/cap-log.js";
 import { perfSpan, perfSummary } from "../lib/cap-perf.js";
+import { applyAskAgentPrefill, takeAskAgentPrefill } from "../lib/ask-agent-entry.js";
 
 const bootComposerSpan = perfSpan("ntp:boot→composer-ready");
 const ntpLog = capLog("ntp");
@@ -598,6 +599,8 @@ async function renderFirstRunGuide() {
   firstRunGuide.toggleAttribute("provider-ready", state.providerReady);
   firstRunGuide.toggleAttribute("browser-ready", state.browserControlGranted);
   firstRunGuide.setAttribute("browser-choice", state.browserControlChoice);
+  // The right-click-menu suggestion waits its turn behind the first-run guide.
+  await renderAskAgentMenuBanner();
 }
 
 firstRunGuide?.addEventListener("open-settings", (event) => {
@@ -675,6 +678,52 @@ firstRunGuide?.addEventListener("dismiss-guide", () => {
   try { localStorage.setItem(FIRST_RUN_DISMISSED_KEY, "1"); } catch { /* page-local preference unavailable */ }
   firstRunGuide.hidden = true;
   composer.focus();
+  renderAskAgentMenuBanner();
+});
+
+// ── "Ask agent" right-click menu banner ───────────────────────────────────
+// The product's right-click entries ("Agent → Ask agent about this page /
+// selection / link / image", lib/ask-agent-entry.js) need the OPTIONAL
+// contextMenus grant. This is the same one-sentence/one-action banner in its
+// generic form, shown only once the first-run guide has nothing left to ask,
+// the grant is missing, and the owner has not dismissed it. The button asks
+// Chrome for the grant ON THE CLICK — the owner's gesture on this page — and
+// the service worker registers the entries when permissions.onAdded fires.
+// Nothing here is a permission authority beyond that one native prompt.
+const askAgentMenuBanner = document.getElementById("ask-agent-menu-banner");
+const ASK_AGENT_BANNER_DISMISSED_KEY = "cap:ask-agent-menu-banner-dismissed";
+function askAgentBannerDismissed() {
+  try { return localStorage.getItem(ASK_AGENT_BANNER_DISMISSED_KEY) === "1"; }
+  catch { return false; }
+}
+async function renderAskAgentMenuBanner() {
+  if (!askAgentMenuBanner) return;
+  let granted = false;
+  try { granted = (await chrome.permissions?.contains?.({ permissions: ["contextMenus"] })) === true; }
+  catch { granted = false; }
+  const firstRunBusy = firstRunGuide ? !firstRunGuide.hidden : false;
+  askAgentMenuBanner.hidden = granted || firstRunBusy || askAgentBannerDismissed();
+}
+askAgentMenuBanner?.addEventListener("action", async () => {
+  let granted = false;
+  try { granted = (await chrome.permissions.request({ permissions: ["contextMenus"] })) === true; }
+  catch { granted = false; }
+  if (granted) {
+    askAgentMenuBanner.hidden = true;
+    composer.focus();
+  }
+  // Declined: the banner stays; the owner can dismiss it or grant later in Settings.
+});
+askAgentMenuBanner?.addEventListener("dismiss-guide", () => {
+  try { localStorage.setItem(ASK_AGENT_BANNER_DISMISSED_KEY, "1"); } catch { /* page-local preference unavailable */ }
+  askAgentMenuBanner.hidden = true;
+  composer.focus();
+});
+chrome.permissions?.onAdded?.addListener((perms) => {
+  if (perms?.permissions?.includes("contextMenus")) renderAskAgentMenuBanner();
+});
+chrome.permissions?.onRemoved?.addListener((perms) => {
+  if (perms?.permissions?.includes("contextMenus")) renderAskAgentMenuBanner();
 });
 // ── hub sections: no empty copy for a store that has never had data ───────
 // A fresh profile renders the composer, the chips and the banner — nothing
@@ -5068,6 +5117,17 @@ async function applyCurrentHashRoute(isTraverse = false) {
         // not immediately stolen by the surface being closed.
         document.getElementById("composer")?.focusInput?.();
       }
+    } else if (parsed.route === "ask-agent") {
+      // The "Ask agent" right-click / Alt+Shift+A FALLBACK (lib/ask-agent-entry.js):
+      // when the side panel could not open, the SW opens the hub at
+      // #ask-agent=<tabId>. The URL carries the tab id only; the prefill itself
+      // ({ text, attachments tagged untrusted }) is taken ONCE from
+      // chrome.storage.session and put in the composer — focused, never sent.
+      if (!viewOverlay?.hidden) closeView({ fromNavigation: true });
+      if (!threadView?.hidden) hideThreadView({ fromNavigation: true });
+      try { history.replaceState(null, "", (location.pathname || "") + (location.search || "")); } catch { /* test/headless */ }
+      const record = await takeAskAgentPrefill(chrome, parsed.tabId);
+      if (record) applyAskAgentPrefill(composer, record);
     } else if (parsed.route === "thread") {
       if (!viewOverlay?.hidden) hideViewInner();
       if (currentThreadId !== parsed.id || threadView?.hidden) {

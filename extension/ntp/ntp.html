@@ -1069,6 +1069,15 @@
         <site-agent-card id="site-offer" offer hidden></site-agent-card>
         <example-chips id="example-chips" label="Try one of these" chips="Group my tabs by topic|Summarise this page|Watch this price"></example-chips>
         <first-run-guide id="first-run-guide" hidden></first-run-guide>
+        <!-- The "Ask agent" right-click entry needs the optional contextMenus
+             grant. Same banner component, generic form: shown once a model is
+             connected and the grant is missing; the button requests the grant
+             ON THE CLICK (an owner gesture on this page); dismiss remembers. -->
+        <first-run-guide id="ask-agent-menu-banner" hidden
+          headline="Add “Ask agent” to your right-click menu."
+          body="Right-click any page, selection, link or image to ask the agent about it (Alt+Shift+A does the same for the current page)."
+          action-label="Add to right-click menu"
+          dismiss-label="Dismiss right-click menu suggestion"></first-run-guide>
         <header class="top">
           <div class="top-actions">
             <span class="status" id="status" role="status" aria-live="polite" hidden></span>

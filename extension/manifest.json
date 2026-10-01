@@ -78,6 +78,13 @@
         "mac": "Alt+Shift+S"
       },
       "description": "Open the side panel on this tab"
+    },
+    "ask-about-page": {
+      "suggested_key": {
+        "default": "Alt+Shift+A",
+        "mac": "Alt+Shift+A"
+      },
+      "description": "Ask the agent about this page (side panel, page attached)"
     }
   },
   "action": {

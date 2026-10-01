@@ -117,6 +117,10 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       with bounded results and attaches bounded text or metadata-only binary references.
 - [x] Durable run authority — service-worker/OPFS run registry, outbox projection,
       bounded recovery, reload persistence. docs/DURABLE-RUN-ARCHITECTURE.md.
+- [x] Product-owned context menu + keyboard shortcut (Alt+Shift+A) — "Ask agent about this
+      page / selection / link / image" opens the side panel (or hub fallback) with fenced
+      untrusted context and editable prefill; contextMenus optional permission requested on
+      owner gesture. docs/DESIGN.md.
 
 ### Landed 2026-08-24 → 08-27 — the recent wave
 - [x] **Agent workers (Phases 1–4 complete, `0.2.308`–`0.2.310`)** — each agent runs in

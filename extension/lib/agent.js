@@ -1921,6 +1921,10 @@ export function createAgent({
       return result;
     },
     lazyDiagnostics: () => lazy.diagnostics(),
+    // The untrusted-content boundary token THIS agent's policy layer names
+    // (lib/untrusted-fence.js) — read-only, so a caller rendering page-derived
+    // context (attachmentContext) fences it with the token the model expects.
+    get untrustedToken() { return typeof untrustedToken === "string" ? untrustedToken : null; },
     // The finite step budget this agent runs under (the run log records it;
     // the surface counts against it).
     budget: () => ({ maxIterations, innerStepLimit, total: budgetTotal }),
