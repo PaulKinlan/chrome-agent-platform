@@ -38,6 +38,12 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "ntp.bundle.js": 870_000,
   "sidepanel.bundle.js": 660_000,
   "shared/diff-core.bundle.js": 17_000,
+  "artifacts.bundle.js": 600_000,
+  "artifact.bundle.js": 600_000,
+  "directory.bundle.js": 600_000,
+  "privacy.bundle.js": 600_000,
+  "offscreen.bundle.js": 250_000,
+  "user-wasm-store-client.bundle.js": 10_000,
 });
 
 /** The bundle outputs the budget report covers (relative to dist/). */

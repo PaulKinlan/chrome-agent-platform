@@ -7,6 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { discoveredOnly } from "../lib/pure.js";
+import "../shared/components.js";
 
 if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
   document.documentElement.dataset.embedded = "1";

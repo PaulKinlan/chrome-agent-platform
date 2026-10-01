@@ -355,9 +355,36 @@ Deno.test("posture: Settings preview and run-bound model dispatch share immutabl
 
 // ── Store boundary: exact bundled-Wasm manifest mapping (hostile) ──────────
 import { buildBundledWasmManifestMap, collectPackageInventory } from "../scripts/package-archive.mjs";
-import { assertStoreTargetBoundary } from "../scripts/store-target-policy.mjs";
+import {
+  assertStoreTargetBoundary,
+  BUNDLE_ARCHIVE_MAP,
+  STORE_BOUNDARY_ALLOWLIST,
+} from "../scripts/store-target-policy.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+
+Deno.test("store map: bundle archive map and boundary allowlist cover all 6 surface bundles", () => {
+  const expectedSurfaceBundles = [
+    ["dist/artifacts.bundle.js", "artifacts/index.js"],
+    ["dist/artifact.bundle.js", "artifact/artifact.js"],
+    ["dist/directory.bundle.js", "directory/directory.js"],
+    ["dist/privacy.bundle.js", "privacy/privacy.js"],
+    ["dist/offscreen.bundle.js", "offscreen/offscreen.js"],
+    ["dist/user-wasm-store-client.bundle.js", "lib/user-wasm-store-client.js"],
+  ];
+  for (const [archivePath, sourcePath] of expectedSurfaceBundles) {
+    assertEquals(
+      BUNDLE_ARCHIVE_MAP.get(archivePath),
+      sourcePath,
+      `${archivePath} must map to ${sourcePath} in BUNDLE_ARCHIVE_MAP`,
+    );
+  }
+  assert(STORE_BOUNDARY_ALLOWLIST.allowedWorkerBundles.includes("dist/offscreen.bundle.js"));
+  assert(STORE_BOUNDARY_ALLOWLIST.allowedWorkerBundles.includes("dist/user-wasm-store-client.bundle.js"));
+  assert(STORE_BOUNDARY_ALLOWLIST.allowedWasmBundles.includes("dist/offscreen.bundle.js"));
+  assert(!STORE_BOUNDARY_ALLOWLIST.allowedWorkerBundles.includes("dist/artifacts.bundle.js"));
+  assert(!STORE_BOUNDARY_ALLOWLIST.allowedWasmBundles.includes("dist/artifacts.bundle.js"));
+});
 
 Deno.test("store map: exact archivePath→executable mapping for ALL 38 shipped CAS binaries", async () => {
   const map = await buildBundledWasmManifestMap(repoRoot);

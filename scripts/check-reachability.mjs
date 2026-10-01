@@ -184,7 +184,7 @@ export async function walkShipped(root, { readdir }) {
       const name = entry.name;
       const rel = relDir ? `${relDir}/${name}` : name;
       if (entry.isDirectory) {
-        if (SKIPPED_DIRS.has(name)) continue;
+        if (SKIPPED_DIRS.has(name) || name.startsWith(".")) continue;
         await walk(`${dir}/${name}`, rel);
       } else if (SHIPPED_EXTENSIONS.has(name.slice(name.lastIndexOf(".")))) {
         // Generated esbuild outputs are never shipped sources: the bundles in

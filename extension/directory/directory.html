@@ -7,7 +7,6 @@
   <title>Agent directory — sites as agents</title>
   <link rel="stylesheet" href="../shared/theme.css">
     <script src="../shared/embedded-boot.js"></script>
-  <script type="module" src="../shared/components.js"></script>
   <style>
     body { min-inline-size:0; overflow-x:clip; }
     .wrap { max-inline-size:var(--content-max); min-inline-size:0; margin-inline:auto;
@@ -40,6 +39,6 @@
     <p class="sub">Every enrolled site can provide declared WebMCP, linked, or inferred functions. Each function shows its own source, schema, provenance, and policy state — and each site carries an enrollment policy (Allow tools / Ask before use / Blocked) that decides whether its tools are available to agents.</p>
     <div id="rows" aria-live="polite"></div>
   </main>
-  <script type="module" src="directory.js"></script>
+  <script type="module" src="../dist/directory.bundle.js"></script>
 </body>
 </html>

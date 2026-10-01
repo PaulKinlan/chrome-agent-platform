@@ -11,6 +11,7 @@
 
 import { buildPrivacyStatement } from "../lib/privacy-statement.js";
 import { send } from "../lib/messages.js";
+import "../shared/components.js";
 
 const statementEl = document.getElementById("statement");
 const status = document.getElementById("status");

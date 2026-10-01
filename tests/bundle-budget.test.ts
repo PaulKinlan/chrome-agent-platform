@@ -18,6 +18,7 @@ import { assert, assertEquals, assertRejects, assertStringIncludes, assertThrows
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { assertNoDynamicEvaluators } from "../scripts/lib/dynamic-evaluator-scan.mjs";
 import {
   assertBundleBudget,
   BUDGET_REPORTED_BUNDLES,
@@ -652,4 +653,151 @@ Deno.test("bundle budget: @vercel/oidc stub throws VercelOidcDisabledError (9epn
   await assertRejects(() => getVercelToken(), VercelOidcDisabledError);
 });
 
+// ── chrome-agent-platform-9epn.5: bundled surface entries ───────────────────
+
+Deno.test("9epn.5 surfaces are bundled: HTML documents and dynamic imports load dist/ bundles, not raw components.js", async () => {
+  const artifactsHtml = await Deno.readTextFile("extension/artifacts/index.html");
+  const artifactHtml = await Deno.readTextFile("extension/artifact/artifact.html");
+  const directoryHtml = await Deno.readTextFile("extension/directory/directory.html");
+  const privacyHtml = await Deno.readTextFile("extension/privacy/privacy.html");
+  const offscreenHtml = await Deno.readTextFile("extension/offscreen/offscreen.html");
+  const userWasmPanelJs = await Deno.readTextFile("extension/options/user-wasm-panel.js");
+
+  // None of the four pages loads raw components.js directly in HTML
+  for (const [name, html] of [
+    ["artifacts", artifactsHtml],
+    ["artifact", artifactHtml],
+    ["directory", directoryHtml],
+    ["privacy", privacyHtml],
+  ]) {
+    assert(
+      !html.includes('src="../shared/components.js"'),
+      `${name} must not load raw components.js directly (bundled into dist/ instead)`,
+    );
+  }
+
+  // Each page references its pre-bundled dist/ script
+  assertStringIncludes(artifactsHtml, 'src="../dist/artifacts.bundle.js"');
+  assertStringIncludes(artifactHtml, 'src="../dist/artifact.bundle.js"');
+  assertStringIncludes(directoryHtml, 'src="../dist/directory.bundle.js"');
+  assertStringIncludes(privacyHtml, 'src="../dist/privacy.bundle.js"');
+  assertStringIncludes(offscreenHtml, 'src="../dist/offscreen.bundle.js"');
+  assertStringIncludes(userWasmPanelJs, 'dist/user-wasm-store-client.bundle.js');
+  assert(!userWasmPanelJs.includes('lib/user-wasm-store-client.js'));
+
+  // Each of the four HTML documents loads <= 2 script tags total
+  for (const [name, html] of [
+    ["artifacts", artifactsHtml],
+    ["artifact", artifactHtml],
+    ["directory", directoryHtml],
+    ["privacy", privacyHtml],
+  ]) {
+    const scripts = html.match(/<script\b[^>]*>/gi) ?? [];
+    assert(
+      scripts.length <= 2,
+      `${name} must have <= 2 script tags (found ${scripts.length})`,
+    );
+  }
+});
+
+Deno.test("9epn.5 bundle budget: offscreen.bundle.js <= 250 KB minified and all surface bundles have metafile reports", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const offscreenBundle = join(repo, "extension", "dist", "offscreen.bundle.js");
+
+  try {
+    const stat = await Deno.stat(offscreenBundle);
+    assert(
+      stat.size <= 250_000,
+      `offscreen.bundle.js must be <= 250 KB minified (actual: ${stat.size} bytes)`,
+    );
+  } catch (e) {
+    if (e instanceof Deno.errors.NotFound) {
+      throw new Error(`dist/offscreen.bundle.js missing — run npm run build:production first`);
+    }
+    throw e;
+  }
+
+  // All 6 surface bundles have generated metafile reports
+  const surfaceNames = [
+    "artifacts",
+    "artifact",
+    "directory",
+    "privacy",
+    "offscreen",
+    "user-wasm-store-client",
+  ];
+  for (const name of surfaceNames) {
+    const reportPath = join(repo, ".build", `bundle-report-${name}.json`);
+    const meta = JSON.parse(await Deno.readTextFile(reportPath));
+    const inputs = Object.keys(meta.inputs ?? {});
+    assert(inputs.length >= 1, `metafile report for ${name} must describe its inputs`);
+  }
+});
+
+Deno.test("9epn.5 dynamic evaluator gate covers all surface bundles without dynamic evaluators", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const bundles = [
+    "artifacts.bundle.js",
+    "artifact.bundle.js",
+    "directory.bundle.js",
+    "privacy.bundle.js",
+    "offscreen.bundle.js",
+    "user-wasm-store-client.bundle.js",
+  ];
+
+  for (const b of bundles) {
+    const bundlePath = join(repo, "extension", "dist", b);
+    const source = await Deno.readTextFile(bundlePath);
+    assertNoDynamicEvaluators(source, b);
+  }
+});
+
+Deno.test("9epn.5 self-contained single bundles: zero runtime relative imports to ../lib/ or ../shared/ (1 JS file instead of 18–22 unbundled requests)", async () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const surfaceBundles = [
+    "artifacts.bundle.js",
+    "directory.bundle.js",
+    "artifact.bundle.js",
+    "privacy.bundle.js",
+    "offscreen.bundle.js",
+  ];
+
+  for (const bundleName of surfaceBundles) {
+    const bundlePath = join(repo, "extension", "dist", bundleName);
+    const source = await Deno.readTextFile(bundlePath);
+
+    // Verify bundle has zero runtime import statements targeting relative lib/ or shared/ modules
+    const relativeImportPattern = /(?:import|export)\s+(?:(?:[\w*\s{},]*)\s+from\s+)?["'](\.\.\/(?:lib|shared)\/[^"']+)["']/g;
+    const matches = [...source.matchAll(relativeImportPattern)].map((m) => m[1]);
+    assertEquals(
+      matches,
+      [],
+      `${bundleName} must not contain relative imports to ../lib/ or ../shared/ (found: ${matches.join(", ")})`,
+    );
+
+    // Also check dynamic import(...) expressions targeting ../lib/ or ../shared/
+    const dynamicImportPattern = /import\s*\(\s*["'](\.\.\/(?:lib|shared)\/[^"']+)["']\s*\)/g;
+    const dynamicMatches = [...source.matchAll(dynamicImportPattern)].map((m) => m[1]);
+    assertEquals(
+      dynamicMatches,
+      [],
+      `${bundleName} must not contain dynamic relative imports to ../lib/ or ../shared/ (found: ${dynamicMatches.join(", ")})`,
+    );
+
+    // Metafile output verification: verify from esbuild metafile that output declares zero external imports to lib/ or shared/
+    const reportName = bundleName.replace(".bundle.js", "");
+    const reportPath = join(repo, ".build", `bundle-report-${reportName}.json`);
+    const meta = JSON.parse(await Deno.readTextFile(reportPath));
+    for (const output of Object.values(meta.outputs ?? {}) as any[]) {
+      const externalImports = (output.imports ?? []).filter((imp: any) =>
+        imp.kind === "import-statement" && (imp.path.includes("lib/") || imp.path.includes("shared/"))
+      );
+      assertEquals(
+        externalImports,
+        [],
+        `${bundleName} metafile outputs must declare 0 imports to lib/ or shared/`,
+      );
+    }
+  }
+});
 
