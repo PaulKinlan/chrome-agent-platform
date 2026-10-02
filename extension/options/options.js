@@ -12,6 +12,7 @@ import {
   DEVELOPER_SECTIONS_SET,
   DEVELOPER_FEATURES_KEY,
   normalizeSettingsSectionId,
+  sleep,
 } from "../lib/pure.js";
 import { projectUnifiedAgents } from "../lib/agent-projection.js";
 import { hydrateI18n } from "../shared/i18n.js";
@@ -3853,6 +3854,16 @@ async function ensureSectionRendered(sectionId) {
     throw e;
   }
 }
+
+let agentsHeavyListsHydrated = false;
+async function hydrateAgentsHeavyLists() {
+  if (agentsHeavyListsHydrated) return;
+  agentsHeavyListsHydrated = true;
+  await renderEnrolledSites().catch(() => {});
+  await renderSiteToolConsents({ cursor: null }).catch(() => {});
+  await renderWebmcpStatus().catch(() => {});
+}
+
 async function renderSection(sectionId) {
   if (sectionId === "providers") {
     await renderProviders();
@@ -3872,9 +3883,12 @@ async function renderSection(sectionId) {
   } else if (sectionId === "agents") {
     await renderAgents();
     await renderEnroll();
+    await hydrateAgentsHeavyLists();
   } else if (sectionId === "browser") {
     await renderBrowser();
     await renderActionPolicy();
+  } else if (sectionId === "board-permissions") {
+    if (developerFeaturesEnabled) populateBoardDenyAgents();
   } else if (sectionId === "permissions") {
     await renderPermissions();
   } else if (sectionId === "skills") {
@@ -3885,6 +3899,9 @@ async function renderSection(sectionId) {
     if (developerFeaturesEnabled) await renderPrompts();
   } else if (sectionId === "usage") {
     await renderUsage();
+  } else if (sectionId === "data") {
+    await renderData();
+    await renderMemoryExplorer();
   } else if (sectionId === "about") {
     await renderAbout();
   }
@@ -3892,7 +3909,11 @@ async function renderSection(sectionId) {
 
 // nav active state
 export async function handleSettingsHashNavigation(hash, isTraverse = false) {
-  const sectionId = normalizeSettingsSectionId(hash) || "providers";
+  let cleanId = typeof hash === "string" ? (hash.startsWith("#") ? hash.slice(1).trim() : hash.trim()) : "";
+  if (cleanId.startsWith("section-")) cleanId = cleanId.slice("section-".length);
+  else if (cleanId.startsWith("section=")) cleanId = cleanId.slice("section=".length);
+  if (cleanId === "provider") cleanId = "providers";
+  const sectionId = normalizeSettingsSectionId(cleanId) || normalizeSettingsSectionId(hash) || "providers";
   if (!sectionId) return false;
 
   const section = document.getElementById(sectionId);
@@ -3901,7 +3922,10 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
   // Developer section requested while the flag is off — show the notice, never
   // a silent scroll to a hidden panel.
   if (!developerFeaturesEnabled && DEVELOPER_SECTIONS_SET.has(sectionId)) {
-    document.querySelectorAll("section.panel").forEach((s) => s.classList.remove("active"));
+    document.querySelectorAll("section.panel").forEach((s) => {
+      s.classList.remove("active");
+      s.dataset.active = "false";
+    });
     showDeveloperLockedNotice();
     return true;
   }
@@ -3909,6 +3933,7 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
 
   document.querySelectorAll("section.panel").forEach((s) => {
     s.classList.toggle("active", s.id === sectionId);
+    s.dataset.active = s.id === sectionId ? "true" : "false";
   });
 
   document.querySelectorAll(".nav-item").forEach((x) => {
@@ -4092,19 +4117,17 @@ await refreshStoragePermission();
 await readDeveloperFeaturesFlag();
 applyDeveloperVisibility(developerFeaturesEnabled);
 
-// CAP-FB-20260827-SETTINGS-MONOLITH-01: multi-section navigation.
-// Only the active section is rendered on boot (and on section switch);
-// the remaining sections are lazy-mounted when navigated to.
+// CAP-FB-20260827-SETTINGS-MONOLITH-01 + chrome-agent-platform-9epn.9:
+// Multi-section navigation with staged progressive hydration.
+// The active/above-the-fold section (#section-provider or location.hash target)
+// renders immediately on boot before yielding.
+await navigationController.syncCurrent();
+await sleep(0);
+
+// Progressive hydration: local-folders and skills initialize static controls.
 await renderLocalFolders();
-// Skills panel: mount EAGERLY at load, exactly like mcp-servers and
-// local-folders. The mount wires the Import button + list; without this,
-// reaching the panel by SCROLLING (no nav event, no hash change) leaves the
-// Import button dead — the nav handler's mount never fires, and the owner's
-// click does nothing (CAP-FB-20260901-SKILLS-IMPORT-BUTTON-01). The
-// dataset.skillsMounted guard makes the later nav-handler call a no-op.
 mountSkillsSection(document.getElementById("skills"));
 if (developerFeaturesEnabled) await renderToolLibrary();
-await navigationController.syncCurrent();
 
 // The OPEN Usage panel must reflect a record/clear the moment it happens (a run
 // completing, or the owner clearing), not show a stale count until a manual
@@ -4140,11 +4163,51 @@ document.querySelectorAll(".usage-range").forEach((b) => {
 });
 // Add-server button (MCP servers section) — a STATIC control wired exactly once.
 document.getElementById("mcp-add-btn")?.addEventListener("click", () => mcpOpenEditor(null));
-await renderData();
-await renderMemoryExplorer();
-await renderEnrolledSites();
-await renderSiteToolConsents({ cursor: null });
-await renderWebmcpStatus();
+
+// Deferred below-the-fold hydration batch (starter templates, MCP status, audit log, Wasm packages, memory explorer)
+async function hydrateBelowFoldHeavyLists() {
+  if (!renderedSections.has("agents")) {
+    await hydrateAgentsHeavyLists().catch(() => {});
+  }
+  if (!renderedSections.has("data")) {
+    await renderData().catch(() => {});
+    await renderMemoryExplorer().catch(() => {});
+  }
+  if (!renderedSections.has("user-wasm")) {
+    const wasmHost = document.getElementById("user-wasm-manager");
+    if (wasmHost) await mountUserWasmPanel(wasmHost).catch(() => {});
+  }
+}
+
+// Progressive observer for offscreen sections
+if (typeof IntersectionObserver !== "undefined") {
+  const io = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (entry.isIntersecting) {
+        io.unobserve(entry.target);
+        if (entry.target.id === "agents") {
+          hydrateAgentsHeavyLists().catch(() => {});
+        } else if (entry.target.id === "data") {
+          renderData().then(renderMemoryExplorer).catch(() => {});
+        } else if (entry.target.id === "user-wasm") {
+          const wasmHost = document.getElementById("user-wasm-manager");
+          if (wasmHost) mountUserWasmPanel(wasmHost).catch(() => {});
+        }
+      }
+    }
+  }, { rootMargin: "200px" });
+  for (const id of ["agents", "data", "user-wasm"]) {
+    const el = document.getElementById(id);
+    if (el) io.observe(el);
+  }
+}
+
+// Scheduled deferred batch
+if (typeof requestIdleCallback === "function") {
+  requestIdleCallback(() => hydrateBelowFoldHeavyLists().catch(() => {}));
+} else {
+  setTimeout(() => hydrateBelowFoldHeavyLists().catch(() => {}), 50);
+}
 
 // ── Developer-features toggle (About) ───────────────────────────────────────
 // The switch reflects the stored flag and, on change, persists it, re-applies

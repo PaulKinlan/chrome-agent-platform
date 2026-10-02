@@ -305,7 +305,7 @@ Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review w
 
 **P1.** On-device text tools via Chrome built-in Summarizer / LanguageDetector / Translator (`chrome-agent-platform-3p3e.5`, offscreen execution, keyless/offline private summarization/detection/translation, `/summarise` & `/translate` composer commands); Template picker visual cards (`CAP-FB-20260829-TEMPLATE-CARDS-01`, candidate in
 review); dialog consolidation (five implementations, three hand-rolled outside the component
-system); Settings sectioning (12,837 px, 8.8 screens, all twelve panels rendered at once);
+system); Settings sectioning (chrome-agent-platform-9epn.9: content-visibility: auto + staged progressive hydration for Settings panels and heavy below-the-fold lists);
 permission-remediation UX; semantic tool search; Store release path; owner export/import;
 the permission-state matrix acceptance lane (supersedes the headed lane); `scripts/ui-integration.ts` red; the UI flash/relayout; pre-bundled surface entries for Artifacts, Directory, Artifact viewer, Privacy, Offscreen, and user-wasm-store-client via `build.mjs` with scrub/minify/evaluator gates and <= 2 JS requests (`chrome-agent-platform-9epn.5`).
 
