@@ -1589,3 +1589,37 @@ export function newId(prefix = "") {
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/** Formats an agent's persona / prompt snippet for display in compact sidebar rows:
+ * strips leading markdown headers, extracts "- **Role**: <role>", and strips markdown syntax. */
+export function formatSidebarAgentRole(raw) {
+  if (!raw || typeof raw !== "string") return "";
+  const str = raw.trim();
+  if (!str) return "";
+
+  // 1. If raw contains - **Role**: <text> or **Role**: <text>, extract <text> (up to newline or " - **")
+  const roleMatch = str.match(/(?:^|\n|\s)(?:[-*]\s+)?\*{0,2}Role\*{0,2}:\s*([^\n]+)/i);
+  if (roleMatch && roleMatch[1]) {
+    let roleText = roleMatch[1].trim();
+    const splitIndex = roleText.search(/\s+-\s+\*\*/);
+    if (splitIndex !== -1) {
+      roleText = roleText.slice(0, splitIndex).trim();
+    }
+    roleText = roleText.replace(/[*_`]/g, "").trim();
+    if (roleText) return roleText;
+  }
+
+  // 2. Otherwise strip markdown heading lines (^#+\s*.*$/gm)
+  let cleaned = str.replace(/^#+\s*.*$/gm, "");
+
+  // Strip leading list markers
+  cleaned = cleaned.replace(/^\s*[-*]\s+/gm, "");
+
+  // Strip bold/italic/code markers
+  cleaned = cleaned.replace(/[*_`]/g, "");
+
+  // Collapse whitespace
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+
+  return cleaned;
+}

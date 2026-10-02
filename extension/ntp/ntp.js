@@ -35,7 +35,7 @@ import {
   flushDeferredComponents,
 } from "../shared/components.js";
 import { runStagedBoot } from "./ntp-boot-scheduler.js";
-import { sleep, timeAgo } from "../lib/pure.js";
+import { formatSidebarAgentRole, sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
 import { formatCadenceMinutes } from "../lib/next-run-label.js";
@@ -1327,6 +1327,8 @@ async function renderNamedAgents() {
   span.end();
 }
 
+export { formatSidebarAgentRole };
+
 // ── the named agents in the SIDEBAR (a created agent must appear here, not
 //    only in the main area) ───────────────────────────────────────────────
 async function renderSidebarAgents(agents) {
@@ -1352,9 +1354,11 @@ async function renderSidebarAgents(agents) {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "agent-item";
+    const rawSnippet = a.role ?? a.description ?? "";
+    const cleanSnippet = formatSidebarAgentRole(rawSnippet);
     // ONE agent concept: no "background" label — the only distinction is the
     // small schedule marker; the tooltip carries the role/description.
-    item.title = (a.name || a.id) + (a.role ? " — " + a.role : a.description ? " — " + a.description : "") + ` — ${scheduleMarker}`;
+    item.title = (a.name || a.id) + (cleanSnippet ? " — " + cleanSnippet : (a.role ? " — " + a.role : a.description ? " — " + a.description : "")) + ` — ${scheduleMarker}`;
     const avatar = document.createElement("img");
     avatar.className = "a-avatar";
     avatar.alt = "";
@@ -1363,15 +1367,13 @@ async function renderSidebarAgents(agents) {
     const label = document.createElement("span");
     label.className = "a-name";
     label.append(document.createTextNode(a.name || a.id));
-    const snippet = a.role ?? a.description ?? "";
-    if (snippet) {
+    if (cleanSnippet) {
       const role = document.createElement("span");
       role.className = "a-role";
       // The full role is stored intact (no limit) and shown on hover via
       // item.title; the visible list line stays short so the list is scannable
       // (mirrors the side panel's truncated role preview).
-      const full = String(snippet);
-      role.textContent = full.length > 88 ? full.slice(0, 88).trimEnd() + "…" : full;
+      role.textContent = cleanSnippet.length > 88 ? cleanSnippet.slice(0, 88).trimEnd() + "…" : cleanSnippet;
       label.append(role);
     }
     const chip = document.createElement("span");
@@ -1762,6 +1764,7 @@ async function renderSidebarHarnessRows() {
   // a partially-stubbed document must not throw from a background render.
   if (!host || typeof host.replaceChildren !== "function") return;
   const section = document.getElementById("harness-presence") || host.closest?.("section") || document.getElementById("sidebar-harnesses-section");
+  const countEl = document.getElementById("harness-count");
   const res = await send("agent.registry").catch(() => null);
   const groups = Array.isArray(res?.groups) ? res.groups : [];
   const harnesses = groups
@@ -1770,6 +1773,7 @@ async function renderSidebarHarnessRows() {
     .filter((a) => a?.kind === "acp" && a.enabled !== false);
   host.replaceChildren();
   if (section) section.hidden = harnesses.length === 0;
+  if (countEl) countEl.textContent = harnesses.length ? `(${harnesses.length})` : "";
   for (const a of harnesses) {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -2482,6 +2486,8 @@ function renderTaskRows(threads, activeId = null) {
     open.type = "button";
     open.className = "t-open";
     open.setAttribute("aria-label", `Open task ${t.name || "Task"}`);
+    const headRow = document.createElement("span");
+    headRow.className = "t-head-row";
     const name = document.createElement("span");
     name.className = "t-name";
     const dot = document.createElement("span");
@@ -2490,21 +2496,22 @@ function renderTaskRows(threads, activeId = null) {
     title.className = "t-title";
     title.textContent = t.name || "Task";
     name.append(dot, title);
+    const meta = document.createElement("span");
+    meta.className = "t-meta";
+    meta.textContent = timeAgo(t.updatedAt);
+    headRow.append(name, meta);
     const preview = document.createElement("span");
     preview.className = "t-preview";
     preview.textContent = t.preview || "";
     // The railDot lives inside the open button so the collapsed icon-rail
     // keeps a real click target (the dot is its visible content there).
-    open.append(railDot, name, preview);
-    const meta = document.createElement("span");
-    meta.className = "t-meta";
-    meta.textContent = timeAgo(t.updatedAt);
+    open.append(railDot, headRow, preview);
     const del = document.createElement("button");
     del.type = "button";
     del.className = "t-delete";
     del.setAttribute("aria-label", `Delete task ${t.name || "Task"}`);
     del.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-    item.append(open, meta, del);
+    item.append(open, del);
     open.addEventListener("click", () => openThread(t.id));
     del.addEventListener("click", async () => {
       const r = await send("thread.delete", { id: t.id })
@@ -5221,6 +5228,38 @@ function initSideDisclosures() {
   }
 }
 
+export const SIDE_COLLAPSED_KEY = "cap:ntp:sidebar-collapsed";
+
+function initSideRailNav() {
+  const railNav = document.getElementById("side-rail-nav");
+  if (!railNav) return;
+  railNav.addEventListener("click", (e) => {
+    const btn = e.target?.closest?.(".rail-sec-btn");
+    if (!btn) return;
+    const targetId = btn.dataset?.railTarget || btn.getAttribute?.("data-rail-target");
+    // Expand the sidebar
+    setSidebarCollapsed(false);
+    side?.classList?.remove("collapsed");
+    try { localStorage.setItem(SIDE_COLLAPSED_KEY, "0"); } catch {}
+    sideToggle?.setAttribute("aria-expanded", "true");
+    updateSideToggleLabels(true);
+
+    if (targetId) {
+      const target = document.getElementById(targetId);
+      if (target) {
+        if (target.hidden) target.hidden = false;
+        if (target.tagName === "DETAILS") {
+          target.open = true;
+          saveSideDisclosureState(targetId, true);
+        }
+        const focusable = target.querySelector?.("summary, button:not([hidden]), [tabindex]:not([tabindex='-1'])") || target;
+        focusable?.focus?.();
+        target.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
+      }
+    }
+  });
+}
+
 async function restoreSidebar() {
   try {
     const s = await send("kv.get", { keys: SIDEBAR_KEY });
@@ -5230,6 +5269,7 @@ async function restoreSidebar() {
   }
   applySidebarForWidth();
   initSideDisclosures();
+  initSideRailNav();
 }
 
 // The "+" new-task button is a destination, not Back: replace the current
@@ -5237,6 +5277,8 @@ async function restoreSidebar() {
 // composer. No prior task can reappear behind the new conversation.
 document.getElementById("new-task")?.addEventListener("click", (e) => {
   e.stopPropagation();
+});
+document.getElementById("new-task")?.addEventListener("click", () => {
   goHome({ focusAfter: composer });
 });
 
@@ -5249,6 +5291,7 @@ document.getElementById("new-agent")?.addEventListener("click", (e) => {
 });
 
 initSideDisclosures();
+initSideRailNav();
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");
