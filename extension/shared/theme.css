@@ -192,6 +192,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 12px;
+  min-height: 32px;
+  box-sizing: border-box;
   font-size: var(--text-sm);
   color: var(--text);
   font: inherit;
@@ -200,6 +202,28 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 }
 .chip:hover { border-color: var(--accent); }
 .chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent2); }
+
+.filter-chip, .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.btn-sm {
+  min-height: 32px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: var(--text-xs);
+}
 
 .tag {
   font-size: var(--text-xs);
@@ -221,7 +245,10 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   cursor: pointer;
   background: none;
   border: 0;
-  padding: 0;
+  padding: 2px 0;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
   font: inherit;
 }
 .link:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
@@ -230,8 +257,9 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
 /* A compact switch (background-agent enable/disable toggle). */
 .switch {
   position: relative;
-  width: 36px;
-  height: 20px;
+  width: 40px;
+  height: 24px;
+  min-height: 24px;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--panel);
@@ -245,8 +273,8 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: var(--muted);
   transition: transform 150ms ease, background 150ms ease;

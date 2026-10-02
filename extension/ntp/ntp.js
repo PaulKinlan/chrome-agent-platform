@@ -5060,6 +5060,26 @@ sideToggle?.addEventListener("click", () => {
   }
   runRouteUpdate(() => setSidebarCollapsed(!sidebarCollapsed));
 });
+// chrome-agent-platform-716s.11: Tab from #side-toggle cycles cleanly to the
+// first interactive element (composer input) rather than hitting a dead-stop on <body>.
+sideToggle?.addEventListener("keydown", (event) => {
+  if (event.key === "Tab" && !event.shiftKey) {
+    event.preventDefault();
+    const threadView = document.getElementById("thread-view");
+    if (threadView && !threadView.hidden) {
+      const firstInThread = threadView.querySelector("button:not([hidden]), [tabindex]:not([tabindex='-1'])");
+      if (firstInThread) {
+        firstInThread.focus();
+        return;
+      }
+    }
+    const composerEl = document.querySelector("#composer");
+    const target = composerEl?.shadowRoot?.querySelector("textarea, button, [tabindex='0']")
+      || composerEl?.querySelector?.("[data-composer-input], textarea")
+      || document.getElementById("home");
+    target?.focus?.();
+  }
+});
 // Escape closes the overlay. Optional-chained: the unit-thread harnesses
 // evaluate this module against a partial DOM shim without addEventListener.
 document.addEventListener?.("keydown", (event) => {

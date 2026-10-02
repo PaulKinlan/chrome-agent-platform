@@ -2139,10 +2139,10 @@ class SwitchToggle extends Component {
     const label = this.getAttribute("label") || "Toggle";
     mountTemplate(this, `
       :host { display:inline-flex; flex:0 0 auto; }
-      .sw { position:relative; width:36px; height:20px; border-radius:999px;
+      .sw { position:relative; width:40px; height:24px; min-height:24px; border-radius:999px;
         border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); cursor:pointer;
         padding:0; flex:0 0 auto; transition:background 150ms ease, border-color 150ms ease; }
-      .sw::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
+      .sw::after { content:""; position:absolute; top:2px; left:2px; width:18px; height:18px;
         border-radius:50%; background:var(--muted,#635e56); transition:transform 150ms ease, background 150ms ease; }
       .sw[aria-checked="true"] { background:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); }
       .sw[aria-checked="true"]::after { transform:translateX(16px); background:var(--btn-fg,#ffffff); }
@@ -3127,17 +3127,17 @@ class CapabilityRow extends Component {
       .run { justify-self:end; font-size:var(--text-xs,12px); color:var(--muted,#8b949e);
         border:1px solid var(--border,#30363d); border-radius:var(--radius-sm,6px);
         padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
-        white-space:nowrap; }
+        white-space:nowrap; min-height:32px; }
       .run:hover, .run:focus-visible { color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); outline:none; }
       .open { justify-self:end; display:inline-flex; align-items:center; justify-content:center;
-        width:28px; height:28px; border:0; background:transparent; color:var(--muted,#8b949e);
+        width:32px; height:32px; min-width:32px; min-height:32px; border:0; background:transparent; color:var(--muted,#8b949e);
         cursor:pointer; border-radius:6px; }
       .open:hover, .open:focus-visible { color:var(--accent,#0e6e63); outline:none; }
       .open svg { width:16px; height:16px; display:block; }
       .delete { justify-self:end; font-size:var(--text-xs,12px); color:var(--danger,#b3261e);
         border:1px solid var(--border,#30363d); border-radius:var(--radius-sm,6px);
         padding:4px 12px; background:transparent; cursor:pointer; font:inherit;
-        white-space:nowrap; }
+        white-space:nowrap; min-height:32px; }
       .delete:hover, .delete:focus-visible { border-color:var(--danger,#b3261e); outline:none; }
       .meta { display:flex; align-items:center; gap:6px; }
       .state { font-size:var(--text-xs,12px); color:var(--muted,#8b949e); white-space:nowrap; }
@@ -3270,7 +3270,7 @@ class ArtifactCard extends Component {
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .actions { display:flex; gap:6px; padding:0 12px 10px; }
       .actions button { flex:1; display:inline-flex; align-items:center; justify-content:center;
-        gap:5px; font:inherit; font-size:var(--text-xs,12px); padding:5px 6px;
+        gap:5px; font:inherit; font-size:var(--text-xs,12px); padding:5px 6px; min-height:32px;
         border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
         background:transparent; color:var(--text,#1d1b18); cursor:pointer; }
       .actions button:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
@@ -7575,9 +7575,9 @@ class AgentComposer extends Component {
       agent-composer .composer .chips:empty { display:none; }
       agent-composer .composer .chips .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px;
         color:var(--text,#1d1b18); background:var(--panel-2,#efede8); border:1px solid var(--border,#e3e0d9);
-        border-radius:999px; padding:3px 10px; }
+        border-radius:999px; padding:3px 10px; min-height:32px; box-sizing:border-box; }
       agent-composer .composer .chips .chip button { border:0; background:transparent; color:var(--muted,#635e56);
-        cursor:pointer; padding:0; font:inherit; line-height:1; }
+        cursor:pointer; padding:0; font:inherit; line-height:1; min-height:32px; min-width:32px; display:inline-flex; align-items:center; justify-content:center; }
       agent-composer .composer .chips .chip button:hover { color:var(--text,#1d1b18); }
       agent-composer .composer .send { display:inline-flex; align-items:center; height:var(--control,36px); padding:0 16px;
         background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); border:0; border-radius:8px;
@@ -7605,7 +7605,7 @@ class AgentComposer extends Component {
       agent-composer .composer .chips .chip.agent-chip .agent-initial { width:18px; height:18px;
         border-radius:50%; border:1px solid var(--accent,#0e6e63); display:inline-flex; align-items:center;
         justify-content:center; font-size:10px; font-weight:700; }
-      agent-composer .composer .chips .chip.agent-chip button { color:var(--accent,#0e6e63); min-width:24px; min-height:24px; }
+      agent-composer .composer .chips .chip.agent-chip button { color:var(--accent,#0e6e63); min-width:32px; min-height:32px; }
       /* the + menu's Choose agent popover: the shared <agent-picker> in the top
          layer, anchored to the + button (logical anchor positioning + edge
          flipping; a JS fallback where anchor positioning is unsupported). */
@@ -10258,11 +10258,11 @@ class AgentPicker extends Component {
       .state { padding:12px 10px; font-size:12.5px; color:var(--muted,#635e56); display:flex; align-items:center; gap:8px; }
       .state.error { color:var(--danger,#b3261e); }
       .retry { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18);
-        border-radius:6px; padding:4px 10px; font:inherit; font-size:12px; cursor:pointer; min-height:28px; }
+        border-radius:6px; padding:4px 10px; font:inherit; font-size:12px; cursor:pointer; min-height:32px; }
       .retry:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .rowdel { flex:0 0 auto; border:1px solid var(--border,#e3e0d9); background:transparent;
         color:var(--danger,#b3261e); border-radius:6px; padding:4px 10px; font:inherit; font-size:12px;
-        cursor:pointer; min-height:28px; }
+        cursor:pointer; min-height:32px; min-width:32px; }
       .rowdel:hover { border-color:var(--danger,#b3261e); }
       .rowdel:focus-visible { outline:2px solid var(--danger,#b3261e); outline-offset:2px; }
       .spin { width:14px; height:14px; border:2px solid currentColor; border-top-color:transparent; border-radius:50%;
@@ -10671,6 +10671,7 @@ const CONTROL_CSS = `
   .control {
     box-sizing: border-box;
     height: var(--input-h, 36px);
+    min-height: 36px;
     width: 100%;
     background: var(--bg, #f7f6f3);
     border: 1px solid var(--border, #e3e0d9);
@@ -12358,7 +12359,7 @@ class ActionLedger extends Component {
         .al-ts { white-space:nowrap; }
         .al-note { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; font-style:italic; }
         .al-undo { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; font:inherit; font-size:12px;
-          cursor:pointer; color:var(--accent,#0e6e63); background:transparent;
+          cursor:pointer; color:var(--accent,#0e6e63); background:transparent; min-height:32px;
           border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px);
           transition:border-color .15s ease, color .15s ease, background .15s ease; white-space:nowrap; }
         .al-undo:hover { border-color:var(--accent,#0e6e63); background:var(--panel-2,#efede8); }
@@ -12368,7 +12369,7 @@ class ActionLedger extends Component {
         .al-done { font-size:11px; color:var(--muted,#635e56); white-space:nowrap; }
         .al-empty { padding:12px 2px; font-size:13px; color:var(--muted,#635e56); }
         .al-error { padding:12px 2px; font-size:13px; color:var(--danger,#b3261e); display:flex; gap:8px; align-items:baseline; }
-        .al-retry { padding:3px 10px; font:inherit; font-size:12px; cursor:pointer; color:var(--accent,#0e6e63);
+        .al-retry { padding:3px 10px; font:inherit; font-size:12px; cursor:pointer; color:var(--accent,#0e6e63); min-height:32px;
           background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
         @media (prefers-reduced-motion: reduce) { .al-undo { transition:none; } }
       </style>
