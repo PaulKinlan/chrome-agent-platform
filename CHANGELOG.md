@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.561] — 2026-10-02
+- Anchor agent mention and action pickers directly to the message input in the side panel and hub.
+
 ## [0.3.560] — 2026-10-02
+- Anchor agent mention and action pickers directly to the message input in the side panel and hub.
 - Fixed the Hub Timeline filter bar so clicking All, Runs, Waiting, Made, or Scheduled moves the active highlight pill immediately.
 
 ## [0.3.559] — 2026-10-02
