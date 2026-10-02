@@ -35,7 +35,7 @@ Deno.test("loaded Emscripten probe snapshot binds shipped CSP and every test-onl
   );
   assertEquals(
     snapshotDigest,
-    "9bb42f6f5d6f567d1f4ff0ce38570170edce6b5e388fb3ea856455c8dec7ec56",
+    "7a4e870366e40cc3d05816f7f7d2e49148b96cf0d92800807eda8f4547b82f48",
   );
   const harness = Deno.readTextFileSync("scripts/emscripten-abi-loaded.ts");
   assert(

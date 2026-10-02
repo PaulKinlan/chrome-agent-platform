@@ -67,6 +67,8 @@ const FILES = [
   ["extension/lib/untrusted-fence.js", "docs/untrusted-fence.js"],
   // Clipboard tools (components.js imports it).
   ["extension/lib/clipboard-tools.js", "docs/clipboard-tools.js"],
+  // Thread projection authority (hub-timeline.js imports it).
+  ["extension/shared/thread-projection-authority.js", "docs/thread-projection-authority.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -129,6 +131,9 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
       // The bounded serializer sits in shared/; the gallery copy is beside tool-summary.js.
       expected = Buffer.from(expected.toString("utf8").replace('../shared/tool-tree.js', './tool-tree.js'));
+    }
+    if (dst === "docs/hub-timeline.js") {
+      expected = Buffer.from(expected.toString("utf8").replace('../shared/thread-projection-authority.js', './thread-projection-authority.js'));
     }
     if (check) {
       let actual;

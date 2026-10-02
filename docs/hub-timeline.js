@@ -15,7 +15,7 @@
 /** Runs surfaced on their own (without a task thread) — the "came back while I
  * was away" rows. A bare `task` run with no thread is a failed dispatch and
  * belongs to the sidebar's failed-runs section, not here. */
-import { projectThreadRunState } from "../shared/thread-projection-authority.js";
+import { projectThreadRunState } from "./thread-projection-authority.js";
 
 const STANDALONE_RUN_KINDS = new Set(["agent", "scheduled", "delegate"]);
 
