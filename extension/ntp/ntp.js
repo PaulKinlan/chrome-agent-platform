@@ -1501,6 +1501,7 @@ function renderTimeline() {
         const val = btn.dataset.val;
         if (val) {
           timelineEl.filter = val;
+          if (timelineFilterEl) timelineFilterEl.value = val;
           try {
             localStorage.setItem(TIMELINE_FILTER_KEY, val);
           } catch { /* storage unavailable */ }

@@ -21,17 +21,61 @@ class ElementNodeStub {
     this.dataset = {};
     this.textContent = "";
     this.tabIndex = 0;
+    this.listeners = {};
+    this.parentNode = null;
   }
   setAttribute(k, v) { this.attributes[k] = String(v); }
   getAttribute(k) { return this.attributes[k] ?? null; }
-  appendChild(child) { this.children.push(child); return child; }
+  appendChild(child) {
+    child.parentNode = this;
+    this.children.push(child);
+    return child;
+  }
   scrollIntoView() {}
   focus() {}
+  addEventListener(event, handler) {
+    (this.listeners[event] ??= []).push(handler);
+  }
+  removeEventListener(event, handler) {
+    if (this.listeners[event]) {
+      this.listeners[event] = this.listeners[event].filter((h) => h !== handler);
+    }
+  }
+  dispatchEvent(event) {
+    event.target ??= this;
+    event.currentTarget = this;
+    for (const h of [...(this.listeners[event.type] ?? [])]) {
+      h(event);
+    }
+    if (event.bubbles && this.parentNode?.dispatchEvent) {
+      this.parentNode.dispatchEvent(event);
+    }
+    return true;
+  }
+  click() {
+    this.dispatchEvent({
+      type: "click",
+      target: this,
+      bubbles: true,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+  }
+  closest(sel) {
+    let cur = this;
+    while (cur) {
+      if (sel === '[role="tab"]' && cur.getAttribute?.("role") === "tab") return cur;
+      if (sel === ".tabs" && cur.tagName === "div") return cur;
+      cur = cur.parentNode;
+    }
+    return null;
+  }
 }
 
 class HTMLElementStub {
   constructor() {
     this._attrs = new Map();
+    this.listeners = {};
   }
   attachShadow(_init) {
     this._shadow = new ShadowRootStub(this);
@@ -56,11 +100,22 @@ class HTMLElementStub {
   removeAttribute(n) {
     this._attrs.delete(n);
   }
-  dispatchEvent(_e) {
+  dispatchEvent(e) {
+    e.target ??= this;
+    e.currentTarget = this;
+    for (const h of [...(this.listeners[e.type] ?? [])]) {
+      h(e);
+    }
     return true;
   }
-  addEventListener() {}
-  removeEventListener() {}
+  addEventListener(event, handler) {
+    (this.listeners[event] ??= []).push(handler);
+  }
+  removeEventListener(event, handler) {
+    if (this.listeners[event]) {
+      this.listeners[event] = this.listeners[event].filter((h) => h !== handler);
+    }
+  }
 }
 
 class ShadowRootStub {
@@ -68,20 +123,26 @@ class ShadowRootStub {
     this.host = host;
     this._innerHTML = "";
     this._tabs = new ElementNodeStub("div");
+    this._tabs.parentNode = this;
   }
   get innerHTML() {
     return this._innerHTML;
   }
   set innerHTML(html) {
     this._innerHTML = String(html);
+    this._tabs = new ElementNodeStub("div");
+    this._tabs.parentNode = this;
   }
   querySelector(sel) {
     if (sel === ".tabs") return this._tabs;
     return null;
   }
   querySelectorAll(sel) {
-    if (sel.includes("button")) return this._tabs.children;
+    if (sel.includes("button") || sel.includes('[role="tab"]')) return this._tabs.children;
     return [];
+  }
+  dispatchEvent(e) {
+    return this.host?.dispatchEvent(e) ?? true;
   }
 }
 
@@ -390,4 +451,86 @@ Deno.test("716s.6: SegmentedControl button min-block-size is var(--control, 36px
     !scBlock.includes("min-block-size:30px") && !scBlock.includes("min-block-size: 30px"),
     "SegmentedControl must not use min-block-size: 30px",
   );
+});
+
+// ── Part 11: 914l Hub Timeline filter segmented-control unstick active selector ──
+Deno.test("914l: segmented-control is NOT in NON_HUB_ELEMENTS", async () => {
+  const { NON_HUB_ELEMENTS } = await import("../extension/shared/components.js");
+  assert(
+    !NON_HUB_ELEMENTS.has("segmented-control"),
+    "'segmented-control' must not be in NON_HUB_ELEMENTS because it is used in ntp.html",
+  );
+});
+
+Deno.test("914l: pre-upgrade own value property does not shadow SegmentedControl.prototype.value and clicking Runs activates Runs", async () => {
+  await import("../extension/shared/components.js");
+  const SegmentedControl = globalThis.customElements.get("segmented-control");
+  const el = new SegmentedControl();
+  el.setAttribute("items", "All,Runs,Waiting,Made,Scheduled");
+
+  // Simulate pre-upgrade property-shadowing bug:
+  // In unpatched code, ntp.js assigns timelineFilterEl.value = 'All' before upgrade, creating an own property
+  Object.defineProperty(el, "value", {
+    value: "All",
+    writable: true,
+    configurable: true,
+    enumerable: true,
+  });
+
+  el.connectedCallback();
+
+  const tabs = el._root.querySelectorAll('[role="tab"]');
+  const allBtn = tabs.find((b) => b.dataset?.val === "All");
+  const runsBtn = tabs.find((b) => b.dataset?.val === "Runs");
+  assert(allBtn, "All button must exist");
+  assert(runsBtn, "Runs button must exist");
+
+  // Initial state should have All selected
+  assertEquals(allBtn.getAttribute("aria-selected"), "true");
+  assertEquals(runsBtn.getAttribute("aria-selected"), "false");
+
+  // Click "Runs" tab
+  runsBtn.click();
+
+  // Own property must not shadow prototype getter/setter
+  assertEquals(el.value, "Runs");
+  assertEquals(runsBtn.getAttribute("aria-selected"), "true");
+  assertEquals(allBtn.getAttribute("aria-selected"), "false");
+});
+
+Deno.test("914l: setting overflow filter clears selection, and clicking All re-selects All with change event", async () => {
+  await import("../extension/shared/components.js");
+  const SegmentedControl = globalThis.customElements.get("segmented-control");
+  const el = new SegmentedControl();
+  el.setAttribute("items", "All,Runs,Waiting,Made,Scheduled");
+  el.connectedCallback();
+
+  // Setting an overflow filter (not in items) should clear active selection on primary buttons
+  el.value = "Hooks";
+
+  const tabs = el._root.querySelectorAll('[role="tab"]');
+  for (const btn of tabs) {
+    assertEquals(
+      btn.getAttribute("aria-selected"),
+      "false",
+      `Expected ${btn.dataset?.val} to have aria-selected='false' when value='Hooks'`,
+    );
+  }
+
+  // Clicking "All" tab re-selects "All" and fires change event
+  let changeFired = false;
+  let changedValue = "";
+  el.addEventListener("change", (e) => {
+    changeFired = true;
+    changedValue = e.detail?.value;
+  });
+
+  const allBtn = tabs.find((b) => b.dataset?.val === "All");
+  assert(allBtn, "All button must exist");
+  allBtn.click();
+
+  assertEquals(el.value, "All");
+  assertEquals(allBtn.getAttribute("aria-selected"), "true");
+  assert(changeFired, "Expected change event to fire when clicking All after overflow filter");
+  assertEquals(changedValue, "All");
 });

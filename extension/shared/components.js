@@ -760,10 +760,26 @@ class Component extends HTMLElement {
     }
   }
   connectedCallback() {
+    this._upgradeOwnProperties();
     if (this._rendered) return;
     this._rendered = true;
     this._render();
     this._wire();
+  }
+  _upgradeOwnProperties() {
+    let proto = Object.getPrototypeOf(this);
+    while (proto && proto !== Component.prototype && proto !== HTMLElement.prototype) {
+      for (const key of Object.getOwnPropertyNames(proto)) {
+        if (key === "constructor") continue;
+        const desc = Object.getOwnPropertyDescriptor(proto, key);
+        if ((desc?.get || desc?.set) && Object.prototype.hasOwnProperty.call(this, key)) {
+          const val = this[key];
+          delete this[key];
+          if (desc.set) this[key] = val;
+        }
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
   }
   attributeChangedCallback(name, oldValue, newValue) {
     // An attribute change re-renders the shadow DOM, so we must re-wire the
@@ -905,7 +921,6 @@ export const NON_HUB_ELEMENTS = new Set([
   "artifact-inspector",
   "artifact-diff",
   "table-preview",
-  "segmented-control",
   "code-block",
   "agent-dialog",
   "provider-select",
@@ -4367,12 +4382,22 @@ class SegmentedControl extends Component {
   }
   get value() {
     const items = this._items();
+    if (this._value === null) return "";
     if (this._value && items.includes(this._value)) return this._value;
     const attr = this.getAttribute("value");
     if (attr && items.includes(attr)) return attr;
     return items[0] ?? "";
   }
-  set value(v) { this._select(String(v ?? ""), { silent: true }); }
+  set value(v) {
+    if (Object.prototype.hasOwnProperty.call(this, "value")) delete this.value;
+    const str = String(v ?? "").trim();
+    if (!str || !this._items().includes(str)) {
+      this._value = null;
+      this._sync();
+      return;
+    }
+    this._select(str, { silent: true });
+  }
   _render() {
     const items = this._items();
     const value = this.value;
@@ -4448,6 +4473,7 @@ class SegmentedControl extends Component {
     this._select(items[next], { focus: true });
   }
   _select(value, { focus = false, silent = false } = {}) {
+    if (Object.prototype.hasOwnProperty.call(this, "value")) delete this.value;
     const items = this._items();
     if (!items.includes(value)) return;
     const changed = value !== this.value;
