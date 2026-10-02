@@ -163,7 +163,14 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   its shared picker directly. `/summarise` and `/translate <lang>` trigger
   on-device execution via Chrome's built-in AI models with zero provider roundtrips.
   Commands for removed or unclear product concepts
-  do not remain as inert suggestions.
+  do not remain as inert suggestions. The autocomplete popup is constrained to
+  `min(440px, calc(100% - 24px))` (`max-width: 480px`), anchored to the inline
+  start with `--shadow-md` elevation. Unfiltered or multi-category listings group
+  commands under quiet category headings (Attach context, Run & switch, Session),
+  align command descriptions adjacently on one line, and display a persistent
+  `↑↓ Navigate · ↵ Select · Esc Dismiss` keyboard footer. The composer attach
+  menu shares the `--shadow-md` elevation token without border outlines and
+  presents plain-English capability notes.
 - Tool cards in the transcript display a distinct `.tool-status.on-device` chip
   labelled "On-device" when the execution completed via Chrome's local built-in models.
 - The composer `/files` palette is progressive enhancement: it is absent when

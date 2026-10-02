@@ -144,14 +144,21 @@ function supportsAnchorPositioning() {
  * native CSS anchor positioning (position-area + position-try-fallbacks) is
  * unavailable; in supporting browsers the CSS wins and this is a no-op.
  */
-function placeFloating(anchor, floatEl, { fullWidth = false, minWidth = 0 } = {}) {
+function placeFloating(
+  anchor,
+  floatEl,
+  { fullWidth = false, minWidth = 0, maxWidth = 0, offsetInline = 0 } = {},
+) {
   if (!anchor || !floatEl) return;
   const a = anchor.getBoundingClientRect();
   if (!a.width && !a.height) return;
   const margin = 8;
-  const w = fullWidth
+  const targetW = maxWidth
+    ? Math.min(maxWidth, Math.max(minWidth, a.width - offsetInline * 2))
+    : fullWidth
     ? Math.min(a.width, window.innerWidth - 2 * margin)
     : Math.max(floatEl.offsetWidth || 0, minWidth);
+  const w = Math.min(targetW, window.innerWidth - 2 * margin);
   const h = floatEl.offsetHeight || 160;
   const below = a.bottom + 4;
   const above = a.top - h - 4;
@@ -159,14 +166,15 @@ function placeFloating(anchor, floatEl, { fullWidth = false, minWidth = 0 } = {}
   const fitsAbove = above >= margin;
   let top = fitsBelow || !fitsAbove ? below : above;
   top = Math.max(margin, Math.min(top, window.innerHeight - h - margin));
-  let left = fullWidth ? a.left : Math.min(a.left, window.innerWidth - w - margin);
-  left = Math.max(margin, left);
+  let left = a.left + offsetInline;
+  left = Math.max(margin, Math.min(left, window.innerWidth - w - margin));
   floatEl.style.position = "fixed";
   floatEl.style.top = `${top}px`;
   floatEl.style.left = `${left}px`;
   floatEl.style.right = "auto";
   floatEl.style.bottom = "auto";
-  if (fullWidth) floatEl.style.width = `${w}px`;
+  if (fullWidth || maxWidth) floatEl.style.width = `${w}px`;
+  if (maxWidth) floatEl.style.maxWidth = `${maxWidth}px`;
 }
 
 /** Inject a <style> once (idempotent, id-keyed) — used by light-DOM components. */
@@ -1920,31 +1928,30 @@ class AttachButton extends Component {
          common case, but a thread with a tall conversation must not push it
          off-screen). The popover is top-layer, so opening it never scrolls the
          main frame (the conversation scroll container is untouched). */
-      .menu { position:absolute; inset:auto; margin:0; background:var(--panel,#ffffff);
-        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px); box-shadow:0 8px 24px rgba(0,0,0,.25);
+      .menu, .attach-menu { position:absolute; inset:auto; margin:0; background:var(--panel,#ffffff);
+        border:none; border-radius:var(--radius-md,12px); box-shadow:var(--shadow-md, 0 8px 24px rgba(29,27,24,.08));
         padding:4px; min-width:200px; z-index:20;
         position-anchor:--attach-anchor; position-area:block-start span-inline-end;
         position-try-fallbacks:flip-block, flip-inline; }
       @supports not (position-area: top) {
-        .menu { position:fixed; bottom:auto; left:auto; }
+        .menu, .attach-menu { position:fixed; bottom:auto; left:auto; }
       }
-      .menu[hidden] { display:none; }
-      .menu button { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:0;
+      .menu[hidden], .attach-menu[hidden] { display:none; }
+      .menu button, .attach-menu button { display:flex; align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:0;
         color:var(--text,#1d1b18); padding:8px 12px; border-radius:var(--radius-sm,6px); cursor:pointer; font:inherit; }
-      .menu button svg { flex:0 0 auto; display:block; color:var(--muted,#635e56); }
-      .menu button:hover, .menu button:focus-visible { background:var(--bg,#f7f6f3); outline:none; }
+      .menu button svg, .attach-menu button svg { flex:0 0 auto; display:block; color:var(--muted,#635e56); }
+      .menu button:hover, .menu button:focus-visible, .attach-menu button:hover, .attach-menu button:focus-visible { background:var(--bg,#f7f6f3); outline:none; }
       .note { font-size:var(--text-xs,12px); color:var(--muted,#635e56); margin:6px 0 2px; max-width:220px; }
     `, `<button part="button" class="plus" type="button" aria-haspopup="menu"
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
-      <div class="menu" role="menu" aria-label="${escapeHtml(label)}" popover="manual"${open ? "" : " hidden"}>
+      <div class="menu attach-menu" role="menu" aria-label="${escapeHtml(label)}" popover="manual"${open ? "" : " hidden"}>
         <button type="button" role="menuitem" data-kind="file">${ATTACH_MENU_ICONS["file"]}Add file</button>
         <button type="button" role="menuitem" data-kind="record-audio">${ATTACH_MENU_ICONS["record-audio"]}Record audio</button>
         <button type="button" role="menuitem" data-kind="capture-camera">${ATTACH_MENU_ICONS["capture-camera"]}Capture camera</button>
         <button type="button" role="menuitem" data-kind="record-screen">${ATTACH_MENU_ICONS["record-screen"]}Record screen</button>
         <button type="button" role="menuitem" data-kind="grab-screenshot">${ATTACH_MENU_ICONS["grab-screenshot"]}Grab screenshot</button>
         <button type="button" role="menuitem" data-kind="add-tab">${ATTACH_MENU_ICONS["add-tab"]}Add tab</button>
-        <button type="button" role="menuitem" data-kind="choose-agent">${ATTACH_MENU_ICONS["choose-agent"]}Choose agent</button>
-        <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data (multimodal where the provider supports it).</p>
+        <p class="note">Text files are read by the agent. Audio, camera, and image attachments are sent to the model as data.</p>
       </div>`);
     this._btn = this._root.querySelector(".plus");
     this._menu = this._root.querySelector(".menu");
@@ -7508,7 +7515,7 @@ class AgentComposer extends Component {
         <textarea data-composer-input id="${this.id ? `${this.id}-input` : `cmp-input-${this._uid}`}" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(label)}"
           aria-describedby="composer-description-${this._uid}" aria-haspopup="listbox" aria-expanded="false"
           aria-controls="popup-${this._uid}" aria-multiline="true" rows="2"></textarea>
-        <div class="popup" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
+        <div class="popup slash-menu" id="popup-${this._uid}" role="listbox" aria-label="Agent and resource mentions" hidden></div>
         <div class="chips"></div>
         <div class="row">
           <mic-button id="${this.id ? `${this.id}-mic` : `mic-${this._uid}`}"></mic-button>
@@ -7535,22 +7542,31 @@ class AgentComposer extends Component {
       agent-composer .composer.drag-over { outline:2px dashed var(--accent,#0e6e63); background:var(--accent-soft,rgba(14,110,99,0.06)); }
       agent-composer .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
         clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-      agent-composer .popup { position:absolute; inset:auto; margin:0; left:0; right:0; background:var(--panel,#ffffff);
-        border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.08));
-        max-height:260px; overflow-y:auto; padding:4px; z-index:40;
-        position-anchor:--composer-anchor; position-area:bottom span-x-start span-x-end;
+      agent-composer .popup, agent-composer .slash-menu { position:absolute; inset:auto; margin:0;
+        inset-inline-start:12px; inset-inline-end:auto; left:12px; right:auto;
+        width:min(440px, calc(100% - 24px)); max-width:480px; background:var(--panel,#ffffff);
+        border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-md, 0 8px 24px rgba(29,27,24,.08));
+        max-height:320px; overflow-y:auto; padding:4px; z-index:40;
+        position-anchor:--composer-anchor; position-area:bottom span-x-start;
         position-try-fallbacks:flip-block; }
       @supports not (position-area: top) {
-        agent-composer .popup { position:absolute; top:calc(100% + 4px); left:0; right:0; }
+        agent-composer .popup, agent-composer .slash-menu { position:absolute; top:calc(100% + 4px);
+          inset-inline-start:12px; inset-inline-end:auto; left:12px; right:auto; }
       }
-      agent-composer .popup[hidden] { display:none; }
-      agent-composer .popup .item { display:flex; align-items:baseline; gap:10px; padding:7px 10px; border-radius:7px; cursor:pointer; }
+      agent-composer .popup[hidden], agent-composer .slash-menu[hidden] { display:none; }
+      agent-composer .popup .item { display:flex; align-items:baseline; gap:8px; padding:6px 10px; border-radius:6px; cursor:pointer; }
       agent-composer .popup .item:hover, agent-composer .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
-      agent-composer .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      agent-composer .popup .item .dsc { flex:1; text-align:right; font-size:11px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      agent-composer .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; flex-shrink:0; }
+      agent-composer .popup .item .dsc { font-size:12px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; }
       agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
-      agent-composer .popup .group-label { padding:6px 10px 2px; font-size:11px; font-weight:700;
-        color:var(--muted,#635e56); letter-spacing:.01em; }
+      agent-composer .popup .group-label { padding:8px 10px 4px; font-size:11px; font-weight:600;
+        color:var(--muted,#635e56); letter-spacing:.01em; user-select:none; }
+      agent-composer .popup .menu-footer {
+        padding:6px 10px; margin-top:4px; border-top:1px solid var(--border,#e3e0d9);
+        font-size:11px; color:var(--muted,#635e56); background:var(--panel,#ffffff);
+        display:flex; align-items:center; justify-content:center; gap:6px;
+        user-select:none; position:sticky; bottom:-4px;
+      }
       agent-composer .composer textarea { width:100%; background:transparent; border:0; color:var(--text,#1d1b18); font:inherit; resize:none; overflow-y:hidden; field-sizing:content; min-height:24px; max-height:180px; outline:none; line-height:1.45; }
       agent-composer .composer .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
       agent-composer .composer .spacer { flex:1; }
@@ -8563,18 +8579,29 @@ class AgentComposer extends Component {
         }
         // No colon typed yet — FILTER the namespace list by the typed prefix
         // (/ → all, /s → schedule + skill, /sk → skill).
+        const groupOrder = ["Attach context", "Run & switch", "Session"];
         const items = COMMAND_NAMESPACES
           .filter((n) => !ns || n.id.startsWith(ns) || n.label.startsWith(ns) || (n.id === "command" && "cmd".startsWith(ns)))
-          .map((n) => ({ id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id }));
-        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
+          .map((n) => ({ id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id, group: n.group }))
+          .sort((a, b) => {
+            const ga = groupOrder.indexOf(a.group);
+            const gb = groupOrder.indexOf(b.group);
+            return (ga === -1 ? 99 : ga) - (gb === -1 ? 99 : gb);
+          });
+        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "", query: ns });
         return;
       }
       if (!ns) {
         // A colon with no namespace (e.g. "/:") — show all namespaces.
+        const groupOrder = ["Attach context", "Run & switch", "Session"];
         const items = COMMAND_NAMESPACES.map((n) => ({
-          id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id,
-        }));
-        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "" });
+          id: `cmd:${n.id}`, label: `/${n.label}`, description: n.description, kind: n.kind, ns: n.id, group: n.group,
+        })).sort((a, b) => {
+          const ga = groupOrder.indexOf(a.group);
+          const gb = groupOrder.indexOf(b.group);
+          return (ga === -1 ? 99 : ga) - (gb === -1 ? 99 : gb);
+        });
+        this._showPopup(items, { type: "command", start: slashPos, end: caret, ns: "", arg: "", query: "" });
         return;
       }
       let items;
@@ -8622,23 +8649,27 @@ class AgentComposer extends Component {
       this._input?.setAttribute("aria-controls", `popup-${this._uid}`);
       const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
       if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
-            // Always position via the JS fallback (flips above/below + clamps). The
-      // native CSS anchor positioning (position-area) proved unreliable for the
-      // bottom-anchored composer (the popup fell off-screen), so the JS path
-      // wins: it sets position:fixed + the correct top/left, overriding the CSS.
-      placeFloating(this._root.querySelector(".composer"), this._popup, { fullWidth: true });
+      // Position via the JS fallback clamped to max 440px and anchored to composer text area.
+      placeFloating(this._root.querySelector(".composer"), this._popup, {
+        minWidth: 320,
+        maxWidth: 440,
+        offsetInline: 12,
+      });
     }
   }
 
   _renderPopupItems() {
     if (!this._popup) return;
     this._popup.replaceChildren();
+    const groups = new Set(this._popupItems.map((it) => it.group).filter(Boolean));
+    const isFiltered = Boolean(this._popupToken?.query || this._popupToken?.arg);
+    const showGroups = !isFiltered || groups.size > 1;
     let lastGroup = null;
     this._popupItems.forEach((it, i) => {
       // Group headers (the /agent list is grouped Named / Background / Site —
       // the same grouping as the shared <agent-picker>). Group names are
       // owner-controlled (agent kinds), so they go through textContent.
-      if (it.group && it.group !== lastGroup) {
+      if (showGroups && it.group && it.group !== lastGroup) {
         const gh = document.createElement("div");
         gh.className = "group-label";
         gh.setAttribute("role", "presentation");
@@ -8669,6 +8700,15 @@ class AgentComposer extends Component {
       });
       this._popup.appendChild(item);
     });
+
+    if (this._popupItems.length > 0) {
+      const footer = document.createElement("div");
+      footer.className = "menu-footer";
+      footer.setAttribute("role", "presentation");
+      footer.setAttribute("aria-hidden", "true");
+      footer.textContent = "↑↓ Navigate · ↵ Select · Esc Dismiss";
+      this._popup.appendChild(footer);
+    }
     // The textarea's activedescendant is kept in lockstep with the highlight
     // (textbox-with-popup: aria-expanded + aria-controls + activedescendant).
     const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);

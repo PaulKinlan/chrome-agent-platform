@@ -4,12 +4,13 @@
 import { skillMatchesUrl } from "./match-patterns.js";
 
 export const COMMAND_NAMESPACES = Object.freeze([
-  { id: "skill", label: "skill", description: "invoke a skill", kind: "skill" },
+  { id: "skill", label: "skill", description: "invoke a skill", kind: "skill", group: "Run & switch" },
   {
     id: "command",
     label: "command",
     description: "invoke an imported command",
     kind: "command",
+    group: "Run & switch",
   },
   {
     id: "agent",
@@ -17,6 +18,7 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "direct the message to an agent",
     kind: "agent",
     direct: true,
+    group: "Run & switch",
   },
   {
     id: "tabs",
@@ -24,6 +26,7 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "attach an open tab",
     kind: "tab",
     direct: true,
+    group: "Attach context",
   },
   {
     id: "artifacts",
@@ -31,6 +34,7 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "attach an artifact",
     kind: "artifact",
     direct: true,
+    group: "Attach context",
   },
   {
     id: "bookmarks",
@@ -38,6 +42,7 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "attach a bookmarked page",
     kind: "bookmark",
     direct: true,
+    group: "Attach context",
   },
   {
     id: "history",
@@ -45,6 +50,7 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "attach a page from browsing history",
     kind: "history",
     direct: true,
+    group: "Attach context",
   },
   {
     id: "files",
@@ -52,6 +58,7 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "attach a file from a granted folder",
     kind: "files",
     localFiles: true,
+    group: "Attach context",
   },
   {
     id: "folder",
@@ -59,12 +66,14 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "attach a granted folder",
     kind: "folder",
     localFiles: true,
+    group: "Attach context",
   },
   {
     id: "remember",
     label: "remember",
     description: "write something to memory",
     kind: "free",
+    group: "Session",
   },
   {
     id: "summarise",

@@ -1898,8 +1898,10 @@ Deno.test("wp6u: attach-button menu items each render an inline svg icon from th
     ["record-screen", "Record screen"],
     ["grab-screenshot", "Grab screenshot"],
     ["add-tab", "Add tab"],
-    ["choose-agent", "Choose agent"],
   ];
+  if (html.includes('data-kind="choose-agent"') || html.includes("Choose agent")) {
+    throw new Error("attach menu must not contain 'Choose agent' entry");
+  }
   for (const [kind, label] of expectedKinds) {
     const iconSvg = ATTACH_MENU_ICONS[kind];
     if (typeof iconSvg !== "string" || !iconSvg.startsWith("<svg") || !iconSvg.includes('aria-hidden="true"')) {
