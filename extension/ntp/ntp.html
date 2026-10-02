@@ -503,7 +503,8 @@
       gap: 6px;
       width: 100%;
     }
-    .side.collapsed .foot-btn {
+    .side.collapsed .foot-btn,
+    .side.collapsed .side-foot .btn.foot-btn {
       inline-size: 36px !important;
       block-size: 36px !important;
       min-width: 36px !important;
@@ -514,6 +515,13 @@
       justify-content: center !important;
       border-radius: var(--radius-sm, 6px);
       margin: 0 auto !important;
+      border-color: transparent !important;
+      background: transparent !important;
+    }
+    .side.collapsed .foot-btn:hover,
+    .side.collapsed .side-foot .btn.foot-btn:hover {
+      border-color: var(--border) !important;
+      background: var(--panel-2) !important;
     }
     .side.collapsed .artifacts-nav-row {
       display: flex;
@@ -961,14 +969,15 @@
        region, and reappears on expand). */
     .side.collapsed #sidebar-durability-hint { display: none; }
     /* (the collapse control is now the edge nub, not a foot row) */
-    .foot-btn {
+    .foot-btn,
+    .side-foot .btn.foot-btn {
       display: flex;
       align-items: center;
       gap: 8px;
       justify-content: flex-start;
       width: 100%;
-      border-color: transparent;
-      background: transparent;
+      border-color: transparent !important;
+      background: transparent !important;
       color: var(--text);
       transition: background .15s ease, color .15s ease, border-color .15s ease;
     }
@@ -979,20 +988,31 @@
       height: 36px;
       justify-content: flex-start;
     }
-    .foot-btn:hover {
-      border-color: var(--border);
-      background: var(--panel-2);
-      color: var(--text);
+    .side:not(.collapsed) .side-foot .btn.foot-btn {
+      padding: 0 12px !important;
+      gap: 10px;
+      width: 100% !important;
+      height: 36px;
+      justify-content: flex-start;
     }
-    .foot-btn:focus-visible {
+    .foot-btn:hover,
+    .side-foot .btn.foot-btn:hover {
+      border-color: var(--border) !important;
+      background: var(--panel-2) !important;
+      color: var(--text) !important;
+    }
+    .foot-btn:focus-visible,
+    .side-foot .btn.foot-btn:focus-visible {
       outline: 2px solid var(--accent);
       outline-offset: -2px;
       border-radius: var(--radius-sm, 6px);
     }
-    .foot-btn:focus:not(:focus-visible) {
+    .foot-btn:focus:not(:focus-visible),
+    .side-foot .btn.foot-btn:focus:not(:focus-visible) {
       outline: none;
     }
-    .foot-btn svg { flex: 0 0 auto; display: block; }
+    .foot-btn svg,
+    .side-foot .btn.foot-btn svg { flex: 0 0 auto; display: block; }
     /* The three footer entries are navigation, not actions: none is the filled
        primary (the accent marks primary actions and the current selection only —
        DESIGN.md). The open view's entry carries aria-current="page" and reads as

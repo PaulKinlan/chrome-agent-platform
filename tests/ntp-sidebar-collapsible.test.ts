@@ -275,7 +275,9 @@ Deno.test("kr97: section icons in all 6 sidebar disclosure headers", async () =>
   ];
 
   for (const id of sections) {
-    const secRegex = new RegExp(`<details[^>]*id="${id}"[\\s\\S]*?<summary[\\s\\S]*?class="sec-icon"[\\s\\S]*?<\\/summary>`, "s");
+    const secRegex = new RegExp(
+      `<details\\b[^>]*\\bid="${id}"[^>]*>(?:(?!<\\/details>)[\\s\\S])*?<summary\\b[^>]*>(?:(?!<\\/summary>)[\\s\\S])*?class="sec-icon"`
+    );
     assert(secRegex.test(html), `element #${id} summary must include a .sec-icon SVG element`);
   }
 
@@ -409,18 +411,11 @@ Deno.test("kr97: ghost button styling, footer padding fix, and quick drawer icon
   );
 
   // Footer buttons in ntp.html do not have icon-btn class
-  assert(
-    !/<button[^>]*id="open-directory"[^>]*class="[^"]*\bicon-btn\b/s.test(html),
-    "#open-directory must not have icon-btn class",
-  );
-  assert(
-    !/<button[^>]*id="open-artifacts"[^>]*class="[^"]*\bicon-btn\b/s.test(html),
-    "#open-artifacts must not have icon-btn class",
-  );
-  assert(
-    !/<button[^>]*id="open-settings"[^>]*class="[^"]*\bicon-btn\b/s.test(html),
-    "#open-settings must not have icon-btn class",
-  );
+  for (const id of ["open-directory", "open-artifacts", "open-settings"]) {
+    const tagMatch = html.match(new RegExp(`<button\\b[^>]*\\bid="${id}"[^>]*>`));
+    assert(tagMatch, `expected button#${id}`);
+    assert(!/\bicon-btn\b/.test(tagMatch[0]), `button#${id} must not have icon-btn class`);
+  }
 
   // ArtifactQuickDrawer trigger button uses drawer SVG glyph and id="drawer-toggle"
   assert(
