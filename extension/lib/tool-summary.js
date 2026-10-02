@@ -420,6 +420,10 @@ export function describeToolCall(name, args) {
     case "update_asset": return "Updating an artifact";
     case "patch_asset": return "Editing an artifact";
     case "get_asset": return "Reading an artifact";
+    case "export_asset_to_folder": {
+      const p = pickArg(args, ["path", "filename"]);
+      return p ? `Saving artifact to “${p}”` : "Saving artifact to folder";
+    }
     case "write_file": {
       const p = pickArg(args, ["path"]);
       return p ? `Writing “${p}”` : "Writing a file";

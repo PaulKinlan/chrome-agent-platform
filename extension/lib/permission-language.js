@@ -45,11 +45,13 @@ export const PERMISSION_USER_LANGUAGE = Object.freeze({
   "system.display": "see display details",
   clipboardWrite: "copy text to the clipboard",
   write_clipboard: "Copy text to clipboard",
+  export_asset_to_folder: "Save artifact to folder",
 });
 
 /** Human labels for model-facing or management tools shown in approval/activity surfaces. */
 export const TOOL_HUMAN_LABELS = Object.freeze({
   write_clipboard: "Copy text to clipboard",
+  export_asset_to_folder: "Save artifact to folder",
 });
 
 /** A permission token as plain words: "tabGroups" → "tab groups",

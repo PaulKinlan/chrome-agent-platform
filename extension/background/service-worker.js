@@ -433,6 +433,8 @@ import {
   ACTION_LEDGER_MAX_ROWS,
   withRunToolBookkeeping,
 } from "../lib/action-ledger.js";
+import { listFsGrants } from "../lib/fs-grants.js";
+import { writeWorkspaceFile } from "../lib/agent-workspace.js";
 import {
   executableBrowserToolRecords,
   executableBundledToolRecords,
@@ -9212,6 +9214,79 @@ const handlers = mergeRouteMaps(
   async "asset.get"({ origin, id }, context) {
     const result = await getAsset(origin ?? "master", id);
     return context?.principal === "model" ? providerSafeTableAssetRead(result) : result;
+  },
+  async "asset.export-to-folder"({ origin, assetId, path, folder, grantId }, context) {
+    const scope = origin ?? "master";
+    const id = assetId || "";
+    if (typeof id !== "string" || !id.trim()) {
+      return { ok: false, error: "invalid_asset_id", message: "assetId is required" };
+    }
+    const targetPath = path || "";
+    if (typeof targetPath !== "string" || !targetPath.trim()) {
+      return { ok: false, error: "invalid_file_path", message: "path is required" };
+    }
+
+    const exists = await getAsset(scope, id);
+    if (!exists || !exists.ok || !exists.asset) {
+      return { ok: false, error: "asset_not_found", message: `Artifact not found: ${id}` };
+    }
+    const asset = exists.asset;
+    const content = typeof asset.content === "string" ? asset.content : (asset.content == null ? "" : String(asset.content));
+
+    // Determine target grant or workspace
+    const grants = await listFsGrants({ scope: context?.scope });
+    const rwGrants = (grants || []).filter((g) => g.mode === "readwrite");
+
+    const folderTarget = folder || grantId;
+    let targetGrant = null;
+    if (folderTarget) {
+      targetGrant = rwGrants.find((g) => g.grantId === folderTarget || g.name === folderTarget);
+      if (!targetGrant) {
+        return { ok: false, error: "grant_not_found", message: `Folder "${folderTarget}" not found or not granted with write permission.` };
+      }
+    } else if (rwGrants.length === 1) {
+      targetGrant = rwGrants[0];
+    } else if (rwGrants.length > 1) {
+      return { ok: false, error: "grant_ambiguous", message: "More than one folder is available — pass folder to choose which one to use." };
+    }
+
+    if (targetGrant) {
+      // Model-facing write through owner-approved fs card (cannot bypass the card)
+      const modelContext = context && context.principal === "model" ? context : { ...(context ?? {}), principal: "model" };
+      const res = await dispatchRoute("fs-grant.write-file-approved", {
+        grantId: targetGrant.grantId,
+        relativePath: targetPath,
+        content,
+      }, modelContext);
+      if (res?.ok === true) {
+        return {
+          ok: true,
+          written: true,
+          grantId: targetGrant.grantId,
+          path: targetPath,
+          name: asset.name || res.name || targetPath,
+          size: res.size,
+          sha256: res.sha256,
+          added: res.added,
+          removed: res.removed,
+        };
+      }
+      return res;
+    }
+
+    // No granted folder: check workspace if agent run
+    if (context?.agentId || context?.namedAgentId) {
+      const res = await writeWorkspaceFile(targetPath, content);
+      return res?.ok === false
+        ? res
+        : { ok: true, written: true, workspace: true, path: targetPath, name: asset.name || targetPath, size: res.bytes, sha256: res.sha256 };
+    }
+
+    return {
+      ok: false,
+      error: "no_folder_granted",
+      message: "No folder is available to this task. Attach one with /folder, or grant one in Settings → Local folders.",
+    };
   },
 
   // ---- agent-generated scripts (create/update/delete/list/get/run) ----

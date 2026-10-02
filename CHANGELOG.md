@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-02
+- Save artifacts directly to disk via Save file picker or download fallback, and allow agents to file deliverables into granted folders with owner approval.
 - Copy agent output with the ledgered write_clipboard tool or attach clipboard text with /paste.
 - Faster rendering of long conversations and tool lists by sharing cached stylesheets across UI components.
 - Cleaner section navigation in Settings and fewer false-alarm error counts in the hub Diagnostics badge.

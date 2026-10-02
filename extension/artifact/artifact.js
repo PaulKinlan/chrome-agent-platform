@@ -11,6 +11,7 @@
 // never innerHTML — so an untrusted artifact body can never inject markup.
 
 import { send } from "../lib/messages.js";
+import { saveArtifactToDisk } from "../lib/artifact-export.js";
 import {
   renderHtmlFrame,
   wireHtmlFrameContent,
@@ -27,6 +28,7 @@ const nameEl = document.getElementById("name");
 const metaEl = document.getElementById("meta");
 const out = document.getElementById("out");
 const copyBtn = document.getElementById("copy-content");
+const saveBtn = document.getElementById("save-disk");
 const modes = document.getElementById("modes");
 
 document.getElementById("back").addEventListener("click", () => {
@@ -45,6 +47,22 @@ copyBtn?.addEventListener("click", async () => {
     copyBtn.textContent = "Copied!";
     setTimeout(() => { copyBtn.textContent = orig; }, 1500);
   } catch { /* clipboard write can be denied; the Copied! label is best-effort feedback */ }
+});
+
+saveBtn?.addEventListener("click", async () => {
+  if (!currentAsset) return;
+  try {
+    const res = await saveArtifactToDisk(currentAsset);
+    if (res?.ok) {
+      const orig = saveBtn.textContent;
+      saveBtn.textContent = "Saved!";
+      setTimeout(() => { saveBtn.textContent = orig; }, 1500);
+    }
+  } catch {
+    const orig = saveBtn.textContent;
+    saveBtn.textContent = "Error";
+    setTimeout(() => { saveBtn.textContent = orig; }, 1500);
+  }
 });
 
 function renderError(message) {
@@ -286,6 +304,7 @@ async function reload({ keepMode } = {}) {
   metaEl.textContent = `${asset.type ?? "unknown"} · ${asset.size ?? 0} B · ${origin}`;
   currentAssetContent = asset.content ?? "";
   if (copyBtn) copyBtn.disabled = !currentAssetContent;
+  if (saveBtn) saveBtn.disabled = !currentAsset;
 
   panels = buildPanels();
   renderPreview(panels.preview, asset);

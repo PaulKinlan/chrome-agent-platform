@@ -125,6 +125,16 @@ const INVERSE_BUILDERS = Object.freeze({
       inverse: null,
     };
   },
+  export_asset_to_folder(args, result) {
+    const name = result?.name || args?.name || result?.filename || "artifact";
+    const path = result?.path || args?.path || "folder";
+    return {
+      sentence: `Saved ${name} to ${path}`,
+      inverse: null,
+    };
+  },
+    };
+  },
 });
 
 // A human sentence for a mutating tool that has no dedicated builder — honest

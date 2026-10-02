@@ -7,6 +7,7 @@
 
 import { send } from "../lib/messages.js";
 import { handleBroadcastEvent } from "../shared/rpc-cache.js";
+import { saveArtifactToDisk } from "../lib/artifact-export.js";
 import { harnessMarkEl } from "../shared/harness-marks.js";
 import { AGENT_TEMPLATES, STARTER_TEMPLATE_IDS, agentTemplateById, skillAsTemplate, templatePrefill } from "../lib/agent-templates.js";
 import { buildAgentSkillRows } from "../lib/agent-skill-rows.js";
@@ -2544,6 +2545,16 @@ if (threadConversation) {
     );
     if (chrome.tabs?.create) chrome.tabs.create({ url });
     else window.open(url, "_blank", "noopener");
+  });
+  threadConversation.addEventListener("save", async (e) => {
+    const { id, origin } = e.detail ?? {};
+    if (!id || !e.target?.matches?.("artifact-card")) return;
+    try {
+      const full = await send("asset.get", { origin: origin ?? "master", id });
+      if (full?.ok && full.asset) {
+        await saveArtifactToDisk(full.asset);
+      }
+    } catch { /* save cancelled or failed */ }
   });
   // "View diff" under an edited artifact opens the version-to-version change in
   // an <agent-dialog> with the shared <artifact-diff> component — the bodies

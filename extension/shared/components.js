@@ -109,6 +109,7 @@ export const ICONS = {
   external: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
   activity: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>',
   cap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M2.5 14.5c0-5 3.8-9 8.5-9 4.2 0 7 2.5 7.5 6.5l3.8 1.5c.8.3.8 1.2 0 1.5-2.2.8-5.8 1-7.8 1-2 0-8.5 0-12-1.5z"/><path d="M11 5.5v9"/><path d="M11 5.5c-2.8 1.2-5 4-5.5 9"/><path d="M10 4.5c.5-.7 1.5-.7 2 0"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
 };
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -3360,6 +3361,7 @@ class ArtifactCard extends Component {
       <div class="actions">
         ${act("open-tab", `<button type="button" data-act="open-tab" title="Open in new tab">${ICONS.external}<span>New tab</span></button>`)}
         ${act("reuse", `<button type="button" data-act="reuse">${ICONS.attach}<span>Reuse</span></button>`)}
+        ${act("save", `<button type="button" data-act="save" title="Save to disk" aria-label="Save ${escapeHtml(name)} to disk">${ICONS.download}<span>Save to disk</span></button>`)}
         ${act("delete", `<button type="button" data-act="delete" class="danger">${ICONS.close}<span>Delete</span></button>`)}
       </div>
     </div>`);
@@ -3383,6 +3385,7 @@ class ArtifactCard extends Component {
     });
     this._root.querySelector('[data-act="open-tab"]')?.addEventListener("click", () => this._emit("open-tab", detail()));
     this._root.querySelector('[data-act="reuse"]')?.addEventListener("click", () => this._emit("reuse", detail()));
+    this._root.querySelector('[data-act="save"]')?.addEventListener("click", () => this._emit("save", detail()));
     this._root.querySelector('[data-act="delete"]')?.addEventListener("click", () => this._emit("delete", detail()));
   }
   disconnectedCallback() {
@@ -6939,7 +6942,7 @@ class AgentConversation extends Component {
     card.setAttribute("origin", origin);
     if (a.at != null) card.setAttribute("time", String(a.at));
     // Only what the thread actually handles.
-    card.setAttribute("actions", "open-tab reuse");
+    card.setAttribute("actions", "open-tab reuse save");
     wrap.appendChild(card);
     // THE PREVIEW COMES FROM THE STORE, never from the tool-result text
     // (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01 / the TOOL-RESULT-ENVELOPE rule):

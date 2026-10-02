@@ -781,6 +781,7 @@
       document.querySelectorAll("artifact-card").forEach((c) => {
         c.addEventListener("open", () => log("#hub-log", `artifact open: ${c.getAttribute("name")}`));
         c.addEventListener("reuse", () => log("#hub-log", `artifact reuse: ${c.getAttribute("name")}`));
+        c.addEventListener("save", () => log("#hub-log", `artifact save: ${c.getAttribute("name")}`));
         c.addEventListener("delete", () => log("#hub-log", `artifact delete: ${c.getAttribute("name")}`));
       });
 
