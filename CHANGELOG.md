@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.561] — 2026-10-02
+- Instant task opening from the sidebar with cached settled execution logs, non-blocking thread execution reads, and deduplicated background queries.
+
 ## [0.3.560] — 2026-10-02
+- Instant task opening from the sidebar with cached settled execution logs, non-blocking thread execution reads, and deduplicated background queries.
 - Fixed the Hub Timeline filter bar so clicking All, Runs, Waiting, Made, or Scheduled moves the active highlight pill immediately.
 
 ## [0.3.559] — 2026-10-02

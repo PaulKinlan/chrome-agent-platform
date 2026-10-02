@@ -595,6 +595,7 @@ async function dispatchOnDeviceText(type, message) {
 // its own record by catching the refusal.
 const pythonNetworkLedger = createPythonNetworkLedger();
 const activePythonFetches = new Map(); // origin -> Set<AbortController>
+const inFlightThreadGet = new Map(); // key -> Promise<ThreadGetResult>
 
 const scriptRunPolicies = new Map();
 const SCRIPT_RUN_POLICY_TTL_MS = 60_000;
@@ -7385,43 +7386,60 @@ const handlers = mergeRouteMaps(
     return { threads: await listThreads() };
   },
   async "thread.get"(m) {
-    const readSpan = perfSpan("thread.get:read");
-    const thread = await getThread(m.id);
-    readSpan.end("ok");
-    if (!thread) return { ok: false, error: "thread not found" };
-    // The thread is a VIEW over the single authoritative per-execution durable
-    // run log (log-redesign): derive the tool cards from the durable logs and
-    // reconcile any missing terminal marker — every journaled tool call + every
-    // turn is visible on reopen, and a stuck "running" thread self-heals.
-    // BOUNDED: the view reads only the recent executions + recent log rows
-    // (owner P0 thread-open perf — the full replay took ~10s).
-    // Windowed loading: supports pagination via limit, offset, and all.
-    const viewSpan = perfSpan("thread.get:view");
-    const view = await buildThreadRunView(thread, {
-      listThreadExecutions: (id) => durableRuns.listThreadExecutions(id),
-      listLogs: (id, limit) => durableRuns.listLogs(id, limit),
-      commitTerminal: commitThreadTerminal,
-      recordFailure: (kind, detail) => pushDiagnostic("error", `[thread] ${kind}: ${detail}`),
-    }, {
-      limit: m?.limit,
-      offset: m?.offset,
-      all: m?.all,
-    });
-    viewSpan.end("ok");
-    if (m?.id && ownerApprovalStore?.approvals) {
-      try {
-        const execs = new Set((await durableRuns.listThreadExecutions(m.id).catch(() => [])).map((e) => e.executionId));
-        const pending = [];
-        for (const [approvalId, app] of ownerApprovalStore.approvals.entries()) {
-          if (app?.status === "pending" && execs.has(app.runId)) {
-            const req = approvalCardDenial({ approvalId, action: app.action, targetRef: app.targetRef, detail: app.detail })?.permissionRequirement;
-            if (req) pending.push({ role: "approval", requirement: req, executionId: app.runId, ts: app.createdAt ?? Date.now() });
+    const key = `${m?.id}:${m?.limit ?? ""}:${m?.offset ?? ""}:${m?.all ?? ""}`;
+    const inFlight = inFlightThreadGet.get(key);
+    if (inFlight) return inFlight;
+
+    const promise = (async () => {
+      const readSpan = perfSpan("thread.get:read");
+      const thread = await getThread(m?.id);
+      readSpan.end("ok");
+      if (!thread) return { ok: false, error: "thread not found" };
+      // The thread is a VIEW over the single authoritative per-execution durable
+      // run log (log-redesign): derive the tool cards from the durable logs and
+      // reconcile any missing terminal marker — every journaled tool call + every
+      // turn is visible on reopen, and a stuck "running" thread self-heals.
+      // BOUNDED: the view reads only the recent executions + recent log rows
+      // (owner P0 thread-open perf — the full replay took ~10s).
+      // Windowed loading: supports pagination via limit, offset, and all.
+      const viewSpan = perfSpan("thread.get:view");
+      let fetchedExecutions = null;
+      const view = await buildThreadRunView(thread, {
+        listThreadExecutions: async (id) => {
+          const list = await durableRuns.listThreadExecutions(id);
+          if (id === m?.id) fetchedExecutions = list;
+          return list;
+        },
+        listLogs: (id, limit) => durableRuns.listLogs(id, limit),
+        commitTerminal: commitThreadTerminal,
+        recordFailure: (kind, detail) => pushDiagnostic("error", `[thread] ${kind}: ${detail}`),
+      }, {
+        limit: m?.limit,
+        offset: m?.offset,
+        all: m?.all,
+      });
+      viewSpan.end("ok");
+      if (m?.id && ownerApprovalStore?.approvals) {
+        try {
+          const execList = fetchedExecutions ?? await durableRuns.listThreadExecutions(m.id).catch(() => []);
+          const execs = new Set(execList.map((e) => e.executionId));
+          const pending = [];
+          for (const [approvalId, app] of ownerApprovalStore.approvals.entries()) {
+            if (app?.status === "pending" && execs.has(app.runId)) {
+              const req = approvalCardDenial({ approvalId, action: app.action, targetRef: app.targetRef, detail: app.detail })?.permissionRequirement;
+              if (req) pending.push({ role: "approval", requirement: req, executionId: app.runId, ts: app.createdAt ?? Date.now() });
+            }
           }
-        }
-        if (pending.length && Array.isArray(view?.messages)) view.messages = [...view.messages, ...pending];
-      } catch { /* best effort */ }
-    }
-    return { ok: true, thread: view };
+          if (pending.length && Array.isArray(view?.messages)) view.messages = [...view.messages, ...pending];
+        } catch { /* best effort */ }
+      }
+      return { ok: true, thread: view };
+    })().finally(() => {
+      if (inFlightThreadGet.get(key) === promise) inFlightThreadGet.delete(key);
+    });
+
+    inFlightThreadGet.set(key, promise);
+    return promise;
   },
   async "acp.journal"(m) {
     if (m?.action === "open") return await openAcpTurn(m, { createThread, continueThread, nameThread: nameThreadAsync });

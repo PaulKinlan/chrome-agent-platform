@@ -184,7 +184,7 @@ Deno.test("restore RUNNING task: transcript + status + controls restored on leav
   const registry = harness.getOrCreateElement("durable-run-registry");
 
   openTask(row);
-  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
+  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false && toolRows(conv.children).length === 1, "thread view open and tool card rendered");
   // persisted journal replayed EXACTLY ONCE
   assertEquals(toolRows(conv.children).length, 1, "one replayed tool card for c1");
   // the inline live-status row + controls restored for the executing run
@@ -203,7 +203,7 @@ Deno.test("restore RUNNING task: transcript + status + controls restored on leav
 
   // RETURN: re-attached; journal still exactly once; live continuation resumes
   openTask(row);
-  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view reopened");
+  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false && toolRows(conv.children).length >= 1, "thread view reopened");
   assertEquals(conv.liveStatus?.state, "running", "the inline status row restored on return");
   assertEquals(toolRows(conv.children).filter((c) => c.name === "zip" || c.getAttribute?.("content")?.includes("zip")).length, 1, "journal replayed exactly once on return");
   portState.listener?.({ type: "progress", event: { runId: "exec_run_1", type: "tool-call", toolName: "xz", toolArgs: {} } });
@@ -228,7 +228,7 @@ Deno.test("restore COMPLETED task: terminal state and retained log control shown
   const row = await boot(harness);
   const conv = harness.getOrCreateElement("thread-conversation");
   openTask(row);
-  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
+  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false && conv.children.length > 0, "thread view open");
   assert(conv.children.some((c) => c.content === "the summary" || c.getAttribute?.("content") === "the summary"), "terminal answer restored");
   assertEquals(conv.liveStatus, null, "no phantom live-status row for a terminal run");
   assertEquals(harness.getOrCreateElement("durable-run-registry").hidden, false, "retained logs remain reachable for a terminal run");
@@ -248,11 +248,11 @@ Deno.test("restore FAILED task: terminal error shown; re-open does not duplicate
   const row = await boot(harness);
   const conv = harness.getOrCreateElement("thread-conversation");
   openTask(row);
-  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view open");
+  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false && conv.children.length > 0, "thread view open");
   assert(conv.children.some((c) => c.content === "provider exploded" || c.getAttribute?.("content") === "provider exploded"), "terminal error restored");
   assertEquals(conv.liveStatus, null, "no phantom live-status row for a failed run");
   const before = conv.children.length;
   openTask(row); // re-open the same task
-  await waitFor(() => harness.getOrCreateElement("thread-view").hidden === false, "thread view reopened");
+  await new Promise((r) => setTimeout(r, 20));
   assertEquals(conv.children.length, before, "re-open reproduces the same terminal projection, no growth");
 });

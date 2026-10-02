@@ -86,15 +86,43 @@ function viewBoundNotice(viewed, total, { turnsKept = false, at = Date.now() } =
   return { role: "system", content, ts: at, derived: true, viewBound: { viewed, total } };
 }
 
+const settledExecutionLogsCache = new Map();
+const SETTLED_LOGS_CACHE_MAX = 512;
+
+export function clearSettledExecutionLogsCache() {
+  settledExecutionLogsCache.clear();
+}
+
 /** Read one execution's log for a view (shared by the thread and agent
  *  views): a read failure is captured on the row, never thrown. dptw: no row
  *  bound — every row the store kept is read. */
-async function readExecutionLogs(e, listLogs, recordFailure) {
+async function readExecutionLogs(e, listLogs, recordFailure, options = {}) {
   // A run still WRITING its own log is not read: the read queues behind its own
   // appends (~1 s vs ~3 ms settled — bead chrome-agent-platform-h638). Its rows
   // stream in through the surface's live transcript; the next build reads them
   // once it settles. PAUSED phases are read (their producer is stopped).
   if (BUSY.includes(e.record?.phase)) return { executionId: e.executionId, logs: [] };
+
+  const isTerminal = ["completed", "failed", "cancelled", "terminal"].includes(e.record?.phase) || e.record?.terminal != null;
+  const cacheKey = isTerminal && e?.executionId
+    ? `${e.executionId}:${e.record?.revision ?? e.record?.updatedAt ?? e.record?.startedAt ?? "settled"}`
+    : null;
+
+  if (!options?.bypassCache && cacheKey && settledExecutionLogsCache.has(cacheKey)) {
+    const cached = settledExecutionLogsCache.get(cacheKey);
+    settledExecutionLogsCache.delete(cacheKey);
+    settledExecutionLogsCache.set(cacheKey, cached);
+    return {
+      executionId: e.executionId,
+      logs: cached,
+      logFailed: false,
+      truncatedLogs: false,
+      phase: e.record?.phase ?? null,
+      pause: e.record?.pause ?? null,
+      terminal: e.record?.terminal ?? null,
+    };
+  }
+
   let logs = [];
   let logFailed = false;
   const logSpan = perfSpan(`thread-view:logs:${e.executionId}`);
@@ -105,6 +133,15 @@ async function readExecutionLogs(e, listLogs, recordFailure) {
     recordFailure("thread-view-logs", `could not read run log for ${e.executionId}: ${String(err?.message ?? err).slice(0, 200)}`);
   }
   logSpan.end(logFailed ? "error" : "ok");
+
+  if (cacheKey && !logFailed && Array.isArray(logs)) {
+    if (settledExecutionLogsCache.size >= SETTLED_LOGS_CACHE_MAX) {
+      const oldest = settledExecutionLogsCache.keys().next().value;
+      if (oldest) settledExecutionLogsCache.delete(oldest);
+    }
+    settledExecutionLogsCache.set(cacheKey, logs);
+  }
+
   return {
     executionId: e.executionId,
     logs,
@@ -171,7 +208,7 @@ export async function buildThreadRunView(thread, deps, options = {}) {
   // fan-out). Order is restored by index: `withLogs` must stay in execution
   // order, because the projection places each execution's cards relative to its
   // own terminal marker.
-  const withLogs = await mapBounded(viewedExecutions, VIEW_READ_CONCURRENCY, (e) => readExecutionLogs(e, listLogs, recordFailure));
+  const withLogs = await mapBounded(viewedExecutions, VIEW_READ_CONCURRENCY, (e) => readExecutionLogs(e, listLogs, recordFailure, opts));
   const projectSpan = perfSpan("thread-view:project");
   const { messages, missingTerminals } = projectThreadWithRunLogs(thread, withLogs);
   projectSpan.end("ok");

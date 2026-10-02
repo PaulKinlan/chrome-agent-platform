@@ -602,6 +602,32 @@ export function createDurableRunRegistry({
   const migratedExecutions = new Set();
   const logHandles = new Map();
   const MAX_BUFFERED_ROWS = 256;    // bounds both memory and the loss window
+  let legacyKeysByExecPromise = null;
+
+  async function getLegacyKeysForExec(executionId) {
+    if (!legacyKeysByExecPromise) {
+      legacyKeysByExecPromise = (async () => {
+        const byExec = new Map();
+        try {
+          for (const k of await store.keys()) {
+            if (typeof k !== "string" || !k.startsWith(LOG_PREFIX)) continue;
+            const rest = k.slice(LOG_PREFIX.length);
+            const colon = rest.indexOf(":");
+            if (colon <= 0) continue;
+            const execId = rest.slice(0, colon);
+            let arr = byExec.get(execId);
+            if (!arr) { arr = []; byExec.set(execId, arr); }
+            arr.push(k);
+          }
+        } catch {
+          legacyKeysByExecPromise = null;
+        }
+        return byExec;
+      })();
+    }
+    const map = await legacyKeysByExecPromise;
+    return map?.get(executionId) ?? [];
+  }
 
   function queueAppend(executionId, handle, row) {
     let pending = pendingAppends.get(executionId);
@@ -760,10 +786,9 @@ export function createDurableRunRegistry({
       return false;
     }
 
-    const prefix = `${LOG_PREFIX}${executionId}:`;
     let legacyKeys;
     try {
-      legacyKeys = (await store.keys()).filter((k) => k.startsWith(prefix));
+      legacyKeys = await getLegacyKeysForExec(executionId);
     } catch {
       return false;
     }
@@ -808,6 +833,9 @@ export function createDurableRunRegistry({
     }).catch(() => {});
     migratedExecutions.add(executionId);
     seenKeys.delete(executionId);
+    if (legacyKeysByExecPromise) {
+      (await legacyKeysByExecPromise.catch(() => null))?.delete(executionId);
+    }
     return legacyKeys.length > 0;
   }
 
@@ -816,8 +844,12 @@ export function createDurableRunRegistry({
     // and only take the exclusive lock when there is actually legacy data to
     // move. An execution already on the WAL (every execution, after its first
     // read) never acquires the write lock at all.
-    const alreadyMigrated = await store.has(`${MIGRATED_PREFIX}${executionId}`).catch(() => false);
-    if (!alreadyMigrated) await locked(() => migrateExecutionLog(executionId));
+    const alreadyMigrated = migratedExecutions.has(executionId) || await store.has(`${MIGRATED_PREFIX}${executionId}`).catch(() => false);
+    if (alreadyMigrated) {
+      migratedExecutions.add(executionId);
+    } else {
+      await locked(() => migrateExecutionLog(executionId));
+    }
     return lockedRead(async () => {
       // Inside the shared lock, which has already awaited the write chain — so
       // every append initiated before this read has queued its row, and this
@@ -892,8 +924,22 @@ export function createDurableRunRegistry({
 
   async function listThreadExecutions(threadId) {
     if (!threadId) return [];
+    const key = `${THREAD_RUNS_PREFIX}${threadId}`;
+    const readFast = await lockedRead(async () => {
+      const stored = await store.get(key);
+      if (stored == null && !scannedThreads.has(threadId)) return null;
+      const ids = Array.isArray(stored) ? stored.filter(validExecutionId) : [];
+      const withTime = [];
+      for (const executionId of ids) {
+        const record = await readRecord(executionId);
+        if (record) withTime.push({ executionId, at: record.startedAt ?? 0, record: publicRecord(record) });
+      }
+      withTime.sort((a, b) => a.at - b.at || a.executionId.localeCompare(b.executionId));
+      return withTime;
+    });
+    if (readFast != null) return readFast;
+
     return locked(async () => {
-      const key = `${THREAD_RUNS_PREFIX}${threadId}`;
       const stored = await store.get(key);
       let ids = Array.isArray(stored) ? stored.filter(validExecutionId) : [];
       // Self-migration: a thread with NO index (admitted before the index
@@ -1021,6 +1067,13 @@ export function createDurableRunRegistry({
         registryAdmission,
       });
       active.add(executionId);
+      migratedExecutions.add(executionId);
+      await store.setTrusted(`${MIGRATED_PREFIX}${executionId}`, {
+        schemaVersion: 1,
+        retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
+        executionId,
+        migratedRows: 0,
+      }).catch(() => {});
       await appendRegistryRow(executionId, {
         schemaVersion: 1,
         retentionPolicyVersion: RUN_RETENTION_POLICY.policyVersion,
@@ -2334,6 +2387,8 @@ export function createDurableRunRegistry({
       seenKeys.clear();
       logHandles.clear();
       scannedThreads.clear();
+      migratedExecutions.clear();
+      legacyKeysByExecPromise = null;
     },
     recover,
     list,

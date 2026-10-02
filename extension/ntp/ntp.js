@@ -2821,6 +2821,20 @@ async function openThread(id) {
   threadTitle.setAttribute("role", "button");
   threadTitle.setAttribute("title", "Click to rename task");
   syncComposerScope();
+
+  // Immediate UI switch (<16ms) before the asynchronous thread.get
+  const sidebar = document.getElementById("thread-sidebar");
+  const escapedId = typeof CSS !== "undefined" && typeof CSS.escape === "function" ? CSS.escape(id) : String(id).replace(/["\\]/g, "\\$&");
+  const sidebarItem = sidebar?.querySelector?.(`[data-thread-id="${escapedId}"]`);
+  const initialTitle = sidebarItem?.querySelector?.(".t-title")?.textContent?.trim();
+  if (initialTitle) {
+    threadTitle.textContent = initialTitle;
+  } else if (!threadTitle.textContent?.trim()) {
+    threadTitle.textContent = "Task";
+  }
+  showThreadView();
+  highlightTaskSidebarRow(id);
+
   // A thread.get can transiently fail when the MV3 service worker is mid-
   // restart (the message wakes it, but the first attempt can race the boot).
   // Rendering an empty "Task" surface then is a LIE (the run's data exists) —
