@@ -543,10 +543,13 @@
       <div class="specimen">
         <h3 class="spec"><code class="tag">&lt;agent-timeline&gt;</code> — the hub's spine: one reverse-chronological stream of tasks + runs</h3>
         <div class="stage column" style="max-width:680px">
+          <div style="display:flex;align-items:center;padding:8px 0;">
+            <segmented-control id="timeline-demo-filters" items="All,Runs,Waiting,Made,Scheduled" value="All" label="Filter timeline" role="toolbar"></segmented-control>
+          </div>
           <agent-timeline id="timeline-demo" limit="40"></agent-timeline>
           <agent-timeline id="timeline-empty"></agent-timeline>
         </div>
-        <p class="caption">The hub below the composer (CAP-FB-20260828-HUB-AS-TIMELINE-01): what is in flight, what is waiting on you, and what came back while you were away — one list, not three object catalogs. Each row is a single Open target that emits <code>open</code> with the entry id (a task thread, or an agent run). A leading status dot carries a status word too, so colour is never the only signal. Seeded demo entries — the real surface is the pure <code>buildTimeline</code> projection of the thread index + the durable-run registry. Second instance shows the empty state.</p>
+        <p class="caption">The hub below the composer (CAP-FB-20260828-HUB-AS-TIMELINE-01): what is in flight, what is waiting on you, and what came back while you were away — one list, not three object catalogs. Filter row provides quick switching across All, Runs, Waiting, Made, and Scheduled facets. Each row is a single Open target that emits <code>open</code> with the entry id (a task thread, or an agent run). A leading status dot carries a status word too, so colour is never the only signal. Seeded demo entries — the real surface is the pure <code>buildTimeline</code> projection of the thread index + the durable-run registry. Second instance shows the empty state.</p>
       </div>
 
       <div class="specimen">
@@ -935,6 +938,13 @@
         { id: "t-done", kind: "thread", threadId: "t-done", title: "Summarise the design doc", agent: "Researcher", time: now - 26 * 3600000, status: "done", outcome: "" },
       ];
       document.getElementById("timeline-empty").entries = [];
+      const timelineFilter = document.getElementById("timeline-demo-filters");
+      const timelineDemo = document.getElementById("timeline-demo");
+      if (timelineFilter && timelineDemo) {
+        timelineFilter.addEventListener("change", (e) => {
+          timelineDemo.filter = e.detail.value;
+        });
+      }
 
       // <next-run> examples — the gallery has no alarms backend, so seed the
       // fire times relative to now (the real surface reads the alarm's

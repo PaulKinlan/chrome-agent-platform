@@ -15,8 +15,6 @@
 /** Runs surfaced on their own (without a task thread) — the "came back while I
  * was away" rows. A bare `task` run with no thread is a failed dispatch and
  * belongs to the sidebar's failed-runs section, not here. */
-import { projectThreadRunState } from "../shared/thread-projection-authority.js";
-
 const STANDALONE_RUN_KINDS = new Set(["agent", "scheduled", "delegate"]);
 
 function short(value, n = 90) {
@@ -55,16 +53,34 @@ export function timelineAgentLabel(run, agentNames) {
 }
 
 /** One of "running" | "paused" | "failed" | "done" | "" (unknown). Derived from
- * the durable run's phase/terminal when a run exists, else the thread status —
- * through the ONE projection the sidebar dot and the conversation status row
- * also read (chrome-agent-platform-716s.1), so a run still waiting on an
- * approval card reads "paused" here exactly as it does there. */
-export function timelineStatus(thread, run, pendingApprovals = []) {
-  return projectThreadRunState({ thread, run, pendingApprovals }).timeline;
+ * the durable run's phase/terminal when a run exists, else the thread status. */
+export function timelineStatus(thread, run) {
+  const phase = run && typeof run === "object" ? String(run.phase ?? "") : "";
+  const terminalFailed = run?.terminal && run.terminal.ok === false;
+  if (phase) {
+    if (["running", "settling", "resume-dispatching", "cancel-requested"].includes(phase)) return "running";
+    if (phase.startsWith("paused")) return "paused";
+    if (phase === "failed" || phase === "cancelled") return "failed";
+    if (phase === "done" || phase === "terminal") return terminalFailed ? "failed" : "done";
+  }
+  if (terminalFailed) return "failed";
+  const ts = thread && typeof thread === "object" ? String(thread.status ?? "") : "";
+  if (ts === "running") return "running";
+  if (ts === "error") return "failed";
+  if (ts) return "done";
+  return phase ? "done" : "";
 }
 
-function outcomeText(thread, run, pendingApprovals) {
-  return projectThreadRunState({ thread, run, pendingApprovals }).outcome;
+function outcomeText(status, run) {
+  const reason = run?.pause?.reason ? short(run.pause.reason) : "";
+  const summary = run?.terminal?.summary ? short(run.terminal.summary) : "";
+  switch (status) {
+    case "running": return "Running…";
+    case "paused": return reason || "Waiting for you";
+    case "failed": return summary || "Didn’t finish";
+    case "done": return summary || "";
+    default: return summary || "";
+  }
 }
 
 function threadTime(t) {
@@ -81,16 +97,13 @@ function runTime(r) {
  *
  * @param {Array<object>} threads  thread index rows { id, name, preview, status, updatedAt, createdAt }
  * @param {Array<object>} runs     durable run records { executionId, threadId, agentId, kind, phase, terminal, taskPreview, scheduleName, updatedAt, startedAt }
- * @param {{ agentNames?: Map|object, limit?: number, pendingApprovals?: object[] }} [opts]
- *   `pendingApprovals` — the page's still-unanswered approval-request events; a
- *   run waiting on one of them is a "paused" row ("Waiting for you").
+ * @param {{ agentNames?: Map|object, limit?: number }} [opts]
  * @returns {Array<{ id, kind, threadId?, executionId?, agentId?, title, agent, time, status, outcome }>}
  */
 export function buildTimeline(threads = [], runs = [], opts = {}) {
   const names = asNameMap(opts.agentNames);
   const limit = Number.isFinite(opts.limit) ? opts.limit : 40;
   const runList = Array.isArray(runs) ? runs : [];
-  const pendingApprovals = Array.isArray(opts.pendingApprovals) ? opts.pendingApprovals : [];
 
   // The latest run per thread (the outcome the thread row shows).
   const latestByThread = new Map();
@@ -107,7 +120,7 @@ export function buildTimeline(threads = [], runs = [], opts = {}) {
     if (!t?.id) continue;
     threadIds.add(t.id);
     const run = latestByThread.get(t.id) || null;
-    const status = timelineStatus(t, run, pendingApprovals);
+    const status = timelineStatus(t, run);
     entries.push({
       id: t.id,
       kind: "thread",
@@ -116,7 +129,7 @@ export function buildTimeline(threads = [], runs = [], opts = {}) {
       agent: timelineAgentLabel(run, names),
       time: Math.max(threadTime(t), run ? runTime(run) : 0),
       status,
-      outcome: outcomeText(t, run, pendingApprovals),
+      outcome: outcomeText(status, run),
     });
   }
 
@@ -124,7 +137,7 @@ export function buildTimeline(threads = [], runs = [], opts = {}) {
     if (r?.threadId && threadIds.has(r.threadId)) continue; // already the thread row's outcome
     if (!STANDALONE_RUN_KINDS.has(r?.kind)) continue;
     if (!r?.executionId) continue;
-    const status = timelineStatus(null, r, pendingApprovals);
+    const status = timelineStatus(null, r);
     entries.push({
       id: `run:${r.executionId}`,
       kind: r.kind,
@@ -134,7 +147,7 @@ export function buildTimeline(threads = [], runs = [], opts = {}) {
       agent: timelineAgentLabel(r, names),
       time: runTime(r),
       status,
-      outcome: outcomeText(null, r, pendingApprovals),
+      outcome: outcomeText(status, r),
     });
   }
 

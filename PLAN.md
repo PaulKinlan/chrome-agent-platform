@@ -87,6 +87,7 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
 
 ### Landed and shipping — the foundation
 - [x] MV3 extension: NTP hub, side panel, directory, options, and artifact viewers (retired chat and memory explorer surfaces deleted).
+- [x] NTP Hub activity timeline filter bar: All · Runs · Waiting · Made · Scheduled with persisted selection and deduplicated screen-reader status text.
 - [x] Real `agent-do` bundled (esbuild) + process/global shims.
 - [x] Provider layer (`lib/provider.js`) — OpenAI / Anthropic / Gemini / DeepSeek /
       Ollama / OpenAI-compatible, per-provider model dropdowns, **Test connection**,

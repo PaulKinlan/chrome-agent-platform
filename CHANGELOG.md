@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
+- Streamlined activity filter bar with All, Runs, Waiting, Made, and Scheduled views, approval/blocked matching in Waiting, and More overflow for secondary facets.
 - Cleaner new-tab first-run layout with a single setup call-to-action, full-width activity feed when no background jobs are running, and unclipped sidebar header.
 - Cleaner conversation transcript with human-readable tool names, single-line declined actions, and proper agent names.
 - Settings copy reads as whole sentences again — About shows the installed version, the Backup & restore heading no longer shows a stray "&amp;", and the MCP servers and Skills introductions are complete.
