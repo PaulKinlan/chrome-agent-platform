@@ -62,9 +62,21 @@ const pageComposer = document.getElementById("page-composer");
 // state (the undone row flips to "Undone").
 
 const harnessQuickEls = [
-  document.getElementById("harness-quick"),
   document.getElementById("harness-quick-page"),
 ].filter(Boolean);
+
+const pageEmptyState = document.getElementById("page-empty-state");
+if (pageEmptyState) {
+  pageEmptyState.addEventListener("click", (e) => {
+    const btn = e.target.closest(".chip-suggestion");
+    if (!btn) return;
+    const prompt = btn.dataset.prompt || btn.textContent.trim();
+    if (pageComposer) {
+      pageComposer.value = prompt;
+      pageComposer.focus?.();
+    }
+  });
+}
 
 /** ONE-CLICK harness agents: the acp rows of the SAME agent.registry authority
  * the picker uses (no second list to keep in sync), rendered above the picker so
@@ -339,6 +351,7 @@ async function loadTabThread(tabId) {
       savePageThread(tabId, null);
     }
   }
+  if (pageEmptyState) pageEmptyState.hidden = !!pageThreadId;
   if (continueHubBtn) continueHubBtn.hidden = !pageThreadId;
   reportSidepanelSurface();
 }
@@ -448,6 +461,7 @@ pageComposer?.addEventListener("send", async (ev) => {
 /** One turn of the page conversation (the composer's send, or the budget
  * Continue action) — the page thread continues across turns. */
 async function runPageTurn(text, attachments, mention) {
+  if (pageEmptyState) pageEmptyState.hidden = true;
   pageHistory?.bindLiveStatusExecution?.(null);
   const res = await runConversationTurn(pageHistory, {
     text,
@@ -605,11 +619,19 @@ function reportSidepanelSurface() {
 }
 
 function switchView(which) {
-  const agents = which === "agents";
+  const agents = which === "agents" || which === "agent";
   tabPage.setAttribute("aria-selected", String(!agents));
   tabAgents.setAttribute("aria-selected", String(agents));
   pageView.hidden = agents;
   agentsView.hidden = !agents;
+  const topStrip = document.getElementById("agent-picker") || document.querySelector(".agent-strip");
+  if (topStrip) {
+    topStrip.hidden = agents;
+  }
+  const hq = document.getElementById("harness-quick");
+  if (hq) {
+    hq.hidden = agents;
+  }
   if (agents) picker?.focusSearch?.();
 }
 tabPage.addEventListener("click", () => switchView("page"));

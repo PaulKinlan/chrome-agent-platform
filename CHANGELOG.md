@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
+- Deduplicate side panel agents list, use distinct icons for Claude Code, Codex, and Gemini CLI, and show suggestion chips on empty page tabs.
 - Compact, categorized slash-command menu with keyboard hints and consistent menu shadows.
 - Clearer empty states with direct next-step actions on the Artifacts and Directory pages.
 - Streamlined activity filter bar with All, Runs, Waiting, Made, and Scheduled views, approval/blocked matching in Waiting, and More overflow for secondary facets.

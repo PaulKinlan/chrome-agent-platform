@@ -346,6 +346,7 @@ Agents create things for the user in the context of a task (generated pages, fil
 data). All four pieces are in: the per-task artifact view in the conversation, the master
 artifacts view in the hub, open/preview/use (now full-window and openable in a new tab,
 `0.2.318`), and attach-an-existing-artifact from the + menu. Artifacts are origin-keyed
+<<<<<<< HEAD
 per agent with a master index; a generated UI IS an artifact. Empty states use the shared
 `<empty-state>` component with owner voice and direct actions (`chrome-agent-platform-716s.7`).
 
@@ -355,3 +356,10 @@ paused on an inline permission/Allow card, or settled while unfocused/closed. Ac
 the design petrol-teal (`#0e6e63`), debounced (250 ms), cleared on viewing or answering.
 When no hub or side panel is open, an attention notification is registered and emitted
 with direct click-routing to the task thread (`#omnibox=thread:<id>`).
+
+## Side Panel Agents & Page Experience (chrome-agent-platform-716s.9, UI Audit #9) — landed
+Side panel deduplication and distinct harness presentation:
+- Agents view hides the top quick-actions harness strip (`.agent-strip` / `#harness-quick-page`), leaving the `<agent-picker>` as the single authority listing each harness once (1×, down from 2×). Top strip restores on returning to Page view.
+- Distinct harness monograms: Claude Code (`C`), Codex (`X`), Gemini CLI (`G`), and pi (`π`) in both `<agent-picker>` avatars and chip marks, removing the previous `C`/`C` avatar collision.
+- Paired vs unpaired CLI harnesses partitioned in `<agent-picker>`: paired harnesses show live status, unpaired ones collapse into `<details class="unpaired-harnesses">`.
+- Page view empty state: one lead sentence plus suggestion chips (*Summarize page*, *Key takeaways*, *Explain page*) prefilling the composer, keeping empty vertical space above the composer ≤ 40% at 420×800.

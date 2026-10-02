@@ -719,6 +719,13 @@ next-step action button or link. The copy width is bounded to ~46ch and centered
 preventing long runaway lines on wide screens. Filter and search bars over zero
 items are hidden or disabled until items exist.
 
+### Side panel Agents view and harness monograms
+*(chrome-agent-platform-716s.9, UI Audit #9.)*
+- **Agents view deduplication**: Quick-action harness chips (`.agent-strip` / `#harness-quick-page`) render exclusively on the **Page** view where they act as quick "ask this harness" actions. Switching to the **Agents** tab hides the top strip, ensuring each harness is listed exactly once in the picker rather than duplicated in both a quick-chips row and the picker. Switching back to Page/Chat restores the quick-strip.
+- **Distinct monograms**: Derived in `harness-marks.js` and `<agent-picker>` (`components.js`): `"C"` for Claude Code, `"X"` for Codex, `"G"` for Gemini CLI, and `"π"` for pi. Avatars in the picker never collide on `"C"`/`"C"`.
+- **Paired vs unpaired harness separation**: `<agent-picker>` ACP groups show paired harnesses with live status pills (`.status.paired`), while unpaired CLI harnesses collapse behind a compact `<details class="unpaired-harnesses">` disclosure with summary `"Pair a local CLI agent in Settings →"`.
+- **Page view empty state**: When a tab has no conversation turns yet, `#page-empty-state` provides a lead sentence (*"Ask anything about this page or pick a suggested action."*) and suggestion chips (*Summarize page*, *Key takeaways*, *Explain page*) that prefill the composer on click, keeping vertical empty space above the composer under 40% at 420×800.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.
