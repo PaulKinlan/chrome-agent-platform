@@ -85,7 +85,7 @@
       }
     }
     .brand-row { display: flex; align-items: center; gap: 6px; block-size: 40px; min-block-size: 40px; flex: 0 0 40px; margin-block-end: 4px; }
-    .brand-row .brand { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .brand-row .brand { flex: 1; min-width: 0; }
     /* The collapse/expand control is an edge NUB protruding from the sidebar's
        right boundary — attached to the panel, discoverable, min 44×44 hit
        target (the visible tab is smaller). It is a SIBLING of #side (not a
@@ -220,15 +220,20 @@
       cursor: pointer;
       font: inherit;
       font-weight: 700;
-      font-size: 16px;
+      font-size: 14px;
       padding: 0 8px;
       text-align: start;
+      white-space: nowrap;
       transition: opacity .18s ease, visibility .18s ease, background .15s ease, color .15s ease;
     }
     .brand .brand-logo {
       color: var(--accent);
       flex-shrink: 0;
       display: block;
+    }
+    .brand .brand-text {
+      white-space: nowrap;
+      overflow: visible;
     }
     .brand:hover { background: var(--panel-2); }
     .brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -639,7 +644,7 @@
        and Jobs sections flow into two columns below it. Prose stays inside the
        panels' own measures, so nothing stretches unreadably. */
     @media (min-width: 1100px) {
-      .main-wrap {
+      .main-wrap, .hub-columns {
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         column-gap: 24px;
       }
@@ -651,6 +656,71 @@
       .main-wrap > #timeline-section {
         grid-column: 1 / -1;
       }
+      /* If agents-section is hidden, jobs-section / work-col expands to full width */
+      .main-wrap:has(#agents-section[hidden]) #jobs-section,
+      .main-wrap:has(#agents-section[hidden]) #work-col,
+      .main-wrap:has(#agents-section[hidden]) .work-col {
+        grid-column: 1 / -1;
+      }
+    }
+    /* When work-list has 0 active items (data-empty="true"), collapse work-col and expand feed-col */
+    #jobs-section[data-empty="true"],
+    #work-col[data-empty="true"],
+    .work-col[data-empty="true"],
+    .main-wrap:has(#work-list[data-empty="true"]) #jobs-section,
+    .main-wrap:has(#work-list[data-empty="true"]) #work-col,
+    .main-wrap:has(#jobs-board-host[data-empty="true"]) #jobs-section,
+    .main-wrap:has(#jobs-board-host[data-empty="true"]) #work-col,
+    .hub-columns:has(#work-list[data-empty="true"]) #work-col,
+    .hub-columns:has(#work-list[data-empty="true"]) #jobs-section,
+    .hub-columns:has(#jobs-board-host[data-empty="true"]) #work-col,
+    .hub-columns:has(#jobs-board-host[data-empty="true"]) #jobs-section {
+      display: none !important;
+    }
+    .main-wrap:has(#jobs-section[data-empty="true"]),
+    .main-wrap:has(#work-col[data-empty="true"]),
+    .main-wrap:has(#work-list[data-empty="true"]),
+    .main-wrap:has(#jobs-board-host[data-empty="true"]),
+    .hub-columns:has(#work-col[data-empty="true"]),
+    .hub-columns:has(#work-list[data-empty="true"]),
+    .hub-columns:has(#jobs-board-host[data-empty="true"]),
+    .hub-columns:has(#work-col[style*="display: none"]),
+    .hub-columns:has(#jobs-section[style*="display: none"]),
+    .main-wrap:has(#work-col[style*="display: none"]),
+    .main-wrap:has(#jobs-section[style*="display: none"]) {
+      grid-template-columns: minmax(0, 1fr) !important;
+    }
+    .hub-columns:has(#work-col[data-empty="true"]) .feed-col,
+    .hub-columns:has(#work-list[data-empty="true"]) .feed-col,
+    .hub-columns:has(#jobs-board-host[data-empty="true"]) .feed-col,
+    .main-wrap:has(#jobs-section[data-empty="true"]) .feed-col,
+    .main-wrap:has(#jobs-board-host[data-empty="true"]) .feed-col {
+      grid-column: 1 / -1 !important;
+    }
+
+    /* Single primary button on first run: style onboarding-cta as sole solid CTA, demote disabled composer-send */
+    body:has(#onboarding:not([hidden])) .composer-send:disabled,
+    body:has(first-run-guide:not([hidden])) .composer-send:disabled,
+    body:has(#onboarding:not([hidden])) .composer .send:disabled,
+    body:has(first-run-guide:not([hidden])) .composer .send:disabled,
+    body:has(#onboarding:not([hidden])) .composer-send:not(.has-input),
+    body:has(first-run-guide:not([hidden])) .composer-send:not(.has-input) {
+      background: var(--surface-hover, var(--panel-2, #efede8)) !important;
+      color: var(--muted, #635e56) !important;
+      border: 1px solid var(--border, #d9d4c9) !important;
+      box-shadow: none !important;
+    }
+
+    /* Single provider status: hide provider-pill / provider-status and timeline-empty when onboarding banner is visible */
+    body:has(#onboarding:not([hidden])) #provider-status,
+    body:has(#onboarding:not([hidden])) #provider-pill,
+    body:has(#onboarding:not([hidden])) .provider-status,
+    body:has(first-run-guide:not([hidden])) #provider-status,
+    body:has(first-run-guide:not([hidden])) #provider-pill,
+    body:has(first-run-guide:not([hidden])) .provider-status,
+    body:has(#onboarding:not([hidden])) #timeline-empty,
+    body:has(first-run-guide:not([hidden])) #timeline-empty {
+      display: none !important;
     }
     /* narrow: reclaim the fixed 24px gutters so the composer controls fit
        beside the 240px rail without a horizontal scroll
@@ -1054,7 +1124,7 @@
          The edge nub + overlays stay AFTER the sidebar (their `#side ~` sibling
          selectors depend on it). -->
     <main class="content">
-      <div class="main-wrap">
+      <div class="main-wrap hub-columns">
         <!-- UX-007: the design has no visible page title; the h1 stays for the
              a11y tree (visually-hidden utility in theme.css). -->
         <h1 class="visually-hidden">Agent Hub</h1>
@@ -1085,7 +1155,8 @@
         <header class="top">
           <div class="top-actions">
             <span class="status" id="status" role="status" aria-live="polite" hidden></span>
-            <button type="button" class="provider-status" id="provider-status" hidden title="Open Settings to fix the provider"></button>
+            <button type="button" class="provider-status provider-pill" id="provider-status" hidden title="Open Settings to fix the provider"></button>
+            <span id="provider-pill" class="provider-pill" hidden></span>
             <!-- The shield renders only in its attention state (a security event
                  to see); the console moved to Settings → Advanced → Diagnostics.
                  The hub still captures its own errors (installPageDiagnostics). -->
@@ -1101,7 +1172,7 @@
              from the durable-run registry + the thread index; hidden until it
              has ever had a row (a fresh profile shows the composer + chips
              only). Each row opens its task thread or its agent's surface. -->
-        <section id="timeline-section" aria-labelledby="timeline-title" hidden>
+        <section id="timeline-section" class="feed-col" aria-labelledby="timeline-title" hidden>
           <div class="panel">
             <div class="panel-head">
               <h2 class="t" id="timeline-title">Timeline</h2>
@@ -1113,6 +1184,7 @@
             </div>
             <div class="panel-body">
               <agent-timeline id="hub-timeline" limit="40" aria-label="Timeline of tasks and agent runs"></agent-timeline>
+              <div id="timeline-empty" class="timeline-empty" hidden>Connect a model in Settings — API key, local Ollama, or Chrome Built-in AI.</div>
             </div>
           </div>
         </section>
@@ -1123,7 +1195,7 @@
              name from the same h2 (aria-labelledby, never a duplicated
              aria-label), and the inner group row says "Yours" rather than
              repeating "Agents" one level below the heading that already said it. -->
-        <section id="agents-section" aria-labelledby="agents-panel-title" hidden>
+        <section id="agents-section" class="feed-col" aria-labelledby="agents-panel-title" hidden>
           <div class="panel">
             <div class="panel-head">
               <h2 class="t" id="agents-panel-title">Agents</h2>
@@ -1143,13 +1215,15 @@
              CAP-FB-20260831-BOARD-VISIBILITY-01: "I'm not seeing the Jobs board
              anywhere"): a fresh profile shows its honest empty state so the
              owner can always see the shared work queue. -->
-        <section id="jobs-section" aria-labelledby="jobs-title">
-          <div class="panel">
+        <section id="jobs-section" class="work-col" data-empty="true" aria-labelledby="jobs-title">
+          <div class="panel" id="work-col" data-empty="true">
             <div class="panel-head">
               <h2 class="t" id="jobs-title">Jobs</h2>
               <span class="hint" id="jobs-count"></span>
             </div>
-            <div class="panel-body jobs-board-body" id="jobs-board-host"></div>
+            <div class="panel-body jobs-board-body work-list" id="jobs-board-host" data-empty="true">
+              <div id="work-list" data-empty="true"></div>
+            </div>
           </div>
         </section>
 
@@ -1174,20 +1248,23 @@
           <span class="brand-text">Chrome <span class="brand-accent">Agent</span> Platform</span>
         </button>
       </div>
-      <section class="side-section side-harness" aria-labelledby="harness-label">
-        <div class="side-label-row">
-          <span class="side-label" id="harness-label">Harness agents</span>
-        </div>
-        <div class="side-list harness-list" id="side-harness" aria-label="Harness agents (ACP)"></div>
-      </section>
       <section class="side-section side-tasks" aria-labelledby="tasks-label">
-        <div class="side-label-row">
+        <div class="side-label-row sidebar-threads-head">
           <span class="side-label" id="tasks-label">Tasks</span>
           <button class="new-task" id="new-task" type="button" aria-label="New task" title="New task"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
         </div>
         <section id="failed-runs" class="failed-runs" hidden aria-label="Failed runs"></section>
         <section id="agent-schedules" class="failed-runs" hidden aria-label="Schedules for this agent"></section>
-        <nav class="side-list thread-list" id="thread-sidebar" aria-label="Task threads" tabindex="0"></nav>
+        <nav class="side-list thread-list" id="thread-sidebar" aria-label="Task threads" tabindex="0">
+          <div id="thread-list"></div>
+        </nav>
+        <div class="thread-empty" id="thread-empty" hidden>No tasks yet — start one above.</div>
+      </section>
+      <section class="side-section side-harness" id="sidebar-harnesses-section" aria-labelledby="harness-label" hidden>
+        <div class="side-label-row">
+          <span class="side-label" id="harness-label">Harness agents</span>
+        </div>
+        <div class="side-list harness-list" id="side-harness" aria-label="Harness agents (ACP)"></div>
       </section>
       <section id="board-section" class="side-section failed-runs" hidden aria-label="Shared jobs board"></section>
       <section class="side-section side-agents" aria-label="Agent list">

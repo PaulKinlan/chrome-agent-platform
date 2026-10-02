@@ -615,6 +615,7 @@ async function renderFirstRunGuide() {
   firstRunGuide.toggleAttribute("provider-ready", state.providerReady);
   firstRunGuide.toggleAttribute("browser-ready", state.browserControlGranted);
   firstRunGuide.setAttribute("browser-choice", state.browserControlChoice);
+  void renderProviderStatus();
   // The right-click-menu suggestion waits its turn behind the first-run guide.
   await renderAskAgentMenuBanner();
 }
@@ -693,6 +694,7 @@ exampleChips?.addEventListener("pick", async (event) => {
 firstRunGuide?.addEventListener("dismiss-guide", () => {
   try { localStorage.setItem(FIRST_RUN_DISMISSED_KEY, "1"); } catch { /* page-local preference unavailable */ }
   firstRunGuide.hidden = true;
+  void renderProviderStatus();
   composer.focus();
   renderAskAgentMenuBanner();
 });
@@ -1681,6 +1683,7 @@ async function renderSidebarHarnessRows() {
   // The NTP module is also imported under DOM stubs (unit + integration tests):
   // a partially-stubbed document must not throw from a background render.
   if (!host || typeof host.replaceChildren !== "function") return;
+  const section = host.closest?.("section") || document.getElementById("sidebar-harnesses-section");
   const res = await send("agent.registry").catch(() => null);
   const groups = Array.isArray(res?.groups) ? res.groups : [];
   const harnesses = groups
@@ -1688,7 +1691,6 @@ async function renderSidebarHarnessRows() {
     .flatMap((g) => (Array.isArray(g.agents) ? g.agents : []))
     .filter((a) => a?.kind === "acp" && a.enabled !== false);
   host.replaceChildren();
-  const section = host.closest?.("section");
   if (section) section.hidden = harnesses.length === 0;
   for (const a of harnesses) {
     const btn = document.createElement("button");
@@ -1727,7 +1729,10 @@ async function renderSidebarHarnessRows() {
 // events re-render it live (see subscribeProgress below).
 let jobsBoardEl = null;
 function renderJobsBoard() {
-  const host = document.getElementById("jobs-board-host");
+  const host = document.getElementById("jobs-board-host") || document.getElementById("work-list");
+  const workList = document.getElementById("work-list");
+  const jobsSection = document.getElementById("jobs-section") || document.getElementById("work-col");
+  const workCol = document.getElementById("work-col");
   if (!host) return;
   if (!jobsBoardEl) {
     jobsBoardEl = document.createElement("jobs-board");
@@ -1740,6 +1745,12 @@ function renderJobsBoard() {
   jobsBoardEl?.refresh?.().then(() => {
     const hint = document.getElementById("jobs-count");
     if (hint && jobsBoardEl) hint.textContent = jobsBoardEl.summary;
+    const hasJobs = Boolean(jobsBoardEl.summary);
+    const emptyStr = String(!hasJobs);
+    host.setAttribute("data-empty", emptyStr);
+    if (workList) workList.setAttribute("data-empty", emptyStr);
+    if (jobsSection) jobsSection.setAttribute("data-empty", emptyStr);
+    if (workCol) workCol.setAttribute("data-empty", emptyStr);
   }).catch(() => {});
 }
 
@@ -4708,9 +4719,18 @@ const PROVIDER_LABELS = {
 };
 async function renderProviderStatus() {
   const slot = document.getElementById("provider-status");
+  const pill = document.getElementById("provider-pill");
   if (!slot) return;
+  const isFirstRunVisible = Boolean(firstRunGuide && !firstRunGuide.hidden && firstRunGuide.style.display !== "none");
   const st = await send("provider.status").catch(() => null);
+  if (isFirstRunVisible && (!st?.ok || !st.modelId)) {
+    // Single provider status statement: suppress duplicate "No model connected yet" in topbar while first-run banner is shown
+    slot.hidden = true;
+    if (pill) pill.hidden = true;
+    return;
+  }
   slot.hidden = false;
+  if (pill) pill.hidden = false;
   slot.classList.remove("ready", "warn");
   if (st?.ok === false) {
     slot.classList.add("warn");
