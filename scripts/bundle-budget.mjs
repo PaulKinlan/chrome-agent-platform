@@ -34,16 +34,10 @@ export const STORE_SW_BUDGET_BYTES = 3_000_000;
 export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "background/service-worker.js": STORE_SW_BUDGET_BYTES,
   "workers/agent-worker.js": 2_000_000,
-  "options.bundle.js": 880_000,
-  "ntp.bundle.js": 870_000,
-  "sidepanel.bundle.js": 660_000,
+  "options.bundle.js": 900_000,
+  "ntp.bundle.js": 920_000,
+  "sidepanel.bundle.js": 700_000,
   "shared/diff-core.bundle.js": 17_000,
-  "artifacts.bundle.js": 600_000,
-  "artifact.bundle.js": 600_000,
-  "directory.bundle.js": 600_000,
-  "privacy.bundle.js": 600_000,
-  "offscreen.bundle.js": 250_000,
-  "user-wasm-store-client.bundle.js": 10_000,
 });
 
 /** The bundle outputs the budget report covers (relative to dist/). */

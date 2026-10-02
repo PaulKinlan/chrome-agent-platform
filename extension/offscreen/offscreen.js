@@ -63,7 +63,7 @@ registerSvgRasteriseHost();
 
 // Chrome built-in on-device text APIs (chrome-agent-platform-3p3e.5):
 // runs Summarizer, LanguageDetector, Translator in the page DOM context.
-import { registerOnDeviceTextHost } from "../lib/on-device-text-tools.js";
+import { registerOnDeviceTextHost } from "../lib/on-device-text-host.js";
 registerOnDeviceTextHost();
 
 // Clipboard write execution in offscreen document (chrome-agent-platform-3p3e.10).
