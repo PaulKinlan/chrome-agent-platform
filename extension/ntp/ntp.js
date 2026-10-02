@@ -4030,10 +4030,10 @@ async function buildAgentConfigDialog(opts) {
 
   const mcpInheritedLabel = document.createElement("p");
   mcpInheritedLabel.textContent = "Inherited from Settings";
-  mcpInheritedLabel.style.cssText = "font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#635e56);margin:2px 0 4px;";
+  mcpInheritedLabel.style.cssText = "font-size:12px;font-weight:600;color:var(--muted,#635e56);margin:2px 0 4px;";
   const mcpOwnLabel = document.createElement("p");
   mcpOwnLabel.textContent = "This agent’s own servers";
-  mcpOwnLabel.style.cssText = "font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted,#635e56);margin:10px 0 4px;";
+  mcpOwnLabel.style.cssText = "font-size:12px;font-weight:600;color:var(--muted,#635e56);margin:10px 0 4px;";
 
   renderMcpInherited();
   renderMcpOwn();

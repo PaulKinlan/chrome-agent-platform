@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
+- Sentence-case section headings across the hub, settings, directory, and privacy pages.
 - Deduplicate side panel agents list, use distinct icons for Claude Code, Codex, and Gemini CLI, and show suggestion chips on empty page tabs.
 - Compact, categorized slash-command menu with keyboard hints and consistent menu shadows.
 - Clearer empty states with direct next-step actions on the Artifacts and Directory pages.

@@ -100,7 +100,7 @@ export async function renderSkillList(listEl, { onUse, onDelete, send: sendFn = 
     group.className = "intent-group";
     const head = document.createElement("div");
     head.className = "intent-head";
-    head.textContent = intent;
+    head.textContent = intent ? intent.charAt(0).toUpperCase() + intent.slice(1) : "";
     group.append(head);
     for (const r of list) group.append(skillCard(r, onUse, handleDelete, sendFn));
     listEl.append(group);
@@ -297,7 +297,7 @@ export function mountSkillsSection(sectionEl, { send: sendFn = send } = {}) {
     }
     const head = document.createElement("div");
     head.className = "intent-head";
-    head.textContent = "commands";
+    head.textContent = "Commands";
     commandsList.append(head);
     for (const cmd of commands) {
       const view = commandView(cmd);

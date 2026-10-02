@@ -79,6 +79,7 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - Workhorse system sans (SF/Segoe/Roboto), antialiased, `cv02/cv03/cv04/cv11`.
 - Fixed rem scale: 12 / 13 / 14 / 16 / 20 / 24. Base 14px.
 - Headings: 600 weight, -0.01em tracking. No display face, no monospace-as-costume.
+- Section headers and kicker labels: sentence-case 12–13px, font-weight 600, color `var(--muted)` (or `var(--text)`), normal/zero letter-spacing (matching the pattern used across the side panel: e.g. "Agents", "Scheduled tasks"). Never use 10–11px uppercase letter-spaced kickers (`text-transform: uppercase` with wide positive tracking is banned across product surfaces).
 
 ## Spacing, radius, elevation
 - 8px grid: 4 / 8 / 12 / 16 / 24 / 32 / 48.
@@ -743,6 +744,6 @@ top layer settles. Reduced motion updates route and focus synchronously without
 creating a snapshot.
 
 ## Anti-slop bans (enforced)
-No rainbow conic glow, no gradient text, no uppercase tracked kickers, no ghost
+No rainbow conic glow, no gradient text, no uppercase tracked kickers (`text-transform: uppercase` on small labels is banned in favour of sentence-case 12–13px muted labels), no ghost
 cards, no over-rounded cards, no emoji, no default purple/blue-black, no AI-beige
 cream+serif.

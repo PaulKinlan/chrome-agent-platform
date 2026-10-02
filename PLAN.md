@@ -312,7 +312,7 @@ the permission-state matrix acceptance lane (supersedes the headed lane); `scrip
 
 **P2.** The whole Wasm tool platform lane — runtime probe, owner install, bundled tranche,
 spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes after the
-demo. Hub first-run layout (`chrome-agent-platform-716s.5`: single setup primary CTA, single provider status, full-width/collapsing jobs column, unclipped brand wordmark, and harnesses below tasks) implemented and verified in Chrome for Testing. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
+demo. Hub first-run layout (`chrome-agent-platform-716s.5`: single setup primary CTA, single provider status, full-width/collapsing jobs column, unclipped brand wordmark, and harnesses below tasks) implemented and verified in Chrome for Testing. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker, and UI kicker label normalization (`chrome-agent-platform-716s.10`: uppercase tracked kickers replaced by sentence-case 12–13px muted labels across all surfaces).
 
 ### State fidelity & paused run reopening (chrome-agent-platform-716s.1)
 - **Reopening a thread waiting for permission**: Reopening a thread waiting on an
