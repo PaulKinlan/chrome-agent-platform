@@ -88,7 +88,7 @@ function runTime(r) {
  */
 export function buildTimeline(threads = [], runs = [], opts = {}) {
   const names = asNameMap(opts.agentNames);
-  const limit = Number.isFinite(opts.limit) ? opts.limit : 40;
+  const limit = Number.isFinite(opts.limit) ? opts.limit : 200;
   const runList = Array.isArray(runs) ? runs : [];
   const pendingApprovals = Array.isArray(opts.pendingApprovals) ? opts.pendingApprovals : [];
 
@@ -138,23 +138,46 @@ export function buildTimeline(threads = [], runs = [], opts = {}) {
     });
   }
 
+  const artifacts = Array.isArray(opts.artifacts) ? opts.artifacts : [];
+  for (const a of artifacts) {
+    const aid = a?.id || a?.key;
+    if (!aid) continue;
+    const origin = a?.origin || "master";
+    const label = a?.title || a?.name || a?.key || a?.id || "artifact";
+    const kindLabel = a?.kind ? `${String(a.kind).toUpperCase()} artifact` : "Artifact";
+    entries.push({
+      id: `artifact:${origin}:${aid}`,
+      kind: "artifact",
+      artifactId: String(aid),
+      artifactOrigin: String(origin),
+      title: `Made ${short(label, 100)}`,
+      agent: origin && origin !== "master" && origin !== "hub" ? `@${shortOrigin(origin)}` : "",
+      time: Number(a?.updatedAt ?? a?.createdAt ?? 0) || 0,
+      status: "done",
+      outcome: kindLabel,
+    });
+  }
+
   entries.sort((a, b) => (b.time ?? 0) - (a.time ?? 0));
   return entries.slice(0, limit);
 }
 
-export const TIMELINE_FILTERS = Object.freeze(["All", "Runs", "Waiting", "Made", "Scheduled"]);
+export const TIMELINE_FILTERS = Object.freeze(["All", "Running", "Waiting", "Completed", "Failed", "Made", "Scheduled"]);
 
 /**
  * Pure predicate over a timeline row: returns true if the entry matches the filter.
  *
- * Primary filters:
+ * Redesigned filters:
  * - All: every row
- * - Runs: thread/task/agent runs (excluding scheduled runs and artifacts)
- * - Waiting: paused/waiting runs, pending permissions, blocked items
+ * - Running: active running runs
+ * - Waiting: paused/waiting runs, pending approvals, blocked items
+ * - Completed: completed or done tasks/runs (excluding artifacts)
+ * - Failed: failed or errored tasks/runs
  * - Made: artifacts / deliverables created
  * - Scheduled: scheduled agent runs
  *
- * Secondary facets (Hooks, Pages, Spent) supported if present.
+ * Backwards compatibility:
+ * - Runs: thread/task/agent runs (excluding scheduled runs and artifacts)
  *
  * @param {object} entry
  * @param {string} [filter="All"]
@@ -166,20 +189,8 @@ export function timelineMatchesFilter(entry, filter = "All") {
   switch (f) {
     case "all":
       return true;
-    case "runs":
-      return (
-        entry.kind === "thread" ||
-        entry.kind === "task" ||
-        entry.kind === "agent" ||
-        entry.kind === "delegate" ||
-        (entry.kind !== "scheduled" &&
-          entry.kind !== "schedule-ran" &&
-          entry.kind !== "artifact" &&
-          entry.kind !== "made" &&
-          entry.kind !== "hook" &&
-          entry.kind !== "page" &&
-          entry.kind !== "spent")
-      );
+    case "running":
+      return entry.status === "running";
     case "waiting":
       return (
         entry.status === "paused" ||
@@ -194,6 +205,36 @@ export function timelineMatchesFilter(entry, filter = "All") {
         entry.kind === "permission" ||
         entry.blocked === true
       );
+    case "completed":
+      return (
+        entry.kind !== "artifact" &&
+        entry.kind !== "made" &&
+        !entry.artifact &&
+        (entry.status === "done" || entry.status === "completed")
+      );
+    case "failed":
+      return entry.status === "failed" || entry.status === "error";
+    case "scheduled":
+      return (
+        entry.kind === "scheduled" ||
+        entry.kind === "schedule-ran" ||
+        Boolean(entry.scheduleName) ||
+        (typeof entry.id === "string" && entry.id.startsWith("run:sched"))
+      );
+    case "runs":
+      return (
+        entry.kind === "thread" ||
+        entry.kind === "task" ||
+        entry.kind === "agent" ||
+        entry.kind === "delegate" ||
+        (entry.kind !== "scheduled" &&
+          entry.kind !== "schedule-ran" &&
+          entry.kind !== "artifact" &&
+          entry.kind !== "made" &&
+          entry.kind !== "hook" &&
+          entry.kind !== "page" &&
+          entry.kind !== "spent")
+      );
     case "made":
       return (
         entry.kind === "artifact" ||
@@ -201,13 +242,6 @@ export function timelineMatchesFilter(entry, filter = "All") {
         Boolean(entry.artifact) ||
         (typeof entry.title === "string" && entry.title.startsWith("Made ")) ||
         (typeof entry.outcome === "string" && entry.outcome.startsWith("Made "))
-      );
-    case "scheduled":
-      return (
-        entry.kind === "scheduled" ||
-        entry.kind === "schedule-ran" ||
-        Boolean(entry.scheduleName) ||
-        (typeof entry.id === "string" && entry.id.startsWith("run:sched"))
       );
     case "hooks":
       return entry.kind === "hook" || entry.kind === "event";
@@ -221,15 +255,92 @@ export function timelineMatchesFilter(entry, filter = "All") {
 }
 
 /**
- * Filter an array of timeline rows with a pure predicate.
+ * Infer the topic group for a timeline entry.
+ *
+ * Topic categories:
+ * - "Tabs & browsing": matches tab, tabs, bookmark, history, window, browsing
+ * - "Social & content": matches social, tweet, post, hacker news, bluesky, linkedin, draft, planner
+ * - "Research & summaries": matches summar, research, report, brief, analy, news, metrics, audit, search
+ * - "Code & development": matches code, python, script, game, flappy, port, process, git, bead, repo, bug, build
+ * - "Bookings & actions": matches book, reserv, table, bistro, calendar, email, order
+ * - "General tasks": fallback
+ *
+ * @param {object} entry
+ * @returns {string}
+ */
+export function inferTimelineTopic(entry) {
+  if (!entry || typeof entry !== "object") return "General tasks";
+  const text = `${entry.title || ""} ${entry.outcome || ""} ${entry.agent || ""} ${entry.scheduleName || ""} ${entry.taskPreview || ""}`.toLowerCase();
+  if (/\btabs?\b|bookmark|history|window|browsing/i.test(text)) {
+    return "Tabs & browsing";
+  }
+  if (/social|tweet|post|hacker news|bluesky|linkedin|draft|planner/i.test(text)) {
+    return "Social & content";
+  }
+  if (/summar|research|report|brief|analy|news|metrics|audit|search/i.test(text)) {
+    return "Research & summaries";
+  }
+  if (/code|python|script|game|flappy|\bports?\b|process|\bgit\b|bead|repo|\bbugs?\b|build/i.test(text)) {
+    return "Code & development";
+  }
+  if (/book|reserv|table|bistro|calendar|email|order/i.test(text)) {
+    return "Bookings & actions";
+  }
+  return "General tasks";
+}
+
+/**
+ * Group timeline entries by inferred topic, ordered by most recent entry timestamp in each group.
+ *
+ * @param {Array<object>} entries
+ * @returns {Array<{ topic: string, count: number, entries: Array<object> }>}
+ */
+export function groupTimelineByTopic(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  const groupsMap = new Map();
+  for (const e of list) {
+    const topic = inferTimelineTopic(e);
+    if (!groupsMap.has(topic)) {
+      groupsMap.set(topic, []);
+    }
+    groupsMap.get(topic).push(e);
+  }
+  const result = [];
+  for (const [topic, items] of groupsMap.entries()) {
+    items.sort((a, b) => (Number(b.time) || 0) - (Number(a.time) || 0));
+    const latestTime = items.reduce((max, item) => Math.max(max, Number(item.time) || 0), 0);
+    result.push({
+      topic,
+      count: items.length,
+      entries: items,
+      _latestTime: latestTime,
+    });
+  }
+  result.sort((a, b) => b._latestTime - a._latestTime);
+  return result.map(({ topic, count, entries }) => ({ topic, count, entries }));
+}
+
+/**
+ * Filter an array of timeline rows with a pure predicate and optional search query.
  *
  * @param {Array<object>} entries
  * @param {string} [filter="All"]
+ * @param {{ query?: string } | string} [options]
  * @returns {Array<object>}
  */
-export function filterTimeline(entries, filter = "All") {
+export function filterTimeline(entries, filter = "All", options = {}) {
   const list = Array.isArray(entries) ? entries : [];
   const f = String(filter || "All").trim();
-  if (!f || f.toLowerCase() === "all") return list;
-  return list.filter((e) => timelineMatchesFilter(e, f));
+  const query = typeof options === "string" ? options : (options?.query || "");
+  const q = String(query || "").trim().toLowerCase();
+
+  return list.filter((e) => {
+    if (!timelineMatchesFilter(e, f)) return false;
+    if (!q) return true;
+    const topic = inferTimelineTopic(e).toLowerCase();
+    const title = String(e.title || "").toLowerCase();
+    const agent = String(e.agent || "").toLowerCase();
+    const outcome = String(e.outcome || "").toLowerCase();
+    return title.includes(q) || agent.includes(q) || outcome.includes(q) || topic.includes(q);
+  });
 }

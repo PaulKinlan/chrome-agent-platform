@@ -1047,72 +1047,66 @@
       background: var(--panel);
     }
     .timeline-filters-row {
-      padding: 10px 14px 6px;
+      padding: 10px 14px 8px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
+      gap: 10px;
+      flex-wrap: wrap;
       border-bottom: 1px solid var(--border);
     }
-    .timeline-overflow {
-      position: relative;
-      display: inline-block;
+    .timeline-controls-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
-    .timeline-overflow[hidden] {
-      display: none !important;
+    .timeline-controls-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
-    .timeline-overflow-btn {
+    .timeline-search {
+      appearance: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--panel-2);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      min-block-size: var(--control, 32px);
+      padding: 0 10px;
+      inline-size: 160px;
+    }
+    .timeline-search:focus {
+      outline: 2px solid var(--accent);
+      outline-offset: -1px;
+      background: var(--panel);
+    }
+    .timeline-group-btn {
       appearance: none;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       background: var(--panel-2);
       color: var(--muted);
       font: inherit;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 550;
-      min-block-size: var(--control, 36px);
-      padding: 0 12px;
+      min-block-size: var(--control, 32px);
+      padding: 0 10px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      list-style: none;
+      white-space: nowrap;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
     }
-    .timeline-overflow-btn::-webkit-details-marker {
-      display: none;
-    }
-    .timeline-overflow-btn:hover {
+    .timeline-group-btn:hover {
       color: var(--text);
-    }
-    .timeline-overflow-menu {
-      position: absolute;
-      top: calc(100% + 4px);
-      right: 0;
-      z-index: 20;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      box-shadow: var(--shadow-1, 0 2px 8px rgba(0, 0, 0, 0.08));
-      padding: 4px;
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      min-width: 110px;
-    }
-    .timeline-overflow-item {
-      appearance: none;
-      border: 0;
-      background: transparent;
-      color: var(--text);
-      font: inherit;
-      font-size: 13px;
-      padding: 6px 12px;
-      border-radius: 4px;
-      text-align: left;
-      cursor: pointer;
-    }
-    .timeline-overflow-item:hover {
       background: var(--bg);
-      color: var(--accent);
+    }
+    .timeline-group-btn[aria-pressed="true"] {
+      background: var(--accent);
+      color: var(--on-accent, #fff);
+      border-color: var(--accent);
     }
     .panel-head {
       display: flex;
@@ -1502,17 +1496,15 @@
             </div>
             <div class="panel-body">
               <div class="timeline-filters-row">
-                <segmented-control id="timeline-filters" items="All,Runs,Waiting,Made,Scheduled" value="All" label="Filter timeline" role="toolbar"></segmented-control>
-                <details id="timeline-overflow" class="timeline-overflow" hidden>
-                  <summary class="timeline-overflow-btn" id="timeline-overflow-btn" aria-label="More filters">More (0)</summary>
-                  <div class="timeline-overflow-menu" role="menu">
-                    <button type="button" class="timeline-overflow-item" data-val="Hooks" role="menuitem">Hooks</button>
-                    <button type="button" class="timeline-overflow-item" data-val="Pages" role="menuitem">Pages</button>
-                    <button type="button" class="timeline-overflow-item" data-val="Spent" role="menuitem">Spent</button>
-                  </div>
-                </details>
+                <div class="timeline-controls-left">
+                  <segmented-control id="timeline-filters" items="All,Running,Waiting,Completed,Failed,Made,Scheduled" value="All" label="Filter timeline" role="toolbar"></segmented-control>
+                </div>
+                <div class="timeline-controls-right">
+                  <input type="search" id="timeline-search" class="timeline-search" placeholder="Filter tasks &amp; runs…" aria-label="Filter timeline by keyword">
+                  <button type="button" id="timeline-group-toggle" class="timeline-group-btn" aria-pressed="false" title="Group timeline by topic">Group by topic</button>
+                </div>
               </div>
-              <agent-timeline id="hub-timeline" limit="40" aria-label="Timeline of tasks and agent runs"></agent-timeline>
+              <agent-timeline id="hub-timeline" limit="200" aria-label="Timeline of tasks and agent runs"></agent-timeline>
               <div id="timeline-empty" class="timeline-empty" hidden>Connect a model in Settings — API key, local Ollama, or Chrome Built-in AI.</div>
             </div>
           </div>

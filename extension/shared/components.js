@@ -66,7 +66,7 @@ import { safeParseOnce, buildTree, subtreeJson, safeJsonStringify, prettyJson, t
 // explorer redacts again at render AND the tree/copy paths only ever see the
 // redacted value.
 import { redactSecrets } from "../lib/pure.js";
-import { filterTimeline, timelineMatchesFilter } from "../lib/hub-timeline.js";
+import { filterTimeline, timelineMatchesFilter, groupTimelineByTopic } from "../lib/hub-timeline.js";
 // The single-sourced shared helpers (CAP-FB-20260830-ESCAPEHTML-SINGLE-SOURCE-01).
 import { escapeHtml, timeAgo, sleep } from "../lib/pure.js";
 import { describeToolCall, redactToolResult, toolResultErrorText } from "../lib/tool-summary.js";
@@ -12719,12 +12719,67 @@ const TIMELINE_STATUS_WORD = {
   failed: "Failed",
   done: "Done",
 };
+function renderTimelineRow(e) {
+  const status = ["running", "paused", "failed", "done"].includes(e.status) ? e.status : "idle";
+  const word = TIMELINE_STATUS_WORD[status] || "";
+  const agent = e.agent ? `<span class="tl-agent">${escapeHtml(e.agent)}</span>` : "";
+  const outcome = e.outcome ? `<span class="tl-outcome">${escapeHtml(e.outcome)}</span>` : "";
+  const sep = agent && outcome ? `<span class="tl-sep" aria-hidden="true">·</span>` : "";
+  const t = Number(e.time) || 0;
+  const iso = t ? new Date(t).toISOString() : "";
+  const full = t ? new Date(t).toLocaleString() : "";
+  // Dedupe screen-reader text: only render .tl-sr when the status word
+  // is not already conveyed in the visible outcome or fallback text.
+  const visibleOutcome = e.outcome || (agent ? "" : word);
+  const alreadyHasWord = word && visibleOutcome.toLowerCase().includes(word.toLowerCase());
+  const srWord = (!alreadyHasWord && word) ? `<span class="tl-sr">${escapeHtml(word)}</span>` : "";
+  return `<li class="tl-item">
+    <button type="button" class="tl-row" data-id="${escapeHtml(String(e.id ?? ""))}" aria-label="Open ${escapeHtml(String(e.title ?? "item"))}">
+      <span class="tl-dot ${status}" aria-hidden="true"></span>
+      <span class="tl-body">
+        <span class="tl-title">${escapeHtml(String(e.title ?? "Task"))}</span>
+        <span class="tl-meta">${agent}${sep}${outcome || (agent ? "" : `<span class="tl-outcome">${escapeHtml(word)}</span>`)}${srWord}</span>
+      </span>
+      <time class="tl-time" datetime="${escapeHtml(iso)}" title="${escapeHtml(full)}">${escapeHtml(timeAgo(t))}</time>
+      <span class="tl-chev" aria-hidden="true">${ICONS.chevron}</span>
+    </button>
+  </li>`;
+}
+
 class AgentTimeline extends Component {
-  static get observedAttributes() { return ["limit", "filter"]; }
+  static get observedAttributes() {
+    return ["limit", "filter", "page", "page-size", "query", "group-by"];
+  }
   constructor() {
     super();
     this._entries = [];
     this._filter = "All";
+    this._page = 1;
+    this._pageSize = 10;
+    this._query = "";
+    this._groupBy = "none";
+  }
+  attributeChangedCallback(name, oldVal, newVal) {
+    if (oldVal === newVal) return;
+    if (name === "filter") {
+      this._filter = newVal || "All";
+      this._page = 1;
+    } else if (name === "query") {
+      this._query = newVal || "";
+      this._page = 1;
+    } else if (name === "page") {
+      const n = Number.parseInt(newVal, 10);
+      this._page = Number.isFinite(n) && n >= 1 ? n : 1;
+    } else if (name === "page-size") {
+      const n = Number.parseInt(newVal, 10);
+      this._pageSize = Number.isFinite(n) && n >= 1 ? n : 10;
+    } else if (name === "group-by") {
+      this._groupBy = newVal || "none";
+    }
+    if (this._rendered) {
+      this._render();
+      this._wire();
+    }
   }
   set entries(value) {
     this._entries = Array.isArray(value) ? value : [];
@@ -12736,99 +12791,142 @@ class AgentTimeline extends Component {
     const next = String(val || "All").trim();
     if (this._filter === next) return;
     this._filter = next;
+    this._page = 1;
     if (this._rendered) { this._render(); this._wire(); }
   }
   get filter() {
     return this.getAttribute("filter") || this._filter || "All";
   }
+  set query(val) {
+    const next = String(val ?? "").trim();
+    if (this._query === next) return;
+    this._query = next;
+    this._page = 1;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get query() {
+    return this.getAttribute("query") ?? this._query ?? "";
+  }
+  set groupBy(val) {
+    const next = String(val ?? "none").trim().toLowerCase();
+    if (this._groupBy === next) return;
+    this._groupBy = next;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get groupBy() {
+    return this.getAttribute("group-by") ?? this._groupBy ?? "none";
+  }
+  set page(val) {
+    const n = Number.parseInt(String(val), 10);
+    const next = Number.isFinite(n) && n >= 1 ? n : 1;
+    if (this._page === next) return;
+    this._page = next;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get page() {
+    const attr = Number.parseInt(this.getAttribute("page") ?? "", 10);
+    if (Number.isFinite(attr) && attr >= 1) return attr;
+    return this._page || 1;
+  }
+  set pageSize(val) {
+    const n = Number.parseInt(String(val), 10);
+    const next = Number.isFinite(n) && n >= 1 ? n : 10;
+    if (this._pageSize === next) return;
+    this._pageSize = next;
+    if (this._rendered) { this._render(); this._wire(); }
+  }
+  get pageSize() {
+    const attr = Number.parseInt(this.getAttribute("page-size") ?? "", 10);
+    if (Number.isFinite(attr) && attr >= 1) return attr;
+    return this._pageSize || 10;
+  }
   _limit() {
     const n = Number.parseInt(this.getAttribute("limit") ?? "", 10);
-    return Number.isFinite(n) && n > 0 ? n : 40;
+    return Number.isFinite(n) && n > 0 ? n : 200;
   }
   _render() {
     const bounded = this._entries.slice(0, this._limit());
     const filter = this.filter;
-    const rows = filterTimeline(bounded, filter);
-    const hooksCount = bounded.filter((e) => timelineMatchesFilter(e, "hooks")).length;
-    const pagesCount = bounded.filter((e) => timelineMatchesFilter(e, "pages")).length;
-    const spentCount = bounded.filter((e) => timelineMatchesFilter(e, "spent")).length;
-    const secondaryCount = hooksCount + pagesCount + spentCount;
-    const moreHiddenAttr = secondaryCount === 0 ? " hidden" : "";
-    const moreDisclosure = `<details class="tl-more"${moreHiddenAttr}>
-      <summary class="tl-more-btn" aria-label="More filters">More (${secondaryCount})</summary>
-      <div class="tl-more-menu" role="menu">
-        <button type="button" class="tl-more-item" data-filter="Hooks" role="menuitem">Hooks</button>
-        <button type="button" class="tl-more-item" data-filter="Pages" role="menuitem">Pages</button>
-        <button type="button" class="tl-more-item" data-filter="Spent" role="menuitem">Spent</button>
-      </div>
-    </details>`;
-    const controls = `<div class="tl-controls"${secondaryCount === 0 ? " hidden" : ""}>${moreDisclosure}</div>`;
-    const items = rows.map((e) => {
-      const status = ["running", "paused", "failed", "done"].includes(e.status) ? e.status : "idle";
-      const word = TIMELINE_STATUS_WORD[status] || "";
-      const agent = e.agent ? `<span class="tl-agent">${escapeHtml(e.agent)}</span>` : "";
-      const outcome = e.outcome ? `<span class="tl-outcome">${escapeHtml(e.outcome)}</span>` : "";
-      const sep = agent && outcome ? `<span class="tl-sep" aria-hidden="true">·</span>` : "";
-      const t = Number(e.time) || 0;
-      const iso = t ? new Date(t).toISOString() : "";
-      const full = t ? new Date(t).toLocaleString() : "";
-      // Dedupe screen-reader text: only render .tl-sr when the status word
-      // is not already conveyed in the visible outcome or fallback text.
-      const visibleOutcome = e.outcome || (agent ? "" : word);
-      const alreadyHasWord = word && visibleOutcome.toLowerCase().includes(word.toLowerCase());
-      const srWord = (!alreadyHasWord && word) ? `<span class="tl-sr">${escapeHtml(word)}</span>` : "";
-      return `<li class="tl-item">
-        <button type="button" class="tl-row" data-id="${escapeHtml(String(e.id ?? ""))}" aria-label="Open ${escapeHtml(String(e.title ?? "item"))}">
-          <span class="tl-dot ${status}" aria-hidden="true"></span>
-          <span class="tl-body">
-            <span class="tl-title">${escapeHtml(String(e.title ?? "Task"))}</span>
-            <span class="tl-meta">${agent}${sep}${outcome || (agent ? "" : `<span class="tl-outcome">${escapeHtml(word)}</span>`)}${srWord}</span>
-          </span>
-          <time class="tl-time" datetime="${escapeHtml(iso)}" title="${escapeHtml(full)}">${escapeHtml(timeAgo(t))}</time>
-          <span class="tl-chev" aria-hidden="true">${ICONS.chevron}</span>
-        </button>
-      </li>`;
-    }).join("");
-    let emptyText = "Nothing yet. Your tasks and your agents’ runs will appear here.";
-    if (bounded.length > 0 && rows.length === 0) {
-      const f = filter.toLowerCase();
-      if (f === "waiting") {
-        emptyText = "Nothing waiting on you.";
-      } else if (f === "runs") {
-        emptyText = "No runs yet.";
-      } else if (f === "made") {
-        emptyText = "Nothing made yet.";
-      } else if (f === "scheduled") {
-        emptyText = "No scheduled runs yet.";
-      } else if (f === "hooks") {
-        emptyText = "No hooks yet.";
-      } else if (f === "pages") {
-        emptyText = "No pages yet.";
-      } else if (f === "spent") {
-        emptyText = "Nothing spent yet.";
+    const query = this.query;
+    const filtered = filterTimeline(bounded, filter, { query });
+    const totalCount = filtered.length;
+    const pageSize = Math.max(1, this.pageSize);
+    const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+    let currentPage = Math.min(Math.max(1, this.page), totalPages);
+    this._page = currentPage;
+
+    let body = "";
+    let paginationHtml = "";
+
+    if (totalCount === 0) {
+      let emptyText = "Nothing yet. Your tasks and your agents’ runs will appear here.";
+      if (bounded.length > 0) {
+        if (query) {
+          emptyText = `No timeline items matching "${query}".`;
+        } else {
+          const f = filter.toLowerCase();
+          if (f === "waiting") {
+            emptyText = "Nothing waiting on you.";
+          } else if (f === "running") {
+            emptyText = "No running tasks.";
+          } else if (f === "completed") {
+            emptyText = "No completed tasks.";
+          } else if (f === "failed") {
+            emptyText = "No failed tasks.";
+          } else if (f === "scheduled") {
+            emptyText = "No scheduled runs yet.";
+          } else if (f === "runs") {
+            emptyText = "No runs yet.";
+          } else if (f === "made") {
+            emptyText = "Nothing made yet.";
+          } else {
+            emptyText = "No matching tasks.";
+          }
+        }
+      }
+      body = `<p class="tl-empty">${escapeHtml(emptyText)}</p>`;
+    } else if (this.groupBy === "topic") {
+      const groups = groupTimelineByTopic(filtered);
+      const groupsHtml = groups.map((g) => {
+        const items = g.entries.map(renderTimelineRow).join("");
+        return `<details class="tl-topic-group" open>
+          <summary class="tl-topic-head">
+            <span class="tl-topic-name">${escapeHtml(g.topic)}</span>
+            <span class="tl-topic-count">${g.count}</span>
+          </summary>
+          <ol class="tl" role="list">${items}</ol>
+        </details>`;
+      }).join("");
+      body = `<div class="tl-groups">${groupsHtml}</div>`;
+    } else {
+      const startIdx = (currentPage - 1) * pageSize;
+      const endIdx = Math.min(startIdx + pageSize, totalCount);
+      const pageRows = filtered.slice(startIdx, endIdx);
+      const items = pageRows.map(renderTimelineRow).join("");
+      body = `<ol class="tl" role="list">${items}</ol>`;
+
+      if (totalCount > pageSize) {
+        const startNum = startIdx + 1;
+        const endNum = endIdx;
+        const rangeText = `${startNum}–${endNum} of ${totalCount}`;
+        const pageText = `Page ${currentPage} of ${totalPages}`;
+        const prevDisabled = currentPage <= 1 ? " disabled" : "";
+        const nextDisabled = currentPage >= totalPages ? " disabled" : "";
+        paginationHtml = `
+          <nav class="tl-pagination" aria-label="Timeline pagination">
+            <span class="tl-page-range">${rangeText}</span>
+            <div class="tl-page-actions">
+              <button type="button" class="tl-page-btn" data-page="prev"${prevDisabled} aria-label="Previous page">Previous</button>
+              <span class="tl-page-num">${pageText}</span>
+              <button type="button" class="tl-page-btn" data-page="next"${nextDisabled} aria-label="Next page">Next</button>
+            </div>
+          </nav>`;
       }
     }
-    const body = rows.length
-      ? `<ol class="tl" role="list">${items}</ol>`
-      : `<p class="tl-empty">${escapeHtml(emptyText)}</p>`;
+
     mountTemplate(this, `
       :host { display:block; }
       :host([hidden]) { display:none; }
-      .tl-controls { display:flex; justify-content:flex-end; padding:4px 14px; }
-      .tl-controls[hidden] { display:none !important; }
-      .tl-more { position:relative; display:inline-block; }
-      .tl-more[hidden] { display:none !important; }
-      .tl-more-btn { appearance:none; border:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8);
-        color:var(--muted,#635e56); font:inherit; font-size:12px; font-weight:550; min-block-size:var(--control, 36px); padding:0 12px;
-        border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; list-style:none; }
-      .tl-more-btn::-webkit-details-marker { display:none; }
-      .tl-more-btn:hover { color:var(--text,#1d1b18); }
-      .tl-more-menu { position:absolute; top:calc(100% + 4px); right:0; z-index:20; background:var(--panel,#fff);
-        border:1px solid var(--border,#e3e0d9); border-radius:6px; box-shadow:var(--shadow-1,0 2px 8px rgba(0,0,0,.08));
-        padding:4px; display:flex; flex-direction:column; gap:2px; min-width:110px; }
-      .tl-more-item { appearance:none; border:0; background:transparent; color:var(--text,#1d1b18);
-        font:inherit; font-size:12px; padding:6px 12px; border-radius:4px; text-align:left; cursor:pointer; }
-      .tl-more-item:hover { background:var(--bg,#f7f6f3); color:var(--accent,#0e6e63); }
       .tl { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; }
       .tl-item { min-inline-size:0; }
       .tl-row { display:grid; grid-template-columns:10px minmax(0,1fr) auto 20px; gap:12px; align-items:center;
@@ -12860,24 +12958,46 @@ class AgentTimeline extends Component {
       .tl-chev svg { width:16px; height:16px; display:block; }
       .tl-row:hover .tl-chev, .tl-row:focus-visible .tl-chev { color:var(--accent,#0e6e63); }
       .tl-empty { margin:0; padding:12px 14px; font-size:13px; color:var(--muted,#635e56); }
-    `, `${controls}${body}`);
+      .tl-groups { display:flex; flex-direction:column; }
+      .tl-topic-group { border-bottom:1px solid var(--border,#e3e0d9); }
+      .tl-topic-group:last-child { border-bottom:0; }
+      .tl-topic-head { display:flex; align-items:center; justify-content:space-between; padding:8px 14px;
+        background:var(--panel-2,#efede8); font-size:12px; font-weight:600; color:var(--muted,#635e56);
+        cursor:pointer; list-style:none; user-select:none; }
+      .tl-topic-head::-webkit-details-marker { display:none; }
+      .tl-topic-name { font-weight:600; }
+      .tl-topic-count { background:var(--panel,#fff); border:1px solid var(--border,#e3e0d9);
+        border-radius:10px; padding:0 6px; font-size:11px; font-weight:600; min-inline-size:18px; text-align:center; }
+      .tl-pagination { display:flex; align-items:center; justify-content:space-between; padding:10px 14px;
+        border-top:1px solid var(--border,#e3e0d9); font-size:12px; color:var(--muted,#635e56); }
+      .tl-page-actions { display:flex; align-items:center; gap:8px; }
+      .tl-page-btn { appearance:none; border:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8);
+        color:var(--text,#1d1b18); font:inherit; font-size:12px; font-weight:550; padding:4px 10px;
+        border-radius:6px; cursor:pointer; }
+      .tl-page-btn:hover:not(:disabled) { background:var(--bg,#f7f6f3); color:var(--accent,#0e6e63); }
+      .tl-page-btn:disabled { opacity:0.4; cursor:not-allowed; }
+      .tl-page-range, .tl-page-num { font-variant-numeric:tabular-nums; }
+    `, `${body}${paginationHtml}`);
   }
   _wire() {
     for (const row of this._root?.querySelectorAll?.(".tl-row") ?? []) {
       row.addEventListener?.("click", () => this._emit("open", { id: row.dataset?.id }));
     }
-    const moreMenu = this._root?.querySelector?.(".tl-more");
-    if (moreMenu) {
-      for (const item of moreMenu.querySelectorAll?.(".tl-more-item") ?? []) {
-        item.addEventListener?.("click", () => {
-          const f = item.dataset?.filter;
-          if (f) {
-            this.filter = f;
-            moreMenu.removeAttribute?.("open");
-            this._emit("filter-change", { filter: f });
-          }
-        });
-      }
+    const prevBtn = this._root?.querySelector?.('[data-page="prev"]');
+    if (prevBtn) {
+      prevBtn.addEventListener?.("click", () => {
+        if (this.page > 1) {
+          this.page = this.page - 1;
+          this._emit("page-change", { page: this.page });
+        }
+      });
+    }
+    const nextBtn = this._root?.querySelector?.('[data-page="next"]');
+    if (nextBtn) {
+      nextBtn.addEventListener?.("click", () => {
+        this.page = this.page + 1;
+        this._emit("page-change", { page: this.page });
+      });
     }
   }
 }

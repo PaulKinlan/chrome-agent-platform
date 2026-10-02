@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.563] — 2026-10-02
+- Redesigned Hub Timeline filters (All, Running, Waiting, Completed, Failed, Made, Scheduled), added keyword search, collapsible topic grouping clusters, timeline artifact previews, and smooth pagination across historical runs.
+
 ## [0.3.562] — 2026-10-02
+- Redesigned Hub Timeline filters with dedicated All, Running, Waiting, Completed, Failed, Made, and Scheduled views, live keyword search, collapsible topic grouping clusters, and smooth pagination across runs and created artifacts.
 - Builds automatically restore local dependencies after package installs, preventing missing module errors when building after npm install.
 
 ## [0.3.561] — 2026-10-02
