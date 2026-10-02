@@ -9,8 +9,7 @@ import { toolUserLanguage, TOOL_USER_LANGUAGE } from "../extension/lib/permissio
 import { toolPurposeGroup } from "../extension/lib/tool-purpose-groups.js";
 import { replaySafetyForTool, REPLAY_READ_ONLY } from "../extension/lib/tool-replay-safety.js";
 import { BROWSER_TOOL_NAMES } from "../extension/lib/chrome-tool-capabilities.js";
-import { browserToolset, capturePage } from "../extension/lib/browser-tools.js";
-import { capturePageToArtifact } from "../extension/lib/capabilities.js";
+import { browserToolset, capturePage, capturePageToArtifact } from "../extension/lib/browser-tools.js";
 
 Deno.test("page-reader: extractReadableMarkdown extracts clean Markdown and YAML frontmatter", () => {
   const html = `

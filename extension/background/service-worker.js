@@ -367,6 +367,7 @@ import {
   browserToolset,
   runBrowserToolCall,
   capturePage,
+  capturePageToArtifact,
   captureTabScreenshot,
   getBrowserControlGrantIdentity,
   isBrowserControlGranted,
@@ -8761,11 +8762,12 @@ const handlers = mergeRouteMaps(
   },
 
   async "page.capture"({ tabId, asArtifact = true, includeScreenshot = false, screenshot = "none" } = {}) {
-    return await capturePage(tabId, { asArtifact, includeScreenshot, screenshot });
+    return await capturePageToArtifact({ tabId, asArtifact, includeScreenshot, screenshot });
   },
 
   async "capture.page"(args = {}) {
-    return await capturePage(args.tabId, {
+    return await capturePageToArtifact({
+      tabId: args.tabId,
       asArtifact: args.asArtifact ?? true,
       includeScreenshot: args.includeScreenshot ?? false,
       screenshot: args.screenshot ?? "none",

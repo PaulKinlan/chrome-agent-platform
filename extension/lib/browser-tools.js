@@ -1389,6 +1389,13 @@ export async function capturePage(tabId, { asArtifact = false, includeScreenshot
   }
 }
 
+/**
+ * Capture active or target tab into a persistent Markdown artifact.
+ */
+export async function capturePageToArtifact({ tabId, asArtifact = true, includeScreenshot = false, screenshot = "none" } = {}) {
+  return await capturePage(tabId, { asArtifact, includeScreenshot, screenshot });
+}
+
 // ── CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the minimal page-action family ──────
 // A grant-gated way to act inside a page (click/type/select/scroll/wait) for
 // sites that ship NO WebMCP tools, executed through the SAME
