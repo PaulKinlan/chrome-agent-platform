@@ -3929,30 +3929,37 @@ export function toggleNavGroup(groupEl) {
   }
 }
 
-export function wireNavGroupAccordions() {
-  document.querySelectorAll(".nav-group").forEach((group) => {
-    const btn = group.querySelector(".nav-group-header");
-    if (!btn) return;
-    btn.addEventListener("click", () => {
-      toggleNavGroup(group);
-    });
-  });
+export function wireNavGroupAccordions(root = document) {
+  if (!root) return;
+  const isNav = root.tagName === "NAV" || (typeof root.matches === "function" && (root.matches("nav.settings-nav") || root.matches("nav[aria-label='Settings categories']")));
+  const nav = isNav ? root : (root.querySelector ? root.querySelector("nav.settings-nav, nav[aria-label='Settings categories']") : null);
 
-  const nav = document.querySelector("nav.settings-nav");
+  const container = nav || root;
+  if (container.querySelectorAll) {
+    container.querySelectorAll(".nav-group").forEach((group) => {
+      const btn = group.querySelector(".nav-group-header");
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        toggleNavGroup(group);
+      });
+    });
+  }
+
   if (nav) {
     nav.addEventListener("keydown", (e) => {
       if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
       const visibleLinks = Array.from(nav.querySelectorAll(".nav-item")).filter((a) => {
-        const group = a.closest(".nav-group");
+        const group = a.closest ? a.closest(".nav-group") : null;
         if (group) {
           if (group.hidden) return false;
-          const items = a.closest(".nav-group-items");
+          const items = a.closest ? a.closest(".nav-group-items") : null;
           if (items && items.hidden) return false;
         }
         return true;
       });
       if (!visibleLinks.length) return;
-      const currentActive = document.activeElement;
+      const activeDoc = nav.ownerDocument || (root && root.ownerDocument) || (typeof document !== "undefined" ? document : null);
+      const currentActive = activeDoc ? activeDoc.activeElement : null;
       const currentIndex = visibleLinks.indexOf(currentActive);
       let targetIndex = -1;
       if (e.key === "ArrowDown") {
@@ -3970,6 +3977,13 @@ export function wireNavGroupAccordions() {
       }
       if (targetIndex >= 0 && visibleLinks[targetIndex]) {
         visibleLinks[targetIndex].focus();
+        if (activeDoc) {
+          try {
+            activeDoc.activeElement = visibleLinks[targetIndex];
+          } catch {
+            // standard document.activeElement is updated by focus()
+          }
+        }
       }
     });
   }

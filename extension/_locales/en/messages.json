@@ -29,7 +29,7 @@
     "message": "Interactive table preview opened."
   },
   "options_about": {
-    "message": "\n        About"
+    "message": "About"
   },
   "options_about_1": {
     "message": "About"
@@ -65,7 +65,7 @@
     "message": "Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on."
   },
   "options_advanced": {
-    "message": "\n        Advanced"
+    "message": "Advanced"
   },
   "options_advanced_1": {
     "message": "Advanced"
@@ -80,7 +80,7 @@
     "message": "Agent scope"
   },
   "options_agents": {
-    "message": "\n        Agents"
+    "message": "Agents"
   },
   "options_agents_1": {
     "message": "Agents"
@@ -113,7 +113,7 @@
     "message": "Backup &amp; restore"
   },
   "options_board_permissions": {
-    "message": "\n        Board permissions"
+    "message": "Board permissions"
   },
   "options_board_permissions_1": {
     "message": "Board permissions"
@@ -122,7 +122,7 @@
     "message": "Browse starter templates…"
   },
   "options_browser_control": {
-    "message": "\n        Browser control"
+    "message": "Browser control"
   },
   "options_browser_control_1": {
     "message": "Browser control"
@@ -173,7 +173,7 @@
     "message": "Cost:"
   },
   "options_data_memory": {
-    "message": "\n        Data & memory"
+    "message": "Data & memory"
   },
   "options_data_memory_1": {
     "message": "Data & memory"
@@ -221,7 +221,7 @@
     "message": "Full release notes"
   },
   "options_hooks": {
-    "message": "\n        Hooks"
+    "message": "Hooks"
   },
   "options_import": {
     "message": "Import"
@@ -248,7 +248,7 @@
     "message": "Loading the changelog…"
   },
   "options_local_folders": {
-    "message": "\n        Local folders"
+    "message": "Local folders"
   },
   "options_local_folders_files": {
     "message": "Local folders & files"
@@ -257,7 +257,7 @@
     "message": "Log verbosity"
   },
   "options_mcp_servers": {
-    "message": "\n        MCP servers"
+    "message": "MCP servers"
   },
   "options_mcp_servers_1": {
     "message": "MCP servers"
@@ -308,7 +308,7 @@
     "message": "Open the captured entries, copy them for a bug report, or clear them."
   },
   "options_permissions": {
-    "message": "\n        Permissions"
+    "message": "Permissions"
   },
   "options_permissions_1": {
     "message": "Permissions"
@@ -323,7 +323,7 @@
     "message": "Provider server tools"
   },
   "options_providers": {
-    "message": "\n        Providers"
+    "message": "Providers"
   },
   "options_providers_1": {
     "message": "Providers"
@@ -377,7 +377,7 @@
     "message": "A Site Agent can report tools after enrollment, but the first model use of each exact tool asks you. Allowed tools run automatically until you disable them here; denied tools stay blocked until you allow or reset them."
   },
   "options_skills": {
-    "message": "\n        Skills"
+    "message": "Skills"
   },
   "options_skills_1": {
     "message": "Skills"
@@ -395,13 +395,13 @@
     "message": "Tool calls"
   },
   "options_tool_library": {
-    "message": "\n        Tool library"
+    "message": "Tool library"
   },
   "options_tool_library_1": {
     "message": "Tool library"
   },
   "options_usage": {
-    "message": "\n        Usage"
+    "message": "Usage"
   },
   "options_usage_1": {
     "message": "Usage"

@@ -110,9 +110,9 @@ Deno.test("716s.4 Deep link journey: every previous #section ID resolves to a va
     "about",
   ];
   for (const id of SECTIONS) {
-    assert(HTML.includes(`id="${id}"`), `panel #${id} must exist in options.html`);
-    assert(HTML.includes(`href="#${id}"`), `nav link for #${id} must exist in options.html`);
-    assert(HTML.includes(`data-section="${id}"`), `data-section="${id}" must exist in options.html`);
+    assert(HTML.includes('id="' + id + '"'), `panel #${id} must exist in options.html`);
+    assert(HTML.includes('href="#' + id + '"'), `nav link for #${id} must exist in options.html`);
+    assert(HTML.includes('data-section="' + id + '"'), `data-section="${id}" must exist in options.html`);
   }
 });
 
