@@ -4691,9 +4691,10 @@ class ArtifactQuickDrawer extends Component {
     mountTemplate(this, `
       :host { display:inline-flex; min-inline-size:0; }
       .trigger { inline-size:36px; block-size:36px; display:inline-flex; align-items:center; justify-content:center;
-        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px); padding:0;
-        background:transparent; color:var(--muted,#635e56); cursor:pointer; }
-      .trigger:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
+        border:1px solid transparent; border-radius:var(--radius-sm,6px); padding:0;
+        background:transparent; color:var(--muted,#635e56); cursor:pointer;
+        transition: background .15s ease, color .15s ease, border-color .15s ease; }
+      .trigger:hover { border-color:var(--border,#e3e0d9); background:var(--panel-2,#efede8); color:var(--text,#1d1b18); }
       .trigger:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .trigger svg { inline-size:16px; block-size:16px; display:block; }
       :host-context([dir="rtl"]) .trigger svg { transform:scaleX(-1); }
@@ -4748,9 +4749,9 @@ class ArtifactQuickDrawer extends Component {
       }
       @media (prefers-reduced-motion:reduce) { * { scroll-behavior:auto !important; } }
       @media (forced-colors:active) { .type { border:1px solid CanvasText; } }
-    `, `<button part="trigger" class="trigger" type="button" aria-label="${escapeHtml(label)}"
+    `, `<button part="trigger" class="trigger" id="drawer-toggle" type="button" aria-label="${escapeHtml(label)}"
         title="${escapeHtml(label)}" aria-expanded="false" aria-controls="artifact-quick-panel">
-        ${ICONS.chevron}</button>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg></button>
       <section class="drawer" id="artifact-quick-panel" popover="auto" hidden aria-labelledby="artifact-quick-title">
         <div class="shell">
           <header class="head"><h2 id="artifact-quick-title">Recent artifacts</h2>

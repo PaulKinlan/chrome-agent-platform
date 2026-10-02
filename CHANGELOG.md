@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.563] — 2026-10-02
+- Overhauled New Tab sidebar with section icons, a 56px collapsed icon rail with direct section jump buttons, compact task and agent rows with clean persona summaries, borderless ghost buttons, aligned footer actions, and a drawer icon for quick artifacts.
+
 ## [0.3.562] — 2026-10-02
+- Overhauled New Tab sidebar with section icons, a 56px collapsed icon rail with direct section jump buttons, compact task and agent rows with clean persona summaries, borderless ghost buttons, aligned footer actions, and a drawer icon for quick artifacts.
 - Builds automatically restore local dependencies after package installs, preventing missing module errors when building after npm install.
 
 ## [0.3.561] — 2026-10-02
