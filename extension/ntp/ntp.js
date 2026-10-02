@@ -1439,41 +1439,29 @@ function noteAgentName(agentId, name) {
     agentNameById.set(agentId, name);
   }
 }
-function updateTimelineSecondaryOverflow(entries) {
-  const bounded = Array.isArray(entries) ? entries.slice(0, 40) : [];
-  const hooks = bounded.filter((e) => timelineMatchesFilter(e, "hooks")).length;
-  const pages = bounded.filter((e) => timelineMatchesFilter(e, "pages")).length;
-  const spent = bounded.filter((e) => timelineMatchesFilter(e, "spent")).length;
-  const total = hooks + pages + spent;
-  const overflowEl = document.getElementById("timeline-overflow");
-  const overflowBtn = document.getElementById("timeline-overflow-btn");
-  if (!overflowEl) return;
-  if (total > 0) {
-    overflowEl.hidden = false;
-    overflowEl.removeAttribute("hidden");
-    if (overflowBtn) overflowBtn.textContent = `More (${total})`;
-  } else {
-    overflowEl.hidden = true;
-    overflowEl.setAttribute("hidden", "");
-  }
-}
-
 async function refreshTimeline() {
   if (!timelineEl) timelineEl = document.getElementById("hub-timeline");
   if (!timelineEl) return;
-  const [threadsRes] = await Promise.all([
+  const [threadsRes, artifactsRes] = await Promise.all([
     send("thread.list").catch(() => ({ threads: [] })),
+    send("artifacts.list", { limit: 60 }).catch(() => ({ assets: [] })),
   ]);
   const threads = Array.isArray(threadsRes?.threads) ? threadsRes.threads : [];
+  const artifacts = Array.isArray(artifactsRes?.assets)
+    ? artifactsRes.assets
+    : Array.isArray(artifactsRes?.artifacts)
+    ? artifactsRes.artifacts
+    : [];
   const entries = buildTimeline(threads, latestDurableRuns, {
     agentNames: agentNameById,
-    limit: 40,
+    limit: 200,
     pendingApprovals: pendingApprovalRequests(),
+    artifacts,
   });
   timelineEl.entries = entries;
-  updateTimelineSecondaryOverflow(entries);
 }
 const TIMELINE_FILTER_KEY = "cap:hub:timeline-filter";
+const TIMELINE_GROUP_KEY = "cap:hub:timeline-group";
 let timelineFilterEl = null;
 
 function renderTimeline() {
@@ -1486,6 +1474,10 @@ function renderTimeline() {
   try {
     savedFilter = localStorage.getItem(TIMELINE_FILTER_KEY) || "All";
   } catch { /* storage unavailable */ }
+  // Normalize legacy filter values
+  if (savedFilter === "Runs") {
+    savedFilter = "All";
+  }
   timelineEl.filter = savedFilter;
   if (timelineFilterEl) {
     timelineFilterEl.value = savedFilter;
@@ -1495,42 +1487,56 @@ function renderTimeline() {
       try {
         localStorage.setItem(TIMELINE_FILTER_KEY, val);
       } catch { /* storage unavailable */ }
-      const overflowEl = document.getElementById("timeline-overflow");
-      if (overflowEl) overflowEl.removeAttribute("open");
     });
   }
 
-  const overflowEl = document.getElementById("timeline-overflow");
-  if (overflowEl) {
-    for (const btn of overflowEl.querySelectorAll(".timeline-overflow-item")) {
-      btn.addEventListener("click", () => {
-        const val = btn.dataset.val;
-        if (val) {
-          timelineEl.filter = val;
-          if (timelineFilterEl) timelineFilterEl.value = val;
-          try {
-            localStorage.setItem(TIMELINE_FILTER_KEY, val);
-          } catch { /* storage unavailable */ }
-          overflowEl.removeAttribute("open");
-        }
-      });
-    }
+  // Restore and wire topic grouping toggle (#timeline-group-toggle)
+  const groupToggleBtn = document.getElementById("timeline-group-toggle");
+  let savedGroup = "none";
+  try {
+    savedGroup = localStorage.getItem(TIMELINE_GROUP_KEY) || "none";
+  } catch { /* storage unavailable */ }
+  const isGrouped = savedGroup === "topic";
+  timelineEl.groupBy = isGrouped ? "topic" : "none";
+  if (groupToggleBtn) {
+    groupToggleBtn.setAttribute("aria-pressed", isGrouped ? "true" : "false");
+    groupToggleBtn.addEventListener("click", () => {
+      const next = timelineEl.groupBy === "topic" ? "none" : "topic";
+      timelineEl.groupBy = next;
+      groupToggleBtn.setAttribute("aria-pressed", next === "topic" ? "true" : "false");
+      try {
+        localStorage.setItem(TIMELINE_GROUP_KEY, next);
+      } catch { /* storage unavailable */ }
+    });
+  }
+
+  // Wire search input (#timeline-search)
+  const searchInput = document.getElementById("timeline-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      timelineEl.query = searchInput.value || "";
+    });
   }
 
   // Reveal/hide the section through the same seen-once machinery every hub
   // section uses (a fresh profile shows nothing here).
   timelineEl.addEventListener("entries-change", (ev) => {
     noteHubData("timeline", "runs", (ev.detail?.count ?? 0) > 0);
-    updateTimelineSecondaryOverflow(timelineEl.entries);
   });
   timelineEl.addEventListener("open", (ev) => openTimelineEntry(ev.detail?.id));
-  updateTimelineSecondaryOverflow(timelineEl.entries);
   refreshTimeline();
 }
 // A timeline row's Open target: a task thread opens its conversation; a
-// standalone agent/scheduled run opens that agent's surface.
+// standalone agent/scheduled run opens that agent's surface; an artifact opens its preview.
 function openTimelineEntry(id) {
   if (typeof id !== "string" || !id) return;
+  if (id.startsWith("artifact:")) {
+    const parts = id.slice("artifact:".length).split(":");
+    const origin = parts[0] || "master";
+    const aid = parts.slice(1).join(":");
+    openArtifactDialog(aid, origin);
+    return;
+  }
   if (!id.startsWith("run:")) { openThread(id); return; }
   const executionId = id.slice("run:".length);
   const run = latestDurableRuns.find((r) => r?.executionId === executionId) || null;
