@@ -41,7 +41,7 @@ import { nextRunLabel, lastRunLabel, NEXT_RUN_TICK_MS } from "../lib/next-run-la
 // Local Set view (the explorer filters in-memory against it; the server also
 // enforces the same list, default-deny).
 const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
-import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, turnTime } from "./thread-view.js";
+import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, turnTime, stripModelAddressedText, isToolResultDeclined } from "./thread-view.js";
 // The bundled diff core (jsdiff via ./diff-core.js → dist; the gallery sync
 // rewrites this to ./diff-core.bundle.js). Only <artifact-diff> uses it.
 import { lineDiffSummary } from "../dist/shared/diff-core.bundle.js";
@@ -71,7 +71,8 @@ import { describeToolCall, redactToolResult, toolResultErrorText } from "../lib/
 import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "./site-agent-copy.js";
 // The user-language permission names the approval card lists (never a Chrome
 // token) — CAP-FB-20260901-ONE-CARD-PER-STEP-01.
-import { permissionUserLanguage, siteLabel } from "../lib/permission-language.js";
+import { permissionUserLanguage, siteLabel, humanToolLabel } from "../lib/permission-language.js";
+export { humanToolLabel };
 import {
   isTextLikeAttachment,
   textToDataUrl,
@@ -5513,10 +5514,12 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
   const lazyName = name === "execute_tool" || name === "search_tools"
     ? (unwrapToolPayload(result).selectedTool || unwrapToolPayload(detail).selectedTool || null)
     : null;
-  const shownName = lazyName || (name === "execute_tool" ? "tool call" : (name || "tool"));
+  const rawToolName = lazyName || (name === "execute_tool" ? "" : (name || "tool"));
+  const shownName = humanToolLabel(rawToolName) || "Action";
   const nameEl = document.createElement("span");
   nameEl.className = "tool-name";
   nameEl.textContent = shownName;
+  if (rawToolName) card.setAttribute("data-raw-tool", rawToolName);
   summary.appendChild(nameEl);
   // `execute_tool`'s own arguments nest the invoked tool's arguments under
   // `arguments` beside a selectionRef that means nothing to a reader.
@@ -5780,7 +5783,8 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
 class AgentIdentity extends Component {
   static get observedAttributes() { return ["name", "avatar", "time"]; }
   _render() {
-    const name = (this.getAttribute("name") || "Agent").trim() || "Agent";
+    const rawName = (this.getAttribute("name") || "").trim();
+    const name = (!rawName || rawName === "Agent") ? "Assistant" : rawName;
     const avatar = String(this.getAttribute("avatar") || "");
     // Only an image data URL or https is ever set as a src (no javascript:).
     const avatarOk = /^(data:image\/|https:\/\/)/iu.test(avatar);
@@ -5883,7 +5887,8 @@ const MESSAGE_BUBBLE_STYLE = `
   .tool .tool-head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); }
   .tool:not([open]) .tool-head { border-bottom:0; }
   .tool .tool-body { display:flex; flex-direction:column; }
-  .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); white-space:nowrap; }
+  .tool .tool-name { font-family:inherit; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); white-space:nowrap; }
+  .skipped-line { font-size:13px; color:var(--muted,#635e56); font-style:normal; line-height:1.4; padding:2px 0; margin:0; }
   /* the collapsed row's human line (what the tool is DOING, not just its id) */
   .tool .tool-what { font-size:12.5px; color:var(--muted,#635e56); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
   .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
@@ -6085,19 +6090,27 @@ class MessageBubble extends Component {
     if (!isStreaming && typeof this.removeAttribute === "function") this.removeAttribute("streaming");
     const role = this.getAttribute("role") || "agent";
     const content = this._content();
-    let markup;
+    let markup = "";
     if (role === "tool") {
       const name = this.getAttribute("tool-name") || "tool";
       const statusRaw = this.getAttribute("tool-status") || "running";
+      const args = this.getAttribute("tool-args");
+      const result = this.getAttribute("tool-result");
+      const detail = this.getAttribute("tool-detail");
+      const isSkipped = this.hasAttribute("skipped") || statusRaw === "skipped" ||
+        isToolResultDeclined(result) || isToolResultDeclined(detail);
+      if (isSkipped) {
+        const text = `You skipped ${humanToolLabel(name).toLowerCase()}.`;
+        markup = `<p class="skipped-line" role="status">${escapeHtml(text)}</p>`;
+        mountTemplate(this, MESSAGE_BUBBLE_STYLE, markup);
+        return;
+      }
       // "done" (an unpaired replay card), "success" and "error" are terminal —
       // anything else (running/absent) renders the running state. A missing
       // result must never re-open a card as running (the replay blocker).
       const status = statusRaw === "done" || statusRaw === "success"
         ? "done"
         : statusRaw === "error" ? "error" : "running";
-      const args = this.getAttribute("tool-args");
-      const result = this.getAttribute("tool-result");
-      const detail = this.getAttribute("tool-detail");
       // A FAILED tool call must never render the generated-UI preview: the
       // args alone carry the HTML (e.g. update_asset's content), so a denied
       // or errored call used to mount the sandbox frame and sit forever on
@@ -6231,10 +6244,13 @@ class MessageBubble extends Component {
       </div></div>`;
     } else {
       let body;
-      if ((role === "agent" || role === "system" || role === "assistant") && isHtmlDocument(content)) {
-        body = renderHtmlFrame(content);
+      const cleanContent = (role === "agent" || role === "system" || role === "assistant")
+        ? stripModelAddressedText(content)
+        : content;
+      if ((role === "agent" || role === "system" || role === "assistant") && isHtmlDocument(cleanContent)) {
+        body = renderHtmlFrame(cleanContent);
       } else {
-        body = (role === "agent" || role === "system" || role === "user" || role === "assistant") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
+        body = (role === "agent" || role === "system" || role === "user" || role === "assistant") ? renderMarkdown(cleanContent) : `<span class="plain">${renderInline(cleanContent)}</span>`;
       }
       // Inline attachments: image attachments render as a thumbnail so the user
       // can SEE what they attached; other media render as a file chip.
@@ -6264,7 +6280,8 @@ class MessageBubble extends Component {
           + `<button type="button" class="long-copy" part="long-copy">Copy full response</button></div></div>`;
       }
       if (role === "agent" || role === "assistant") {
-        const author = this.getAttribute("author") || "Agent";
+        const rawAuthor = this.getAttribute("author");
+        const author = (!rawAuthor || rawAuthor === "Agent") ? "Assistant" : rawAuthor;
         const avatar = this.getAttribute("author-avatar") || "";
         const ts = this.getAttribute("ts") || "";
         markup = `<div class="turn"><agent-identity name="${escapeHtml(author)}"${avatar ? ` avatar="${escapeHtml(avatar)}"` : ""}${ts ? ` time="${escapeHtml(ts)}"` : ""}></agent-identity>${bubbleOut}</div>`;
@@ -6485,8 +6502,10 @@ class AgentConversation extends Component {
     else this.removeAttribute("agent-avatar");
   }
   _identityAttrs(ts) {
+    const rawName = this.getAttribute("agent-name");
+    const author = (!rawName || rawName === "Agent") ? "Assistant" : rawName;
     return {
-      author: this.getAttribute("agent-name") || null,
+      author,
       "author-avatar": this.getAttribute("agent-avatar") || null,
       ts: String(typeof ts === "number" && ts > 0 ? ts : Date.now()),
     };
@@ -6897,17 +6916,21 @@ class AgentConversation extends Component {
     const detailNote = m.detailNote ?? m["tool-detail-note"];
     const durationMs = m.durationMs ?? m["tool-duration"];
     const siteActivity = normalizeSiteActivity(m.siteActivity ?? m["site-activity"]);
+    const isSkipped = m.skipped === true || status === "skipped" ||
+      isToolResultDeclined(result) || isToolResultDeclined(detail);
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
-    return this._bubble("tool", null, {
+    const extra = {
       "tool-name": name,
-      "tool-status": status || "running",
+      "tool-status": isSkipped ? "skipped" : (status || "running"),
       "tool-args": toolPayloadAttribute(args),
       "tool-result": toolPayloadAttribute(result),
       "tool-detail": toolPayloadAttribute(detail),
       "tool-detail-note": typeof detailNote === "string" && detailNote ? detailNote : null,
       "tool-duration": durationMs != null ? String(durationMs) : null,
       "site-activity": siteActivity ? JSON.stringify(siteActivity) : null,
-    });
+    };
+    if (isSkipped) extra.skipped = "";
+    return this._bubble("tool", isSkipped ? `You skipped ${humanToolLabel(name).toLowerCase()}.` : null, extra);
   }
   /** The IN-CONTEXT grant card for a PERSISTED permission denial
    *  (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b, the reopened-thread half of
@@ -6945,6 +6968,8 @@ class AgentConversation extends Component {
       // inside the card), never an attribute.
       if (m.cardDetail && typeof m.cardDetail === "object") card.detail = m.cardDetail;
     } else {
+      const toolName = m.tool || req.tool || req.toolName || m.toolName;
+      if (toolName) card.setAttribute("tool", toolName);
       card.setAttribute("reason", String(req.reason ?? "perform this action").slice(0, 240));
       if (Array.isArray(req.permissions) && req.permissions.length) card.setAttribute("permissions", JSON.stringify(req.permissions.slice(0, 8)));
       if (Array.isArray(req.grantOrigins) && req.grantOrigins.length) card.setAttribute("origins", JSON.stringify(req.grantOrigins.slice(0, 50)));
@@ -8926,6 +8951,7 @@ customElements.define("conversation-run-status", ConversationRunStatus);
 const ICON_STEP_ACTIVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" class="spin"><path d="M12 3a9 9 0 1 0 9 9"/></svg>';
 const ICON_STEP_DONE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
 const ICON_STEP_ERROR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+const ICON_STEP_SKIPPED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const ICON_PLAN_DONE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
 const ICON_CHEVRON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
 
@@ -8951,20 +8977,22 @@ class PlanStrip extends Component {
     if (!steps.length) { mountTemplate(this, ":host{display:none;}", ""); return; }
     const settled = this.getAttribute("state") === "settled";
     const sum = planSummary({ steps, state: settled ? "settled" : "running" });
+    const isPlanSkipped = settled && (sum.allSkipped || (steps.length === 1 && steps[0].status === "skipped"));
     // The summary line: while running, the step in flight; once settled, the
-    // count (with an honest note when a step failed).
+    // count (with an honest note when a step failed, or Skipped when skipped).
     const summaryText = settled
-      ? `${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? " · 1 or more failed" : ""}`
+      ? (isPlanSkipped ? "Skipped" : `${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? " · 1 or more failed" : ""}`)
       : sum.activeLabel
         ? `Step ${sum.current} of ${sum.total} · ${sum.activeLabel}`
         : `Step ${sum.current} of ${sum.total}`;
     // aria-live text: the active step (running) or the outcome (settled).
     const liveText = settled
-      ? `Plan complete — ${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? ", with an error" : ""}`
+      ? (isPlanSkipped ? "Plan skipped" : `Plan complete — ${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? ", with an error" : ""}`)
       : sum.activeLabel ? `Now: ${sum.activeLabel}` : "";
     const rows = steps.map((s) => {
       const icon = s.status === "done" ? ICON_STEP_DONE
         : s.status === "error" ? ICON_STEP_ERROR
+        : s.status === "skipped" ? ICON_STEP_SKIPPED
         : ICON_STEP_ACTIVE;
       return `<li data-status="${s.status}"><span class="ic" aria-hidden="true">${icon}</span><span class="tx">${escapeHtml(s.label)}</span></li>`;
     }).join("");
@@ -8978,6 +9006,7 @@ class PlanStrip extends Component {
       .lead { flex:0 0 auto; width:16px; height:16px; display:inline-flex; color:var(--accent,#0e6e63); }
       .lead.done { color:var(--success,#1a7f37); }
       .lead.err { color:var(--danger,#b3261e); }
+      .lead.skipped { color:var(--muted,#635e56); }
       .sumtx { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .chev { flex:0 0 auto; width:16px; height:16px; display:inline-flex; color:var(--muted,#635e56); transition:transform .18s ease; }
       details[open] .chev { transform:rotate(180deg); }
@@ -8985,10 +9014,12 @@ class PlanStrip extends Component {
       li { display:flex; align-items:center; gap:9px; font-size:12px; line-height:1.4; color:var(--muted,#635e56); min-width:0; }
       li[data-status="active"] { color:var(--text,#1d1b18); font-weight:600; }
       li[data-status="error"] { color:var(--danger,#b3261e); }
+      li[data-status="skipped"] { color:var(--muted,#635e56); }
       li .ic { flex:0 0 auto; width:15px; height:15px; display:inline-flex; }
       li[data-status="done"] .ic { color:var(--success,#1a7f37); }
       li[data-status="active"] .ic { color:var(--accent,#0e6e63); }
       li[data-status="error"] .ic { color:var(--danger,#b3261e); }
+      li[data-status="skipped"] .ic { color:var(--muted,#635e56); }
       li .tx { min-width:0; overflow-wrap:anywhere; }
       .lead svg, .chev svg, li .ic svg { width:100%; height:100%; display:block; }
       .spin { transform-origin:center; animation:plan-spin .9s linear infinite; }
@@ -8998,7 +9029,7 @@ class PlanStrip extends Component {
     `, `<div class="plan">
       <details${!settled && steps.length > 1 ? " open" : ""}>
         <summary>
-          <span class="lead${settled && !sum.errored ? " done" : ""}${settled && sum.errored ? " err" : ""}" aria-hidden="true">${settled ? (sum.errored ? ICON_STEP_ERROR : ICON_PLAN_DONE) : ICON_STEP_ACTIVE}</span>
+          <span class="lead${settled && !sum.errored && !isPlanSkipped ? " done" : ""}${settled && sum.errored ? " err" : ""}${isPlanSkipped ? " skipped" : ""}" aria-hidden="true">${settled ? (sum.errored ? ICON_STEP_ERROR : (isPlanSkipped ? ICON_STEP_SKIPPED : ICON_PLAN_DONE)) : ICON_STEP_ACTIVE}</span>
           <span class="sumtx">${escapeHtml(summaryText)}</span>
           <span class="chev" aria-hidden="true">${ICON_CHEVRON}</span>
         </summary>
@@ -9009,6 +9040,7 @@ class PlanStrip extends Component {
   }
 }
 customElements.define("plan-strip", PlanStrip);
+
 
 /* <permission-approval-card reason="…" permissions='["tabs"]' origins='["https://a.com"]'
  * host-origins='["https://a.com"]' global="true"
@@ -9030,7 +9062,7 @@ function approvalLine(text) {
 
 class PermissionApprovalCard extends Component {
   static get observedAttributes() {
-    return ["reason", "permissions", "origins", "host-origins", "global", "state", "detail"];
+    return ["reason", "permissions", "origins", "host-origins", "global", "state", "detail", "tool"];
   }
   _jsonList(name) {
     const raw = this.getAttribute(name);
@@ -9041,13 +9073,24 @@ class PermissionApprovalCard extends Component {
     } catch { return []; }
   }
   _render() {
+    const tool = (this.getAttribute("tool") ?? "").trim();
     const reason = (this.getAttribute("reason") ?? "perform this action").slice(0, 240);
+    const actionLabel = tool ? humanToolLabel(tool).toLowerCase() : (reason || "this action");
     const permissions = this._jsonList("permissions");
     const origins = this._jsonList("origins");
     const hostOrigins = this._jsonList("host-origins");
     const isGlobal = this.getAttribute("global") === "true";
     const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") ?? "").slice(0, 240);
+
+    if (state === "denied") {
+      mountTemplate(this, `
+        :host { display:block; margin:0 0 10px; }
+        .skipped-line { margin:0; font-size:12.5px; color:var(--muted,#635e56); font-style:normal; line-height:1.45; }
+      `, `<p class="skipped-line" role="status"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>You skipped ${escapeHtml(actionLabel)}.</p>`);
+      return;
+    }
+
     // ONE card lists EVERYTHING the click allows, each in the owner's words
     // (what the agent will be able to do — never a Chrome permission token):
     // "See your open tabs", "Group tabs", "Control the browser on this site".
@@ -9070,24 +9113,18 @@ class PermissionApprovalCard extends Component {
     const chromeNote = state === "pending" && (permissions.length || hostOrigins.length)
       ? "Chrome will ask you to confirm in one prompt."
       : "";
-    // A declined site-access ask says WHICH site was not read and why (the
-    // owner declined), not a generic line (READ-PAGE-HOST-GRANT-01).
-    const declinedText = hostOrigins.length
-      ? `Not allowed to ${reason} — you declined. The action was not performed.`
-      : "Declined. The action was not performed.";
     const stateText = state === "granted"
       ? (detail || "Approved — continuing…")
-      : state === "denied"
-        ? declinedText
-        : state === "expired"
-          ? (detail || "The request expired. The action was not performed.")
-        : state === "error"
-          ? (detail || "The approval could not be completed — try again.")
-          : "";
+      : state === "expired"
+        ? (detail || "The request expired. The action was not performed.")
+      : state === "error"
+        ? (detail || "The approval could not be completed — try again.")
+        : "";
+    const headerTitle = tool ? humanToolLabel(tool) : "Permission request";
     mountTemplate(this, `
       :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
       .card { max-width:88%; border-radius:12px; padding:12px 14px; background:var(--panel,#fff); border:1px solid var(--accent,#0e6e63); }
-      .title { font-size:13px; font-weight:700; color:var(--ink,#1d1b18); margin:0 0 4px; }
+      .title { font-size:13px; font-weight:700; color:var(--ink,#1d1b18); margin:0 0 4px; font-family:inherit; }
       .reason { font-size:13.5px; color:var(--ink,#1d1b18); margin:0 0 6px; line-height:1.45; }
       .needs-title { margin:0 0 2px; font-size:12.5px; font-weight:600; color:var(--muted,#635e56); }
       .needs { margin:0 0 8px; padding-left:18px; font-size:12.5px; color:var(--ink,#1d1b18); line-height:1.5; }
@@ -9111,10 +9148,10 @@ class PermissionApprovalCard extends Component {
       .hosts li { overflow-wrap:anywhere; }
       .hosts .none { color:var(--muted,#635e56); }
       .dynamic { margin:0 0 12px; font-size:12.5px; font-weight:600; color:var(--danger,#b3261e); }
-      :host([state="granted"]) .card, :host([state="denied"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
+      :host([state="granted"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
       :host([state="expired"]) .card { border-color:var(--border,#e3e0d9); }
-    `, `<div class="card" role="group" aria-label="Permission request">
-      <p class="title">Permission request</p>
+    `, `<div class="card" role="group" aria-label="${escapeHtml(headerTitle)}"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>
+      <p class="title"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>${escapeHtml(headerTitle)}</p>
       <p class="reason">The agent wants to ${escapeHtml(reason)}.</p>
       ${needs.length ? `<p class="needs-title">Allowing this lets the agent:</p><ul class="needs">${needs.join("")}</ul>` : ""}
       ${chromeNote ? `<p class="note">${escapeHtml(chromeNote)}</p>` : ""}
@@ -9137,6 +9174,49 @@ class PermissionApprovalCard extends Component {
   }
 }
 customElements.define("permission-approval-card", PermissionApprovalCard);
+
+/* <tool-receipt tool="list_tabs" status="done" result="..."> — quiet tool receipt component */
+class ToolReceipt extends Component {
+  static get observedAttributes() {
+    return ["tool", "status", "args", "result", "detail", "skipped"];
+  }
+  _render() {
+    const tool = (this.getAttribute("tool") || "").trim();
+    const status = this.getAttribute("status") || "done";
+    const skipped = this.getAttribute("skipped") === "true" || this.hasAttribute("skipped");
+    const rawResult = this.getAttribute("result") || "";
+    const detail = this.getAttribute("detail") || "";
+    const label = humanToolLabel(tool);
+
+    if (skipped || isToolResultDeclined(rawResult) || isToolResultDeclined(detail)) {
+      mountTemplate(this, `
+        :host { display:block; margin:2px 0; }
+        .skipped-line { font-size:13px; color:var(--muted,#635e56); font-style:normal; line-height:1.4; padding:2px 0; margin:0; }
+      `, `<p class="skipped-line" role="status"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>You skipped ${escapeHtml(label.toLowerCase())}.</p>`);
+      return;
+    }
+
+    const cleanResult = stripModelAddressedText(rawResult);
+    mountTemplate(this, `
+      :host { display:block; margin:6px 0; }
+      .receipt { font-family:inherit; border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:8px 12px; background:var(--panel,#ffffff); }
+      .header { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; font-weight:600; }
+      .title { font-family:inherit; }
+      .raw { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--muted,#635e56); margin-top:4px; }
+      .result { font-size:12px; color:var(--muted,#635e56); margin-top:4px; white-space:pre-wrap; }
+    `, `<div class="receipt"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>
+      <div class="header">
+        <span class="title">${escapeHtml(label)}</span>
+        <span class="status ${escapeHtml(status)}">${escapeHtml(status)}</span>
+      </div>
+      <details>
+        <summary class="raw">${escapeHtml(tool || "tool")}</summary>
+        ${cleanResult ? `<div class="result">${escapeHtml(cleanResult)}</div>` : ""}
+      </details>
+    </div>`);
+  }
+}
+customElements.define("tool-receipt", ToolReceipt);
 
 /* <thinking-trace label="reasoning" open steps='[{"label","text"}]'> — an
  * expandable reasoning trace (the BeautifulUI "Thinking" primitive). A muted,

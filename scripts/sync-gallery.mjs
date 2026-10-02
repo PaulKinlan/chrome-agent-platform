@@ -81,6 +81,9 @@ export async function syncGallery({ check = false } = {}) {
     if (dst === "docs/tool-tree.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/pure.js', './pure.js'));
     }
+    if (dst === "docs/thread-view.js") {
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/permission-language.js', './permission-language.js'));
+    }
     if (dst === "docs/components.js") {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/tool-summary.js', './tool-summary.js'));
       expected = Buffer.from(expected.toString("utf8").replace('../lib/attachments.js', './attachments.js'));

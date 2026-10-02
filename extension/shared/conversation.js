@@ -19,7 +19,7 @@ import { runAcpTaskTurn } from "../lib/acp-runner.js";
 import { summarizeToolResult, toolResultTruncationNote } from "../lib/tool-summary.js";
 import { formatBudgetProgress, formatContinuationStop } from "../lib/run-budget.js";
 import { safeJsonStringify } from "./tool-tree.js";
-import { artifactIdentityFromPayloads } from "./thread-view.js";
+import { artifactIdentityFromPayloads, projectThreadMessages, isToolResultDeclined } from "./thread-view.js";
 import { isAuthoritativeThreadResultProjected, projectThreadRunState } from "./thread-projection-authority.js";
 import { approvalEventKey, createPendingApprovalTracker } from "../lib/pending-approval-replay.js";
 
@@ -527,12 +527,14 @@ export function renderRunTranscript(container, executionId, { onStatus = null, c
         const resEff = effectiveToolCall(ev.toolName, ev.toolArgs, src);
         const raw = safeToolResultFull(shown);
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
-        const status = isToolErrorEvent(ev) ? "error" : "success";
+        const err = isToolErrorEvent(ev);
+        const isDeclined = isToolResultDeclined(src) || ev.status === "skipped" || ev.status === "declined";
+        const status = err ? "error" : "success";
         const note = liveToolResultNote(ev);
         // Resolve this call's plan step — and adopt the tool's REAL name, now
         // known from the result, as the corrected checklist label.
         const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
-        c.planEvent?.({ type: "step-end", status: status === "error" ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
+        c.planEvent?.({ type: "step-end", status: isDeclined ? "skipped" : (status === "error" ? "error" : "done"), label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
         if (status === "success" && typeof c.rememberArtifact === "function") {
           const known = artifactIdentityFromPayloads([src]);
           if (known) c.rememberArtifact(known.id, known.name);
@@ -1793,237 +1795,8 @@ export function projectThreadWithRunLogs(thread, executions = []) {
  * terminal row, so the terminal renders LAST. Applying this to an already-
  * correct (post-fix) thread is IDEMPOTENT. Pure — unit-tested against the
  * real <agent-conversation> setMessages. */
-export function projectThreadMessages(thread) {
-  const messages = Array.isArray(thread?.messages) ? thread.messages : [];
-  if (!messages.length) return [];
+export { projectThreadMessages };
 
-  // The artifact rows the live run PERSISTED into the body (keyed by the tool
-  // call that produced them) are the authoritative descriptor — the live path
-  // derived them from the FULL result before the journal bounded it. The old
-  // projection dropped every `role:"artifact"` row on the floor (no case for
-  // it), which is why ARTIFACTS-IN-THREAD-01 rendered nothing. Render them, and
-  // fall back to deriving from the tool card only for a call that persisted no
-  // artifact row (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01).
-  const bodyArtifactsByCall = new Map();
-  for (const m of messages) {
-    if (m && m.role === "artifact" && m.artifact && typeof m.artifact === "object" && m.artifact.id && m.toolCallId) {
-      if (!bodyArtifactsByCall.has(m.toolCallId)) bodyArtifactsByCall.set(m.toolCallId, m);
-    }
-  }
-
-  // Pair raw tool rows into unified tool cards (one card per callId). The
-  // protocol's own calls (search_tools/list_tools) are dropped here — they
-  // are plumbing, never a card (§9); the durable run log still lists them.
-  const rawTools = messages.filter((m) => m && m.role === "tool" && m.protocol !== true && !isProtocolTool(m.toolName));
-  const pairedTools = pairToolJournal(
-    rawTools.map((m) => ({
-      type: m.toolStatus === "running" ? "tool-call" : "tool-result",
-      callId: m.toolCallId ?? null,
-      run: null,
-      tool: m.toolName ?? "tool",
-      selectedTool: m.selectedTool ?? null,
-      args: m.toolArgs ?? null,
-      result: m.toolResult ?? null,
-      // The derived row's retained full result rides the pairing as
-      // `resultFull`; its note is carried verbatim (already worded).
-      resultFull: typeof m.toolDetail === "string" && m.toolDetail ? m.toolDetail : null,
-      ok: m.toolOk ?? null,
-      siteActivity: boundSiteToolActivity(m.siteActivity),
-      ts: typeof m.ts === "number" ? m.ts : null,
-      executionId: m.executionId ?? null,
-    })),
-  );
-  const noteByCall = new Map();
-  for (const m of rawTools) if (m.toolCallId && typeof m.toolDetailNote === "string" && m.toolDetailNote) noteByCall.set(m.toolCallId, m.toolDetailNote);
-
-  const toolCards = pairedTools.map((t) => {
-    const orig = rawTools.find((m) =>
-      (t.callId && m.toolCallId === t.callId) ||
-      (m.toolName === t.tool && (m.toolResult === t.result || m.toolArgs === t.args))
-    );
-    return {
-      role: "tool",
-      name: t.tool,
-      status: t.status,
-      args: t.args ?? null,
-      result: t.result ?? null,
-      // The card's detail is the COMPLETE retained result
-      // (CAP-FB-20260901-TOOL-RESULT-FULL-JSON-01).
-      detail: t.resultFull ?? null,
-      detailNote: (t.callId && noteByCall.get(t.callId)) || null,
-      // The runtime-authoritative selected tool, so the artifact derivation
-      // below keys on the tool that RAN even when a prose summary shadows it.
-      selectedTool: t.selectedTool ?? null,
-      siteActivity: t.siteActivity && visibleSiteToolLabel(t.tool, 128) === t.siteActivity.tool
-        ? t.siteActivity
-        : null,
-      ts: t.ts ?? null,
-      executionId: t.executionId ?? orig?.executionId ?? null,
-      callId: t.callId,
-    };
-  });
-
-  const emittedTools = new Set();
-  const seenApprovalKeys = new Set();
-  const turns = [];
-  let currentTurn = { user: null, systems: [], tools: [], approvals: [], terminals: [], execId: null };
-
-  const flushTurn = () => {
-    if (currentTurn.user || currentTurn.systems.length || currentTurn.tools.length || currentTurn.approvals.length || currentTurn.terminals.length) {
-      turns.push(currentTurn);
-    }
-    currentTurn = { user: null, systems: [], tools: [], approvals: [], terminals: [], execId: null };
-  };
-
-  for (const m of messages) {
-    if (!m || typeof m !== "object") continue;
-    const role = m.role;
-
-    if (role === "user") {
-      if (currentTurn.user || currentTurn.terminals.length || currentTurn.tools.length) {
-        flushTurn();
-      }
-      currentTurn.user = {
-        role: "user",
-        content: m.content,
-        ts: m.ts ?? null,
-        attachments: Array.isArray(m.attachments) ? m.attachments : (m.attachments ? [m.attachments] : null),
-        executionId: m.executionId ?? null,
-      };
-      if (m.executionId) currentTurn.execId = m.executionId;
-    } else if (role === "system" || role === "thinking") {
-      currentTurn.systems.push({
-        role,
-        content: m.content,
-        ts: m.ts ?? null,
-      });
-    } else if (role === "assistant" || role === "error" || role === "agent") {
-      if (currentTurn.terminals.length && m.executionId && currentTurn.execId && m.executionId !== currentTurn.execId) {
-        flushTurn();
-      }
-      currentTurn.terminals.push({
-        role,
-        content: m.content,
-        ts: m.ts ?? null,
-        reason: m.reason ?? null,
-        action: m.action ?? null,
-        executionId: m.executionId ?? null,
-      });
-      if (m.executionId && !currentTurn.execId) currentTurn.execId = m.executionId;
-    } else if (role === "approval") {
-      // The derived grant card for a persisted denial (§2b): one per distinct
-      // requirement across the thread, rendered with its turn's tool cards.
-      const req = m.requirement;
-      const key = typeof req?.key === "string" && req.key ? req.key : null;
-      if (req && typeof req === "object" && (!key || !seenApprovalKeys.has(key))) {
-        if (key) seenApprovalKeys.add(key);
-        currentTurn.approvals.push({
-          role: "approval",
-          requirement: req,
-          executionId: m.executionId ?? null,
-          toolCallId: m.toolCallId ?? null,
-          ts: m.ts ?? null,
-          ...(typeof m.state === "string" && m.state ? { state: m.state } : {}),
-          ...(typeof m.detail === "string" && m.detail ? { detail: m.detail } : {}),
-        });
-        if (m.executionId && !currentTurn.execId) currentTurn.execId = m.executionId;
-      }
-    } else if (role === "tool") {
-      if (m.protocol === true || isProtocolTool(m.toolName)) continue;
-      const callId = m.toolCallId;
-      const idx = toolCards.findIndex((tc, i) =>
-        !emittedTools.has(i) && (
-          (callId && tc.callId === callId) ||
-          (m.executionId && tc.executionId === m.executionId && tc.name === m.toolName) ||
-          (tc.name === m.toolName)
-        )
-      );
-      if (idx >= 0 && !emittedTools.has(idx)) {
-        currentTurn.tools.push(toolCards[idx]);
-        emittedTools.add(idx);
-        if (toolCards[idx].executionId && !currentTurn.execId) {
-          currentTurn.execId = toolCards[idx].executionId;
-        }
-      }
-    }
-  }
-  flushTurn();
-
-  for (let i = 0; i < toolCards.length; i++) {
-    if (emittedTools.has(i)) continue;
-    const tc = toolCards[i];
-    if (tc.executionId) {
-      const matchTurn = turns.find((t) => t.execId === tc.executionId);
-      if (matchTurn) {
-        matchTurn.tools.push(tc);
-        emittedTools.add(i);
-      }
-    }
-  }
-
-  const remainingTools = [];
-  for (let i = 0; i < toolCards.length; i++) {
-    if (!emittedTools.has(i)) {
-      remainingTools.push(toolCards[i]);
-      emittedTools.add(i);
-    }
-  }
-
-  const output = [];
-  for (const turn of turns) {
-    if (turn.systems.length) output.push(...turn.systems);
-    if (turn.user) output.push(turn.user);
-    if (turn.tools.length) {
-      turn.tools.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-      // Each artifact-producing tool card is followed by the deliverable it
-      // made, rendered from the store in the thread that produced it
-      // (CAP-FB-20260830-THREAD-ARTIFACT-CARD-01). This is the REOPEN /
-      // re-projection path — the live run appends the same card, and both must
-      // agree, so a reopened thread shows the artifact where the run left it.
-      const imageCards = [];
-      for (const tc of turn.tools) {
-        output.push(tc);
-        // Prefer the persisted artifact row (authoritative, full-fidelity); only
-        // derive from the bounded tool result when the run persisted none.
-        const persisted = tc.callId ? bodyArtifactsByCall.get(tc.callId) : null;
-        const artifact = persisted?.artifact
-          ?? (tc.status === "error" ? null : artifactFromToolResult(tc.name, tc.detail ?? tc.result, tc.selectedTool, tc.args));
-        if (artifact) {
-          output.push({
-            role: "artifact",
-            artifact,
-            toolCallId: tc.callId ?? null,
-            executionId: tc.executionId ?? null,
-            ts: persisted?.ts ?? tc.ts ?? null,
-            derived: true,
-          });
-        }
-        imageCards.push({ status: tc.status === "error" ? "error" : "success", result: tc.detail ?? tc.result, artifact });
-      }
-      // The generated-image strip under this turn: the screenshots it captured
-      // and the image assets it produced (CAP-FB-20260830-GENERATED-IMAGE-STRIP-01).
-      const imageItems = imageItemsFromToolCards(imageCards);
-      if (imageItems.length) {
-        output.push({ role: "images", items: imageItems, executionId: turn.execId ?? null, ts: null, derived: true });
-      }
-    }
-    if (turn.approvals.length) {
-      turn.approvals.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-      output.push(...turn.approvals);
-    }
-    if (turn.terminals.length) {
-      turn.terminals.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-      output.push(...turn.terminals);
-    }
-  }
-
-  if (remainingTools.length) {
-    remainingTools.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
-    output.push(...remainingTools);
-  }
-
-  return output;
-}
 
 export async function runConversationTurn(container, { text, attachments = [], history = [], threadId = null, onStatus = null, agentId = null, agentKind = null, isStale = null, projectionOwner = null, mention = null, onRunRegistered = null, sessionStore = null, settings = null }) {
   const c = container;
@@ -2686,10 +2459,11 @@ export async function runConversationTurn(container, { text, attachments = [], h
         const raw = safeToolResultFull(shown);
         const summary = shown != null ? summarizeToolResult(resEff.name, shown) : "";
         const err = isToolErrorEvent(ev);
+        const isDeclined = isToolResultDeclined(src) || ev.status === "skipped" || ev.status === "declined";
         const status = err ? "error" : "success";
         const note = liveToolResultNote(ev);
         const doneName = (typeof ev.selectedTool === "string" && ev.selectedTool) || resEff.name || ev.toolName;
-        c.planEvent?.({ type: "step-end", status: err ? "error" : "done", label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
+        c.planEvent?.({ type: "step-end", status: isDeclined ? "skipped" : (err ? "error" : "done"), label: planStepLabel(doneName, resEff.args ?? ev.toolArgs) });
         applyToolResultToCard(card, ev, c, { resEff, summary, raw, status, note });
         // The artifact this call produced, rendered in the thread that made it
         // (the same derivation the durable-log replay uses, so the live view

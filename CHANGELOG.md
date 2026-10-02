@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
+- Cleaner conversation transcript with human-readable tool names, single-line declined actions, and proper agent names.
 - Settings copy reads as whole sentences again — About shows the installed version, the Backup & restore heading no longer shows a stray "&amp;", and the MCP servers and Skills introductions are complete.
 - Faster Settings page opening with progressive section rendering and CSS content-visibility.
 - Private on-device text summarization, language detection, and translation using Chrome Built-in AI.

@@ -2580,7 +2580,7 @@ function hideThreadViewInner() {
   currentAgentId = null;
   currentAgentKind = null;
   // Back to the hub: the next task's assistant turns are the hub's own agent.
-  threadConversation?.setIdentity?.({ name: "Agent", avatar: initialAvatar("Agent") });
+  threadConversation?.setIdentity?.({ name: "Assistant", avatar: initialAvatar("Assistant") });
   hideAgentSchedules();
   syncComposerScope();
   syncConversationRunControls();
@@ -2707,7 +2707,7 @@ async function openThread(id) {
   currentAgentId = null; // a thread is NOT an agent chat
   currentAgentKind = null;
   // Assistant turns in a task thread are the hub's own agent.
-  threadConversation?.setIdentity?.({ name: "Agent", avatar: initialAvatar("Agent") });
+  threadConversation?.setIdentity?.({ name: "Assistant", avatar: initialAvatar("Assistant") });
   setRunDebugOpen(false); // a surface switch always starts with the debug overlay closed
   syncConversationRunControls();
   hideAgentSchedules();

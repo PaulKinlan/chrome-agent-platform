@@ -52,3 +52,6 @@ the demo model is reachable only behind the developer flag.
 | Host access and the core runtime permissions are granted at install. | Host access and the permissions the extension needs to run are granted at install. |
 | …memory, alarms, downloaded models… | …memory, schedules, downloaded models… |
 | show more (N more chars) | show more (N more characters) |
+| Owner denied the requested capability. [tool] was not performed; do not retry it. | You skipped [action]. |
+| tool call (raw tool identifier) | Human tool label (e.g. List open tabs) |
+| A Agent | Assistant |

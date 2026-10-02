@@ -207,7 +207,8 @@ Deno.test("legibility: a reopened (run-log) card with the decoded envelope is un
   const texts = allText(card);
   assertEquals(leaksIn(texts), [], `leaked: ${leaksIn(texts).join(",")}`);
   const head = findAll(card, (e) => e.className === "tool-name")[0];
-  assertEquals(head?.textContent, "memory_set");
+  assertEquals(head?.textContent, "Memory set");
+  assertEquals(card.dataset?.rawTool || card.getAttribute?.("data-raw-tool"), "memory_set");
 });
 
 Deno.test("legibility: a still-running execute_tool card never shows the protocol name", () => {
