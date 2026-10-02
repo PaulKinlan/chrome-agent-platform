@@ -4,7 +4,6 @@
 - Builds automatically restore local dependencies after package installs, preventing missing module errors when building after npm install.
 
 ## [0.3.561] — 2026-10-02
-- Builds automatically restore local dependencies after package installs, preventing missing module errors when building after npm install.
 - Instant task opening from the sidebar with cached settled execution logs, non-blocking thread execution reads, and deduplicated background queries.
 - Fixed tool discovery for clipboard and on-device text tools, and automatically provide active tab context when asking questions in the side panel.
 - Anchor agent mention and action pickers directly to the message input in the side panel and hub.
