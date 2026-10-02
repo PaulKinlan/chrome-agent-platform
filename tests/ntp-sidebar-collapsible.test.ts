@@ -152,12 +152,13 @@ Deno.test("5vk4: sidebar disclosure state resolution and defaults", () => {
   // Pure logic test for sidebar disclosure state:
   // - tasks-section: default open
   // - agents-section: default open
-  // - board-strip: default open when openCount > 0, default closed when openCount === 0
+  // - board-strip: default closed
   // - harness-presence: default closed
   // - activity-section: default closed
+  // - failed-runs: default closed
   function resolveDisclosureState(
     sectionId: string,
-    { openJobs = 0, persistedState = null }: { openJobs?: number; persistedState?: Record<string, boolean> | null } = {},
+    persistedState: Record<string, boolean> | null = null,
   ): boolean {
     if (persistedState && typeof persistedState[sectionId] === "boolean") {
       return persistedState[sectionId];
@@ -168,7 +169,6 @@ Deno.test("5vk4: sidebar disclosure state resolution and defaults", () => {
       case "agents-section":
         return true;
       case "board-strip":
-        return openJobs > 0;
       case "harness-presence":
       case "activity-section":
       case "failed-runs":
@@ -183,8 +183,8 @@ Deno.test("5vk4: sidebar disclosure state resolution and defaults", () => {
   assertEquals(resolveDisclosureState("agents-section"), true);
   assertEquals(resolveDisclosureState("harness-presence"), false);
   assertEquals(resolveDisclosureState("activity-section"), false);
-  assertEquals(resolveDisclosureState("board-strip", { openJobs: 0 }), false);
-  assertEquals(resolveDisclosureState("board-strip", { openJobs: 3 }), true);
+  assertEquals(resolveDisclosureState("board-strip"), false);
+  assertEquals(resolveDisclosureState("failed-runs"), false);
 
   // Persisted state overrides defaults
   const persisted = {
@@ -192,9 +192,72 @@ Deno.test("5vk4: sidebar disclosure state resolution and defaults", () => {
     "board-strip": true,
     "harness-presence": true,
   };
-  assertEquals(resolveDisclosureState("tasks-section", { persistedState: persisted }), false);
-  assertEquals(resolveDisclosureState("board-strip", { openJobs: 0, persistedState: persisted }), true);
-  assertEquals(resolveDisclosureState("harness-presence", { persistedState: persisted }), true);
-  assertEquals(resolveDisclosureState("agents-section", { persistedState: persisted }), true); // not in persisted, falls back to default
+  assertEquals(resolveDisclosureState("tasks-section", persisted), false);
+  assertEquals(resolveDisclosureState("board-strip", persisted), true);
+  assertEquals(resolveDisclosureState("harness-presence", persisted), true);
+  assertEquals(resolveDisclosureState("agents-section", persisted), true); // not in persisted, falls back to default
 });
+
+Deno.test("5vk4: brand text and toggle dimensions in .side-top avoid text clipping", async () => {
+  const html = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.html`);
+
+  // .side-top gap must be 4px
+  assert(/\.side-top\s*\{[^}]*gap:\s*4px/s.test(html), ".side-top must declare gap: 4px");
+
+  // .side-top .brand must be 13px font-size with -0.01em letter-spacing and white-space nowrap
+  assert(
+    /\.side-top\s+\.brand\s*\{[^}]*font-size:\s*13px/s.test(html) &&
+    /\.side-top\s+\.brand\s*\{[^}]*letter-spacing:\s*-0\.01em/s.test(html),
+    ".side-top .brand must specify font-size: 13px and letter-spacing: -0.01em to prevent clipping",
+  );
+
+  // .side:not(.collapsed) #side-toggle must be 28px x 28px
+  assert(
+    /\.side:not\(\.collapsed\)\s+(?:#side-toggle|\.side-toggle)\s*\{[^}]*width:\s*28px/s.test(html) &&
+    /\.side:not\(\.collapsed\)\s+(?:#side-toggle|\.side-toggle)\s*\{[^}]*height:\s*28px/s.test(html),
+    ".side:not(.collapsed) #side-toggle must be 28x28px",
+  );
+
+  // .side.collapsed #side-toggle remains 36px x 36px
+  assert(
+    /\.side\.collapsed\s+(?:#side-toggle|\.side-toggle)\s*\{[^}]*width:\s*36px/s.test(html),
+    ".side.collapsed #side-toggle must remain 36x36px",
+  );
+});
+
+Deno.test("5vk4: side disclosure summary min-height, inner list bounds, and centered collapsed rail", async () => {
+  const html = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.html`);
+
+  // Closed disclosures cannot shrink and summary headers have min-height: 34px
+  assert(
+    /details\.side-disclosure:not\(\[open\]\)\s*\{[^}]*flex:\s*0\s+0\s+auto\s*!important/s.test(html),
+    "details.side-disclosure:not([open]) must have flex: 0 0 auto !important",
+  );
+  assert(
+    /\.side-disclosure\s*>\s*summary\s*\{[^}]*min-height:\s*34px/s.test(html) ||
+    /\.side-head\s*\{[^}]*min-height:\s*34px/s.test(html),
+    "Summary and side-head must have min-height: 34px",
+  );
+
+  // Secondary disclosure inner list max-heights
+  assert(/\.fr-list\s*\{[^}]*max-height:\s*120px/s.test(html), ".fr-list must have max-height: 120px");
+  assert(/\.bs-list\s*\{[^}]*max-height:\s*120px/s.test(html), ".bs-list must have max-height: 120px");
+  assert(/\.agents-list[^{]*\{[^}]*max-height:\s*150px/s.test(html), ".agents-list must have max-height: 150px");
+  assert(/\.activity-list\s*\{[^}]*max-height:\s*160px/s.test(html), ".activity-list must have max-height: 160px");
+
+  // .side.collapsed centering
+  assert(
+    /\.side\.collapsed\s*\{[^}]*padding:\s*12px\s+9px/s.test(html),
+    ".side.collapsed must have padding: 12px 9px",
+  );
+  assert(
+    /\.side\.collapsed\s*\{[^}]*align-items:\s*center/s.test(html),
+    ".side.collapsed must have align-items: center",
+  );
+  assert(
+    /\.side\.collapsed\s+\.side-foot\s*\{[^}]*align-items:\s*center/s.test(html),
+    ".side.collapsed .side-foot must have align-items: center",
+  );
+});
+
 

@@ -2153,7 +2153,7 @@ async function refreshBoard() {
   if (savedDisclosures && typeof savedDisclosures["board-strip"] === "boolean") {
     section.open = savedDisclosures["board-strip"];
   } else {
-    section.open = open.length > 0;
+    section.open = false;
   }
   if (listEl === section) {
     const label = document.createElement("div");
@@ -5186,11 +5186,14 @@ function initSideDisclosures() {
     "activity-section",
   ];
   const states = loadSideDisclosureStates() || {};
+  const defaultOpen = new Set(["tasks-section", "agents-section"]);
   for (const id of sections) {
     const el = document.getElementById(id);
     if (!el || el.tagName !== "DETAILS") continue;
     if (typeof states[id] === "boolean") {
       el.open = states[id];
+    } else {
+      el.open = defaultOpen.has(id);
     }
     el.addEventListener("toggle", () => {
       saveSideDisclosureState(id, el.open);

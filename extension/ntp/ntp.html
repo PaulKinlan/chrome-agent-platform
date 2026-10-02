@@ -90,30 +90,49 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 6px;
+      gap: 4px;
       block-size: 40px;
       min-block-size: 40px;
       flex: 0 0 40px;
       margin-block-end: 4px;
       width: 100%;
     }
-    .side-top .brand { flex: 1; min-width: 0; }
+    .side-top .brand {
+      font-size: 13px;
+      gap: 6px;
+      letter-spacing: -0.01em;
+      flex: 1;
+      min-width: 0;
+      white-space: nowrap;
+      padding: 0 4px;
+    }
     .side-toggle {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 36px;
-      height: 36px;
-      min-width: 36px;
-      min-height: 36px;
       border: 1px solid var(--border);
       border-radius: var(--radius-sm, 6px);
       background: var(--panel, #fff);
       color: var(--muted);
       cursor: pointer;
       padding: 0;
-      flex: 0 0 36px;
       transition: background .15s ease, color .15s ease, border-color .15s ease;
+    }
+    .side:not(.collapsed) #side-toggle,
+    .side:not(.collapsed) .side-toggle {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      flex: 0 0 28px;
+    }
+    .side.collapsed #side-toggle,
+    .side.collapsed .side-toggle {
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      min-height: 36px;
+      flex: 0 0 36px;
     }
     .side-toggle:hover {
       color: var(--text);
@@ -130,6 +149,7 @@
     .side-toggle svg { display: block; transition: transform .18s ease; }
     .side.collapsed .side-top {
       justify-content: center;
+      align-items: center;
       margin-block-end: 6px;
       width: 100%;
     }
@@ -169,10 +189,16 @@
       padding-block-start: 6px;
     }
     .side-disclosure[hidden] { display: none !important; }
+    details.side-disclosure:not([open]) {
+      flex: 0 0 auto !important;
+      overflow: visible !important;
+    }
     .side-disclosure > summary {
       cursor: pointer;
       list-style: none;
       user-select: none;
+      flex: 0 0 auto;
+      min-height: 34px;
     }
     .side-disclosure > summary::-webkit-details-marker { display: none; }
     .side-disclosure .chev {
@@ -190,9 +216,10 @@
       align-items: center;
       justify-content: space-between;
       width: 100%;
-      min-height: 32px;
+      min-height: 34px;
       padding: 2px 4px;
       box-sizing: border-box;
+      flex: 0 0 auto;
     }
     .side-head h2, .side-head .side-label, .side-head .fr-title, .side-head .bs-title {
       display: inline-flex;
@@ -238,35 +265,33 @@
       max-height: none;
       overflow-y: auto;
     }
-    #agents-section {
-      flex: 0 1 auto;
-    }
-    #agents-section[open] {
-      flex: 0 1 auto;
-    }
-    #agents-list, #side-agents {
-      max-height: 200px;
-      overflow-y: auto;
-    }
-    .harness-presence {
+    #failed-runs, #harness-presence, #board-strip, #agents-section, #activity-section {
       flex: 0 0 auto;
     }
-    .board-strip {
+    #failed-runs[open], #harness-presence[open], #board-strip[open], #agents-section[open], #activity-section[open] {
       flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
     }
-    .board-strip .bs-list {
+    .fr-list { max-height: 120px; overflow-y: auto; }
+    .bs-list {
       display: flex;
       flex-direction: column;
       gap: 4px;
       padding: 4px 4px 8px;
+      max-height: 120px;
+      overflow-y: auto;
     }
-    /* The Activity ledger section is content-sized (not a flex-grow pane) and
-       hidden when empty. `.side-section { display:flex }` beats the UA
-       `[hidden]` rule, so — like every other collapsible sidebar section — it
-       needs its own explicit `[hidden]` display:none (the pattern documented at
-       `.view-head .back[hidden]`). */
+    .agents-list, #side-agents {
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .activity-list {
+      max-height: 160px;
+      overflow-y: auto;
+    }
     .side-activity { flex: 0 0 auto; max-block-size: 40%; overflow-y: auto; }
-    .side-activity > summary { cursor: pointer; list-style: none; }
+    .side-activity > summary { cursor: pointer; list-style: none; flex: 0 0 auto; min-height: 34px; }
     .side-activity > summary::-webkit-details-marker { display: none; }
     .harness-list { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 4px 6px 8px; }
     .harness-list.side-list { flex-direction: row; flex-wrap: wrap; }
@@ -311,10 +336,13 @@
       inline-size: 56px;
       flex-basis: 56px;
       width: 56px;
-      padding: 10px 8px;
+      padding: 12px 9px;
       box-sizing: border-box;
       overflow-x: hidden;
       overflow-y: clip;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
     }
     .side.collapsed .brand { display: none !important; }
     .side.collapsed .side-label,
@@ -408,12 +436,14 @@
       padding: 0 !important;
       justify-content: center !important;
       border-radius: var(--radius-sm, 6px);
+      margin: 0 auto !important;
     }
     .side.collapsed .artifacts-nav-row {
       display: flex;
       justify-content: center;
+      align-items: center;
       width: 100%;
-      grid-template-columns: auto;
+      margin: 0;
     }
     .brand {
       display: flex;
@@ -814,11 +844,12 @@
       flex-direction: column;
       align-items: center;
       gap: 4px;
+      width: 100%;
     }
-    .side.collapsed .artifacts-nav-row .foot-btn { inline-size: 34px; block-size: 34px; }
+    .side.collapsed .artifacts-nav-row .foot-btn { inline-size: 36px !important; block-size: 36px !important; margin: 0 auto; }
     .side.collapsed .artifacts-nav-row artifact-quick-drawer::part(trigger) {
-      inline-size: 34px;
-      block-size: 34px;
+      inline-size: 36px;
+      block-size: 36px;
     }
 
     .content {
