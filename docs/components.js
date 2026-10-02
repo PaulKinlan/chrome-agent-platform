@@ -38,12 +38,13 @@ import { partiesOf, projectBoard, statusOf } from "./board-view-model.js";
 // authority shared by <next-run> and the NTP routine row, so a routine's next
 // fire reads identically everywhere. The gallery sync rewrites this path to
 // ./next-run-label.js beside the deploy copy.
-import { nextRunLabel, lastRunLabel, NEXT_RUN_TICK_MS } from "./next-run-label.js";
+import { nextRunLabel, lastRunLabel, NEXT_RUN_TICK_MS, formatCadenceMinutes } from "./next-run-label.js";
 import { countDiagnosticsBadgeErrors, isExcludedDiagnosticBadgeEntry } from "./diagnostics-badge.js";
+export { formatCadenceMinutes };
 // Local Set view (the explorer filters in-memory against it; the server also
 // enforces the same list, default-deny).
 const USER_VISIBLE_KINDS = new Set(USER_VISIBLE_KINDS_ARR);
-import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, turnTime } from "./thread-view.js";
+import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, turnTime, stripModelAddressedText, isToolResultDeclined } from "./thread-view.js";
 // The bundled diff core (jsdiff via ./diff-core.js → dist; the gallery sync
 // rewrites this to ./diff-core.bundle.js). Only <artifact-diff> uses it.
 import { lineDiffSummary } from "./diff-core.bundle.js";
@@ -74,7 +75,8 @@ import { describeToolCall, redactToolResult, toolResultErrorText } from "./tool-
 import { SITE_AGENT_COPY, siteOfferHost, siteOfferLabel, siteUsingLabel } from "./site-agent-copy.js";
 // The user-language permission names the approval card lists (never a Chrome
 // token) — CAP-FB-20260901-ONE-CARD-PER-STEP-01.
-import { permissionUserLanguage, siteLabel } from "./permission-language.js";
+import { permissionUserLanguage, siteLabel, humanToolLabel } from "./permission-language.js";
+export { humanToolLabel };
 import {
   isTextLikeAttachment,
   textToDataUrl,
@@ -799,12 +801,79 @@ class Component extends HTMLElement {
   }
 }
 
+const sheetCache = new Map();
+
+/**
+ * Returns a cached constructable CSSStyleSheet for the given cssText,
+ * or null if constructable stylesheets are not supported in this runtime.
+ */
+export function getConstructableSheet(cssText) {
+  if (typeof CSSStyleSheet === "undefined" || !("replaceSync" in CSSStyleSheet.prototype)) {
+    return null;
+  }
+  let sheet = sheetCache.get(cssText);
+  if (!sheet) {
+    sheet = new CSSStyleSheet();
+    sheet.replaceSync(cssText);
+    sheetCache.set(cssText, sheet);
+  }
+  return sheet;
+}
+
+/**
+ * Adopts a constructable stylesheet if supported; otherwise falls back to injecting
+ * a <style> element into the shadow root.
+ * Returns true if adopted via adoptedStyleSheets, false if fallback path taken.
+ */
+export function adoptOrInjectStyle(shadowRoot, cssText) {
+  if (!shadowRoot || !cssText) return false;
+  const sheet = getConstructableSheet(cssText);
+  if (sheet && Array.isArray(shadowRoot.adoptedStyleSheets)) {
+    if (!shadowRoot.adoptedStyleSheets.includes(sheet)) {
+      shadowRoot.adoptedStyleSheets = [...shadowRoot.adoptedStyleSheets, sheet];
+    }
+    return true;
+  }
+  // Fallback when adoptedStyleSheets is not supported:
+  // Inject a <style> element if one isn't already present in this shadow root.
+  try {
+    const existing = typeof shadowRoot.querySelector === "function" ? shadowRoot.querySelector("style") : null;
+    if (!existing) {
+      const doc = shadowRoot.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (doc && typeof doc.createElement === "function") {
+        const styleEl = doc.createElement("style");
+        styleEl.textContent = cssText;
+        if (typeof shadowRoot.prepend === "function") {
+          shadowRoot.prepend(styleEl);
+        } else if (typeof shadowRoot.appendChild === "function") {
+          shadowRoot.appendChild(styleEl);
+        }
+      }
+    }
+  } catch {
+    // Graceful fallback for minimal stubs
+  }
+  return false;
+}
+
+/** Clear the constructable stylesheet cache (for test harnesses). */
+export function clearSheetCache() {
+  sheetCache.clear();
+}
+
 // Build the shadow content: style + markup. Safe (no eval).
-function mountTemplate(host, style, markup) {
+export function mountTemplate(host, style, markup) {
   const useShadow = host.constructor.shadow();
   const root = host._root;
   if (useShadow) {
-    root.innerHTML = `<style>${style}</style>${markup}`;
+    if (adoptOrInjectStyle(root, style)) {
+      root.innerHTML = markup;
+    } else {
+      // Fallback: when adoptedStyleSheets is not supported, ensure the style is
+      // in innerHTML so environments inspecting root.innerHTML or querySelector("style")
+      // see the style element reliably.
+      root.innerHTML = `<style>${style}</style>${markup}`;
+    }
   } else {
     // light-DOM mode: inject a single <style> if not already present, then markup.
     const styleId = `sc-${host.localName}-style`;
@@ -990,6 +1059,7 @@ class FirstRunGuide extends Component {
       button { min-height:var(--control,36px); border-radius:var(--radius-sm,6px); padding:0 14px;
         border:1px solid var(--accent,#0e6e63); background:var(--accent,#0e6e63); color:var(--btn-fg,#fff);
         font:inherit; font-weight:600; cursor:pointer; white-space:nowrap; }
+      button.primary, button.onboarding-cta { border:1px solid var(--accent,#0e6e63); background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); }
       button:hover { filter:brightness(1.08); }
       button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .dismiss { width:36px; padding:0; display:inline-flex; align-items:center; justify-content:center;
@@ -998,7 +1068,7 @@ class FirstRunGuide extends Component {
       .dismiss svg { width:16px; height:16px; }
       @media (max-width:640px) { .banner { grid-template-columns:minmax(0,1fr) auto; }
         .banner > p { grid-column:1 / -1; } }
-    `, !generic ? (providerReady ? "" : `<section class="banner" aria-labelledby="first-run-title">
+    `, !generic ? (providerReady ? "" : `<section class="banner onboarding-card" id="onboarding" aria-labelledby="first-run-title">
       <p id="first-run-title"><strong>No model connected yet.</strong> Tab tasks already work — connect a model for everything else.</p>
       <button class="primary connect-model" type="button">Connect a model</button>
       <button class="dismiss" type="button" aria-label="Dismiss first-run setup">${ICONS.close}</button>
@@ -1009,7 +1079,12 @@ class FirstRunGuide extends Component {
     </section>`);
   }
   _wire() {
-    this._root.querySelector(".connect-model")?.addEventListener("click", (sourceEvent) =>
+    const btn = this._root.querySelector(".connect-model");
+    if (btn) {
+      btn.id = "onboarding-settings";
+      btn.classList.add("onboarding-cta");
+    }
+    btn?.addEventListener("click", (sourceEvent) =>
       this._emit("open-settings", { sourceEvent }));
     this._root.querySelector(".action")?.addEventListener("click", (sourceEvent) =>
       this._emit("action", { sourceEvent }));
@@ -2188,7 +2263,7 @@ class PermissionRow extends Component {
       .info { flex:1; min-width:0; }
       .name { font-weight:600; }
       .desc { font-size:12px; color:var(--muted,#635e56); }
-      .state { font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:var(--muted,#635e56); }
+      .state { font-size:12px; font-weight:600; color:var(--muted,#635e56); }
       .state.granted { color:var(--accent2,#34d399); }
       .state.warned { color:var(--warn,#f59e0b); }
       .btn { border:1px solid var(--border,#e3e0d9); background:transparent; color:var(--text,#1d1b18); border-radius:7px; padding:6px 12px; cursor:pointer; font:inherit; }
@@ -2425,7 +2500,7 @@ class AgentTemplateCard extends Component {
     const overflow = skills.length - shownSkills.length;
     const minutes = Number(template.schedule?.periodInMinutes);
     const cadence = !blank && template.mode === "background" && Number.isFinite(minutes) && minutes > 0
-      ? `every ${minutes} min`
+      ? formatCadenceMinutes(minutes)
       : "";
     const titleId = `template-title-${Math.random().toString(36).slice(2)}`;
     const personaId = `${titleId}-persona`;
@@ -2459,11 +2534,11 @@ class AgentTemplateCard extends Component {
       .cadence { background:transparent; border:1px solid var(--border,#e3e0d9); font-variant-numeric:tabular-nums; }
       .cadence svg { inline-size:12px; block-size:12px; }
       .overflow { border:1px solid var(--border,#e3e0d9); background:transparent; font-weight:700; }
-      .use { display:inline-flex; align-items:center; gap:6px; justify-self:start; min-block-size:36px; padding:0 14px; border:0; border-radius:var(--radius-sm,6px);
-        background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit;
-        transition:background-color 150ms ease-out; }
-      .use:hover { background:var(--accent-hover,#0a5c53); }
-      .use[aria-pressed="true"] { background:transparent; color:var(--accent,#0e6e63); box-shadow:inset 0 0 0 1px var(--accent,#0e6e63); }
+      .use { display:inline-flex; align-items:center; gap:6px; justify-self:start; min-block-size:36px; padding:0 14px; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
+        background:transparent; color:var(--text,#1d1b18); cursor:pointer; font:600 var(--text-sm,13px)/1 inherit;
+        transition:background-color 150ms ease-out, border-color 150ms ease-out; }
+      .use:hover { background:var(--panel-2,#efede8); border-color:var(--muted,#635e56); }
+      .use[aria-pressed="true"] { background:transparent; color:var(--accent,#0e6e63); border-color:var(--accent,#0e6e63); box-shadow:inset 0 0 0 1px var(--accent,#0e6e63); }
       .use svg { inline-size:14px; block-size:14px; }
       .use:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       @media (prefers-reduced-motion:reduce) { article, .use { transition:none; } }
@@ -4606,7 +4681,7 @@ class ArtifactQuickDrawer extends Component {
       .close:focus-visible, .action:focus-visible, .browse:focus-visible, .retry:focus-visible,
       input:focus-visible, select:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
       .controls { display:grid; grid-template-columns:minmax(0,1fr) 112px; gap:8px; padding:12px 14px; }
-      label { display:flex; flex-direction:column; gap:4px; min-inline-size:0; font-size:11px; font-weight:600; color:var(--muted,#635e56); }
+      label { display:flex; flex-direction:column; gap:4px; min-inline-size:0; font-size:12px; font-weight:600; color:var(--muted,#635e56); }
       input, select { min-inline-size:0; min-block-size:40px; border:1px solid var(--border,#e3e0d9);
         border-radius:var(--radius-sm,6px); background:var(--bg,#f7f6f3); color:var(--text,#1d1b18);
         font:inherit; font-size:13px; padding:0 10px; }
@@ -4618,7 +4693,7 @@ class ArtifactQuickDrawer extends Component {
       .name { flex:1; min-inline-size:0; font-weight:650; font-size:13px; line-height:1.35;
         overflow-wrap:anywhere; }
       .type { flex:0 0 auto; border:1px solid var(--border,#e3e0d9); border-radius:999px;
-        padding:1px 7px; color:var(--muted,#635e56); font-size:10px; text-transform:uppercase; }
+        padding:1px 7px; color:var(--muted,#635e56); font-size:12px; font-weight:600; }
       dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px 10px; margin:7px 0 8px; }
       dl div { min-inline-size:0; }
       dt { color:var(--muted,#635e56); font-size:10px; }
@@ -5598,10 +5673,12 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
   const lazyName = name === "execute_tool" || name === "search_tools"
     ? (unwrapToolPayload(result).selectedTool || unwrapToolPayload(detail).selectedTool || null)
     : null;
-  const shownName = lazyName || (name === "execute_tool" ? "tool call" : (name || "tool"));
+  const rawToolName = lazyName || (name === "execute_tool" ? "" : (name || "tool"));
+  const shownName = humanToolLabel(rawToolName) || "Action";
   const nameEl = document.createElement("span");
   nameEl.className = "tool-name";
   nameEl.textContent = shownName;
+  if (rawToolName) card.setAttribute("data-raw-tool", rawToolName);
   summary.appendChild(nameEl);
   // `execute_tool`'s own arguments nest the invoked tool's arguments under
   // `arguments` beside a selectionRef that means nothing to a reader.
@@ -5865,7 +5942,8 @@ export function buildToolCardDom({ name, status: statusIn, args, result, detail,
 class AgentIdentity extends Component {
   static get observedAttributes() { return ["name", "avatar", "time"]; }
   _render() {
-    const name = (this.getAttribute("name") || "Agent").trim() || "Agent";
+    const rawName = (this.getAttribute("name") || "").trim();
+    const name = (!rawName || rawName === "Agent") ? "Assistant" : rawName;
     const avatar = String(this.getAttribute("avatar") || "");
     // Only an image data URL or https is ever set as a src (no javascript:).
     const avatarOk = /^(data:image\/|https:\/\/)/iu.test(avatar);
@@ -5899,7 +5977,7 @@ const MESSAGE_BUBBLE_STYLE = `
   .body .cite-ref a { color:var(--accent,#0e6e63); text-decoration:none; font-size:0.75em; margin-left:1px; }
   :host([role="user"]) .msg { background:var(--secondary-layer,#efede8); }
   :host([role="steer"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--accent,#0e6e63); }
-  :host([role="steer"]) .steer-label { display:block; font-size:11px; font-weight:600; color:var(--accent,#0e6e63); letter-spacing:.04em; text-transform:uppercase; margin:0 0 4px; }
+  :host([role="steer"]) .steer-label { display:block; font-size:12px; font-weight:600; color:var(--accent,#0e6e63); margin:0 0 4px; }
   :host([role="agent"]) .msg, :host([role="system"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); }
   :host([role="error"]) .msg { background:var(--panel,#ffffff); border:1px solid var(--danger,#b3261e); }
   :host([role="error"]) .body { color:var(--danger,#b3261e); }
@@ -5968,7 +6046,8 @@ const MESSAGE_BUBBLE_STYLE = `
   .tool .tool-head { display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border,#e3e0d9); background:var(--panel-2,#efede8); }
   .tool:not([open]) .tool-head { border-bottom:0; }
   .tool .tool-body { display:flex; flex-direction:column; }
-  .tool .tool-name { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); white-space:nowrap; }
+  .tool .tool-name { font-family:inherit; font-size:12.5px; font-weight:600; color:var(--ink,#1d1b18); white-space:nowrap; }
+  .skipped-line { font-size:13px; color:var(--muted,#635e56); font-style:normal; line-height:1.4; padding:2px 0; margin:0; }
   /* the collapsed row's human line (what the tool is DOING, not just its id) */
   .tool .tool-what { font-size:12.5px; color:var(--muted,#635e56); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; flex:1 1 auto; }
   .tool .tool-status { margin-left:auto; display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:1px 8px; border-radius:999px; }
@@ -6170,19 +6249,27 @@ class MessageBubble extends Component {
     if (!isStreaming && typeof this.removeAttribute === "function") this.removeAttribute("streaming");
     const role = this.getAttribute("role") || "agent";
     const content = this._content();
-    let markup;
+    let markup = "";
     if (role === "tool") {
       const name = this.getAttribute("tool-name") || "tool";
       const statusRaw = this.getAttribute("tool-status") || "running";
+      const args = this.getAttribute("tool-args");
+      const result = this.getAttribute("tool-result");
+      const detail = this.getAttribute("tool-detail");
+      const isSkipped = this.hasAttribute("skipped") || statusRaw === "skipped" ||
+        isToolResultDeclined(result) || isToolResultDeclined(detail);
+      if (isSkipped) {
+        const text = `You skipped ${humanToolLabel(name).toLowerCase()}.`;
+        markup = `<p class="skipped-line" role="status">${escapeHtml(text)}</p>`;
+        mountTemplate(this, MESSAGE_BUBBLE_STYLE, markup);
+        return;
+      }
       // "done" (an unpaired replay card), "success" and "error" are terminal —
       // anything else (running/absent) renders the running state. A missing
       // result must never re-open a card as running (the replay blocker).
       const status = statusRaw === "done" || statusRaw === "success"
         ? "done"
         : statusRaw === "error" ? "error" : "running";
-      const args = this.getAttribute("tool-args");
-      const result = this.getAttribute("tool-result");
-      const detail = this.getAttribute("tool-detail");
       // A FAILED tool call must never render the generated-UI preview: the
       // args alone carry the HTML (e.g. update_asset's content), so a denied
       // or errored call used to mount the sandbox frame and sit forever on
@@ -6316,10 +6403,13 @@ class MessageBubble extends Component {
       </div></div>`;
     } else {
       let body;
-      if ((role === "agent" || role === "system" || role === "assistant") && isHtmlDocument(content)) {
-        body = renderHtmlFrame(content);
+      const cleanContent = (role === "agent" || role === "system" || role === "assistant")
+        ? stripModelAddressedText(content)
+        : content;
+      if ((role === "agent" || role === "system" || role === "assistant") && isHtmlDocument(cleanContent)) {
+        body = renderHtmlFrame(cleanContent);
       } else {
-        body = (role === "agent" || role === "system" || role === "user" || role === "assistant") ? renderMarkdown(content) : `<span class="plain">${renderInline(content)}</span>`;
+        body = (role === "agent" || role === "system" || role === "user" || role === "assistant") ? renderMarkdown(cleanContent) : `<span class="plain">${renderInline(cleanContent)}</span>`;
       }
       // Inline attachments: image attachments render as a thumbnail so the user
       // can SEE what they attached; other media render as a file chip.
@@ -6349,7 +6439,8 @@ class MessageBubble extends Component {
           + `<button type="button" class="long-copy" part="long-copy">Copy full response</button></div></div>`;
       }
       if (role === "agent" || role === "assistant") {
-        const author = this.getAttribute("author") || "Agent";
+        const rawAuthor = this.getAttribute("author");
+        const author = (!rawAuthor || rawAuthor === "Agent") ? "Assistant" : rawAuthor;
         const avatar = this.getAttribute("author-avatar") || "";
         const ts = this.getAttribute("ts") || "";
         markup = `<div class="turn"><agent-identity name="${escapeHtml(author)}"${avatar ? ` avatar="${escapeHtml(avatar)}"` : ""}${ts ? ` time="${escapeHtml(ts)}"` : ""}></agent-identity>${bubbleOut}</div>`;
@@ -6358,20 +6449,26 @@ class MessageBubble extends Component {
       }
     }
     if (typeof this._root.appendChild === "function" && (this._root.nodeType !== undefined || this._root._children !== undefined || this._root.children !== undefined)) {
-      if (!this._styleEl || !this._bodyWrap || this._styleEl.parentNode !== this._root || this._bodyWrap.parentNode !== this._root) {
+      if (!this._bodyWrap || this._bodyWrap.parentNode !== this._root) {
         this._root.innerHTML = "";
-        this._styleEl = document.createElement("style");
-        this._styleEl.textContent = MESSAGE_BUBBLE_STYLE;
-        this._root.appendChild(this._styleEl);
-        this._bodyWrap = document.createElement("div");
-        this._bodyWrap.className = "bubble-wrap";
-        if (this._bodyWrap.style) this._bodyWrap.style.display = "contents";
-        this._root.appendChild(this._bodyWrap);
+        adoptOrInjectStyle(this._root, MESSAGE_BUBBLE_STYLE);
+        this._styleEl = typeof this._root.querySelector === "function" ? this._root.querySelector("style") : null;
+        const doc = this._root.ownerDocument || (typeof document !== "undefined" ? document : null);
+        if (doc && typeof doc.createElement === "function") {
+          this._bodyWrap = doc.createElement("div");
+          this._bodyWrap.className = "bubble-wrap";
+          if (this._bodyWrap.style) this._bodyWrap.style.display = "contents";
+          this._root.appendChild(this._bodyWrap);
+        }
       }
-      this._bodyWrap.innerHTML = markup;
-      if (this._cardDom) {
-        this._bodyWrap.appendChild(this._cardDom);
-        this._cardDom = null;
+      if (this._bodyWrap) {
+        this._bodyWrap.innerHTML = markup;
+        if (this._cardDom) {
+          this._bodyWrap.appendChild(this._cardDom);
+          this._cardDom = null;
+        }
+      } else {
+        this._root.innerHTML = markup;
       }
     } else {
       mountTemplate(this, MESSAGE_BUBBLE_STYLE, markup);
@@ -6570,8 +6667,10 @@ class AgentConversation extends Component {
     else this.removeAttribute("agent-avatar");
   }
   _identityAttrs(ts) {
+    const rawName = this.getAttribute("agent-name");
+    const author = (!rawName || rawName === "Agent") ? "Assistant" : rawName;
     return {
-      author: this.getAttribute("agent-name") || null,
+      author,
       "author-avatar": this.getAttribute("agent-avatar") || null,
       ts: String(typeof ts === "number" && ts > 0 ? ts : Date.now()),
     };
@@ -6982,17 +7081,21 @@ class AgentConversation extends Component {
     const detailNote = m.detailNote ?? m["tool-detail-note"];
     const durationMs = m.durationMs ?? m["tool-duration"];
     const siteActivity = normalizeSiteActivity(m.siteActivity ?? m["site-activity"]);
+    const isSkipped = m.skipped === true || status === "skipped" ||
+      isToolResultDeclined(result) || isToolResultDeclined(detail);
     if (typeof m.ts === "number") this._maybeTsGap(m.ts);
-    return this._bubble("tool", null, {
+    const extra = {
       "tool-name": name,
-      "tool-status": status || "running",
+      "tool-status": isSkipped ? "skipped" : (status || "running"),
       "tool-args": toolPayloadAttribute(args),
       "tool-result": toolPayloadAttribute(result),
       "tool-detail": toolPayloadAttribute(detail),
       "tool-detail-note": typeof detailNote === "string" && detailNote ? detailNote : null,
       "tool-duration": durationMs != null ? String(durationMs) : null,
       "site-activity": siteActivity ? JSON.stringify(siteActivity) : null,
-    });
+    };
+    if (isSkipped) extra.skipped = "";
+    return this._bubble("tool", isSkipped ? `You skipped ${humanToolLabel(name).toLowerCase()}.` : null, extra);
   }
   /** The IN-CONTEXT grant card for a PERSISTED permission denial
    *  (CAP-FB-20260827-TOOL-CALL-LEGIBILITY-01 §2b, the reopened-thread half of
@@ -7030,6 +7133,8 @@ class AgentConversation extends Component {
       // inside the card), never an attribute.
       if (m.cardDetail && typeof m.cardDetail === "object") card.detail = m.cardDetail;
     } else {
+      const toolName = m.tool || req.tool || req.toolName || m.toolName;
+      if (toolName) card.setAttribute("tool", toolName);
       card.setAttribute("reason", String(req.reason ?? "perform this action").slice(0, 240));
       if (Array.isArray(req.permissions) && req.permissions.length) card.setAttribute("permissions", JSON.stringify(req.permissions.slice(0, 8)));
       if (Array.isArray(req.grantOrigins) && req.grantOrigins.length) card.setAttribute("origins", JSON.stringify(req.grantOrigins.slice(0, 50)));
@@ -7500,7 +7605,7 @@ class AgentComposer extends Component {
           <mic-button id="${this.id ? `${this.id}-mic` : `mic-${this._uid}`}"></mic-button>
           <attach-button id="${this.id ? `${this.id}-attach` : `attach-${this._uid}`}"></attach-button>
           <span class="spacer"></span>
-          <button id="${this.id ? `${this.id}-send` : `cmp-send-${this._uid}`}" class="btn send" data-composer-send type="button">${escapeHtml(sendLabel)}</button>
+          <button id="${this.id ? `${this.id}-send` : `cmp-send-${this._uid}`}" class="btn send composer-send" data-composer-send type="button" disabled>${escapeHtml(sendLabel)}</button>
         </div>
         <div class="agent-pop" popover="manual" hidden>
           <agent-picker callable-only label="Run with agent"
@@ -7538,8 +7643,8 @@ class AgentComposer extends Component {
       agent-composer .popup .item .lbl { font-weight:600; font-size:13px; color:var(--text,#1d1b18); white-space:nowrap; flex-shrink:0; }
       agent-composer .popup .item .dsc { font-size:12px; color:var(--muted,#635e56); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:left; }
       agent-composer .popup .empty { padding:8px 10px; font-size:12px; color:var(--muted,#635e56); }
-      agent-composer .popup .group-label { padding:8px 10px 4px; font-size:11px; font-weight:600;
-        color:var(--muted,#635e56); letter-spacing:.01em; user-select:none; }
+      agent-composer .popup .group-label { padding:6px 10px 2px; font-size:12px; font-weight:600;
+        color:var(--muted,#635e56); user-select:none; }
       agent-composer .popup .menu-footer {
         padding:6px 10px; margin-top:4px; border-top:1px solid var(--border,#e3e0d9);
         font-size:11px; color:var(--muted,#635e56); background:var(--panel,#ffffff);
@@ -7561,6 +7666,13 @@ class AgentComposer extends Component {
         background:var(--accent,#0e6e63); color:var(--btn-fg,#fff); border:0; border-radius:8px;
         font:inherit; font-weight:600; cursor:pointer; }
       agent-composer .composer .send:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:2px; }
+      agent-composer .composer .send:disabled,
+      agent-composer .composer .send.composer-send:disabled {
+        background: var(--surface-hover, var(--panel-2, #efede8)) !important;
+        color: var(--muted, #635e56) !important;
+        border: 1px solid var(--border, #d9d4c9) !important;
+        cursor: not-allowed;
+      }
       agent-composer > .composer-status { margin-top:8px; font-size:12px; color:var(--muted,#635e56); }
       agent-composer > .composer-status:empty { display:none; }
       /* the recording chip (record-screen / record-audio) — a visible start/stop */
@@ -7664,6 +7776,11 @@ class AgentComposer extends Component {
     input.style.overflowY = natural > cap ? "auto" : "hidden";
   }
   _wire() {
+    const hasText = !!this._input?.value?.trim();
+    if (this._run) {
+      this._run.disabled = !hasText;
+      this._run.classList.toggle("has-input", hasText);
+    }
     this._run?.addEventListener("click", () => this._send());
     this._input?.addEventListener("input", () => {
       this._historyIndex = -1;
@@ -8321,7 +8438,17 @@ class AgentComposer extends Component {
   }
   get input() { return this._input; }
   get value() { return this._input?.value ?? ""; }
-  set value(v) { if (this._input) { this._input.value = v; this._autoGrow(); } }
+  set value(v) {
+    if (this._input) {
+      this._input.value = v;
+      this._autoGrow();
+      const hasText = !!String(v ?? "").trim();
+      if (this._run) {
+        this._run.disabled = !hasText;
+        this._run.classList.toggle("has-input", hasText);
+      }
+    }
+  }
   async _ingestFile(file) {
     if (!file) return null;
     const isImage = file.type?.startsWith("image/");
@@ -8504,6 +8631,11 @@ class AgentComposer extends Component {
     const input = this._input;
     if (!input) return;
     this._autoGrow();
+    const hasText = !!input.value?.trim();
+    if (this._run) {
+      this._run.disabled = !hasText;
+      this._run.classList.toggle("has-input", hasText);
+    }
     const text = input.value;
     const caret = input.selectionStart ?? text.length;
 
@@ -8958,6 +9090,10 @@ class AgentComposer extends Component {
     // recording; only the accepted path tears the mic down.
     (this._mic ?? this.querySelector("mic-button"))?.stop?.();
     if (this._input) { this._input.value = ""; this._autoGrow(); }
+    if (this._run) {
+      this._run.disabled = true;
+      this._run.classList.remove("has-input");
+    }
     this._resolvedSpans = []; // the input is cleared — the recorded boundaries are gone
     const pending = this.attachments.splice(0);
     this._clearChips();
@@ -9106,6 +9242,7 @@ customElements.define("conversation-run-status", ConversationRunStatus);
 const ICON_STEP_ACTIVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true" class="spin"><path d="M12 3a9 9 0 1 0 9 9"/></svg>';
 const ICON_STEP_DONE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>';
 const ICON_STEP_ERROR = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+const ICON_STEP_SKIPPED = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 const ICON_PLAN_DONE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
 const ICON_CHEVRON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>';
 
@@ -9131,20 +9268,22 @@ class PlanStrip extends Component {
     if (!steps.length) { mountTemplate(this, ":host{display:none;}", ""); return; }
     const settled = this.getAttribute("state") === "settled";
     const sum = planSummary({ steps, state: settled ? "settled" : "running" });
+    const isPlanSkipped = settled && (sum.allSkipped || (steps.length === 1 && steps[0].status === "skipped"));
     // The summary line: while running, the step in flight; once settled, the
-    // count (with an honest note when a step failed).
+    // count (with an honest note when a step failed, or Skipped when skipped).
     const summaryText = settled
-      ? `${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? " · 1 or more failed" : ""}`
+      ? (isPlanSkipped ? "Skipped" : `${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? " · 1 or more failed" : ""}`)
       : sum.activeLabel
         ? `Step ${sum.current} of ${sum.total} · ${sum.activeLabel}`
         : `Step ${sum.current} of ${sum.total}`;
     // aria-live text: the active step (running) or the outcome (settled).
     const liveText = settled
-      ? `Plan complete — ${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? ", with an error" : ""}`
+      ? (isPlanSkipped ? "Plan skipped" : `Plan complete — ${sum.total} ${sum.total === 1 ? "step" : "steps"}${sum.errored ? ", with an error" : ""}`)
       : sum.activeLabel ? `Now: ${sum.activeLabel}` : "";
     const rows = steps.map((s) => {
       const icon = s.status === "done" ? ICON_STEP_DONE
         : s.status === "error" ? ICON_STEP_ERROR
+        : s.status === "skipped" ? ICON_STEP_SKIPPED
         : ICON_STEP_ACTIVE;
       return `<li data-status="${s.status}"><span class="ic" aria-hidden="true">${icon}</span><span class="tx">${escapeHtml(s.label)}</span></li>`;
     }).join("");
@@ -9158,6 +9297,7 @@ class PlanStrip extends Component {
       .lead { flex:0 0 auto; width:16px; height:16px; display:inline-flex; color:var(--accent,#0e6e63); }
       .lead.done { color:var(--success,#1a7f37); }
       .lead.err { color:var(--danger,#b3261e); }
+      .lead.skipped { color:var(--muted,#635e56); }
       .sumtx { flex:1 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .chev { flex:0 0 auto; width:16px; height:16px; display:inline-flex; color:var(--muted,#635e56); transition:transform .18s ease; }
       details[open] .chev { transform:rotate(180deg); }
@@ -9165,10 +9305,12 @@ class PlanStrip extends Component {
       li { display:flex; align-items:center; gap:9px; font-size:12px; line-height:1.4; color:var(--muted,#635e56); min-width:0; }
       li[data-status="active"] { color:var(--text,#1d1b18); font-weight:600; }
       li[data-status="error"] { color:var(--danger,#b3261e); }
+      li[data-status="skipped"] { color:var(--muted,#635e56); }
       li .ic { flex:0 0 auto; width:15px; height:15px; display:inline-flex; }
       li[data-status="done"] .ic { color:var(--success,#1a7f37); }
       li[data-status="active"] .ic { color:var(--accent,#0e6e63); }
       li[data-status="error"] .ic { color:var(--danger,#b3261e); }
+      li[data-status="skipped"] .ic { color:var(--muted,#635e56); }
       li .tx { min-width:0; overflow-wrap:anywhere; }
       .lead svg, .chev svg, li .ic svg { width:100%; height:100%; display:block; }
       .spin { transform-origin:center; animation:plan-spin .9s linear infinite; }
@@ -9178,7 +9320,7 @@ class PlanStrip extends Component {
     `, `<div class="plan">
       <details${!settled && steps.length > 1 ? " open" : ""}>
         <summary>
-          <span class="lead${settled && !sum.errored ? " done" : ""}${settled && sum.errored ? " err" : ""}" aria-hidden="true">${settled ? (sum.errored ? ICON_STEP_ERROR : ICON_PLAN_DONE) : ICON_STEP_ACTIVE}</span>
+          <span class="lead${settled && !sum.errored && !isPlanSkipped ? " done" : ""}${settled && sum.errored ? " err" : ""}${isPlanSkipped ? " skipped" : ""}" aria-hidden="true">${settled ? (sum.errored ? ICON_STEP_ERROR : (isPlanSkipped ? ICON_STEP_SKIPPED : ICON_PLAN_DONE)) : ICON_STEP_ACTIVE}</span>
           <span class="sumtx">${escapeHtml(summaryText)}</span>
           <span class="chev" aria-hidden="true">${ICON_CHEVRON}</span>
         </summary>
@@ -9189,6 +9331,7 @@ class PlanStrip extends Component {
   }
 }
 customElements.define("plan-strip", PlanStrip);
+
 
 /* <permission-approval-card reason="…" permissions='["tabs"]' origins='["https://a.com"]'
  * host-origins='["https://a.com"]' global="true"
@@ -9210,7 +9353,7 @@ function approvalLine(text) {
 
 class PermissionApprovalCard extends Component {
   static get observedAttributes() {
-    return ["reason", "permissions", "origins", "host-origins", "global", "state", "detail"];
+    return ["reason", "permissions", "origins", "host-origins", "global", "state", "detail", "tool"];
   }
   _jsonList(name) {
     const raw = this.getAttribute(name);
@@ -9221,13 +9364,24 @@ class PermissionApprovalCard extends Component {
     } catch { return []; }
   }
   _render() {
+    const tool = (this.getAttribute("tool") ?? "").trim();
     const reason = (this.getAttribute("reason") ?? "perform this action").slice(0, 240);
+    const actionLabel = tool ? humanToolLabel(tool).toLowerCase() : (reason || "this action");
     const permissions = this._jsonList("permissions");
     const origins = this._jsonList("origins");
     const hostOrigins = this._jsonList("host-origins");
     const isGlobal = this.getAttribute("global") === "true";
     const state = ["granted", "denied", "expired", "error"].includes(this.getAttribute("state")) ? this.getAttribute("state") : "pending";
     const detail = (this.getAttribute("detail") ?? "").slice(0, 240);
+
+    if (state === "denied") {
+      mountTemplate(this, `
+        :host { display:block; margin:0 0 10px; }
+        .skipped-line { margin:0; font-size:12.5px; color:var(--muted,#635e56); font-style:normal; line-height:1.45; }
+      `, `<p class="skipped-line" role="status"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>You skipped ${escapeHtml(actionLabel)}.</p>`);
+      return;
+    }
+
     // ONE card lists EVERYTHING the click allows, each in the owner's words
     // (what the agent will be able to do — never a Chrome permission token):
     // "See your open tabs", "Group tabs", "Control the browser on this site".
@@ -9250,24 +9404,18 @@ class PermissionApprovalCard extends Component {
     const chromeNote = state === "pending" && (permissions.length || hostOrigins.length)
       ? "Chrome will ask you to confirm in one prompt."
       : "";
-    // A declined site-access ask says WHICH site was not read and why (the
-    // owner declined), not a generic line (READ-PAGE-HOST-GRANT-01).
-    const declinedText = hostOrigins.length
-      ? `Not allowed to ${reason} — you declined. The action was not performed.`
-      : "Declined. The action was not performed.";
     const stateText = state === "granted"
       ? (detail || "Approved — continuing…")
-      : state === "denied"
-        ? declinedText
-        : state === "expired"
-          ? (detail || "The request expired. The action was not performed.")
-        : state === "error"
-          ? (detail || "The approval could not be completed — try again.")
-          : "";
+      : state === "expired"
+        ? (detail || "The request expired. The action was not performed.")
+      : state === "error"
+        ? (detail || "The approval could not be completed — try again.")
+        : "";
+    const headerTitle = tool ? humanToolLabel(tool) : "Permission request";
     mountTemplate(this, `
       :host { display:flex; margin:0 0 14px; justify-content:flex-start; }
       .card { max-width:88%; border-radius:12px; padding:12px 14px; background:var(--panel,#fff); border:1px solid var(--accent,#0e6e63); }
-      .title { font-size:13px; font-weight:700; color:var(--ink,#1d1b18); margin:0 0 4px; }
+      .title { font-size:13px; font-weight:700; color:var(--ink,#1d1b18); margin:0 0 4px; font-family:inherit; }
       .reason { font-size:13.5px; color:var(--ink,#1d1b18); margin:0 0 6px; line-height:1.45; }
       .needs-title { margin:0 0 2px; font-size:12.5px; font-weight:600; color:var(--muted,#635e56); }
       .needs { margin:0 0 8px; padding-left:18px; font-size:12.5px; color:var(--ink,#1d1b18); line-height:1.5; }
@@ -9291,10 +9439,10 @@ class PermissionApprovalCard extends Component {
       .hosts li { overflow-wrap:anywhere; }
       .hosts .none { color:var(--muted,#635e56); }
       .dynamic { margin:0 0 12px; font-size:12.5px; font-weight:600; color:var(--danger,#b3261e); }
-      :host([state="granted"]) .card, :host([state="denied"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
+      :host([state="granted"]) .card { border-color:var(--border,#e3e0d9); opacity:.85; }
       :host([state="expired"]) .card { border-color:var(--border,#e3e0d9); }
-    `, `<div class="card" role="group" aria-label="Permission request">
-      <p class="title">Permission request</p>
+    `, `<div class="card" role="group" aria-label="${escapeHtml(headerTitle)}"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>
+      <p class="title"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>${escapeHtml(headerTitle)}</p>
       <p class="reason">The agent wants to ${escapeHtml(reason)}.</p>
       ${needs.length ? `<p class="needs-title">Allowing this lets the agent:</p><ul class="needs">${needs.join("")}</ul>` : ""}
       ${chromeNote ? `<p class="note">${escapeHtml(chromeNote)}</p>` : ""}
@@ -9317,6 +9465,49 @@ class PermissionApprovalCard extends Component {
   }
 }
 customElements.define("permission-approval-card", PermissionApprovalCard);
+
+/* <tool-receipt tool="list_tabs" status="done" result="..."> — quiet tool receipt component */
+class ToolReceipt extends Component {
+  static get observedAttributes() {
+    return ["tool", "status", "args", "result", "detail", "skipped"];
+  }
+  _render() {
+    const tool = (this.getAttribute("tool") || "").trim();
+    const status = this.getAttribute("status") || "done";
+    const skipped = this.getAttribute("skipped") === "true" || this.hasAttribute("skipped");
+    const rawResult = this.getAttribute("result") || "";
+    const detail = this.getAttribute("detail") || "";
+    const label = humanToolLabel(tool);
+
+    if (skipped || isToolResultDeclined(rawResult) || isToolResultDeclined(detail)) {
+      mountTemplate(this, `
+        :host { display:block; margin:2px 0; }
+        .skipped-line { font-size:13px; color:var(--muted,#635e56); font-style:normal; line-height:1.4; padding:2px 0; margin:0; }
+      `, `<p class="skipped-line" role="status"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>You skipped ${escapeHtml(label.toLowerCase())}.</p>`);
+      return;
+    }
+
+    const cleanResult = stripModelAddressedText(rawResult);
+    mountTemplate(this, `
+      :host { display:block; margin:6px 0; }
+      .receipt { font-family:inherit; border:1px solid var(--border,#e3e0d9); border-radius:8px; padding:8px 12px; background:var(--panel,#ffffff); }
+      .header { display:flex; align-items:center; justify-content:space-between; font-size:12.5px; font-weight:600; }
+      .title { font-family:inherit; }
+      .raw { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--muted,#635e56); margin-top:4px; }
+      .result { font-size:12px; color:var(--muted,#635e56); margin-top:4px; white-space:pre-wrap; }
+    `, `<div class="receipt"${tool ? ` data-raw-tool="${escapeHtml(tool)}"` : ""}>
+      <div class="header">
+        <span class="title">${escapeHtml(label)}</span>
+        <span class="status ${escapeHtml(status)}">${escapeHtml(status)}</span>
+      </div>
+      <details>
+        <summary class="raw">${escapeHtml(tool || "tool")}</summary>
+        ${cleanResult ? `<div class="result">${escapeHtml(cleanResult)}</div>` : ""}
+      </details>
+    </div>`);
+  }
+}
+customElements.define("tool-receipt", ToolReceipt);
 
 /* <thinking-trace label="reasoning" open steps='[{"label","text"}]'> — an
  * expandable reasoning trace (the BeautifulUI "Thinking" primitive). A muted,
@@ -9734,7 +9925,7 @@ class PromptBar extends Component {
       .pop.open { display:block; }
       .pop button { display:block; width:100%; text-align:left; background:transparent; border:0; border-radius:7px; padding:7px 10px; font:inherit; font-size:13px; color:var(--ink,#1d1b18); cursor:pointer; }
       .pop button:hover, .pop button[aria-selected="true"] { background:var(--panel-2,#efede8); }
-      .pop .head { font-size:11px; font-weight:600; text-transform:none; color:var(--muted,#635e56); padding:4px 10px 6px; }
+      .pop .head { font-size:12px; font-weight:600; text-transform:none; color:var(--muted,#635e56); padding:4px 10px 6px; }
     `, `<div class="bar">
         <textarea id="pb-input" rows="1" placeholder="${escapeHtml(placeholder)}" aria-label="Prompt"
           aria-description="Type @ to mention any named, background, or Site Agent."></textarea>
@@ -10151,7 +10342,7 @@ class AgentPicker extends Component {
       .search { flex:1; min-width:0; min-height:44px; background:transparent; border:0; color:var(--text,#1d1b18);
         font:inherit; outline:none; }
       .list { display:flex; flex-direction:column; gap:2px; max-height:320px; overflow-y:auto; }
-      .group-h { font-size:11px; font-weight:700; letter-spacing:.01em; color:var(--muted,#635e56);
+      .group-h { font-size:12px; font-weight:600; color:var(--muted,#635e56);
         padding:8px 10px 2px; }
       .opt { display:flex; align-items:center; gap:10px; min-height:44px; padding:6px 10px; border-radius:8px;
         border:1px solid transparent; cursor:pointer; text-align:start; background:transparent; font:inherit;
@@ -10813,7 +11004,7 @@ class ModelPicker extends Component {
       }
       .opt:hover { background: color-mix(in oklab, var(--accent, #0e6e63) 8%, transparent); }
       .opt[aria-selected="true"] { background: color-mix(in oklab, var(--accent, #0e6e63) 14%, transparent); font-weight: 600; }
-      .group { padding: 6px 10px 2px; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted, #635e56); }
+      .group { padding: 6px 10px 2px; font-size: 12px; font-weight: 600; color: var(--muted, #635e56); }
       .group + .group, .opt + .group { margin-top: 4px; border-top: 1px solid var(--border, #e3e0d9); padding-top: 8px; }
       .empty { padding: 8px 10px; font-size: 12px; color: var(--muted, #635e56); }
       .custom-hint { font-size: 12px; color: var(--accent2); }
@@ -11151,7 +11342,7 @@ class PanelButton extends Component {
       .console .line { display:flex; gap:8px; padding:3px 14px; align-items:baseline; border-left:2px solid transparent; }
       .console .line:hover { background:var(--panel-2,#efede8); }
       .console .ts { flex:0 0 auto; color:var(--muted,#635e56); }
-      .console .lv { flex:0 0 auto; width:44px; text-transform:uppercase; font-size:10px; font-weight:700; letter-spacing:.04em; }
+      .console .lv { flex:0 0 auto; width:44px; font-size:12px; font-weight:600; }
       .console .lvl-error { border-left-color:var(--danger,#b3261e); } .console .lvl-error .lv { color:var(--danger,#b3261e); }
       .console .lvl-error .msg { color:var(--danger,#b3261e); }
       .console .lvl-warn { border-left-color:var(--warning,#9a6700); } .console .lvl-warn .lv { color:var(--warning,#9a6700); }
@@ -11162,7 +11353,7 @@ class PanelButton extends Component {
       .console .line-copy:hover { color:var(--text,#1d1b18); background:var(--panel-2,#efede8); }
       .shield-body .sect { padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .shield-body .sect:last-child { border-bottom:0; }
-      .shield-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:8px; }
+      .shield-body .sect-h { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin-bottom:8px; }
       .shield-body .chips { display:flex; flex-wrap:wrap; gap:6px; }
       .shield-body .chip { font-size:12px; padding:3px 9px; border-radius:999px; border:1px solid var(--border,#e3e0d9); }
       .shield-body .chip.ok { background:var(--on-accent-muted,#d7f0ea); border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); display:inline-flex; align-items:center; gap:6px; }
@@ -11173,32 +11364,32 @@ class PanelButton extends Component {
       .shield-body .chip.muted { color:var(--muted,#635e56); }
       .shield-body .viol { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:6px; }
       .shield-body .viol li { display:flex; gap:8px; align-items:baseline; font-size:12px; }
-      .shield-body .vkind { flex:0 0 auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--warning,#9a6700); }
+      .shield-body .vkind { flex:0 0 auto; font-size:12px; font-weight:600; color:var(--warning,#9a6700); }
       .shield-body .vmsg { flex:1; word-break:break-word; }
       .shield-body .vts { flex:0 0 auto; color:var(--muted,#635e56); }
       .diag-body .sect { padding:10px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       .diag-body .sect:last-child { border-bottom:0; }
-      .diag-body .sect-h { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--muted,#635e56); margin-bottom:6px; }
+      .diag-body .sect-h { font-size:12px; font-weight:600; color:var(--muted,#635e56); margin-bottom:6px; }
       .diag-metrics { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; padding:12px 14px; border-bottom:1px solid var(--border,#e3e0d9); }
       @media (max-width: 480px) { .diag-metrics { grid-template-columns:repeat(2, 1fr); } }
       .diag-card { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:8px 6px; background:var(--bg,#f7f6f3); border:1px solid var(--border,#e3e0d9); border-radius:8px; text-align:center; }
       .diag-card-num { font-size:18px; font-weight:700; color:var(--text,#1d1b18); }
       .diag-card-num.has-error { color:var(--danger,#b3261e); }
       .diag-card-num.has-running { color:var(--accent,#0e6e63); }
-      .diag-card-label { font-size:11px; color:var(--muted,#635e56); margin-top:2px; }
+      .diag-card-label { font-size:12px; color:var(--muted,#635e56); margin-top:2px; }
       .diag-tools-list { display:flex; flex-wrap:wrap; gap:6px; }
       .diag-tool-chip { font-size:12px; padding:2px 8px; border-radius:999px; border:1px solid var(--border,#e3e0d9); background:var(--panel,#ffffff); color:var(--text,#1d1b18); }
       .diag-tool-chip .count { font-weight:600; color:var(--accent,#0e6e63); margin-left:4px; }
       .diag-errors-list { display:flex; flex-direction:column; gap:4px; }
       .diag-error-row { display:flex; gap:8px; font-size:12px; align-items:baseline; padding:2px 0; }
       .diag-error-time { flex:0 0 auto; color:var(--muted,#635e56); font-size:11px; }
-      .diag-error-level { flex:0 0 auto; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+      .diag-error-level { flex:0 0 auto; font-size:12px; font-weight:600; }
       .lvl-error .diag-error-level { color:var(--danger,#b3261e); }
       .lvl-warn .diag-error-level { color:var(--warning,#9a6700); }
       .diag-error-msg { flex:1; word-break:break-word; }
       .diag-active-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
       .diag-active-item { display:flex; gap:8px; align-items:center; font-size:12px; }
-      .diag-active-badge { font-size:10px; font-weight:600; text-transform:uppercase; padding:1px 6px; border-radius:4px; background:var(--on-accent-muted,#d7f0ea); color:var(--accent,#0e6e63); }
+      .diag-active-badge { font-size:12px; font-weight:600; padding:1px 6px; border-radius:4px; background:var(--on-accent-muted,#d7f0ea); color:var(--accent,#0e6e63); }
       .diag-active-preview { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       @media (prefers-reduced-motion: reduce) { .panel { transition:none; } }
     `, `
@@ -11458,15 +11649,15 @@ class DiagnosticsPanel extends PanelButton {
           </div>
         </div>
         <div class="sect" id="diag-active-sect" hidden>
-          <div class="sect-h">Active Runs</div>
+          <div class="sect-h">Active runs</div>
           <ul class="diag-active-list"></ul>
         </div>
         <div class="sect">
-          <div class="sect-h">Tool Usage</div>
+          <div class="sect-h">Tool usage</div>
           <div class="diag-tools-list"></div>
         </div>
         <div class="sect">
-          <div class="sect-h">Errors & Warnings</div>
+          <div class="sect-h">Errors & warnings</div>
           <div class="diag-errors-list"></div>
         </div>
       </div>`;
@@ -11913,8 +12104,7 @@ class ActivityExplorer extends Component {
     return ["agent", "limit"];
   }
   _render() {
-    this._root.innerHTML = `
-      <style>
+    mountTemplate(this, `
         :host { display:block; }
         .aex { display:flex; flex-direction:column; gap:8px; }
         .aex-toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
@@ -11936,7 +12126,7 @@ class ActivityExplorer extends Component {
         span.aex-agent { font-size:11.5px; font-weight:600; color:var(--accent,#0e6e63); white-space:nowrap;
           max-width:150px; overflow:hidden; text-overflow:ellipsis; background:transparent; border:0; padding:0; }
         .aex-main { min-width:0; min-inline-size:0; }
-        .aex-kind { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+        .aex-kind { font-size:12px; font-weight:600;
           color:var(--muted,#635e56); margin-right:6px; white-space:nowrap; }
         .aex-kind.task, .aex-kind.started { color:var(--accent,#0e6e63); }
         .aex-kind.finished { color:var(--accent,#0e6e63); }
@@ -12011,14 +12201,14 @@ class ActivityExplorer extends Component {
         .aex-plain-copy:focus-visible, .aex-plain-more:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
         .aex-plain .aex-detail { padding:4px 10px 8px; }
         @media (prefers-reduced-motion: reduce) { .aex-blocks .tt-toggle .tt-caret { transition:none; } .aex-blocks .tt-copy { transition:none; } }
-      </style>
+    `, `
       <div class="aex">
         <div class="aex-toolbar">
           <input class="aex-search" type="search" placeholder="Search activity…" aria-label="Search activity">
           <select class="aex-agent" aria-label="Filter by agent"><option value="">All agents</option></select>
         </div>
         <div class="aex-list" role="log" aria-live="polite"></div>
-      </div>`;
+      </div>`);
   }
   _wire() {
     this._search = this._root.querySelector(".aex-search");
@@ -12300,8 +12490,7 @@ class ActionLedger extends Component {
     return ["limit"];
   }
   _render() {
-    this._root.innerHTML = `
-      <style>
+    mountTemplate(this, `
         :host { display:block; }
         .al { display:flex; flex-direction:column; }
         .al-row { display:grid; grid-template-columns:1fr auto; align-items:baseline; gap:12px;
@@ -12329,9 +12518,9 @@ class ActionLedger extends Component {
         .al-retry { padding:3px 10px; font:inherit; font-size:12px; cursor:pointer; color:var(--accent,#0e6e63); min-height:32px;
           background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
         @media (prefers-reduced-motion: reduce) { .al-undo { transition:none; } }
-      </style>
+    `, `
       <div class="al" role="list" aria-label="Recent actions"></div>
-    `;
+    `);
     this._list = this._root.querySelector(".al");
     this._paint();
   }
@@ -12671,15 +12860,14 @@ customElements.define("agent-timeline", AgentTimeline);
  * ────────────────────────────────────────────────────────────────────────── */
 class JobsBoard extends Component {
   _render() {
-    this._root.innerHTML = `
-      <style>
+    mountTemplate(this, `
         :host { display:block; }
         .jb { display:flex; flex-direction:column; gap:14px; }
         /* Empty group containers collapse so the flex gap never stacks up as
            blank space (a fresh board is just the empty line, no dead air). */
         .jb-open:empty, .jb-claimed:empty, .jb-blocked:empty, .jb-settled:empty, .jb-msgs:empty { display:none; }
         .jb-group { display:flex; flex-direction:column; }
-        .jb-head { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em;
+        .jb-head { font-size:12px; font-weight:600;
           color:var(--muted,#635e56); padding:0 2px 5px; display:flex; align-items:baseline; gap:6px; }
         .jb-head .jb-n { font-weight:600; color:var(--muted,#635e56); }
         .jb-row { display:flex; flex-direction:column; gap:3px; padding:8px 0;
@@ -12690,9 +12878,9 @@ class JobsBoard extends Component {
           overflow-wrap:anywhere; }
         .jb-meta { font-size:11.5px; color:var(--muted,#635e56); display:flex; gap:6px 8px; align-items:baseline;
           flex-wrap:wrap; }
-        /* The status WORD is a text badge — never colour alone. A left border in
-           the tone accent + the uppercase label together carry the state. */
-        .jb-badge { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+        /* The status word is a text badge — never colour alone. A left border in
+           the tone accent carries the state with a sentence-case label. */
+        .jb-badge { font-size:12px; font-weight:600;
           padding:1px 6px; border-radius:999px; border:1px solid var(--border,#e3e0d9);
           color:var(--muted,#635e56); background:var(--panel-2); flex:0 0 auto;
           display:inline-flex; align-items:center; gap:5px; }
@@ -12706,7 +12894,7 @@ class JobsBoard extends Component {
         /* One unbroken line by design, but bounded so it cannot hold the board's column
            open or overflow the row now that the column is allowed to be narrow. */
         .jb-party { white-space:nowrap; min-width:0; overflow:hidden; text-overflow:ellipsis; }
-        .jb-outcome { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
+        .jb-outcome { font-size:12px; font-weight:600; }
         .jb-outcome.completed { color:var(--accent,#0e6e63); }
         .jb-outcome.failed { color:var(--danger,#b3261e); }
         /* Settled row is a real button that expands its result in place. The
@@ -12728,7 +12916,7 @@ class JobsBoard extends Component {
         .jb-msg { font-size:12.5px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden;
           display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
         .jb-empty { font-size:13px; color:var(--muted,#635e56); padding:6px 0; line-height:1.5; }
-      </style>
+    `, `
       <div class="jb">
         <div class="jb-open" role="list" aria-label="Open jobs" aria-live="polite"></div>
         <div class="jb-claimed" role="list" aria-label="Claimed jobs"></div>
@@ -12736,7 +12924,7 @@ class JobsBoard extends Component {
         <div class="jb-settled" role="list" aria-label="Recently settled jobs"></div>
         <div class="jb-msgs" role="list" aria-label="Board messages"></div>
         <div class="jb-empty" hidden></div>
-      </div>`;
+      </div>`);
   }
   _wire() {
     this._openEl = this._root.querySelector(".jb-open");
@@ -12834,6 +13022,10 @@ class JobsBoard extends Component {
 
     const isEmpty = !open.length && !claimed.length && !blocked.length && !settled.length && !messages.length;
     this._emptyEl.hidden = !isEmpty;
+    if (typeof this.toggleAttribute === "function") this.toggleAttribute("data-empty", isEmpty); else if (isEmpty) this.setAttribute("data-empty", ""); else this.removeAttribute("data-empty");
+    if (this.parentElement) this.parentElement.setAttribute("data-empty", String(isEmpty));
+    const sec = typeof this.closest === "function" ? this.closest("section") : null;
+    if (sec) sec.setAttribute("data-empty", String(isEmpty));
     if (isEmpty) {
       // An unreadable board is an HONEST error, never a false "empty".
       this._emptyEl.textContent = this._loadError
