@@ -38,6 +38,7 @@ import { runStagedBoot } from "./ntp-boot-scheduler.js";
 import { sleep, timeAgo } from "../lib/pure.js";
 import { canonicalRef, findAgentByRef } from "../shared/agent-registry.js";
 import { agentScheduleMarker, backgroundAgentsForDisplay } from "../shared/agent-display.js";
+import { formatCadenceMinutes } from "../lib/next-run-label.js";
 import { buildTemplateSelect } from "../lib/agent-template-select.js";
 import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
@@ -1331,7 +1332,9 @@ async function renderNamedAgents() {
 async function renderSidebarAgents(agents) {
   const list = document.getElementById("side-agents");
   if (!list) return;
+  const countEl = document.getElementById("agents-count");
   const rows = Array.isArray(agents) ? agents : [];
+  if (countEl) countEl.textContent = rows.length ? `(${rows.length})` : "";
   list.replaceChildren();
   if (!rows.length) {
     const empty = document.createElement("div");
@@ -1342,7 +1345,10 @@ async function renderSidebarAgents(agents) {
   }
   for (const a of rows) {
     const isBackground = a.kind === "background";
-    const scheduleMarker = agentScheduleMarker(a);
+    const cadence = a.schedule?.periodInMinutes ? formatCadenceMinutes(a.schedule.periodInMinutes) : "";
+    const scheduleMarker = a.schedule?.periodInMinutes
+      ? (isBackground && a.enabled !== true ? `Schedule off · ${cadence}` : `Scheduled · ${cadence}`)
+      : agentScheduleMarker(a);
     const item = document.createElement("button");
     item.type = "button";
     item.className = "agent-item";
@@ -1723,7 +1729,7 @@ async function openArtifactDialog(id, origin, fallbackName) {
 let actionLedgerEl = null;
 function renderActionLedger() {
   actionLedgerEl = document.getElementById("side-action-ledger");
-  const section = document.getElementById("activity-ledger-section");
+  const section = document.getElementById("activity-section") || document.getElementById("activity-ledger-section");
   if (!actionLedgerEl || !section) return;
   actionLedgerEl.addEventListener("entries-change", (ev) => {
     const count = Number(ev.detail?.count ?? 0);
@@ -1731,7 +1737,7 @@ function renderActionLedger() {
     // ntp.html declares it — the Undo leg was a JOURNEY artifact (it clicked
     // inside a closed <details>), never a product defect. No auto-open here.
     section.hidden = count === 0;
-    const countEl = document.getElementById("side-activity-count");
+    const countEl = document.getElementById("activity-count") || document.getElementById("side-activity-count");
     if (countEl) countEl.textContent = count ? `(${count})` : "";
   });
   // An undo mutates tabs/bookmarks — refresh the run log so both surfaces agree.
@@ -1745,11 +1751,11 @@ function renderActionLedger() {
 // harness's conversation. The owner asked for the harnesses to be reachable, not
 // buried behind the + menu.
 async function renderSidebarHarnessRows() {
-  const host = document.getElementById("side-harness");
+  const host = document.getElementById("harness-list") || document.getElementById("side-harness");
   // The NTP module is also imported under DOM stubs (unit + integration tests):
   // a partially-stubbed document must not throw from a background render.
   if (!host || typeof host.replaceChildren !== "function") return;
-  const section = host.closest?.("section") || document.getElementById("sidebar-harnesses-section");
+  const section = document.getElementById("harness-presence") || host.closest?.("section") || document.getElementById("sidebar-harnesses-section");
   const res = await send("agent.registry").catch(() => null);
   const groups = Array.isArray(res?.groups) ? res.groups : [];
   const harnesses = groups
@@ -1761,6 +1767,7 @@ async function renderSidebarHarnessRows() {
   for (const a of harnesses) {
     const btn = document.createElement("button");
     btn.type = "button";
+    btn.className = "harness-pill";
     btn.dataset.ref = a.ref ?? `acp:${a.id}`;
     // THE OWNER ASKED FOR ICONS AND THE ROWS WERE PLAIN TEXT (Paul, 2026-09-23:
     // "you haven't landed my icons for the harnesses in the ntp sidepanel").
@@ -2109,8 +2116,10 @@ let failedRunsOwner = 0;
 let boardOwner = 0;
 async function refreshBoard() {
   const owner = ++boardOwner;
-  const section = document.getElementById("board-section");
+  const section = document.getElementById("board-strip") || document.getElementById("board-section");
   if (!section) return;
+  const countEl = document.getElementById("board-count");
+  const listEl = document.getElementById("board-list") || section;
   let jobs = null;
   let messages = null;
   try {
@@ -2124,7 +2133,7 @@ async function refreshBoard() {
     jobs = null; // worker restarting — the next authoritative render re-fetches
   }
   if (owner !== boardOwner) return; // a newer render superseded this one
-  section.replaceChildren();
+  listEl.replaceChildren();
   const open = (jobs ?? []).filter((j) => j && (j.status === "pending" || j.status === "claimed"));
   // Settled results stay VISIBLE for a bounded window (CAP-FB-20260830-AGENT-
   // BOARD-WORKING-01 step 6): the owner sees "Research finished: …" here
@@ -2139,10 +2148,19 @@ async function refreshBoard() {
     return;
   }
   section.hidden = false;
-  const label = document.createElement("div");
-  label.className = "fr-label";
-  label.textContent = `Board (${open.length} open)`;
-  section.append(label);
+  if (countEl) countEl.textContent = open.length > 0 ? `(${open.length} open)` : "(0 open)";
+  const savedDisclosures = loadSideDisclosureStates();
+  if (savedDisclosures && typeof savedDisclosures["board-strip"] === "boolean") {
+    section.open = savedDisclosures["board-strip"];
+  } else {
+    section.open = open.length > 0;
+  }
+  if (listEl === section) {
+    const label = document.createElement("div");
+    label.className = "fr-label";
+    label.textContent = `Board (${open.length} open)`;
+    section.append(label);
+  }
   for (const job of open.slice(0, 8)) {
     const row = document.createElement("div");
     row.className = "fr-row";
@@ -2163,7 +2181,7 @@ async function refreshBoard() {
     meta.className = "fr-meta";
     meta.textContent = state;
     row.append(dot, text, meta);
-    section.append(row);
+    listEl.append(row);
   }
   for (const job of settled) {
     // A settled row is a real <button>: it opens the poster's thread (where
@@ -2188,7 +2206,7 @@ async function refreshBoard() {
       else showBoardResult(job);
     });
     row.append(text, meta);
-    section.append(row);
+    listEl.append(row);
   }
   for (const m of recent) {
     const row = document.createElement("div");
@@ -2198,7 +2216,7 @@ async function refreshBoard() {
     text.textContent = `${m.fromName} → ${m.toName}: ${m.body}`;
     text.title = text.textContent;
     row.append(text);
-    section.append(row);
+    listEl.append(row);
   }
 }
 
@@ -2262,27 +2280,44 @@ async function refreshFailedRuns() {
     dismissedIds: new Set(dismissedIds),
     knownAgentIds: agentRefs === null ? undefined : new Set(agentRefs),
   });
-  section.replaceChildren();
+  const countEl = document.getElementById("failed-runs-count");
+  const clearAllBtn = document.getElementById("failed-runs-clear");
+  const listEl = document.getElementById("failed-runs-list");
+  if (countEl) countEl.textContent = String(failed.length);
+  if (listEl) {
+    listEl.replaceChildren();
+  } else {
+    section.replaceChildren();
+  }
   section.hidden = failed.length === 0;
   if (!failed.length) return;
-  const label = document.createElement("div");
-  label.className = "fr-label";
-  label.textContent = `Failed runs (${failed.length})`;
-  // Clear-all (owner: "sometimes I just don't want to see them"): one click,
-  // no confirm — dismissing is durable but carries no data loss beyond the
-  // retry affordance, and the rows carry only previews already shown.
-  const clearAll = document.createElement("button");
-  clearAll.type = "button";
-  clearAll.className = "fr-clear";
-  clearAll.textContent = "Clear all";
-  clearAll.setAttribute("aria-label", `Dismiss all ${failed.length} failed runs`);
-  clearAll.addEventListener("click", async () => {
-    clearAll.disabled = true;
-    await send("run.dismissFailed", { executionIds: failed.map((f) => f.executionId) }).catch(() => null);
-    if (owner === failedRunsOwner) await refreshFailedRuns();
-  });
-  label.append(clearAll);
-  section.append(label);
+  const target = listEl || section;
+  if (!listEl) {
+    const label = document.createElement("div");
+    label.className = "fr-label";
+    label.textContent = `Failed runs (${failed.length})`;
+    const clearAll = document.createElement("button");
+    clearAll.type = "button";
+    clearAll.className = "fr-clear";
+    clearAll.textContent = "Clear all";
+    clearAll.setAttribute("aria-label", `Dismiss all ${failed.length} failed runs`);
+    clearAll.addEventListener("click", async (e) => {
+      e?.stopPropagation?.();
+      clearAll.disabled = true;
+      await send("run.dismissFailed", { executionIds: failed.map((f) => f.executionId) }).catch(() => null);
+      if (owner === failedRunsOwner) await refreshFailedRuns();
+    });
+    label.append(clearAll);
+    section.append(label);
+  } else if (clearAllBtn) {
+    clearAllBtn.onclick = async (e) => {
+      e?.stopPropagation?.();
+      clearAllBtn.disabled = true;
+      await send("run.dismissFailed", { executionIds: failed.map((f) => f.executionId) }).catch(() => null);
+      clearAllBtn.disabled = false;
+      if (owner === failedRunsOwner) await refreshFailedRuns();
+    };
+  }
   // ORPHANED-ALARM CLEANUP (owner P0): failed records whose agent is an
   // agent-ref (background:/agent:) may be orphaned — the agent was deleted but
   // its alarm survived. Offer one honest cleanup action that cancels every
@@ -2307,7 +2342,7 @@ async function refreshFailedRuns() {
         orphanBtn.disabled = false;
       }
     });
-    section.append(orphanBtn);
+    target.append(orphanBtn);
   }
   for (const fr of failed) {
     const row = document.createElement("div");
@@ -2356,7 +2391,7 @@ async function refreshFailedRuns() {
       }
     });
     row.append(text, retry, dismiss);
-    section.append(row, statusLine);
+    target.append(row, statusLine);
   }
 }
 
@@ -2398,6 +2433,8 @@ function syncTaskRowDots() {
 function renderTaskRows(threads, activeId = null) {
   const span = perfSpan("ntp:thread-list-hydrated");
   const el = document.getElementById("thread-sidebar");
+  const tasksCountEl = document.getElementById("tasks-count");
+  if (tasksCountEl) tasksCountEl.textContent = Array.isArray(threads) && threads.length ? `(${threads.length})` : "";
   if (!el) {
     span.end();
     return;
@@ -5120,6 +5157,47 @@ narrowSidebarMq?.addEventListener?.("change", applySidebarForWidth);
 // Restore the persisted rail state on load (session or durable), then let the
 // width policy decide the effective state (a narrow viewport collapses even
 // when the saved choice was expanded).
+const SIDE_DISCLOSURES_KEY = "cap:ntp:side-disclosures";
+function loadSideDisclosureStates() {
+  try {
+    const raw = localStorage.getItem(SIDE_DISCLOSURES_KEY) || localStorage.getItem("cap:ntp:side-sections");
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function saveSideDisclosureState(id, isOpen) {
+  try {
+    const states = loadSideDisclosureStates() || {};
+    states[id] = isOpen;
+    localStorage.setItem(SIDE_DISCLOSURES_KEY, JSON.stringify(states));
+    localStorage.setItem("cap:ntp:side-sections", JSON.stringify(states));
+  } catch {
+    // quota or sandbox restriction
+  }
+}
+function initSideDisclosures() {
+  const sections = [
+    "tasks-section",
+    "failed-runs",
+    "harness-presence",
+    "board-strip",
+    "agents-section",
+    "activity-section",
+  ];
+  const states = loadSideDisclosureStates() || {};
+  for (const id of sections) {
+    const el = document.getElementById(id);
+    if (!el || el.tagName !== "DETAILS") continue;
+    if (typeof states[id] === "boolean") {
+      el.open = states[id];
+    }
+    el.addEventListener("toggle", () => {
+      saveSideDisclosureState(id, el.open);
+    });
+  }
+}
+
 async function restoreSidebar() {
   try {
     const s = await send("kv.get", { keys: SIDEBAR_KEY });
@@ -5128,21 +5206,26 @@ async function restoreSidebar() {
     persistedSidebarCollapsed = false; // worker unreachable — default expanded.
   }
   applySidebarForWidth();
+  initSideDisclosures();
 }
 
 // The "+" new-task button is a destination, not Back: replace the current
 // deep route with Home, close the task/agent surface, then focus a fresh hub
 // composer. No prior task can reappear behind the new conversation.
-document.getElementById("new-task")?.addEventListener("click", () => {
+document.getElementById("new-task")?.addEventListener("click", (e) => {
+  e.stopPropagation();
   goHome({ focusAfter: composer });
 });
 
 // Creating an agent likewise starts from Home before opening the dialog, so
 // the dialog is never stacked behind a task/agent surface.
-document.getElementById("new-agent")?.addEventListener("click", () => {
+document.getElementById("new-agent")?.addEventListener("click", (e) => {
+  e.stopPropagation();
   goHome({ focusAfter: null });
   openQuickCreateAgent();
 });
+
+initSideDisclosures();
 
 // ── in-context navigation (no new tabs) ─────────────────────────────────
 const viewOverlay = document.getElementById("view");

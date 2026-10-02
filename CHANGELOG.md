@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.561] — 2026-10-02
+- Collapsible sections in the New Tab sidebar with dedicated room for your task list, human-readable daily schedule labels, compact tool chips, and a tidy collapsed rail with a top toggle button.
+
 ## [0.3.560] — 2026-10-02
+- Collapsible sections in the New Tab sidebar with dedicated room for your task list, human-readable daily schedule labels, compact tool chips, and a tidy collapsed rail with a top toggle button.
 - Fixed the Hub Timeline filter bar so clicking All, Runs, Waiting, Made, or Scheduled moves the active highlight pill immediately.
 
 ## [0.3.559] — 2026-10-02
