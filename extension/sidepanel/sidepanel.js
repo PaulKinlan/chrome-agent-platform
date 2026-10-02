@@ -463,9 +463,24 @@ pageComposer?.addEventListener("send", async (ev) => {
 async function runPageTurn(text, attachments, mention) {
   if (pageEmptyState) pageEmptyState.hidden = true;
   pageHistory?.bindLiveStatusExecution?.(null);
+  let effectiveAttachments = attachments ? [...attachments] : [];
+  if (currentTabId != null && !effectiveAttachments.some((a) => a.kind === "tab" || a.tabId === currentTabId)) {
+    let tabInfo = null;
+    try { tabInfo = await chrome.tabs?.get?.(currentTabId); } catch {}
+    const tabName = tabInfo?.title || hostEl?.textContent || "Current page";
+    const tabUrl = tabInfo?.url || currentTabOrigin || "";
+    if (tabUrl) {
+      effectiveAttachments.push({
+        kind: "tab",
+        tabId: currentTabId,
+        name: tabName,
+        url: tabUrl,
+      });
+    }
+  }
   const res = await runConversationTurn(pageHistory, {
     text,
-    attachments,
+    attachments: effectiveAttachments,
     threadId: pageThreadId,
     mention,
     onStatus: (s) => projectConversationRunStatus(pageHistory, s),

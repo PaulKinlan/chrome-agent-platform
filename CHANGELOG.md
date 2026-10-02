@@ -4,11 +4,12 @@
 - Instant task opening from the sidebar with cached settled execution logs, non-blocking thread execution reads, and deduplicated background queries.
 
 ## [0.3.560] — 2026-10-02
-- Instant task opening from the sidebar with cached settled execution logs, non-blocking thread execution reads, and deduplicated background queries.
+- Fixed tool discovery for clipboard and on-device text tools, and automatically provide active tab context when asking questions in the side panel.
+
+## [0.3.560] — 2026-10-02
 - Fixed the Hub Timeline filter bar so clicking All, Runs, Waiting, Made, or Scheduled moves the active highlight pill immediately.
 
 ## [0.3.559] — 2026-10-02
-- Fixed the Hub Timeline filter bar so clicking All, Runs, Waiting, Made, or Scheduled moves the active highlight pill immediately.
 - Organized Settings navigation into six clear groups, collapsed starter template galleries by default, and replaced raw minute intervals with plain English cadence labels.
 - Save any web page as a clean, readable Markdown note in your Artifacts library via the capture_page tool.
 - Save artifacts directly to disk via Save file picker or download fallback, and allow agents to file deliverables into granted folders with owner approval.
@@ -39,7 +40,6 @@
 - Reopening a thread that is waiting for permission now restores the approval card and shows the honest waiting status.
 
 ## [0.3.558] — 2026-09-29
-- Reopening a thread that is waiting for permission now restores the approval card and shows the honest waiting status.
 - Python can reach the web again for origins you allow in Settings, with every request shown in the run receipt.
 
 ## [0.3.557] — 2026-09-29
@@ -100,7 +100,6 @@
 - evaluate MCP Zod peer unification with schema parity tests and evidence
 
 ## [0.3.538] — 2026-09-25
-- evaluate MCP Zod peer unification with schema parity tests and evidence
 
 ## [0.3.537] — 2026-09-25
 - internal: evaluate MCP Zod peer unification with schema parity tests and evidence (decision: retain separate peers)
@@ -109,7 +108,6 @@
 - destructive browser tool calls from external agent runs can now be approved directly in the conversation
 
 ## [0.3.535] — 2026-09-25
-- destructive browser tool calls from external agent runs can now be approved directly in the conversation
 
 ## [0.3.534] — 2026-09-25
 - resolve the picker checkout from the environment and walk .sh in the home-path guard (tgx6)
@@ -452,10 +450,8 @@
 - clean local docs/.build/ Rust residue and add .gitignore guard
 
 ## [0.3.424] — 2026-09-18
-- clean local docs/.build/ Rust residue and add .gitignore guard
 
 ## [0.3.423] — 2026-09-18
-- clean local docs/.build/ Rust residue and add .gitignore guard
 
 ## [0.3.422] — 2026-09-18
 - use supported syntax for bd link discovered-from and blocks in AGENTS.md
@@ -704,7 +700,6 @@
 - the browser checks run on the newest Chrome for Testing you have installed
 
 ## [0.3.352] — 2026-09-17
-- the browser checks run on the newest Chrome for Testing you have installed
 
 ## [0.3.351] — 2026-09-17
 - tests: reword tally pin test to honestly describe declarative registry check
@@ -836,7 +831,6 @@
 - Release notes now stay in sync even when opened in fresh project checkouts
 
 ## [0.3.308] — 2026-09-17
-- Release notes now stay in sync even when opened in fresh project checkouts
 
 ## [0.3.307] — 2026-09-17
 - Release notes for recent updates now use plain language descriptions
@@ -983,7 +977,6 @@
 - Tools that currently run only in Settings preview now fail with an honest refusal message when called from a live task
 
 ## [0.3.260] — 2026-09-17
-- Internal bookkeeping: the version number was bumped twice while landing the previous cleanup change; no functional difference
 
 ## [0.3.259] — 2026-09-17
 - Internal cleanup: remove an obsolete proof script left over from the skill-import work
@@ -1544,10 +1537,8 @@
 - Task view full work — the agent's full response is stored, shown, and copyable; bounds are byte-true, escape-aware, surrogate-safe, and honest
 
 ## [0.2.583] — 2026-09-17
-- Task view full work — the agent's full response is stored, shown, and copyable; bounds are byte-true, escape-aware, surrogate-safe, and honest
 
 ## [0.2.582] — 2026-09-17
-- Task view full work — the agent's full response is stored, shown, and copyable; bounds are byte-true, escape-aware, surrogate-safe, and honest
 
 ## [0.2.581] — 2026-09-17
 - Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
@@ -1559,13 +1550,10 @@
 - Typing a second /command after the first now works; the release notes gained two entries for it.)
 
 ## [0.2.578] — 2026-09-17
-- Typing a second /command after the first now works; the release notes gained two entries for it.)
 
 ## [0.2.577] — 2026-09-17
-- Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
 
 ## [0.2.576] — 2026-09-17
-- Skill list work — /skill and Settings read one catalog; collision-proof refIds; broken skills hidden and reported
 
 ## [0.2.575] — 2026-09-17
 - Focus order work — 24px hit areas, a real label-for gate, shadow-DOM aware audit checks, and the attach button's ring restored
@@ -1580,7 +1568,6 @@
 - user-language release notes
 
 ## [0.2.571] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.570] — 2026-09-17
 - The agent can now read, search and list files in a folder you share, with clear errors.
@@ -1589,7 +1576,6 @@
 - Release notes wording corrected.
 
 ## [0.2.568] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.567] — 2026-09-17
 - Groundwork for connecting the agent to external tool servers is in place.
@@ -1598,28 +1584,22 @@
 - Work has begun on folder tools and external tool-server support.
 
 ## [0.2.565] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.564] — 2026-09-17
-- Release notes wording corrected.
 
 ## [0.2.563] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.562] — 2026-09-17
 - Scheduled tasks now show when they will next run, and repeating tasks are called routines.
 
 ## [0.2.561] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.560] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.559] — 2026-09-17
 - A plan for connecting the agent to external tool servers is written up.
 
 ## [0.2.558] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.557] — 2026-09-17
 - A generated file that used to change after every build is no longer kept in source control.
@@ -1628,7 +1608,6 @@
 - Work has begun on the enterprise-permission and scheduling improvements.
 
 ## [0.2.555] — 2026-09-17
-- A recent improvement is now available.
 
 ## [0.2.554] — 2026-09-17
 - : merge — a Show developer features toggle hides the advanced surfaces by default
@@ -1679,7 +1658,6 @@
 - Typing a model id now always saves it, and a missing model stops the run with a clear message instead of silently using the demo model.
 
 ## [0.2.538] — 2026-09-17
-- Typing a model id now always saves it, and a missing model stops the run with a clear message instead of silently using the demo model.
 
 ## [0.2.537] — 2026-09-17
 - The side panel is now a companion for the current tab, and the hub timeline shows a runs-today count.
@@ -1754,7 +1732,6 @@
 - Address the r2 review: honest probe readiness, accurate permission classification, final matrix provenance
 
 ## [0.2.514] — 2026-09-17
-- Typing / or @ in the composer now shows an accessible suggestion list that keyboard and screen-reader users can follow
 - tasks: OPTIONAL-PERMISSION-OMITTED-01 schema completed (r2 review accepted the code)
 - Fix the four install-only permissions Chrome omits from optional_permissions
 
@@ -1798,7 +1775,6 @@
 - Housekeeping: a task entry was completed to the required shape so the tracker check passes.
 
 ## [0.2.500] — 2026-09-17
-- Housekeeping: parallel work streams reconciled.
 
 ## [0.2.499] — 2026-09-17
 - Tracker: the viewer Source/Diff tabs are recorded as landed.
@@ -1807,7 +1783,6 @@
 - Landed: opening an artifact now lets you switch between the rendered preview, the highlighted source, and a diff between any two versions with a restore button.
 
 ## [0.2.497] — 2026-09-17
-- Housekeeping: parallel work streams reconciled.
 
 ## [0.2.496] — 2026-09-17
 - Tracker: model-visible screenshots are recorded as landed.
@@ -1819,7 +1794,6 @@
 - Two more editing-flow fixes are in progress in parallel and recorded as claimed.
 
 ## [0.2.493] — 2026-09-17
-- Housekeeping: parallel work streams reconciled.
 
 ## [0.2.492] — 2026-09-17
 - Tracker: the honesty backstop for browser actions is recorded as landed.

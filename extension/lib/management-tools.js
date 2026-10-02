@@ -65,6 +65,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "board_read",
   "board_read_messages",
   ...TABLE_TOOL_NAMES,
+  "write_clipboard",
 ];
 
 const TableArtifactIdSchema = z.string().min(1).max(200);
@@ -668,6 +669,15 @@ export function managementToolset({ callRoute }) {
       }),
       execute: ({ name, task, at, delayMs, periodInMinutes }) =>
         call("task.update", { name, task, at, delayMs, periodInMinutes }),
+    }),
+    write_clipboard: tool({
+      description: "Copy text to the system clipboard. The copy action is ledgered for the owner.",
+      inputSchema: z.object({
+        text: z.string().describe("The text content to copy to the clipboard"),
+      }),
+      execute: async ({ text }) => {
+        return await call("clipboard.write", { text });
+      },
     }),
   };
 }

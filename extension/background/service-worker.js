@@ -439,6 +439,7 @@ import { listFsGrants } from "../lib/fs-grants.js";
 import { writeWorkspaceFile } from "../lib/agent-workspace.js";
 import {
   executableBrowserToolRecords,
+  executableBuiltinToolRecords,
   executableBundledToolRecords,
   executableManagementToolRecords,
   executableMcpToolRecords,
@@ -2193,7 +2194,7 @@ async function dispatchUserWasmTool({ descriptorInput, args: validatedArgs, cont
   }
 }
 
-async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools = {}, executionId, scoped, providerServer = null, agentTools = null }) {
+async function liveChromeLazyRecords({ browserTools, managementTools, onDeviceTools = {}, mcpTools = {}, executionId, scoped, providerServer = null, agentTools = null }) {
   const version = String(chrome.runtime.getManifest()?.version ?? "0");
   const extensionDigest = sha256Hex(`cap-extension:${version}`);
   const permissionDigest = await lazyPermissionDigest();
@@ -2253,6 +2254,19 @@ async function liveChromeLazyRecords({ browserTools, managementTools, mcpTools =
         scope,
         capabilitiesByTool: canonicalChromeCapabilitiesByTool(managementTools, "management"),
         authorizationGuard: makeGuard(managementGrantDigest, "management"),
+      })
+      : []),
+    ...(Object.keys(onDeviceTools).length
+      ? executableBuiltinToolRecords(onDeviceTools, {
+        version,
+        sourceGeneration: `${sourceGeneration}:on-device`,
+        closureGeneration: `${sourceGeneration}:on-device:${executionId ?? "none"}`,
+        packageDigest: extensionDigest,
+        permissionDigest,
+        grantDigest: browserGrantDigest,
+        scope,
+        packageId: "cap.on-device-text-tools",
+        availability: "ready",
       })
       : []),
     // Admitted bundled Wasm packages provide spec-derived validation, run-bound
@@ -2722,17 +2736,6 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // execution id — the route context — never a model-controlled arg.)
       callRoute: modelManagementDispatch,
     });
-    if (!scoped) {
-      liveManagementTools.write_clipboard = tool({
-        description: "Copy text to the system clipboard. The copy action is ledgered for the owner.",
-        inputSchema: z.object({
-          text: z.string().describe("The text content to copy to the clipboard"),
-        }),
-        execute: async ({ text }) => {
-          return await modelManagementDispatch("clipboard.write", { text });
-        },
-      });
-    }
     // ── Remote MCP servers (CAP-FB-20260831-MCP-TOOL-INJECTION-01) ───────────
     // A run connects the EFFECTIVE MCP server set (global ∪ this agent's, minus
     // disabled — mcp-config.effectiveMcpServers) over the browser-safe transports
@@ -2813,20 +2816,29 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // (mirroring the management tools, which scoped runs also lack).
       workflowRunRoute: scoped ? null : (args) => modelManagementDispatch("workflow.run", args ?? {}),
       extraTools: { ...bookedBrowserTools, ...bookedManagementTools, ...bookedOnDeviceTools },
-      readMasterLazySources: () => liveChromeLazyRecords({
-        browserTools: bookedBrowserTools,
-        managementTools: bookedManagementTools,
-        mcpTools: mcpRunTools,
-        executionId: approvalExecutionId,
-        scoped,
-        providerServer: {
-          lane: model.providerLane ?? "openai-compatible",
-          modelId: model.modelId ?? "",
-          readSwitches: readServerToolSwitches,
-          latchRegistry: serverToolLatchRegistry,
-        },
-        agentTools,
-      }),
+      readMasterLazySources: async () => {
+        try {
+          return await liveChromeLazyRecords({
+            browserTools: bookedBrowserTools,
+            managementTools: bookedManagementTools,
+            onDeviceTools: bookedOnDeviceTools,
+            mcpTools: mcpRunTools,
+            executionId: approvalExecutionId,
+            scoped,
+            providerServer: {
+              lane: model.providerLane ?? "openai-compatible",
+              modelId: model.modelId ?? "",
+              readSwitches: readServerToolSwitches,
+              latchRegistry: serverToolLatchRegistry,
+            },
+            agentTools,
+          });
+        } catch (err) {
+          console.error("[service-worker] liveChromeLazyRecords threw:", err);
+          pushDiagnostic("error", `liveChromeLazyRecords: ${err?.message ?? err}`, "orchestrator", "lazy-sources");
+          throw err;
+        }
+      },
       serverTooling,
       delegateGuard: async (origin) => {
         if (!isWebmcpOriginAllowed(allowedWebmcpOrigins, origin)) {
