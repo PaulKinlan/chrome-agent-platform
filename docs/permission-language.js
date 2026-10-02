@@ -70,3 +70,15 @@ export function siteLabel(origin) {
   } catch { /* not a URL */ }
   return String(origin ?? "");
 }
+
+export const TOOL_USER_LANGUAGE = Object.freeze({
+  summarize_text: "summarise text on-device",
+  detect_language: "detect language on-device",
+  translate_text: "translate text on-device",
+});
+
+/** The user-language phrase for a tool. */
+export function toolUserLanguage(toolName) {
+  return TOOL_USER_LANGUAGE[toolName] ?? null;
+}
+

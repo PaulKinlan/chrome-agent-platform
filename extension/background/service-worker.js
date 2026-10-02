@@ -60,6 +60,7 @@ import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, conti
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
 import { createRunControl, createThreadQueue } from "../lib/run-control.js";
 import { drainQueuedFollowUp, reconcileQueueClaims } from "../lib/queue-drain.js";
+import { onDeviceTextToolset } from "../lib/on-device-text-tools.js";
 import { isMemoryKeyQuotaError, isNativeQuotaExceededError } from "../lib/storage-errors.js";
 import {
   PREVIEW_LIMITS,
@@ -538,6 +539,36 @@ function cancelTableExecution(runId) {
     chrome.runtime.sendMessage({ type: TABLE_WORKER_CANCEL_TYPE, runId }).catch(() => {});
   } catch { /* offscreen host may already be gone */ }
   return cancelled;
+}
+
+async function dispatchOnDeviceText(type, message) {
+  const ready = await ensureOffscreen();
+  if (!ready?.ok) {
+    return {
+      ok: false,
+      code: "on_device_model_unavailable",
+      reason: "Chrome's built-in on-device language tools are not available in this browser.",
+    };
+  }
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type,
+      ...message,
+    });
+    return res && typeof res === "object"
+      ? res
+      : {
+          ok: false,
+          code: "on_device_model_unavailable",
+          reason: "Chrome's built-in on-device language tools are not available in this browser.",
+        };
+  } catch {
+    return {
+      ok: false,
+      code: "on_device_model_unavailable",
+      reason: "Chrome's built-in on-device language tools are not available in this browser.",
+    };
+  }
 }
 
 /** Run a script source in the sandboxed host, bounded by a timeout. The
@@ -2725,6 +2756,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
 
     const bookedBrowserTools = withRunToolBookkeeping(liveBrowserTools, bkCtx, bkDeps);
     const bookedManagementTools = withRunToolBookkeeping(liveManagementTools, bkCtx, bkDeps);
+    const liveOnDeviceTools = onDeviceTextToolset({
+      dispatchRoute: modelManagementDispatch,
+    });
+    const bookedOnDeviceTools = withRunToolBookkeeping(liveOnDeviceTools, bkCtx, bkDeps);
 
     const orch = await createOrchestrator({
       model,
@@ -2759,7 +2794,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // SCOPED (hook) runs get NO route, so their workflow_run fails closed
       // (mirroring the management tools, which scoped runs also lack).
       workflowRunRoute: scoped ? null : (args) => modelManagementDispatch("workflow.run", args ?? {}),
-      extraTools: { ...bookedBrowserTools, ...bookedManagementTools },
+      extraTools: { ...bookedBrowserTools, ...bookedManagementTools, ...bookedOnDeviceTools },
       readMasterLazySources: () => liveChromeLazyRecords({
         browserTools: bookedBrowserTools,
         managementTools: bookedManagementTools,
@@ -6334,6 +6369,10 @@ const handlers = mergeRouteMaps(
         developerFeatures: await developerFeaturesOn(),
       });
     },
+    "onDeviceText.summarize": async (message) => dispatchOnDeviceText("onDeviceText.summarize", message),
+    "onDeviceText.detectLanguage": async (message) => dispatchOnDeviceText("onDeviceText.detectLanguage", message),
+    "onDeviceText.translate": async (message) => dispatchOnDeviceText("onDeviceText.translate", message),
+    "onDeviceText.availability": async (message) => dispatchOnDeviceText("onDeviceText.availability", message),
   },
   activityRoutes,
   schedulerRoutes,
@@ -6741,7 +6780,7 @@ const handlers = mergeRouteMaps(
       const inFlight = activePythonFetches.get(result.origin);
       if (inFlight) {
         for (const ctrl of inFlight) {
-          try { ctrl.abort(); } catch { /* best-effort abort */ }
+          try { ctrl.abort(); } catch { /* best-effort in-flight abort */ }
         }
         inFlight.clear();
         activePythonFetches.delete(result.origin);

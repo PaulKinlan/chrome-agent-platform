@@ -66,6 +66,19 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "write something to memory",
     kind: "free",
   },
+  {
+    id: "summarise",
+    label: "summarise",
+    description: "summarise the attached tab or selection on-device",
+    kind: "direct",
+    direct: true,
+  },
+  {
+    id: "translate",
+    label: "translate",
+    description: "translate the attached tab or selection on-device",
+    kind: "free",
+  },
 ]);
 
 // Shared 18px currentColor stroke icons for the composer + attach menu
@@ -359,6 +372,31 @@ export async function loadComposerCommandItems(
             lastVisitTime: entry.lastVisitTime ?? null,
           },
         }));
+    }
+    case "summarise": {
+      return [
+        {
+          id: "summarise",
+          label: "Summarise",
+          description: "Summarise the attached tab or selection on-device (private, zero API key)",
+          kind: "command",
+          insertText: "/summarise",
+          prompt: "Summarise this on-device",
+        },
+      ];
+    }
+    case "translate": {
+      const lang = query || arg || "es";
+      return [
+        {
+          id: "translate",
+          label: `Translate to ${lang}`,
+          description: `Translate the attached tab or selection to ${lang} on-device (private, zero API key)`,
+          kind: "command",
+          insertText: `/translate ${lang}`.trim(),
+          prompt: `Translate this to ${lang} on-device`,
+        },
+      ];
     }
     default:
       return [];

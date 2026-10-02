@@ -251,6 +251,10 @@ const DIRECT_TOOL_GROUP = Object.freeze({
   "date_formatter_bounded": "text-documents",
   "base64": "text-documents",
   "xxd": "text-documents",
+  // On-device built-in text tools.
+  "summarize_text": "text-documents",
+  "detect_language": "text-documents",
+  "translate_text": "text-documents",
   // Bundled packages — tables & queries.
   "csvtool": "tables-queries",
   "sqlite3_query_bounded": "tables-queries",

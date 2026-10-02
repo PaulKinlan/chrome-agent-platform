@@ -303,7 +303,7 @@ Also P0: `CAP-FB-20260827-MAIN-GATES-RED-02` (fixed and shipped; author review w
 ### Performance program (2026-10-01 audit)
 - **`chrome-agent-platform-9epn.2`** — NTP boot long task elimination: orders boot renders, yields between stages, defers non-hub element definitions, achieving 0 long tasks > 50ms on new tab load.
 
-**P1.** Template picker visual cards (`CAP-FB-20260829-TEMPLATE-CARDS-01`, candidate in
+**P1.** On-device text tools via Chrome built-in Summarizer / LanguageDetector / Translator (`chrome-agent-platform-3p3e.5`, offscreen execution, keyless/offline private summarization/detection/translation, `/summarise` & `/translate` composer commands); Template picker visual cards (`CAP-FB-20260829-TEMPLATE-CARDS-01`, candidate in
 review); dialog consolidation (five implementations, three hand-rolled outside the component
 system); Settings sectioning (12,837 px, 8.8 screens, all twelve panels rendered at once);
 permission-remediation UX; semantic tool search; Store release path; owner export/import;

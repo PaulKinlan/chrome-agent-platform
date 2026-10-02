@@ -1595,6 +1595,27 @@ Deno.test("site-tool cards expose one fail-closed View site activity control", a
   }
 });
 
+Deno.test("buildToolCardDom labels on-device tool results with On-device chip", async () => {
+  const { buildToolCardDom } = await import("../extension/shared/components.js");
+  const restoreDoc = installFakeDocument();
+  try {
+    const card = buildToolCardDom({
+      name: "summarize_text",
+      status: "done",
+      args: null,
+      result: { ok: true, onDevice: true, summary: "Clean summary" },
+      detail: null,
+      duration: 120,
+      expandedState: new Map(),
+    });
+    const chip = card.querySelector(".on-device");
+    if (!chip) throw new Error("card must render an On-device chip when onDevice:true");
+    if (chip.textContent !== "On-device") throw new Error(`chip text was "${chip.textContent}", expected "On-device"`);
+  } finally {
+    restoreDoc();
+  }
+});
+
 Deno.test("site activity control writes only origin + tool + timestamp, then opens query-free Settings", async () => {
   await import("../extension/shared/components.js");
   const restoreDoc = installFakeDocument();
