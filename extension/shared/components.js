@@ -180,6 +180,11 @@ function placeFloating(
   floatEl.style.bottom = "auto";
   if (fullWidth || maxWidth) floatEl.style.width = `${w}px`;
   if (maxWidth) floatEl.style.maxWidth = `${maxWidth}px`;
+  const actual = floatEl.getBoundingClientRect();
+  if ((actual.width || actual.height) && (Math.abs(actual.top - top) > 1 || Math.abs(actual.left - left) > 1)) {
+    floatEl.style.top = `${top - (actual.top - top)}px`;
+    floatEl.style.left = `${left - (actual.left - left)}px`;
+  }
 }
 
 /** Inject a <style> once (idempotent, id-keyed) — used by light-DOM components. */
@@ -7646,8 +7651,7 @@ class AgentComposer extends Component {
          as the blank-toggle bug. Tag-scoping keeps the controls in the LIGHT
          DOM (the CDP journeys hit #task-input/#run-task) while the styles only
          apply within THIS component's subtree. */
-      agent-composer { anchor-scope: --composer-anchor, --composer-attach; }
-      agent-composer .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; anchor-name:--composer-anchor; }
+      agent-composer .composer { position:relative; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9); border-radius:12px; padding:14px; }
       agent-composer .composer:focus-within { border-color:var(--accent,#0e6e63); }
       agent-composer .composer.drag-over { outline:2px dashed var(--accent,#0e6e63); background:var(--accent-soft,rgba(14,110,99,0.06)); }
       agent-composer .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
@@ -7656,13 +7660,7 @@ class AgentComposer extends Component {
         inset-inline-start:12px; inset-inline-end:auto; left:12px; right:auto;
         width:min(440px, calc(100% - 24px)); max-width:480px; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:10px; box-shadow:var(--shadow-md, 0 8px 24px rgba(29,27,24,.08));
-        max-height:320px; overflow-y:auto; padding:4px; z-index:40;
-        position-anchor:--composer-anchor; position-area:bottom span-x-start;
-        position-try-fallbacks:flip-block; }
-      @supports not (position-area: top) {
-        agent-composer .popup, agent-composer .slash-menu { position:absolute; top:calc(100% + 4px);
-          inset-inline-start:12px; inset-inline-end:auto; left:12px; right:auto; }
-      }
+        max-height:320px; overflow-y:auto; padding:4px; z-index:40; }
       agent-composer .popup[hidden], agent-composer .slash-menu[hidden] { display:none; }
       agent-composer .popup .item { display:flex; align-items:baseline; gap:8px; padding:6px 10px; border-radius:6px; cursor:pointer; }
       agent-composer .popup .item:hover, agent-composer .popup .item[data-active="true"] { background:var(--panel-2,#efede8); }
@@ -7716,18 +7714,11 @@ class AgentComposer extends Component {
         justify-content:center; font-size:10px; font-weight:700; }
       agent-composer .composer .chips .chip.agent-chip button { color:var(--accent,#0e6e63); min-width:32px; min-height:32px; }
       /* the + menu's Choose agent popover: the shared <agent-picker> in the top
-         layer, anchored to the + button (logical anchor positioning + edge
-         flipping; a JS fallback where anchor positioning is unsupported). */
-      agent-composer attach-button { anchor-name:--composer-attach; }
-      agent-composer .agent-pop { position:absolute; inset:auto; margin:0; padding:10px;
+         layer, anchored to the composer/attach button via placeFloating. */
+      agent-composer .agent-pop { position:fixed; inset:auto; margin:0; padding:10px;
         width:min(380px, calc(100vw - 24px)); background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:12px;
-        box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.12)); z-index:60;
-        position-anchor:--composer-attach; position-area:block-start span-inline-end;
-        position-try-fallbacks:flip-block, flip-inline; }
-      @supports not (position-area: top) {
-        agent-composer .agent-pop { position:fixed; }
-      }
+        box-shadow:var(--shadow-2, 0 12px 32px rgba(29,27,24,.12)); z-index:60; }
       agent-composer .agent-pop[hidden] { display:none; }
       /* the tab picker (add-tab / grab-screenshot) — a floating list, in-bounds */
       .tab-picker { position:fixed; z-index:60; background:var(--panel,#ffffff); border:1px solid var(--border,#e3e0d9);
@@ -8053,9 +8044,11 @@ class AgentComposer extends Component {
     const reopen = !this._slashAgentToken;
     this._slashAgentToken = { start: token.start, end: token.end };
     if (reopen) this._presentAgentPopover();
-        // The typed arg filters the picker; the composer input KEEPS focus so the
+    // The typed arg filters the picker; the composer input KEEPS focus so the
     // user can keep typing the reference (or a space to end the token).
     this._agentPick?.setQuery?.(token.arg || "");
+    const anchor = this._root?.querySelector?.(".composer") || this._attach;
+    placeFloating(anchor, this._agentPop, { minWidth: 260, maxWidth: 380 });
   }
 
   _presentAgentPopover() {
@@ -8071,9 +8064,8 @@ class AgentComposer extends Component {
     if (typeof this._agentPop.showPopover === "function") {
       try { this._agentPop.showPopover(); } catch { /* already shown */ }
     }
-    if (!supportsAnchorPositioning()) {
-      placeFloating(this._attach, this._agentPop, { minWidth: 320 });
-    }
+    const anchor = this._root?.querySelector?.(".composer") || this._attach;
+    placeFloating(anchor, this._agentPop, { minWidth: 260, maxWidth: 380 });
     // Live data on every open (the SW registry is the authority).
     this._agentPick.refresh?.();
     // Mirror the picker's highlight onto the focused composer textarea: the
@@ -8814,12 +8806,29 @@ class AgentComposer extends Component {
       this._input?.setAttribute("aria-controls", `popup-${this._uid}`);
       const active = this._popup.querySelector(`[data-index="${this._popupActive}"]`);
       if (active?.id) this._input?.setAttribute("aria-activedescendant", active.id);
-      // Position via the JS fallback clamped to max 440px and anchored to composer text area.
-      placeFloating(this._root.querySelector(".composer"), this._popup, {
-        minWidth: 320,
-        maxWidth: 440,
-        offsetInline: 12,
-      });
+      // Anchor directly to .composer using position: absolute
+      const composerEl = this._root?.querySelector?.(".composer");
+      if (composerEl) {
+        const rect = composerEl.getBoundingClientRect();
+        const spaceBelow = (typeof window !== "undefined" ? window.innerHeight : 800) - rect.bottom - 12;
+        const spaceAbove = rect.top - 12;
+        const openAbove = spaceBelow < 220 && spaceAbove > spaceBelow;
+        this._popup.style.position = "absolute";
+        if (openAbove) {
+          this._popup.style.bottom = "calc(100% + 6px)";
+          this._popup.style.top = "auto";
+          this._popup.style.maxHeight = `${Math.max(120, Math.min(320, Math.floor(spaceAbove)))}px`;
+        } else {
+          this._popup.style.top = "calc(100% + 6px)";
+          this._popup.style.bottom = "auto";
+          this._popup.style.maxHeight = `${Math.max(120, Math.min(320, Math.floor(spaceBelow)))}px`;
+        }
+        this._popup.style.left = "0px";
+        this._popup.style.right = "auto";
+        const widthVal = rect.width ? Math.min(440, Math.max(260, Math.floor(rect.width))) : 360;
+        this._popup.style.width = `${widthVal}px`;
+        this._popup.style.maxWidth = "100%";
+      }
     }
   }
 

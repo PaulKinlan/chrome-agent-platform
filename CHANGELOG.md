@@ -5,6 +5,7 @@
 
 ## [0.3.560] — 2026-10-02
 - Fixed tool discovery for clipboard and on-device text tools, and automatically provide active tab context when asking questions in the side panel.
+- Anchor agent mention and action pickers directly to the message input in the side panel and hub.
 
 ## [0.3.560] — 2026-10-02
 - Fixed the Hub Timeline filter bar so clicking All, Runs, Waiting, Made, or Scheduled moves the active highlight pill immediately.
