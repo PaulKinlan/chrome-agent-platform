@@ -79,7 +79,9 @@ Deno.test("headers: top-left product name across all pages includes Cap logo lin
   assertStringIncludes(options, 'class="brand-logo"');
   assertStringIncludes(options, '<span class="brand-text">Chrome <span data-i18n="options_agent">Agent</span> Platform</span>');
   assertStringIncludes(options, 'class="about-brand-logo"');
-  assertStringIncludes(options, '<span class="about-brand-text">Chrome Agent Platform</span>');
+  // 716s.2: the catalogue key sits on the TEXT span, never on the logo
+  // container — hydrating the container had replaced the SVG with text.
+  assertStringIncludes(options, '<span class="about-brand-text" data-i18n="options_chrome_agent_platform">Chrome Agent Platform</span>');
 
   const privacy = await Deno.readTextFile(new URL("extension/privacy/privacy.html", root));
   assertStringIncludes(privacy, 'class="brand-logo"');

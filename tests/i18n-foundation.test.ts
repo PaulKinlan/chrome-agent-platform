@@ -91,12 +91,27 @@ Deno.test("i18n: hydrateI18n fills data-i18n text and data-i18n-attr attributes 
   assertEquals(attrEl.attrs["aria-label"], messages[first].message, "data-i18n-attr must come from the catalogue");
 });
 
-Deno.test("i18n: every data-i18n leaf in Settings markup resolves to a catalogue message byte-identical to its no-JS fallback text", async () => {
+/** What the markup fallback RENDERS: entities decoded, whitespace collapsed.
+ * The catalogue holds text, never markup — comparing raw bytes is exactly how
+ * "Backup &amp; restore" got into the catalogue and onto the screen (716s.2). */
+function renderedText(markup: string): string {
+  return markup
+    .replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z]+);/g, (whole, body) => {
+      if (body[0] === "#") return String.fromCodePoint(body[1] === "x" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10));
+      return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: "\u00a0" } as Record<string, string>)[body] ?? whole;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+Deno.test("i18n: every data-i18n leaf in Settings markup resolves to a catalogue message that renders identically to its no-JS fallback text", async () => {
   // The Settings migration contract: the markup keeps the English text as the
-  // no-JS fallback, the catalogue value is the EXACT same bytes, so rendering
+  // no-JS fallback, the catalogue value renders the SAME text, so rendering
   // is unchanged whether or not chrome.i18n/hydration runs. A drift in either
   // direction (key without catalogue entry, or catalogue value ≠ markup text)
-  // is the silent-copy-change this pin exists to stop.
+  // is the silent-copy-change this pin exists to stop. Since 716s.2 the
+  // comparison is on RENDERED text: the markup may write `&amp;`, the
+  // catalogue must hold `&` — a catalogue entity renders literally.
   const html = new URL("../extension/options/options.html", import.meta.url);
   const src = await Deno.readTextFile(html);
   const code = src
@@ -110,9 +125,11 @@ Deno.test("i18n: every data-i18n leaf in Settings markup resolves to a catalogue
     assert(entry, `data-i18n key ${key} on <${tag}> has no catalogue entry`);
     assertEquals(
       entry.message,
-      staticText,
+      renderedText(staticText),
       `catalogue message for ${key} drifted from the static markup fallback text`,
     );
+    assert(!/&[a-zA-Z#][a-zA-Z0-9]*;/.test(entry.message), `${key}: the catalogue holds text, never an HTML entity — hydration renders it literally`);
+    assertEquals(entry.message, entry.message.trim(), `${key}: no padding whitespace in the catalogue`);
     checked++;
   }
   assert(checked >= 100, `expected the Settings migration to have wired ~120 leaves, found ${checked}`);
@@ -138,4 +155,82 @@ Deno.test("i18n: hydrating the migrated Settings leaves renders the catalogue va
   // FALSIFICATION: the catalogue value must be byte-identical to the static
   // markup text — if a migration ever reworded a string, this is the tripwire.
   assertEquals(messages[key].message, staticText, "catalogue value drifted from the original rendered text — migrations must be byte-identical");
+});
+
+// ── Mixed content (chrome-agent-platform-716s.2) ─────────────────────────────
+// A minimal DOM double: enough of Element for hydrateI18n's mixed path —
+// `children`, `ownerDocument.createTextNode`, `replaceChildren`, textContent.
+function fakeDom() {
+  const doc = { createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }) };
+  const el = (tag: string, attrs: Record<string, string>, kids: any[] = []) => {
+    const node: any = {
+      nodeType: 1,
+      tagName: tag.toUpperCase(),
+      attrs: { ...attrs },
+      childNodes: kids,
+      ownerDocument: doc,
+      get children() { return node.childNodes.filter((n: any) => n.nodeType === 1); },
+      get textContent() { return node.childNodes.map((n: any) => n.textContent).join(""); },
+      set textContent(v: string) { node.childNodes = [doc.createTextNode(v)]; },
+      getAttribute(n: string) { return node.attrs[n] ?? null; },
+      setAttribute(n: string, v: string) { node.attrs[n] = v; },
+      replaceChildren(...nodes: any[]) { node.childNodes = nodes; },
+    };
+    return node;
+  };
+  const text = (s: string) => doc.createTextNode(s);
+  const root = (...els: any[]) => ({ querySelectorAll: (sel: string) => (sel === "[data-i18n]" ? els : []) });
+  return { el, text, root };
+}
+
+Deno.test("i18n: hydrating <p>text <code>x</code> tail</p> keeps the tail AND the inline element (the truncation defect)", () => {
+  const { el, text, root } = fakeDom();
+  // options_diagnostics_logs_help: "Write a $1 line to the page's DevTools console each time a site's tools are checked."
+  const code = el("code", {}, [text("[WebMCP]")]);
+  const p = el("span", { "data-i18n": "options_diagnostics_logs_help" }, [text("Write a "), code, text(" line to the page's DevTools console each time a site's tools are checked.")]);
+  hydrateI18n(root(p));
+  assertEquals(p.textContent, "Write a [WebMCP] line to the page's DevTools console each time a site's tools are checked.");
+  assert(p.childNodes.includes(code), "the SAME <code> node is placed back — moved, not cloned or re-parsed");
+  assertEquals(p.children.length, 1);
+  assert(p.childNodes.every((n: any) => n.nodeType === 3 || n === code), "only text nodes and the original child — no markup is created from the catalogue string");
+});
+
+Deno.test("i18n: the About version keeps its <strong id=about-version> and the MCP lead keeps both inline children in message order", () => {
+  const { el, text, root } = fakeDom();
+  const strong = el("strong", { id: "about-version" }, [text("v0.3.560")]);
+  const version = el("span", { "data-i18n": "options_version" }, [text("Version "), strong]);
+  const abbr = el("abbr", { title: "Model Context Protocol" }, [text("MCP")]);
+  const codeEl = el("code", {}, [text("https://")]);
+  const lead = el("p", { "data-i18n": "options_mcp_lead" }, [text("Connect a remote "), abbr, text(" server … over an "), codeEl, text(" URL.")]);
+  hydrateI18n(root(version, lead));
+  assertEquals(version.textContent, "Version v0.3.560", "About renders Version <manifest version> — not a bare 'Version'");
+  assertEquals(version.childNodes[1], strong, "the version node survives hydration so options.js's manifest write is what renders");
+  assertEquals(lead.textContent, messages.options_mcp_lead.message.replace("$1", "MCP").replace("$2", "https://"));
+  assertEquals(lead.children, [abbr, codeEl], "both inline children survive, in order");
+  assert(lead.textContent.endsWith("never shown again after you save it."), "the whole sentence renders, not the prefix before the first child");
+});
+
+Deno.test("i18n: a mixed element whose message does not place every child is left UNTOUCHED (never destroys the logo or a file input)", () => {
+  const { el, text, root } = fakeDom();
+  const svg = el("svg", { class: "about-brand-logo" });
+  const span = el("span", { class: "about-brand-text" }, [text("Chrome Agent Platform")]);
+  // The pre-fix shape: the key on the container, the message a plain string.
+  const brand = el("div", { "data-i18n": "options_chrome_agent_platform" }, [svg, text(" "), span]);
+  const before = [...brand.childNodes];
+  hydrateI18n(root(brand));
+  assertEquals(brand.childNodes, before, "no slot for the children → the markup fallback stays exactly as authored");
+  // A missing key on a mixed element likewise keeps the markup (the check
+  // script is the loud guard for that; a leaf still renders the key).
+  const input = el("input", { type: "file" });
+  const label = el("label", { "data-i18n": "options_key_that_does_not_exist" }, [text("Import a backup file"), input]);
+  hydrateI18n(root(label));
+  assertEquals(label.childNodes, [label.childNodes[0], input]);
+  assert(label.childNodes.includes(input), "the file <input> survives");
+});
+
+Deno.test("i18n: mixed-content hydration contains no innerHTML/outerHTML/insertAdjacentHTML path", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/shared/i18n.js", import.meta.url));
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  assert(!/innerHTML|outerHTML|insertAdjacentHTML|createContextualFragment|DOMParser/.test(code), "catalogue strings are never parsed as markup");
+  assert(/replaceChildren\(/.test(code) && /createTextNode\(/.test(code), "the mixed path writes text nodes and re-places existing children");
 });

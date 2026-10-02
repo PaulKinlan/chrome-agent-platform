@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
+- Settings copy reads as whole sentences again — About shows the installed version, the Backup & restore heading no longer shows a stray "&amp;", and the MCP servers and Skills introductions are complete.
 - Faster Settings page opening with progressive section rendering and CSS content-visibility.
 - Private on-device text summarization, language detection, and translation using Chrome Built-in AI.
 - Smaller extension bundles — the MCP client library now ships once instead of twice, trimming the background worker by about 150 KB.
