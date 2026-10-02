@@ -8,10 +8,13 @@
 import { send } from "../lib/messages.js";
 import { discoveredOnly } from "../lib/pure.js";
 import "../shared/components.js";
+import { t, hydrateI18n } from "../shared/i18n.js";
 
 if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
   document.documentElement.dataset.embedded = "1";
 }
+
+hydrateI18n();
 
 const rowsEl = document.getElementById("rows");
 
@@ -80,10 +83,18 @@ async function render() {
   const discoveredShown = await renderDiscovered(list);
   if (!list.length) {
     if (discoveredShown) return;
-    const empty = document.createElement("p");
-    empty.className = "empty";
-    empty.textContent = "No sites yet. When an open page offers tools, the hub shows a chip you can use to add it as a Site Agent.";
-    rowsEl.append(empty);
+    const emptyState = document.createElement("empty-state");
+    emptyState.setAttribute("title", t("directory_empty_title"));
+    emptyState.setAttribute("description", t("directory_empty_desc"));
+    emptyState.setAttribute("action-label", t("directory_empty_action"));
+    emptyState.addEventListener("action", () => {
+      if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+        chrome.runtime.openOptionsPage();
+      } else {
+        location.href = "../options/options.html#section-agents";
+      }
+    });
+    rowsEl.append(emptyState);
     return;
   }
 

@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
+- Clearer empty states with direct next-step actions on the Artifacts and Directory pages.
 - Streamlined activity filter bar with All, Runs, Waiting, Made, and Scheduled views, approval/blocked matching in Waiting, and More overflow for secondary facets.
 - Cleaner new-tab first-run layout with a single setup call-to-action, full-width activity feed when no background jobs are running, and unclipped sidebar header.
 - Cleaner conversation transcript with human-readable tool names, single-line declined actions, and proper agent names.

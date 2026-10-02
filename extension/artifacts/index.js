@@ -7,10 +7,13 @@
 
 import { send } from "../lib/messages.js";
 import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent, confirmActionDialog } from "../shared/components.js";
+import { t, hydrateI18n } from "../shared/i18n.js";
 
 if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
   document.documentElement.dataset.embedded = "1";
 }
+
+hydrateI18n();
 
 const grid = document.getElementById("grid");
 const status = document.getElementById("status");
@@ -76,8 +79,29 @@ async function render() {
   const assets = (Array.isArray(res.assets) ? res.assets : []).slice().reverse();
   grid.replaceChildren();
 
+  // If there are search or filter inputs on the page (#kind, #q), hide or disable them
+  // when total unfiltered artifact count is 0.
+  const kindFilter = document.getElementById("kind");
+  const searchInput = document.getElementById("q");
+  if (kindFilter) kindFilter.hidden = !assets.length;
+  if (searchInput) searchInput.hidden = !assets.length;
+
   if (!assets.length) {
-    grid.innerHTML = `<div class="empty">No artifacts yet. Ask an agent to make something.</div>`;
+    const emptyState = document.createElement("empty-state");
+    emptyState.setAttribute("title", t("artifacts_empty_title"));
+    emptyState.setAttribute("description", t("artifacts_empty_desc"));
+    emptyState.setAttribute("action-label", t("artifacts_empty_action"));
+    emptyState.setAttribute("action-href", "../ntp/ntp.html");
+    emptyState.addEventListener("action", () => {
+      if (window.parent && window.parent !== window) {
+        try {
+          window.parent.postMessage({ type: "cap:go-home" }, "*");
+          return;
+        } catch { /* fallback */ }
+      }
+      location.href = "../ntp/ntp.html";
+    });
+    grid.append(emptyState);
     status.textContent = "";
     foot.textContent = "";
     return;

@@ -362,5 +362,36 @@
   },
   "options_what_this_extension_sends_and_stores": {
     "message": "What this extension sends and stores"
+  },
+  "artifacts_title": {
+    "message": "Artifacts"
+  },
+  "artifacts_sub": {
+    "message": "Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it."
+  },
+  "artifacts_empty_title": {
+    "message": "Nothing made yet"
+  },
+  "artifacts_empty_desc": {
+    "message": "Documents, reports, tables, and files your agents create will show up here."
+  },
+  "artifacts_empty_action": {
+    "message": "Start a task in the hub"
+  },
+  "directory_title": {
+    "message": "Directory"
+  },
+  "directory_sub": {
+    "message": "Sites that offer agent tools will appear here automatically as you browse."
+  },
+  "directory_empty_title": {
+    "message": "Nothing here yet"
+  },
+  "directory_empty_desc": {
+    "message": "No remote agents connected yet. Connect a remote agent in Settings or install a skill pack."
+  },
+  "directory_empty_action": {
+    "message": "Connect a remote agent"
   }
 }
+

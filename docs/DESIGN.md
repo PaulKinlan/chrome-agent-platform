@@ -704,6 +704,14 @@ a control at 360 px (`.btn`, the tabs and the header host are `white-space:
 nowrap`, and a container query collapses the disclosure's Open button to its icon
 under 360 px). The numbered instruction card is removed.
 
+## Empty states
+*(chrome-agent-platform-716s.7)* Empty states on primary pages (Artifacts,
+Directory) use the shared `<empty-state>` component. They are calm, framed cards
+in the owner's voice that explain what will appear and offer exactly one clear
+next-step action button or link. The copy width is bounded to ~46ch and centered,
+preventing long runaway lines on wide screens. Filter and search bars over zero
+items are hidden or disabled until items exist.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.
