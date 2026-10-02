@@ -347,9 +347,11 @@ Agents create things for the user in the context of a task (generated pages, fil
 data). All four pieces are in: the per-task artifact view in the conversation, the master
 artifacts view in the hub, open/preview/use (now full-window and openable in a new tab,
 `0.2.318`), and attach-an-existing-artifact from the + menu. Artifacts are origin-keyed
-<<<<<<< HEAD
 per agent with a master index; a generated UI IS an artifact. Empty states use the shared
 `<empty-state>` component with owner voice and direct actions (`chrome-agent-platform-716s.7`).
+The Artifacts gallery redesign (`chrome-agent-platform-qvve`) introduces miniature desktop
+previews without scrollbars, non-wrapping action controls, human-readable size formatting,
+search and type filters, and a responsive wide-screen split inspector.
 
 ## Feature: Attention Badging & Completion Notifications (chrome-agent-platform-3p3e.6) — shipped
 Toolbar action badge counts runs waiting on the owner while no surface displays them:

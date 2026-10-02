@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.563] — 2026-10-02
+- Redesigned Artifacts gallery with scaled miniature desktop previews without scrollbars, non-wrapping action buttons, formatted size badges, title and kind search filters, and a wide-screen split preview inspector.
+
 ## [0.3.562] — 2026-10-02
+- Redesigned Artifacts gallery with scaled miniature desktop previews without scrollbars, non-wrapping action buttons, formatted size badges, title/kind search filters, and a wide-screen split preview inspector.
 - Builds automatically restore local dependencies after package installs, preventing missing module errors when building after npm install.
 
 ## [0.3.561] — 2026-10-02

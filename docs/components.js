@@ -505,8 +505,11 @@ export function preferenceBootstrapScript(nonce) {
 
 /**
  * Inject the CSP <meta> + the preference bootstrap as early as possible.
+ * @param {string} html
+ * @param {string} [nonce]
+ * @param {{ thumbnail?: boolean }} [options]
  */
-export function injectFrameGuards(html, nonce) {
+export function injectFrameGuards(html, nonce, { thumbnail = false } = {}) {
   // injectCspMeta already PREPENDS the navigation guard + the CSP before any
   // content. Prepend the preference bootstrap too (after the guard/CSP, before
   // the attacker content) — never after a <head>. The sandbox-constraints
@@ -515,6 +518,9 @@ export function injectFrameGuards(html, nonce) {
   // storage/network APIs instead of raw SecurityErrors.
   const guarded = injectCspMeta(html);
   const s = String(guarded ?? "");
+  const thumbStyle = thumbnail
+    ? '<style data-cap-thumb="1">html,body{overflow:hidden!important;scrollbar-width:none!important;-ms-overflow-style:none!important}::-webkit-scrollbar{display:none!important}</style>'
+    : '';
   // The nav guard + CSP are at the very start; insert the bootstrap after them
   // (still before the attacker content).
   const navGuard = navigationGuardScript();
@@ -522,10 +528,10 @@ export function injectFrameGuards(html, nonce) {
     const rest = s.slice(navGuard.length);
     const m = rest.match(/^<meta[^>]*Content-Security-Policy[^>]*>/i);
     if (m) {
-      return navGuard + m[0] + preferenceBootstrapScript(nonce) + sandboxApiGuardScript() + rest.slice(m[0].length);
+      return navGuard + m[0] + preferenceBootstrapScript(nonce) + thumbStyle + sandboxApiGuardScript() + rest.slice(m[0].length);
     }
   }
-  return preferenceBootstrapScript(nonce) + sandboxApiGuardScript() + s;
+  return preferenceBootstrapScript(nonce) + thumbStyle + sandboxApiGuardScript() + s;
 }
 
 /**
@@ -544,6 +550,8 @@ export function injectFrameGuards(html, nonce) {
  *
  * The generated UI is also THEMED via the preference-percolation: the frame
  * carries a one-time nonce + a bootstrap that applies the parent's theme/locale.
+ * @param {string} html
+ * @param {{ nonce?: string, thumbnail?: boolean }} [options]
  */
 // The rendered-HTML frame contents are held OUT of the privileged DOM. A
 // direct srcdoc child inherits extension_pages script-src 'self' (blocking the
@@ -554,19 +562,20 @@ export function injectFrameGuards(html, nonce) {
 // postMessage by wireHtmlFrameContent after mount.
 const frameContents = new Map(); // nonce → guarded HTML string
 
-export function renderHtmlFrame(html, { nonce } = {}) {
-  const n = nonce ?? generateNonce();
+export function renderHtmlFrame(html, { nonce = "", thumbnail = false } = {}) {
+  const n = nonce || generateNonce();
   const previewUrl = typeof chrome !== "undefined" && chrome.runtime?.getURL
     ? chrome.runtime.getURL("sandbox/artifact-preview.html")
     : null;
+  const extraAttr = thumbnail ? ' scrolling="no"' : '';
   if (!previewUrl) {
     // Non-extension showcase (no sandbox host + no extension_pages CSP): the
     // srcdoc path has no parent CSP to inherit, so the guarded inline scripts
     // run. The extension never reaches this branch.
-    return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts" srcdoc="${escapeHtml(injectFrameGuards(html, n))}"></iframe></div>`;
+    return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts"${extraAttr} srcdoc="${escapeHtml(injectFrameGuards(html, n, { thumbnail }))}"></iframe></div>`;
   }
-  frameContents.set(n, injectFrameGuards(html, n));
-  return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts" src="${escapeHtml(previewUrl)}"></iframe></div>`;
+  frameContents.set(n, injectFrameGuards(html, n, { thumbnail }));
+  return `<div class="html-frame" data-frame-nonce="${n}"><iframe title="Rendered HTML output" sandbox="allow-scripts"${extraAttr} src="${escapeHtml(previewUrl)}"></iframe></div>`;
 }
 
 /** Deliver the staged guarded HTML to a rendered frame (post-mount wiring — a
@@ -3288,6 +3297,31 @@ class CapabilityRow extends Component {
 }
 customElements.define("capability-row", CapabilityRow);
 
+/** Format byte counts into clean human-readable units (e.g. 500 B, 88.6 KB, 1.5 MB). */
+export function formatArtifactSize(bytes) {
+  const n = Math.max(0, Number(bytes) || 0);
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) {
+    const kb = (n / 1024).toFixed(1).replace(/\.0$/, "");
+    return `${kb} KB`;
+  }
+  const mb = (n / (1024 * 1024)).toFixed(1).replace(/\.0$/, "");
+  return `${mb} MB`;
+}
+
+/** Format artifact type for badge display (HTML, Markdown, JSON, etc.). */
+export function formatArtifactType(type) {
+  const t = String(type || "").toLowerCase();
+  if (t === "html") return "HTML";
+  if (t === "markdown" || t === "md") return "Markdown";
+  if (t === "json") return "JSON";
+  if (t === "csv") return "CSV";
+  if (t === "text") return "Text";
+  if (t === "image") return "Image";
+  if (t === "data") return "Data";
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Data";
+}
+
 /* <artifact-card id name type size origin time> — an artifact card for the
  * gallery: a LIVE preview thumbnail (an html artifact renders in a sandboxed
  * iframe, an image renders inline, text/data renders as a truncated preview),
@@ -3320,7 +3354,7 @@ class ArtifactCard extends Component {
     let previewHtml = "";
     if (hasPreview) {
       if (type === "html") {
-        previewHtml = renderHtmlFrame(this._preview);
+        previewHtml = renderHtmlFrame(this._preview, { thumbnail: true });
       } else if (type === "image") {
         previewHtml = `<img class="img" src="${escapeHtml(this._preview)}" alt="">`;
       } else {
@@ -3345,14 +3379,21 @@ class ArtifactCard extends Component {
       .card { display:flex; flex-direction:column; background:var(--panel,#ffffff);
         border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-md,12px);
         overflow:hidden; }
-      .preview { position:relative; height:132px; background:var(--panel-2,#efede8);
+      .preview { height:188px; position:relative; background:var(--panel-2,#efede8);
         overflow:hidden; border-bottom:1px solid var(--border,#e3e0d9); cursor:pointer; }
-      .preview .html-frame, .preview .html-frame iframe { width:100%; height:100%; }
-      .preview .html-frame iframe { border:0; pointer-events:none; transform:scale(1); transform-origin:top left; }
+      .preview .html-frame { width:100%; height:100%; overflow:hidden; position:relative; }
+      .preview .html-frame iframe { width:250%; height:250%; border:0; pointer-events:none;
+        transform:scale(0.4); transform-origin:top left; overflow:hidden; }
       .img { width:100%; height:100%; object-fit:cover; display:block; }
-      .text { margin:0; padding:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-        font-size:11px; line-height:1.4; color:var(--muted,#635e56); white-space:pre-wrap;
+      .text { margin:0; padding:14px 16px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        font-size:11.5px; line-height:1.5; color:var(--text,#1d1b18);
+        background:linear-gradient(180deg, var(--panel,#fff) 0%, var(--panel-2,#efede8) 100%);
+        height:100%; box-sizing:border-box; white-space:pre-wrap;
         word-break:break-word; overflow:hidden; }
+      .type-badge { position:absolute; top:8px; right:8px; padding:2px 8px; border-radius:999px;
+        font-size:10.5px; font-weight:600; background:color-mix(in srgb, var(--panel,#fff) 88%, transparent);
+        border:1px solid var(--border,#e3e0d9); color:var(--muted,#635e56); backdrop-filter:blur(4px);
+        pointer-events:none; z-index:2; }
       .placeholder { height:100%; display:flex; flex-direction:column; gap:6px;
         align-items:center; justify-content:center; color:var(--muted,#635e56);
         font-size:12px; text-transform:capitalize; }
@@ -3363,25 +3404,26 @@ class ArtifactCard extends Component {
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
       .meta { font-size:var(--text-xs,12px); color:var(--muted,#635e56);
         white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .actions { display:flex; gap:6px; padding:0 12px 10px; }
-      .actions button { flex:1; display:inline-flex; align-items:center; justify-content:center;
-        gap:5px; font:inherit; font-size:var(--text-xs,12px); padding:5px 6px; min-height:32px;
-        border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,6px);
-        background:transparent; color:var(--text,#1d1b18); cursor:pointer; }
+      .actions { display:flex; align-items:center; gap:6px; padding:0 12px 12px; flex-wrap:nowrap; }
+      .actions button { flex:1 1 0; min-width:0; white-space:nowrap; display:inline-flex;
+        align-items:center; justify-content:center; gap:4px; font:inherit; font-size:12px;
+        font-weight:500; padding:6px 8px; min-height:32px; border:1px solid var(--border,#e3e0d9);
+        border-radius:var(--radius-sm,6px); background:transparent; color:var(--text,#1d1b18);
+        cursor:pointer; }
       .actions button:hover { border-color:var(--accent,#0e6e63); color:var(--accent,#0e6e63); }
       .actions button.danger:hover { border-color:var(--danger,#b3261e); color:var(--danger,#b3261e); }
       .actions button:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:1px; }
-      .actions button svg { width:14px; height:14px; }
+      .actions button svg { width:14px; height:14px; flex-shrink:0; }
     `, `<div class="card">
-      <div class="preview" part="preview" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}">${previewHtml}</div>
+      <div class="preview" part="preview" role="button" tabindex="0" aria-label="Open ${escapeHtml(name)}">${previewHtml}<span class="type-badge">${escapeHtml(formatArtifactType(type))}</span></div>
       <div class="body">
         <span class="name" title="${escapeHtml(name)}">${escapeHtml(name)}</span>
-        <span class="meta">${escapeHtml(type)} · ${escapeHtml(size)} B · ${escapeHtml(origin)}${t ? " · " + escapeHtml(t) : ""}</span>
+        <span class="meta">${escapeHtml(type)} · ${escapeHtml(formatArtifactSize(size))} · ${escapeHtml(origin)}${t ? " · " + escapeHtml(t) : ""}</span>
       </div>
       <div class="actions">
         ${act("open-tab", `<button type="button" data-act="open-tab" title="Open in new tab">${ICONS.external}<span>New tab</span></button>`)}
         ${act("reuse", `<button type="button" data-act="reuse">${ICONS.attach}<span>Reuse</span></button>`)}
-        ${act("save", `<button type="button" data-act="save" title="Save to disk" aria-label="Save ${escapeHtml(name)} to disk">${ICONS.download}<span>Save to disk</span></button>`)}
+        ${act("save", `<button type="button" data-act="save" title="Save to disk" aria-label="Save ${escapeHtml(name)} to disk">${ICONS.download}<span>Save</span></button>`)}
         ${act("delete", `<button type="button" data-act="delete" class="danger">${ICONS.close}<span>Delete</span></button>`)}
       </div>
     </div>`);

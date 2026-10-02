@@ -44,6 +44,9 @@ function mountPreview({ nonce, html }) {
   frame.title = "Rendered HTML output";
   frame.setAttribute("sandbox", "allow-scripts");
   frame.setAttribute("referrerpolicy", "no-referrer");
+  if (html.includes('data-cap-thumb="1"')) {
+    frame.setAttribute("scrolling", "no");
+  }
   // The supplied string already starts with the generated-document CSP,
   // preference bootstrap, and navigation guard. Keeping it in this nested
   // opaque frame is the authority boundary; the host URL remains stable.

@@ -1,13 +1,20 @@
 // artifacts/index.js — the artifact GALLERY: a grid of <artifact-card> for every
 // artifact the agents have made. Each card shows a live preview thumbnail (an
 // html artifact renders in a sandboxed iframe), the name/type/size/origin/time,
-// and actions: open (the full live viewer), reuse (attach to a new task via the
+// and actions: open (the full live viewer / side inspector), reuse (attach to a new task via the
 // parent NTP), delete. Mirrors the directory view pattern (loaded in the
 // NTP's in-context view frame; messaging via lib/messages.js).
 
 import { send } from "../lib/messages.js";
 import { saveArtifactToDisk } from "../lib/artifact-export.js";
-import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent, confirmActionDialog } from "../shared/components.js";
+import {
+  renderHtmlFrame,
+  isHtmlDocument,
+  wireHtmlFrameContent,
+  confirmActionDialog,
+  formatArtifactSize,
+  formatArtifactType,
+} from "../shared/components.js";
 import { t, hydrateI18n } from "../shared/i18n.js";
 
 if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
@@ -20,11 +27,20 @@ const grid = document.getElementById("grid");
 const status = document.getElementById("status");
 const foot = document.getElementById("foot");
 const capacity = document.getElementById("capacity");
+const searchInput = document.getElementById("q");
+const kindFilter = document.getElementById("kind");
+const inspector = document.getElementById("artifact-inspector");
 
 // Bound the live-preview work: preview at most this many artifacts (the most
 // recent), so a large gallery stays responsive. The rest render as placeholder
 // cards (still openable/deletable).
 const MAX_PREVIEWS = 24;
+
+let allAssets = [];
+let filterKind = "";
+let searchQuery = "";
+let selectedAssetId = null;
+let inspectorCleanup = null;
 
 document.getElementById("back")?.addEventListener("click", () => {
   if (history.length > 1) history.back();
@@ -71,6 +87,24 @@ async function renderCapacity() {
   capacity.hidden = false;
 }
 
+export function matchesFilter(a, kind, query) {
+  if (kind) {
+    const t = String(a.type || "").toLowerCase();
+    if (kind === "html" && t !== "html") return false;
+    if (kind === "markdown" && t !== "markdown" && t !== "md") return false;
+    if (kind === "data" && !["data", "json", "csv", "text"].includes(t)) return false;
+    if (kind === "image" && t !== "image") return false;
+  }
+  if (query) {
+    const q = query.toLowerCase();
+    const nameMatch = String(a.name || "").toLowerCase().includes(q);
+    const originMatch = String(a.origin || "").toLowerCase().includes(q);
+    const typeMatch = String(a.type || "").toLowerCase().includes(q);
+    if (!nameMatch && !originMatch && !typeMatch) return false;
+  }
+  return true;
+}
+
 async function render() {
   renderCapacity();
   // The LIBRARY — every artifact the owner has, not just the ones the hub agent
@@ -78,16 +112,16 @@ async function render() {
   // (CAP-FB-20260828-ARTIFACT-DURABILITY-01).
   const res = await send("asset.list", { origin: "all" }).catch(() => ({ assets: [] }));
   const assets = (Array.isArray(res.assets) ? res.assets : []).slice().reverse();
-  grid.replaceChildren();
+  allAssets = assets;
 
   // If there are search or filter inputs on the page (#kind, #q), hide or disable them
   // when total unfiltered artifact count is 0.
-  const kindFilter = document.getElementById("kind");
-  const searchInput = document.getElementById("q");
   if (kindFilter) kindFilter.hidden = !assets.length;
   if (searchInput) searchInput.hidden = !assets.length;
 
   if (!assets.length) {
+    closeArtifactInspector();
+    grid.replaceChildren();
     const emptyState = document.createElement("empty-state");
     emptyState.setAttribute("title", t("artifacts_empty_title"));
     emptyState.setAttribute("description", t("artifacts_empty_desc"));
@@ -108,13 +142,34 @@ async function render() {
     return;
   }
 
-  status.textContent = `${assets.length} artifact${assets.length === 1 ? "" : "s"} — newest first.`;
-  foot.textContent = assets.length > MAX_PREVIEWS
+  await updateFilteredView();
+}
+
+async function updateFilteredView() {
+  const filtered = allAssets.filter((a) => matchesFilter(a, filterKind, searchQuery));
+  grid.replaceChildren();
+
+  if (!filtered.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No artifacts match your filter.";
+    grid.append(empty);
+    status.textContent = `0 of ${allAssets.length} artifacts match.`;
+    foot.textContent = "";
+    return;
+  }
+
+  const isFiltering = filterKind !== "" || searchQuery !== "";
+  status.textContent = isFiltering
+    ? `Showing ${filtered.length} of ${allAssets.length} artifacts.`
+    : `${allAssets.length} artifact${allAssets.length === 1 ? "" : "s"} — newest first.`;
+
+  foot.textContent = filtered.length > MAX_PREVIEWS
     ? `Showing live previews for the newest ${MAX_PREVIEWS}; older artifacts are listed without a live preview.`
     : "";
 
   const cards = [];
-  for (const a of assets.slice(0, MAX_PREVIEWS)) {
+  for (const a of filtered.slice(0, MAX_PREVIEWS)) {
     const card = document.createElement("artifact-card");
     card.setAttribute("id", a.id ?? "");
     card.setAttribute("name", a.name ?? "Untitled");
@@ -122,9 +177,10 @@ async function render() {
     card.setAttribute("size", String(a.size ?? 0));
     card.setAttribute("origin", a.origin ?? "master");
     card.setAttribute("time", String(a.at ?? ""));
+    if (a.id === selectedAssetId) card.classList.add("selected");
     cards.push({ card, a });
   }
-  for (const a of assets.slice(MAX_PREVIEWS)) {
+  for (const a of filtered.slice(MAX_PREVIEWS)) {
     const card = document.createElement("artifact-card");
     card.setAttribute("id", a.id ?? "");
     card.setAttribute("name", a.name ?? "Untitled");
@@ -132,6 +188,7 @@ async function render() {
     card.setAttribute("size", String(a.size ?? 0));
     card.setAttribute("origin", a.origin ?? "master");
     card.setAttribute("time", String(a.at ?? ""));
+    if (a.id === selectedAssetId) card.classList.add("selected");
     cards.push({ card, a });
   }
 
@@ -150,13 +207,6 @@ async function render() {
 }
 
 // Artifact deletion uses the SHARED confirm (CAP-FB-20260827-DIALOG-CONSOLIDATION-01).
-// This was a hand-rolled <dialog> duplicating confirmActionDialog — the exact
-// pattern the project rules forbid, and why dialogs behaved inconsistently: each
-// copy owned its own focus, dismiss and sizing behaviour, so a fix to one never
-// reached the others. The shared one is also strictly better here: it adds
-// backdrop light-dismiss, an aria-label, and a settled guard, and it already
-// implements the rule this dialog cared about — a destructive confirm focuses
-// Cancel, not the destructive button.
 function confirmDeleteDialog(name, type) {
   return confirmActionDialog({
     title: "Delete artifact",
@@ -164,6 +214,158 @@ function confirmDeleteDialog(name, type) {
     confirmLabel: "Delete",
     destructive: true,
   });
+}
+
+export async function openArtifactInspector(id, origin) {
+  selectedAssetId = id;
+  grid.querySelectorAll("artifact-card").forEach((c) => {
+    c.classList.toggle("selected", c.getAttribute("id") === id);
+  });
+
+  if (!inspector) return;
+  const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
+  const asset = res?.ok ? res.asset : null;
+  if (!asset) {
+    closeArtifactInspector();
+    return;
+  }
+
+  inspectorCleanup?.();
+  inspectorCleanup = null;
+  inspector.hidden = false;
+  inspector.replaceChildren();
+
+  const head = document.createElement("div");
+  head.className = "insp-head";
+
+  const metaBlock = document.createElement("div");
+  metaBlock.className = "insp-meta-block";
+  const title = document.createElement("span");
+  title.className = "insp-title";
+  title.textContent = asset.name ?? "Untitled";
+  title.title = asset.name ?? "Untitled";
+  const meta = document.createElement("span");
+  meta.className = "insp-meta";
+  meta.textContent = `${formatArtifactType(asset.type)} · ${formatArtifactSize(asset.size)} · ${origin ?? "master"}`;
+  metaBlock.append(title, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "insp-actions";
+
+  // New Tab button
+  const openTabBtn = document.createElement("button");
+  openTabBtn.type = "button";
+  openTabBtn.className = "insp-btn";
+  openTabBtn.title = "Open in new tab";
+  openTabBtn.setAttribute("aria-label", "Open in new tab");
+  openTabBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>New tab</span>`;
+  openTabBtn.addEventListener("click", () => {
+    const url = chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`);
+    if (typeof chrome !== "undefined" && chrome.tabs?.create) chrome.tabs.create({ url });
+    else window.open(url, "_blank");
+  });
+
+  // Reuse button
+  const reuseBtn = document.createElement("button");
+  reuseBtn.type = "button";
+  reuseBtn.className = "insp-btn";
+  reuseBtn.title = "Reuse artifact";
+  reuseBtn.setAttribute("aria-label", "Reuse artifact");
+  reuseBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span>Reuse</span>`;
+  reuseBtn.addEventListener("click", async () => {
+    const inOverlay = window.parent && window.parent !== window;
+    if (inOverlay) {
+      try {
+        window.parent.postMessage({
+          type: "cap:attach-artifact",
+          artifact: { id, name: asset.name, type: asset.type, origin: origin ?? "master" },
+        }, "*");
+        status.textContent = `"${asset.name}" sent to the hub — it will attach to a new task.`;
+        return;
+      } catch { /* fallback */ }
+    }
+    try {
+      await navigator.clipboard.writeText(asset.content ?? asset.name ?? "");
+      status.textContent = `"${asset.name}" copied — paste it into a new task on the hub.`;
+    } catch {
+      status.textContent = `Could not reach the hub.`;
+    }
+  });
+
+  // Save button
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "insp-btn";
+  saveBtn.title = "Save to disk";
+  saveBtn.setAttribute("aria-label", `Save ${asset.name ?? "artifact"} to disk`);
+  saveBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span>Save</span>`;
+  saveBtn.addEventListener("click", async () => {
+    try { await saveArtifactToDisk(asset); } catch { /* cancelled */ }
+  });
+
+  // Delete button
+  const delBtn = document.createElement("button");
+  delBtn.type = "button";
+  delBtn.className = "insp-btn danger";
+  delBtn.title = "Delete artifact";
+  delBtn.setAttribute("aria-label", "Delete artifact");
+  delBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg><span>Delete</span>`;
+  delBtn.addEventListener("click", async () => {
+    if (!(await confirmDeleteDialog(asset.name, asset.type))) return;
+    const delRes = await send("asset.delete", { origin: origin ?? "master", id });
+    if (delRes?.ok === false && delRes.error) {
+      status.textContent = `Delete failed: ${delRes.error}`;
+      return;
+    }
+    closeArtifactInspector();
+    await render();
+  });
+
+  // Close button
+  const closeBtn = document.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "insp-close";
+  closeBtn.id = "inspector-close";
+  closeBtn.title = "Close inspector";
+  closeBtn.setAttribute("aria-label", "Close inspector");
+  closeBtn.textContent = "×";
+  closeBtn.addEventListener("click", () => closeArtifactInspector());
+
+  actions.append(openTabBtn, reuseBtn, saveBtn, delBtn, closeBtn);
+  head.append(metaBlock, actions);
+
+  const body = document.createElement("div");
+  body.className = "insp-body";
+
+  const type = asset.type ?? "data";
+  const content = asset.content ?? "";
+
+  if (type === "html" || (type === "text" && isHtmlDocument(content))) {
+    body.innerHTML = renderHtmlFrame(content);
+    const frameEl = body.querySelector(".html-frame");
+    if (frameEl) {
+      inspectorCleanup = wireHtmlFrameContent(frameEl);
+    }
+  } else if (type === "image") {
+    const img = document.createElement("img");
+    img.src = content;
+    img.alt = asset.name ?? "artifact";
+    body.append(img);
+  } else {
+    const pre = document.createElement("pre");
+    pre.textContent = content;
+    body.append(pre);
+  }
+
+  inspector.append(head, body);
+}
+
+export function closeArtifactInspector() {
+  inspectorCleanup?.();
+  inspectorCleanup = null;
+  selectedAssetId = null;
+  if (inspector) inspector.hidden = true;
+  grid.querySelectorAll("artifact-card.selected").forEach((c) => c.classList.remove("selected"));
 }
 
 function wireCard(card) {
@@ -177,11 +379,17 @@ function wireCard(card) {
     }
   });
   card.addEventListener("open", (e) => {
-    // Item 53/54: open the artifact in an <agent-dialog> (the full live render)
-    // instead of navigating to the artifact.html viewer, which doubled up its
-    // own back button with the hub's overlay header.
     const { id, origin } = e.detail ?? {};
-    openArtifactDialog(id, origin ?? "master");
+    if (window.innerWidth >= 960) {
+      openArtifactInspector(id, origin ?? "master");
+    } else {
+      openArtifactDialog(id, origin ?? "master");
+    }
+  });
+  card.addEventListener("dblclick", () => {
+    const id = card.getAttribute("id") || "";
+    const origin = card.getAttribute("origin") || "master";
+    openArtifactDialog(id, origin);
   });
   card.addEventListener("save", async (e) => {
     const { id, origin } = e.detail ?? {};
@@ -195,22 +403,19 @@ function wireCard(card) {
   });
   card.addEventListener("delete", async (e) => {
     const { id, name, type, origin } = e.detail ?? {};
-    // Direct owner action: the modal names the artifact; confirming deletes it
-    // with NO permission grant (the owner's click is the approval).
     if (!(await confirmDeleteDialog(name, type))) return;
     const res = await send("asset.delete", { origin: origin ?? "master", id });
     if (res?.ok === false && res.error) {
       status.textContent = `Delete failed: ${res.error}`;
       return;
     }
+    if (selectedAssetId === id) {
+      closeArtifactInspector();
+    }
     await render();
   });
   card.addEventListener("reuse", async (e) => {
     const { id, name, type, origin } = e.detail ?? {};
-    // Ask the parent NTP to attach this artifact to a new task (the NTP owns
-    // the composer + the thread surface). When the gallery is NOT in the NTP
-    // overlay (standalone), the postMessage goes nowhere — fall back to copying
-    // the artifact content so the action always does something.
     const inOverlay = window.parent && window.parent !== window;
     if (inOverlay) {
       try {
@@ -237,7 +442,7 @@ function wireCard(card) {
 // Item 53/54: the artifact expand dialog — the full live render (html in the
 // sandboxed iframe, image inline, or text) in an <agent-dialog>, without the
 // artifact.html viewer's doubled-up header.
-async function openArtifactDialog(id, origin) {
+export async function openArtifactDialog(id, origin) {
   const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
   const asset = res?.ok ? res.asset : null;
   if (!asset) { status.textContent = "Artifact not found."; return; }
@@ -262,7 +467,7 @@ async function openArtifactDialog(id, origin) {
   const metaSpan = document.createElement("span");
   metaSpan.style.fontSize = "12px";
   metaSpan.style.color = "var(--muted)";
-  metaSpan.textContent = `${asset.type ?? "data"} · ${asset.size ?? 0} B · ${origin ?? "master"}`;
+  metaSpan.textContent = `${formatArtifactType(asset.type)} · ${formatArtifactSize(asset.size)} · ${origin ?? "master"}`;
 
   const openTabBtn = document.createElement("button");
   openTabBtn.type = "button";
@@ -342,5 +547,24 @@ async function openArtifactDialog(id, origin) {
   dialog.show();
   dialog.addEventListener("close", () => { frameCleanups.forEach((c) => { try { c(); } catch { /* one cleanup failing must not skip the rest */ } }); dialog.remove(); }, { once: true });
 }
+
+// Wire search and kind filters
+searchInput?.addEventListener("input", (e) => {
+  searchQuery = e.target.value.trim();
+  updateFilteredView();
+});
+
+kindFilter?.addEventListener("click", (e) => {
+  const pill = e.target.closest(".kind-pill");
+  if (!pill) return;
+  kindFilter.querySelectorAll(".kind-pill").forEach((b) => {
+    b.classList.remove("active");
+    b.setAttribute("aria-selected", "false");
+  });
+  pill.classList.add("active");
+  pill.setAttribute("aria-selected", "true");
+  filterKind = pill.dataset.kind || "";
+  updateFilteredView();
+});
 
 render();

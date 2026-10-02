@@ -426,7 +426,11 @@ The generated document receives the strict prepend-first CSP and may run inline
 UI scripts/styles without network access. Preference messages relay only between
 the current child and its exact nonce. Teardown removes the outer frame and the
 privileged staging entry; repeated async preview renders clean the prior listener
-and stage exactly one replacement.
+and stage exactly one replacement. Thumbnail previews in `<artifact-card>` scale
+inner frame content at 0.4 (250% viewport) and suppress internal scrollbars via
+frame guards and `scrolling="no"`, providing faithful scaled desktop previews.
+On wide viewports (≥960px), selecting a card displays a side-by-side interactive
+inspector with full-scale live rendering, metadata, and direct actions.
 
 ## WebMCP discovery boundary
 
