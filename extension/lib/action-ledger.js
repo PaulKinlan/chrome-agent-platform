@@ -117,6 +117,14 @@ const INVERSE_BUILDERS = Object.freeze({
       inverse: id ? { tool: "delete_named_agent", args: { id } } : null,
     };
   },
+  write_clipboard(args, result) {
+    const text = typeof args?.text === "string" ? args.text : "";
+    const n = result?.characterCount ?? text.length;
+    return {
+      sentence: `Copied ${n} ${n === 1 ? "character" : "characters"} to the clipboard`,
+      inverse: null,
+    };
+  },
 });
 
 // A human sentence for a mutating tool that has no dedicated builder — honest

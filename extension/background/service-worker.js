@@ -149,6 +149,7 @@ import {
   reportWebmcpDetection,
 } from "../lib/webmcp-detection-registry.js";
 import {
+  hasPermission,
   hasCapability,
   capabilityStatus,
   requestCapability,
@@ -281,6 +282,7 @@ import {
 } from "../lib/thread-run-view.js";
 import { withSiteDocsFallback } from "../lib/site-docs-fallback.js";
 import { managementToolset, MANAGEMENT_TOOL_NAMES } from "../lib/management-tools.js";
+import { writeClipboardText } from "../lib/clipboard-tools.js";
 import { runPython } from "../lib/python-execution.js";
 import { getPythonRuntimeProvider, setPythonRuntimeProvider } from "../lib/python-tool.js";
 import { createPythonRuntimeProvider } from "../lib/python-runtime.js";
@@ -2564,6 +2566,17 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // execution id — the route context — never a model-controlled arg.)
       callRoute: modelManagementDispatch,
     });
+    if (!scoped) {
+      liveManagementTools.write_clipboard = tool({
+        description: "Copy text to the system clipboard. The copy action is ledgered for the owner.",
+        inputSchema: z.object({
+          text: z.string().describe("The text content to copy to the clipboard"),
+        }),
+        execute: async ({ text }) => {
+          return await modelManagementDispatch("clipboard.write", { text });
+        },
+      });
+    }
     // ── Remote MCP servers (CAP-FB-20260831-MCP-TOOL-INJECTION-01) ───────────
     // A run connects the EFFECTIVE MCP server set (global ∪ this agent's, minus
     // disabled — mcp-config.effectiveMcpServers) over the browser-safe transports
@@ -6203,6 +6216,39 @@ const handlers = mergeRouteMaps(
         developerFeatures: await developerFeaturesOn(),
       });
     },
+    "clipboard.write": async (message, context) => {
+      const text = message?.text;
+      if (typeof text !== "string" || !text) {
+        return { ok: false, code: "invalid_input", error: "Text must be a non-empty string." };
+      }
+      const hasPerm = await hasPermission("clipboardWrite");
+      if (!hasPerm) {
+        return {
+          ok: false,
+          code: "permission_denied",
+          permission: "clipboardWrite",
+          error: "clipboardWrite permission not granted",
+        };
+      }
+      return await writeClipboardText(text, {
+        writeTextFn: async (t) => {
+          const ready = await ensureOffscreen();
+          if (ready?.ok) {
+            try {
+              await chrome.runtime.sendMessage({ type: "cap:clipboard-write", text: t });
+            } catch {
+              // offscreen listener will handle if present
+            }
+          }
+        },
+        recordLedgerFn: async (entry) => {
+          await writeActionLedgerRow("write_clipboard", { text }, { ok: true, ...entry }, context);
+        },
+      });
+    },
+    "write_clipboard": async (message, context) => {
+      return handlers["clipboard.write"](message, context);
+    },
   },
   activityRoutes,
   schedulerRoutes,
@@ -6610,7 +6656,7 @@ const handlers = mergeRouteMaps(
       const inFlight = activePythonFetches.get(result.origin);
       if (inFlight) {
         for (const ctrl of inFlight) {
-          try { ctrl.abort(); } catch {}
+          try { ctrl.abort(); } catch { /* abort already in flight or ignored */ }
         }
         inFlight.clear();
         activePythonFetches.delete(result.origin);

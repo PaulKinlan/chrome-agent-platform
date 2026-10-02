@@ -61,3 +61,13 @@ registerUserWasmHost();
 import { registerSvgRasteriseHost } from "../lib/svg-rasterise-host.js";
 registerSvgRasteriseHost();
 
+// Clipboard write execution in offscreen document (chrome-agent-platform-3p3e.10).
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "cap:clipboard-write" && typeof message?.text === "string") {
+    navigator.clipboard?.writeText?.(message.text)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message ?? err) }));
+    return true;
+  }
+});
+

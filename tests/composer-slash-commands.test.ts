@@ -65,8 +65,9 @@ Deno.test("composer command audit removes obsolete commands and exposes the usef
     "files",
     "folder",
     "remember",
+    "paste",
   ]);
-  for (const id of ["tabs", "artifacts", "bookmarks", "history", "agent"]) {
+  for (const id of ["tabs", "artifacts", "bookmarks", "history", "agent", "paste"]) {
     assert(
       COMMAND_NAMESPACES.find((item) => item.id === id)?.direct,
       `/${id} must open directly`,

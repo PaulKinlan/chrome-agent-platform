@@ -278,7 +278,7 @@ the permission-state matrix acceptance lane (supersedes the headed lane); `scrip
 
 **P2.** The whole Wasm tool platform lane — runtime probe, owner install, bundled tranche,
 spreadsheet toolkit, tabular diff, abuse gates, the Gate-2 Worker host. Resumes after the
-demo. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
+demo. Clipboard capabilities (`chrome-agent-platform-3p3e.10`): ledgered, bounded `write_clipboard` tool for agents (gated on optional `clipboardWrite`), with owner-gesture clipboard attachment via `/paste` or attach menu in `<agent-composer>`. **P3.** Dead components, recipes→skills rename, hub agent rows onto the shared picker.
 
 ### Known open defect classes
 - **WebMCP discovery — passive registry acceptance candidate in review.** The owner rejected
