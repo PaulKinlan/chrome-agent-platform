@@ -384,6 +384,27 @@ try {
     // The metafile-side same-version duplicate guard (EVERY package since
     // 9epn.3) + lockfile-drift guard in scripts/bundle-budget.mjs
     // (assertBundleBudget) are the tripwires.
+    // chrome-agent-platform-bd06: if node_modules/.deno is absent or incomplete
+    // (e.g. wiped by npm ci or npm install), auto-run `deno install` so that
+    // requireFromRoot / CANON_ANTHROPIC / CANON_ZOD_DIR resolve into .deno
+    // instead of flat node_modules/ or throwing ENOENT on readdirSync.
+    const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
+    let denoEntries = [];
+    try {
+      denoEntries = readdirSync(denoStoreDir);
+    } catch (err) {
+      if (err?.code !== "ENOENT") throw err;
+    }
+    if (!denoEntries.some((d) => d.startsWith("@modelcontextprotocol+sdk@"))) {
+      try {
+        execFileSync("deno", ["install"], { cwd: ROOT, stdio: "inherit" });
+        denoEntries = readdirSync(denoStoreDir);
+      } catch (err) {
+        throw new Error(
+          `cap-deno-store-resolve: ${denoStoreDir} is missing or incomplete and automatic \`deno install\` failed (${err?.message || err}) — run \`deno install\` and retry.`,
+        );
+      }
+    }
     const requireFromRoot = createRequire(path.join(ROOT, "package.json"));
     function resolveCanonical(spec, opts, what) {
       try {
@@ -427,7 +448,6 @@ try {
     // agent-do's bare `zod` imports already resolve to that same zod via
     // CANON_ZOD_V4, so its MCP client now shares one zod with the rest of its
     // stack). Live-resolved and fail-closed: no matching instance, no build.
-    const denoStoreDir = path.join(ROOT, "node_modules", ".deno");
     const CANON_ZOD_DIR = realpathSync(path.join(ROOT, "node_modules", "zod"));
     const mcpStoreCandidates = readdirSync(denoStoreDir)
       .filter((d) => d.startsWith("@modelcontextprotocol+sdk@"))

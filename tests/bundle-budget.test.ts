@@ -801,3 +801,86 @@ Deno.test("9epn.5 self-contained single bundles: zero runtime relative imports t
   }
 });
 
+Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install before resolving canonical dependencies", async () => {
+  const source = await Deno.readTextFile("extension/../build.mjs");
+
+  // 1. Order pin: checking/materializing denoStoreDir MUST happen BEFORE
+  // requireFromRoot / CANON_ANTHROPIC / CANON_PU / CANON_ZOD_V4 / CANON_ZOD_DIR.
+  // If npm ci/install wiped node_modules/.deno, resolving before deno install
+  // would resolve CANON_* to flat node_modules/ instead of node_modules/.deno/,
+  // or readdirSync(denoStoreDir) would throw raw ENOENT.
+  const denoInstallCheck = source.indexOf('execFileSync("deno", ["install"]');
+  const requireFromRootPos = source.indexOf('createRequire(path.join(ROOT, "package.json"))');
+  const canonAnthropicPos = source.indexOf('CANON_ANTHROPIC = resolveCanonical("@ai-sdk/anthropic"');
+  const canonZodDirPos = source.indexOf('CANON_ZOD_DIR = realpathSync(path.join(ROOT, "node_modules", "zod"))');
+
+  assert(denoInstallCheck !== -1, "build.mjs must contain automatic deno install invocation");
+  assert(requireFromRootPos !== -1, "build.mjs must define requireFromRoot");
+  assert(canonAnthropicPos !== -1, "build.mjs must define CANON_ANTHROPIC");
+  assert(canonZodDirPos !== -1, "build.mjs must define CANON_ZOD_DIR");
+
+  assert(
+    denoInstallCheck < requireFromRootPos,
+    "deno install auto-materialization must run BEFORE createRequire/requireFromRoot",
+  );
+  assert(
+    denoInstallCheck < canonAnthropicPos,
+    "deno install auto-materialization must run BEFORE resolving CANON_ANTHROPIC",
+  );
+  assert(
+    denoInstallCheck < canonZodDirPos,
+    "deno install auto-materialization must run BEFORE resolving CANON_ZOD_DIR",
+  );
+
+  // 2. Fails closed with cap-deno-store-resolve if deno install fails or store missing
+  assertStringIncludes(
+    source,
+    "cap-deno-store-resolve:",
+    "build.mjs must surface cap-deno-store-resolve on failure instead of raw ENOENT",
+  );
+  assertStringIncludes(
+    source,
+    'startsWith("@modelcontextprotocol+sdk@")',
+    "build.mjs must verify @modelcontextprotocol+sdk@* exists in node_modules/.deno",
+  );
+
+  // 3. Behavioral simulation: verify that when denoStoreDir is missing and
+  // deno install fails, cap-deno-store-resolve is thrown instead of raw ENOENT.
+  const simulateBootstrap = (fakeReaddir: (p: string) => string[], fakeExec: () => void) => {
+    const store = "/fake/node_modules/.deno";
+    let entries: string[] = [];
+    try {
+      entries = fakeReaddir(store);
+    } catch (err: any) {
+      if (err?.code !== "ENOENT") throw err;
+    }
+    if (!entries.some((d) => d.startsWith("@modelcontextprotocol+sdk@"))) {
+      try {
+        fakeExec();
+        entries = fakeReaddir(store);
+      } catch (err: any) {
+        throw new Error(
+          `cap-deno-store-resolve: ${store} is missing or incomplete and automatic \`deno install\` failed (${err?.message || err}) — run \`deno install\` and retry.`,
+        );
+      }
+    }
+    return entries;
+  };
+
+  const err = assertThrows(() =>
+    simulateBootstrap(
+      () => {
+        const e: any = new Error("ENOENT: no such file or directory");
+        e.code = "ENOENT";
+        throw e;
+      },
+      () => {
+        throw new Error("deno: command not found");
+      },
+    )
+  );
+  assertStringIncludes(err.message, "cap-deno-store-resolve:");
+  assertStringIncludes(err.message, "automatic `deno install` failed");
+});
+
+

@@ -3,9 +3,10 @@
 // human cadence, and clean collapsed rail.
 
 import { assert, assertEquals, assertMatch } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { fileURLToPath } from "node:url";
 import { formatCadenceMinutes } from "../extension/lib/next-run-label.js";
 
-const ROOT = new URL("../", import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 Deno.test("5vk4: human cadence formatting in sidebar agent subtitle", () => {
   assertEquals(formatCadenceMinutes(1440), "daily");
