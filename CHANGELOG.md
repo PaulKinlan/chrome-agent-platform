@@ -2,8 +2,6 @@
 
 ## [0.3.561] — 2026-10-02
 - Instant task opening from the sidebar with cached settled execution logs, non-blocking thread execution reads, and deduplicated background queries.
-
-## [0.3.560] — 2026-10-02
 - Fixed tool discovery for clipboard and on-device text tools, and automatically provide active tab context when asking questions in the side panel.
 - Anchor agent mention and action pickers directly to the message input in the side panel and hub.
 - Collapsible sections in the New Tab sidebar with dedicated room for your task list, human-readable daily schedule labels, compact tool chips, and a tidy collapsed rail with a top toggle button.

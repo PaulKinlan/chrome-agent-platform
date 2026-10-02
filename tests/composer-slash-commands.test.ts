@@ -60,6 +60,7 @@ Deno.test("composer command audit removes obsolete commands and exposes the usef
     "agent",
     "tabs",
     "artifacts",
+    "capture",
     "bookmarks",
     "history",
     "files",
