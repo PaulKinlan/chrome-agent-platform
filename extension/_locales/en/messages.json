@@ -1,4 +1,19 @@
 {
+  "artifacts_empty_action": {
+    "message": "Start a task in the hub"
+  },
+  "artifacts_empty_desc": {
+    "message": "Documents, reports, tables, and files your agents create will show up here."
+  },
+  "artifacts_empty_title": {
+    "message": "Nothing made yet"
+  },
+  "artifacts_sub": {
+    "message": "Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it."
+  },
+  "artifacts_title": {
+    "message": "Artifacts"
+  },
   "components_copied_exact": {
     "message": "Copied exact artifact content."
   },
@@ -28,6 +43,24 @@
   "components_table_preview_opened": {
     "message": "Interactive table preview opened."
   },
+  "directory_empty_action": {
+    "message": "Connect a remote agent"
+  },
+  "directory_empty_desc": {
+    "message": "No remote agents connected yet. Connect a remote agent in Settings or install a skill pack."
+  },
+  "directory_empty_title": {
+    "message": "Nothing here yet"
+  },
+  "directory_sub": {
+    "message": "Sites that offer agent tools will appear here automatically as you browse."
+  },
+  "directory_title": {
+    "message": "Directory"
+  },
+  "options_about": {
+    "message": "About"
+  },
   "options_about_1": {
     "message": "About"
   },
@@ -52,6 +85,9 @@
   "options_adding_origins_scopes_control_to_the_listed_sites_": {
     "message": "Adding origins scopes control to the listed sites. To allow every site again, turn the switch off and back on."
   },
+  "options_advanced": {
+    "message": "Advanced"
+  },
   "options_advanced_1": {
     "message": "Advanced"
   },
@@ -63,6 +99,9 @@
   },
   "options_agent_scope": {
     "message": "Agent scope"
+  },
+  "options_agents": {
+    "message": "Agents"
   },
   "options_agents_1": {
     "message": "Agents"
@@ -97,8 +136,14 @@
   "options_backup_restore": {
     "message": "Backup & restore"
   },
+  "options_board_permissions": {
+    "message": "Board permissions"
+  },
   "options_board_permissions_1": {
     "message": "Board permissions"
+  },
+  "options_browser_control": {
+    "message": "Browser control"
   },
   "options_browser_control_1": {
     "message": "Browser control"
@@ -138,6 +183,9 @@
   },
   "options_cost": {
     "message": "Cost:"
+  },
+  "options_data_memory": {
+    "message": "Data & memory"
   },
   "options_data_memory_1": {
     "message": "Data & memory"
@@ -188,6 +236,9 @@
   "options_full_release_notes": {
     "message": "Full release notes"
   },
+  "options_hooks": {
+    "message": "Hooks"
+  },
   "options_import": {
     "message": "Import"
   },
@@ -212,6 +263,9 @@
   "options_loading_the_changelog": {
     "message": "Loading the changelog…"
   },
+  "options_local_folders": {
+    "message": "Local folders"
+  },
   "options_local_folders_files": {
     "message": "Local folders & files"
   },
@@ -222,11 +276,32 @@
     "message": "Connect a remote $1 server so agents can call its tools. Only remote servers are supported — Streamable HTTP or SSE over an $2 URL. An auth token stays on this device only — never in the bundle, logs, or receipts — and is never shown again after you save it.",
     "description": "$1 is the inline abbreviation MCP; $2 is the inline code https://"
   },
+  "options_mcp_servers": {
+    "message": "MCP servers"
+  },
   "options_mcp_servers_1": {
     "message": "MCP servers"
   },
   "options_multiple_agents": {
     "message": "Multiple agents"
+  },
+  "options_nav_group_agents": {
+    "message": "Agents"
+  },
+  "options_nav_group_automation": {
+    "message": "Automation"
+  },
+  "options_nav_group_data_backup": {
+    "message": "Data & backup"
+  },
+  "options_nav_group_models_spend": {
+    "message": "Models & spend"
+  },
+  "options_nav_group_permissions_folders": {
+    "message": "Permissions & folders"
+  },
+  "options_nav_group_skills_tools": {
+    "message": "Skills & tools"
   },
   "options_never_allow": {
     "message": "Never allow"
@@ -255,6 +330,9 @@
   "options_origin": {
     "message": "Origin"
   },
+  "options_permissions": {
+    "message": "Permissions"
+  },
   "options_permissions_1": {
     "message": "Permissions"
   },
@@ -263,6 +341,9 @@
   },
   "options_provider_server_tools": {
     "message": "Provider server tools"
+  },
+  "options_providers": {
+    "message": "Providers"
   },
   "options_providers_1": {
     "message": "Providers"
@@ -322,6 +403,9 @@
   "options_site_tool_permissions_help": {
     "message": "A Site Agent can report tools after enrollment, but the first model use of each exact tool asks you. Allowed tools run automatically until you disable them here; denied tools stay blocked until you allow or reset them."
   },
+  "options_skills": {
+    "message": "Skills"
+  },
   "options_skills_1": {
     "message": "Skills"
   },
@@ -341,8 +425,14 @@
   "options_tool_calls": {
     "message": "Tool calls"
   },
+  "options_tool_library": {
+    "message": "Tool library"
+  },
   "options_tool_library_1": {
     "message": "Tool library"
+  },
+  "options_usage": {
+    "message": "Usage"
   },
   "options_usage_1": {
     "message": "Usage"
@@ -363,50 +453,11 @@
   "options_what_this_extension_sends_and_stores": {
     "message": "What this extension sends and stores"
   },
-  "artifacts_title": {
-    "message": "Artifacts"
+  "privacy_back_to_settings": {
+    "message": "Back to Settings"
   },
-  "artifacts_sub": {
-    "message": "Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it."
-  },
-  "artifacts_empty_title": {
-    "message": "Nothing made yet"
-  },
-  "artifacts_empty_desc": {
-    "message": "Documents, reports, tables, and files your agents create will show up here."
-  },
-  "artifacts_empty_action": {
-    "message": "Start a task in the hub"
-  },
-  "directory_title": {
-    "message": "Directory"
-  },
-  "directory_sub": {
-    "message": "Sites that offer agent tools will appear here automatically as you browse."
-  },
-  "directory_empty_title": {
-    "message": "Nothing here yet"
-  },
-  "directory_empty_desc": {
-    "message": "No remote agents connected yet. Connect a remote agent in Settings or install a skill pack."
-  },
-  "directory_empty_action": {
-    "message": "Connect a remote agent"
-  },
-  "privacy_lead_summary": {
-    "message": "Everything below is read from the extension's own lists, so it changes when the extension does."
-  },
-  "privacy_data_management_title": {
-    "message": "Data & memory on this device"
-  },
-  "privacy_data_management_lead": {
-    "message": "Your data stays on your device. Each agent's memory and site data are kept isolated per site, so one site can never inspect or access another site's memory or tools."
-  },
-  "privacy_storage_summary": {
-    "message": "Settings, agent conversations, site permissions, and cached models remain under your control and never leave this device unless you explicitly export them."
-  },
-  "privacy_technical_storage_summary": {
-    "message": "Technical storage details"
+  "privacy_clear_permissions": {
+    "message": "Clear permissions"
   },
   "privacy_clear_site_memory": {
     "message": "Clear site memory"
@@ -414,17 +465,25 @@
   "privacy_clear_threads": {
     "message": "Clear threads"
   },
-  "privacy_clear_permissions": {
-    "message": "Clear permissions"
+  "privacy_data_management_lead": {
+    "message": "Your data stays on your device. Each agent's memory and site data are kept isolated per site, so one site can never inspect or access another site's memory or tools."
+  },
+  "privacy_data_management_title": {
+    "message": "Data & memory on this device"
   },
   "privacy_factory_reset": {
     "message": "Reset all data…"
   },
+  "privacy_lead_summary": {
+    "message": "Everything below is read from the extension's own lists, so it changes when the extension does."
+  },
   "privacy_open_data_memory": {
     "message": "Open Data & memory"
   },
-  "privacy_back_to_settings": {
-    "message": "Back to Settings"
+  "privacy_storage_summary": {
+    "message": "Settings, agent conversations, site permissions, and cached models remain under your control and never leave this device unless you explicitly export them."
+  },
+  "privacy_technical_storage_summary": {
+    "message": "Technical storage details"
   }
 }
-

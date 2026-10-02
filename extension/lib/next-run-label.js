@@ -90,3 +90,32 @@ export function lastRunLabel(at, { now = Date.now() } = {}) {
   }
   return { ago, label: `Last run ${ago}` };
 }
+
+/**
+ * Humanise a recurring schedule cadence in minutes into plain English:
+ * 1440 → "daily", 60 → "hourly", 360 → "every 6 hours", 10080 → "weekly".
+ *
+ * @param {number|string} mins
+ * @returns {string}
+ */
+export function formatCadenceMinutes(mins) {
+  const n = Number(mins);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  if (n === 60) return "hourly";
+  if (n === 1440) return "daily";
+  if (n === 10080) return "weekly";
+  if (n < 60) return `every ${n} min`;
+  if (n % 10080 === 0) {
+    const weeks = n / 10080;
+    return weeks === 1 ? "weekly" : `every ${weeks} weeks`;
+  }
+  if (n % 1440 === 0) {
+    const days = n / 1440;
+    return days === 1 ? "daily" : `every ${days} days`;
+  }
+  if (n % 60 === 0) {
+    const hours = n / 60;
+    return hours === 1 ? "hourly" : `every ${hours} hours`;
+  }
+  return `every ${n} min`;
+}

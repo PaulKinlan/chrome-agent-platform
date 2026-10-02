@@ -14,6 +14,7 @@ import {
   normalizeSettingsSectionId,
   sleep,
 } from "../lib/pure.js";
+import { formatCadenceMinutes } from "../lib/next-run-label.js";
 import { projectUnifiedAgents } from "../lib/agent-projection.js";
 import { hydrateI18n } from "../shared/i18n.js";
 import { skillAsTemplate } from "../lib/agent-templates.js";
@@ -2029,6 +2030,12 @@ function renderBackgroundAgentPicker(agents) {
   }
   host.hidden = false;
 
+  const disclosure = document.createElement("details");
+  disclosure.className = "starter-templates-disclosure";
+  const summary = document.createElement("summary");
+  summary.setAttribute("data-i18n", "options_browse_starter_templates");
+  summary.textContent = "Browse starter templates…";
+
   const copy = document.createElement("div");
   copy.className = "background-agent-add-copy";
   const title = document.createElement("h3");
@@ -2038,8 +2045,6 @@ function renderBackgroundAgentPicker(agents) {
   hint.className = "muted";
   hint.textContent = "Choose a built-in scheduled template, then add it to your agents.";
   copy.append(title, hint);
-  host.setAttribute("role", "group");
-  host.setAttribute("aria-labelledby", title.id);
 
   const gallery = document.createElement("agent-template-gallery");
   gallery.id = "background-agent-gallery";
@@ -2064,7 +2069,8 @@ function renderBackgroundAgentPicker(agents) {
     selectedId = String(event.detail?.id ?? "");
     const agent = agents.find((candidate) => candidate.id === selectedId);
     add.disabled = !agent;
-    chosen.textContent = agent ? `${agent.name} — runs every ${agent.schedule?.periodInMinutes ?? "?"} min once added.` : "Nothing chosen yet.";
+    const cadenceText = formatCadenceMinutes(agent?.schedule?.periodInMinutes);
+    chosen.textContent = agent ? `${agent.name} — runs ${cadenceText || `every ${agent.schedule?.periodInMinutes ?? "?"} min`} once added.` : "Nothing chosen yet.";
     add.textContent = agent ? `Add ${agent.name}` : "Add";
   });
   add.addEventListener("click", async () => {
@@ -2077,7 +2083,10 @@ function renderBackgroundAgentPicker(agents) {
     await renderUnifiedAgentSettings();
   });
   controls.append(chosen, add);
-  host.append(copy, gallery, controls);
+  disclosure.append(summary, copy, gallery, controls);
+  host.setAttribute("role", "group");
+  host.setAttribute("aria-labelledby", title.id);
+  host.append(disclosure);
 }
 
 async function renderUnifiedAgentSettings() {
@@ -2863,13 +2872,16 @@ async function renderUsage(range = currentUsageRange) {
   const cards = $("#usage-cards");
   if (cards) {
     cards.replaceChildren();
-    for (const [n, l] of [
+    const stats = [
       [formatTokens(tok), "total tokens"],
       [formatTokens(safe.inputTokens), "input"],
       [formatTokens(safe.outputTokens), "output"],
-      [formatCost(safe.estimatedCost), "est. cost"],
-      [String(safe.calls), "calls"],
-    ]) {
+    ];
+    if (safe.estimatedCost > 0) {
+      stats.push([formatCost(safe.estimatedCost), "est. cost"]);
+    }
+    stats.push([String(safe.calls), "calls"]);
+    for (const [n, l] of stats) {
       const s = document.createElement("div");
       s.className = "usage-stat";
       const nEl = document.createElement("div");
@@ -3907,6 +3919,93 @@ async function renderSection(sectionId) {
   }
 }
 
+export function expandNavGroup(groupEl) {
+  if (!groupEl) return;
+  const btn = groupEl.querySelector(".nav-group-header");
+  const items = groupEl.querySelector(".nav-group-items");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+  if (items) items.hidden = false;
+}
+
+export function collapseNavGroup(groupEl) {
+  if (!groupEl) return;
+  const btn = groupEl.querySelector(".nav-group-header");
+  const items = groupEl.querySelector(".nav-group-items");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+  if (items) items.hidden = true;
+}
+
+export function toggleNavGroup(groupEl) {
+  if (!groupEl) return;
+  const btn = groupEl.querySelector(".nav-group-header");
+  const isExpanded = btn?.getAttribute("aria-expanded") === "true";
+  if (isExpanded) {
+    collapseNavGroup(groupEl);
+  } else {
+    expandNavGroup(groupEl);
+  }
+}
+
+export function wireNavGroupAccordions(root = document) {
+  if (!root) return;
+  const isNav = root.tagName === "NAV" || (typeof root.matches === "function" && (root.matches("nav.settings-nav") || root.matches("nav[aria-label='Settings categories']")));
+  const nav = isNav ? root : (root.querySelector ? root.querySelector("nav.settings-nav, nav[aria-label='Settings categories']") : null);
+
+  const container = nav || root;
+  if (container.querySelectorAll) {
+    container.querySelectorAll(".nav-group").forEach((group) => {
+      const btn = group.querySelector(".nav-group-header");
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        toggleNavGroup(group);
+      });
+    });
+  }
+
+  if (nav) {
+    nav.addEventListener("keydown", (e) => {
+      if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) return;
+      const visibleLinks = Array.from(nav.querySelectorAll(".nav-item")).filter((a) => {
+        const group = a.closest ? a.closest(".nav-group") : null;
+        if (group) {
+          if (group.hidden) return false;
+          const items = a.closest ? a.closest(".nav-group-items") : null;
+          if (items && items.hidden) return false;
+        }
+        return true;
+      });
+      if (!visibleLinks.length) return;
+      const activeDoc = nav.ownerDocument || (root && root.ownerDocument) || (typeof document !== "undefined" ? document : null);
+      const currentActive = activeDoc ? activeDoc.activeElement : null;
+      const currentIndex = visibleLinks.indexOf(currentActive);
+      let targetIndex = -1;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        targetIndex = currentIndex >= 0 ? (currentIndex + 1) % visibleLinks.length : 0;
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        targetIndex = currentIndex >= 0 ? (currentIndex - 1 + visibleLinks.length) % visibleLinks.length : visibleLinks.length - 1;
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        targetIndex = 0;
+      } else if (e.key === "End") {
+        e.preventDefault();
+        targetIndex = visibleLinks.length - 1;
+      }
+      if (targetIndex >= 0 && visibleLinks[targetIndex]) {
+        visibleLinks[targetIndex].focus();
+        if (activeDoc) {
+          try {
+            activeDoc.activeElement = visibleLinks[targetIndex];
+          } catch {
+            // standard document.activeElement is updated by focus()
+          }
+        }
+      }
+    });
+  }
+}
+
 // nav active state
 export async function handleSettingsHashNavigation(hash, isTraverse = false) {
   let cleanId = typeof hash === "string" ? (hash.startsWith("#") ? hash.slice(1).trim() : hash.trim()) : "";
@@ -3941,6 +4040,8 @@ export async function handleSettingsHashNavigation(hash, isTraverse = false) {
       x.getAttribute("href") === `#${sectionId}`;
     if (match) {
       x.setAttribute("aria-current", "true");
+      const group = x.closest(".nav-group");
+      if (group) expandNavGroup(group);
     } else {
       x.removeAttribute("aria-current");
     }
@@ -4100,6 +4201,7 @@ document.querySelectorAll(".nav-item").forEach((a) => {
     navigationController.navigate(targetHash, { replace: true });
   });
 });
+wireNavGroupAccordions();
 
 // (The legacy "Custom…" reveal wiring for the old select-based model field is
 // gone — the shared <model-picker> makes custom ids a first-class typed path.)

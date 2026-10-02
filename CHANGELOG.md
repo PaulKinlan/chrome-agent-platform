@@ -1,7 +1,8 @@
 # Changelog
 
-- Save any web page as a clean, readable Markdown note in your Artifacts library via the capture_page tool.
 ## [0.3.559] — 2026-10-02
+- Organized Settings navigation into six clear groups, collapsed starter template galleries by default, and replaced raw minute intervals with plain English cadence labels.
+- Save any web page as a clean, readable Markdown note in your Artifacts library via the capture_page tool.
 - Save artifacts directly to disk via Save file picker or download fallback, and allow agents to file deliverables into granted folders with owner approval.
 - Copy agent output with the ledgered write_clipboard tool or attach clipboard text with /paste.
 - Faster rendering of long conversations and tool lists by sharing cached stylesheets across UI components.
