@@ -1,6 +1,10 @@
 # Changelog
 
+## [0.3.564] — 2026-10-02
+- Anchors sidebar navigation (Directory, Artifacts, Settings) to the bottom of the window and spaces open sections proportionally to fill remaining height.
+
 ## [0.3.563] — 2026-10-02
+- Anchored New Tab sidebar navigation (Directory, Artifacts, Settings) to the bottom of the viewport and allowed open collapsible sections to flex proportionally to fill remaining sidebar height without fixed 120px–160px height caps.
 - Overhauled New Tab sidebar with section icons, a 56px collapsed icon rail with direct section jump buttons, compact task and agent rows with clean persona summaries, borderless ghost buttons, aligned footer actions, and a drawer icon for quick artifacts.
 - Redesigned Hub Timeline filters (All, Running, Waiting, Completed, Failed, Made, Scheduled), added keyword search, collapsible topic grouping clusters, timeline artifact previews, and smooth pagination across historical runs.
 - Redesigned Artifacts gallery with scaled miniature desktop previews without scrollbars, non-wrapping action buttons, formatted size badges, title and kind search filters, and a wide-screen split preview inspector.

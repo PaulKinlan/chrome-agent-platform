@@ -261,8 +261,8 @@
       margin-inline-start: 4px;
     }
     #tasks-section[open] {
-      flex: 1 1 280px;
-      min-height: 200px;
+      flex: 1.6 1 160px;
+      min-height: 110px;
       display: flex;
       flex-direction: column;
     }
@@ -288,32 +288,61 @@
       max-height: none;
       overflow-y: auto;
     }
-    #failed-runs, #harness-presence, #board-strip, #agents-section, #activity-section {
+    #agents-section[open] {
+      flex: 1.2 1 130px;
+      min-height: 96px;
+      display: flex;
+      flex-direction: column;
+    }
+    #board-strip[open],
+    #activity-section[open],
+    #failed-runs[open] {
+      flex: 1 1 96px;
+      min-height: 76px;
+      display: flex;
+      flex-direction: column;
+    }
+    #harness-presence {
       flex: 0 0 auto;
     }
-    #failed-runs[open], #harness-presence[open], #board-strip[open], #agents-section[open], #activity-section[open] {
+    #harness-presence[open] {
       flex: 0 0 auto;
       display: flex;
       flex-direction: column;
     }
-    .fr-list { max-height: 120px; overflow-y: auto; }
+    .fr-list {
+      flex: 1 1 auto;
+      min-height: 0;
+      max-height: none;
+      overflow-y: auto;
+    }
     .bs-list {
       display: flex;
+      flex: 1 1 auto;
       flex-direction: column;
       gap: 4px;
       padding: 4px 4px 8px;
-      max-height: 120px;
+      min-height: 0;
+      max-height: none;
       overflow-y: auto;
     }
     .agents-list, #side-agents {
-      max-height: 140px;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-height: 0;
+      max-height: none;
       overflow-y: auto;
     }
     .activity-list {
-      max-height: 160px;
+      display: flex;
+      flex: 1 1 auto;
+      flex-direction: column;
+      min-height: 0;
+      max-height: none;
       overflow-y: auto;
     }
-    .side-activity { flex: 0 0 auto; max-block-size: 40%; overflow-y: auto; }
+    .side-activity { flex: 0 0 auto; overflow-y: auto; }
     .side-activity > summary { cursor: pointer; list-style: none; flex: 0 0 auto; min-height: 34px; }
     .side-activity > summary::-webkit-details-marker { display: none; }
     .harness-list { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; padding: 4px 6px 8px; }
@@ -955,6 +984,8 @@
       padding: 0 4px;
     }
     .side-foot {
+      margin-block-start: auto;
+      flex: 0 0 auto;
       border-top: 1px solid var(--border);
       padding-top: 12px;
       display: flex;

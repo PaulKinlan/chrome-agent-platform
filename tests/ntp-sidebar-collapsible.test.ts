@@ -44,9 +44,9 @@ Deno.test("5vk4: sidebar collapsible disclosure sections and markup in ntp.html"
 
   // Tasks primary flex height rules
   assert(
-    /#tasks-section\[open\]\s*\{[^}]*flex:\s*1\s+1\s+(?:220px|280px)/s.test(html) ||
-    /#tasks-section\[open\]\s*\{[^}]*min-height:\s*(?:160px|200px)/s.test(html),
-    "#tasks-section[open] must have flex: 1 1 280px or min-height: 200px",
+    /#tasks-section\[open\]\s*\{[^}]*flex:\s*(?:1|1\.6)\s+1\s+(?:160px|220px|280px)/s.test(html) ||
+    /#tasks-section\[open\]\s*\{[^}]*min-height:\s*(?:110px|160px|200px)/s.test(html),
+    "#tasks-section[open] must have flex: 1.6 1 160px or min-height: 110px",
   );
 
   // Failed runs disclosure
@@ -242,10 +242,10 @@ Deno.test("5vk4: side disclosure summary min-height, inner list bounds, and cent
   );
 
   // Secondary disclosure inner list max-heights
-  assert(/\.fr-list\s*\{[^}]*max-height:\s*120px/s.test(html), ".fr-list must have max-height: 120px");
-  assert(/\.bs-list\s*\{[^}]*max-height:\s*120px/s.test(html), ".bs-list must have max-height: 120px");
-  assert(/\.agents-list[^{]*\{[^}]*max-height:\s*(?:140px|150px)/s.test(html), ".agents-list must have max-height: 140px or 150px");
-  assert(/\.activity-list\s*\{[^}]*max-height:\s*160px/s.test(html), ".activity-list must have max-height: 160px");
+  assert(/\.fr-list\s*\{[^}]*max-height:\s*(?:120px|none)/s.test(html), ".fr-list must have max-height: 120px or none");
+  assert(/\.bs-list\s*\{[^}]*max-height:\s*(?:120px|none)/s.test(html), ".bs-list must have max-height: 120px or none");
+  assert(/\.agents-list[^{]*\{[^}]*max-height:\s*(?:140px|150px|none)/s.test(html), ".agents-list must have max-height: 140px, 150px, or none");
+  assert(/\.activity-list\s*\{[^}]*max-height:\s*(?:160px|none)/s.test(html), ".activity-list must have max-height: 160px or none");
 
   // .side.collapsed centering
   assert(
@@ -434,5 +434,57 @@ Deno.test("kr97: ghost button styling, footer padding fix, and quick drawer icon
     "board settled button must be styled with text-align: left",
   );
 });
+
+Deno.test("mxra: .side-foot is anchored to bottom via margin-block-start: auto and open sections flex to fill remaining height without 120px/140px max-height caps", async () => {
+  const html = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.html`);
+
+  // a) .side-foot CSS includes margin-block-start: auto (or margin-top: auto) and flex: 0 0 auto
+  assert(
+    /\.side-foot\s*\{[^}]*(?:margin-block-start|margin-top):\s*auto/s.test(html),
+    ".side-foot must have margin-block-start: auto or margin-top: auto",
+  );
+  assert(
+    /\.side-foot\s*\{[^}]*(?:flex:\s*0\s+0\s+auto|flex-shrink:\s*0)/s.test(html),
+    ".side-foot must have flex: 0 0 auto or flex-shrink: 0",
+  );
+
+  // b) open sections have positive flex-grow (NOT flex: 0 0 auto)
+  for (const id of ["tasks-section", "agents-section", "board-strip", "activity-section", "failed-runs"]) {
+    const regex = new RegExp(`#${id}\\[open\\][^{]*\\{[^}]*flex:\\s*([0-9.]+)\\s+`, "s");
+    const m = html.match(regex);
+    assert(m, `#${id}[open] must declare flex property`);
+    const flexGrow = parseFloat(m[1]);
+    assert(flexGrow > 0, `#${id}[open] must have positive flex-grow, got ${flexGrow}`);
+  }
+
+  // details.side-disclosure:not([open]) has flex: 0 0 auto !important
+  assert(
+    /details\.side-disclosure:not\(\[open\]\)\s*\{[^}]*flex:\s*0\s+0\s+auto\s*!important/s.test(html),
+    "details.side-disclosure:not([open]) must have flex: 0 0 auto !important",
+  );
+
+  // c) .agents-list, #side-agents, .bs-list, .activity-list, and .fr-list have flex: 1 1 auto and max-height: none
+  assert(
+    /\.agents-list[^{]*\{[^}]*max-height:\s*none/s.test(html) &&
+    /\.agents-list[^{]*\{[^}]*flex:\s*1\s+1\s+auto/s.test(html),
+    ".agents-list must have flex: 1 1 auto and max-height: none",
+  );
+  assert(
+    /\.bs-list\s*\{[^}]*max-height:\s*none/s.test(html) &&
+    /\.bs-list\s*\{[^}]*flex:\s*1\s+1\s+auto/s.test(html),
+    ".bs-list must have flex: 1 1 auto and max-height: none",
+  );
+  assert(
+    /\.activity-list\s*\{[^}]*max-height:\s*none/s.test(html) &&
+    /\.activity-list\s*\{[^}]*flex:\s*1\s+1\s+auto/s.test(html),
+    ".activity-list must have flex: 1 1 auto and max-height: none",
+  );
+  assert(
+    /\.fr-list\s*\{[^}]*max-height:\s*none/s.test(html) &&
+    /\.fr-list\s*\{[^}]*flex:\s*1\s+1\s+auto/s.test(html),
+    ".fr-list must have flex: 1 1 auto and max-height: none",
+  );
+});
+
 
 
