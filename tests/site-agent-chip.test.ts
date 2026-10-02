@@ -186,5 +186,5 @@ Deno.test("site-agent chip: the hub composes the chip after the composer (Tab #1
   assert(js.includes('send("agent.tool-offers"'), "the hub reads the permission-free tool offers");
   const dir = await Deno.readTextFile(new URL("../extension/directory/directory.js", import.meta.url));
   assert(!dir.includes("Browse the web with the extension installed"), "the Directory empty copy says what actually happens");
-  assertMatch(dir, /the hub shows a chip/);
+  assert(dir.includes("directory_empty_desc"), "the Directory uses localized empty description");
 });

@@ -886,7 +886,8 @@ export class LazyToolProtocol {
     let snapshot;
     try {
       snapshot = await this.#snapshot();
-    } catch {
+    } catch (e) {
+      console.error?.("[lazy-tool-protocol] search snapshot error:", e);
       return fixedError("lazy-source-unavailable");
     }
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
@@ -913,7 +914,8 @@ export class LazyToolProtocol {
     let snapshot;
     try {
       snapshot = await liveSnapshot(this.#readSources);
-    } catch {
+    } catch (e) {
+      console.error?.("[lazy-tool-protocol] list liveSnapshot error:", e);
       return fixedError("lazy-source-unavailable");
     }
     if (isAborted(signal)) return fixedError("lazy-run-aborted");
@@ -987,7 +989,8 @@ export class LazyToolProtocol {
     let first;
     try {
       first = await liveSnapshot(this.#readSources);
-    } catch {
+    } catch (e) {
+      console.error?.("[lazy-tool-protocol] execute first liveSnapshot error:", e);
       return fixedError("lazy-source-unavailable");
     }
     const selectionRef = ownData(request, "selectionRef");
@@ -1037,7 +1040,8 @@ export class LazyToolProtocol {
     let dispatchSnapshot;
     try {
       dispatchSnapshot = await liveSnapshot(this.#readSources);
-    } catch {
+    } catch (e) {
+      console.error?.("[lazy-tool-protocol] execute dispatchSnapshot error:", e);
       return released(fixedError("lazy-source-unavailable"));
     }
     const dispatchResolved = this.#revalidateAcrossGrant(
@@ -1141,7 +1145,8 @@ export class LazyToolProtocol {
     let after;
     try {
       after = await liveSnapshot(this.#readSources);
-    } catch {
+    } catch (e) {
+      console.error?.("[lazy-tool-protocol] execute after liveSnapshot error:", e);
       return released(fixedError("lazy-source-unavailable"));
     }
     // An owner grant that landed while this call was in flight regenerated

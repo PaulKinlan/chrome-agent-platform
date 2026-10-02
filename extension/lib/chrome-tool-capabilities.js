@@ -8,8 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 139,
-  managementTools: 51,
-  totalTools: 190,
+  managementTools: 52,
+  totalTools: 191,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -218,6 +218,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "table_group_aggregate",
   "table_pivot",
   "table_formula",
+  "write_clipboard",
 ]);
 
 export const FLAGGED_FOR_LATER_PROVIDER_CUTOVER = Object.freeze([
@@ -561,6 +562,7 @@ const rows = [
   record("table_group_aggregate", "management", ["management.table.group-aggregate"], [], "none", "idempotent", false, "idempotent", "management.table"),
   record("table_pivot", "management", ["management.table.pivot"], [], "none", "idempotent", false, "idempotent", "management.table"),
   record("table_formula", "management", ["management.table.formula"], [], "none", "idempotent", false, "idempotent", "management.table"),
+  record("write_clipboard", "management", ["management.clipboard.write"], [], "none", "mutating", false, "mutating", "management.clipboard"),
   // Tranche-12 Chrome API coverage:
   // browser-wide global grant), user scripts + dynamic content scripts
   // (single-origin matches; destination-origin grant coverage; host

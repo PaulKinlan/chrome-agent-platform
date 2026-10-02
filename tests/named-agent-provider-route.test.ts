@@ -183,6 +183,7 @@ Deno.test("named-agent.set-provider ROUTE: blank same-provider Save preserves th
     ownerApprovalStore: store, activeExecutions: new Set(["exec-18ug"]), progressPorts: new Set(["conversation"]),
     opaqueTargetRef: async () => "opaque-test-ref",
     securityApprovalEvent: () => {}, broadcastProgress: () => {}, broadcastRegistryChanged: () => {},
+    attention: { cardOpened: () => {}, cardClosed: () => {} },
     setTimeout, clearTimeout,
   });
   for (const approve of [false, true]) {

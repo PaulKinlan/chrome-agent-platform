@@ -267,6 +267,7 @@ const BUILT_IN_TOOLS = new Set([
   "unsubscribe_hook", "generate_ui", "create_script", "update_script",
   "delete_script", "list_scripts", "get_script", "run_script", "python_execute",
   "table_filter", "table_select", "table_join", "table_group_aggregate", "table_pivot", "table_formula",
+  "write_clipboard",
   // Per-agent schedule controls: mutating built-ins (route-gated by owner
   // approval; a replay re-runs the gated route, so the gate re-arms).
   "schedules_pause", "schedules_resume", "schedules_update",

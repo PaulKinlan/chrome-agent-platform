@@ -5,6 +5,7 @@
 // @ts-nocheck
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { fileURLToPath } from "node:url";
 import {
   isExcludedDiagnosticBadgeEntry,
   countDiagnosticsBadgeErrors,
@@ -14,7 +15,7 @@ import { launchChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 import { openCdp, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
 
-const EXT = new URL("../extension", import.meta.url).pathname;
+const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 
 function findChromeForTesting(): string | null {
   const env = Deno.env.get("CHROME_BINARY");

@@ -104,7 +104,7 @@ Deno.test("site delegation WIRING: service-worker wires attachments and progress
   assertStringIncludes(sw, 'async "agent.delegate"({ origin, task, threadId = null, attachments = []');
 
   // Check agent.delegate builds context and multimodal task
-  assertStringIncludes(sw, "const delegateContext = attachmentContext(validAttachments);");
+  assertStringIncludes(sw, "const delegateContext = attachmentContext(validAttachments");
   assertStringIncludes(sw, "const promptTask = buildMultimodalTask(task, validAttachments);");
 
   // Check agent.delegate filters out local-folder grants

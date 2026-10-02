@@ -99,6 +99,7 @@ export const CENSUS_CATEGORIES = {
     "agent.create", "agent.enroll-origin", "agent.retry-cleanup", "agent.pending-cleanup",
     "task.cancel", "task.cancelBackground", "schedule.cancelOrphans", "diagnostics.clear",
     "security.clear", "usage.clear", "webmcp.diagnostics.set", "skills.set",
+    "clipboard.write", "write_clipboard", "page.capture", "capture.page", "asset.export-to-folder",
   ]),
   READ_ONLY_STATUS_TELEMETRY: new Set([
     "actions.list", "activity.list", "agent-workspace.usage", "agent.directory",
@@ -123,6 +124,7 @@ export const CENSUS_CATEGORIES = {
     "thread.get", "thread.list", "tools.allOrigins", "tools.consent.states",
     "tools.policies", "usage.get", "webmcp.status",
     "python.network.grants",
+    "onDeviceText.summarize", "onDeviceText.detectLanguage", "onDeviceText.translate", "onDeviceText.availability",
   ]),
 };
 
@@ -187,9 +189,9 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 263", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 272", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 263, `registered routes population must equal 263 (got ${registered.size})`);
+  assertEquals(registered.size, 272, `registered routes population must equal 272 (got ${registered.size})`);
 });
 
 Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {

@@ -366,9 +366,11 @@ export async function revokeBrowserControlGrant() {
   });
 }
 
-/** Resolve the active tab in the current window. */
+/** Resolve the active tab in the browser (last-focused window, falling back to currentWindow). */
 async function activeTab() {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const lastFocused = await chrome.tabs.query({ active: true, lastFocusedWindow: true }).catch(() => []);
+  if (lastFocused[0]) return lastFocused[0];
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   return tabs[0] ?? null;
 }
 

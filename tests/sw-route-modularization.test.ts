@@ -326,6 +326,15 @@ const BASELINE_ROUTES = [
   "security.state",
   "security.clear",
   "browser.callTool",
+  "onDeviceText.summarize",
+  "onDeviceText.detectLanguage",
+  "onDeviceText.translate",
+  "onDeviceText.availability",
+  "clipboard.write",
+  "write_clipboard",
+  "page.capture",
+  "capture.page",
+  "asset.export-to-folder",
 ];
 
 Deno.test("sw routes: mergeRouteMaps combines maps and detects collisions", () => {
