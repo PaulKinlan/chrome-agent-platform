@@ -42,7 +42,8 @@
     "power",
     "search",
     "webRequest",
-    "userScripts"
+    "userScripts",
+    "clipboardWrite"
   ],
   "chrome_url_overrides": {
     "newtab": "ntp/ntp.html"

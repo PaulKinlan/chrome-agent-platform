@@ -94,3 +94,6 @@ export function renderUntrustedPolicy(token = UNTRUSTED_TOKEN_PLACEHOLDER) {
 }
 
 export const UNTRUSTED_POLICY_PLACEHOLDER = renderUntrustedPolicy(UNTRUSTED_TOKEN_PLACEHOLDER);
+
+/** Alias for fenceUntrustedText for wrapping untrusted content with boundary tokens. */
+export const wrapUntrustedContent = fenceUntrustedText;

@@ -63,6 +63,10 @@ const FILES = [
   // Diagnostics badge categorization and exclusion rules
   // (components.js imports it — the gallery must resolve it).
   ["extension/lib/diagnostics-badge.js", "docs/diagnostics-badge.js"],
+  // Untrusted boundary helpers (clipboard-tools.js imports it).
+  ["extension/lib/untrusted-fence.js", "docs/untrusted-fence.js"],
+  // Clipboard tools (components.js imports it).
+  ["extension/lib/clipboard-tools.js", "docs/clipboard-tools.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -110,6 +114,8 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/hub-timeline.js', './hub-timeline.js'));
       // Diagnostics badge helpers sit in lib/; the gallery copy is beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../lib/diagnostics-badge.js', './diagnostics-badge.js'));
+      // Clipboard tools sits in lib/; the gallery copy is beside components.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/clipboard-tools.js', './clipboard-tools.js'));
       // <artifact-diff> imports the diff core by its dist path; the gallery
       // copy of the bundle sits beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));

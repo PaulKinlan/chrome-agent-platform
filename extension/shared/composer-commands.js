@@ -88,6 +88,13 @@ export const COMMAND_NAMESPACES = Object.freeze([
     description: "translate the attached tab or selection on-device",
     kind: "free",
   },
+  {
+    id: "paste",
+    label: "paste",
+    description: "attach text from clipboard",
+    kind: "paste",
+    direct: true,
+  },
 ]);
 
 // Shared 18px currentColor stroke icons for the composer + attach menu
@@ -95,6 +102,8 @@ export const COMMAND_NAMESPACES = Object.freeze([
 export const ATTACH_MENU_ICONS = Object.freeze({
   file:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>',
+  "paste-clipboard":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>',
   "record-audio":
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>',
   "capture-camera":
@@ -406,6 +415,15 @@ export async function loadComposerCommandItems(
           prompt: `Translate this to ${lang} on-device`,
         },
       ];
+    }
+    case "paste": {
+      return [{
+        id: "paste:clipboard",
+        label: "Paste from clipboard",
+        description: "attach clipboard text safely fenced as untrusted data",
+        kind: "paste",
+      }];
+    }
     }
     default:
       return [];

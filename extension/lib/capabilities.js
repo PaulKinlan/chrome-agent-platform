@@ -331,6 +331,15 @@ export const CAPABILITIES = [
     hint: "Observe (never block or modify) web requests for sites you already granted host access to. Blocking webRequest is not available without enterprise policy.",
     gates: "Gates: reading observed request activity.",
   },
+  {
+    id: "clipboardWrite",
+    group: "system",
+    permissions: ["clipboardWrite"],
+    label: "Clipboard",
+    hint: "Copy text to the clipboard. Without the grant, the write_clipboard tool is refused.",
+    gates: "Gates: write_clipboard tool.",
+    chromeOsOnly: false,
+  },
 ];
 
 /** Whether a permission (or the equivalent) is currently granted. */

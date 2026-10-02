@@ -80,6 +80,7 @@ import {
   isTextLikeAttachment,
   textToDataUrl,
 } from "../lib/attachments.js";
+import { readClipboardOnGesture } from "../lib/clipboard-tools.js";
 
 const ARIA_HIDDEN = "aria-hidden";
 const TRUE = ""; // boolean-attribute present marker
@@ -2015,6 +2016,7 @@ class AttachButton extends Component {
         aria-expanded="${open}" aria-label="${escapeHtml(label)}">${ICONS.plus}</button>
       <div class="menu attach-menu" role="menu" aria-label="${escapeHtml(label)}" popover="manual"${open ? "" : " hidden"}>
         <button type="button" role="menuitem" data-kind="file">${ATTACH_MENU_ICONS["file"]}Add file</button>
+        <button type="button" role="menuitem" data-kind="paste-clipboard">${ATTACH_MENU_ICONS["paste-clipboard"]}Paste from clipboard</button>
         <button type="button" role="menuitem" data-kind="record-audio">${ATTACH_MENU_ICONS["record-audio"]}Record audio</button>
         <button type="button" role="menuitem" data-kind="capture-camera">${ATTACH_MENU_ICONS["capture-camera"]}Capture camera</button>
         <button type="button" role="menuitem" data-kind="record-screen">${ATTACH_MENU_ICONS["record-screen"]}Record screen</button>
@@ -2045,6 +2047,10 @@ class AttachButton extends Component {
       if (!b) return;
       this._toggle(false);
       const kind = b.dataset.kind;
+      if (kind === "paste-clipboard") {
+        this._emit("paste-clipboard");
+        return;
+      }
       if (kind === "record-audio" || kind === "capture-camera") {
         this._emit("attach-media", { kind });
         return;
@@ -7877,6 +7883,7 @@ class AgentComposer extends Component {
     });
     this._attach?.addEventListener("attach-media", (e) => this._captureMedia(e.detail?.kind));
     this._attach?.addEventListener("attach-context", (e) => this._contextAction(e.detail?.kind));
+    this._attach?.addEventListener("paste-clipboard", () => this._pasteFromClipboard());
     this._attach?.addEventListener("attach-error", (e) => this.setStatus(e.detail?.message || "attachment rejected", false));
     this._mic?.addEventListener("mic-error", (e) => this.setStatus(e.detail?.message || "mic error", false));
     // the + menu's "Choose agent" → the shared <agent-picker> in a top-layer
@@ -8286,6 +8293,31 @@ class AgentComposer extends Component {
         ? "screen capture permission denied"
         : "couldn't " + kind + ": " + (e?.message ?? e);
       this.setStatus(msg, false);
+    }
+  }
+
+  async _pasteFromClipboard() {
+    try {
+      const res = await readClipboardOnGesture({
+        hasUserGesture: true,
+        readTextFn: () => (navigator.clipboard?.readText ? navigator.clipboard.readText() : Promise.resolve("")),
+      });
+      if (res.ok && res.rawText) {
+        this._attachMedia({
+          name: "clipboard.txt",
+          type: "text/plain",
+          size: new TextEncoder().encode(res.rawText).byteLength,
+          kind: "text",
+          text: res.text,
+          untrusted: true,
+          source: "clipboard",
+        });
+        this.setStatus("Attached clipboard text.");
+      } else {
+        this.setStatus(res.error || "Clipboard is empty.", false);
+      }
+    } catch (e) {
+      this.setStatus(`Couldn't read clipboard: ${e?.message ?? e}`, false);
     }
   }
 
@@ -8852,6 +8884,13 @@ class AgentComposer extends Component {
         input.setRangeText("", token.start, token.end, "end");
         this._hidePopup();
         this._attachLocalFolder(item);
+        input.focus();
+        return;
+      }
+      if (item.kind === "paste") {
+        input.setRangeText("", token.start, token.end, "end");
+        this._hidePopup();
+        await this._pasteFromClipboard();
         input.focus();
         return;
       }

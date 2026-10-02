@@ -43,6 +43,13 @@ export const PERMISSION_USER_LANGUAGE = Object.freeze({
   "system.cpu": "see system CPU details",
   "system.storage": "see system storage details",
   "system.display": "see display details",
+  clipboardWrite: "copy text to the clipboard",
+  write_clipboard: "Copy text to clipboard",
+});
+
+/** Human labels for model-facing or management tools shown in approval/activity surfaces. */
+export const TOOL_HUMAN_LABELS = Object.freeze({
+  write_clipboard: "Copy text to clipboard",
 });
 
 /** A permission token as plain words: "tabGroups" → "tab groups",
@@ -50,6 +57,11 @@ export const PERMISSION_USER_LANGUAGE = Object.freeze({
  * permission"). */
 export function permissionPlainName(permission) {
   return String(permission ?? "").replace(/[._-]+/g, " ").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().trim();
+}
+
+/** The human-readable label for a tool name. */
+export function toolHumanLabel(toolName) {
+  return TOOL_HUMAN_LABELS[toolName] || PERMISSION_USER_LANGUAGE[toolName] || permissionPlainName(toolName);
 }
 
 /** The user-language phrase for a permission. An unknown token falls back to

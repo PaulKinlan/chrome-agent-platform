@@ -1,6 +1,7 @@
 # Changelog
 
-## [0.3.559] — 2026-10-01
+## [0.3.559] — 2026-10-02
+- Copy agent output with the ledgered write_clipboard tool or attach clipboard text with /paste.
 - Faster rendering of long conversations and tool lists by sharing cached stylesheets across UI components.
 - Cleaner section navigation in Settings and fewer false-alarm error counts in the hub Diagnostics badge.
 - Clearer Data & memory page with plain-language explanations and calmer destructive action styling.
