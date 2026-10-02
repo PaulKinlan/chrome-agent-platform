@@ -448,13 +448,21 @@ Deno.test("mxra: .side-foot is anchored to bottom via margin-block-start: auto a
     ".side-foot must have flex: 0 0 auto or flex-shrink: 0",
   );
 
-  // b) open sections have positive flex-grow (NOT flex: 0 0 auto)
-  for (const id of ["tasks-section", "agents-section", "board-strip", "activity-section", "failed-runs"]) {
+  // b) open primary sections have positive flex-grow (NOT flex: 0 0 auto)
+  for (const id of ["tasks-section", "agents-section", "activity-section"]) {
     const regex = new RegExp(`#${id}\\[open\\][^{]*\\{[^}]*flex:\\s*([0-9.]+)\\s+`, "s");
     const m = html.match(regex);
     assert(m, `#${id}[open] must declare flex property`);
     const flexGrow = parseFloat(m[1]);
     assert(flexGrow > 0, `#${id}[open] must have positive flex-grow, got ${flexGrow}`);
+  }
+
+  // board-strip and failed-runs use flex: 0 1 auto and max-height: 220px
+  for (const id of ["board-strip", "failed-runs"]) {
+    const regex = new RegExp(`#${id}\\[open\\][^{]*\\{[^}]*flex:\\s*0\\s+1\\s+auto`, "s");
+    assert(regex.test(html), `#${id}[open] must declare flex: 0 1 auto`);
+    const maxH = new RegExp(`#${id}\\[open\\][^{]*\\{[^}]*max-height:\\s*220px`, "s");
+    assert(maxH.test(html), `#${id}[open] must declare max-height: 220px`);
   }
 
   // details.side-disclosure:not([open]) has flex: 0 0 auto !important

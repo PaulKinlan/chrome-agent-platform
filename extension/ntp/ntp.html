@@ -294,11 +294,16 @@
       display: flex;
       flex-direction: column;
     }
-    #board-strip[open],
-    #activity-section[open],
-    #failed-runs[open] {
+    #activity-section[open] {
       flex: 1 1 96px;
       min-height: 76px;
+      display: flex;
+      flex-direction: column;
+    }
+    #board-strip[open],
+    #failed-runs[open] {
+      flex: 0 1 auto;
+      max-height: 220px;
       display: flex;
       flex-direction: column;
     }
