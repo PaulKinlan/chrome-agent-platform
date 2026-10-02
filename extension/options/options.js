@@ -119,10 +119,10 @@ async function wireObservabilitySettings() {
 const RUN_RETENTION_KEY = "cap:runRetention";
 function describeRetentionBound(policy) {
   if (!policy || policy.mode === "retain-all") {
-    return "On: every run keeps its full step-by-step detail until you clear it. Storage grows with use.";
+    return "Every run keeps its full step-by-step detail until you clear it. Storage grows with use.";
   }
   const mib = Math.round((policy.globalBytes ?? 32 * 1024 * 1024) / (1024 * 1024));
-  return `Off: full detail for the newest ${policy.perThread ?? 50} runs per task and the newest ${policy.globalExecutions ?? 500} runs overall (up to ${mib} MiB); older runs keep a summary line.`;
+  return `Full detail for the newest ${policy.perThread ?? 50} runs per task and the newest ${policy.globalExecutions ?? 500} runs overall (up to ${mib} MiB); older runs keep a summary line.`;
 }
 async function wireRunRetentionSettings() {
   const toggle = document.getElementById("run-retention-keep-all");

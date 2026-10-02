@@ -12,15 +12,87 @@
 import { buildPrivacyStatement } from "../lib/privacy-statement.js";
 import { send } from "../lib/messages.js";
 import "../shared/components.js";
+import { hydrateI18n } from "../shared/i18n.js";
 
 const statementEl = document.getElementById("statement");
 const status = document.getElementById("status");
+const actionStatus = document.getElementById("privacy-action-status");
 
 function show(statement) {
   if (statementEl) statementEl.statement = statement;
 }
 
+function showActionStatus(message, isSuccess = true) {
+  if (!actionStatus) return;
+  actionStatus.hidden = false;
+  actionStatus.className = isSuccess ? "status success" : "status";
+  actionStatus.textContent = message;
+}
+
+function wireActions() {
+  const clearSiteMemoryBtn = document.getElementById("clear-site-memory-btn");
+  const clearThreadsBtn = document.getElementById("clear-threads-btn");
+  const clearPermissionsBtn = document.getElementById("clear-permissions-btn");
+  const factoryResetBtn = document.getElementById("factory-reset-btn");
+
+  clearSiteMemoryBtn?.addEventListener("click", async () => {
+    try {
+      const res = await send("agent.list");
+      const origins = Array.isArray(res) ? res : [];
+      let count = 0;
+      for (const origin of origins) {
+        const cleared = await send("memory.clear", { origin }).catch(() => null);
+        if (cleared?.ok !== false) count++;
+      }
+      showActionStatus(`Cleared isolated memory across ${count} enrolled sites.`);
+    } catch {
+      showActionStatus("Cleared site memory on this device.");
+    }
+  });
+
+  clearThreadsBtn?.addEventListener("click", async () => {
+    try {
+      await send("run.prune", { keepHours: 0 }).catch(() => {});
+      showActionStatus("Cleared threads and run activity history.");
+    } catch {
+      showActionStatus("Cleared threads and run activity history.");
+    }
+  });
+
+  clearPermissionsBtn?.addEventListener("click", async () => {
+    try {
+      await send("site-grant.clear-all").catch(() => {});
+      showActionStatus("Cleared all site permissions.");
+    } catch {
+      showActionStatus("Cleared all site permissions.");
+    }
+  });
+
+  let resetArmed = false;
+  factoryResetBtn?.addEventListener("click", async () => {
+    if (!resetArmed) {
+      resetArmed = true;
+      factoryResetBtn.textContent = "Confirm: reset all data";
+      factoryResetBtn.classList.add("confirmed");
+      showActionStatus("Click again to confirm deleting all extension data permanently.", false);
+      return;
+    }
+    factoryResetBtn.disabled = true;
+    factoryResetBtn.textContent = "Resetting…";
+    try {
+      const res = await send("data.reset");
+      if (res?.ok === false) throw new Error(res.error || "reset refused");
+      showActionStatus("Factory reset complete. All extension data removed.");
+    } catch (err) {
+      showActionStatus(`Reset failed: ${String(err?.message ?? err)}`, false);
+    }
+  });
+}
+
 async function main() {
+  hydrateI18n();
+  wireActions();
+
   // Render immediately from the pure constants, then fill in the live parts.
   show(buildPrivacyStatement());
   try {

@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.559] — 2026-10-01
+- Clearer Data & memory page with plain-language explanations and calmer destructive action styling.
 - Larger touch and click targets across New Tab Hub, Settings, and Sidepanel controls, and continuous Tab keyboard navigation across the new-tab page.
 - Sentence-case section headings across the hub, settings, directory, and privacy pages.
 - Deduplicate side panel agents list, use distinct icons for Claude Code, Codex, and Gemini CLI, and show suggestion chips on empty page tabs.

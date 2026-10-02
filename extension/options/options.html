@@ -437,7 +437,7 @@
       <section id="data" class="panel">
         <h2 data-i18n="options_data_memory_1">Data & memory</h2>
         <p
-          class="muted">Per-origin memory is stored in OPFS, keyed by origin — one site can never read another. Browse each agent's memory below.</p>
+          class="muted">Each agent's memory is kept on this device, apart per site — one site can never read another. Browse each agent's memory below.</p>
         <div id="memory-explorer" class="memory-explorer"></div>
         <div id="origin-list" class="origin-list"></div>
 
@@ -450,7 +450,7 @@
             <switch-toggle id="run-retention-keep-all" label="Keep every run log"></switch-toggle>
             <div class="toggle-text">
               <span class="toggle-name" data-i18n="options_keep_every_run_log">Keep every run log</span>
-              <span class="muted" id="run-retention-bound">Off: full detail for the newest 50 runs per task and the newest 500 runs overall (up to 32 MiB); older runs keep a summary line.</span>
+              <span class="muted" id="run-retention-bound">Full detail for the newest 50 runs per task and the newest 500 runs overall (up to 32 MiB); older runs keep a summary line.</span>
             </div>
           </div>
         </div>
@@ -465,8 +465,8 @@
             <select id="purge-journal-agent" class="input-select" style="max-width:260px;">
               <option value="" data-i18n="options_all_agents">All agents</option>
             </select>
-            <button type="button" class="btn" id="purge-journals-btn" data-i18n="options_purge_journals">Purge journals…</button>
-            <button type="button" class="btn" id="sweep-orphans-btn" data-i18n="options_clean_up_leftover_files">Clean up leftover files…</button>
+            <button type="button" class="btn btn-danger" id="purge-journals-btn" data-i18n="options_purge_journals">Purge journals…</button>
+            <button type="button" class="btn btn-danger" id="sweep-orphans-btn" data-i18n="options_clean_up_leftover_files">Clean up leftover files…</button>
           </div>
           <p id="maintenance-status" role="status" aria-live="polite" class="muted" style="margin: 10px 0 0; font-size: 13px;"></p>
         </div>

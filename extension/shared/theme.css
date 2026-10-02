@@ -164,6 +164,24 @@ a:hover { text-decoration: underline; text-underline-offset: 2px; }
   color: var(--text);
 }
 .btn.ghost:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
+.btn.danger,
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+.btn.danger:hover,
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn.danger.filled,
+.btn-danger-filled {
+  background: var(--danger);
+  color: var(--btn-fg, #ffffff);
+  border-color: var(--danger);
+}
 
 /* Consistent icon-button scale (mic, +, and any icon action across surfaces). */
 .icon-btn {

@@ -392,6 +392,39 @@
   },
   "directory_empty_action": {
     "message": "Connect a remote agent"
+  },
+  "privacy_lead_summary": {
+    "message": "Everything below is read from the extension's own lists, so it changes when the extension does."
+  },
+  "privacy_data_management_title": {
+    "message": "Data & memory on this device"
+  },
+  "privacy_data_management_lead": {
+    "message": "Your data stays on your device. Each agent's memory and site data are kept isolated per site, so one site can never inspect or access another site's memory or tools."
+  },
+  "privacy_storage_summary": {
+    "message": "Settings, agent conversations, site permissions, and cached models remain under your control and never leave this device unless you explicitly export them."
+  },
+  "privacy_technical_storage_summary": {
+    "message": "Technical storage details"
+  },
+  "privacy_clear_site_memory": {
+    "message": "Clear site memory"
+  },
+  "privacy_clear_threads": {
+    "message": "Clear threads"
+  },
+  "privacy_clear_permissions": {
+    "message": "Clear permissions"
+  },
+  "privacy_factory_reset": {
+    "message": "Reset all data…"
+  },
+  "privacy_open_data_memory": {
+    "message": "Open Data & memory"
+  },
+  "privacy_back_to_settings": {
+    "message": "Back to Settings"
   }
 }
 

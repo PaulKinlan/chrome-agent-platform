@@ -110,6 +110,18 @@ const BANNED_TERMS = [
     why: 'the system\'s word, not the reader\'s — say what the person can do next (docs/COPY.md lists the banned words and the voice rule)',
     advancedExempt: true,
   },
+  {
+    id: "opfs",
+    test: /\bOPFS\b/i,
+    why: 'OPFS is an implementation backend noun — say "kept on this device" or "browser storage", never "OPFS"',
+    advancedExempt: true,
+  },
+  {
+    id: "master",
+    test: /\bMaster\b/,
+    why: 'say "the hub" — never "Master"',
+    advancedExempt: true,
+  },
 ];
 
 // ── rule 2: Skills is not a destination ───────────────────────────────────

@@ -1150,10 +1150,30 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   grid-area: hint;
   font-size: 0.8rem;
 }
-.perm-row .btn {
-  grid-area: btn;
+.btn.danger,
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
 }
-.btn.danger { background: var(--danger); color: var(--btn-fg); border-color: var(--danger); }
+.btn.danger:hover,
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+#factory-reset-btn,
+.btn.danger.filled,
+.btn-danger-filled {
+  background: var(--danger);
+  color: var(--btn-fg, #ffffff);
+  border-color: var(--danger);
+}
+#factory-reset-btn:hover,
+.btn.danger.filled:hover,
+.btn-danger-filled:hover {
+  background: color-mix(in srgb, var(--danger) 85%, #000);
+}
 /* A disabled action reads as disabled — the gated "Use" (before Test passes)
    must never look clickable (CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01). */
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }

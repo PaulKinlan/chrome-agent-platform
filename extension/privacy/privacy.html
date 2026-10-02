@@ -21,14 +21,42 @@
           </svg>
           <span>Chrome <span>Agent</span> Platform</span>
         </p>
-        <h1>What this extension sends and stores</h1>
-        <p class="lede">Everything below is read from the extension's own lists, so it changes when the extension does.</p>
+        <h1 data-i18n="options_what_this_extension_sends_and_stores">What this extension sends and stores</h1>
+        <p class="lede" data-i18n="privacy_lead_summary">Everything below is read from the extension's own lists, so it changes when the extension does.</p>
       </header>
       <privacy-statement id="statement"></privacy-statement>
       <p id="status" class="status" role="status" aria-live="polite" hidden></p>
+
+      <section id="privacy-data-management" class="privacy-data-section">
+        <h2 data-i18n="privacy_data_management_title">Data &amp; memory on this device</h2>
+        <p class="lede" data-i18n="privacy_data_management_lead">
+          Your data stays on your device. Each agent's memory and site data are kept isolated per site, so one site can never inspect or access another site's memory or tools.
+        </p>
+        <div class="storage-disclosure">
+          <p class="storage-summary" data-i18n="privacy_storage_summary">
+            Settings, agent conversations, site permissions, and cached models remain under your control and never leave this device unless you explicitly export them.
+          </p>
+          <details class="technical-storage-details" data-vocab="advanced">
+            <summary data-i18n="privacy_technical_storage_summary">Technical storage details</summary>
+            <ul>
+              <li><code>chrome.storage.local</code>: Local extension preferences, active provider choices, and schedule definitions.</li>
+              <li><code>Origin-Private File System (OPFS)</code>: Isolated per-site agent memory, run logs, and task artifacts.</li>
+              <li><code>IndexedDB</code>: Local file and folder handles granted to agents, plus token usage ledgers.</li>
+            </ul>
+          </details>
+        </div>
+        <div class="privacy-actions" aria-label="Data clearing actions">
+          <button type="button" class="btn btn-danger" id="clear-site-memory-btn" data-i18n="privacy_clear_site_memory">Clear site memory</button>
+          <button type="button" class="btn btn-danger" id="clear-threads-btn" data-i18n="privacy_clear_threads">Clear threads</button>
+          <button type="button" class="btn btn-danger" id="clear-permissions-btn" data-i18n="privacy_clear_permissions">Clear permissions</button>
+          <button type="button" class="btn btn-danger-fill" id="factory-reset-btn" data-i18n="privacy_factory_reset">Reset all data…</button>
+        </div>
+        <p id="privacy-action-status" class="status" role="status" aria-live="polite" hidden></p>
+      </section>
+
       <footer class="foot">
-        <a class="btn" href="../options/options.html#data" id="open-data-memory">Open Data &amp; memory</a>
-        <a class="btn ghost" href="../options/options.html#about" id="open-about">Back to Settings</a>
+        <a class="btn" href="../options/options.html#data" id="open-data-memory" data-i18n="privacy_open_data_memory">Open Data &amp; memory</a>
+        <a class="btn ghost" href="../options/options.html#about" id="open-about" data-i18n="privacy_back_to_settings">Back to Settings</a>
       </footer>
     </main>
     <script type="module" src="../dist/privacy.bundle.js"></script>

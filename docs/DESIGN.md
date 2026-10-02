@@ -45,6 +45,11 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - Progressive initial hydration stages the active panel first, yielding execution via `await sleep(0)` before background hydration of heavy lists (starter templates, MCP status, audit log, Wasm packages, memory explorer).
 - Long lists in the hub (NTP thread sidebar items, timeline entries, tool library rows) similarly declare `content-visibility: auto` to bound initial DOM layout overhead.
 
+## Calm destructive actions and reading measure
+- **Calm danger-outline styling**: Secondary destructive buttons (`.btn-danger` / `.btn.danger` on the Privacy page and Settings Data & memory panel) use a calm outline (`background: transparent; color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border))`), preventing heavy solid-red buttons from competing for attention. Solid danger fill is reserved strictly for final confirmation actions (such as Factory reset confirmation).
+- **Reading measure**: Informational surfaces and lead paragraphs (such as `privacy.html` `.lede`) enforce `max-width: 65ch` for comfortable scanning.
+- **Owner voice for storage**: Descriptions explain data isolation and persistence in plain user-centered language ("kept on this device", isolated per site so one site never inspects another), keeping backend machinery identifiers (like OPFS or raw key names) inside technical disclosures. Toggle descriptions state their effect directly without redundant "Off:" prefixes.
+
 ## Owner-uploaded WebAssembly files
 - Settings → WebAssembly files uses the reusable `<user-wasm-manager>` component. It is separate from the developer-only, read-only Tool library, whose authority and diagnostic behavior stay unchanged.
 - The native file chooser, owner-written name, and description are one form. The description explains how agents will use it; current copy explicitly says storage does not run or register a tool. Actual writing progress is labelled as writing, not a completed save.
