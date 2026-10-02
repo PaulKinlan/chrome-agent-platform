@@ -17,6 +17,7 @@
 // tab (two wakes per tab per 5 s) and was most of what filled the trace ring.
 
 import { send } from "../lib/messages.js";
+import { countDiagnosticsBadgeErrors } from "../lib/diagnostics-badge.js";
 
 /** The session-storage key the SW bumps. Carries an integer only — never event content. */
 export const DIAGNOSTICS_REVISION_KEY = "cap:diagnosticsRevision";
@@ -70,11 +71,12 @@ export async function refreshDiagnostics() {
   try {
     if (consoleEl || diagEl) {
       const res = await send("diagnostics.list");
-      const count = res?.count ?? 0;
-      if (consoleEl) consoleEl.setAttribute("count", String(count));
+      const rawCount = res?.count ?? 0;
+      if (consoleEl) consoleEl.setAttribute("count", String(rawCount));
       if (diagEl) {
-        diagEl.setAttribute("count", String(count));
-        if (count > 0) diagEl.setAttribute("attention", "");
+        const badgeCount = countDiagnosticsBadgeErrors(res?.entries);
+        diagEl.setAttribute("count", String(badgeCount));
+        if (badgeCount > 0) diagEl.setAttribute("attention", "");
         else diagEl.removeAttribute("attention");
         if (diagEl._open) diagEl.refresh?.();
       }

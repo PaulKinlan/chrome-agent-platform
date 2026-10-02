@@ -60,6 +60,9 @@ const FILES = [
   ["extension/lib/permission-language.js", "docs/permission-language.js"],
   // The hub timeline projection and filters (components.js imports it — the gallery must resolve it).
   ["extension/lib/hub-timeline.js", "docs/hub-timeline.js"],
+  // Diagnostics badge categorization and exclusion rules
+  // (components.js imports it — the gallery must resolve it).
+  ["extension/lib/diagnostics-badge.js", "docs/diagnostics-badge.js"],
 ];
 
 export async function syncGallery({ check = false } = {}) {
@@ -105,6 +108,8 @@ export async function syncGallery({ check = false } = {}) {
       expected = Buffer.from(expected.toString("utf8").replace('../lib/permission-language.js', './permission-language.js'));
       // The hub timeline projection sits in lib/; the gallery copy is beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../lib/hub-timeline.js', './hub-timeline.js'));
+      // Diagnostics badge helpers sit in lib/; the gallery copy is beside components.js.
+      expected = Buffer.from(expected.toString("utf8").replace('../lib/diagnostics-badge.js', './diagnostics-badge.js'));
       // <artifact-diff> imports the diff core by its dist path; the gallery
       // copy of the bundle sits beside components.js.
       expected = Buffer.from(expected.toString("utf8").replace('../dist/shared/diff-core.bundle.js', './diff-core.bundle.js'));

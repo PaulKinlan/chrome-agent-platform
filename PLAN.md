@@ -333,6 +333,7 @@ demo. Hub first-run layout (`chrome-agent-platform-716s.5`: single setup primary
 - **Worktree hygiene** — 71 registered worktrees, and `/tmp` is RAM-backed at 92% inode
   use. Run `node scripts/worktree-audit.mjs` before any cleanup decision; nothing is
   removed until its HEAD is reachable from `origin/main` or a `rescue/*` tag.
+- **Settings heading focus ring & Diagnostics badge false alarm (`chrome-agent-platform-716s.13`, landed).** Suppressed programmatic `h2[tabindex="-1"]:focus` outline in Settings while preserving `:focus-visible` rings on interactive elements; excluded keyless setup nudges (`no_provider`, `missing_api_key`, demo-model pricing warnings, and owner-declined optional permission prompts) from incrementing the Diagnostics badge error count.
 
 ## Open questions for Paul
 The full list with resolved answers is [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
