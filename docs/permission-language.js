@@ -42,6 +42,7 @@ export const PERMISSION_USER_LANGUAGE = Object.freeze({
   "system.cpu": "see system CPU details",
   "system.storage": "see system storage details",
   "system.display": "see display details",
+  export_asset_to_folder: "Save artifact to folder",
 });
 
 /** A permission token as plain words: "tabGroups" → "tab groups",

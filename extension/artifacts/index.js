@@ -6,6 +6,7 @@
 // NTP's in-context view frame; messaging via lib/messages.js).
 
 import { send } from "../lib/messages.js";
+import { saveArtifactToDisk } from "../lib/artifact-export.js";
 import { renderHtmlFrame, isHtmlDocument, wireHtmlFrameContent, confirmActionDialog } from "../shared/components.js";
 
 if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
@@ -157,6 +158,16 @@ function wireCard(card) {
     // own back button with the hub's overlay header.
     const { id, origin } = e.detail ?? {};
     openArtifactDialog(id, origin ?? "master");
+  });
+  card.addEventListener("save", async (e) => {
+    const { id, origin } = e.detail ?? {};
+    if (!id) return;
+    try {
+      const full = await send("asset.get", { origin: origin ?? "master", id });
+      if (full?.ok && full.asset) {
+        await saveArtifactToDisk(full.asset);
+      }
+    } catch { /* save cancelled or failed */ }
   });
   card.addEventListener("delete", async (e) => {
     const { id, name, type, origin } = e.detail ?? {};

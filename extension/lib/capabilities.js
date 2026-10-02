@@ -499,3 +499,5 @@ export async function requestOriginHost(origin) {
     return false;
   }
 }
+
+export const EXPORT_ASSET_TO_FOLDER_TOOL = "export_asset_to_folder";

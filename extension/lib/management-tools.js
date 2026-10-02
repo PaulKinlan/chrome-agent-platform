@@ -32,6 +32,7 @@ export const MANAGEMENT_TOOL_NAMES = [
   "delete_asset",
   "list_assets",
   "get_asset",
+  "export_asset_to_folder",
   "get_usage",
   "get_memory_overview",
   "create_named_agent",
@@ -272,6 +273,25 @@ export function managementToolset({ callRoute }) {
         id: z.string(),
       }),
       execute: ({ origin, id }) => call("asset.get", { origin, id }),
+    }),
+    export_asset_to_folder: tool({
+      description:
+        "Save an artifact into a granted local folder (from /folder or Settings → Local folders) or the current agent's private workspace. REQUIRES OWNER APPROVAL: reuses the write_file owner-approval card showing the exact path and content. Pass assetId (the artifact to save) and path (the destination relative path, e.g. 'reports/summary.md'). If more than one folder is granted, pass folder (or grantId).",
+      inputSchema: z.object({
+        assetId: z.string().describe("the artifact id to save (from list_assets or create_asset)"),
+        path: z.string().describe("the destination file path relative to the granted folder or workspace (e.g. 'reports/summary.md')"),
+        folder: z.string().optional().describe("the folder name or grantId, when more than one is available"),
+        grantId: z.string().optional().describe("which folder grantId, when more than one is available"),
+        origin: z.string().default("master").describe("the artifact origin ('master' or an https origin)"),
+      }),
+      execute: (args) =>
+        call("asset.export-to-folder", {
+          origin: args.origin ?? "master",
+          assetId: args.assetId,
+          path: args.path,
+          folder: args.folder ?? args.grantId,
+          grantId: args.grantId ?? args.folder,
+        }),
     }),
 
     // Permission grants/revocations are intentionally NOT model tools. Until

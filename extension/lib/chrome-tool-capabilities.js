@@ -8,8 +8,8 @@ import { permissionUserLanguage, siteLabel } from "./permission-language.js";
 
 export const CHROME_TOOL_CAPABILITY_BOUNDS = Object.freeze({
   browserTools: 138,
-  managementTools: 50,
-  totalTools: 188,
+  managementTools: 51,
+  totalTools: 189,
   maxCapabilityTokens: 4,
   maxCapabilityTokenBytes: 96,
   maxPermissions: 8,
@@ -179,6 +179,7 @@ export const MANAGEMENT_CAPABILITY_TOOL_NAMES = Object.freeze([
   "delete_asset",
   "list_assets",
   "get_asset",
+  "export_asset_to_folder",
   "get_usage",
   "get_memory_overview",
   "create_named_agent",
@@ -263,6 +264,7 @@ const DESTRUCTIVE_POLICY_TOOLS = new Set([
   "remove_bookmark",
   "set_cookie",
   "remove_cookie",
+  "export_asset_to_folder",
 ]);
 function derivePolicyClass(toolName, mutationClass) {
   if (DESTRUCTIVE_POLICY_TOOLS.has(toolName)) return "destructive";
@@ -505,6 +507,7 @@ const rows = [
   record("delete_asset", "management", ["management.asset.delete"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("list_assets", "management", ["management.asset.list"], [], "none", "read-only", false, "read", "management.assets"),
   record("get_asset", "management", ["management.asset.get"], [], "none", "read-only", false, "read", "management.assets"),
+  record("export_asset_to_folder", "management", ["management.asset.export"], [], "none", "mutating", false, "mutating", "management.assets"),
   record("get_usage", "management", ["management.usage.get"], [], "none", "read-only", false, "read", "management.usage"),
   record("get_memory_overview", "management", ["management.memory.overview.get"], [], "none", "read-only", false, "read", "management.memory"),
   record("create_named_agent", "management", ["management.named-agent.create"], [], "none", "mutating", false, "mutating", "management.named-agents"),
