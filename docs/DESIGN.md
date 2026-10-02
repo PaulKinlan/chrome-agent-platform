@@ -745,6 +745,21 @@ items are hidden or disabled until items exist.
 - **Paired vs unpaired harness separation**: `<agent-picker>` ACP groups show paired harnesses with live status pills (`.status.paired`), while unpaired CLI harnesses collapse behind a compact `<details class="unpaired-harnesses">` disclosure with summary `"Pair a local CLI agent in Settings →"`.
 - **Page view empty state**: When a tab has no conversation turns yet, `#page-empty-state` provides a lead sentence (*"Ask anything about this page or pick a suggested action."*) and suggestion chips (*Summarize page*, *Key takeaways*, *Explain page*) that prefill the composer on click, keeping vertical empty space above the composer under 40% at 420×800.
 
+## Reader-mode page capture → Markdown artifact (`capture_page`)
+*(chrome-agent-platform-3p3e.4)* `capture_page` performs pure/DOM reader-mode
+extraction on the active or target tab (`extension/lib/page-reader.js`). It strips
+boilerplate elements (`<script>`, `<style>`, `<nav>`, `<header>`, `<footer>`, `<aside>`,
+`[role="navigation"]`, `[aria-hidden="true"]`), and converts headings, paragraphs,
+lists, code blocks, blockquotes, links, and tables into structured Markdown with YAML
+frontmatter (`title`, `source_url`, `captured_at`, `word_count`). Output is bounded
+to ≤ 512 kB markdown and ≤ 500 links, with untrusted web text fenced via
+`wrapUntrustedContent` when returned to the model. Passing `asArtifact: true`
+persists the capture as a Markdown document in the Artifacts library (`kind: "document"`,
+`mimeType: "text/markdown"`). Optional screenshots (`includeScreenshot: true` or
+`screenshot: "viewport" | "full"`) attach a bounded capture (max height 16384px).
+The composer attach menu (`+`) exposes "Capture this page", and `/capture` provides
+direct slash-command execution.
+
 ## Motion
 150–250ms state transitions only; `prefers-reduced-motion` respected. No
 page-load choreography, no decorative glow.

@@ -364,3 +364,11 @@ Side panel deduplication and distinct harness presentation:
 - Distinct harness monograms: Claude Code (`C`), Codex (`X`), Gemini CLI (`G`), and pi (`π`) in both `<agent-picker>` avatars and chip marks, removing the previous `C`/`C` avatar collision.
 - Paired vs unpaired CLI harnesses partitioned in `<agent-picker>`: paired harnesses show live status, unpaired ones collapse into `<details class="unpaired-harnesses">`.
 - Page view empty state: one lead sentence plus suggestion chips (*Summarize page*, *Key takeaways*, *Explain page*) prefilling the composer, keeping empty vertical space above the composer ≤ 40% at 420×800.
+
+per agent with a master index; a generated UI IS an artifact.
+
+## Feature: Reader-mode page capture → Artifacts (3p3e.4) — implemented
+`capture_page` tool (`extension/lib/page-reader.js`, `extension/lib/browser-tools.js`)
+extracts clean structured Markdown with YAML frontmatter from tabs and persists to the
+Artifacts store with `asArtifact: true`. Composer `+` attach menu provides "Capture this page",
+and `/capture` provides slash-command execution.

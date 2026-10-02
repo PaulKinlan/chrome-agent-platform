@@ -133,8 +133,6 @@ const INVERSE_BUILDERS = Object.freeze({
       inverse: null,
     };
   },
-    };
-  },
 });
 
 // A human sentence for a mutating tool that has no dedicated builder — honest

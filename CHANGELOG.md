@@ -1,5 +1,6 @@
 # Changelog
 
+- Save any web page as a clean, readable Markdown note in your Artifacts library via the capture_page tool.
 ## [0.3.559] — 2026-10-02
 - Save artifacts directly to disk via Save file picker or download fallback, and allow agents to file deliverables into granted folders with owner approval.
 - Copy agent output with the ledgered write_clipboard tool or attach clipboard text with /paste.

@@ -88,6 +88,7 @@ export function siteLabel(origin) {
 /** The user-language names for internal tool names. Maps camelCase and
  * snake_case tool identifiers to readable actions. */
 export const TOOL_USER_LANGUAGE = Object.freeze({
+  capture_page: "Save page as readable note",
   summarize_text: "summarise text on-device",
   detect_language: "detect language on-device",
   translate_text: "translate text on-device",
@@ -124,9 +125,15 @@ export const TOOL_USER_LANGUAGE = Object.freeze({
   groupTabs: "Group tabs",
 });
 
+export const TOOL_LABELS = TOOL_USER_LANGUAGE;
+
 /** The user-language phrase for a tool. */
 export function toolUserLanguage(toolName) {
   return TOOL_USER_LANGUAGE[toolName] ?? null;
+}
+
+export function toolLabel(toolName) {
+  return toolUserLanguage(toolName);
 }
 
 /** Return a readable sentence-case label for a tool name.
@@ -148,4 +155,3 @@ export function humanToolLabel(rawName) {
   if (!words) return "";
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
-

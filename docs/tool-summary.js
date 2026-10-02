@@ -354,6 +354,7 @@ export function describeToolCall(name, args) {
       const u = pickArg(args, ["url", "tabId"]);
       return u ? `Reading the page (${u})` : "Reading the page";
     }
+    case "capture_page": return "Saving page as readable note";
     case "find_elements": return "Finding elements on the page";
     case "click": case "click_element": {
       const t = pickArg(args, ["selector", "text", "target"]);

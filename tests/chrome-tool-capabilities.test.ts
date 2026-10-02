@@ -64,13 +64,13 @@ Deno.test("chrome capability table is exact and complete for 138 browser + 51 ma
   assertEquals(DEVELOPER_ONLY_TOOL_NAMES, ["get_cookie", "set_cookie", "remove_cookie"]);
   assertEquals(MANAGEMENT_TOOL_NAMES, MANAGEMENT_CAPABILITY_TOOL_NAMES);
   assertEquals(Object.keys(management).sort(), [...MANAGEMENT_CAPABILITY_TOOL_NAMES].sort());
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 189);
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 138);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 190);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "chrome-api").length, 139);
   assertEquals(CHROME_TOOL_CAPABILITY_TABLE.filter((row) => row.sourceKind === "management").length, 51);
   assertEquals(CHROME_TOOL_CAPABILITY_BOUNDS, {
-    browserTools: 138,
+    browserTools: 139,
     managementTools: 51,
-    totalTools: 189,
+    totalTools: 190,
     maxCapabilityTokens: 4,
     maxCapabilityTokenBytes: 96,
     maxPermissions: 8,
@@ -206,7 +206,7 @@ Deno.test("unbound lazy browser/management records preserve source closure and v
   }
   const browserRecords = executableBrowserToolRecords(browser, { ...context(), capabilitiesByTool: capabilitiesByTool(browser, "chrome-api") });
   const managementRecords = executableManagementToolRecords(management, { ...context(), capabilitiesByTool: capabilitiesByTool(management, "management") });
-  assertEquals(browserRecords.length, 138);
+  assertEquals(browserRecords.length, 139);
   assertEquals(managementRecords.length, 51);
   for (const record of [...browserRecords, ...managementRecords]) {
     const name = record.descriptorInput.toolId;
@@ -291,7 +291,7 @@ Deno.test("unsafe-for-cutover list remains policy metadata and does not filter t
   // open_side_panel was removed 2026-08-30 (CAP-FB-20260830-SIDE-PANEL-TOOL-CUT-01),
   // so it is gone from the cutover list as well as the catalog.
   assert(!FLAGGED_FOR_LATER_PROVIDER_CUTOVER.includes("open_side_panel"));
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 189);
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 190);
   assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 189);
 });
 
