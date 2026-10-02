@@ -198,10 +198,8 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   contract, and turns a selected file into the same removable attachment chip
   as the + menu. Permission loss and empty/error states name Settings → Local
   folders as the recovery path; no picker or permission prompt fires implicitly.
-- Hub sidebar Tasks/Agents sections share one intrinsic flex primitive: fixed
-  headers with inline-end actions, independently scrolling lists with stable
-  symmetric gutters while expanded, and gutter-free scrollable lists in the
-  collapsed rail so task dots, agent avatars, and + actions share one center.
+- Hub sidebar collapsible disclosure sections (chrome-agent-platform-5vk4): sidebar sections (Tasks, Failed runs, Harness agents, Board, Agents, Activity) are native `<details class="side-disclosure">` elements with persisted open/closed state in `localStorage["cap:ntp:side-disclosures"]`. Tasks is the primary flex section (`flex: 1 1 220px; min-height: 160px;`), giving task history dedicated room. Agent schedules format raw minutes to plain human cadence labels ("daily", "hourly", "every 6 hours", "weekly") via `formatCadenceMinutes`. Harness agents render as compact `.harness-pill` chips in a wrapping row. Action buttons inside disclosure summaries (`#new-task`, `#new-agent`, `#failed-runs-clear`) stop click propagation to prevent accidental toggling.
+- Hub collapsed rail: the sidebar toggle (`#side-toggle`) is anchored in `.side-top` at the top of `#side` (eliminating floating mid-wall nub positions). When collapsed (`.side.collapsed`), the 56px rail completely hides all section bodies, cards, and secondary summaries (`display: none !important`), presenting a clean vertical rail with top toggle, new-task button, vertical spacer, and bottom icon actions without horizontal overflow or bleed.
   Task and agent rows share padding/radius/hover tokens; the task delete action
   is centered on the row and remains keyboard-focusable. A run's transcript keeps
   every substantive per-step answer in order: a step that ran tools and ended in
