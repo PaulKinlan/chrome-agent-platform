@@ -798,12 +798,79 @@ class Component extends HTMLElement {
   }
 }
 
+const sheetCache = new Map();
+
+/**
+ * Returns a cached constructable CSSStyleSheet for the given cssText,
+ * or null if constructable stylesheets are not supported in this runtime.
+ */
+export function getConstructableSheet(cssText) {
+  if (typeof CSSStyleSheet === "undefined" || !("replaceSync" in CSSStyleSheet.prototype)) {
+    return null;
+  }
+  let sheet = sheetCache.get(cssText);
+  if (!sheet) {
+    sheet = new CSSStyleSheet();
+    sheet.replaceSync(cssText);
+    sheetCache.set(cssText, sheet);
+  }
+  return sheet;
+}
+
+/**
+ * Adopts a constructable stylesheet if supported; otherwise falls back to injecting
+ * a <style> element into the shadow root.
+ * Returns true if adopted via adoptedStyleSheets, false if fallback path taken.
+ */
+export function adoptOrInjectStyle(shadowRoot, cssText) {
+  if (!shadowRoot || !cssText) return false;
+  const sheet = getConstructableSheet(cssText);
+  if (sheet && Array.isArray(shadowRoot.adoptedStyleSheets)) {
+    if (!shadowRoot.adoptedStyleSheets.includes(sheet)) {
+      shadowRoot.adoptedStyleSheets = [...shadowRoot.adoptedStyleSheets, sheet];
+    }
+    return true;
+  }
+  // Fallback when adoptedStyleSheets is not supported:
+  // Inject a <style> element if one isn't already present in this shadow root.
+  try {
+    const existing = typeof shadowRoot.querySelector === "function" ? shadowRoot.querySelector("style") : null;
+    if (!existing) {
+      const doc = shadowRoot.ownerDocument || (typeof document !== "undefined" ? document : null);
+      if (doc && typeof doc.createElement === "function") {
+        const styleEl = doc.createElement("style");
+        styleEl.textContent = cssText;
+        if (typeof shadowRoot.prepend === "function") {
+          shadowRoot.prepend(styleEl);
+        } else if (typeof shadowRoot.appendChild === "function") {
+          shadowRoot.appendChild(styleEl);
+        }
+      }
+    }
+  } catch {
+    // Graceful fallback for minimal stubs
+  }
+  return false;
+}
+
+/** Clear the constructable stylesheet cache (for test harnesses). */
+export function clearSheetCache() {
+  sheetCache.clear();
+}
+
 // Build the shadow content: style + markup. Safe (no eval).
-function mountTemplate(host, style, markup) {
+export function mountTemplate(host, style, markup) {
   const useShadow = host.constructor.shadow();
   const root = host._root;
   if (useShadow) {
-    root.innerHTML = `<style>${style}</style>${markup}`;
+    if (adoptOrInjectStyle(root, style)) {
+      root.innerHTML = markup;
+    } else {
+      // Fallback: when adoptedStyleSheets is not supported, ensure the style is
+      // in innerHTML so environments inspecting root.innerHTML or querySelector("style")
+      // see the style element reliably.
+      root.innerHTML = `<style>${style}</style>${markup}`;
+    }
   } else {
     // light-DOM mode: inject a single <style> if not already present, then markup.
     const styleId = `sc-${host.localName}-style`;
@@ -6373,20 +6440,26 @@ class MessageBubble extends Component {
       }
     }
     if (typeof this._root.appendChild === "function" && (this._root.nodeType !== undefined || this._root._children !== undefined || this._root.children !== undefined)) {
-      if (!this._styleEl || !this._bodyWrap || this._styleEl.parentNode !== this._root || this._bodyWrap.parentNode !== this._root) {
+      if (!this._bodyWrap || this._bodyWrap.parentNode !== this._root) {
         this._root.innerHTML = "";
-        this._styleEl = document.createElement("style");
-        this._styleEl.textContent = MESSAGE_BUBBLE_STYLE;
-        this._root.appendChild(this._styleEl);
-        this._bodyWrap = document.createElement("div");
-        this._bodyWrap.className = "bubble-wrap";
-        if (this._bodyWrap.style) this._bodyWrap.style.display = "contents";
-        this._root.appendChild(this._bodyWrap);
+        adoptOrInjectStyle(this._root, MESSAGE_BUBBLE_STYLE);
+        this._styleEl = typeof this._root.querySelector === "function" ? this._root.querySelector("style") : null;
+        const doc = this._root.ownerDocument || (typeof document !== "undefined" ? document : null);
+        if (doc && typeof doc.createElement === "function") {
+          this._bodyWrap = doc.createElement("div");
+          this._bodyWrap.className = "bubble-wrap";
+          if (this._bodyWrap.style) this._bodyWrap.style.display = "contents";
+          this._root.appendChild(this._bodyWrap);
+        }
       }
-      this._bodyWrap.innerHTML = markup;
-      if (this._cardDom) {
-        this._bodyWrap.appendChild(this._cardDom);
-        this._cardDom = null;
+      if (this._bodyWrap) {
+        this._bodyWrap.innerHTML = markup;
+        if (this._cardDom) {
+          this._bodyWrap.appendChild(this._cardDom);
+          this._cardDom = null;
+        }
+      } else {
+        this._root.innerHTML = markup;
       }
     } else {
       mountTemplate(this, MESSAGE_BUBBLE_STYLE, markup);
@@ -11960,8 +12033,7 @@ class ActivityExplorer extends Component {
     return ["agent", "limit"];
   }
   _render() {
-    this._root.innerHTML = `
-      <style>
+    mountTemplate(this, `
         :host { display:block; }
         .aex { display:flex; flex-direction:column; gap:8px; }
         .aex-toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
@@ -12058,14 +12130,14 @@ class ActivityExplorer extends Component {
         .aex-plain-copy:focus-visible, .aex-plain-more:focus-visible { outline:2px solid var(--accent,#0e6e63); outline-offset:0; }
         .aex-plain .aex-detail { padding:4px 10px 8px; }
         @media (prefers-reduced-motion: reduce) { .aex-blocks .tt-toggle .tt-caret { transition:none; } .aex-blocks .tt-copy { transition:none; } }
-      </style>
+    `, `
       <div class="aex">
         <div class="aex-toolbar">
           <input class="aex-search" type="search" placeholder="Search activity…" aria-label="Search activity">
           <select class="aex-agent" aria-label="Filter by agent"><option value="">All agents</option></select>
         </div>
         <div class="aex-list" role="log" aria-live="polite"></div>
-      </div>`;
+      </div>`);
   }
   _wire() {
     this._search = this._root.querySelector(".aex-search");
@@ -12347,8 +12419,7 @@ class ActionLedger extends Component {
     return ["limit"];
   }
   _render() {
-    this._root.innerHTML = `
-      <style>
+    mountTemplate(this, `
         :host { display:block; }
         .al { display:flex; flex-direction:column; }
         .al-row { display:grid; grid-template-columns:1fr auto; align-items:baseline; gap:12px;
@@ -12376,9 +12447,9 @@ class ActionLedger extends Component {
         .al-retry { padding:3px 10px; font:inherit; font-size:12px; cursor:pointer; color:var(--accent,#0e6e63); min-height:32px;
           background:transparent; border:1px solid var(--border,#e3e0d9); border-radius:var(--radius-sm,8px); }
         @media (prefers-reduced-motion: reduce) { .al-undo { transition:none; } }
-      </style>
+    `, `
       <div class="al" role="list" aria-label="Recent actions"></div>
-    `;
+    `);
     this._list = this._root.querySelector(".al");
     this._paint();
   }
@@ -12718,8 +12789,7 @@ customElements.define("agent-timeline", AgentTimeline);
  * ────────────────────────────────────────────────────────────────────────── */
 class JobsBoard extends Component {
   _render() {
-    this._root.innerHTML = `
-      <style>
+    mountTemplate(this, `
         :host { display:block; }
         .jb { display:flex; flex-direction:column; gap:14px; }
         /* Empty group containers collapse so the flex gap never stacks up as
@@ -12775,7 +12845,7 @@ class JobsBoard extends Component {
         .jb-msg { font-size:12.5px; line-height:1.45; color:var(--text,#1d1b18); overflow:hidden;
           display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow-wrap:anywhere; }
         .jb-empty { font-size:13px; color:var(--muted,#635e56); padding:6px 0; line-height:1.5; }
-      </style>
+    `, `
       <div class="jb">
         <div class="jb-open" role="list" aria-label="Open jobs" aria-live="polite"></div>
         <div class="jb-claimed" role="list" aria-label="Claimed jobs"></div>
@@ -12783,7 +12853,7 @@ class JobsBoard extends Component {
         <div class="jb-settled" role="list" aria-label="Recently settled jobs"></div>
         <div class="jb-msgs" role="list" aria-label="Board messages"></div>
         <div class="jb-empty" hidden></div>
-      </div>`;
+      </div>`);
   }
   _wire() {
     this._openEl = this._root.querySelector(".jb-open");

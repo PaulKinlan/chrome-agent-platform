@@ -28,6 +28,12 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
   (`prefers-color-scheme`) or explicit `data-theme` attribute (matching `extension/shared/theme.css`).
   Theme switcher UI was removed in `v0.2.301` to maintain a single quiet design system.
 
+## Component stylesheet sharing (constructable stylesheets)
+- Shadow-DOM Web Components in `extension/shared/components.js` use constructable stylesheets (`adoptedStyleSheets`) via `adoptOrInjectStyle` and `mountTemplate`.
+- Stylesheets are parsed once per unique CSS text and memoized (`getConstructableSheet`), allowing hundreds of component instances (e.g. `<message-bubble>`, `<task-row>`, `<capability-row>`, `<artifact-card>`) to share a single in-memory `CSSStyleSheet` object.
+- This eliminates thousands of redundant `<style>` DOM nodes in shadow roots, lowers style recalc overhead, and maintains standard CSS variable inheritance for light/dark theme cascading.
+- Environments lacking `CSSStyleSheet.prototype.replaceSync` or `adoptedStyleSheets` (e.g. unit test DOM stubs) transparently fall back to inline `<style>` injection.
+
 ## Directory function cards
 - A function is one semantic unit in source order: name, truthful bounded registry description (or “No description provided”), site/schema metadata, then its own source and approval states.
 - `<tool-directory-card>` owns responsive behavior with intrinsic/logical sizing, `min-inline-size: 0`, wrapping state controls, and a card-level container query. Badges never float outside or detach from their function in narrow or RTL layouts.
