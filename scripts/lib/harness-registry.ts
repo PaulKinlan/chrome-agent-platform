@@ -171,6 +171,7 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-settings-cleanliness.ts": { class: "kat" },
   "kat-python-no-ambient-network.ts": { class: "kat" },
   "kat-python-permissioned-fetch.ts": { class: "kat" },
+  "kat-python-wheel-install.ts": { class: "kat" },
   "kat-settings-multi-section.ts": { class: "kat" },
   "kat-settings-server-tools.ts": { class: "kat" },
   "kat-site-delegation-attachments.ts": { class: "kat" },
