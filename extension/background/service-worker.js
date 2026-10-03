@@ -2851,7 +2851,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     // The enclave's synthesized service tools (brave_search et al.) join
     // the run's extra tools when the enclave is enabled and the service
     // credential exists (jao1.5 wiring).
-    const enclaveTools = await enclaveServiceToolsForRun();
+    const enclaveTools = scoped ? {} : await enclaveServiceToolsForRun();
     const liveOnDeviceTools = onDeviceTextToolset({
       dispatchRoute: modelManagementDispatch,
     });
@@ -6525,13 +6525,16 @@ async function enclaveServiceToolsForRun() {
     // their secret is missing; it must not crash the run
   }
   if (!enabled) return {};
+  // Only synthesize tools for services whose credential EXISTS in the vault
+  const masked = await enclaveVault().then((v) => v.listMasked({ caller: "sw" })).catch(() => []);
+  const configuredIds = new Set(masked.map((m) => m.keyId));
   return synthesizeServiceTools({
     descriptors: SERVICE_DESCRIPTORS,
     proxyCall: (message, context) => enclaveProxyRoutes["enclave.proxy"](message, context),
     vault: {
       getSecretRaw: (keyId, o) => enclaveVault().then((v) => v.getSecretRaw(keyId, o)),
     },
-    secretGate: (svc) => Boolean(svc.auth?.secretId),
+    secretGate: (svc) => Boolean(svc.auth?.secretId && configuredIds.has(svc.auth.secretId)),
   });
 }
 async function enclaveStatusForSettings() {

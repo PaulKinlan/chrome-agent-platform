@@ -140,14 +140,18 @@ function buildRequest(toolDef, service, params, authValue) {
  *   it: origin pinning, SSRF checks, credential omission, redirect refusal,
  *   the body bound, and the untrusted tagging all apply.
  * @param {object} opts.vault — the Stage-1 vault (raw reads stay in-worker).
+ * @param {(service: object) => boolean} [opts.secretGate] — skip services whose
+ *   credential the gate refuses (the Settings wiring gates on the configured
+ *   key ids); default allows every declared service.
  * @returns {Record<string, ReturnType<typeof tool>>} the synthesized tools.
  */
-export function synthesizeServiceTools({ descriptors, proxyCall, vault }) {
+export function synthesizeServiceTools({ descriptors, proxyCall, vault, secretGate = null }) {
   if (typeof proxyCall !== "function") {
     throw new TypeError("service tools require the enclave proxy call");
   }
   const tools = {};
   for (const service of Object.values(descriptors ?? {})) {
+    if (typeof secretGate === "function" && !secretGate(service)) continue;
     for (const toolDef of service.tools ?? []) {
       const inputSchema = zodFromParameters(toolDef.parameters);
       tools[toolDef.name] = tool({
