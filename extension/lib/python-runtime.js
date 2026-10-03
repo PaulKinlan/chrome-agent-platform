@@ -87,6 +87,7 @@ export function createPythonRuntimeProvider({
   sendMessage = null,
   timeoutMs = PYTHON_EXEC_TIMEOUT_MS,
   networkLedger = null,
+  loadWheels = null,
 } = {}) {
   let hostSettled = false;
   let hostOk = false;
@@ -132,6 +133,7 @@ export function createPythonRuntimeProvider({
     let emitStdout = null;
     let readStdin = null;
     let stdinGiven = false;
+    let currentWheels = null;
     // The network records for THIS run, taken from the ledger when the run
     // settles (bead chrome-agent-platform-4p7j.2). They are collected by the
     // service worker's "python.fetch" proxy — the actor — so a program that
@@ -160,6 +162,9 @@ export function createPythonRuntimeProvider({
       setStdin({ stdin }) {
         if (typeof stdin === "function") readStdin = stdin;
       },
+      setWheels(wheels) {
+        if (Array.isArray(wheels)) currentWheels = wheels;
+      },
       /** The run's network records: every request the proxy made or refused.
        * Empty for a run that asked for nothing — which is most runs. */
       takeNetworkRecords() {
@@ -178,6 +183,14 @@ export function createPythonRuntimeProvider({
         const takeRecords = () => ensureRunRecordsTaken();
         const ready = await ensureHostReady();
         if (!ready) throw new Error("python_unavailable_host");
+        let wheelsToSend = currentWheels;
+        if (!wheelsToSend && typeof loadWheels === "function") {
+          try {
+            wheelsToSend = await loadWheels();
+          } catch {
+            wheelsToSend = [];
+          }
+        }
         let response;
         try {
           response = await withTimeout(
@@ -186,6 +199,7 @@ export function createPythonRuntimeProvider({
               runId,
               code: sanitizeInput(code),
               stdin: sanitizeInput(oneShotStdin()),
+              wheels: Array.isArray(wheelsToSend) ? wheelsToSend : [],
             }),
             timeoutMs,
           );

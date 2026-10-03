@@ -9566,13 +9566,13 @@ const handlers = mergeRouteMaps(
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
   },
-  async "python.execute"({ code, stdin }) {
+  async "python.execute"({ code, stdin, wheels }) {
     const provider = getPythonRuntimeProvider();
     const runtime = await provider();
     if (!runtime) {
       return { ok: false, error: "python unavailable — the bounded Python runtime is not admitted yet (see docs/PYODIDE-BOUNDED-BUILD.md); no result was fabricated" };
     }
-    return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? "") });
+    return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? ""), wheels });
   },
 
   // ---- saved workflows (workflows-to-memory) ----
@@ -11969,6 +11969,22 @@ setPythonRuntimeProvider(
   createPythonRuntimeProvider({
     ensureHost: ensureOffscreen,
     networkLedger: pythonNetworkLedger,
+    loadWheels: async () => {
+      try {
+        const list = await listOwnerBlobs({ kind: "wheel" });
+        if (!list || list.length === 0) return [];
+        const wheels = [];
+        for (const item of list) {
+          const bytes = await verifyAndReadOwnerBlobBytes({ digest: item.digest });
+          if (bytes) {
+            wheels.push({ name: item.name ?? `${item.digest}.whl`, bytes: Array.from(bytes) });
+          }
+        }
+        return wheels;
+      } catch {
+        return [];
+      }
+    },
   }).provider,
 );
 
