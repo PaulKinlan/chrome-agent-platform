@@ -169,3 +169,36 @@ Deno.test("jao1.3: the descriptor schema is strict — auth and secret ids are d
   assert(!sent.url.includes("sk-INJECTED") && !sent.url.includes("spoof"), "an injected auth parameter never reaches the URL");
   assertEquals(sent.init.headers["X-Subscription-Token"], "sk-brave-9f8e7d6c5b4a3210-feeds-back", "the header is the vault-injected value only");
 });
+
+Deno.test("jao1.5 wiring: an empty descriptor set produces no tools", () => {
+  const tools = synthesizeServiceTools({ descriptors: {}, proxyCall: async () => ({}), vault: {} });
+  assertEquals(Object.keys(tools).length, 0);
+});
+
+Deno.test("jao1.5 wiring: secretGate controls which services are synthesized", async () => {
+  const storage = fakeStorage();
+  const vault = await createSecretVault({
+    storageArea: storage,
+    extensionId: "a".repeat(32) + "b",
+    installSaltB64: "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==",
+  });
+  const routes = (createEnclaveProxyRoutes as any)({ vault, fetchImpl: async () => { throw new Error("no I/O"); }, isAllowedCaller: () => true });
+
+  // Gate OFF: nothing configured — brave_search must be ABSENT.
+  const toolsOff = synthesizeServiceTools({
+    descriptors: SERVICE_DESCRIPTORS,
+    proxyCall: (message: any, context: any) => routes["enclave.proxy"](message, context),
+    vault,
+    secretGate: () => false,
+  });
+  assertEquals(toolsOff.brave_search, undefined, "brave_search must be ABSENT when the gate is off");
+
+  // Gate ON: brave_search is synthesized.
+  const toolsOn = synthesizeServiceTools({
+    descriptors: SERVICE_DESCRIPTORS,
+    proxyCall: (message: any, context: any) => routes["enclave.proxy"](message, context),
+    vault,
+    secretGate: () => true,
+  });
+  assert(toolsOn.brave_search !== undefined, "brave_search must be PRESENT when the gate is on");
+});

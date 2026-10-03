@@ -498,6 +498,12 @@
         <p class="muted">API keys for the services agents can call. Keys are stored encrypted inside this extension only, are never sent to any model, and are delivered only to the service's own endpoint. Paste a key to add or rotate it — leave the field blank to keep the stored key.</p>
         <div id="vault-services" class="vault-services"></div>
 
+        <div class="vault-expose-row" style="display:flex;align-items:center;gap:8px;padding:6px 0;">
+          <input id="enclave-enabled-toggle" type="checkbox" checked>
+          <label for="enclave-enabled-toggle" style="cursor:pointer">Expose service tools to agents</label>
+          <span id="enclave-expose-status" class="muted" role="status"></span>
+        </div>
+
         <h3>Add a service key</h3>
         <div class="vault-add">
           <label for="vault-add-id">Key id</label>

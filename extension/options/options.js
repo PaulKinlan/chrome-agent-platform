@@ -3562,6 +3562,29 @@ document.getElementById("vault-add-save")?.addEventListener("click", async () =>
   renderVaultPanel();
 });
 
+// The enclave enable toggle (chrome-agent-platform-jao1.5 wiring): writes
+// cap:enclave-enabled to chrome.storage.local — the SW's
+// enclaveServiceToolsForRun() reads it per run to gate the synthesized tools.
+const enclaveToggle = document.getElementById("enclave-enabled-toggle");
+const enclaveExposeStatus = document.getElementById("enclave-expose-status");
+async function syncEnclaveToggle() {
+  try {
+    const got = await chrome.storage.local.get("cap:enclave-enabled");
+    enclaveToggle.checked = got["cap:enclave-enabled"] !== false; // default ON
+  } catch {
+    enclaveToggle.checked = true;
+  }
+}
+enclaveToggle?.addEventListener("change", async () => {
+  try {
+    await chrome.storage.local.set({ "cap:enclave-enabled": enclaveToggle.checked });
+    if (enclaveExposeStatus) enclaveExposeStatus.textContent = enclaveToggle.checked ? "Service tools exposed to agents." : "Service tools hidden from agents.";
+  } catch (e) {
+    setVaultStatus(`Toggle failed: ${e?.message ?? e}`, true);
+  }
+});
+syncEnclaveToggle();
+
 renderVaultPanel();
 
 /** One-click owner export
