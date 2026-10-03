@@ -352,6 +352,28 @@ export async function encodeTarStream(entries, sink, options = {}) {
 
 const TAR_FATAL_DECODER = new TextDecoder("utf-8", { fatal: true });
 
+/** The name a decoded entry may carry: normalized (GNU's leading "./" is a
+ * convention, not content), never absolute, never containing a ".." component
+ * (chrome-agent-platform-vv8c M3: hostile ustar/PAX/GNU-L names reached
+ * onEntry verbatim and a restore driver would have written outside the
+ * staging root). Fails closed with a named error — hostile archives are
+ * REFUSED, not silently rewritten. */
+function safeEntryName(raw) {
+  let name = String(raw ?? "");
+  name = name.replace(/\u0000+$/g, "");
+  while (name.startsWith("./")) name = name.slice(2);
+  if (name.length === 0) throw new Error("tar member name is empty");
+  if (name.startsWith("/") || name.startsWith("\\")) {
+    throw new Error(`tar member name is absolute: "${name}"`);
+  }
+  for (const part of name.split("/")) {
+    if (part === "..") {
+      throw new Error(`tar member name escapes the archive root: "${name}"`);
+    }
+  }
+  return name;
+}
+
 class TarByteReader {
   constructor(reader) {
     this.reader = reader;
@@ -482,7 +504,17 @@ function parseTarHeader(block) {
 
   const nameBytes = block.subarray(0, 100);
   const nameNul = nameBytes.indexOf(0);
-  const name = TAR_FATAL_DECODER.decode(nameBytes.subarray(0, nameNul === -1 ? 100 : nameNul));
+  let name = TAR_FATAL_DECODER.decode(nameBytes.subarray(0, nameNul === -1 ? 100 : nameNul));
+
+  // POSIX ustar prefix (bytes 345..500): the name split across prefix + name
+  // joins as prefix + "/" + name. GNU archives leave the prefix empty and use
+  // 'L' long-name entries instead (handled by the caller).
+  if (block[345] !== 0) {
+    const prefixBytes = block.subarray(345, 500);
+    const pNul = prefixBytes.indexOf(0);
+    const prefix = TAR_FATAL_DECODER.decode(prefixBytes.subarray(0, pNul === -1 ? 155 : pNul));
+    if (prefix) name = prefix + "/" + name;
+  }
 
   const sizeField = TAR_FATAL_DECODER.decode(block.subarray(124, 136));
   if (sizeField.charCodeAt(0) & 0x80 || sizeField.charCodeAt(0) === 0xFF) {
@@ -640,7 +672,7 @@ export async function decodeTarStream(source, onEntry, options = {}) {
         // Directory entry (a real `tar -cf` of a tree contains them): announced
         // with an empty body so a restore driver can create the directory;
         // there is no payload to drain.
-        const dirName = overlayName ?? header.name;
+        const dirName = safeEntryName(overlayName ?? header.name);
         overlayName = null;
         overlaySize = null;
         const keep = await onEntry({ name: dirName, size: 0n, typeflag: "5", body: new ReadableStream({ start(c) { c.close(); } }) });
@@ -653,7 +685,9 @@ export async function decodeTarStream(source, onEntry, options = {}) {
         throw new Error(`unsupported TAR entry typeflag "${header.typeflag}" (entry "${header.name}")`);
       }
 
-      const name = overlayName ?? header.name;
+      // M3: the composed name (overlay or ustar prefix+name) must never carry
+      // a traversal component — hostile archives are REFUSED here.
+      const name = safeEntryName(overlayName ?? header.name);
       const size = overlaySize ?? header.size;
       // The pad belongs to the EFFECTIVE payload: the ustar size field lies by
       // design when a PAX size record overlays it (the encoder writes 0 there).
@@ -662,6 +696,7 @@ export async function decodeTarStream(source, onEntry, options = {}) {
       overlaySize = null;
 
       let remaining = size;
+      let delivered = 0n;
       // HWM 0 is LOAD-BEARING: the default strategy (HWM 1) calls pull once at
       // construction, consuming payload bytes before onEntry has even run — the
       // drain below would then re-consume them and desync the archive (measured:
@@ -675,6 +710,7 @@ export async function decodeTarStream(source, onEntry, options = {}) {
           }
           const want = Number(remaining > 64n * 1024n ? 64n * 1024n : remaining);
           const chunk = await reader.readExact(want);
+          delivered += BigInt(want);
           remaining -= BigInt(want);
           controller.enqueue(chunk);
         },
@@ -682,16 +718,13 @@ export async function decodeTarStream(source, onEntry, options = {}) {
 
       const keep = await onEntry({ name, size, typeflag: "0", body });
       if (keep === false) {
-        await body.cancel();
-        remaining = size; // everything undelivered is drained below
+        try { await body.cancel(); } catch { /* already gone */ }
       }
-      // Drain whatever the consumer did not read (skipped tail or a fully
-      // skipped entry) — bounded chunks, still O(1) memory.
-      while (remaining > 0n) {
-        const want = Number(remaining > 64n * 1024n ? 64n * 1024n : remaining);
-        await reader.readExact(want);
-        remaining -= BigInt(want);
-      }
+      // Drain only what the consumer did NOT read (vv8c H1: resetting the
+      // counter to the full size re-drained bytes the body already delivered
+      // and desynced the archive). Skip the remainder + the 512-byte pad.
+      const undelivered = size - delivered;
+      if (undelivered > 0n) await reader.skip(Number(undelivered));
       if (padLen > 0) await reader.skip(padLen);
 
       files++;
