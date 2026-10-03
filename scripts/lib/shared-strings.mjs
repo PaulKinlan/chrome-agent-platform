@@ -3,7 +3,9 @@
 //
 // Why: the descriptor rows repeat the same caveat/provenance prose once per
 // package, and every consumer bundles that duplication (chrome-agent-platform-
-// ehsl — the store service-worker bundle sat ~10 bytes under its 3 MB budget).
+// ehsl — the store service-worker bundle sat ~10 bytes under its 3 MB budget
+// when written; measured 2,998,629 bytes = 1,371 bytes headroom on 2026-09-18
+// (chrome-agent-platform-4ctv baseline).
 // A string that appears at least `minCount` times and is at least `minLength`
 // characters is emitted ONCE and referenced from each row, so the exported VALUE
 // is unchanged while the bytes are not paid per copy.
