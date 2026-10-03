@@ -43,6 +43,7 @@ import {
   createMcpRoutes,
   createSchedulerRoutes,
   createFsGrantRoutes,
+  createEnclaveProxyRoutes,
   createAgentWorkspaceRoutes,
   createMemoryRoutes,
   resolveMemory,
@@ -112,6 +113,7 @@ import {
   createOpfsAdapter,
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
+import { createSecretVault } from "../lib/secret-vault.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
 import {
@@ -6449,7 +6451,26 @@ function isOwnerPrincipal(ctx) {
   return p === "extension" || p === "owner-options";
 }
 
+// ── The Secure Enclave outbound proxy (chrome-agent-platform-jao1.2) ──────
+// The vault derives its key once per worker lifetime (memoized promise); the
+// proxy route is fenced to sanctioned surfaces via the SW's own principal
+// fence, the same fence browser.callTool uses.
+let enclaveVaultPromise = null;
+function enclaveVault() {
+  enclaveVaultPromise ??= createSecretVault({
+    storageArea: chrome.storage.local,
+    extensionId: chrome.runtime.id,
+  });
+  return enclaveVaultPromise;
+}
+const enclaveProxyRoutes = createEnclaveProxyRoutes({
+  vault: {
+    getSecretRaw: (keyId, opts) => enclaveVault().then((v) => v.getSecretRaw(keyId, opts)),
+  },
+  isAllowedCaller: (context) => isOwnerPrincipal(context),
+});
 const handlers = mergeRouteMaps(
+  enclaveProxyRoutes,
   // THE ACP HARNESS'S BROWSER-TOOL CALLS (chrome-agent-platform-2amt). Fenced with isOwnerPrincipal
   // (OWNER_EXTENSION_FENCED): callable by extension surfaces (hub, sidepanel), but rejected for pages.
   {

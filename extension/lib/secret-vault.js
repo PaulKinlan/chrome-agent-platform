@@ -11,10 +11,16 @@
 // WHAT THIS IS NOT (the honest threat model): the derived key material is
 // reconstructible inside this extension's own contexts, so this encryption is
 // defense-in-depth for AT-REST snapshots — it is NOT a boundary against code
-// executing with extension-context privileges. That boundary is structural:
-// raw reads are refused for every non-service-worker caller, the only UI
-// surface is a masked projection whose serialization provably carries no
-// plaintext, and error messages name key ids, never values.
+// executing with extension-context privileges.
+//
+// THE RAW-READ AUTHORITY IS A CALLER CONTRACT, NOT A CRYPTOGRAPHIC ONE
+// (voicebox-dsflash1's review of jao1.1): assertSwCaller compares the caller
+// label it is handed, and in-worker routing is what makes "sw" meaningful.
+// The structural boundaries are the other two: content scripts and page
+// contexts cannot reach this module at all, and the only UI surface is a
+// masked projection whose serialization provably carries no plaintext.
+// Records are additionally bound to their key id via AES-GCM additionalData,
+// so a record's {iv, ct} cannot be swapped into another id's slot.
 
 const VAULT_PREFIX = "cap:vault:secret:";
 const SALT_KEY = "cap:vault:install-salt";
@@ -51,12 +57,23 @@ async function ensureInstallSalt(storageArea) {
   }
   const salt = b64(crypto.getRandomValues(new Uint8Array(32)));
   await storageArea.set({ [SALT_KEY]: salt });
-  return salt;
+  // ADOPT THE WINNER (voicebox-dsflash1's review of jao1.1): two concurrent
+  // opens can both reach this line; whichever salt is in storage NOW is the
+  // one records will be written under, so deriving from the read-back value
+  // (not the locally generated one) keeps every open on the same key — no
+  // orphaned records.
+  const readBack = await storageArea.get(SALT_KEY);
+  return (readBack && typeof readBack[SALT_KEY] === "string" && readBack[SALT_KEY].length > 0)
+    ? readBack[SALT_KEY]
+    : salt;
 }
 
 /** The vault. Construct with createSecretVault — the async open derives the
  * extension-bound key once. */
-export async function createSecretVault({ storageArea, extensionId, installSaltB64 }) {
+/**
+ * @param {{ storageArea: any, extensionId: string, installSaltB64?: string }} opts
+ */
+export async function createSecretVault({ storageArea, extensionId, installSaltB64 = null } = {}) {
   if (!storageArea || typeof storageArea.get !== "function" || typeof storageArea.set !== "function") {
     throw new TypeError("secret vault requires a chrome.storage.local-shaped storageArea");
   }
@@ -98,8 +115,12 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
 
   async function encryptToRecord(keyId, value, previous) {
     const iv = crypto.getRandomValues(new Uint8Array(12));
+    // The key id is authenticated as additionalData: a record's {iv, ct}
+    // cannot be swapped into another id's slot and still decrypt
+    // (voicebox-dsflash1's review of jao1.1).
+    const aad = ENCODER.encode(recordKey(keyId));
     const ct = await crypto.subtle.encrypt(
-      { name: "AES-GCM", iv },
+      { name: "AES-GCM", iv, additionalData: aad },
       aesKey,
       ENCODER.encode(value),
     );
@@ -117,7 +138,7 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
 
   async function decryptRecord(keyId, record) {
     const plain = await crypto.subtle.decrypt(
-      { name: "AES-GCM", iv: unb64(record.iv) },
+      { name: "AES-GCM", iv: unb64(record.iv), additionalData: ENCODER.encode(recordKey(keyId)) },
       aesKey,
       unb64(record.ct),
     );
