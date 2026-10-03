@@ -63,6 +63,7 @@ export class AcpClient {
     this.requestTimeoutMs = options.requestTimeoutMs || 120_000;
     this.permissionHandler = options.permissionHandler || null;
     this.customTransport = options.transport || null;
+    this.executionId = typeof options.executionId === "string" ? options.executionId : null;
 
     /** @type {WebSocket|null} */
     this.ws = null;
@@ -78,6 +79,10 @@ export class AcpClient {
     this.availableCommands = [];
     this.connected = false;
     this.activeSessionId = null;
+  }
+
+  setExecutionId(id) {
+    this.executionId = typeof id === "string" ? id : null;
   }
 
   /**
@@ -371,11 +376,19 @@ export class AcpClient {
       let result;
       try {
         const name = typeof msg.params?.name === "string" ? msg.params.name : "";
+        const args = (msg.params?.args && typeof msg.params.args === "object") ? { ...msg.params.args } : {};
+        // Strip any harness-injected executionId, id, or approved flags (security boundary: ACP-SQF5)
+        delete args.executionId;
+        delete args.id;
+        delete args.approved;
         this.activeTurnListener?.({ kind: "tool", detail: `browser:${name || "(unnamed)"}`, raw: msg.params });
-        // THE SERVICE WORKER RUNS THE TOOL. This module is page context and must not import
-        // browser-tools.js (agent-loop.js: "those are SW authority"), which is also why the tools'
-        // grants stay where they are — the SW checks them, not this transport.
-        const reply = await chrome.runtime.sendMessage({ type: "browser.callTool", name, args: msg.params?.args ?? {} });
+        // THE SERVICE WORKER RUNS THE TOOL under principal 'model' with this.executionId.
+        const reply = await chrome.runtime.sendMessage({
+          type: "browser.callTool",
+          name,
+          args,
+          executionId: this.executionId || "",
+        });
         result = reply && reply.ok === false && reply.error !== undefined ? { error: reply.error } : reply;
       } catch (error) {
         result = { error: `browser tool dispatch failed: ${String((error && error.message) || error)}` };

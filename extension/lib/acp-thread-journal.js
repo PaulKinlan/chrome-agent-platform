@@ -23,7 +23,7 @@
  * @param {string} [fallback]
  * @returns {string}
  */
-const slug = (v, f = "unknown") => String(v ?? "").trim().replace(/[^a-zA-Z0-9._-]+/g, "-").slice(0, 48) || f;
+const slug = (v, f = "unknown") => String(v ?? "").trim().replace(/[^a-zA-Z0-9_-]+/g, "-").slice(0, 48) || f;
 
 let counter = 0;
 
@@ -50,26 +50,26 @@ export function acpToolRows(events = [], executionId = "") {
 }
 
 /**
- * @param {{task?: string, attachments?: any[], threadId?: string|null, harnessId?: string|null, sessionId?: string|null}} [params]
+ * @param {{task?: string, attachments?: any[], threadId?: string|null, harnessId?: string|null, sessionId?: string|null, executionId?: string|null}} [params]
  * @param {any} [deps]
  */
-export async function openAcpTurn({ task = "", attachments = [], threadId = null, harnessId = "pi", sessionId = null } = {}, deps = {}) {
+export async function openAcpTurn({ task = "", attachments = [], threadId = null, harnessId = "pi", sessionId = null, executionId = null } = {}, deps = {}) {
   const { createThread, continueThread, nameThread } = deps;
-  const executionId = acpExecutionId(harnessId, sessionId);
+  const execId = (typeof executionId === "string" && executionId) ? executionId : acpExecutionId(harnessId, sessionId);
   try {
     if (threadId) {
-      if (!continueThread) return { ok: false, error: "continueThread unavailable", executionId };
+      if (!continueThread) return { ok: false, error: "continueThread unavailable", executionId: execId };
       const cont = await continueThread(threadId, task, attachments);
-      if (!cont?.thread) return { ok: false, error: "continue failed", executionId };
-      return { ok: true, threadId: cont.thread.id, history: cont.history ?? [], executionId, created: false };
+      if (!cont?.thread) return { ok: false, error: "continue failed", executionId: execId };
+      return { ok: true, threadId: cont.thread.id, history: cont.history ?? [], executionId: execId, created: false };
     }
-    if (!createThread) return { ok: false, error: "createThread unavailable", executionId };
+    if (!createThread) return { ok: false, error: "createThread unavailable", executionId: execId };
     const thread = await createThread(task, attachments);
-    if (!thread?.id) return { ok: false, error: "create failed", executionId };
+    if (!thread?.id) return { ok: false, error: "create failed", executionId: execId };
     try { nameThread?.(thread.id, task); } catch { /* thread naming is cosmetic; creation already succeeded */ }
-    return { ok: true, threadId: thread.id, history: [], executionId, created: true };
+    return { ok: true, threadId: thread.id, history: [], executionId: execId, created: true };
   } catch (err) {
-    return { ok: false, error: String(err?.message ?? err), executionId };
+    return { ok: false, error: String(err?.message ?? err), executionId: execId };
   }
 }
 

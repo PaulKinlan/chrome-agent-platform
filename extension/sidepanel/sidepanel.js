@@ -466,7 +466,7 @@ async function runPageTurn(text, attachments, mention) {
   let effectiveAttachments = attachments ? [...attachments] : [];
   if (currentTabId != null && !effectiveAttachments.some((a) => a.kind === "tab" || a.tabId === currentTabId)) {
     let tabInfo = null;
-    try { tabInfo = await chrome.tabs?.get?.(currentTabId); } catch {}
+    try { tabInfo = await chrome.tabs?.get?.(currentTabId); } catch { /* best effort */ }
     const tabName = tabInfo?.title || hostEl?.textContent || "Current page";
     const tabUrl = tabInfo?.url || currentTabOrigin || "";
     if (tabUrl) {

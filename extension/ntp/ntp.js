@@ -5252,7 +5252,7 @@ function initSideRailNav() {
     // Expand the sidebar
     setSidebarCollapsed(false);
     side?.classList?.remove("collapsed");
-    try { localStorage.setItem(SIDE_COLLAPSED_KEY, "0"); } catch {}
+    try { localStorage.setItem(SIDE_COLLAPSED_KEY, "0"); } catch { /* best effort */ }
     sideToggle?.setAttribute("aria-expanded", "true");
     updateSideToggleLabels(true);
 
