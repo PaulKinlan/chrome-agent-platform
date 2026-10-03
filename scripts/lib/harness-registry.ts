@@ -122,6 +122,16 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "kat-agent-delegation.ts": { class: "kat", budgetMs: 300_000 },
   "kat-browser-grant-persistence.ts": { class: "kat" },
   "kat-agent-templates.ts": { class: "kat" },
+  // The only suite that measures the sandbox's EGRESS confinement (ovfm.4, hardened
+  // by jfpx): every network claim is asserted at an owned endpoint that records
+  // arrivals, each arrival paired with a non-arrival, and each refusal asserted by
+  // the MECHANISM's own words (teaching guards vs Chrome's native refusal; URL
+  // validation vs the policy gate). Browser-only.
+  "kat-sandbox-egress.ts": {
+    class: "kat",
+    loadSensitive: "serialized-Chrome browser suite (up to three sequential launches per run, each taking a bounded-concurrency slot through launchChrome). Never start it above the core count: under heavy load the launches slow and the digest/import-map cases can time out rather than fail — a load red, not a product red.",
+    owner: "chrome-agent-platform-gafh",
+  },
   "kat-artifact-library-capacity.ts": { class: "kat" },
   // CLEARED 2026-09-23 (chrome-agent-platform-l3ts family, by the lane that measured it):
   // the runner's own ledger saw this KAT GREEN twice tonight (kat-verdicts.json, 22:32Z) while
