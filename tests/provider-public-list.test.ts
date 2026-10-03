@@ -62,14 +62,22 @@ Deno.test("provider options: the settings picker source never offers an internal
       `${internal} became selectable in the settings picker`,
     );
   }
-  // One-directional sync: every card the picker declares is a provider the
-  // runtime authority serves as PUBLIC. (The inverse is deliberately not
-  // asserted — lm-studio is public but needs no picker card to stay valid.)
+  // Two-directional sync (fkea): the picker declares exactly the providers the
+  // runtime authority serves as PUBLIC. A card pointing at a non-public provider
+  // fails the first direction; a public provider whose card is dropped fails the
+  // second — lm-studio HAS a card (options.js:217), so the old comment claiming
+  // it "needs no picker card to stay valid" was false and let a lost card pass.
   const publicIds = publicProviderChoices(PROVIDER_CHOICES).map((choice) => choice.id);
   for (const declared of declaredIds) {
     assert(
       publicIds.includes(declared),
       `${declared} is a settings picker card but is not in the public authority list`,
+    );
+  }
+  for (const pub of publicIds) {
+    assert(
+      declaredIds.includes(pub),
+      `${pub} is public in the runtime authority but has no settings picker card`,
     );
   }
 });
