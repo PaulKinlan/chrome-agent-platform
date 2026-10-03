@@ -199,6 +199,98 @@ Deno.test("validatePurePythonWheel: refuses corrupt or truncated zip bytes", () 
   assertEquals(res.refused, "invalid-zip");
 });
 
+Deno.test("validatePurePythonWheel: refuses an archive where local headers carry native binary but Central Directory omits it (CD/LFH desync)", () => {
+  // Craft archive: local headers have [__init__.py, WHEEL, payload.so], CD lists only first 2
+  const local1 = new TextEncoder().encode("pass\n");
+  const local2 = new TextEncoder().encode("Wheel-Version: 1.0\n");
+  const local3 = new Uint8Array([0x7f, 0x45, 0x4c, 0x46]); // .so ELF
+
+  const filesAll = [
+    { name: "testpkg/__init__.py", content: local1 },
+    { name: "testpkg-1.0.dist-info/WHEEL", content: local2 },
+    { name: "testpkg/payload.so", content: local3 },
+  ];
+  const localChunks: Uint8Array[] = [];
+  const cdChunks: Uint8Array[] = [];
+  let offset = 0;
+
+  for (let i = 0; i < filesAll.length; i++) {
+    const { name, content } = filesAll[i];
+    const nameBytes = new TextEncoder().encode(name);
+    const dataBytes = content;
+    const crc = crc32(dataBytes);
+    const size = dataBytes.byteLength;
+
+    const local = new Uint8Array(30 + nameBytes.byteLength + size);
+    const lv = new DataView(local.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, size, true);
+    lv.setUint32(22, size, true);
+    lv.setUint16(26, nameBytes.byteLength, true);
+    local.set(nameBytes, 30);
+    local.set(dataBytes, 30 + nameBytes.byteLength);
+    localChunks.push(local);
+
+    // OMIT 3rd file (payload.so) from Central Directory
+    if (i < 2) {
+      const cd = new Uint8Array(46 + nameBytes.byteLength);
+      const cv = new DataView(cd.buffer);
+      cv.setUint32(0, 0x02014b50, true);
+      cv.setUint16(4, 20, true);
+      cv.setUint16(6, 20, true);
+      cv.setUint32(16, crc, true);
+      cv.setUint32(20, size, true);
+      cv.setUint32(24, size, true);
+      cv.setUint16(28, nameBytes.byteLength, true);
+      cv.setUint32(42, offset, true);
+      cd.set(nameBytes, 46);
+      cdChunks.push(cd);
+    }
+    offset += local.byteLength;
+  }
+
+  const cdSize = cdChunks.reduce((acc, c) => acc + c.byteLength, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, 2, true);
+  ev.setUint16(10, 2, true);
+  ev.setUint32(12, cdSize, true);
+  ev.setUint32(16, offset, true);
+
+  const desynced = new Uint8Array(offset + cdSize + 22);
+  let pos = 0;
+  for (const c of localChunks) { desynced.set(c, pos); pos += c.byteLength; }
+  for (const c of cdChunks) { desynced.set(c, pos); pos += c.byteLength; }
+  desynced.set(eocd, pos);
+
+  const res = validatePurePythonWheel({ name: "testpkg-1.0-py3-none-any.whl", bytes: desynced });
+  assertEquals(res.ok, false);
+  assertEquals(res.refused, "zip-header-mismatch");
+});
+
+Deno.test("validatePurePythonWheel: refuses an archive with path traversal entry", () => {
+  const zip = makeZip([
+    { name: "../../testpkg/__init__.py", content: "x = 1\n" },
+    { name: "testpkg-1.0.dist-info/WHEEL", content: "Wheel-Version: 1.0\n" },
+  ]);
+  const res = validatePurePythonWheel({ name: "testpkg-1.0-py3-none-any.whl", bytes: zip });
+  assertEquals(res.ok, false);
+  assertEquals(res.refused, "path-traversal-rejected");
+});
+
+Deno.test("validatePurePythonWheel: refuses an archive with absolute path entry", () => {
+  const zip = makeZip([
+    { name: "/etc/shadow.py", content: "x = 1\n" },
+    { name: "testpkg-1.0.dist-info/WHEEL", content: "Wheel-Version: 1.0\n" },
+  ]);
+  const res = validatePurePythonWheel({ name: "testpkg-1.0-py3-none-any.whl", bytes: zip });
+  assertEquals(res.ok, false);
+  assertEquals(res.refused, "path-traversal-rejected");
+});
+
 // ── OPFS Storage Lifecycle Tests for Wheels ─────────────────────────────────
 
 Deno.test("OPFS wheel storage: stores pure wheel, lists by kind, and deletes cleanly", async () => {
