@@ -48,16 +48,26 @@ export function createVaultRoutes({
     },
 
     /** One minimal authenticated request through the enclave proxy: proves the
-     * stored token is accepted WITHOUT logging or returning it. */
+     * stored token is accepted WITHOUT logging or returning it.
+     * SECURITY (voicebox-dsflash1's review): the proxy's error TEXT is never
+     * passed through — an error envelope can embed the request URL, and a
+     * query-injected token would leak into the Settings DOM. The caller gets
+     * { ok, status, code } with a strict whitelisted code only. */
     async "vault.test"({ service } = {}, context) {
       requireSettingsSender(context);
       if (typeof testConnection !== "function") {
-        return { ok: false, error: "the enclave proxy is not wired for connection tests" };
+        return { ok: false, code: "not_wired" };
       }
       const res = await testConnection({ service });
-      // The proxy result is { ok, status?, error? } — never a body, never the
-      // secret. Pass through exactly those fields.
-      return { ok: res?.ok === true, status: res?.status ?? null, error: res?.error ?? null };
+      const ok = res?.ok === true;
+      const KNOWN_CODES = new Set([
+        "auth_failed", "connection_failed", "timeout", "redirect_refused",
+        "bound_exceeded", "target_refused", "origin_not_approved",
+        "unknown_service", "bad_method", "secret_unavailable",
+        "template_error", "unbounded_response", "not_wired",
+      ]);
+      const code = ok ? null : (typeof res?.code === "string" && KNOWN_CODES.has(res.code) ? res.code : "connection_failed");
+      return { ok, status: typeof res?.status === "number" ? res.status : null, code };
     },
   };
 }

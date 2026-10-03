@@ -3504,7 +3504,10 @@ function vaultRow(row) {
     setVaultStatus(`Testing ${row.keyId}…`, false);
     const res = await vaultSend("vault.test", { service: row.keyId === "BRAVE_SEARCH_API_KEY" ? "brave-search" : row.keyId.toLowerCase() });
     const ok = res?.ok === true;
-    setVaultStatus(ok ? `Connection OK (status ${res.status}).` : `Connection failed: ${res?.error ?? "unknown"}`, !ok);
+    // The code is a STRICT whitelisted token from the SW — never an error
+    // string (a proxy error envelope can embed the request URL, which carries
+    // a query-injected token).
+    setVaultStatus(ok ? `Connection OK (status ${res.status}).` : `Connection failed (${res?.code ?? "connection_failed"}).`, !ok);
     test.disabled = false;
   });
 
