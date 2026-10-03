@@ -347,3 +347,117 @@ Deno.test("11rm.1: falsification controls (mutants fail closed)", async () => {
     try { await Deno.remove(tmpDir2, { recursive: true }); } catch { /* ignore */ }
   }
 });
+
+
+// ── vv8c re-review regressions (M3 traversal, M4 ustar prefix, H1 desync) ──
+
+function vvcHeader(name: string, size: number, typeflag = "0") {
+  const b = new Uint8Array(512);
+  const enc = new TextEncoder();
+  b.set(enc.encode(name).subarray(0, 100), 0);
+  b.set(enc.encode("0000644\0"), 100);
+  b.set(enc.encode("0000000\0"), 108);
+  b.set(enc.encode("0000000\0"), 116);
+  b.set(enc.encode(size.toString(8).padStart(11, "0") + " "), 124);
+  b.set(enc.encode("00000000000 "), 136);
+  b.set(enc.encode("        "), 148);
+  b[156] = enc.encode(typeflag)[0];
+  b.set(enc.encode("ustar\0"), 257);
+  b.set(enc.encode("00"), 263);
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += b[i];
+  b.set(enc.encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+  return b;
+}
+
+// ── vv8c re-review regressions (M3 traversal, M4 ustar prefix, H1 desync) ──
+
+function vv8cHeader(name: string, size: number, typeflag = "0", opts: { prefix?: string } = {}) {
+  const vvcHeaderEnc = new TextEncoder();
+  const b = new Uint8Array(512);
+  b.set(vvcHeaderEnc.encode(name).subarray(0, 100), 0);
+  b.set(vvcHeaderEnc.encode("0000644\0"), 100);
+  b.set(vvcHeaderEnc.encode("0000000\0"), 108);
+  b.set(vvcHeaderEnc.encode("0000000\0"), 116);
+  b.set(vvcHeaderEnc.encode(size.toString(8).padStart(11, "0") + " "), 124);
+  b.set(vvcHeaderEnc.encode("00000000000 "), 136);
+  b.set(vvcHeaderEnc.encode("        "), 148);
+  b[156] = vvcHeaderEnc.encode(typeflag)[0];
+  b.set(vvcHeaderEnc.encode("ustar\0"), 257);
+  b.set(vvcHeaderEnc.encode("00"), 263);
+  if (opts.prefix) b.set(vvcHeaderEnc.encode(opts.prefix).subarray(0, 155), 345);
+  let sum = 0;
+  for (let i = 0; i < 512; i++) sum += b[i];
+  b.set(vvcHeaderEnc.encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+  return b;
+}
+
+Deno.test("vv8c M3: hostile names (ustar ../, absolute, PAX overlay, GNU L) are REFUSED, never delivered to onEntry", async () => {
+  const enc = new TextEncoder();
+  const cases: Array<{ label: string; chunks: Uint8Array[]; expectedError: string }> = [];
+  const add = (label: string, chunks: Uint8Array[], expectedError: string) => cases.push({ label, chunks, expectedError });
+
+  add("ustar ../", [vv8cHeader("../evil.txt", 5), enc.encode("pwned"), new Uint8Array(507), new Uint8Array(1024)], "escapes the archive root");
+  add("absolute /", [vv8cHeader("/etc/evil.txt", 5), enc.encode("pwned"), new Uint8Array(507), new Uint8Array(1024)], "tar member name is absolute");
+  add("PAX overlay", [
+    vv8cHeader("PaxHeader", 25, "x"),
+    enc.encode("25 path=../../etc/shadow\n"),
+    new Uint8Array(487),
+    vv8cHeader("benign.txt", 5),
+    enc.encode("pwned"),
+    new Uint8Array(507),
+    new Uint8Array(1024),
+  ], "escapes the archive root");
+  add("GNU L", [
+    vv8cHeader("L", 17, "L"),
+    enc.encode("../../evil/long\0"),
+    new Uint8Array(496),
+    vv8cHeader("benign.txt", 5),
+    enc.encode("pwned"),
+    new Uint8Array(507),
+    new Uint8Array(1024),
+  ], "escapes the archive root");
+
+  const decodeTarStream = (await import("../extension/lib/tar-stream.js") as any).decodeTarStream;
+  for (const { label, chunks, expectedError } of cases) {
+    const archive = new Uint8Array(chunks.reduce((a, c) => a + c.byteLength, 0));
+    let off = 0;
+    for (const c of chunks) { archive.set(c, off); off += c.byteLength; }
+    // dump the bytes right after the L entry for diagnosis
+    const lEnd = 512 + 17 + 495;
+    console.log("L entry end:", lEnd, "next 16 bytes:", Array.from(archive.subarray(lEnd, lEnd + 16)).map((b) => b.toString(16)).join(" "));
+    await assertRejects(
+      () => decodeTarStream(new Blob([archive]).stream(), () => true),
+      Error,
+      expectedError,
+      `hostile name ${label} must fail closed`,
+    );
+  }
+});
+
+Deno.test("vv8c M4: a POSIX ustar prefix+name header decodes as the FULL joined path", async () => {
+  const enc = new TextEncoder();
+  const rel = ("d".repeat(30) + "/").repeat(4) + "e".repeat(30) + ".txt";
+  const slash = rel.lastIndexOf("/");
+  const prefix = rel.slice(0, slash);
+  const base = rel.slice(slash + 1);
+  const payload = enc.encode("ustar prefix payload");
+  const chunks: Uint8Array[] = [
+    vv8cHeader(base, payload.length, "0", { prefix }),
+    payload,
+    new Uint8Array((512 - (payload.length % 512)) % 512),
+    new Uint8Array(1024),
+  ];
+  const archive = new Uint8Array(chunks.reduce((a, c) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of chunks) { archive.set(c, off); off += c.byteLength; }
+
+  const decodeTarStream = (await import("../extension/lib/tar-stream.js") as any).decodeTarStream;
+  const seen: Array<{ name: string; size: string }> = [];
+  await decodeTarStream(new Blob([archive]).stream(), (entry: any) => {
+    seen.push({ name: entry.name, size: String(entry.size) });
+    return true;
+  });
+  assertEquals(seen.length, 1);
+  assertEquals(seen[0].name, rel, "the ustar prefix joins the name (was truncated to the bare 100-byte field)");
+});
