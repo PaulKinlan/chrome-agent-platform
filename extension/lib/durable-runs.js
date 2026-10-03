@@ -178,7 +178,8 @@ function validExecutionId(value) {
   const lower = value.toLowerCase();
   if (["__proto__", "prototype", "constructor"].includes(lower)) return false;
   return /^exec:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-    || /^exec_[a-zA-Z0-9][a-zA-Z0-9_-]{7,194}$/.test(value);
+    || /^exec_[a-zA-Z0-9][a-zA-Z0-9_-]{7,194}$/.test(value)
+    || /^acp:[a-zA-Z0-9][a-zA-Z0-9_.:-]{7,194}$/.test(value);
 }
 
 function publicRecord(record) {

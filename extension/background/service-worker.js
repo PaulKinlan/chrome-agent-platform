@@ -1793,6 +1793,7 @@ const recentRunAttestations = new Map(); // execId → { taskId, at, finalized, 
 const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
 const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
+const harnessRunDocuments = new Map(); // executionId -> documentId
 
 // Exact WebMCP consent authority tokens never cross runtime messaging. A
 // WeakSet makes an object copied from a request body useless even if every
@@ -1955,6 +1956,22 @@ function finalizeExecution(execId) {
   cancellingApprovalExecutions.delete(execId);
   const slot = recentRunAttestations.get(execId);
   if (slot) slot.finalized = true;
+}
+async function isExecutionLive(executionId) {
+  if (!executionId || typeof executionId !== "string") return false;
+  if (activeExecutions.has(executionId)) return true;
+  await durableRecoveryReady;
+  const snapshot = await durableRuns.list().catch(() => null);
+  const run = snapshot?.runs?.find((r) => r.executionId === executionId);
+  if (run && (run.phase === "running" || run.phase === "paused-permission")) {
+    activeExecutions.add(executionId);
+    if (!harnessRunDocuments.has(executionId)) {
+      const docId = run.approvalResolverDocumentId || run.resumeRequest?.approvalResolverDocumentId || "";
+      if (docId) harnessRunDocuments.set(executionId, docId);
+    }
+    return true;
+  }
+  return false;
 }
 function recordRunAttestation(att) {
   if (!att?.runId) return;
@@ -2873,7 +2890,7 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
             agentTools,
           });
         } catch (err) {
-          console.error("[service-worker] liveChromeLazyRecords threw:", err);
+          capLog("orchestrator").error("liveChromeLazyRecords threw:", err);
           pushDiagnostic("error", `liveChromeLazyRecords: ${err?.message ?? err}`, "orchestrator", "lazy-sources");
           throw err;
         }
@@ -6424,21 +6441,38 @@ const handlers = mergeRouteMaps(
   {
     "browser.callTool": async (message, context) => {
       if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
-      const isApproved = message?.approved === true;
+      const executionId = typeof message?.executionId === "string" ? message.executionId : "";
+      if (executionId) {
+        const live = typeof isExecutionLive === "function" ? await isExecutionLive(executionId) : true;
+        if (!live) {
+          return { ok: false, error: "harness_run_not_active" };
+        }
+      }
+      const isApproved = !executionId && message?.approved === true;
+      const owningDocId = (executionId && typeof harnessRunDocuments !== "undefined" && harnessRunDocuments.get(executionId)) ||
+        (typeof context?.documentId === "string" ? context.documentId : "");
+      const callContext = executionId ? {
+        principal: "model",
+        executionId,
+        runId: executionId,
+        documentId: owningDocId,
+        resolverDocumentId: owningDocId,
+        onApprovalEvent: async (event) => (typeof broadcastProgress === "function" ? broadcastProgress({ ...event, runId: executionId }) : undefined),
+      } : context;
       return runBrowserToolCall(message?.name, message?.args ?? {}, {
-        scheduleScriptGate: (scriptId) => (isApproved ? { ok: true } : dispatchRoute("task.schedule-script", { scriptId }, context)),
-        cookieValueGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("browser.cookie-value", payload, context)),
+        scheduleScriptGate: (scriptId) => (isApproved ? { ok: true } : dispatchRoute("task.schedule-script", { scriptId }, callContext)),
+        cookieValueGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("browser.cookie-value", payload, callContext)),
         destructiveActionGate: async (action, payload) => {
+          const policy = await (typeof destructiveActionPolicy === "function" ? destructiveActionPolicy() : Promise.resolve("always"));
+          if (policy === "never") {
+            return { ok: false, approvalDenied: true, error: `Destructive browser actions are blocked in Settings; ${action} was not performed.` };
+          }
           if (isApproved) {
-            const policy = await destructiveActionPolicy();
-            if (policy === "never") {
-              return { ok: false, approvalDenied: true, error: `Destructive browser actions are blocked in Settings; ${action} was not performed.` };
-            }
             return { ok: true, approvalConsumed: true };
           }
-          return dispatchRoute("browser.destructive-action", { action, ...payload }, context);
+          return dispatchRoute("browser.destructive-action", { action, ...payload }, callContext);
         },
-        fileWriteGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("fs-grant.write-file-approved", payload, context)),
+        fileWriteGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("fs-grant.write-file-approved", payload, callContext)),
         developerFeatures: await developerFeaturesOn(),
       });
     },
@@ -7548,9 +7582,61 @@ const handlers = mergeRouteMaps(
     inFlightThreadGet.set(key, promise);
     return promise;
   },
-  async "acp.journal"(m) {
-    if (m?.action === "open") return await openAcpTurn(m, { createThread, continueThread, nameThread: nameThreadAsync });
-    if (m?.action === "result") return await recordAcpTurn(m, { appendThreadMessage, commitThreadTerminal });
+  async "acp.journal"(m, context) {
+    if (m?.action === "open") {
+      const opened = await openAcpTurn(m, { createThread, continueThread, nameThread: nameThreadAsync });
+      if (opened?.ok && opened.executionId) {
+        const executionId = opened.executionId;
+        const owningDocId = typeof context?.documentId === "string" ? context.documentId : "";
+        harnessRunDocuments.set(executionId, owningDocId);
+        beginExecution(executionId, typeof m?.task === "string" ? m.task : "acp-turn");
+        await admitDurableRun(durableRuns, {
+          executionId,
+          threadId: opened.threadId,
+          kind: "harness",
+          agentId: m?.harnessId || "pi",
+          taskPreview: typeof m?.task === "string" ? m.task : "",
+          journalTarget: "master",
+          resumeRequest: {
+            route: "acp.journal",
+            harnessId: m?.harnessId || "pi",
+            threadId: opened.threadId,
+            task: typeof m?.task === "string" ? m.task : "",
+            approvalResolverDocumentId: owningDocId,
+          },
+        }).catch(() => null);
+      }
+      return opened;
+    }
+    if (m?.action === "result") {
+      const recorded = await recordAcpTurn(m, { appendThreadMessage, commitThreadTerminal });
+      if (m?.executionId) {
+        const executionId = m.executionId;
+        endExecution(executionId);
+        harnessRunDocuments.delete(executionId);
+        await durableRuns.settle(executionId, {
+          ok: m?.ok === true,
+          result: m?.text || "",
+          error: m?.error || (m?.ok ? undefined : "harness turn failed"),
+          logicalId: m?.threadId || executionId,
+        }).catch(() => null);
+      }
+      return recorded;
+    }
+    if (m?.action === "cancel") {
+      if (m?.executionId) {
+        const executionId = m.executionId;
+        endExecution(executionId);
+        harnessRunDocuments.delete(executionId);
+        await durableRuns.settle(executionId, {
+          ok: false,
+          aborted: true,
+          error: "Task was cancelled",
+          logicalId: m?.threadId || executionId,
+        }).catch(() => null);
+      }
+      return { ok: true };
+    }
     return { ok: false, error: "invalid acp.journal action" };
   },
   async "thread.delete"(m) {

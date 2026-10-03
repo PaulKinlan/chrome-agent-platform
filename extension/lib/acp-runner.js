@@ -6,6 +6,7 @@
 
 import { AcpClient, acpAllowOptionId, acpDenyOptionId } from "./acp-client.js";
 import { AcpNativeTransport, DEFAULT_NATIVE_HOST } from "./acp-native.js";
+import { acpExecutionId } from "./acp-thread-journal.js";
 
 
 // ── CAP skill context on the harness turn (chrome-agent-platform-etdn) ──────
@@ -369,6 +370,15 @@ export async function cancelAcpTurn(options = {}) {
       cancelledOnWire = true;
     } catch { /* best effort */ }
   }
+  if (active.executionId) {
+    try {
+      await (globalThis.chrome?.runtime?.sendMessage?.({
+        type: "acp.journal",
+        action: "cancel",
+        executionId: active.executionId,
+      }) ?? Promise.resolve());
+    } catch { /* best effort */ }
+  }
   return { ok: true, cancelledOnWire, sessionId: active.sessionId };
 }
 
@@ -515,7 +525,7 @@ export async function runAcpTaskTurn(options) {
   } = options;
 
   const sessionKey = acpSessionKey(threadId, harnessId);
-  const currentExecutionId = executionId || `acp:${sessionKey}:${Date.now()}`;
+  const currentExecutionId = executionId || acpExecutionId(harnessId, sessionKey);
   onRunRegistered?.(currentExecutionId);
 
   const stale = () => {
@@ -604,12 +614,13 @@ export async function runAcpTaskTurn(options) {
       };
 
   const client = (typeof options.clientFactory === "function")
-    ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: cwd, transport: nativeTransport || null })
+    ? options.clientFactory({ url: effectiveEndpoint, defaultCwd: cwd, transport: nativeTransport || null, executionId: currentExecutionId })
     : new AcpClient({
       url: effectiveEndpoint,
       defaultCwd: cwd,
       transport: nativeTransport || null,
       ...(permissionHandler ? { permissionHandler } : {}),
+      executionId: currentExecutionId,
     });
 
   // CLAIM the conversation BEFORE ANY await — synchronously. A second (or
@@ -618,7 +629,7 @@ export async function runAcpTaskTurn(options) {
   // a third send would still read the OLD claim and overwrite the second one,
   // leaving two turns unnotified and both prompting. `cancelled` makes the
   // newer turn's intent visible even before this turn reaches the wire.
-  const claim = { client: null, sessionId: null, cancelled: false, stoppedByOwner: false };
+  const claim = { client: null, sessionId: null, cancelled: false, stoppedByOwner: false, executionId: currentExecutionId };
   const prior = activeTurns.get(sessionKey);
   if (prior) prior.cancelled = true;
   activeTurns.set(sessionKey, claim);
