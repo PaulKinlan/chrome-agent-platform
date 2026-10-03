@@ -2848,6 +2848,10 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
 
     const bookedBrowserTools = withRunToolBookkeeping(liveBrowserTools, bkCtx, bkDeps);
     const bookedManagementTools = withRunToolBookkeeping(liveManagementTools, bkCtx, bkDeps);
+    // The enclave's synthesized service tools (brave_search et al.) join
+    // the run's extra tools when the enclave is enabled and the service
+    // credential exists (jao1.5 wiring).
+    const enclaveTools = await enclaveServiceToolsForRun();
     const liveOnDeviceTools = onDeviceTextToolset({
       dispatchRoute: modelManagementDispatch,
     });
@@ -2886,10 +2890,6 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
       // SCOPED (hook) runs get NO route, so their workflow_run fails closed
       // (mirroring the management tools, which scoped runs also lack).
       workflowRunRoute: scoped ? null : (args) => modelManagementDispatch("workflow.run", args ?? {}),
-      // The enclave's synthesized service tools (brave_search et al.) join
-      // the run's extra tools when the enclave is enabled and the service
-      // credential exists (jao1.5 wiring).
-      const enclaveTools = await enclaveServiceToolsForRun();
       extraTools: { ...bookedBrowserTools, ...bookedManagementTools, ...bookedOnDeviceTools, ...enclaveTools },
       readMasterLazySources: async () => {
         try {

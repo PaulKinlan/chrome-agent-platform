@@ -51,8 +51,9 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
 
-  "lib/service-tools.js":
-    "The declarative service-descriptor & tool-synthesis engine (jao1.3, CAP-SECURE-ENCLAVE Stage 3): the agent-toolset + sandbox wiring that exposes the synthesized tools is the NEXT slice; tests/service-tools.test.ts pins the isolation contract (zero auth fields in the synthesized tools) meanwhile.",
+  // (lib/service-tools.js was RETAINED at jao1.3; jao1.5's wiring merged the
+  // synthesized tools into the agent loop's extraTools — REACHED now, so the
+  // RETAINED line is gone. tests/service-tools.test.ts still pins it.)
   // (lib/secret-vault.js was RETAINED at jao1.1; jao1.2 wired the enclave proxy
   // route in the service worker, which imports the vault — REACHED now, so the
   // RETAINED line is gone. tests/secret-vault.test.ts still pins the contract.)
