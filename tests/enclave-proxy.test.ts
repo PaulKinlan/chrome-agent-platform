@@ -162,7 +162,7 @@ Deno.test("jao1.2: redirect responses are refused without following (laundering 
     headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
   }, { principal: "model", documentId: "d" });
   assertEquals(res.ok, false, "a redirect does not complete");
-  assertStringIncludes(String(res.error ?? res), "redirect", "the refusal names the redirect");
+  assertEquals(res.code, "redirect_refused", "the refusal carries the strict code");
   assertEquals(calls.length, 1, "exactly one request was made (no follow)");
 });
 
@@ -174,7 +174,7 @@ Deno.test("jao1.2: the response is bounded and tagged untrusted", async () => {
     service: "brave-search", path: "/res/search", method: "GET", headers: {},
   }, { principal: "model", documentId: "d" });
   assertEquals(res.ok, false, "a body over the bound is refused");
-  assertStringIncludes(String(res.error ?? res), "1 MiB", "the refusal names the bound");
+  assertEquals(res.code, "bound_exceeded", "the refusal carries the strict settings-safe code");
 
   const small = fakeFetch([{ match: (u) => u.includes("api.search.brave.com"), reply: { body: '{"small": true}' } }]);
   const { handler: handler2 } = await buildRoute({ fetchImpl: small });

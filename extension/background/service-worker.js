@@ -44,6 +44,7 @@ import {
   createSchedulerRoutes,
   createFsGrantRoutes,
   createEnclaveProxyRoutes,
+  createVaultRoutes,
   createAgentWorkspaceRoutes,
   createMemoryRoutes,
   resolveMemory,
@@ -6469,7 +6470,41 @@ const enclaveProxyRoutes = createEnclaveProxyRoutes({
   },
   isAllowedCaller: (context) => isOwnerPrincipal(context),
 });
+// The Settings surface for the vault (chrome-agent-platform-jao1.5): the
+// masked status + set/rotate/delete are Settings-gated; the connection test
+// runs ONE minimal request through the enclave proxy and returns only
+// { ok, status } — never the body, never the secret.
+const vaultRoutes = createVaultRoutes({
+  vault: {
+    listMasked: (opts) => enclaveVault().then((v) => v.listMasked(opts)),
+    setSecret: (keyId, value, o) => enclaveVault().then((v) => v.setSecret(keyId, value, o)),
+    rotateSecret: (keyId, value, o) => enclaveVault().then((v) => v.rotateSecret(keyId, value, o)),
+    deleteSecret: (keyId, o) => enclaveVault().then((v) => v.deleteSecret(keyId, o)),
+  },
+  requireSettingsSender: (context) => {
+    if (context?.principal !== "owner-options") {
+      const e = new Error("vault routes are restricted to the Settings surface");
+      e.name = "SettingsSurfaceRequiredError";
+      throw e;
+    }
+  },
+  testConnection: async ({ service }) => {
+    // Pre-I/O refusals THROW with code-tagged errors; the Settings surface
+    // needs the strict { ok, code } shape, never raw error text (the enclave
+    // proxy's error text is settings-safe by code, but the mapping stays
+    // total so nothing bypasses the whitelist).
+    try {
+      return await enclaveProxyRoutes["enclave.proxy"](
+        { service, path: "/", method: "GET" },
+        { principal: "owner-options" },
+      );
+    } catch (err) {
+      return { ok: false, code: err?.code || "unknown_error" };
+    }
+  },
+});
 const handlers = mergeRouteMaps(
+  vaultRoutes,
   enclaveProxyRoutes,
   // THE ACP HARNESS'S BROWSER-TOOL CALLS (chrome-agent-platform-2amt). Fenced with isOwnerPrincipal
   // (OWNER_EXTENSION_FENCED): callable by extension surfaces (hub, sidepanel), but rejected for pages.

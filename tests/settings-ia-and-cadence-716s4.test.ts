@@ -26,7 +26,7 @@ Deno.test("716s.4 AgentTemplateCard: uses formatCadenceMinutes and secondary Use
   assert(!cardStyles.includes("background:var(--accent"), "AgentTemplateCard .use button must not be filled accent background");
 });
 
-Deno.test("716s.4 Settings navigation IA: nav shows 6 group headings and retains all 15 sections", () => {
+Deno.test("716s.4 Settings navigation IA: nav shows 6 group headings and retains all 16 sections", () => {
   const groupHeadings = [...HTML.matchAll(/<span\s+class="nav-group-title"[^>]*>([^<]+)<\/span>/g)].map((m) => m[1].replace(/&amp;/g, "&").trim());
   assertEquals(groupHeadings.length, 6, "nav must have exactly 6 architectural group headings");
   assertEquals(groupHeadings, [
@@ -45,8 +45,8 @@ Deno.test("716s.4 Settings navigation IA: nav shows 6 group headings and retains
   // All 15 section panels are preserved and match navigation in order
   const sections = [...HTML.matchAll(/<section\s+id="([^"]+)"\s+class="panel(?:\s+active)?"/g)].map((m) => m[1]);
   const navItems = [...HTML.matchAll(/<a\s+href="#([^"]+)"\s+class="nav-item"\s+data-section="\1"/g)].map((m) => m[1]);
-  assertEquals(sections.length, 15, "all 15 panels exist");
-  assertEquals(navItems.length, 15, "all 15 nav items exist");
+  assertEquals(sections.length, 16, "all 16 panels exist");
+  assertEquals(navItems.length, 16, "all 16 nav items exist");
   assertEquals(navItems, sections, "nav items and sections must match in panel order");
 });
 

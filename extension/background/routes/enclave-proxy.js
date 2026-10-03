@@ -27,6 +27,7 @@
 // service allowlist are injected, so the unit tests exercise the real handler
 // with fakes (the 32yz executable-handler style).
 
+import { capLog } from "../../lib/cap-log.js";
 import { checkFetchTarget } from "../../lib/fetch-policy.js";
 import { tagUntrusted } from "../../lib/untrusted-fence.js";
 
@@ -89,7 +90,9 @@ async function substituteTemplates(value, resolveSecret, depth = 0) {
 function assertNoResidualTemplate(value, label) {
   const text = typeof value === "string" ? value : JSON.stringify(value);
   if (text && text.includes("$VAULT{")) {
-    throw new Error(`enclave proxy: ${label} still contains an unsubstituted template after resolution`);
+    const e = new Error(`enclave proxy: ${label} still contains an unsubstituted template after resolution`);
+    e.code = "template_error";
+    throw e;
   }
 }
 
@@ -143,12 +146,16 @@ export function createEnclaveProxyRoutes({
     const serviceId = String(message?.service ?? "");
     const service = services[serviceId];
     if (!service || !Array.isArray(service.origins) || service.origins.length === 0) {
-      throw new Error(`enclave proxy: unknown service "${serviceId}"`);
+      const e = new Error(`enclave proxy: unknown service "${serviceId}"`);
+      e.code = "unknown_service";
+      throw e;
     }
 
     const method = String(message?.method ?? "GET").toUpperCase();
     if (!ALLOWED_METHODS.includes(method)) {
-      throw new Error(`enclave proxy: method ${method} is not allowed (${ALLOWED_METHODS.join(", ")})`);
+      const e = new Error(`enclave proxy: method ${method} is not allowed (${ALLOWED_METHODS.join(", ")})`);
+      e.code = "bad_method";
+      throw e;
     }
 
     // Resolve the templates BEFORE any URL/origin decision: an unresolvable
@@ -192,12 +199,18 @@ export function createEnclaveProxyRoutes({
 
     // SSRF: the shared predicate (scheme + private/loopback) runs FIRST.
     const target = checkFetchTarget(urlText);
-    if (!target.ok) throw new Error(`enclave proxy: ${target.error}`);
+    if (!target.ok) {
+      const e = new Error(`enclave proxy: ${target.error}`);
+      e.code = "target_refused";
+      throw e;
+    }
     // Origin pin: the resolved URL's origin must be one of the service's
     // approved origins (an absolute-URL path cannot launder the allowlist).
     const origin = target.url.origin;
     if (!service.origins.some((o) => o === origin)) {
-      throw new Error(`enclave proxy: ${origin} is not an approved origin for service "${serviceId}" — approved: ${service.origins.join(", ")}`);
+      const e = new Error(`enclave proxy: ${origin} is not an approved origin for service "${serviceId}" — approved: ${service.origins.join(", ")}`);
+      e.code = "origin_not_approved";
+      throw e;
     }
 
     // Credential scrubbing: the caller never sets Cookie (credentials are
@@ -228,14 +241,16 @@ export function createEnclaveProxyRoutes({
         body,
       });
     } catch (err) {
-      // The error names the service, never the headers or their values — and
-      // substituted query secrets are scrubbed out of transport messages
-      // (a URL-embedded query token would otherwise ride err.message).
-      return { ok: false, error: `enclave proxy: the request to ${serviceId} failed (${scrub(String(err?.message ?? err)).slice(0, 120)})` };
+      // SETTINGS-SAFE shape: a strict code only. The URL (which carries the
+      // query-injected token) and the headers never reach the caller. The
+      // scrubbed detail stays in the worker console for diagnosis.
+      const detail = scrub(String(err?.message ?? err)).slice(0, 200);
+      capLog("enclave-proxy").warn(`enclave proxy: ${serviceId} request failed: ${detail}`);
+      return { ok: false, code: "connection_failed", error: "connection_failed" };
     }
 
     if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
-      return { ok: false, error: `enclave proxy: ${serviceId} redirected — the enclave never follows redirects (token laundering)` };
+      return { ok: false, code: "redirect_refused", error: "redirect_refused" };
     }
 
     // Bounded body read: the READER path is unconditional (a stream is read
@@ -257,14 +272,14 @@ export function createEnclaveProxyRoutes({
         size += value.byteLength;
         if (size > MAX_BODY_BYTES) {
           try { await reader.cancel(); } catch { /* gone */ }
-          return { ok: false, error: `enclave proxy: the response from ${serviceId} exceeded the 1 MiB enclave bound` };
+          return { ok: false, code: "bound_exceeded", error: "bound_exceeded" };
         }
         parts.push(value);
       }
     } else {
       // No stream and no declared length: the response cannot be bounded, so
       // it is refused — the enclave never accepts an unbounded body.
-      return { ok: false, error: `enclave proxy: the response from ${serviceId} had no body stream and no content-length — it cannot be bounded to 1 MiB` };
+      return { ok: false, code: "unbounded_response", error: "unbounded_response" };
     }
     const bodyBytes = new Uint8Array(size);
     let filled = 0;

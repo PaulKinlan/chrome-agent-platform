@@ -238,3 +238,29 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
     },
   };
 }
+
+// ── The Settings panel model (chrome-agent-platform-jao1.5) ──────────────
+
+/** The masked rows the Settings Web-services panel renders. A projection of
+ * listMasked — this shape is the ONLY vault surface the panel model carries,
+ * so the panel cannot grow a raw-value dependency by accident. */
+export function vaultPanelRows(masked) {
+  return (masked ?? []).map((entry) => ({
+    keyId: entry.keyId,
+    masked: entry.masked,
+    configured: entry.configured === true,
+    lastUsed: entry.lastUsed ?? 0,
+    rotations: entry.rotations ?? 0,
+  }));
+}
+
+/** The Save button's semantics for one service row:
+ *   configured + blank input -> "none"   (configured — leave blank to keep)
+ *   unconfigured + blank     -> "none"
+ *   unconfigured + value     -> "set"
+ *   configured + value       -> "rotate" */
+export function resolveSaveAction({ configured, inputValue }) {
+  const hasValue = typeof inputValue === "string" && inputValue.length > 0;
+  if (!hasValue) return "none";
+  return configured ? "rotate" : "set";
+}

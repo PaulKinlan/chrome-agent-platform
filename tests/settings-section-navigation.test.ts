@@ -44,7 +44,7 @@ Deno.test("settings multi-section: handleSettingsHashNavigation toggles .active 
 
 Deno.test("settings multi-section: DOM node count and active panel isolation", () => {
   const sections = [...HTML.matchAll(/<section\s+id="([^"]+)"\s+class="panel(?:\s+active)?"/g)].map((m) => m[1]);
-  assertEquals(sections.length, 15, "options.html has 15 section panels, including user-wasm");
+  assertEquals(sections.length, 16, "options.html has 16 section panels, including user-wasm");
   assertEquals(sections.filter((id) => id === "user-wasm"), ["user-wasm"], "the upload panel exists exactly once");
   const navigation = [...HTML.matchAll(/<a\s+href="#([^"]+)"\s+class="nav-item"\s+data-section="\1"/g)].map((m) => m[1]);
   assertEquals(navigation, sections, "each panel has exactly one matching navigation link in panel order");

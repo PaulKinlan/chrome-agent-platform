@@ -198,3 +198,85 @@ Deno.test("jao1.1: key ids are strict — the identifier is a credential id, not
     await assertRejects(() => vault.setSecret(bad, "whatever", { by: "sw" }), TypeError);
   }
 });
+
+// ── jao1.5: the Settings panel model + owner-gated routes ────────────────
+
+import { vaultPanelRows, resolveSaveAction } from "../extension/lib/secret-vault.js";
+import { createVaultRoutes } from "../extension/background/routes/vault.js";
+
+Deno.test("jao1.5: the panel model projects masked rows for the Settings surface", () => {
+  const masked = [
+    { keyId: "BRAVE_SEARCH_API_KEY", configured: true, lastUsed: 1700, configuredAt: 1600, rotations: 1, masked: "…c5b4" },
+    { keyId: "GITHUB_TOKEN", configured: true, lastUsed: 0, configuredAt: 1500, rotations: 0, masked: "…" },
+  ];
+  const rows = vaultPanelRows(masked);
+  assertEquals(rows.length, 2);
+  assertEquals(rows[0], { keyId: "BRAVE_SEARCH_API_KEY", masked: "…c5b4", configured: true, lastUsed: 1700, rotations: 1 });
+  const serialized = JSON.stringify(rows);
+  assertEquals(/sk-|ghp_|SECRET/.test(serialized), false, "the panel model serializes with no secret material");
+});
+
+Deno.test("jao1.5: save-action semantics — configured keys with a blank input KEEP, new keys SET, filled inputs ROTATE", () => {
+  assertEquals(resolveSaveAction({ configured: false, inputValue: "" }), "none", "nothing configured and nothing typed is a no-op");
+  assertEquals(resolveSaveAction({ configured: false, inputValue: "new-secret" }), "set", "a new key is set");
+  assertEquals(resolveSaveAction({ configured: true, inputValue: "" }), "none", "configured — leave blank to keep");
+  assertEquals(resolveSaveAction({ configured: true, inputValue: "rotated-secret" }), "rotate", "a filled input on a configured key rotates");
+});
+
+Deno.test("jao1.5: the vault routes are Settings-gated and the status surface is masked-only", async () => {
+  const storage = fakeStorage();
+  const vault = await openTestVault(storage);
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+
+  const enclaveProxyCalls: any[] = [];
+  const routes = createVaultRoutes({
+    vault,
+    requireSettingsSender: (ctx: any) => {
+      if (ctx?.principal !== "owner-options") throw new Error("settings surface required");
+    },
+    testConnection: async () => ({ ok: true, status: 200 }),
+  });
+
+  const owner = { principal: "owner-options" };
+  const status = await routes["vault.status"]({}, owner);
+  assertEquals(status.ok, true);
+  assertEquals(status.services.length, 1);
+  assertEquals(status.services[0].masked, "…back", "the mask is the secret's tail");
+  assertEquals("value" in status.services[0], false, "the status surface carries no raw value field");
+
+  // A non-Settings caller is refused on every route.
+  const stranger = { principal: "content" };
+  for (const [name, handler] of Object.entries(routes)) {
+    await assertRejects(() => (handler as any)({}, stranger), Error, "settings surface", `${name} must be Settings-gated`);
+  }
+});
+
+Deno.test("jao1.5: set/rotate/delete through the routes round-trip, and the test connection never exposes the secret", async () => {
+  const storage = fakeStorage();
+  const vault = await openTestVault(storage);
+  const testCalls: any[] = [];
+  const routes = createVaultRoutes({
+    vault,
+    requireSettingsSender: () => {},
+    testConnection: (msg: any) => {
+      testCalls.push(msg);
+      return Promise.resolve({ ok: true, status: 200 });
+    },
+  });
+  const owner = { principal: "owner-options" };
+
+  await routes["vault.set"]({ keyId: "GITHUB_TOKEN", value: SECRET_B }, owner);
+  const status = await routes["vault.status"]({}, owner);
+  assertEquals(status.services[0].keyId, "GITHUB_TOKEN");
+  assertEquals(JSON.stringify(status), JSON.stringify(status, (k, v) => (k === "value" ? "[REDACTED]" : v)).replace("[REDACTED]", status.services[0].masked ? status.services[0].masked : ""));
+
+  await routes["vault.rotate"]({ keyId: "GITHUB_TOKEN", value: SECRET_A }, owner);
+  await routes["vault.delete"]({ keyId: "GITHUB_TOKEN" }, owner);
+  const gone = await routes["vault.status"]({}, owner);
+  assertEquals(gone.services.length, 0, "the deleted key is gone");
+
+  const tc = await routes["vault.test"]({ service: "brave-search" }, owner);
+  assertEquals(tc.ok, true, "the test connection passes");
+  assertEquals(testCalls.length, 1, "the test connection ran through the enclave proxy once");
+  assertEquals(JSON.stringify(tc).includes(SECRET_B), false, "the test result never echoes the secret");
+});
