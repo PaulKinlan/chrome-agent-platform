@@ -337,10 +337,12 @@ demo. Performance program (`chrome-agent-platform-9epn`): constructable styleshe
 
 ## Open questions for Paul
 The full list with resolved answers is [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
-Genuinely open: **Q11** extension name/distribution channel · **Q12** the recommended
-default provider/model for the best out-of-box experience · **Q13** owner-selected Wasm
-under Store policy · **Q14** Co-do licence/provenance reconciliation · **Q15** the
-semantic index engine · **Q16** grouped tabular artifact promotion.
+Resolved in recent passes: **Q11** extension name/distribution (unpacked/developer only,
+no Store release) · **Q14** Co-do licence reconciliation (no external binaries copied; in-repo/pinned sources only).
+Genuinely open / deferred: **Q12** recommended default provider (ANSWERED 2026-09-01; luna pre-filled, follow-up q2tc) ·
+**Q13** owner-selected Wasm in developer build (Store half moot per Q11; developer build open for Paul; blocks tzc) ·
+**Q15** semantic index engine · **Q16** grouped tabular artifact promotion (dptw Infinity context; grouped vs single-body choice open for Paul) ·
+**Q21** shared-worker conversation history · **Q22** permission card bundling (owner call needed before EXEC-DEMO-01).
 
 ## Feature: Artifacts (Paul 2026-08-16) — shipped
 Agents create things for the user in the context of a task (generated pages, files, UI,
