@@ -84,6 +84,41 @@ Deno.test("known-WebMCP registry is LRU-bounded and drops stale/zero signals", (
   assertEquals(entries.some((entry) => entry.origin === "https://site-0.example"), false);
   assertEquals(entries.some((entry) => entry.origin === "https://stale.example"), false);
   assert(entries.every((entry, i) => i === 0 || entries[i - 1].lastSeen >= entry.lastSeen));
+
+  // pzmo: the assertion above cannot discriminate the staleness filter — the
+  // stale entry is the oldest in a MAX+5 corpus, so the LRU cap drops it in
+  // both arms. Pin the filter with an input too small for the cap to act on:
+  // here only the staleness filter can drop the entry.
+  assertEquals(
+    pruneWebmcpRegistry([{
+      origin: "https://stale.example",
+      documents: [{
+        tabId: 1,
+        documentId: "doc-stale",
+        url: "https://stale.example/tools",
+        toolCount: 3,
+        lastSeen: now - WEBMCP_REGISTRY_STALE_MS - 1,
+      }],
+    }], now).length,
+    0,
+    "a stale document is pruned, not merely capped away",
+  );
+  // …and the same document one millisecond inside the window survives, so the
+  // assertion cannot pass vacuously by the function returning [].
+  assertEquals(
+    pruneWebmcpRegistry([{
+      origin: "https://stale.example",
+      documents: [{
+        tabId: 1,
+        documentId: "doc-fresh",
+        url: "https://stale.example/tools",
+        toolCount: 3,
+        lastSeen: now - WEBMCP_REGISTRY_STALE_MS + 1,
+      }],
+    }], now).length,
+    1,
+    "a document inside the staleness window is kept",
+  );
 });
 
 Deno.test("agent.discoverable-tabs ROUTE: only passively detected WebMCP origins are listed", async () => {
