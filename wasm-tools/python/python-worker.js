@@ -463,6 +463,35 @@ function installCapModule(pyodide) {
   }
 }
 
+/** Unpack pure-Python wheels into site-packages before user code runs (chrome-agent-platform-4p7j, S2.1).
+ *  Fails closed on any corrupted or unreadable archive. */
+function materializeWheels(pyodide, wheels) {
+  for (const w of wheels) {
+    if (!w || !w.bytes) continue;
+    const name = String(w.name ?? "unnamed.whl");
+    const rawBytes = w.bytes instanceof Uint8Array
+      ? w.bytes
+      : w.bytes instanceof ArrayBuffer
+        ? new Uint8Array(w.bytes)
+        : Array.isArray(w.bytes)
+          ? new Uint8Array(w.bytes)
+          : w.bytes && typeof w.bytes === "object" && w.bytes.buffer instanceof ArrayBuffer
+            ? new Uint8Array(w.bytes.buffer, w.bytes.byteOffset, w.bytes.byteLength)
+            : null;
+    if (!rawBytes || rawBytes.byteLength === 0) {
+      throw new Error(`wheel-materialization-failed: empty package bytes for '${name}'`);
+    }
+    try {
+      pyodide.unpackArchive(rawBytes, "zip", { extractDir: "/lib/python3.12/site-packages" });
+    } catch (err) {
+      throw new Error(`wheel-materialization-failed: '${name}': ${err?.message ?? err}`);
+    }
+  }
+  try {
+    runIsolated(pyodide, "import importlib\nimportlib.invalidate_caches()");
+  } catch { /* best-effort cache invalidation */ }
+}
+
 function runtime() {
   if (!runtimePromise) {
     runtimePromise = loadPyodide({
@@ -522,6 +551,9 @@ self.onmessage = async (event) => {
   };
   try {
     const pyodide = await runtime();
+    if (Array.isArray(message.wheels) && message.wheels.length > 0) {
+      materializeWheels(pyodide, message.wheels);
+    }
     const stdout = [];
     pyodide.setStdout({ batched: (chunk) => stdout.push(String(chunk ?? "")) });
     // One-shot stdin: the whole input arrives once, then EOF — a program that
