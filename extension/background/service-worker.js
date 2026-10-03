@@ -1794,6 +1794,14 @@ const latestExecutionByTask = new Map(); // logical taskId → execId (latest)
 const activeExecutions = new Set(); // execIds currently allowed to record
 const MAX_RUN_ATTESTATIONS = 100;
 const harnessRunDocuments = new Map(); // executionId -> documentId
+const endedExecutions = new Set();
+function markExecutionEnded(executionId) {
+  if (!executionId) return;
+  endedExecutions.add(executionId);
+  while (endedExecutions.size > 500) {
+    endedExecutions.delete(endedExecutions.keys().next().value);
+  }
+}
 
 // Exact WebMCP consent authority tokens never cross runtime messaging. A
 // WeakSet makes an object copied from a request body useless even if every
@@ -1959,13 +1967,16 @@ function finalizeExecution(execId) {
 }
 async function isExecutionLive(executionId) {
   if (!executionId || typeof executionId !== "string") return false;
-  if (activeExecutions.has(executionId)) return true;
+  if (typeof endedExecutions !== "undefined" && endedExecutions.has(executionId)) return false;
+  if (typeof cancellingApprovalExecutions !== "undefined" && cancellingApprovalExecutions.has(executionId)) return false;
+  if (typeof activeExecutions !== "undefined" && activeExecutions.has(executionId)) return true;
   await durableRecoveryReady;
   const snapshot = await durableRuns.list().catch(() => null);
   const run = snapshot?.runs?.find((r) => r.executionId === executionId);
   if (run && (run.phase === "running" || run.phase === "paused-permission")) {
-    activeExecutions.add(executionId);
-    if (!harnessRunDocuments.has(executionId)) {
+    if (typeof endedExecutions !== "undefined" && endedExecutions.has(executionId)) return false;
+    if (typeof activeExecutions !== "undefined") activeExecutions.add(executionId);
+    if (typeof harnessRunDocuments !== "undefined" && !harnessRunDocuments.has(executionId)) {
       const docId = run.approvalResolverDocumentId || run.resumeRequest?.approvalResolverDocumentId || "";
       if (docId) harnessRunDocuments.set(executionId, docId);
     }
@@ -5274,6 +5285,9 @@ async function requireOwnerApproval(context, action, target, payload, detail = u
       resolvePendingApproval(ownerApprovalStore, pending.approvalId, false);
       return { ok: false, error: decision?.decision === "timeout" ? `Owner approval for ${action} timed out after 60s.` : "Owner denied approval for this operation.", approvalDenied: true, action };
     }
+    if (!activeExecutions.has(executionId) || cancellingApprovalExecutions.has(executionId) || endedExecutions.has(executionId)) {
+      return { ok: false, error: "The run was cancelled before approval could be applied.", approvalDenied: true, action };
+    }
     const exact = consumeApproved(ownerApprovalStore, executionId, action, target, digest);
     if (exact.ok) {
       securityApprovalEvent("consumed", action, targetRef);
@@ -6443,7 +6457,7 @@ const handlers = mergeRouteMaps(
       if (!isOwnerPrincipal(context)) return { ok: false, error: "owner_extension_required" };
       const executionId = typeof message?.executionId === "string" ? message.executionId : "";
       if (executionId) {
-        const live = typeof isExecutionLive === "function" ? await isExecutionLive(executionId) : true;
+        const live = typeof isExecutionLive === "function" ? await isExecutionLive(executionId) : false;
         if (!live) {
           return { ok: false, error: "harness_run_not_active" };
         }
@@ -6451,6 +6465,9 @@ const handlers = mergeRouteMaps(
       const isApproved = !executionId && message?.approved === true;
       const owningDocId = (executionId && typeof harnessRunDocuments !== "undefined" && harnessRunDocuments.get(executionId)) ||
         (typeof context?.documentId === "string" ? context.documentId : "");
+      if (executionId && owningDocId && context?.documentId && owningDocId !== context.documentId) {
+        return { ok: false, error: "harness_run_document_mismatch" };
+      }
       const callContext = executionId ? {
         principal: "model",
         executionId,
@@ -6463,16 +6480,27 @@ const handlers = mergeRouteMaps(
         scheduleScriptGate: (scriptId) => (isApproved ? { ok: true } : dispatchRoute("task.schedule-script", { scriptId }, callContext)),
         cookieValueGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("browser.cookie-value", payload, callContext)),
         destructiveActionGate: async (action, payload) => {
-          const policy = await (typeof destructiveActionPolicy === "function" ? destructiveActionPolicy() : Promise.resolve("always"));
+          const policy = await (typeof destructiveActionPolicy === "function" ? destructiveActionPolicy() : Promise.resolve("ask"));
           if (policy === "never") {
             return { ok: false, approvalDenied: true, error: `Destructive browser actions are blocked in Settings; ${action} was not performed.` };
           }
           if (isApproved) {
             return { ok: true, approvalConsumed: true };
           }
-          return dispatchRoute("browser.destructive-action", { action, ...payload }, callContext);
+          const res = await dispatchRoute("browser.destructive-action", { action, ...payload }, callContext);
+          if (executionId && typeof isExecutionLive === "function" && !(await isExecutionLive(executionId))) {
+            return { ok: false, error: "harness_run_not_active", approvalDenied: true };
+          }
+          return res;
         },
-        fileWriteGate: (payload) => (isApproved ? { ok: true } : dispatchRoute("fs-grant.write-file-approved", payload, callContext)),
+        fileWriteGate: async (payload) => {
+          if (isApproved) return { ok: true };
+          const res = await dispatchRoute("fs-grant.write-file-approved", payload, callContext);
+          if (executionId && typeof isExecutionLive === "function" && !(await isExecutionLive(executionId))) {
+            return { ok: false, error: "harness_run_not_active" };
+          }
+          return res;
+        },
         developerFeatures: await developerFeaturesOn(),
       });
     },
@@ -7612,7 +7640,8 @@ const handlers = mergeRouteMaps(
       const recorded = await recordAcpTurn(m, { appendThreadMessage, commitThreadTerminal });
       if (m?.executionId) {
         const executionId = m.executionId;
-        endExecution(executionId);
+        markExecutionEnded(executionId);
+        finalizeExecution(executionId);
         harnessRunDocuments.delete(executionId);
         await durableRuns.settle(executionId, {
           ok: m?.ok === true,
@@ -7626,14 +7655,10 @@ const handlers = mergeRouteMaps(
     if (m?.action === "cancel") {
       if (m?.executionId) {
         const executionId = m.executionId;
-        endExecution(executionId);
+        markExecutionEnded(executionId);
+        finalizeExecution(executionId);
         harnessRunDocuments.delete(executionId);
-        await durableRuns.settle(executionId, {
-          ok: false,
-          aborted: true,
-          error: "Task was cancelled",
-          logicalId: m?.threadId || executionId,
-        }).catch(() => null);
+        await cancelExecutionTree(executionId, { reason: "harness turn cancelled" }).catch(() => null);
       }
       return { ok: true };
     }

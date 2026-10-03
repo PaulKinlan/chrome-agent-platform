@@ -180,7 +180,7 @@ Deno.test("named-agent.set-provider ROUTE: blank same-provider Save preserves th
   const store = approvals.createApprovalStore();
   const modelDispatch = runInNewContext(`${functions.join("\n")}\nconst handlers = ({${source.slice(route.start, route.end)}}); dispatchRoute;`, {
     ...approvals, ...namedAgents,
-    ownerApprovalStore: store, activeExecutions: new Set(["exec-18ug"]), progressPorts: new Set(["conversation"]),
+    ownerApprovalStore: store, activeExecutions: new Set(["exec-18ug"]), cancellingApprovalExecutions: new Set(), endedExecutions: new Set(), progressPorts: new Set(["conversation"]),
     opaqueTargetRef: async () => "opaque-test-ref",
     securityApprovalEvent: () => {}, broadcastProgress: () => {}, broadcastRegistryChanged: () => {},
     attention: { cardOpened: () => {}, cardClosed: () => {} },

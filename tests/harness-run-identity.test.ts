@@ -78,15 +78,60 @@ Deno.test("sqf5: AcpClient attaches execution id to browser/call_tool and strips
     // 3. Sent executionId is the trusted client.executionId, NOT the harness-supplied one
     assertEquals(sent.executionId, "exec_test_harness_ses-1_123_456");
 
-    // 4. args are clean: approved, executionId, and id were stripped
+    // 4. args are clean: approved and executionId were stripped, while id in args is NOT stripped if tool requires it
     assertEquals(sent.args.tabId, 42);
     assertEquals(sent.args.approved, undefined);
     assertEquals(sent.args.executionId, undefined);
-    assertEquals(sent.args.id, undefined);
 
     // 5. Harness received the JSON-RPC reply
     assertEquals(rpcReplies.length, 1);
     assertEquals(rpcReplies[0].id, "call-1");
+  } finally {
+    (globalThis as any).chrome = originalChrome;
+  }
+});
+
+Deno.test("sqf5: AcpClient preserves args.id for tools whose schema requires id (e.g. remove_bookmark, close_window)", async () => {
+  const sentMessages: any[] = [];
+  const originalChrome = (globalThis as any).chrome;
+  (globalThis as any).chrome = {
+    runtime: {
+      sendMessage: async (msg: any) => {
+        sentMessages.push(msg);
+        return { ok: true };
+      },
+    },
+  };
+
+  try {
+    const client = new AcpClient({
+      executionId: "exec_test_harness_preserve_id",
+      transport: { send: () => {}, close: () => {}, onMessage: () => {} },
+    });
+
+    const handler = (client as any)._handleAgentRequest.bind(client);
+
+    // Call tool that uses 'id' argument, like remove_bookmark or close_window
+    await handler({
+      jsonrpc: "2.0",
+      id: "call-preserve-id",
+      method: "browser/call_tool",
+      params: {
+        name: "remove_bookmark",
+        args: {
+          id: "bm_12345",
+          approved: true, // should be stripped
+          executionId: "bad-id", // should be stripped
+        },
+      },
+    });
+
+    assertEquals(sentMessages.length, 1);
+    assertEquals(sentMessages[0].name, "remove_bookmark");
+    // args.id MUST be preserved
+    assertEquals(sentMessages[0].args.id, "bm_12345");
+    assertEquals(sentMessages[0].args.approved, undefined);
+    assertEquals(sentMessages[0].args.executionId, undefined);
   } finally {
     (globalThis as any).chrome = originalChrome;
   }
@@ -431,8 +476,10 @@ Deno.test("sqf5: live run survives SW restart mid-turn via durable registry reco
     "durableRecoveryReady",
     "durableRuns",
     "harnessRunDocuments",
+    "endedExecutions",
+    "cancellingApprovalExecutions",
     `return (${isExecutionLiveSrc.replace("async function isExecutionLive", "async function")});`,
-  )(activeExecutions, Promise.resolve(), mockDurableRuns, harnessRunDocuments);
+  )(activeExecutions, Promise.resolve(), mockDurableRuns, harnessRunDocuments, new Set(), new Set());
 
   // 1. Before recovery, activeExecutions does not have the ID
   assertEquals(activeExecutions.has("exec_recovered_mid_turn_123"), false);
@@ -446,4 +493,163 @@ Deno.test("sqf5: live run survives SW restart mid-turn via durable registry reco
   // 3. For terminal run, it returns false
   const isTerminalLive = await compiledIsExecutionLive("exec_already_terminal_789");
   assertEquals(isTerminalLive, false);
+});
+
+Deno.test("sqf5: real acp.journal open -> result / cancel calls finalizeExecution and prevents revive", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+
+  // Verify endExecution is NOT referenced anywhere in service-worker.js
+  assertEquals(src.includes("endExecution("), false, "endExecution must not be called anywhere in service-worker.js");
+  assertEquals(src.includes("finalizeExecution("), true, "finalizeExecution must be used");
+
+  // Extract handlers object and run real handlers
+  const activeExecutions = new Set<string>();
+  const cancellingApprovalExecutions = new Set<string>();
+  const endedExecutions = new Set<string>();
+  const harnessRunDocuments = new Map<string, string>();
+  const settledRuns: any[] = [];
+  const cancelledTrees: any[] = [];
+
+  const markExecutionEnded = (id: string) => endedExecutions.add(id);
+  const finalizeExecution = (id: string) => {
+    activeExecutions.delete(id);
+    cancellingApprovalExecutions.delete(id);
+  };
+  const beginExecution = (id: string) => activeExecutions.add(id);
+  const cancelExecutionTree = async (id: string, opts: any) => {
+    cancelledTrees.push({ id, opts });
+    cancellingApprovalExecutions.add(id);
+  };
+
+  const durableRuns = {
+    start: async () => {},
+    settle: async (id: string, payload: any) => { settledRuns.push({ id, payload }); },
+    list: async () => ({ runs: [] }),
+  };
+
+  // Extract acp.journal handler
+  const journalSite = src.indexOf('"acp.journal"');
+  assert(journalSite >= 0);
+  const journalEnd = src.indexOf('\n  async "thread.delete"', journalSite);
+  assert(journalEnd > journalSite);
+  const journalHandlerSrc = src.slice(journalSite + '"acp.journal"'.length, journalEnd).replace(/,\s*$/, "");
+
+  const compiledJournal = new Function(
+    "openAcpTurn",
+    "recordAcpTurn",
+    "createThread",
+    "continueThread",
+    "nameThreadAsync",
+    "appendThreadMessage",
+    "commitThreadTerminal",
+    "harnessRunDocuments",
+    "beginExecution",
+    "admitDurableRun",
+    "durableRuns",
+    "markExecutionEnded",
+    "finalizeExecution",
+    "cancelExecutionTree",
+    `return (async function ${journalHandlerSrc});`,
+  )(
+    async () => ({ ok: true, threadId: "thread-1", executionId: "exec_turn_lifecycle" }),
+    async () => ({ ok: true }),
+    () => {}, () => {}, () => {}, () => {}, () => {},
+    harnessRunDocuments,
+    beginExecution,
+    async () => null,
+    durableRuns,
+    markExecutionEnded,
+    finalizeExecution,
+    cancelExecutionTree,
+  );
+
+  const ctx = { principal: "extension", documentId: "doc-owner-lifecycle" };
+
+  // 1. OPEN turn
+  const openRes = await compiledJournal({ action: "open", task: "close tab" }, ctx);
+  assertEquals(openRes.ok, true);
+  assertEquals(openRes.executionId, "exec_turn_lifecycle");
+  assertEquals(activeExecutions.has("exec_turn_lifecycle"), true);
+  assertEquals(harnessRunDocuments.get("exec_turn_lifecycle"), "doc-owner-lifecycle");
+
+  // 2. RESULT finishes turn
+  const resultRes = await compiledJournal({ action: "result", executionId: "exec_turn_lifecycle", ok: true, text: "done" }, ctx);
+  assertEquals(resultRes.ok, true);
+  assertEquals(activeExecutions.has("exec_turn_lifecycle"), false, "turn must not remain in activeExecutions after result");
+  assertEquals(endedExecutions.has("exec_turn_lifecycle"), true, "turn must be in endedExecutions");
+  assertEquals(harnessRunDocuments.has("exec_turn_lifecycle"), false, "document mapping must be removed");
+  assertEquals(settledRuns.length, 1);
+  assertEquals(settledRuns[0].id, "exec_turn_lifecycle");
+
+  // 3. CANCEL turn
+  beginExecution("exec_cancel_turn");
+  harnessRunDocuments.set("exec_cancel_turn", "doc-owner-cancel");
+  const cancelRes = await compiledJournal({ action: "cancel", executionId: "exec_cancel_turn" }, ctx);
+  assertEquals(cancelRes.ok, true);
+  assertEquals(activeExecutions.has("exec_cancel_turn"), false, "turn must not remain in activeExecutions after cancel");
+  assertEquals(endedExecutions.has("exec_cancel_turn"), true, "turn must be in endedExecutions after cancel");
+  assertEquals(cancelledTrees.length, 1);
+  assertEquals(cancelledTrees[0].id, "exec_cancel_turn");
+});
+
+Deno.test("sqf5: approval cannot be consumed after run is cancelled or ended", async () => {
+  const src = await Deno.readTextFile(new URL("../extension/background/service-worker.js", import.meta.url));
+  const site = src.indexOf('"browser.callTool": async');
+  const end = src.indexOf("\n    },", site);
+  const handlerSrc = src.slice(site + '"browser.callTool":'.length, end + "\n    }".length);
+
+  const activeExecutions = new Set<string>(["exec_approval_race"]);
+  const cancellingApprovalExecutions = new Set<string>();
+  const endedExecutions = new Set<string>();
+
+  const isExecutionLive = async (id: string) =>
+    !endedExecutions.has(id) && !cancellingApprovalExecutions.has(id) && activeExecutions.has(id);
+
+  const fakeDispatchRoute = async (route: string, _body: any, _context: any) => {
+    if (route === "browser.destructive-action") {
+      // Simulate owner clicking "Stop" during the 60s approval wait
+      activeExecutions.delete("exec_approval_race");
+      cancellingApprovalExecutions.add("exec_approval_race");
+      endedExecutions.add("exec_approval_race");
+
+      // Even if the approval resolver then says ok: true, the gate must fail closed
+      return { ok: true };
+    }
+    return { ok: true };
+  };
+
+  const compiled = new Function(
+    "isOwnerPrincipal",
+    "runBrowserToolCall",
+    "dispatchRoute",
+    "developerFeaturesOn",
+    "destructiveActionPolicy",
+    "isExecutionLive",
+    "activeExecutions",
+    "cancellingApprovalExecutions",
+    "endedExecutions",
+    `return (${handlerSrc});`,
+  )(
+    (ctx: any) => ctx?.principal === "extension",
+    async (_name: string, _args: any, gates: any) => {
+      return await gates.destructiveActionGate("browser.close-foreign-tab", { tabId: 10 });
+    },
+    fakeDispatchRoute,
+    () => Promise.resolve(false),
+    () => Promise.resolve("ask"),
+    isExecutionLive,
+    activeExecutions,
+    cancellingApprovalExecutions,
+    endedExecutions,
+  );
+
+  const ctx = { principal: "extension", documentId: "doc-owner-race" };
+  const res = await compiled({
+    name: "close_tab",
+    args: { tabId: 10 },
+    executionId: "exec_approval_race",
+  }, ctx);
+
+  assertEquals(res.ok, false);
+  assertEquals(res.error, "harness_run_not_active");
 });

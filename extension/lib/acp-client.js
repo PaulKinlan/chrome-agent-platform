@@ -377,9 +377,9 @@ export class AcpClient {
       try {
         const name = typeof msg.params?.name === "string" ? msg.params.name : "";
         const args = (msg.params?.args && typeof msg.params.args === "object") ? { ...msg.params.args } : {};
-        // Strip any harness-injected executionId, id, or approved flags (security boundary: ACP-SQF5)
+        // Strip any harness-injected executionId or approved flags (security boundary: ACP-SQF5).
+        // DO NOT strip args.id: browser tools (e.g. close_window, remove_bookmark) take an id argument.
         delete args.executionId;
-        delete args.id;
         delete args.approved;
         this.activeTurnListener?.({ kind: "tool", detail: `browser:${name || "(unnamed)"}`, raw: msg.params });
         // THE SERVICE WORKER RUNS THE TOOL under principal 'model' with this.executionId.
