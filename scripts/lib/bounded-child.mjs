@@ -72,7 +72,7 @@ export function boundedChildTimeoutMs(env = process.env, variable = "CAP_BOUNDED
 
 /** How long the child gets to write a diagnostic report after SIGUSR2, before the kill. Kept
  *  short: it is added to the bound, not a new bound. */
-const REPORT_GRACE_MS = 1500;
+export const REPORT_GRACE_MS = 1500; // exported so tests/bounded-child.test.ts can pin the grace window it measures
 
 /** The newest Node diagnostic report for `pid` in the child's cwd, or "none".
  *  `wchan=futex_do_wait` says WHERE the thread sleeps; the report says WHAT it was doing

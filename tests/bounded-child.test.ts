@@ -25,15 +25,21 @@ import {
   boundedChildTimeoutMs,
   DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
   MAX_TIMER_MS,
+  REPORT_GRACE_MS,
   runBoundedChild,
 } from "../scripts/lib/bounded-child.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const FUTEX_WAIT = "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);";
-// The same wait with a SIGUSR2 listener installed: the signal no longer terminates the child, and the
-// listener cannot run while the main thread is blocked, so the child lives until the kill that follows
-// the grace window.
+// The same wait with a SIGUSR2 listener installed. MEASURED (Linux, node v24.21.0, 3/3 runs): installing
+// the listener replaces the OS-level default action, so the parked child SURVIVES the diagnostic signal
+// even though the JS callback cannot run while the thread is parked — the grace-window kill is what ends
+// it. The shape that dies ON the signal is the no-listener child in the test above.
 const STUBBORN_FUTEX_WAIT = `process.on("SIGUSR2", () => {}); ${FUTEX_WAIT}`;
+// An IDLE child (an event-loop timer, i.e. epoll, not a futex park) also survives the signal, and here the
+// listener CAN actually run — so this shape proves the survival is the listener's doing and not merely the
+// park. Its kill still has to honour the full grace window (asserted by the elapsed bound).
+const IDLE_SURVIVOR = `process.on("SIGUSR2", () => {}); setInterval(() => {}, 1000);`;
 const TIMEOUT_MS = 2_000;
 
 type Sample = { ok: boolean; ms: number; status?: number; message?: string };
@@ -125,10 +131,32 @@ Deno.test("bounded child: a child that survives the diagnostic signal is killed 
   assertEquals(file, join(recordDir, "hangs.jsonl"), `the message must name this probe's record file; sample=${report}`);
   const rows = records(recordDir);
   assertEquals(rows.length, 1, `exactly one record must be on disk, got ${rows.length}; sample=${report}`);
-  // The other branch: this child outlives the signal, so the kill after the grace window ends it.
+  // MEASURED semantics (Linux node v24.21.0, 3/3): the installed listener replaces the default action, so
+  // this child outlives the signal EVEN THOUGH its JS callback cannot run while parked — the grace kill
+  // ends it. (The no-listener child above is the one that ends on SIGUSR2.)
   assertEquals(rows[0].endedBy, "SIGKILL", `the kill after the grace window ended this child; record=${JSON.stringify(rows[0])}`);
   assert((s.message ?? "").includes("the child ended on SIGKILL"), `the message must say how the child ended; sample=${report}`);
   assert(s.ms >= TIMEOUT_MS - 250, `the bound must elapse (>= ${TIMEOUT_MS - 250}ms), got ${s.ms}ms; sample=${report}`);
+  rmSync(recordDir, { recursive: true, force: true });
+});
+
+Deno.test("bounded child: an IDLE child survives the diagnostic signal, and the grace-window kill ends it (fnmr)", async () => {
+  const recordDir = freshRecordDir();
+  const s = await sample("node", ["-e", IDLE_SURVIVOR], { recordDir });
+  const report = JSON.stringify(s);
+  assert(!s.ok, `an idle child that ignores SIGUSR2 must still raise the named error; sample=${report}`);
+  assert(/^futex probe HUNG: no exit within 2s /.test(s.message ?? ""), `the error must name the hang; sample=${report}`);
+  const rows = records(recordDir);
+  assertEquals(rows.length, 1, `exactly one record must be on disk, got ${rows.length}; sample=${report}`);
+  // An idle (epoll) child CAN run its SIGUSR2 listener, so it outlives the signal and the grace kill ends it.
+  assertEquals(rows[0].endedBy, "SIGKILL", `the kill after the grace window ended this child; record=${JSON.stringify(rows[0])}`);
+  assert((s.message ?? "").includes("the child ended on SIGKILL"), `the message must say how the child ended; sample=${report}`);
+  // THE GRACE IS REAL, and this is the assertion that keeps it tested: a mutant that kills immediately
+  // (grace 0) ends this child by SIGKILL too, but cannot satisfy the elapsed bound.
+  assert(
+    s.ms >= TIMEOUT_MS + REPORT_GRACE_MS - 250,
+    `the grace window must elapse before the kill (>= ${TIMEOUT_MS + REPORT_GRACE_MS - 250}ms), got ${s.ms}ms; sample=${report}`,
+  );
   rmSync(recordDir, { recursive: true, force: true });
 });
 
