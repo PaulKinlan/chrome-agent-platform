@@ -132,6 +132,7 @@ export const I18N_DEFAULT_CATALOGUE = Object.freeze({
   "options_open_the_captured_entries_copy_them_for_a_bug_repo": "Open the captured entries, copy them for a bug report, or clear them.",
   "options_origin": "Origin",
   "options_permissions": "Permissions",
+  "options_web_services": "Web services",
   "options_permissions_1": "Permissions",
   "options_privacy": "Privacy",
   "options_provider_server_tools": "Provider server tools",

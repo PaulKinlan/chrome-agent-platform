@@ -33,6 +33,7 @@ import { requestProviderHostAccess } from "../lib/provider-gate.js";
 import { declaredManifestOrigins, revokeSiteOrigin, siteAccessLabel, siteAccessScope, siteAccessState } from "../lib/site-access.js";
 import { createOpfsAdapter, createChromeAlarmsAdapter } from "../lib/data-archive.js";
 import { streamExportArchive } from "../lib/backup-export.js";
+import { vaultPanelRows, resolveSaveAction } from "../lib/secret-vault.js";
 import { streamRestoreArchive } from "../lib/backup-restore.js";
 import { consumeSiteActivityFocus, normalizeSiteActivityFocus, SITE_ACTIVITY_FOCUS_KEY } from "../lib/site-activity-focus.js";
 import {
@@ -3398,6 +3399,167 @@ function setBackupStatus(text) {
   backupStatus.textContent = text;
 }
 
+// ── Web services & vault (chrome-agent-platform-jao1.5, CAP-SECURE-ENCLAVE
+// Stage 5): the Settings surface for service credentials. The routes are
+// Settings-gated in the service worker; this page only ever handles the
+// MASKED projection plus the key the owner is actively typing.
+
+const VAULT_SERVICES = [
+  { id: "BRAVE_SEARCH_API_KEY", label: "Brave Search (web search)", testService: "brave-search" },
+];
+
+function vaultSend(type, payload = {}) {
+  return chrome.runtime.sendMessage({ type, ...payload }).then((v) => v, (e) => ({ ok: false, error: String(e?.message ?? e) }));
+}
+
+function renderVaultPanel() {
+  const host = document.getElementById("vault-services");
+  if (!host) return;
+  vaultSend("vault.status").then((res) => {
+    host.replaceChildren();
+    const rows = vaultPanelRows(res?.services ?? []);
+    if (!rows.length) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "No service keys stored yet. Add one below.";
+      host.append(empty);
+      return;
+    }
+    for (const row of rows) host.append(vaultRow(row));
+  });
+}
+
+function vaultRow(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "vault-row";
+  wrap.dataset.keyId = row.keyId;
+
+  const name = document.createElement("span");
+  name.className = "vault-key-id";
+  name.textContent = row.keyId;
+
+  const mask = document.createElement("span");
+  mask.className = "vault-mask muted";
+  mask.textContent = row.masked;
+
+  const lastUsed = document.createElement("span");
+  lastUsed.className = "muted";
+  lastUsed.textContent = row.lastUsed ? new Date(row.lastUsed).toLocaleString() : "never used";
+
+  const input = document.createElement("input");
+  input.type = "password";
+  input.className = "vault-input";
+  input.placeholder = "leave blank to keep";
+  input.autocomplete = "off";
+  input.setAttribute("aria-label", `New key for ${row.keyId}`);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "btn small";
+  toggle.textContent = "Show";
+  toggle.addEventListener("click", () => {
+    input.type = input.type === "password" ? "text" : "password";
+    toggle.textContent = input.type === "password" ? "Show" : "Hide";
+  });
+
+  const save = document.createElement("button");
+  save.type = "button";
+  save.className = "btn small";
+  save.textContent = "Rotate";
+  save.disabled = true;
+  input.addEventListener("input", () => {
+    const action = resolveSaveAction({ configured: row.configured, inputValue: input.value });
+    save.textContent = action === "rotate" ? "Rotate" : "Save";
+    save.disabled = action === "none";
+  });
+  save.addEventListener("click", async () => {
+    const action = resolveSaveAction({ configured: true, inputValue: input.value });
+    if (action !== "rotate") return;
+    save.disabled = true;
+    const res = await vaultSend("vault.rotate", { keyId: row.keyId, value: input.value });
+    input.value = "";
+    save.disabled = false;
+    setVaultStatus(res?.ok ? `${row.keyId} rotated.` : `Rotation failed: ${res?.error ?? "unknown"}`, !res?.ok);
+    renderVaultPanel();
+  });
+
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "btn small";
+  remove.textContent = "Remove";
+  remove.addEventListener("click", async () => {
+    remove.disabled = true;
+    const res = await vaultSend("vault.delete", { keyId: row.keyId });
+    remove.disabled = false;
+    setVaultStatus(res?.ok ? `${row.keyId} removed.` : `Remove failed: ${res?.error ?? "unknown"}`, !res?.ok);
+    renderVaultPanel();
+  });
+
+  const test = document.createElement("button");
+  test.type = "button";
+  test.className = "btn small";
+  test.textContent = "Test connection";
+  test.addEventListener("click", async () => {
+    test.disabled = true;
+    setVaultStatus(`Testing ${row.keyId}…`, false);
+    const res = await vaultSend("vault.test", { service: row.keyId === "BRAVE_SEARCH_API_KEY" ? "brave-search" : row.keyId.toLowerCase() });
+    const ok = res?.ok === true;
+    setVaultStatus(ok ? `Connection OK (status ${res.status}).` : `Connection failed: ${res?.error ?? "unknown"}`, !ok);
+    test.disabled = false;
+  });
+
+  const controls = document.createElement("div");
+  controls.className = "vault-controls";
+  controls.style.display = "flex";
+  controls.style.gap = "6px";
+  controls.style.flexWrap = "wrap";
+  controls.append(input, toggle, save, test, remove);
+
+  const label = document.createElement("div");
+  label.style.display = "flex";
+  label.style.gap = "8px";
+  label.style.alignItems = "baseline";
+  label.append(name, mask, lastUsed);
+
+  wrap.append(label, controls);
+  return wrap;
+}
+
+function setVaultStatus(text, isError) {
+  const el = document.getElementById("vault-status");
+  if (!el) return;
+  el.hidden = false;
+  el.textContent = text;
+  el.style.color = isError ? "var(--danger,#b3261e)" : "";
+}
+
+const vaultAddId = document.getElementById("vault-add-id");
+const vaultAddValue = document.getElementById("vault-add-value");
+const vaultAddToggle = document.getElementById("vault-add-toggle");
+vaultAddToggle?.addEventListener("click", () => {
+  vaultAddValue.type = vaultAddValue.type === "password" ? "text" : "password";
+  vaultAddToggle.textContent = vaultAddValue.type === "password" ? "Show" : "Hide";
+});
+document.getElementById("vault-add-save")?.addEventListener("click", async () => {
+  const keyId = vaultAddId?.value.trim() ?? "";
+  const value = vaultAddValue?.value ?? "";
+  if (!keyId || !value) {
+    setVaultStatus("Both a key id and a value are required.", true);
+    return;
+  }
+  const res = await vaultSend("vault.set", { keyId, value });
+  if (!res?.ok) {
+    setVaultStatus(`Save failed: ${res?.error ?? "unknown"}`, true);
+    return;
+  }
+  if (vaultAddValue) vaultAddValue.value = "";
+  setVaultStatus(`${keyId} saved. The key is stored encrypted and never sent to any model.`);
+  renderVaultPanel();
+});
+
+renderVaultPanel();
+
+/** One-click owner export
 /** One-click owner export — STREAMED (0ymn / 11rm.3): the Options page reads
  * the OPFS tree directly (same extension origin as the service worker) and
  * writes a .tar backup straight to the picked file in 64 KiB chunks — nothing
@@ -3903,6 +4065,8 @@ async function renderSection(sectionId) {
     if (developerFeaturesEnabled) populateBoardDenyAgents();
   } else if (sectionId === "permissions") {
     await renderPermissions();
+  } else if (sectionId === "web-services") {
+    await renderVaultPanel();
   } else if (sectionId === "skills") {
     mountSkillsSection(document.getElementById("skills"));
   } else if (sectionId === "hooks") {

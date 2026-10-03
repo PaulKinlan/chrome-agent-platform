@@ -838,6 +838,7 @@ export const SETTINGS_SECTIONS = Object.freeze([
   "browser",
   "board-permissions",
   "permissions",
+  "web-services",
   "hooks",
   "prompts",
   "usage",
@@ -880,7 +881,7 @@ export function normalizeSettingsSectionId(hash) {
 export const OPTIONS_PRODUCT_HASHES = new Set([
   "#providers", "#mcp-servers", "#local-folders", "#user-wasm", "#tool-library", "#skills", "#agents", "#background",
   "#background-agents", "#board-permissions",
-  "#browser", "#permissions", "#hooks",
+  "#browser", "#permissions", "#web-services", "#hooks",
   "#prompts", "#usage", "#data", "#about",
 ]);
 

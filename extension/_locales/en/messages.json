@@ -333,6 +333,10 @@
   "options_permissions": {
     "message": "Permissions"
   },
+  "options_web_services": {
+    "message": "Web services",
+    "description": "Settings nav + panel title for the Secure Enclave web services & vault surface."
+  },
   "options_permissions_1": {
     "message": "Permissions"
   },

@@ -63,7 +63,7 @@ Deno.test("9epn.9 hydration: options.js stages active section hydration and yiel
   );
 });
 
-Deno.test("9epn.9 section rendering: renderSection covers all 15 settings sections including data and board-permissions", () => {
+Deno.test("9epn.9 section rendering: renderSection covers all 16 settings sections including data, board-permissions and web-services", () => {
   const ensureBlock = JS.slice(JS.indexOf("async function ensureSectionRendered"), JS.indexOf("// nav active state"));
   for (const section of SETTINGS_SECTIONS) {
     assertStringIncludes(
@@ -74,7 +74,7 @@ Deno.test("9epn.9 section rendering: renderSection covers all 15 settings sectio
   }
 });
 
-Deno.test("9epn.9 DOM node queryability: all 15 section panels and critical child containers exist in options.html", () => {
+Deno.test("9epn.9 DOM node queryability: all 16 section panels and critical child containers exist in options.html", () => {
   for (const sectionId of SETTINGS_SECTIONS) {
     const sectionMatch = new RegExp('<section\\s+id="' + sectionId + '"\\s+class="panel', "i").test(HTML);
     assert(sectionMatch, "options.html must contain <section id=" + sectionId + " class='panel...");
