@@ -46,7 +46,7 @@ function withTimeout(promise, ms) {
  * Returns { ok:true, stdout } or { ok:false, error }. The code/stdin are the
  * ONLY inputs; the result is the bounded stdout string; fresh per run.
  */
-export async function runPython(runtime, { code = "", stdin = "", timeoutMs = PYTHON_EXEC_BOUNDS.maxRunMs } = {}) {
+export async function runPython(runtime, { code = "", stdin = "", wheels = null, timeoutMs = PYTHON_EXEC_BOUNDS.maxRunMs } = {}) {
   const codeBytes = utf8Bytes(code);
   const stdinBytes = utf8Bytes(stdin);
   if (codeBytes.byteLength === 0) return { ok: false, error: "python_empty_code" };
@@ -62,6 +62,9 @@ export async function runPython(runtime, { code = "", stdin = "", timeoutMs = PY
   // JS-eval-shaped path (no runPythonAsync) is refused fail-closed.
   if (!runtime || typeof runtime.runPythonAsync !== "function") {
     return { ok: false, error: "python_unavailable" };
+  }
+  if (typeof runtime.setWheels === "function" && Array.isArray(wheels)) {
+    runtime.setWheels(wheels);
   }
   let out = "";
   // The run's network records (bead chrome-agent-platform-4p7j.2). They are

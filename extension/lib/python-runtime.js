@@ -49,7 +49,7 @@ export const PYTHON_RUNTIME_PIN = Object.freeze({
     "pyodide.asm.wasm": Object.freeze({ sha256: "b7e66a19427a55010ac3367c1b6c64b893f9826f783412945fdf0c3337f3bc94", bytes: 10088051 }),
     "python_stdlib.zip": Object.freeze({ sha256: "72894522b791858b9d613ac786b951d8b5094035dcf376313ea24a466810f336", bytes: 2341872 }),
     "pyodide-lock.json": Object.freeze({ sha256: "cd50b49de944c579045e122fe8628b31f9ce446379f032f36c05e273d38766e0", bytes: 106335 }),
-    "python-worker.js": Object.freeze({ sha256: "d3c945c6fc7e4044a8a364136b63148a9e7d985a4bb29e8d6cef88456179e9c0", bytes: 24358 }),
+    "python-worker.js": Object.freeze({ sha256: "43001ed689d05a78d8de0162ffbde8a25f1f5316877dc9377ad5be271af87d54", bytes: 25725 }),
   }),
 });
 
@@ -87,6 +87,7 @@ export function createPythonRuntimeProvider({
   sendMessage = null,
   timeoutMs = PYTHON_EXEC_TIMEOUT_MS,
   networkLedger = null,
+  loadWheels = null,
 } = {}) {
   let hostSettled = false;
   let hostOk = false;
@@ -132,6 +133,7 @@ export function createPythonRuntimeProvider({
     let emitStdout = null;
     let readStdin = null;
     let stdinGiven = false;
+    let currentWheels = null;
     // The network records for THIS run, taken from the ledger when the run
     // settles (bead chrome-agent-platform-4p7j.2). They are collected by the
     // service worker's "python.fetch" proxy — the actor — so a program that
@@ -160,6 +162,9 @@ export function createPythonRuntimeProvider({
       setStdin({ stdin }) {
         if (typeof stdin === "function") readStdin = stdin;
       },
+      setWheels(wheels) {
+        if (Array.isArray(wheels)) currentWheels = wheels;
+      },
       /** The run's network records: every request the proxy made or refused.
        * Empty for a run that asked for nothing — which is most runs. */
       takeNetworkRecords() {
@@ -178,6 +183,14 @@ export function createPythonRuntimeProvider({
         const takeRecords = () => ensureRunRecordsTaken();
         const ready = await ensureHostReady();
         if (!ready) throw new Error("python_unavailable_host");
+        let wheelsToSend = currentWheels;
+        if (!wheelsToSend && typeof loadWheels === "function") {
+          try {
+            wheelsToSend = await loadWheels();
+          } catch {
+            wheelsToSend = [];
+          }
+        }
         let response;
         try {
           response = await withTimeout(
@@ -186,6 +199,7 @@ export function createPythonRuntimeProvider({
               runId,
               code: sanitizeInput(code),
               stdin: sanitizeInput(oneShotStdin()),
+              wheels: Array.isArray(wheelsToSend) ? wheelsToSend : [],
             }),
             timeoutMs,
           );

@@ -453,7 +453,8 @@ import {
   userWasmLazyRecords,
   withOwnerSiteToolActivity,
 } from "../lib/lazy-tool-protocol.js";
-import { listOwnerBlobs, verifyAndReadOwnerBlobBytes } from "../lib/user-wasm-store.js";
+import { createOwnerBlobStore, listOwnerBlobs, verifyAndReadOwnerBlobBytes } from "../lib/user-wasm-store.js";
+import { validatePurePythonWheel } from "../lib/python-wheel-validator.js";
 import { buildUserWasmAuthority, USER_WASM_RUN_TYPE } from "../lib/user-wasm-host.js";
 import { DEFAULT_USER_WASM_WALL_MS } from "../lib/wasm-offscreen-host.js";
 
@@ -6895,6 +6896,58 @@ const handlers = mergeRouteMaps(
       return { ok: false, error: String(e?.message ?? e) };
     }
   },
+  /** List installed Python wheels from the OPFS store (chrome-agent-platform-4p7j, S1.1). */
+  async "wheel.list"(_m, context) {
+    if (context?.principal !== "extension" && context?.principal !== "owner-options") {
+      return { ok: false, error: "unauthorized_principal" };
+    }
+    try {
+      const rows = await listOwnerBlobs({ kind: "wheel" });
+      return { ok: true, wheels: rows };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+  /** Ingest and store a pure-Python wheel into the OPFS store (chrome-agent-platform-4p7j, S1.1). */
+  async "wheel.put"({ name, bytes, description = "" }, context) {
+    if (context?.principal !== "owner-options") return { ok: false, error: "unauthorized_principal" };
+    const rawBytes = bytes instanceof Uint8Array
+      ? bytes
+      : Array.isArray(bytes)
+        ? new Uint8Array(bytes)
+        : bytes && typeof bytes === "object" && bytes.buffer instanceof ArrayBuffer
+          ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+          : null;
+    const validated = validatePurePythonWheel({ name, bytes: rawBytes });
+    if (!validated.ok) {
+      return { ok: false, refused: validated.refused, error: validated.error };
+    }
+    try {
+      const store = createOwnerBlobStore();
+      const saved = await store.put({
+        bytes: rawBytes,
+        name: validated.name,
+        description: typeof description === "string" ? description : "",
+        kind: "wheel",
+      });
+      return { ok: true, digest: saved.digest, name: saved.name, size: saved.size };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
+  /** Delete a stored Python wheel by digest (chrome-agent-platform-4p7j, S1.1). */
+  async "wheel.delete"({ digest }, context) {
+    if (context?.principal !== "owner-options") return { ok: false, error: "unauthorized_principal" };
+    const d = String(digest ?? "").trim();
+    if (!/^[0-9a-f]{64}$/i.test(d)) return { ok: false, error: "invalid_digest" };
+    try {
+      const store = createOwnerBlobStore();
+      await store.remove(d);
+      return { ok: true, digest: d, removed: true };
+    } catch (e) {
+      return { ok: false, error: String(e?.message ?? e) };
+    }
+  },
   async "capabilities.status"() {
     // Granted/absent status of every OPTIONAL capability (storage, alarms,
     // tabs, scripting, notifications, sidePanel). The Settings panel renders
@@ -9513,13 +9566,13 @@ const handlers = mergeRouteMaps(
     await recordScriptRun(origin ?? "master", id, { ok: run?.ok, result, error: run?.error }).catch(() => {});
     return { ok: run?.ok ?? false, result, error: run?.error, logs: run?.logs ?? [] };
   },
-  async "python.execute"({ code, stdin }) {
+  async "python.execute"({ code, stdin, wheels }) {
     const provider = getPythonRuntimeProvider();
     const runtime = await provider();
     if (!runtime) {
       return { ok: false, error: "python unavailable — the bounded Python runtime is not admitted yet (see docs/PYODIDE-BOUNDED-BUILD.md); no result was fabricated" };
     }
-    return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? "") });
+    return await runPython(runtime, { code: String(code ?? ""), stdin: String(stdin ?? ""), wheels });
   },
 
   // ---- saved workflows (workflows-to-memory) ----
@@ -11916,6 +11969,22 @@ setPythonRuntimeProvider(
   createPythonRuntimeProvider({
     ensureHost: ensureOffscreen,
     networkLedger: pythonNetworkLedger,
+    loadWheels: async () => {
+      try {
+        const list = await listOwnerBlobs({ kind: "wheel" });
+        if (!list || list.length === 0) return [];
+        const wheels = [];
+        for (const item of list) {
+          const bytes = await verifyAndReadOwnerBlobBytes({ digest: item.digest });
+          if (bytes) {
+            wheels.push({ name: item.name ?? `${item.digest}.whl`, bytes: Array.from(bytes) });
+          }
+        }
+        return wheels;
+      } catch {
+        return [];
+      }
+    },
   }).provider,
 );
 

@@ -50,6 +50,7 @@ export const CENSUS_CATEGORIES = {
     "tool-stream.stage-asset", "tool-stream.promote-output", "tool-stream.remove", "tool-stream.discard",
     "tool-stream.tabular-transform",
     "python.network.grant", "python.network.revoke",
+    "wheel.put", "wheel.delete",
   ]),
   OWNER_APPROVAL_DIRECT: new Set([
     "named-agent.update", "named-agent.delete", "named-agent.set-schedule", "named-agent.set-mcp-servers",
@@ -125,6 +126,7 @@ export const CENSUS_CATEGORIES = {
     "tools.policies", "usage.get", "webmcp.status",
     "python.network.grants",
     "onDeviceText.summarize", "onDeviceText.detectLanguage", "onDeviceText.translate", "onDeviceText.availability",
+    "wheel.list",
   ]),
 };
 
@@ -189,9 +191,9 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 272", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 275", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 272, `registered routes population must equal 272 (got ${registered.size})`);
+  assertEquals(registered.size, 275, `registered routes population must equal 275 (got ${registered.size})`);
 });
 
 Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {

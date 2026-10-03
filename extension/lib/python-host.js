@@ -61,7 +61,7 @@ function ensureVerified(deps) {
  * answer. The relay is deliberately dumb: every grant check, every
  * confused-deputy default and every record lives in the SW route, so there is
  * exactly one place to read to know what Python may reach. */
-function runInFreshWorker({ runId, code, stdin, workerUrl, WorkerCtor, sendToServiceWorker }) {
+function runInFreshWorker({ runId, code, stdin, wheels, workerUrl, WorkerCtor, sendToServiceWorker }) {
   return new Promise((resolve) => {
     let settled = false;
     let worker = null;
@@ -125,7 +125,28 @@ function runInFreshWorker({ runId, code, stdin, workerUrl, WorkerCtor, sendToSer
     worker.onerror = (event) => {
       finish({ ok: false, error: `python_worker_error:${String(event?.message ?? "unknown")}` });
     };
-    worker.postMessage({ type: "python.run", runId, code, stdin });
+    const normalizedWheels = [];
+    const transfer = [];
+    if (Array.isArray(wheels)) {
+      for (const w of wheels) {
+        if (!w || !w.bytes) continue;
+        let b = null;
+        if (w.bytes instanceof Uint8Array) {
+          b = w.bytes;
+        } else if (w.bytes instanceof ArrayBuffer) {
+          b = new Uint8Array(w.bytes);
+        } else if (Array.isArray(w.bytes)) {
+          b = new Uint8Array(w.bytes);
+        } else if (typeof w.bytes === "object") {
+          b = new Uint8Array(Object.values(w.bytes));
+        }
+        if (b && b.byteLength > 0) {
+          transfer.push(b.buffer);
+          normalizedWheels.push({ name: w.name, bytes: b });
+        }
+      }
+    }
+    worker.postMessage({ type: "python.run", runId, code, stdin, wheels: normalizedWheels }, transfer);
   });
 }
 
@@ -156,6 +177,7 @@ async function executeRun(message, deps) {
       runId: String(message?.runId ?? ""),
       code,
       stdin: String(message?.stdin ?? ""),
+      wheels: Array.isArray(message?.wheels) ? message.wheels : [],
       workerUrl,
       WorkerCtor: deps.WorkerCtor,
       sendToServiceWorker: typeof deps.sendToServiceWorker === "function"
