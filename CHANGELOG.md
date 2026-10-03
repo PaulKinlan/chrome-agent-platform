@@ -2,6 +2,7 @@
 
 ## [0.3.565] — 2026-10-03
 - Add pure-Python wheel validator and OPFS wheel store routes with dispatch census classification
+- The Site Agents panel now states its setup action once with a concise empty state, removing duplicate instructions.
 
 ## [0.3.564] — 2026-10-02
 - Anchors sidebar navigation (Directory, Artifacts, Settings) to the bottom of the window and spaces open sections proportionally to fill remaining height.
