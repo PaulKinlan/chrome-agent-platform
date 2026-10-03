@@ -13,27 +13,50 @@
 //     script that fails to START must not masquerade as a fast, successful bound.
 //   - A missing command is FAILED TO START, never HUNG: naming a start failure
 //     as a hang is the wrong-cause error this helper exists to prevent.
+//
+// fnmr review (2026-09-25): a sentence that CLAIMS an effect is not the effect. The
+// durable record is asserted by reading the file the message names: for a child the
+// diagnostic signal kills, for one that outlives it, and for a record that cannot be
+// written. A probe's record directory is kept on failure, as evidence.
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   boundedChildTimeoutMs,
   DEFAULT_BOUNDED_CHILD_TIMEOUT_MS,
   MAX_TIMER_MS,
+  REPORT_GRACE_MS,
   runBoundedChild,
 } from "../scripts/lib/bounded-child.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const FUTEX_WAIT = "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);";
+// The same wait with a SIGUSR2 listener installed. MEASURED (Linux, node v24.21.0, 3/3 runs): installing
+// the listener replaces the OS-level default action, so the parked child SURVIVES the diagnostic signal
+// even though the JS callback cannot run while the thread is parked — the grace-window kill is what ends
+// it. The shape that dies ON the signal is the no-listener child in the test above.
+const STUBBORN_FUTEX_WAIT = `process.on("SIGUSR2", () => {}); ${FUTEX_WAIT}`;
+// An IDLE child (an event-loop timer, i.e. epoll, not a futex park) also survives the signal, and here the
+// listener CAN actually run — so this shape proves the survival is the listener's doing and not merely the
+// park. Its kill still has to honour the full grace window (asserted by the elapsed bound).
+const IDLE_SURVIVOR = `process.on("SIGUSR2", () => {}); setInterval(() => {}, 1000);`;
 const TIMEOUT_MS = 2_000;
 
 type Sample = { ok: boolean; ms: number; status?: number; message?: string };
 
 /** One probe, recorded as a sample so a fast failure cannot read as a pass. */
-async function sample(command: string, args: string[] = [], timeoutMs = TIMEOUT_MS): Promise<Sample> {
+async function sample(
+  command: string,
+  args: string[] = [],
+  { timeoutMs = TIMEOUT_MS, recordDir }: { timeoutMs?: number; recordDir?: string } = {},
+): Promise<Sample> {
   const started = Date.now();
   try {
     const r = await runBoundedChild(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       timeoutMs,
       label: "futex probe",
+      recordDir,
     });
     return { ok: true, ms: Date.now() - started, status: r.status };
   } catch (e) {
@@ -41,11 +64,25 @@ async function sample(command: string, args: string[] = [], timeoutMs = TIMEOUT_
   }
 }
 
+/** A fresh record directory for ONE probe, on the durable root (never RAM-backed scratch), so a
+ *  record read back from it can only be that probe's. */
+function freshRecordDir(): string {
+  return durableDir("bounded-child-test", crypto.randomUUID());
+}
+
+/** The JSON lines appended to <dir>/hangs.jsonl, or [] when the file does not exist. */
+function records(dir: string): Array<Record<string, unknown>> {
+  const file = join(dir, "hangs.jsonl");
+  if (!existsSync(file)) return [];
+  return readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+}
+
 Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES it (i8qn/fnmr)", async () => {
-  const s = await sample("node", ["-e", FUTEX_WAIT]);
+  const recordDir = freshRecordDir();
+  const s = await sample("node", ["-e", FUTEX_WAIT], { recordDir });
   const report = JSON.stringify(s);
   assert(!s.ok, `a futex-waiting child must raise the named error; sample=${report}`);
-  const m = /^futex probe HUNG: no exit within 2s \(pid=(\d+) state=(\S+) threads=(\d+) wchan=(\S+)\); its process group was killed\. This is a hang, not slow work — chrome-agent-platform-fnmr\.$/
+  const m = /^futex probe HUNG: no exit within 2s \(pid=(\d+) state=(\S+) threads=(\d+) wchan=(\S+) thread-wchan\[(.+)\]\); its process group was killed\. This is a hang, not slow work — chrome-agent-platform-fnmr\. (.*) A durable record was appended to (\S+)\.$/
     .exec(s.message ?? "");
   assert(m, `the SPECIFIC named sentence with pid/state/threads/wchan must be present; sample=${report}`);
   const [, pid, state, threads, wchan] = m;
@@ -57,6 +94,86 @@ Deno.test("bounded child: a futex-waiting child is killed, and the error NAMES i
   // raise in milliseconds, so the bound must actually have elapsed.
   assert(s.ms >= TIMEOUT_MS - 250, `the bound must elapse (>= ${TIMEOUT_MS - 250}ms), got ${s.ms}ms; sample=${report}`);
   assert(s.ms < TIMEOUT_MS + 10_000, `the bound must fire promptly, got ${s.ms}ms; sample=${report}`);
+  // A FNM R HANG CANNOT WRITE A SIGNAL REPORT, so the thread table is the evidence (measured: a child
+  // blocked in Atomics.wait is TERMINATED by SIGUSR2 with no report, while an epoll-idle child writes
+  // a full one). Per-thread wchan shows which threads are in the futex, which the process-wide field
+  // cannot. The trailing clause must say a report is missing rather than promise one.
+  const threadTable = m[5];
+  assert(/:futex_do_wait/.test(threadTable), `the thread table must show the futex wait, got ${threadTable}; sample=${report}`);
+  assert(m[6].includes("No diagnostic report was produced"), `the message must say no report came, got: ${m[6]}`);
+  assert(/futex|thread-wchan/.test(m[6]), `and it must point at the thread table instead, got: ${m[6]}`);
+  // THE RECORD IS A FILE, NOT A SENTENCE (fnmr review). This child has no SIGUSR2 listener, so the
+  // diagnostic signal ends it inside the grace window: exactly the case where the old code cancelled
+  // the write and printed the sentence anyway. Read the file the message names.
+  assert(m[6].includes("the child ended on SIGUSR2"), `the message must say how the child ended, got: ${m[6]}`);
+  assertEquals(m[7], join(recordDir, "hangs.jsonl"), `the message must name this probe's record file; sample=${report}`);
+  const rows = records(recordDir);
+  assertEquals(rows.length, 1, `exactly one record must be on disk, got ${rows.length}; sample=${report}`);
+  assertEquals(rows[0].label, "futex probe");
+  assertEquals(rows[0].endedBy, "SIGUSR2", `the diagnostic signal ended this child; record=${JSON.stringify(rows[0])}`);
+  assertEquals(rows[0].report, "none");
+  assert(
+    String(rows[0].snapshot).startsWith(`pid=${pid} state=${state} `),
+    `the record must carry the live snapshot the message names; record=${JSON.stringify(rows[0])}`,
+  );
+  // The default record file is shared by every lane on the box, so the record says which checkout hung.
+  assertEquals(rows[0].cwd, Deno.cwd(), `the record must say which checkout hung; record=${JSON.stringify(rows[0])}`);
+  rmSync(recordDir, { recursive: true, force: true });
+});
+
+Deno.test("bounded child: a child that survives the diagnostic signal is killed after the grace window, and its record is written (fnmr)", async () => {
+  const recordDir = freshRecordDir();
+  const s = await sample("node", ["-e", STUBBORN_FUTEX_WAIT], { recordDir });
+  const report = JSON.stringify(s);
+  assert(!s.ok, `a child that ignores SIGUSR2 must still raise the named error; sample=${report}`);
+  assert(/^futex probe HUNG: no exit within 2s /.test(s.message ?? ""), `the error must name the hang; sample=${report}`);
+  const file = /A durable record was appended to (\S+)\.$/.exec(s.message ?? "")?.[1];
+  assertEquals(file, join(recordDir, "hangs.jsonl"), `the message must name this probe's record file; sample=${report}`);
+  const rows = records(recordDir);
+  assertEquals(rows.length, 1, `exactly one record must be on disk, got ${rows.length}; sample=${report}`);
+  // MEASURED semantics (Linux node v24.21.0, 3/3): the installed listener replaces the default action, so
+  // this child outlives the signal EVEN THOUGH its JS callback cannot run while parked — the grace kill
+  // ends it. (The no-listener child above is the one that ends on SIGUSR2.)
+  assertEquals(rows[0].endedBy, "SIGKILL", `the kill after the grace window ended this child; record=${JSON.stringify(rows[0])}`);
+  assert((s.message ?? "").includes("the child ended on SIGKILL"), `the message must say how the child ended; sample=${report}`);
+  assert(s.ms >= TIMEOUT_MS - 250, `the bound must elapse (>= ${TIMEOUT_MS - 250}ms), got ${s.ms}ms; sample=${report}`);
+  rmSync(recordDir, { recursive: true, force: true });
+});
+
+Deno.test("bounded child: an IDLE child survives the diagnostic signal, and the grace-window kill ends it (fnmr)", async () => {
+  const recordDir = freshRecordDir();
+  const s = await sample("node", ["-e", IDLE_SURVIVOR], { recordDir });
+  const report = JSON.stringify(s);
+  assert(!s.ok, `an idle child that ignores SIGUSR2 must still raise the named error; sample=${report}`);
+  assert(/^futex probe HUNG: no exit within 2s /.test(s.message ?? ""), `the error must name the hang; sample=${report}`);
+  const rows = records(recordDir);
+  assertEquals(rows.length, 1, `exactly one record must be on disk, got ${rows.length}; sample=${report}`);
+  // An idle (epoll) child CAN run its SIGUSR2 listener, so it outlives the signal and the grace kill ends it.
+  assertEquals(rows[0].endedBy, "SIGKILL", `the kill after the grace window ended this child; record=${JSON.stringify(rows[0])}`);
+  assert((s.message ?? "").includes("the child ended on SIGKILL"), `the message must say how the child ended; sample=${report}`);
+  // THE GRACE IS REAL, and this is the assertion that keeps it tested: a mutant that kills immediately
+  // (grace 0) ends this child by SIGKILL too, but cannot satisfy the elapsed bound.
+  assert(
+    s.ms >= TIMEOUT_MS + REPORT_GRACE_MS - 250,
+    `the grace window must elapse before the kill (>= ${TIMEOUT_MS + REPORT_GRACE_MS - 250}ms), got ${s.ms}ms; sample=${report}`,
+  );
+  rmSync(recordDir, { recursive: true, force: true });
+});
+
+Deno.test("bounded child: when the record cannot be written, the message says so instead of claiming it (fnmr)", async () => {
+  const scratch = freshRecordDir();
+  // A regular file where the record directory's parent should be: the mkdir fails, so no record
+  // can exist, and the message must say that rather than name a file.
+  writeFileSync(join(scratch, "blocker"), "");
+  const recordDir = join(scratch, "blocker", "records");
+  const s = await sample("node", ["-e", FUTEX_WAIT], { timeoutMs: 1_000, recordDir });
+  const report = JSON.stringify(s);
+  assert(!s.ok, `the hang must still raise the named error; sample=${report}`);
+  assert(/^futex probe HUNG: /.test(s.message ?? ""), `the error must still name the hang; sample=${report}`);
+  assert(/No durable record was written \(.+\)\.$/.test(s.message ?? ""), `the message must say no record was written, and why; sample=${report}`);
+  assert(!(s.message ?? "").includes("A durable record was appended"), `the message must not claim a record it did not write; sample=${report}`);
+  assert(!existsSync(join(recordDir, "hangs.jsonl")), `and no record may exist; sample=${report}`);
+  rmSync(scratch, { recursive: true, force: true });
 });
 
 Deno.test("bounded child: an empty or invalid override means the default, never a 0 ms bound (61h3)", () => {
