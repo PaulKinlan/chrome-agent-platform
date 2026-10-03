@@ -10279,6 +10279,12 @@ export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = n
  *   current-agent-id — the bare id of the agent being talked to (a "Current" badge)
  *   exclude-current  — hide the current agent from the list
  *   callable-only    — list only callable agents (a disabled background agent is hidden)
+ *   exclude-kinds    — space-separated kinds to hide entirely (e.g.
+ *                      exclude-kinds="acp"): the side panel's agents list
+ *                      projects the ONE created-agents set the hub and
+ *                      Settings share — harness agents live in its
+ *                      harness-quick affordance, not the agent rows
+ *                      (chrome-agent-platform-h97m)
  *   label            — the visible label for the search combobox
  *   state / error    — "loading" | "error" (+ error message) overrides
  *   summary          — LIST presentation: the SAME grouped rows, no search row
@@ -10302,7 +10308,7 @@ export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = n
  * reduced-motion via the shared tokens. No emoji — inline currentColor SVG. */
 class AgentPicker extends Component {
   static get observedAttributes() {
-    return ["agents", "selected", "current-agent-id", "exclude-current", "callable-only", "label", "state", "error", "summary", "deletable"];
+    return ["agents", "selected", "current-agent-id", "exclude-current", "callable-only", "exclude-kinds", "label", "state", "error", "summary", "deletable"];
   }
   constructor() {
     super();
@@ -10332,6 +10338,12 @@ class AgentPicker extends Component {
     return !!kinds && (kinds.has("*") || kinds.has(String(kind ?? "")));
   }
   get _callableOnly() { return this.hasAttribute("callable-only"); }
+  get _excludeKinds() {
+    return (this.getAttribute("exclude-kinds") ?? "")
+      .split(/\s+/)
+      .map((k) => k.trim())
+      .filter(Boolean);
+  }
   get _excludeCurrent() { return this.hasAttribute("exclude-current"); }
   get _currentAgentId() { return this.getAttribute("current-agent-id") || ""; }
 
@@ -10405,6 +10417,7 @@ class AgentPicker extends Component {
     return filterGroups(groups, this._query, {
       callableOnly: this._callableOnly,
       excludeId: this._excludeCurrent ? this._currentAgentId : null,
+      excludeKinds: this._excludeKinds,
     });
   }
 

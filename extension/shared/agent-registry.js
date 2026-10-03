@@ -89,15 +89,22 @@ export function isCallable(agent) {
  *   callableOnly — keep only the callable agents (the /agent + +menu rule)
  *   excludeRef   — drop this canonical ref (the agent you are talking to)
  *   excludeId    — drop this bare id (any kind) — the legacy current-agent rule
+ *   excludeKinds — drop every agent of these kinds (e.g. ["acp"]): the side
+ *     panel's agents list projects the ONE created-agents set (named +
+ *     background) like the hub and Settings do — harness agents live in its
+ *     designed harness-quick affordance, not in the agent rows
+ *     (chrome-agent-platform-h97m).
  */
 export function filterGroups(groups = [], query = "", opts = {}) {
-  const { callableOnly = false, excludeRef = null, excludeId = null } = opts;
+  const { callableOnly = false, excludeRef = null, excludeId = null, excludeKinds = null } = opts;
+  const kinds = Array.isArray(excludeKinds) && excludeKinds.length ? new Set(excludeKinds) : null;
   const q = String(query ?? "").trim().toLowerCase();
   const matches = (s) => !q || String(s ?? "").toLowerCase().includes(q);
   const out = [];
   for (const g of Array.isArray(groups) ? groups : []) {
     const agents = (Array.isArray(g?.agents) ? g.agents : []).filter((a) => {
       if (!a) return false;
+      if (kinds && kinds.has(a.kind)) return false;
       if (callableOnly && !isCallable(a)) return false;
       if (excludeRef && (a.ref ?? canonicalRef(a.kind, a.id)) === excludeRef) return false;
       if (excludeId && String(a.id).toLowerCase() === String(excludeId).toLowerCase()) return false;
