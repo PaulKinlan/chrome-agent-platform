@@ -854,7 +854,11 @@ async function renderSiteAgents() {
     }
     el.append(banner);
   } else if (!agents.length) {
-    el.innerHTML = `<div class="empty">No Site Agents yet. Find tools from an open tab to add one.</div>`;
+    el.innerHTML = `<div class="empty">${SITE_AGENT_COPY.siteAgentsEmpty}</div>`;
+    const hubStatus = document.getElementById("webmcp-hub-status");
+    if (hubStatus && hubStatus.textContent === "Open a site and I'll look for tools you can use.") {
+      hubStatus.textContent = "";
+    }
   }
   noteHubData("agents", "site", agents.length > 0 || unenrolledTabs.length > 0);
 
@@ -873,13 +877,15 @@ async function renderWebmcpHubStatus() {
   const status = await send("webmcp.status").catch(() => null);
   const s = status?.status;
   el.replaceChildren();
+  const siteAgentsEl = document.getElementById("site-agents");
+  const isEmptyShowing = Boolean(siteAgentsEl?.querySelector(".empty"));
   if (!s) {
-    el.textContent = "Open a site and I'll look for tools you can use.";
+    el.textContent = isEmptyShowing ? "" : "Open a site and I'll look for tools you can use.";
     return;
   }
   const vm = formatWebmcpHubStatus(s);
   if (!vm) {
-    el.textContent = "Open a site and I'll look for tools you can use.";
+    el.textContent = isEmptyShowing ? "" : "Open a site and I'll look for tools you can use.";
     return;
   }
   const addTime = (parent, at) => {

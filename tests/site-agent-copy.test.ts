@@ -15,6 +15,7 @@ import { WEBMCP_ERROR_BOUND, applyWebmcpLifecycle, boundWebmcpError } from "../e
 const INTERNAL_CHATTER = /webmcp|inject(?:ed|ion)?|page[- ]report|scan(?:ned|ning)?/i;
 
 Deno.test("site-agent copy: actions describe finding tools for a Site Agent", () => {
+  assertEquals(SITE_AGENT_COPY.siteAgentsEmpty, "No Site Agents yet.");
   assertEquals(SITE_AGENT_COPY.findToolsAction, "Find site tools");
   assertEquals(SITE_AGENT_COPY.pickerTitle, "Find tools for a Site Agent");
   assertMatch(SITE_AGENT_COPY.pickerHint, /choose a tab/i);
@@ -246,6 +247,10 @@ Deno.test("site-agent copy: the centralized vocabulary is the ACTUAL consumer au
   assert(
     /discover-page[\s\S]*SITE_AGENT_COPY\.findToolsAction/.test(ntp),
     "findToolsAction is not consumed by the ntp discover action at runtime",
+  );
+  assert(
+    ntp.includes("SITE_AGENT_COPY.siteAgentsEmpty"),
+    "siteAgentsEmpty is not consumed by the ntp empty state at runtime",
   );
 });
 

@@ -5,6 +5,7 @@
 // use this vocabulary so implementation details cannot displace the user's task.
 
 export const SITE_AGENT_COPY = Object.freeze({
+  siteAgentsEmpty: "No Site Agents yet.",
   findToolsAction: "Find site tools",
   pickerTitle: "Find tools for a Site Agent",
   pickerHint:
