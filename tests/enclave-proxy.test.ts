@@ -50,13 +50,23 @@ function fakeFetch(responses: Array<{ match: (u: string, init: any) => boolean; 
     calls.push({ url: u, init });
     for (const r of responses) {
       if (r.match(u, init)) {
+        const bytes = new TextEncoder().encode(r.reply.body ?? "{}");
+        const body = new ReadableStream({
+          start(controller) {
+            for (let i = 0; i < bytes.byteLength; i += 64 * 1024) {
+              controller.enqueue(bytes.subarray(i, i + 64 * 1024));
+            }
+            controller.close();
+          },
+        });
         return {
           ok: r.reply.ok ?? true,
           status: r.reply.status ?? 200,
           type: r.reply.type ?? "basic",
           headers: new Headers(r.reply.headers ?? { "content-type": "application/json" }),
-          text: async () => r.reply.body ?? "{}",
-          arrayBuffer: async () => new TextEncoder().encode(r.reply.body ?? "{}").buffer,
+          body,
+          text: async () => new TextDecoder().decode(bytes),
+          arrayBuffer: async () => bytes.buffer,
         };
       }
     }
@@ -78,7 +88,7 @@ async function buildRoute(profile: any) {
     installSaltB64: "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==",
   });
   await vault.setSecret("BRAVE_SEARCH_API_KEY", "sk-brave-9f8e7d6c5b4a3210-feeds-back", { by: "sw" });
-  const route = (createEnclaveProxyRoutes as any)({ vault, fetchImpl: profile.fetchImpl, services: SERVICES });
+  const route = (createEnclaveProxyRoutes as any)({ vault, fetchImpl: profile.fetchImpl, services: SERVICES, isAllowedCaller: () => true });
   const handler = route["enclave.proxy"];
   assert(typeof handler === "function", "the route exposes the enclave.proxy handler");
   return { handler, calls: profile.fetchImpl.calls, vault };
