@@ -99,9 +99,9 @@ export function createEnclaveProxyRoutes({
   vault,
   fetchImpl = (...args) => globalThis.fetch(...args),
   services = DEFAULT_SERVICES,
-  /** The caller gate. Default allows all — the TEST shape; production wires
-   * the SW's own principal fence so only sanctioned surfaces reach the proxy. */
-  isAllowedCaller = () => true,
+  /** The caller gate. FAILS CLOSED by default — production wires the SW's own
+   * principal fence; tests inject an explicit allow-all when they mean it. */
+  isAllowedCaller = () => false,
 } = {}) {
   if (!vault || typeof vault.getSecretRaw !== "function") {
     throw new TypeError("enclave proxy routes require the Stage-1 secret vault");
@@ -153,9 +153,24 @@ export function createEnclaveProxyRoutes({
 
     // Resolve the templates BEFORE any URL/origin decision: an unresolvable
     // secret must fail the call before any I/O or error surface exists.
-    const query = await substituteTemplates(message?.query ?? {}, resolveSecret);
-    const headers = await substituteTemplates(message?.headers ?? {}, resolveSecret);
-    const rawBody = message?.body === undefined ? undefined : await substituteTemplates(message.body, resolveSecret);
+    // Every substituted value is recorded so a transport-error string can be
+    // SCRUBBED before it reaches any caller (URLs embed query secrets).
+    const injectedSecrets = [];
+    const resolveSecretAndRecord = async (keyId) => {
+      const secret = await resolveSecret(keyId);
+      injectedSecrets.push(secret);
+      return secret;
+    };
+    const scrub = (text) => {
+      let out = String(text ?? "");
+      for (const secret of injectedSecrets) {
+        if (secret) out = out.split(secret).join("[redacted]");
+      }
+      return out;
+    };
+    const query = await substituteTemplates(message?.query ?? {}, resolveSecretAndRecord);
+    const headers = await substituteTemplates(message?.headers ?? {}, resolveSecretAndRecord);
+    const rawBody = message?.body === undefined ? undefined : await substituteTemplates(message.body, resolveSecretAndRecord);
     assertNoResidualTemplate(query, "the query");
     assertNoResidualTemplate(headers, "the headers");
     if (rawBody !== undefined) assertNoResidualTemplate(rawBody, "the body");
@@ -213,19 +228,29 @@ export function createEnclaveProxyRoutes({
         body,
       });
     } catch (err) {
-      // The error names the service, never the headers or their values.
-      return { ok: false, error: `enclave proxy: the request to ${serviceId} failed (${String(err?.message ?? err).slice(0, 120)})` };
+      // The error names the service, never the headers or their values — and
+      // substituted query secrets are scrubbed out of transport messages
+      // (a URL-embedded query token would otherwise ride err.message).
+      return { ok: false, error: `enclave proxy: the request to ${serviceId} failed (${scrub(String(err?.message ?? err)).slice(0, 120)})` };
     }
 
     if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
       return { ok: false, error: `enclave proxy: ${serviceId} redirected — the enclave never follows redirects (token laundering)` };
     }
 
-    // Bounded body read: one byte past the bound refuses the call.
-    const reader = res.body?.getReader?.();
+    // Bounded body read: the READER path is unconditional (a stream is read
+    // chunk-wise and refused the moment it passes the bound). A body-less
+    // response needs the declared content-length to fit the bound before any
+    // buffering happens — the fallback never buffers unbounded.
+    const declared = Number(res.headers?.get?.("content-length") ?? "0");
+    if (!Number.isNaN(declared) && declared > MAX_BODY_BYTES) {
+      return { ok: false, error: `enclave proxy: the response from ${serviceId} declared ${declared} bytes, over the 1 MiB enclave bound` };
+    }
     const parts = [];
     let size = 0;
-    if (reader) {
+    const streamReader = typeof res.body?.getReader === "function" ? res.body.getReader() : null;
+    if (streamReader) {
+      const reader = streamReader;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -237,12 +262,9 @@ export function createEnclaveProxyRoutes({
         parts.push(value);
       }
     } else {
-      const text = await res.text();
-      size = new TextEncoder().encode(text).byteLength;
-      if (size > MAX_BODY_BYTES) {
-        return { ok: false, error: `enclave proxy: the response from ${serviceId} exceeded the 1 MiB enclave bound` };
-      }
-      parts.push(new TextEncoder().encode(text));
+      // No stream and no declared length: the response cannot be bounded, so
+      // it is refused — the enclave never accepts an unbounded body.
+      return { ok: false, error: `enclave proxy: the response from ${serviceId} had no body stream and no content-length — it cannot be bounded to 1 MiB` };
     }
     const bodyBytes = new Uint8Array(size);
     let filled = 0;
