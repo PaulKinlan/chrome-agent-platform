@@ -181,8 +181,13 @@ Deno.test("scheduled named-agent fire resolves the live immutable memory namespa
   const start = source.indexOf('} else if (alarm.name.startsWith("agent:"))');
   const end = source.indexOf("      // Surface attribution for the fired run", start + 1);
   const namedAlarmPath = source.slice(start, end);
-  assert(namedAlarmPath.includes("memory: namedAgentMemory(agent.instanceId || slug)"),
+  // wz6i: the fire branch resolves memory override-aware — a seeded built-in
+  // background agent keeps its legacy `recipe:` tier, every other agent the
+  // instance namespace named-agent.history reads (the SAME resolution).
+  assert(namedAlarmPath.includes("namedAgentMemory(agent.instanceId || slug)"),
     "the scheduled fire must write where named-agent.history reads");
+  assert(namedAlarmPath.includes("backgroundAgentMemory(agent.memoryKey)"),
+    "a seeded built-in background agent keeps its legacy memory tier (wz6i)");
   assert(!namedAlarmPath.includes("memory: namedAgentMemory(slug)"),
     "the legacy slug directory must not receive new scheduled transcripts");
 });

@@ -4,6 +4,8 @@
 // can project unified agents and normalize agent slugs without bundling
 // heavy service-worker-only storage backends (memory, durable-runs, scheduler).
 
+import { isVisibleAgentRow } from "./agent-seeds.js";
+
 /** Normalize an agent id to a kebab-case slug. */
 export function slugifyAgentId(value) {
   return String(value || "")
@@ -43,6 +45,13 @@ export function projectUnifiedAgents(namedAgents = [], backgroundAgents = []) {
       if (!existing.schedule?.periodInMinutes && recipeSchedule) {
         existing.schedule = recipeSchedule;
       }
+      // wz6i: a seed's live enabled flag rides the named-agent.list enrichment;
+      // the background side derives the SAME fact from the task store, so fill
+      // it when the named side has not (enrichment order must not flicker a
+      // row out of the list).
+      if (existing.enabled === undefined && typeof b.enabled === "boolean") {
+        existing.enabled = b.enabled;
+      }
     } else {
       byId.set(b.id, {
         ...b,
@@ -53,5 +62,5 @@ export function projectUnifiedAgents(namedAgents = [], backgroundAgents = []) {
       });
     }
   }
-  return [...byId.values()];
+  return [...byId.values()].filter(isVisibleAgentRow);
 }
