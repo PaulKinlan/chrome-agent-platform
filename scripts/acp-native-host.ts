@@ -15,6 +15,7 @@
 // WebSocket bridge uses (imported, not duplicated).
 
 import { applyHostDefaults, resolveAdapter, HARNESS_ADAPTERS, toolServerError, adapterNameFromInitialize } from "./acp-bridge.ts";
+import { acpChildEnv, acpChildEnvNote, acpChildSpawnOptions } from "./lib/acp-child-env.ts";
 
 const HARNESS = Deno.env.get("CAP_ACP_HARNESS") || "pi";
 const ADAPTER_OVERRIDE = Deno.env.get("CAP_ACP_ADAPTER") || "";
@@ -58,12 +59,19 @@ if (import.meta.main) {
     // itself, so the extension must be told why the harness is unavailable.
     Deno.stderr.writeSync(new TextEncoder().encode(`adapter not found: ${resolved.args[0]}\n`));
   }
-  const child = new Deno.Command(resolved.cmd, {
+  // 5f5u: the native host spawned with NO env, so the adapter inherited the host environment whole —
+  // including an ANTHROPIC_API_KEY that takes precedence over a claude.ai login. Scope it out for the
+  // child (host untouched; CAP_ACP_KEEP_API_KEY=1 passes it through) and say so host-side.
+  const childEnvResult = acpChildEnv();
+  const childEnvNote = acpChildEnvNote(childEnvResult, "native host");
+  if (childEnvNote) console.error(childEnvNote);
+  const child = new Deno.Command(resolved.cmd, acpChildSpawnOptions({
     args: resolved.args,
-    stdin: "piped",
-    stdout: "piped",
+    env: childEnvResult.env,
+    // Same measured reason as the bridge: Deno merges `env` over the parent's, so omitting the key is
+    // not enough to scope it out — acpChildSpawnOptions carries clearEnv:true (5f5u).
     stderr: "inherit",
-  }).spawn();
+  })).spawn();
 
   const childWriter = child.stdin.getWriter();
 

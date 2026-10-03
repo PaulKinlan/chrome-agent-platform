@@ -14,6 +14,20 @@ const send = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
 // inferring it from a rendered string.
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 const LOG = process.env.CAP_ACP_FIXTURE_LOG ?? "";
+// 5f5u: what THIS adapter can actually see. The spawn sites scope the child
+// environment with clearEnv (Deno merges `env` over the parent by default, so
+// omitting a variable is not enough); tests/acp-child-env-wiring.test.ts drives
+// each real spawn site and reads this line, so the assertion is on the child's
+// own observation rather than on our own env map. Presence only — no value.
+if (LOG) {
+  try {
+    appendFileSync(LOG, JSON.stringify({
+      type: "fixture-env",
+      pid: process.pid,
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY ? "PRESENT" : "ABSENT",
+    }) + "\n");
+  } catch { /* logging is best-effort */ }
+}
 // Fault injection for the adapter spawn that dies under machine load: with
 // CAP_ACP_FIXTURE_DIE_ON_SPAWN=N the Nth adapter process started for the shared
 // CAP_ACP_FIXTURE_SPAWN_COUNTER counter exits at once, before reading a single
