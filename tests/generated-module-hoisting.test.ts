@@ -1,6 +1,8 @@
 // tests/generated-module-hoisting.test.ts — the generated descriptor module
 // emits long repeated strings ONCE (chrome-agent-platform-ehsl: the store
-// service-worker bundle sat ~10 bytes under its 3 MB budget, and per-row
+// service-worker bundle sat ~10 bytes under its 3 MB budget when written
+// (stale; measured 2,998,629 bytes = 1,371 bytes headroom on 2026-09-18, per
+// chrome-agent-platform-4ctv's baseline), and per-row
 // duplicates of the same caveat prose were several KB of it).
 //
 // These are PROPERTY pins, not prose pins: they fail if the hoisting stops
