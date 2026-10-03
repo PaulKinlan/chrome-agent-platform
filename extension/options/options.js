@@ -3491,7 +3491,9 @@ function vaultRow(row) {
     remove.disabled = true;
     const res = await vaultSend("vault.delete", { keyId: row.keyId });
     remove.disabled = false;
-    setVaultStatus(res?.ok ? `${row.keyId} removed.` : `Remove failed: ${res?.error ?? "unknown"}`, !res?.ok);
+    // vault.deleteSecret returns { keyId, deleted: true } — no ok field.
+    const removedOk = res?.ok === true || res?.deleted === true;
+    setVaultStatus(removedOk ? `${row.keyId} removed.` : `Remove failed: ${res?.error ?? "unknown"}`, !removedOk);
     renderVaultPanel();
   });
 

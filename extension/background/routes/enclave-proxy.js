@@ -27,6 +27,7 @@
 // service allowlist are injected, so the unit tests exercise the real handler
 // with fakes (the 32yz executable-handler style).
 
+import { capLog } from "../../lib/cap-log.js";
 import { checkFetchTarget } from "../../lib/fetch-policy.js";
 import { tagUntrusted } from "../../lib/untrusted-fence.js";
 
@@ -244,7 +245,7 @@ export function createEnclaveProxyRoutes({
       // query-injected token) and the headers never reach the caller. The
       // scrubbed detail stays in the worker console for diagnosis.
       const detail = scrub(String(err?.message ?? err)).slice(0, 200);
-      console.warn(`enclave proxy: ${serviceId} request failed: ${detail}`);
+      capLog("enclave-proxy").warn(`enclave proxy: ${serviceId} request failed: ${detail}`);
       return { ok: false, code: "connection_failed", error: "connection_failed" };
     }
 

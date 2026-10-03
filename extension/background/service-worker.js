@@ -6488,10 +6488,20 @@ const vaultRoutes = createVaultRoutes({
       throw e;
     }
   },
-  testConnection: ({ service }) => enclaveProxyRoutes["enclave.proxy"](
-    { service, path: "/", method: "GET" },
-    { principal: "owner-options" },
-  ),
+  testConnection: async ({ service }) => {
+    // Pre-I/O refusals THROW with code-tagged errors; the Settings surface
+    // needs the strict { ok, code } shape, never raw error text (the enclave
+    // proxy's error text is settings-safe by code, but the mapping stays
+    // total so nothing bypasses the whitelist).
+    try {
+      return await enclaveProxyRoutes["enclave.proxy"](
+        { service, path: "/", method: "GET" },
+        { principal: "owner-options" },
+      );
+    } catch (err) {
+      return { ok: false, code: err?.code || "unknown_error" };
+    }
+  },
 });
 const handlers = mergeRouteMaps(
   vaultRoutes,
