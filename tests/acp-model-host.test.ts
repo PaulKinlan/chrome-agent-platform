@@ -47,3 +47,21 @@ Deno.test("ACP SW proxy carries model steps and scoped permission decisions, clo
   assertEquals(choice,"deny");assertEquals(seen.prompt[0].content,"test");assertEquals(parts[0].finishReason,"stop");
   proxy.close();assert(hostClosed);
 });
+
+Deno.test("ACP discovery host/proxy returns catalogue and closes without a model step", async () => {
+  const { discoverAcpCommands } = await import("../extension/lib/acp-model-proxy.js");
+  const runtime={id:"extension",getURL:p=>`chrome-extension://extension/${p}`,onConnect:event()};
+  let closed=false;
+  registerAcpModelHost(runtime, config=>({
+    async discoverCommands() {
+      assertEquals(await config.permissionHandler({title:"write",options:[{optionId:"allow"}]}),null);
+      return {sessionId:"s",received:true,commands:[{name:"$probe"}]};
+    },
+    model:{doStream(){throw Error("discovery must not stream");}},
+    close(){closed=true;},
+  }));
+  const catalogue=await discoverAcpCommands({harnessId:"codex"},()=>{
+    const [a,b]=ports({id:runtime.id,url:runtime.getURL("dist/background/service-worker.js")});runtime.onConnect.emit(b);return a;
+  });
+  assertEquals(catalogue.commands,[{name:"$probe"}]);assert(closed);
+});

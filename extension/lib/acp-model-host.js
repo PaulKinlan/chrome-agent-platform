@@ -35,6 +35,9 @@ export function registerAcpModelHost(runtime = chrome.runtime, createModel = cre
               port.postMessage({type:"permission",id,request});
             })
           });
+        } else if (message.type === "catalogue" && model) {
+          const catalogue = await model.discoverCommands();
+          if (!closed) port.postMessage({ type: "catalogue", catalogue });
         } else if (message.type === "permission-result") {
           permissions.get(message.id)?.(message.optionId); permissions.delete(message.id);
         } else if (message.type === "step" && model) {

@@ -42,3 +42,22 @@ export function createAcpModelProxy(config, connect = (name) => chrome.runtime.c
   return { model, modelId:config.harnessId, providerName:"acp", providerLane:"acp", close,
     fork() { const child=createAcpModelProxy(config,connect); children.add(child); return child; } };
 }
+
+/** An isolated, non-tool discovery backend. Always closes; no prompt is sent. */
+export async function discoverAcpCommands(config, connect = (name) => chrome.runtime.connect({ name })) {
+  const port = connect(`cap-acp-model:${crypto.randomUUID()}`);
+  let timer;
+  try {
+    return await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("Harness command discovery timed out. Check the bridge and try again.")), 20000);
+      port.onDisconnect.addListener(() => reject(new Error("Harness command discovery disconnected. Check the bridge and try again.")));
+      port.onMessage.addListener((message) => {
+        if (message.type === "catalogue") resolve(message.catalogue);
+        else if (message.type === "error") reject(new Error("Harness command discovery failed. Check the bridge working directory and authentication, then try again."));
+        else if (message.type === "permission") port.postMessage({ type: "permission-result", id: message.id, optionId: null });
+      });
+      port.postMessage({ type: "open", config: { url: config.url, cwd: config.cwd, harnessId: config.harnessId } });
+      port.postMessage({ type: "catalogue" });
+    });
+  } finally { clearTimeout(timer); port.disconnect(); }
+}

@@ -207,6 +207,7 @@ Fenced with `isOwnerPrincipal(context)` (`"extension"` or `"owner-options"`). Ca
 
 | Route Name | Owning Module | Description |
 |---|---|---|
+| `acp.commands` | `service-worker.js` | Extension-only, temporary no-prompt/no-tool discovery session; always closes; no command dispatch |
 | `browser.callTool` | `service-worker.js` | Invokes a browser tool (ACP in-app protocol) |
 | `actions.undo` | `service-worker.js` | Undoes a user action recorded in ledger |
 | `notifications.list` | `service-worker.js` | Lists pending extension notifications |
