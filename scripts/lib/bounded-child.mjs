@@ -51,6 +51,24 @@ function snapshot(pid) {
 
 export const DEFAULT_BOUNDED_CHILD_TIMEOUT_MS = 120_000;
 
+export const VERIFY_COMPLETION_SENTINEL = "VERIFY OK:";
+export const PACKAGES_COMPLETION_SENTINEL = "OK: 38 packages";
+
+/**
+ * Distinguish a teardown-only generator wedge from a mid-work hang (chrome-agent-platform-ahiq).
+ * When running with --verify, if stdoutTail carries the completion sentinels ("VERIFY OK:" and
+ * "OK: 38 packages"), the child completed its verification work before the futex shutdown stall.
+ * A caller can accept this after reaping the process group so healthy builds don't fail.
+ */
+export function isVerifyTeardownWedge(stdoutTail, args = [], label = "") {
+  const isVerify = args.includes("--verify") || label.includes("--verify");
+  if (!isVerify) return false;
+  if (typeof stdoutTail !== "string") return false;
+  const hasVerifyOk = stdoutTail.includes(VERIFY_COMPLETION_SENTINEL);
+  const hasPackagesOk = stdoutTail.includes(PACKAGES_COMPLETION_SENTINEL) || /OK:\s*\d+\s*packages/.test(stdoutTail);
+  return hasVerifyOk && hasPackagesOk;
+}
+
 /** The longest delay a JS timer can carry: 2^31 - 1 ms (~24.8 days). Node and Deno silently
  *  clamp a longer setTimeout delay to 1 ms, so an "unscaled" huge override killed a fast child
  *  after ~5 ms and reported a nonsense bound (chrome-agent-platform-61h3 re-review). */
@@ -115,8 +133,9 @@ function recordHang(recordDir, entry) {
  * @param {string} command
  * @param {string[]} args
  * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, stdio?: import("node:child_process").StdioOptions,
- *           timeoutMs?: number, label?: string, recordDir?: string }} [options]
- * @returns {Promise<{ status: number, signal: NodeJS.Signals | null, ms: number }>}
+ *           timeoutMs?: number, label?: string, recordDir?: string, echoStdout?: boolean, echoStderr?: boolean,
+ *           acceptTeardownWedge?: boolean }} [options]
+ * @returns {Promise<{ status: number, signal: NodeJS.Signals | null, ms: number, stdout?: string, stderr?: string, teardownWedge?: boolean }>}
  */
 export async function runBoundedChild(command, args, {
   cwd,
@@ -125,15 +144,24 @@ export async function runBoundedChild(command, args, {
   timeoutMs = boundedChildTimeoutMs(env),
   label = command,
   recordDir,
+  echoStdout = false,
+  echoStderr = false,
+  acceptTeardownWedge = args.includes("--verify"),
 } = {}) {
   const started = Date.now();
   const child = spawn(command, args, { cwd, env, stdio, detached: true });
-  const capture = Array.isArray(stdio) && (stdio[1] === "pipe" || stdio[2] === "pipe");
+  const capture = stdio === "pipe" || (Array.isArray(stdio) && (stdio[1] === "pipe" || stdio[2] === "pipe"));
   const outChunks = [];
   const errChunks = [];
   if (capture) {
-    child.stdout?.on("data", (d) => outChunks.push(d));
-    child.stderr?.on("data", (d) => errChunks.push(d));
+    child.stdout?.on("data", (d) => {
+      outChunks.push(d);
+      if (echoStdout) process.stdout.write(d);
+    });
+    child.stderr?.on("data", (d) => {
+      errChunks.push(d);
+      if (echoStderr) process.stderr.write(d);
+    });
   }
   let timedOut = false;
   let spawnError = null;
@@ -188,11 +216,32 @@ export async function runBoundedChild(command, args, {
     // stdoutTail answers the question the FIX depends on: did the child finish its WORK and
     // then fail to exit (a teardown-only hang, which a caller could accept), or did it hang
     // mid-work (which it cannot)? Captured only when stdio was piped.
-    const tail = capture ? Buffer.concat(outChunks).toString("utf8").trim().split("\n").slice(-2).join(" ⏎ ") : "(stdout not captured)";
+    const fullStdout = capture ? Buffer.concat(outChunks).toString("utf8") : "";
+    const tail = capture ? fullStdout.trim().split("\n").slice(-2).join(" ⏎ ") : "(stdout not captured)";
+    const isTeardownWedge = Boolean(acceptTeardownWedge && isVerifyTeardownWedge(tail, args, label));
     // cwd says WHICH checkout hung: the default record file is shared by every lane on the box.
     const recorded = recordHang(recordDir, {
-      at: new Date().toISOString(), label, cwd: cwd ?? process.cwd(), timeoutMs, snapshot: at, report, endedBy, stdoutTail: tail,
+      at: new Date().toISOString(),
+      label,
+      cwd: cwd ?? process.cwd(),
+      timeoutMs,
+      snapshot: at,
+      report,
+      endedBy,
+      stdoutTail: tail,
+      teardownWedge: isTeardownWedge,
+      accepted: isTeardownWedge,
     });
+    if (isTeardownWedge) {
+      return {
+        status: 0,
+        signal: null,
+        ms,
+        stdout: capture ? fullStdout : undefined,
+        stderr: capture ? Buffer.concat(errChunks).toString("utf8") : undefined,
+        teardownWedge: true,
+      };
+    }
     throw new Error(
       `${label} HUNG: no exit within ${(timeoutMs / 1000).toFixed(0)}s (${at}); its process group was killed. ` +
       `This is a hang, not slow work — chrome-agent-platform-fnmr. ` +

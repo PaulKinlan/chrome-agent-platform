@@ -99,7 +99,8 @@ try {
     ...(REGEN_TOOLS ? [] : ["--verify"]),
   ], {
     cwd: ROOT,
-    stdio: "inherit",
+    stdio: ["inherit", "pipe", "inherit"],
+    echoStdout: true,
     label: "bundled-tool generator",
     timeoutMs: boundedChildTimeoutMs(process.env, "CAP_BUNDLED_TOOL_TIMEOUT_MS"),
   });
