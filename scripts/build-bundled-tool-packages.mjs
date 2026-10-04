@@ -614,6 +614,23 @@ for (const pkg of packages) {
   if (audit.measured.memoryInitial > initialPages) throw new Error(`${pkg.toolId}: binary initial ${audit.measured.memoryInitial} exceeds declared ${initialPages}`);
   if (maxPages > tierCeiling) throw new Error(`${pkg.toolId}: exceeds ${tier} tier`);
 
+// 7rok: build.rebuildRef must name a file that exists in the tree, or the
+// provenance pointer rots the next time someone reads it — 7 of 38 manifests
+// pointed at packages/bundled/<name>/build.sh, which does not exist, while the
+// real script sat under packages/bundled/evidence/<name>/. Six of the seven keep
+// a build.sh there and hashwasm-blake3 reproduces by extraction (extract.mjs),
+// not by a build script. Resolve the real path at generation time and fail
+// closed when there is none, so a future admit cannot emit a dead reference.
+function rebuildRefFor(lane) {
+  const candidates = [
+    `packages/bundled/${lane}/build.sh`,
+    `packages/bundled/evidence/${lane}/build.sh`,
+    `packages/bundled/evidence/${lane}/extract.mjs`,
+  ];
+  for (const rel of candidates) if (existsSync(join(REPO, rel))) return rel;
+  throw new Error(`no reproduction script for lane '${lane}' (tried ${candidates.join(", ")})`);
+}
+
   const meta = pkg.row ?? pkg;
   const capabilities = [...meta.capabilities].sort();
   const capabilityDigest = sha256(enc.encode(canonicalJson(capabilities)));
@@ -628,7 +645,7 @@ for (const pkg of packages) {
     executables: [{ id: pkg.toolId, sha256: wasmSha, size: pkg.bytes.byteLength, imports: { allowed, disallowed: [] }, memory: { tier, initialPages, maxPages }, runtimeCompat: ["wasm32"], replayClass: meta.replayClass, capabilities, capabilityDigest, ...(pkg.callexport ? { callExport: pkg.callexport } : {}) }],
     signer: { lane: SIGNER.lane, keyId: SIGNER.keyId, alg: "none" },
     source: pkg.sourceAnchor ?? SOURCE,
-    build: { toolchain: pkg.toolchain, profile: "release", reproducible: true, rebuildRef: `packages/bundled/${pkg.buildScriptLane}/build.sh` },
+    build: { toolchain: pkg.toolchain, profile: "release", reproducible: true, rebuildRef: rebuildRefFor(pkg.buildScriptLane) },
     sbom: { format: pkg.sbom.format, sha256: sha256(sbomBytes), ref: pkg.sbom.rel },
     license: { spdx: pkg.spdx, file: pkg.licenseFile, ...(pkg.notices ? { notices: pkg.notices } : {}) },
     meta: { category: String(meta.category), channel: "bundled", description, label: pkg.toolId, status: meta.metaStatus ?? (SETTINGS_PREVIEW_LANES.has(pkg.toolId) ? "settings-preview-enabled" : "disabled-no-host"), note: meta.metaNote ?? `evidence: packages/bundled/evidence/${pkg.lane}; owner decision CAP-DECISION-TEMPLATE-20260822-06` },
