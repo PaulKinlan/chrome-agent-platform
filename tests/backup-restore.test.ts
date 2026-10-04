@@ -2,10 +2,9 @@
 // chrome-agent-platform-d885.8: tests for streaming TAR restore driver and options wiring.
 // @ts-nocheck
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { streamExportArchive } from "../extension/lib/backup-export.js";
 import { streamRestoreArchive } from "../extension/lib/backup-restore.js";
-import { buildArchive } from "../extension/lib/data-archive.js";
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder();
@@ -78,6 +77,7 @@ Deno.test("backup-restore: streamExportArchive -> streamRestoreArchive round-tri
     }),
     opfs: {
       listFiles: async () => [...restoredFiles.keys()],
+      readFile: async (path: string) => restoredFiles.get(path)!,
       writeFile: async (path: string, bytes: Uint8Array) => {
         restoredFiles.set(path, bytes);
       },
@@ -167,11 +167,6 @@ Deno.test("backup-restore: options.js routes .tar files to streamRestoreArchive 
 });
 
 Deno.test("backup-restore: transactional staging and owner confirmation cancellation", async () => {
-  const profileFiles = new Map<string, Uint8Array>([
-    ["master/journal.json", ENCODER.encode(JSON.stringify({ live: true }))],
-  ]);
-
-  // Export a TAR with new content
   const tarChunks: Uint8Array[] = [];
   const tarSink = new WritableStream<Uint8Array>({
     write(chunk) { tarChunks.push(chunk); },
@@ -204,13 +199,11 @@ Deno.test("backup-restore: transactional staging and owner confirmation cancella
     off += c.byteLength;
   }
 
-  // Pre-existing live OPFS state
   const liveFiles = new Map<string, Uint8Array>([
     ["master/journal.json", ENCODER.encode("original live content")],
   ]);
-  const writtenStagingFiles = [];
+  const writtenStagingFiles: string[] = [];
 
-  // Restore with confirm returning FALSE (cancelled)
   let confirmCalled = false;
   const restoreRes = await streamRestoreArchive({
     stream: new ReadableStream({
@@ -235,7 +228,7 @@ Deno.test("backup-restore: transactional staging and owner confirmation cancella
     confirm: async ({ manifest, summary }) => {
       confirmCalled = true;
       assertEquals(summary.opfsFiles, 1);
-      return false; // User clicks CANCEL
+      return false; // Owner cancels
     },
   });
 
@@ -243,21 +236,14 @@ Deno.test("backup-restore: transactional staging and owner confirmation cancella
   assertEquals(restoreRes.ok, false, "restore must report ok: false on cancellation");
   assertEquals(restoreRes.cancelled, true, "restore must report cancelled: true");
 
-  // Assert live data was NOT mutated
   assertEquals(DECODER.decode(liveFiles.get("master/journal.json")!), "original live content");
 
-  // Assert staging files were cleaned up
   for (const staged of writtenStagingFiles) {
     assert(!liveFiles.has(staged), `staging file ${staged} must be cleaned up after cancel`);
   }
 });
 
-Deno.test("backup-restore: legacy JSON backup auto-detection and fallback routing", async () => {
-  const opfs = [
-    { path: "legacy/note.txt", encoding: "utf8", data: "legacy content via json" },
-  ];
-  const kv = { "legacy:pref": "restored-val" };
-  const alarms: any[] = [];
+Deno.test("backup-restore: legacy JSON backup auto-detection, fallback routing and fail-closed confirmation", async () => {
   const legacyJson = JSON.stringify({
     magic: "cap-export",
     formatVersion: 1,
@@ -266,19 +252,38 @@ Deno.test("backup-restore: legacy JSON backup auto-detection and fallback routin
     policy: { excluded: [] },
     configuredProviders: [],
     mcpServers: [],
-    kv,
-    alarms,
-    opfs,
+    kv: { "legacy:pref": "restored-val" },
+    alarms: [],
+    opfs: [
+      { path: "legacy/note.txt", encoding: "utf8", data: "legacy content via json" },
+    ],
     manifest: {
-      kvKeys: Object.keys(kv).length,
-      opfsFiles: opfs.length,
-      alarms: alarms.length,
-      totalBytes:
-        opfs.reduce((n, e) => n + ENCODER.encode(e.data).length, 0) +
-        ENCODER.encode(JSON.stringify(kv)).length,
+      kvKeys: 1,
+      opfsFiles: 1,
+      alarms: 0,
+      totalBytes: 50,
     },
   });
 
+  // 1. Confirm cancel fails closed
+  const cancelRes = await streamRestoreArchive({
+    stream: legacyJson,
+    confirm: async () => false,
+  });
+  assertEquals(cancelRes.ok, false);
+  assertEquals(cancelRes.cancelled, true);
+
+  // 2. Corrupted JSON fails closed before mutation
+  await assertRejects(
+    () => streamRestoreArchive({
+      stream: "{corrupt-json{{{",
+      confirm: async () => true,
+    }),
+    Error,
+    "archive-bad-json",
+  );
+
+  // 3. Successful restore
   const liveFiles = new Map<string, Uint8Array>();
   let liveKv: Record<string, any> = {};
 
@@ -308,7 +313,10 @@ Deno.test("backup-restore: legacy JSON backup auto-detection and fallback routin
   assertEquals(liveKv["legacy:pref"], "restored-val");
 });
 
-Deno.test("backup-restore: swap failure triggers automatic rollback from sidecar journal", async () => {
+Deno.test("backup-restore: swap failure on second file triggers rollback from sidecar journal, restoring first mutated file", async () => {
+  const file1Data = ENCODER.encode("incoming file 1 data");
+  const file2Data = ENCODER.encode("incoming file 2 data");
+
   const tarChunks: Uint8Array[] = [];
   const tarSink = new WritableStream<Uint8Array>({
     write(chunk) { tarChunks.push(chunk); },
@@ -316,9 +324,9 @@ Deno.test("backup-restore: swap failure triggers automatic rollback from sidecar
 
   await streamExportArchive({
     writable: tarSink,
-    listFiles: async () => ["master/data.json"],
-    open: async () => {
-      const b = ENCODER.encode("new data to be swapped");
+    listFiles: async () => ["master/file1.txt", "master/file2.txt"],
+    open: async (p: string) => {
+      const b = p.includes("file1") ? file1Data : file2Data;
       return {
         size: b.byteLength,
         stream: new ReadableStream({
@@ -329,7 +337,7 @@ Deno.test("backup-restore: swap failure triggers automatic rollback from sidecar
         }),
       };
     },
-    kvGet: async () => ({ key1: "val1" }),
+    kvGet: async () => ({ key1: "new-val" }),
     alarms: { getAll: async () => [] },
     extensionVersion: "1.0.0",
   });
@@ -342,11 +350,13 @@ Deno.test("backup-restore: swap failure triggers automatic rollback from sidecar
   }
 
   const liveFiles = new Map<string, Uint8Array>([
-    ["master/data.json", ENCODER.encode("original data")],
+    ["master/file1.txt", ENCODER.encode("original file 1 content")],
+    ["master/file2.txt", ENCODER.encode("original file 2 content")],
   ]);
-  let liveKv: Record<string, any> = { key1: "orig-val" };
+  let liveKv: Record<string, any> = { key1: "original-kv-val" };
 
-  let writeCount = 0;
+  let liveCommitWrites = 0;
+  let sawMutatedFile1BeforeRollback = false;
   let errorCaught = false;
 
   try {
@@ -361,11 +371,15 @@ Deno.test("backup-restore: swap failure triggers automatic rollback from sidecar
         listFiles: async () => [...liveFiles.keys()],
         readFile: async (p: string) => liveFiles.get(p) ?? new Uint8Array(0),
         writeFile: async (p: string, b: Uint8Array) => {
-          // Allow staging write, but fail during the commit phase
           if (!p.startsWith(".staging-restore-")) {
-            writeCount++;
-            if (writeCount === 1) {
-              throw new Error("simulated disk error during atomic swap");
+            liveCommitWrites++;
+            if (liveCommitWrites === 1) {
+              liveFiles.set(p, b);
+              sawMutatedFile1BeforeRollback = true;
+              return;
+            }
+            if (liveCommitWrites === 2) {
+              throw new Error("simulated disk failure on second live file write");
             }
           }
           liveFiles.set(p, b);
@@ -386,11 +400,21 @@ Deno.test("backup-restore: swap failure triggers automatic rollback from sidecar
     });
   } catch (err: any) {
     errorCaught = true;
-    assert(err.message.includes("simulated disk error"), "error must be reported");
+    assert(err.message.includes("simulated disk failure"), "expected simulated disk failure");
   }
 
-  assert(errorCaught, "swap error must be caught");
-  // Assert rollback restored original file and KV
-  assertEquals(DECODER.decode(liveFiles.get("master/data.json")!), "original data");
-  assertEquals(liveKv.key1, "orig-val");
+  assert(errorCaught, "error must be thrown on second file failure");
+  assert(sawMutatedFile1BeforeRollback, "first live file MUST have been mutated before rollback occurred");
+
+  assertEquals(
+    DECODER.decode(liveFiles.get("master/file1.txt")!),
+    "original file 1 content",
+    "master/file1.txt must be restored from rollback journal after second file failed",
+  );
+  assertEquals(
+    DECODER.decode(liveFiles.get("master/file2.txt")!),
+    "original file 2 content",
+    "master/file2.txt was never committed and remains original",
+  );
+  assertEquals(liveKv.key1, "original-kv-val");
 });

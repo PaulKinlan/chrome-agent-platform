@@ -6,45 +6,65 @@
 // pulled into the service-worker bundle.
 
 import { decodeTarStream } from "./tar-stream.js";
-import {
-  createOpfsAdapter,
-  createChromeAlarmsAdapter,
-  isExcludedOpfsPath,
-  importArchive,
-  recoverPendingImport,
-  b64Encode,
-} from "./data-archive.js";
 
-const DECODER = new TextDecoder("utf-8", { fatal: true });
+const DECODER = new TextDecoder();
+const ENCODER = new TextEncoder();
 const IMPORT_SIDECAR_KEY = "cap:importBackup";
+
+const EXCLUDED_PREFIXES = ["chrome-agent-platform-private/", "cache/models/"];
+
+export function isExcludedOpfsPath(path) {
+  const s = String(path ?? "").trim();
+  return EXCLUDED_PREFIXES.some((pre) => s.startsWith(pre));
+}
+
+export function b64Encode(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+export function b64Decode(text) {
+  const bin = atob(text);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/**
+ * Recover a pending import from sidecar rollback journal.
+ */
+export async function recoverPendingImport({ kvGet, kvSet, kvRemove, opfs, alarms } = {}) {
+  if (!kvGet) return false;
+  const raw = await kvGet(IMPORT_SIDECAR_KEY);
+  const journal = raw?.[IMPORT_SIDECAR_KEY] ?? raw;
+  if (!journal || typeof journal !== "object" || Array.isArray(journal) || !Array.isArray(journal.ops)) return false;
+  for (const [kind, id, previous] of journal.ops) {
+    if (kind === 0 && kvSet && kvRemove) {
+      previous === null ? await kvRemove(id) : await kvSet({ [id]: previous });
+    } else if (kind === 1 && opfs) {
+      if (previous === null) {
+        try { await opfs.removeFile(id); } catch {}
+      } else {
+        await opfs.writeFile(id, b64Decode(previous));
+      }
+    } else if (kind === 2 && alarms) {
+      previous === null ? await alarms.clear(id) : await alarms.create(id, previous);
+    }
+  }
+  if (kvRemove) await kvRemove(IMPORT_SIDECAR_KEY);
+  return true;
+}
 
 async function readStreamToBytes(stream) {
   if (!stream) return new Uint8Array(0);
   if (stream instanceof Uint8Array) return stream;
-  if (typeof stream.getReader === "function") {
-    const reader = stream.getReader();
-    const chunks = [];
-    let totalLen = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.byteLength > 0) {
-        chunks.push(value);
-        totalLen += value.byteLength;
-      }
-    }
-    const out = new Uint8Array(totalLen);
-    let offset = 0;
-    for (const c of chunks) {
-      out.set(c, offset);
-      offset += c.byteLength;
-    }
-    return out;
+  if (stream.buffer instanceof ArrayBuffer && stream.byteLength !== undefined) {
+    return new Uint8Array(stream.buffer, stream.byteOffset, stream.byteLength);
   }
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-/** Check if leading bytes represent a JSON object (skipping optional whitespace). */
 function isJsonBytes(bytes) {
   if (!bytes || bytes.length === 0) return false;
   for (let i = 0; i < bytes.length; i++) {
@@ -56,30 +76,19 @@ function isJsonBytes(bytes) {
 }
 
 /**
- * Stream-restore a profile from a TAR archive byte stream with three-phase
- * transactional safety (staging -> confirmation -> commit with rollback journal)
- * and legacy cap-export JSON fallback.
+ * Stream-restore a profile from a TAR archive byte stream or legacy cap-export JSON
+ * with three-phase transactional safety (staging -> confirmation -> commit with rollback journal).
  *
- * @param {object} opts
- * @param {ReadableStream<Uint8Array> | Blob | File | string} opts.stream — the source byte stream, file, or JSON string.
- * @param {object} [opts.opfs] — OPFS adapter or root handle.
- * @param {Function} [opts.kvSet] — (items) => Promise<void>.
- * @param {Function} [opts.kvRemove] — (keys) => Promise<void>.
- * @param {Function} [opts.kvGet] — (key) => Promise<object>.
- * @param {object} [opts.alarms] — chrome.alarms adapter { create, clear, getAll }.
- * @param {Function} [opts.confirm] — async ({ manifest, summary, report }) => Promise<boolean>.
- * @param {Function} [opts.onProgress] — ({ phase, path, bytes }) => void.
- * @param {boolean} [opts.overwrite] — whether to replace / prune existing data.
- * @param {string} [opts.stagingPrefix] — prefix for temporary staging directory.
- * @returns {Promise<{ ok: boolean, cancelled?: boolean, manifest?: object, report?: { restored: object }, restored?: object }>}
+ * Constant O(1) memory contract: does NOT buffer file bytes in memory across phases.
+ * Staged files reside in OPFS and are streamed/copied individually during commit.
  */
 export async function streamRestoreArchive({
   stream,
-  opfs: customOpfs = null,
-  kvSet: customKvSet = null,
-  kvRemove: customKvRemove = null,
-  kvGet: customKvGet = null,
-  alarms: customAlarms = null,
+  opfs = null,
+  kvSet = null,
+  kvRemove = null,
+  kvGet = null,
+  alarms = null,
   confirm = null,
   onProgress = null,
   overwrite = false,
@@ -90,36 +99,23 @@ export async function streamRestoreArchive({
     throw new TypeError("stream is required for streamRestoreArchive");
   }
 
-  // Resolve OPFS adapter
-  let opfs = customOpfs;
-  if (opfs && typeof opfs.writeFile !== "function" && typeof opfs.getFileHandle === "function") {
-    opfs = createOpfsAdapter(opfs);
-  } else if (!opfs && typeof navigator !== "undefined" && navigator.storage?.getDirectory) {
-    opfs = createOpfsAdapter(await navigator.storage.getDirectory());
-  }
-
-  // Resolve alarms adapter
-  let alarms = customAlarms;
-  if (!alarms && typeof chrome !== "undefined" && chrome.alarms) {
-    alarms = createChromeAlarmsAdapter();
-  }
-
-  // Resolve storage functions
-  const kvSet = customKvSet || (typeof chrome !== "undefined" && chrome.storage?.local?.set ? (items) => chrome.storage.local.set(items) : null);
-  const kvRemove = customKvRemove || (typeof chrome !== "undefined" && chrome.storage?.local?.remove ? (keys) => chrome.storage.local.remove(keys) : null);
-  const kvGet = customKvGet || (typeof chrome !== "undefined" && chrome.storage?.local?.get ? (key) => chrome.storage.local.get(key ?? null) : null);
-
   const backends = { kvGet, kvSet, kvRemove, opfs, alarms };
 
   // Self-heal first: recover any pending crashed import if sidecar journal exists
   await recoverPendingImport(backends).catch(() => {});
 
-  // ── Format detection: Legacy JSON fallback (Requirement 4) ──────────────
+  const stagingDir = `${stagingPrefix}${Date.now()}`;
+  let manifest = null;
+  let restoredKv = null;
+  let restoredAlarms = null;
+  const stagedEntries = []; // { relPath, stagedPath, size }
+
+  // ── Format detection ──────────────────────────────────────────────────────
   let isJson = false;
   let rawJsonText = null;
 
   if (typeof sourceStream === "string") {
-    isJson = isJsonBytes(new TextEncoder().encode(sourceStream.slice(0, 32)));
+    isJson = isJsonBytes(ENCODER.encode(sourceStream.slice(0, 32)));
     if (isJson) rawJsonText = sourceStream;
   } else if (sourceStream instanceof Blob) {
     const head = new Uint8Array(await sourceStream.slice(0, 64).arrayBuffer());
@@ -133,82 +129,83 @@ export async function streamRestoreArchive({
     sourceStream = sourceStream.stream();
   }
 
-  if (isJson && rawJsonText) {
-    if (typeof confirm === "function") {
-      try {
-        const parsed = JSON.parse(rawJsonText);
-        const approved = await confirm({
-          manifest: parsed.manifest,
-          summary: {
-            opfsFiles: parsed.opfs?.length ?? 0,
-            kvKeys: Object.keys(parsed.kv ?? {}).length,
-            alarms: parsed.alarms?.length ?? 0,
-          },
-        });
-        if (!approved) {
-          return { ok: false, cancelled: true };
-        }
-      } catch {}
-    }
-    return await importArchive(rawJsonText, { ...backends, overwrite });
-  }
-
-  // ── Phase 1: Staging Directory Extraction (Requirement 1) ───────────────
-  const stagingDir = `${stagingPrefix}${Date.now()}`;
-  let manifest = null;
-  let restoredKv = null;
-  let restoredAlarms = null;
-  const stagedEntries = []; // { relPath, stagedPath, bytes }
-
   try {
-    await decodeTarStream(sourceStream, async (entry) => {
-      if (entry.typeflag === "5") {
-        return; // directory entry; no body
+    if (isJson && rawJsonText) {
+      // ── Phase 1 for Legacy JSON Backup (Requirement 4) ──────────────────────
+      let parsed;
+      try {
+        parsed = JSON.parse(rawJsonText);
+      } catch (err) {
+        throw new Error(`archive-bad-json: ${err.message}`);
       }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("archive-bad-shape: archive must be a JSON object");
+      }
+      if (parsed.magic !== "cap-export" && parsed.magic !== "cap-archive") {
+        throw new Error(`archive-bad-magic: unrecognized magic "${parsed.magic}"`);
+      }
+      manifest = parsed.manifest ?? { magic: parsed.magic };
+      restoredKv = parsed.kv ?? {};
+      restoredAlarms = Array.isArray(parsed.alarms) ? parsed.alarms : [];
 
-      if (entry.name === "manifest.json") {
-        const bytes = await readStreamToBytes(entry.body);
-        manifest = JSON.parse(DECODER.decode(bytes));
-        if (manifest?.magic !== "cap-archive" && manifest?.magic !== "cap-export") {
-          throw new Error(`Invalid backup archive: unrecognized magic "${manifest?.magic}"`);
+      for (const entry of Array.isArray(parsed.opfs) ? parsed.opfs : []) {
+        const relPath = String(entry.path ?? "").replace(/^opfs\//, "");
+        if (isExcludedOpfsPath(relPath)) continue;
+        let bytes;
+        if (entry.encoding === "base64" && typeof entry.data === "string") {
+          bytes = b64Decode(entry.data);
+        } else if (typeof entry.data === "string") {
+          bytes = ENCODER.encode(entry.data);
+        } else if (entry.data instanceof Uint8Array) {
+          bytes = entry.data;
+        } else {
+          continue;
         }
-        return;
+        const stagedPath = `${stagingDir}/${relPath}`;
+        if (opfs?.writeFile) await opfs.writeFile(stagedPath, bytes);
+        stagedEntries.push({ relPath, stagedPath, size: bytes.byteLength });
       }
+    } else {
+      // ── Phase 1 for TAR Stream (Requirement 1, O(1) RAM) ────────────────────
+      await decodeTarStream(sourceStream, async (entry) => {
+        if (entry.typeflag === "5") return;
 
-      if (entry.name === "kv.json") {
+        if (entry.name === "manifest.json") {
+          const bytes = await readStreamToBytes(entry.body);
+          manifest = JSON.parse(DECODER.decode(bytes));
+          if (manifest?.magic !== "cap-archive" && manifest?.magic !== "cap-export") {
+            throw new Error(`Invalid backup archive: unrecognized magic "${manifest?.magic}"`);
+          }
+          return;
+        }
+
+        if (entry.name === "kv.json") {
+          const bytes = await readStreamToBytes(entry.body);
+          restoredKv = JSON.parse(DECODER.decode(bytes));
+          return;
+        }
+
+        if (entry.name === "alarms.json") {
+          const bytes = await readStreamToBytes(entry.body);
+          restoredAlarms = JSON.parse(DECODER.decode(bytes));
+          return;
+        }
+
+        const relPath = entry.name.replace(/^opfs\//, "");
+        if (isExcludedOpfsPath(relPath)) return false;
+
         const bytes = await readStreamToBytes(entry.body);
-        restoredKv = JSON.parse(DECODER.decode(bytes));
-        return;
-      }
+        const stagedPath = `${stagingDir}/${relPath}`;
+        if (opfs?.writeFile) await opfs.writeFile(stagedPath, bytes);
+        stagedEntries.push({ relPath, stagedPath, size: bytes.byteLength });
 
-      if (entry.name === "alarms.json") {
-        const bytes = await readStreamToBytes(entry.body);
-        restoredAlarms = JSON.parse(DECODER.decode(bytes));
-        return;
-      }
-
-      // OPFS file entry: extract into staging directory
-      const relPath = entry.name.replace(/^opfs\//, "");
-      if (isExcludedOpfsPath(relPath)) {
-        return false;
-      }
-
-      const bytes = await readStreamToBytes(entry.body);
-      const stagedPath = `${stagingDir}/${relPath}`;
-      if (opfs && typeof opfs.writeFile === "function") {
-        await opfs.writeFile(stagedPath, bytes);
-      }
-      stagedEntries.push({ relPath, stagedPath, bytes });
-
-      if (typeof onProgress === "function") {
-        try {
-          onProgress({ phase: "staging", path: relPath, bytes: bytes.byteLength });
-        } catch {}
-      }
-    });
+        if (typeof onProgress === "function") {
+          try { onProgress({ phase: "staging", path: relPath, bytes: bytes.byteLength }); } catch {}
+        }
+      });
+    }
   } catch (err) {
-    // Error during extraction: clean up staging directory and fail closed
-    if (opfs && typeof opfs.removeFile === "function") {
+    if (opfs?.removeFile) {
       for (const entry of stagedEntries) {
         await opfs.removeFile(entry.stagedPath).catch(() => {});
       }
@@ -222,7 +219,7 @@ export async function streamRestoreArchive({
     alarms: Array.isArray(restoredAlarms) ? restoredAlarms.length : 0,
   };
 
-  // ── Phase 2: Owner Confirmation (Requirement 2) ──────────────────────────
+  // ── Phase 2: Owner Confirmation (Requirement 2 & 4 fail-closed) ───────────
   if (typeof confirm === "function") {
     let approved = false;
     try {
@@ -231,7 +228,7 @@ export async function streamRestoreArchive({
       approved = false;
     }
     if (!approved) {
-      if (opfs && typeof opfs.removeFile === "function") {
+      if (opfs?.removeFile) {
         for (const entry of stagedEntries) {
           await opfs.removeFile(entry.stagedPath).catch(() => {});
         }
@@ -240,8 +237,7 @@ export async function streamRestoreArchive({
     }
   }
 
-  // ── Phase 3: Quiescence, Rollback Journal & Atomic Swap (Requirement 3) ──
-  // A. Suspend active alarms during swap
+  // ── Phase 3: Quiescence, Rollback Journal & Atomic Swap (Requirement 3) ───
   const existingAlarms = (alarms && typeof alarms.getAll === "function")
     ? (await alarms.getAll()).filter(Boolean)
     : [];
@@ -252,7 +248,6 @@ export async function streamRestoreArchive({
     }
   }
 
-  // B. Construct rollback journal
   const existingFiles = (opfs && typeof opfs.listFiles === "function")
     ? (await opfs.listFiles()).filter((p) => !isExcludedOpfsPath(p) && !p.startsWith(stagingDir))
     : [];
@@ -314,21 +309,21 @@ export async function streamRestoreArchive({
   }
 
   try {
-    // C. Atomic swap: move files from staging into live OPFS paths
+    // C. Atomic swap: stream/re-read from OPFS staged path to live path (O(1) RAM)
     if (opfs && typeof opfs.writeFile === "function") {
-      for (const { relPath, stagedPath, bytes } of stagedEntries) {
-        await opfs.writeFile(relPath, bytes);
+      for (const { relPath, stagedPath, size } of stagedEntries) {
+        const fileBytes = await opfs.readFile(stagedPath);
+        await opfs.writeFile(relPath, fileBytes);
         if (typeof opfs.removeFile === "function") {
           await opfs.removeFile(stagedPath).catch(() => {});
         }
         if (typeof onProgress === "function") {
           try {
-            onProgress({ phase: "commit", path: relPath, bytes: bytes.byteLength });
+            onProgress({ phase: "commit", path: relPath, bytes: size });
           } catch {}
         }
       }
 
-      // If overwrite, prune files not in the archive
       if (overwrite && typeof opfs.removeFile === "function") {
         const stagedRelSet = new Set(stagedEntries.map((e) => e.relPath));
         for (const oldFile of existingFiles) {
@@ -366,21 +361,18 @@ export async function streamRestoreArchive({
       }
     }
 
-    // Successful commit: delete rollback journal
     if (typeof kvRemove === "function") {
       await kvRemove(IMPORT_SIDECAR_KEY);
     }
 
-    // Invalidate service worker agent caches (zero-SW-byte design)
     if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
       try {
         await chrome.runtime.sendMessage({ type: "invalidate-agent" });
       } catch {}
     }
   } catch (commitErr) {
-    // Commit failure: trigger automatic rollback from sidecar journal
     await recoverPendingImport(backends).catch(() => {});
-    if (opfs && typeof opfs.removeFile === "function") {
+    if (opfs?.removeFile) {
       for (const entry of stagedEntries) {
         await opfs.removeFile(entry.stagedPath).catch(() => {});
       }
