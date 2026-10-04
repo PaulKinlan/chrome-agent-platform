@@ -57,6 +57,7 @@ import {
 import { HeavyGateSlotRefusedError, heavyGateRefusalPayload } from "./lib/heavy-gate-slot.ts";
 import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, searchResultNames, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
+import { composerInput, composerSend, composerPopup } from "./lib/composer-target.ts";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -532,8 +533,8 @@ async function runScriptedToolProbe(cdp, ntpSession, optsSession, steps, task, e
   const beforeIds = await listRunIds(cdp, optsSession);
   await clickSel(cdp, ntpSession, "#home").catch(() => false);
   await sleep(600);
-  await typeInto(cdp, ntpSession, "#task-input", task);
-  await clickSel(cdp, ntpSession, "#run-task");
+  await typeInto(cdp, ntpSession, composerInput("hub"), task);
+  await clickSel(cdp, ntpSession, composerSend("hub"));
   const t0 = Date.now();
   while (provider.requests.length < expectRequests && Date.now() - t0 < 120000) {
     if (onPause) await onPause().catch(() => false);
@@ -1535,7 +1536,7 @@ async function main() {
     await pressTab(cdp, ntpSession); // ONE genuine Tab key from a neutral start
     const tab1 = await focusedInHub();
     console.log("fresh hub Tab #1:", JSON.stringify(tab1));
-    check("fresh hub: Tab #1 focuses the composer", tab1?.inComposer === true && (tab1?.id === "composer-input" || tab1?.id === "task-input" || tab1?.tag === "TEXTAREA"));
+    check("fresh hub: Tab #1 focuses the composer", tab1?.inComposer === true && (tab1?.id === "composer-input" || tab1?.tag === "TEXTAREA"));
     await evalIn(cdp, ntpSession, `document.activeElement?.blur?.(); true`);
     const bannerButtons = await evalIn(cdp, ntpSession, `(() => {
       const g = document.getElementById('first-run-guide');
@@ -2728,7 +2729,7 @@ async function main() {
     // Type /folder: into the composer (the hub input is empty after the Run).
     await evalIn(cdp, ntpSession, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
     await sleep(400);
-    check("folder command: bare /folder typed into the composer", await typeInto(cdp, ntpSession, "#task-input", "/folder"));
+    check("folder command: bare /folder typed into the composer", await typeInto(cdp, ntpSession, composerInput("hub"), "/folder"));
     await sleep(1200); // the popup loads fs-grant.list async
     const popupRows = await evalIn(cdp, ntpSession, `(() => {
       const comp = document.querySelector('agent-composer');
@@ -2769,7 +2770,7 @@ async function main() {
     // " /tabs:" → the tabs picker must open at the SECOND token's position.
     await evalIn(cdp, ntpSession, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
     await sleep(400);
-    check("multi-slash: typed the first /skill:summarise command", await typeInto(cdp, ntpSession, "#task-input", "/skill:summarise"));
+    check("multi-slash: typed the first /skill:summarise command", await typeInto(cdp, ntpSession, composerInput("hub"), "/skill:summarise"));
     // Poll for the skill popup row (skill.list loads async from the SW).
     let skillParsed = { rows: [], open: false };
     for (let i = 0; i < 30; i++) {
@@ -2792,7 +2793,7 @@ async function main() {
     await sleep(800);
     const afterSkill = await evalIn(cdp, ntpSession, `(() => {
       const comp = document.querySelector('agent-composer');
-      const inp = comp?.querySelector('#task-input');
+      const inp = comp?.querySelector('[data-composer-input]');
       const pop = comp?.querySelector('.popup');
       return JSON.stringify({ value: inp?.value ?? '', popupHidden: pop ? pop.hidden : true });
     })()`);
@@ -2825,10 +2826,10 @@ async function main() {
     await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, ntpSession);
     await sleep(800);
-    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('agent-composer #task-input')?.value ?? ''`);
+    const multiValue = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("hub")}')?.value ?? ''`);
     check("multi-slash: the final input holds BOTH the skill and the tab reference",
       /\/skill:(?:builtin:)?page-summary/.test(multiValue) && /\/tabs:/.test(multiValue));
-    check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
+    check("multi-slash: clicked Run task", await clickSel(cdp, ntpSession, composerSend("hub")));
     // Wait for the run to FULLY settle (the demo model streams; the journal
     // entry lands at run START, so a journal poll is not enough — the run-end
     // UI re-render clears the composer and must be done before the NTP block
@@ -2857,21 +2858,21 @@ async function main() {
 
     check(
       "NTP: task input present",
-      (await boxOf(cdp, ntpSession, "#task-input")) !== null,
+      (await boxOf(cdp, ntpSession, composerInput("hub"))) !== null,
     );
     const typedTask = "hello from cdp input";
     check(
       "NTP: typed a task via Input events",
-      await typeInto(cdp, ntpSession, "#task-input", typedTask),
+      await typeInto(cdp, ntpSession, composerInput("hub"), typedTask),
     );
     const taskVal = await evalIn(
       cdp, ntpSession,
-      `document.querySelector('#composer [data-composer-input], #composer textarea, #task-input')?.value`,
+      `document.querySelector('${composerInput("hub")}')?.value`,
     );
     check("NTP: textarea reflects the typed text", taskVal === typedTask);
     check(
       "NTP: clicked Run task via a real click",
-      await clickSel(cdp, ntpSession, "#run-task"),
+      await clickSel(cdp, ntpSession, composerSend("hub")),
     );
     await sleep(7000); // let the demo agent stream + journal
     const ntpShot = await captureShot(cdp, ntpSession);
@@ -3107,8 +3108,8 @@ async function main() {
       // Snapshot BEFORE the click: the terminal wait must bind to THIS run's
       // exact execution (request-count arrival is not settlement).
       const ledgerBeforeIds = await listRunIds(cdp, ledgerOptsSession);
-      await typeInto(cdp, ntpSession, "#task-input", "create the Undo Journey Agent");
-      await clickSel(cdp, ntpSession, "#run-task");
+      await typeInto(cdp, ntpSession, composerInput("hub"), "create the Undo Journey Agent");
+      await clickSel(cdp, ntpSession, composerSend("hub"));
       for (let i = 0; i < 120 && ledgerProvider.requests.length < 3; i++) await sleep(250);
       const ledgerRun = await awaitNewRunTerminal(cdp, ledgerOptsSession, ledgerBeforeIds, "create the Undo Journey Agent");
       const env = ledgerProvider.requests.length > 0 ? executeEnvelope(ledgerProvider.requests[ledgerProvider.requests.length - 1], "create_named_agent") : null;
@@ -4258,8 +4259,8 @@ async function main() {
     await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
     await clickSel(cdp, ntpSession, "#home").catch(() => false);
     await sleep(600);
-    check("keyless: typed 'group my tabs by topic' into the hub composer", await typeInto(cdp, ntpSession, "#task-input", "group my tabs by topic"));
-    check("keyless: clicked Run task", await clickSel(cdp, ntpSession, "#run-task"));
+    check("keyless: typed 'group my tabs by topic' into the hub composer", await typeInto(cdp, ntpSession, composerInput("hub"), "group my tabs by topic"));
+    check("keyless: clicked Run task", await clickSel(cdp, ntpSession, composerSend("hub")));
     const KEYLESS_CARD_SEL = "#thread-conversation permission-approval-card";
     const KEYLESS_BUBBLES = `(() => {
       const conv = document.getElementById('thread-conversation');
@@ -4697,8 +4698,8 @@ async function main() {
       await cdp.send("Page.bringToFront", {}, ntpSession).catch(() => {});
       await clickSel(cdp, ntpSession, "#home").catch(() => false);
       await sleep(600);
-      await typeInto(cdp, ntpSession, "#task-input", text);
-      await clickSel(cdp, ntpSession, "#run-task");
+      await typeInto(cdp, ntpSession, composerInput("hub"), text);
+      await clickSel(cdp, ntpSession, composerSend("hub"));
     };
     const pollThreadError = async (deadlineMs, done) => {
       const t0 = Date.now();
@@ -5479,8 +5480,8 @@ async function main() {
     // Turn 2 — the edit turn through the THREAD composer; sample the banner
     // 300 ms after the send, then wait for the settle.
     await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
-    await typeInto(cdp, ntpSession, "#thread-composer #task-input", "@demo-stream now make it shorter");
-    await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+    await typeInto(cdp, ntpSession, composerInput("thread"), "@demo-stream now make it shorter");
+    await clickSel(cdp, ntpSession, composerSend("thread"));
     await sleep(300);
     const at300 = await threadState();
     const tvShot300 = await captureShot(cdp, ntpSession);
@@ -5569,8 +5570,8 @@ async function main() {
       // Turn 2 — the edit through the THREAD composer; the update pauses on
       // the approval card (name + "+n -m" + the diff), approved with a genuine click.
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id }).catch(() => {});
-      await typeInto(cdp, ntpSession, "#thread-composer #task-input", "add the opening hours");
-      await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+      await typeInto(cdp, ntpSession, composerInput("thread"), "add the opening hours");
+      await clickSel(cdp, ntpSession, composerSend("thread"));
       let scriptedApproval = null;
       let scriptedApproved = false;
       {
@@ -6463,10 +6464,10 @@ async function main() {
       await cdp.send("Target.activateTarget", { targetId: ntpPage.id });
       await cdp.send("Page.bringToFront", {}, ntpSession);
       await sleep(300);
-      if (!(await typeInto(cdp, ntpSession, "#thread-composer #task-input", task))) return false;
-      const typed = await evalIn(cdp, ntpSession, `document.querySelector('#thread-composer #task-input')?.value ?? null`);
+      if (!(await typeInto(cdp, ntpSession, composerInput("thread"), task))) return false;
+      const typed = await evalIn(cdp, ntpSession, `document.querySelector('${composerInput("thread")}')?.value ?? null`);
       if (typed !== task) console.log(`[debug] sendTask typed=${JSON.stringify(typed)}`);
-      return await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+      return await clickSel(cdp, ntpSession, composerSend("thread"));
     };
     // Once the decision settles and the run finishes, the thread re-projects
     // its transcript from the durable log (the decision row "[tool] DENIED by
@@ -7743,12 +7744,12 @@ async function main() {
     await sleep(2500);
     let composerReady = false;
     for (let i = 0; i < 20 && !composerReady; i++) {
-      composerReady = (await boxOf(cdp, ntpSession, "#task-input")) !== null;
+      composerReady = (await boxOf(cdp, ntpSession, composerInput("hub"))) !== null;
       if (!composerReady) await sleep(250);
     }
     if (composerReady) {
-      await typeInto(cdp, ntpSession, "#task-input", `@demo-run-script ${cardScriptId}`);
-      await clickSel(cdp, ntpSession, "#run-task");
+      await typeInto(cdp, ntpSession, composerInput("hub"), `@demo-run-script ${cardScriptId}`);
+      await clickSel(cdp, ntpSession, composerSend("hub"));
     }
     const readCard = () => evalIn(
       cdp, ntpSession,
@@ -7999,7 +8000,7 @@ async function main() {
       cdp.pageSessions.add(popupSess);
       await evalIn(cdp, popupSess, `(() => { document.querySelector('agent-composer')?.focusInput?.(); return true; })()`);
       await sleep(400);
-      await typeInto(cdp, popupSess, "#task-input", "/skill:");
+      await typeInto(cdp, popupSess, composerInput("hub"), "/skill:");
       await sleep(1600); // the popup loads skill.list async
       skillPopupShot = await captureShot(cdp, popupSess);
       if (skillPopupShot) await writeEvidence("skill-popup-sync.png", skillPopupShot);
@@ -8131,7 +8132,7 @@ async function main() {
       const readPalette = () => evalIn(cdp, paletteSess, `(() => {
         // The composer renders in the LIGHT DOM (no shadow): find the input
         // carrying the /skill token, then its composer's popup.
-        const input = [...document.querySelectorAll('[data-composer-input], #task-input')].find((i) => String(i.value ?? '').startsWith('/skill'));
+        const input = [...document.querySelectorAll('[data-composer-input]')].find((i) => String(i.value ?? '').startsWith('/skill'));
         if (!input) return "";
         const c = input.closest('agent-composer') ?? document;
         const pop = c.querySelector('.popup') ?? document.querySelector('.popup');
@@ -8156,7 +8157,7 @@ async function main() {
       // same event the composer's slash-command listener consumes.
       const typePalette = (text) => evalIn(cdp, paletteSess, `(() => {
         // Light DOM: the first visible composer input.
-        for (const i of document.querySelectorAll('[data-composer-input], #task-input')) {
+        for (const i of document.querySelectorAll('[data-composer-input]')) {
           const host = i.closest('agent-composer') ?? i;
           if (!host.getBoundingClientRect().width) continue;
           i.value = ${JSON.stringify(text ?? '')};
@@ -8177,7 +8178,7 @@ async function main() {
       if (paletteShot) await writeEvidence("site-playbook-palette.png", paletteShot);
       // Clear the composer, switch the ACTIVE tab to a non-matching origin
       // (the hub itself — chrome-extension://), and re-open the palette.
-      await evalIn(cdp, paletteSess, `(() => { for (const i of document.querySelectorAll('[data-composer-input], #task-input')) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
+      await evalIn(cdp, paletteSess, `(() => { for (const i of document.querySelectorAll('[data-composer-input]')) { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); } return true; })()`);
       await cdp.send("Target.activateTarget", { targetId: palettePage.id }).catch(() => {});
       await sleep(800);
       await typePalette("/skill:");
@@ -8208,8 +8209,8 @@ async function main() {
         // the fixture tab must stay the active tab when the run starts).
         await clickSel(cdp, ntpSession, "#home").catch(() => false);
         await sleep(600);
-        await typeInto(cdp, ntpSession, "#task-input", "site playbook probe");
-        await clickSel(cdp, ntpSession, "#run-task");
+        await typeInto(cdp, ntpSession, composerInput("hub"), "site playbook probe");
+        await clickSel(cdp, ntpSession, composerSend("hub"));
         // Wait for the provider call to land.
         let playbookCalls = 0;
         for (let i = 0; i < 40; i++) {
@@ -8801,8 +8802,8 @@ async function demoPathJourney() {
     await cdp.send("Page.bringToFront", {}, ntp).catch(() => {});
     await clickSel(cdp, ntp, "#home").catch(() => false);
     await sleep(500);
-    const typed = await typeInto(cdp, ntp, "#task-input", DEMO_STEP1);
-    const ran = typed && await clickSel(cdp, ntp, "#run-task");
+    const typed = await typeInto(cdp, ntp, composerInput("hub"), DEMO_STEP1);
+    const ran = typed && await clickSel(cdp, ntp, composerSend("hub"));
     const STATE = `(() => {
       const conv = document.getElementById('thread-conversation');
       if (!conv) return JSON.stringify({ agent: [], status: [], cards: [], pending: 0, artifactCards: [] });
@@ -8873,8 +8874,8 @@ async function demoPathJourney() {
     const grantRevoked = await msg({ type: "browser-control.set", granted: false });
     await clickSel(cdp, ntp, "#home").catch(() => false);
     await sleep(500);
-    const typed1b = await typeInto(cdp, ntp, "#task-input", DEMO_STEP1);
-    const ran1b = typed1b && await clickSel(cdp, ntp, "#run-task");
+    const typed1b = await typeInto(cdp, ntp, composerInput("hub"), DEMO_STEP1);
+    const ran1b = typed1b && await clickSel(cdp, ntp, composerSend("hub"));
     const CARDS = `(() => {
       const conv = document.getElementById('thread-conversation');
       const forbidden = ["tabGroups", "browsingData", "activeTab"];
@@ -8992,8 +8993,8 @@ async function demoPathJourney() {
     await msg({ type: "kv.set", values: { "cap:developerFeatures": true } });
     await clickSel(cdp, hubSession, "#home").catch(() => false);
     await sleep(500);
-    const typed5 = await typeInto(cdp, hubSession, "#task-input", "@demo-edit-artifact create crumb.html then edit it");
-    const ran5 = typed5 && await clickSel(cdp, hubSession, "#run-task");
+    const typed5 = await typeInto(cdp, hubSession, composerInput("hub"), "@demo-edit-artifact create crumb.html then edit it");
+    const ran5 = typed5 && await clickSel(cdp, hubSession, composerSend("hub"));
     let approved = false;
     t0 = Date.now();
     while (Date.now() - t0 < 30000 && !approved) {
