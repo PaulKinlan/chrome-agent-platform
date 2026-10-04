@@ -51,6 +51,8 @@ export const SKIPPED_DIRS = new Set(["dist", "dist-versions", "dist-archives", "
 //     tests so the follow-up is a mechanical delete.
 export const RETAINED = {
 
+  "lib/code-mode-sandbox.js":
+    "The code-mode sandbox bounds + tool-call SDK configuration (jao1.4, CAP-SECURE-ENCLAVE Stage 4): the SW wiring (script-host integration + tool-call bridging) is the NEXT slice; tests/code-mode-sandbox.test.ts pins the bounds and isolation contract meanwhile.",
   // (lib/service-tools.js was RETAINED at jao1.3; jao1.5's wiring merged the
   // synthesized tools into the agent loop's extraTools — REACHED now, so the
   // RETAINED line is gone. tests/service-tools.test.ts still pins it.)
