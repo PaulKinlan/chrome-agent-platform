@@ -83,7 +83,7 @@ Deno.test("first-run composition redacts setup state and only prefills the real 
   const providerSrc = providerRoutes || worker;
   const summaryStart = providerSrc.indexOf('async "provider.summary"()');
   const summaryEnd = providerSrc.indexOf(
-    'async "provider.permission-summary"()',
+    'async "provider.permission-summary"(',
     summaryStart,
   );
   assert(summaryStart >= 0 && summaryEnd > summaryStart);

@@ -19,7 +19,7 @@ import { effectiveBaseURL } from "../../lib/provider.js";
 import { safeProviderError } from "../../lib/pure.js";
 import { requireSettingsSender } from "./auth.js";
 
-export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
+export function createProviderRoutes({ invalidateAgent = () => {}, harnessConfig = null } = {}) {
   return Object.freeze({
     async "provider.get"(_m, context) {
       requireSettingsSender(context);
@@ -47,7 +47,7 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       };
     },
 
-    async "provider.permission-summary"() {
+    async "provider.permission-summary"(message = {}) {
       // Permission preflight must not pull the provider key/model/base URL into a
       // non-settings DOM. Return only the normalized origin match needed by the
       // owner surface; a network endpoint that cannot derive an origin fails
@@ -56,7 +56,9 @@ export function createProviderRoutes({ invalidateAgent = () => {} } = {}) {
       // invalid" for a config that simply has no base URL
       // (CAP-FB-20260829-PROVIDER-SET-NO-BASEURL-01). The preset base URL is
       // resolved inside providerOriginPattern itself.
-      const cfg = await getProviderConfig();
+      const cfg = message.harnessId && harnessConfig
+        ? await harnessConfig(message.harnessId)
+        : await getProviderConfig();
       const problem = providerEndpointProblem(cfg);
       return {
         provider: String(cfg.provider ?? ""),

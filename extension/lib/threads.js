@@ -251,7 +251,7 @@ export async function generateThreadName(task) {
  * so the task is never blocked on a model call. Returns the thread. The caller
  * should then call `nameThreadAsync` to upgrade the name via the model.
  */
-export async function createThread(task, attachments) {
+export async function createThread(task, attachments, harnessId = null) {
   return withThreadLock(async () => {
   const mem = masterMemory();
   const id = newThreadId();
@@ -260,6 +260,7 @@ export async function createThread(task, attachments) {
   const thread = {
     id,
     name: fallbackName,
+    ...(harnessId ? { harnessId } : {}),
     messages: [{ role: "user", content: boundText(task), ts: now, ...(sanitizeAttachments(attachments) ? { attachments: sanitizeAttachments(attachments) } : {}) }],
     createdAt: now,
     updatedAt: now,
@@ -586,12 +587,13 @@ export async function commitThreadTerminal(id, executionId, terminal) {
  * read the SAME pre-append history, so the second run's model context diverged
  * from the persisted thread. The read + append + history-derivation now happen
  * under one lock. */
-export async function continueThread(id, task, attachments) {
+export async function continueThread(id, task, attachments, harnessId = null) {
   if (!id) return { thread: null, history: [] };
   return withThreadLock(async () => {
     const mem = masterMemory();
     const thread = (await mem.get(`thread:${id}`)) ?? null;
     if (!thread) return { thread: null, history: [] };
+    if (harnessId) thread.harnessId = harnessId;
     const history = historyFromThread(thread);
     // Continuation fidelity: the union of every journaled skill id across the
     // thread's terminal rows, so a resumed run re-applies skills that earlier

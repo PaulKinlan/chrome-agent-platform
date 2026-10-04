@@ -60,6 +60,7 @@ const BASELINE_ROUTES = [
   "agent.list",
   "thread.list",
   "thread.get",
+  "acp.commands",
   "acp.journal",
   "thread.delete",
   "thread.rename",

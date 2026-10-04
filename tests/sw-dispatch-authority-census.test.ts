@@ -65,6 +65,7 @@ export const CENSUS_CATEGORIES = {
     "webmcp.use-tool",
   ]),
   OWNER_EXTENSION_FENCED: new Set([
+    "acp.commands",
     "actions.undo", "notifications.list", "notification.get", "notification.dismiss",
     "privacy.statement", "tools.invoke", "management.resolve-approval",
     "run.resolve-inline-approval", "approval.detail", "run.dismissFailed", "run.cancel",
@@ -191,9 +192,9 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 275", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 276", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 275, `registered routes population must equal 275 (got ${registered.size})`);
+  assertEquals(registered.size, 276, `registered routes population must equal 276 (got ${registered.size})`);
 });
 
 Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {
