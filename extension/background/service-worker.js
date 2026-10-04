@@ -6499,8 +6499,25 @@ const vaultRoutes = createVaultRoutes({
     // proxy's error text is settings-safe by code, but the mapping stays
     // total so nothing bypasses the whitelist).
     try {
+      const desc = SERVICE_DESCRIPTORS?.[service];
+      const headers = {};
+      let path = "/";
+      const query = {};
+      if (desc?.auth?.type === "header" && desc.auth.header && desc.auth.secretId) {
+        headers[desc.auth.header] = `$VAULT{${desc.auth.secretId}}`;
+      } else if (desc?.auth?.type === "bearer" && desc.auth.secretId) {
+        headers["Authorization"] = `Bearer $VAULT{${desc.auth.secretId}}`;
+      } else if (desc?.auth?.type === "query" && desc.auth.param && desc.auth.secretId) {
+        query[desc.auth.param] = `$VAULT{${desc.auth.secretId}}`;
+      }
+      if (desc?.tools?.[0]?.request?.path) {
+        path = desc.tools[0].request.path;
+        if (service === "brave-search") {
+          query.q = "test";
+        }
+      }
       return await enclaveProxyRoutes["enclave.proxy"](
-        { service, path: "/", method: "GET" },
+        { service, path, method: "GET", headers, query },
         { principal: "owner-options" },
       );
     } catch (err) {

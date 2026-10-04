@@ -280,3 +280,36 @@ Deno.test("jao1.5: set/rotate/delete through the routes round-trip, and the test
   assertEquals(testCalls.length, 1, "the test connection ran through the enclave proxy once");
   assertEquals(JSON.stringify(tc).includes(SECRET_B), false, "the test result never echoes the secret");
 });
+
+Deno.test("fpb0: vault.test maps auth_failed, timeout, secret_unavailable, and falls back on unknown codes", async () => {
+  const storage = fakeStorage();
+  const vault = await openTestVault(storage);
+  let nextResult: any = { ok: false, code: "auth_failed", status: 401 };
+  const routes = createVaultRoutes({
+    vault,
+    requireSettingsSender: () => {},
+    testConnection: () => Promise.resolve(nextResult),
+  });
+  const owner = { principal: "owner-options" };
+
+  const rAuth = await routes["vault.test"]({ service: "brave-search" }, owner);
+  assertEquals(rAuth.ok, false);
+  assertEquals(rAuth.code, "auth_failed");
+  assertEquals(rAuth.status, 401);
+
+  nextResult = { ok: false, code: "timeout" };
+  const rTime = await routes["vault.test"]({ service: "brave-search" }, owner);
+  assertEquals(rTime.ok, false);
+  assertEquals(rTime.code, "timeout");
+
+  nextResult = { ok: false, code: "secret_unavailable" };
+  const rSec = await routes["vault.test"]({ service: "brave-search" }, owner);
+  assertEquals(rSec.ok, false);
+  assertEquals(rSec.code, "secret_unavailable");
+
+  // An unwhitelisted code collapses to connection_failed
+  nextResult = { ok: false, code: "some_unwhitelisted_error_name" };
+  const rUnknown = await routes["vault.test"]({ service: "brave-search" }, owner);
+  assertEquals(rUnknown.ok, false);
+  assertEquals(rUnknown.code, "connection_failed");
+});

@@ -32,6 +32,7 @@ import { checkFetchTarget } from "../../lib/fetch-policy.js";
 import { tagUntrusted } from "../../lib/untrusted-fence.js";
 
 const MAX_BODY_BYTES = 1024 * 1024; // 1 MiB — the enclave response bound
+const DEFAULT_TIMEOUT_MS = 15_000; // 15s — outbound proxy request timeout bound
 const ALLOWED_METHODS = ["GET", "POST"];
 const VAULT_TEMPLATE = /\$VAULT\{([A-Z][A-Z0-9_]*)\}/g;
 
@@ -61,9 +62,17 @@ async function substituteTemplates(value, resolveSecret, depth = 0) {
     let last = 0;
     for (const m of matches) {
       out += value.slice(last, m.index);
-      const secret = await resolveSecret(m[1]);
+      let secret;
+      try {
+        secret = await resolveSecret(m[1]);
+      } catch (err) {
+        if (!err.code) err.code = "secret_unavailable";
+        throw err;
+      }
       if (typeof secret !== "string" || secret.length === 0) {
-        throw new Error(`enclave proxy: the vault has no value for ${m[1]} — grant or rotate it before calling`);
+        const e = new Error(`enclave proxy: the vault has no value for ${m[1]} — grant or rotate it before calling`);
+        e.code = "secret_unavailable";
+        throw e;
       }
       out += secret;
       last = m.index + m[0].length;
@@ -120,16 +129,22 @@ export function createEnclaveProxyRoutes({
       if (result && typeof result.then === "function") {
         return result.then((r) => {
           if (typeof r?.value !== "string") {
-            throw new Error(`enclave proxy: the vault has no value for ${keyId}`);
+            const e = new Error(`enclave proxy: the vault has no value for ${keyId}`);
+            e.code = "secret_unavailable";
+            throw e;
           }
           return r.value;
         });
       }
     } catch (err) {
-      throw new Error(`enclave proxy: the vault refused ${keyId} (${String(err?.message ?? err)})`);
+      const e = new Error(`enclave proxy: the vault refused ${keyId} (${String(err?.message ?? err)})`);
+      e.code = err?.code || "secret_unavailable";
+      throw e;
     }
     if (typeof result?.value !== "string") {
-      throw new Error(`enclave proxy: the vault has no value for ${keyId}`);
+      const e = new Error(`enclave proxy: the vault has no value for ${keyId}`);
+      e.code = "secret_unavailable";
+      throw e;
     }
     return result.value;
   };
@@ -232,6 +247,8 @@ export function createEnclaveProxyRoutes({
     }
 
     let res;
+    const timeoutMs = Number(message?.timeoutMs) > 0 ? Number(message.timeoutMs) : DEFAULT_TIMEOUT_MS;
+    const signal = AbortSignal.timeout(timeoutMs);
     try {
       res = await fetchImpl(target.url.href, {
         method,
@@ -239,8 +256,13 @@ export function createEnclaveProxyRoutes({
         credentials: "omit", // a proxied request is anonymous — always
         redirect: "manual", // redirects are REFUSED, never followed
         body,
+        signal,
       });
     } catch (err) {
+      if (err?.name === "TimeoutError" || signal?.aborted || /timeout|timed out/i.test(String(err?.message ?? ""))) {
+        capLog("enclave-proxy").warn(`enclave proxy: ${serviceId} request timed out after ${timeoutMs}ms`);
+        return { ok: false, code: "timeout", error: "timeout" };
+      }
       // SETTINGS-SAFE shape: a strict code only. The URL (which carries the
       // query-injected token) and the headers never reach the caller. The
       // scrubbed detail stays in the worker console for diagnosis.
@@ -249,7 +271,17 @@ export function createEnclaveProxyRoutes({
       return { ok: false, code: "connection_failed", error: "connection_failed" };
     }
 
-    if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, status: res.status, code: "auth_failed", error: "auth_failed" };
+    }
+
+    const isRedirect = res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400);
+    if (isRedirect) {
+      const authHeader = res.headers?.get?.("www-authenticate");
+      const location = res.headers?.get?.("location") ?? "";
+      if (authHeader || /auth|login|signin|dashboard|unauthorized|forbidden|challenge/i.test(location)) {
+        return { ok: false, status: res.status, code: "auth_failed", error: "auth_failed" };
+      }
       return { ok: false, code: "redirect_refused", error: "redirect_refused" };
     }
 
@@ -287,11 +319,16 @@ export function createEnclaveProxyRoutes({
       bodyBytes.set(p, filled);
       filled += p.byteLength;
     }
+    const bodyText = DECODER_safe(bodyBytes);
+
+    if (res.status === 422 && /SUBSCRIPTION_TOKEN_INVALID|authentication|invalid[_\s-]?key|x-subscription-token/i.test(bodyText)) {
+      return { ok: false, status: res.status, code: "auth_failed", error: "auth_failed" };
+    }
 
     return tagUntrusted({
       ok: res.ok ?? true,
       status: res.status,
-      body: DECODER_safe(bodyBytes),
+      body: bodyText,
       bytes: size,
     });
   };

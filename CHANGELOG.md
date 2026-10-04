@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.566] — 2026-10-04
+- Map 401/403 and auth redirects to auth_failed, add timeout bound, and eliminate dead codes in vault test connection
+
 ## [0.3.565] — 2026-10-03
 - Add pure-Python wheel validator and OPFS wheel store routes with dispatch census classification
 - The Site Agents panel now states its setup action once with a concise empty state, removing duplicate instructions.

@@ -13,6 +13,7 @@
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import { createSecretVault } from "../extension/lib/secret-vault.js";
 import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
+import { KNOWN_VAULT_TEST_CODES, createVaultRoutes } from "../extension/background/routes/vault.js";
 
 const ENCODER = new TextEncoder();
 
@@ -248,4 +249,271 @@ Deno.test("jao1.2: the caller gate refuses unsanctioned callers before any resol
   assertEquals(res.ok, false, "an unsanctioned caller is refused");
   assertEquals(gateCalls, 1, "the gate ran");
   assert(!JSON.stringify(res).includes("sk-brave"), "the refusal carries no secret");
+});
+
+Deno.test("fpb0: 401 Unauthorized and 403 Forbidden return code auth_failed with HTTP status", async () => {
+  const fetch401 = fakeFetch([{ match: () => true, reply: { status: 401, ok: false, body: '{"error":"Unauthorized"}' } }]);
+  const { handler: handler401 } = await buildRoute({ fetchImpl: fetch401 });
+  const res401 = await handler401({
+    service: "brave-search", path: "/res/search", method: "GET",
+    headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
+  }, { principal: "model", documentId: "d" });
+  assertEquals(res401.ok, false);
+  assertEquals(res401.code, "auth_failed");
+  assertEquals(res401.status, 401);
+
+  const fetch403 = fakeFetch([{ match: () => true, reply: { status: 403, ok: false, body: '{"error":"Forbidden"}' } }]);
+  const { handler: handler403 } = await buildRoute({ fetchImpl: fetch403 });
+  const res403 = await handler403({
+    service: "brave-search", path: "/res/search", method: "GET",
+    headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
+  }, { principal: "model", documentId: "d" });
+  assertEquals(res403.ok, false);
+  assertEquals(res403.code, "auth_failed");
+  assertEquals(res403.status, 403);
+});
+
+Deno.test("fpb0: 422 with authentication error in body returns code auth_failed", async () => {
+  const fetch422 = fakeFetch([{
+    match: () => true,
+    reply: {
+      status: 422,
+      ok: false,
+      body: JSON.stringify({
+        type: "ErrorResponse",
+        error: { code: "SUBSCRIPTION_TOKEN_INVALID", detail: "The provided API key is invalid.", meta: { component: "authentication" } },
+      }),
+    },
+  }]);
+  const { handler } = await buildRoute({ fetchImpl: fetch422 });
+  const res = await handler({
+    service: "brave-search", path: "/res/search", method: "GET",
+    headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
+  }, { principal: "model", documentId: "d" });
+  assertEquals(res.ok, false);
+  assertEquals(res.code, "auth_failed");
+  assertEquals(res.status, 422);
+});
+
+Deno.test("fpb0: redirect carrying an auth challenge or auth location returns auth_failed", async () => {
+  // Auth challenge via WWW-Authenticate header
+  const fetchAuthHeader = fakeFetch([{
+    match: () => true,
+    reply: { status: 302, type: "basic", headers: { "www-authenticate": "Bearer error=invalid_token", location: "https://api.search.brave.com/auth" }, body: "" },
+  }]);
+  const { handler: handlerHeader } = await buildRoute({ fetchImpl: fetchAuthHeader });
+  const resHeader = await handlerHeader({
+    service: "brave-search", path: "/res/search", method: "GET",
+    headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
+  }, { principal: "model", documentId: "d" });
+  assertEquals(resHeader.ok, false);
+  assertEquals(resHeader.code, "auth_failed");
+
+  // Auth redirect via location to login / dashboard
+  const fetchAuthLocation = fakeFetch([{
+    match: () => true,
+    reply: { status: 301, type: "basic", headers: { location: "https://api-dashboard.search.brave.com" }, body: "" },
+  }]);
+  const { handler: handlerLoc } = await buildRoute({ fetchImpl: fetchAuthLocation });
+  const resLoc = await handlerLoc({
+    service: "brave-search", path: "/res/search", method: "GET",
+    headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
+  }, { principal: "model", documentId: "d" });
+  assertEquals(resLoc.ok, false);
+  assertEquals(resLoc.code, "auth_failed");
+
+  // Non-auth redirect stays redirect_refused
+  const fetchNormalRedirect = fakeFetch([{
+    match: () => true,
+    reply: { status: 302, type: "basic", headers: { location: "https://search.brave.com/documentation" }, body: "" },
+  }]);
+  const { handler: handlerNorm } = await buildRoute({ fetchImpl: fetchNormalRedirect });
+  const resNorm = await handlerNorm({
+    service: "brave-search", path: "/res/search", method: "GET",
+    headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
+  }, { principal: "model", documentId: "d" });
+  assertEquals(resNorm.ok, false);
+  assertEquals(resNorm.code, "redirect_refused");
+});
+
+Deno.test("fpb0: hanging fetch triggers timeout bound with code timeout", async () => {
+  const hangingFetch: any = (_url: any, init: any) => new Promise((_resolve, reject) => {
+    if (init.signal?.aborted) {
+      reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      return;
+    }
+    init.signal?.addEventListener("abort", () => {
+      reject(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    });
+  });
+  hangingFetch.calls = [];
+  const { handler } = await buildRoute({ fetchImpl: hangingFetch });
+  const res = await handler({
+    service: "brave-search", path: "/res/search", method: "GET",
+    headers: { Authorization: "Bearer $VAULT{BRAVE_SEARCH_API_KEY}" },
+    timeoutMs: 50,
+  }, { principal: "model", documentId: "d" });
+  assertEquals(res.ok, false);
+  assertEquals(res.code, "timeout");
+});
+
+Deno.test("fpb0: an unconfigured secret throws with code secret_unavailable", async () => {
+  const fetchImpl = fakeFetch([{ match: () => true, reply: { body: "{}" } }]);
+  const { handler } = await buildRoute({ fetchImpl });
+  try {
+    await handler({
+      service: "brave-search", path: "/res/search", method: "GET",
+      headers: { Authorization: "Bearer $VAULT{NOT_CONFIGURED_IN_VAULT}" },
+    }, { principal: "model", documentId: "d" });
+    assert(false, "should have thrown");
+  } catch (err: any) {
+    assertEquals(err?.code, "secret_unavailable");
+  }
+});
+
+Deno.test("fpb0: every code in KNOWN_VAULT_TEST_CODES has a producing site and is not dead", async () => {
+  const codesProduced = new Set<string>();
+
+  // 1. auth_failed (via 401)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { status: 401, ok: false, body: "{}" } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    const r = await handler({ service: "brave-search", path: "/res/search", method: "GET", headers: {} }, { principal: "model" });
+    codesProduced.add(r.code);
+  }
+
+  // 2. connection_failed (via network throw)
+  {
+    const fetchImpl: any = () => { throw new TypeError("Failed to fetch"); };
+    fetchImpl.calls = [];
+    const { handler } = await buildRoute({ fetchImpl });
+    const r = await handler({ service: "brave-search", path: "/res/search", method: "GET", headers: {} }, { principal: "model" });
+    codesProduced.add(r.code);
+  }
+
+  // 3. timeout (via hanging/aborted fetch)
+  {
+    const fetchImpl: any = (_u: any, init: any) => new Promise((_, rej) => {
+      init.signal?.addEventListener("abort", () => rej(new DOMException("timed out", "TimeoutError")));
+    });
+    fetchImpl.calls = [];
+    const { handler } = await buildRoute({ fetchImpl });
+    const r = await handler({ service: "brave-search", path: "/res/search", method: "GET", headers: {}, timeoutMs: 20 }, { principal: "model" });
+    codesProduced.add(r.code);
+  }
+
+  // 4. redirect_refused (via 302 without auth)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { status: 302, headers: { location: "https://example.com" }, body: "" } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    const r = await handler({ service: "brave-search", path: "/res/search", method: "GET", headers: {} }, { principal: "model" });
+    codesProduced.add(r.code);
+  }
+
+  // 5. bound_exceeded (via large body)
+  {
+    const big = "x".repeat(1024 * 1024 + 50);
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { body: big } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    const r = await handler({ service: "brave-search", path: "/res/search", method: "GET", headers: {} }, { principal: "model" });
+    codesProduced.add(r.code);
+  }
+
+  // 6. target_refused (SSRF / private IP throw)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { body: "{}" } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    try {
+      await handler({ service: "brave-search", path: "http://127.0.0.1:80", method: "GET", headers: {} }, { principal: "model" });
+    } catch (e: any) {
+      codesProduced.add(e.code);
+    }
+  }
+
+  // 7. origin_not_approved (unapproved origin throw)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { body: "{}" } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    try {
+      await handler({ service: "brave-search", path: "https://evil.org/x", method: "GET", headers: {} }, { principal: "model" });
+    } catch (e: any) {
+      codesProduced.add(e.code);
+    }
+  }
+
+  // 8. unknown_service (unknown service throw)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { body: "{}" } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    try {
+      await handler({ service: "no-such-service", path: "/", method: "GET", headers: {} }, { principal: "model" });
+    } catch (e: any) {
+      codesProduced.add(e.code);
+    }
+  }
+
+  // 9. bad_method (unsupported method throw)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { body: "{}" } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    try {
+      await handler({ service: "brave-search", path: "/", method: "DELETE", headers: {} }, { principal: "model" });
+    } catch (e: any) {
+      codesProduced.add(e.code);
+    }
+  }
+
+  // 10. secret_unavailable (unconfigured key in template throw)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { body: "{}" } }]);
+    const { handler } = await buildRoute({ fetchImpl });
+    try {
+      await handler({ service: "brave-search", path: "/res/search", method: "GET", headers: { Authorization: "$VAULT{MISSING_KEY}" } }, { principal: "model" });
+    } catch (e: any) {
+      codesProduced.add(e.code);
+    }
+  }
+
+  // 11. template_error (residual template in query/headers throw)
+  {
+    const fetchImpl = fakeFetch([{ match: () => true, reply: { body: "{}" } }]);
+    const storage = fakeStorage();
+    const vault = await createSecretVault({ storageArea: storage, extensionId: "a".repeat(32) + "b", installSaltB64: "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==" });
+    await vault.setSecret("NESTED_KEY", "$VAULT{RECURSIVE_KEY}", { by: "sw" });
+    const route = (createEnclaveProxyRoutes as any)({ vault, fetchImpl, services: SERVICES, isAllowedCaller: () => true });
+    try {
+      await route["enclave.proxy"]({ service: "brave-search", path: "/res/search", method: "GET", headers: { Authorization: "$VAULT{NESTED_KEY}" } }, { principal: "model" });
+    } catch (e: any) {
+      codesProduced.add(e.code);
+    }
+  }
+
+  // 12. unbounded_response (no reader and no content-length)
+  {
+    const fetchImpl: any = () => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers(), // no content-length
+      body: null, // no stream reader
+    });
+    fetchImpl.calls = [];
+    const { handler } = await buildRoute({ fetchImpl });
+    const r = await handler({ service: "brave-search", path: "/res/search", method: "GET", headers: {} }, { principal: "model" });
+    codesProduced.add(r.code);
+  }
+
+  // 13. not_wired (vault.test without testConnection)
+  {
+    const storage = fakeStorage();
+    const vault = await createSecretVault({ storageArea: storage, extensionId: "a".repeat(32) + "b", installSaltB64: "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==" });
+    const routes = createVaultRoutes({ vault, requireSettingsSender: () => {}, testConnection: undefined });
+    const r = await routes["vault.test"]({ service: "brave-search" });
+    codesProduced.add(r.code);
+  }
+
+  // Every single code in KNOWN_VAULT_TEST_CODES must have been produced!
+  for (const code of KNOWN_VAULT_TEST_CODES) {
+    assert(codesProduced.has(code), `whitelist code "${code}" must have an active producing site`);
+  }
+  assertEquals(codesProduced.size, KNOWN_VAULT_TEST_CODES.length);
 });

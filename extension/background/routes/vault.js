@@ -9,6 +9,13 @@
 // through the enclave proxy and reports {ok, status} — never the body, never
 // the secret.
 
+export const KNOWN_VAULT_TEST_CODES = Object.freeze([
+  "auth_failed", "connection_failed", "timeout", "redirect_refused",
+  "bound_exceeded", "target_refused", "origin_not_approved",
+  "unknown_service", "bad_method", "secret_unavailable",
+  "template_error", "unbounded_response", "not_wired",
+]);
+
 /** @param {{ vault: any, requireSettingsSender: Function, testConnection?: Function, services?: object }} deps */
 export function createVaultRoutes({
   vault,
@@ -60,12 +67,7 @@ export function createVaultRoutes({
       }
       const res = await testConnection({ service });
       const ok = res?.ok === true;
-      const KNOWN_CODES = new Set([
-        "auth_failed", "connection_failed", "timeout", "redirect_refused",
-        "bound_exceeded", "target_refused", "origin_not_approved",
-        "unknown_service", "bad_method", "secret_unavailable",
-        "template_error", "unbounded_response", "not_wired",
-      ]);
+      const KNOWN_CODES = new Set(KNOWN_VAULT_TEST_CODES);
       const code = ok ? null : (typeof res?.code === "string" && KNOWN_CODES.has(res.code) ? res.code : "connection_failed");
       return { ok, status: typeof res?.status === "number" ? res.status : null, code };
     },
