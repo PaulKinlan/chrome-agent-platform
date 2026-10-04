@@ -28,6 +28,8 @@
 // Records are additionally bound to their key id via AES-GCM additionalData, so
 // a record's {iv, ct} cannot be swapped into another id's slot.
 
+import { newId, sleep } from "./pure.js";
+
 const VAULT_PREFIX = "cap:vault:secret:";
 const SALT_KEY = "cap:vault:install-salt";
 const SALT_LOCK_KEY = "cap:vault:install-salt-lock";
@@ -129,14 +131,14 @@ function ensureInstallSalt(storageArea) {
     if (lockFresh) {
       // Another writer is initializing: wait for its salt rather than racing it.
       for (let attempt = 0; attempt < 20; attempt++) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await sleep(25);
         const won = readSalt(await storageArea.get(SALT_KEY));
         if (won) return won;
       }
       // Abandoned (or very slow) writer: fall through and initialize ourselves.
     }
 
-    const owner = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const owner = newId("vault_lock");
     await storageArea.set({
       [SALT_LOCK_KEY]: { owner, expiresAt: Date.now() + SALT_LOCK_TTL_MS },
     });
