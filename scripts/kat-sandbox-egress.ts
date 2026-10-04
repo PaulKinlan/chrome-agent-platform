@@ -29,6 +29,11 @@
 
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp, computeUnpackedExtensionId } from "./lib/chrome-launch.ts";
+import {
+  ENVIRONMENTAL_REFUSAL_EXIT,
+  ENVIRONMENTAL_REFUSAL_MARKER,
+  QuietWindowRefusedError,
+} from "./lib/quiet-window.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -42,6 +47,26 @@ const failures: string[] = [];
 function check(name: string, cond: boolean, detail?: unknown) {
   if (cond) { pass++; console.log(`PASS: ${name}`); }
   else { fail++; failures.push(name); console.log(`FAIL: ${name} — ${String(JSON.stringify(detail)).slice(0, 300)}`); }
+}
+
+// gafh: ONE launch site for the suite's three sequential browsers. The registry
+// declares this suite loadSensitive (heavy load slows the launches and the
+// digest/import-map cases then time out — a load red, not a product red), so
+// launches wait for a quiet box and a refusal is the THIRD verdict: printed
+// with the greppable marker + the measured numbers, exit 75, never a product
+// red. The declaration lives in scripts/lib/harness-registry.ts;
+// tests/quiet-window.test.ts keeps registry and source in step.
+async function launchSandboxChrome() {
+  try {
+    return await launchChrome({ extension: EXT, timeoutMs: 40_000, requireQuiet: true });
+  } catch (e) {
+    if (e instanceof QuietWindowRefusedError) {
+      console.error(e.message);
+      console.error(`${ENVIRONMENTAL_REFUSAL_MARKER} ${JSON.stringify(e.sample)}`);
+      Deno.exit(ENVIRONMENTAL_REFUSAL_EXIT);
+    }
+    throw e;
+  }
 }
 
 await Deno.mkdir(OUT, { recursive: true });
@@ -171,7 +196,7 @@ const GUARD_MOD_SOURCE = `export default async () => {
 };`;
 
 async function runModuleCases() {
-  const { proc, wsUrl } = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+  const { proc, wsUrl } = await launchSandboxChrome();
   try {
     const cdp = await openCdp(wsUrl);
     const id = await computeUnpackedExtensionId(EXT);
@@ -222,7 +247,7 @@ async function runModuleCases() {
 //     which the module path does not touch (the third, script-host's inline
 //     resolveScriptModules, stays a documented scope limit: it is the SW path).
 async function runSeamCases() {
-  const { proc, wsUrl } = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+  const { proc, wsUrl } = await launchSandboxChrome();
   try {
     const cdp = await openCdp(wsUrl);
     const id = await computeUnpackedExtensionId(EXT);
@@ -258,7 +283,7 @@ async function runSeamCases() {
 }
 
 // ── run it through the real host path ─────────────────────────────────────
-const { proc, wsUrl } = await launchChrome({ extension: EXT, timeoutMs: 40_000 });
+const { proc, wsUrl } = await launchSandboxChrome();
 let result: any = null;
 try {
   const cdp = await openCdp(wsUrl);
