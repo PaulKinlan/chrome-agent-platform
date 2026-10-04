@@ -208,7 +208,12 @@
 
   <section id="agents-view" role="tabpanel" aria-labelledby="tab-agents" hidden>
     <div id="agents-list-pane">
-      <agent-picker id="agents-picker" label="Agents" callable-only exclude-kinds="acp"></agent-picker>
+      <!-- THE FOUR-SURFACES INVARIANT (voicebox-beads-v15y, following h97m): this picker projects
+           the ONE created-agents set (named + background) that options/ntp/hub project through
+           projectUnifiedAgents. acp and site agents are excluded: acp lives in the harness
+           affordance, and an enrolled site agent — callable by design — would otherwise be the
+           +1 row the other three surfaces never count. -->
+      <agent-picker id="agents-picker" label="Agents" callable-only exclude-kinds="acp site"></agent-picker>
       <div class="tasks-sect">
         <h2 class="tasks-h agent-section-h">Scheduled tasks</h2>
         <div id="agents-tasks" role="list" aria-label="Scheduled tasks"></div>

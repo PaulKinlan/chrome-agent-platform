@@ -16,6 +16,7 @@ import {
   shouldApplyRegistrySnapshot,
 } from "../extension/shared/agent-registry.js";
 import { assertEquals } from "jsr:@std/assert@1";
+import { projectUnifiedAgents } from "../extension/lib/agent-projection.js";
 
 const groups = [
   {
@@ -197,4 +198,55 @@ Deno.test("h97m: excludeKinds composes with query + callableOnly, and an empty/u
   assertEquals(noop.flatMap((g) => g.agents).length, 4);
   const unknown = filterGroups(H97M_REGISTRY, "", { callableOnly: true, excludeKinds: ["master"] });
   assertEquals(unknown.flatMap((g) => g.agents).length, 4);
+});
+
+Deno.test("four-surfaces invariant: the picker projects the same created-agents set as options/ntp/hub — an enrolled site agent does not leak in (voicebox-beads-v15y)", () => {
+  // THE MEASUREMENT the bead asked for, in ONE run over ONE fixture:
+  //   · options/ntp/hub project the created-agents set through
+  //     projectUnifiedAgents(named, background) — site agents are projected away;
+  //   · the side panel's <agent-picker callable-only exclude-kinds="acp site">
+  //     projects the registry through filterGroups — and callable-only ALONE
+  //     would carry the enrolled site agent, because isCallable passes site
+  //     unconditionally. That was v15y's measured divergence (the picker +1
+  //     row the other three surfaces never count); the site exclusion is why
+  //     it stays closed, asserted here so the reason survives the fixture.
+  const namedStore = groups.find((g) => g.id === "named").agents
+    .map(({ skills, status, ...a }) => ({ ...a }));
+  const backgroundStore = groups.find((g) => g.id === "background").agents
+    .map(({ skills, status, ...a }) => ({ ...a }));
+
+  // Surfaces 1-3 (options, ntp, hub): the created-agents projection.
+  const projected = projectUnifiedAgents(namedStore, backgroundStore).map((a) => `${a.kind}:${a.id}`).sort();
+
+  // Surface 4 pre-exclusion (the measured divergence): callable-only + acp
+  // excluded still admits the enrolled site agent.
+  const withoutSiteFilter = filterGroups(groups, "", { callableOnly: true, excludeKinds: ["acp"] })
+    .flatMap((g) => g.agents.map((a) => `${a.kind}:${a.id}`));
+  assertEquals(
+    withoutSiteFilter.includes("site:https://github.com"),
+    true,
+    "pre-condition: callable-only alone admits the enrolled site agent — the divergence v15y measured",
+  );
+
+  // Surface 4 as shipped: the picker excludes acp AND site, and the four
+  // surfaces agree ON KINDS — the projection also carries disabled background
+  // agents (isVisibleAgentRow keeps them visible for browse/management), which
+  // the picker's own callable-only correctly drops: you cannot talk to a
+  // disabled agent. The invariant v15y pins is the KIND SET — no site, no acp
+  // — plus every picker row being a created agent.
+  const picker = filterGroups(groups, "", { callableOnly: true, excludeKinds: ["acp", "site"] })
+    .flatMap((g) => g.agents.map((a) => `${a.kind}:${a.id}`)).sort();
+  assertEquals(picker, ["background:sorting-hat", "named:pr-reviewer", "named:reader"]);
+  for (const row of picker) {
+    assertEquals(
+      projected.includes(row),
+      true,
+      `the four-surfaces invariant: picker row '${row}' must be a created agent (named/background), never a site or harness row`,
+    );
+  }
+  assertEquals(
+    picker.some((r) => r.startsWith("site:") || r.startsWith("acp:")),
+    false,
+    "no site or acp row may reach the picker — that is the divergence v15y measured",
+  );
 });
