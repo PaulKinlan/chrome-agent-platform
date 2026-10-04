@@ -83,10 +83,12 @@ that, so its Python statuses were re-derived from the tree:
     it lands" is corrected.
 - **Still SPECIFIED, NOT BUILT** — the pinned package set itself:
   - **Zero `.whl` files ship in the tree** and **no first-party code calls
-    `loadPackage`** (zero call sites under `extension/` or `wasm-tools/`), and
-    `4p7j` measured `loadPackage` as a silent no-op in this worker. The 8
-    hash-pinned packages install only when the owner supplies wheel bytes
-    (S3 of the `4p7j` arc — **PROPOSED**, no owning bead).
+    `loadPackage`** — no call site under `extension/`; the only `loadPackage`
+    matches under `wasm-tools/` are in the vendored upstream loader
+    (`wasm-tools/python/pyodide.asm.js`, skipped by `git grep` unless `--text`),
+    which nothing here invokes — and `4p7j` measured `loadPackage` as a silent
+    no-op in this worker. The 8 hash-pinned packages install only when the owner
+    supplies wheel bytes (S3 of the `4p7j` arc — **PROPOSED**, no owning bead).
   - `micropip` is not called by first-party code — **PROPOSED**, no owning bead.
   - There is no OPFS venv: no code under `extension/` or `wasm-tools/` references
     `agent-workspaces/<agent>/python_env/` — **PROPOSED**, no owning bead.
