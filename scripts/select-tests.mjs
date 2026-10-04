@@ -77,12 +77,38 @@ function git(args, cwd = ROOT) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
+// Build scratch is not a source change (chrome-agent-platform-nz2r). A killed
+// build leaves extension/.dist-stage-<pid>-<ts>/ and the lock files behind,
+// untracked; this candidate list used to carry them into the coverage check, so
+// `test:changed` fell closed to the FULL suite until a human deleted them — on a
+// box where an interrupted build is normal, that is a 30-second gate turning
+// into a suite that cannot finish. .gitignore excludes the same family (the
+// first defence); this predicate is the SECOND, so the gate stays immune even in
+// a worktree whose ignore rules are stale or were bypassed. Family kept in step
+// with scripts/evidence-runner.sh's leftover census.
+const BUILD_RESIDUE_PREFIXES = [
+  "extension/.dist-stage-",
+  "extension/.dist-link-",
+  "extension/.dist-prev-",
+  ".build.lock",
+  ".lock-stage-",
+  ".lock-quarantine-",
+  ".owner.tmp-",
+];
+
+/** True for build scratch that must never count as a changed source file. */
+export function isBuildResidue(file) {
+  const f = String(file).replace(/^\.\//, "");
+  return BUILD_RESIDUE_PREFIXES.some((prefix) => f.startsWith(prefix));
+}
+
 function changedFiles(base) {
   const tracked = git(["diff", "--name-only", base]).split("\n").filter(Boolean);
   const untracked = git(["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean);
   return [...new Set([...tracked, ...untracked])]
     .map((f) => normalize(f))
     .filter((f) =>
+      !isBuildResidue(f) &&
       !f.startsWith(".") && !f.startsWith("docs") && !f.startsWith("dist") &&
       !f.startsWith("test-artifacts") && !f.startsWith("evidence") && !f.startsWith("reports") &&
       !f.includes("CHANGELOG")
