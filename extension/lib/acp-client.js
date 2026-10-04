@@ -64,6 +64,7 @@ export class AcpClient {
     this.permissionHandler = options.permissionHandler || null;
     this.customTransport = options.transport || null;
     this.executionId = typeof options.executionId === "string" ? options.executionId : null;
+    this.toolHandler = options.toolHandler || null;
 
     /** @type {WebSocket|null} */
     this.ws = null;
@@ -292,7 +293,8 @@ export class AcpClient {
       this.pending.set(id, { resolve, reject, deadline });
 
       const msg = { jsonrpc: "2.0", id, method, params };
-      this._send(msg);
+      try { this._send(msg); }
+      catch (error) { clearTimeout(deadline); this.pending.delete(id); reject(error); }
     });
   }
 
@@ -372,7 +374,28 @@ export class AcpClient {
     // {"method":"browser/call_tool","params":{"name":…,"args":…}}. Everything the tool decides —
     // permissions, the browser-control grant, the consent card — is decided inside the tool, so this
     // is a transport, not a new source of authority.
+    if (msg.method === "_cap/tools/list" || msg.method === "_cap/tools/call") {
+      if (!this.toolHandler) {
+        this._send({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "Method not found" } });
+        return;
+      }
+      try {
+        const result = await this.toolHandler(msg.method, msg.params);
+        this._send({ jsonrpc: "2.0", id: msg.id, result });
+      } catch (error) {
+        this._send({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: String(error?.message ?? error) } });
+      }
+      return;
+    }
     if (msg.method === "browser/call_tool") {
+      if (this.toolHandler) {
+        this._send({
+          jsonrpc: "2.0",
+          id: msg.id,
+          error: { code: -32601, message: "browser/call_tool is disabled when toolHandler is configured" },
+        });
+        return;
+      }
       let result;
       try {
         const name = typeof msg.params?.name === "string" ? msg.params.name : "";
@@ -440,6 +463,16 @@ export class AcpClient {
         id: msg.id,
         result: { outcome: { outcome: "selected", optionId: selectedOptionId } },
       });
+      return;
+    }
+
+    if (this.toolHandler && ["_cap/tools/list", "_cap/tools/call"].includes(msg.method)) {
+      try {
+        const result = await this.toolHandler(msg.method, msg.params);
+        this._send({ jsonrpc: "2.0", id: msg.id, result });
+      } catch (error) {
+        if (this.connected) this._send({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: String(error?.message ?? error) } });
+      }
       return;
     }
 

@@ -14,6 +14,7 @@ import { parseArgs } from "jsr:@std/cli@1/parse-args";
 import { acpChildEnvFor, acpChildEnvNote, acpChildSpawnOptions, actionableAuthWarning } from "./lib/acp-child-env.ts";
 import { existsSync } from "node:fs";
 import { hostname } from "node:os";
+import { acpToolChannel, createAcpTools } from "./lib/acp-tools.ts";
 
 const args = parseArgs(Deno.args, {
   string: ["port", "adapter", "harness", "cwd", "token", "allow-origin", "host"],
@@ -571,8 +572,12 @@ export function createAcpServer(
    * it (chrome-agent-platform-7p7e / 5i9i). */
   hostCwdDefault: string = args.cwd,
 ) {
-  return Deno.serve({ port, hostname: HOST }, (req) => {
+  const toolEndpoints = new Map<string, Awaited<ReturnType<typeof createAcpTools>>>();
+  const server = Deno.serve({ port, hostname: HOST }, (req) => {
     const url = new URL(req.url);
+    if (url.pathname.startsWith("/cap-tools/")) {
+      return toolEndpoints.get(url.pathname)?.handle(req) ?? new Response("CAP run unavailable", { status: 404 });
+    }
 
     if (url.pathname === "/health") {
       const probeHarness = url.searchParams.get("harness")?.trim() || HARNESS;
@@ -650,6 +655,12 @@ export function createAcpServer(
     let lastStderr = "";
     let adapterName: string | null = null;
     let initializeId: unknown = null;
+    const tools = acpToolChannel((raw) => socket.send(raw));
+    let toolsEnabled = false;
+    let httpToolsSupported = false;
+    let toolPath = "";
+    let toolSessionStarted = false;
+    let disconnected = false;
 
     socket.onopen = async () => {
       console.log(`[acp-bridge] Client connected from ${clientOrigin || "local script"} (harness: ${connectionHarness})`);
@@ -716,6 +727,16 @@ export function createAcpServer(
                 buffer = buffer.slice(nl + 1);
                 if (line.trim() && socket.readyState === WebSocket.OPEN) {
                   adapterName = adapterNameFromInitialize(line, initializeId, adapterName);
+                  try {
+                    const frame = JSON.parse(line);
+                    // N2: Drop adapter-originated frames that target private _cap/* namespace
+                    if (typeof frame?.method === "string" && frame.method.startsWith("_cap/")) {
+                      continue;
+                    }
+                    if (frame.id === initializeId && frame.result) {
+                      httpToolsSupported = frame.result.agentCapabilities?.mcpCapabilities?.http === true;
+                    }
+                  } catch { /* ACP framing errors are handled by the client */ }
                   socket.send(line);
                 }
               }
@@ -764,15 +785,35 @@ export function createAcpServer(
           }
         }
         const frame = JSON.parse(String(event.data));
-        if (frame?.method === "initialize") initializeId = frame.id;
+        if (tools.receive(frame)) return;
+        if (frame?.method === "initialize") {
+          initializeId = frame.id;
+          toolsEnabled = frame.params?.clientCapabilities?._meta?.capTools === true;
+        }
         const refusal = toolServerError(String(event.data), adapterName);
         if (refusal) {
           socket.send(JSON.stringify(refusal));
           return;
         }
-        // Host defaults first, then the browser-tool declaration: the harness learns what it can call
-        // BACK to Chrome with on its first prompt of the session (2amt).
-        const data = applyBrowserToolDeclaration(applyHostDefaults(String(event.data), hostCwdDefault || undefined));
+        if (toolsEnabled && ["session/new", "session/load"].includes(frame.method) && httpToolsSupported) {
+          if (toolSessionStarted) {
+            socket.send(JSON.stringify({ jsonrpc: "2.0", id: frame.id, error: { code: -32602, message: "CAP tool connection already owns a session; reconnect for another session" } }));
+            return;
+          }
+          toolSessionStarted = true;
+          const endpoint = await createAcpTools(tools.call);
+          if (disconnected) { await endpoint.close(); return; }
+          toolPath = `/cap-tools/${crypto.randomUUID()}`;
+          toolEndpoints.set(toolPath, endpoint);
+          const host = HOST === "::1" ? "[::1]" : "127.0.0.1";
+          frame.params.mcpServers = [...(frame.params.mcpServers ?? []), endpoint.config(`http://${host}:${server.addr.port}${toolPath}`)];
+        }
+        // Host defaults first, then the browser-tool declaration: when toolsEnabled is true (CAP tools session),
+        // skip the legacy applyBrowserToolDeclaration which claims "no MCP server, no HTTP endpoint" (B1 / V3).
+        const withDefaults = applyHostDefaults(JSON.stringify(frame), hostCwdDefault || undefined);
+        const data = toolsEnabled
+          ? withDefaults
+          : applyBrowserToolDeclaration(withDefaults);
         const encoder = new TextEncoder();
         await writer.write(encoder.encode(data + "\n"));
       } catch (err) {
@@ -782,6 +823,11 @@ export function createAcpServer(
 
     socket.onclose = () => {
       console.log("[acp-bridge] Client disconnected, cleaning up adapter process");
+      disconnected = true;
+      tools.close();
+      const endpoint = toolEndpoints.get(toolPath);
+      toolEndpoints.delete(toolPath);
+      void endpoint?.close();
       if (child) {
         try {
           child.kill("SIGTERM");
@@ -795,6 +841,7 @@ export function createAcpServer(
 
     return response;
   });
+  return server;
 }
 
 // If invoked directly from CLI

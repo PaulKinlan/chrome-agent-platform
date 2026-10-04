@@ -83,7 +83,7 @@ Deno.test("first-run composition redacts setup state and only prefills the real 
   const providerSrc = providerRoutes || worker;
   const summaryStart = providerSrc.indexOf('async "provider.summary"()');
   const summaryEnd = providerSrc.indexOf(
-    'async "provider.permission-summary"()',
+    'async "provider.permission-summary"(',
     summaryStart,
   );
   assert(summaryStart >= 0 && summaryEnd > summaryStart);
@@ -120,7 +120,7 @@ Deno.test("first-run composition preserves transaction and provider boundaries",
   ]);
   assert(worker.includes("durableRuns"));
   assert(memoryRoutes.includes("__tombs"));
-  assert(worker.includes("attachmentContext(attachments)"));
+  assert(worker.includes("attachmentContext(attachments"));
   assert(memory.includes("run-registry"));
   assert(options.includes("runOwnerApprovedMutation"));
   assert(options.includes("blockSessionOnlyCredentialSave"));
