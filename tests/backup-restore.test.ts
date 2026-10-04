@@ -5,6 +5,7 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { streamExportArchive } from "../extension/lib/backup-export.js";
 import { streamRestoreArchive } from "../extension/lib/backup-restore.js";
+import { buildArchive } from "../extension/lib/data-archive.js";
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder();
@@ -163,4 +164,233 @@ Deno.test("backup-restore: options.js routes .tar files to streamRestoreArchive 
     code.includes('send("owner.import.all", { raw'),
     "options.js must preserve owner.import.all for JSON backups",
   );
+});
+
+Deno.test("backup-restore: transactional staging and owner confirmation cancellation", async () => {
+  const profileFiles = new Map<string, Uint8Array>([
+    ["master/journal.json", ENCODER.encode(JSON.stringify({ live: true }))],
+  ]);
+
+  // Export a TAR with new content
+  const tarChunks: Uint8Array[] = [];
+  const tarSink = new WritableStream<Uint8Array>({
+    write(chunk) { tarChunks.push(chunk); },
+  });
+
+  await streamExportArchive({
+    writable: tarSink,
+    listFiles: async () => ["master/journal.json"],
+    open: async () => {
+      const b = ENCODER.encode("overwritten data");
+      return {
+        size: b.byteLength,
+        stream: new ReadableStream({
+          start(c) {
+            c.enqueue(b);
+            c.close();
+          },
+        }),
+      };
+    },
+    kvGet: async () => ({ theme: "light" }),
+    alarms: { getAll: async () => [] },
+    extensionVersion: "1.0.0",
+  });
+
+  const tarBuffer = new Uint8Array(tarChunks.reduce((a, c) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of tarChunks) {
+    tarBuffer.set(c, off);
+    off += c.byteLength;
+  }
+
+  // Pre-existing live OPFS state
+  const liveFiles = new Map<string, Uint8Array>([
+    ["master/journal.json", ENCODER.encode("original live content")],
+  ]);
+  const writtenStagingFiles = [];
+
+  // Restore with confirm returning FALSE (cancelled)
+  let confirmCalled = false;
+  const restoreRes = await streamRestoreArchive({
+    stream: new ReadableStream({
+      start(c) {
+        c.enqueue(tarBuffer);
+        c.close();
+      },
+    }),
+    opfs: {
+      listFiles: async () => [...liveFiles.keys()],
+      readFile: async (p: string) => liveFiles.get(p)!,
+      writeFile: async (p: string, b: Uint8Array) => {
+        if (p.startsWith(".staging-restore-")) {
+          writtenStagingFiles.push(p);
+        }
+        liveFiles.set(p, b);
+      },
+      removeFile: async (p: string) => {
+        liveFiles.delete(p);
+      },
+    },
+    confirm: async ({ manifest, summary }) => {
+      confirmCalled = true;
+      assertEquals(summary.opfsFiles, 1);
+      return false; // User clicks CANCEL
+    },
+  });
+
+  assertEquals(confirmCalled, true, "confirm hook must be invoked after staging extraction");
+  assertEquals(restoreRes.ok, false, "restore must report ok: false on cancellation");
+  assertEquals(restoreRes.cancelled, true, "restore must report cancelled: true");
+
+  // Assert live data was NOT mutated
+  assertEquals(DECODER.decode(liveFiles.get("master/journal.json")!), "original live content");
+
+  // Assert staging files were cleaned up
+  for (const staged of writtenStagingFiles) {
+    assert(!liveFiles.has(staged), `staging file ${staged} must be cleaned up after cancel`);
+  }
+});
+
+Deno.test("backup-restore: legacy JSON backup auto-detection and fallback routing", async () => {
+  const opfs = [
+    { path: "legacy/note.txt", encoding: "utf8", data: "legacy content via json" },
+  ];
+  const kv = { "legacy:pref": "restored-val" };
+  const alarms: any[] = [];
+  const legacyJson = JSON.stringify({
+    magic: "cap-export",
+    formatVersion: 1,
+    exportedAt: 1750000000000,
+    extensionVersion: "0.2.0",
+    policy: { excluded: [] },
+    configuredProviders: [],
+    mcpServers: [],
+    kv,
+    alarms,
+    opfs,
+    manifest: {
+      kvKeys: Object.keys(kv).length,
+      opfsFiles: opfs.length,
+      alarms: alarms.length,
+      totalBytes:
+        opfs.reduce((n, e) => n + ENCODER.encode(e.data).length, 0) +
+        ENCODER.encode(JSON.stringify(kv)).length,
+    },
+  });
+
+  const liveFiles = new Map<string, Uint8Array>();
+  let liveKv: Record<string, any> = {};
+
+  const res = await streamRestoreArchive({
+    stream: legacyJson,
+    opfs: {
+      listFiles: async () => [...liveFiles.keys()],
+      readFile: async (p: string) => liveFiles.get(p) ?? new Uint8Array(0),
+      writeFile: async (p: string, b: Uint8Array) => {
+        liveFiles.set(p, b);
+      },
+      removeFile: async (p: string) => {
+        liveFiles.delete(p);
+      },
+    },
+    kvGet: async () => liveKv,
+    kvSet: async (items: any) => {
+      liveKv = { ...liveKv, ...items };
+    },
+    kvRemove: async () => {},
+    alarms: { getAll: async () => [], create: async () => {}, clear: async () => {} },
+    overwrite: true,
+  });
+
+  assertEquals(res.ok, true, "legacy JSON restore must succeed");
+  assertEquals(DECODER.decode(liveFiles.get("legacy/note.txt")!), "legacy content via json");
+  assertEquals(liveKv["legacy:pref"], "restored-val");
+});
+
+Deno.test("backup-restore: swap failure triggers automatic rollback from sidecar journal", async () => {
+  const tarChunks: Uint8Array[] = [];
+  const tarSink = new WritableStream<Uint8Array>({
+    write(chunk) { tarChunks.push(chunk); },
+  });
+
+  await streamExportArchive({
+    writable: tarSink,
+    listFiles: async () => ["master/data.json"],
+    open: async () => {
+      const b = ENCODER.encode("new data to be swapped");
+      return {
+        size: b.byteLength,
+        stream: new ReadableStream({
+          start(c) {
+            c.enqueue(b);
+            c.close();
+          },
+        }),
+      };
+    },
+    kvGet: async () => ({ key1: "val1" }),
+    alarms: { getAll: async () => [] },
+    extensionVersion: "1.0.0",
+  });
+
+  const tarBuffer = new Uint8Array(tarChunks.reduce((a, c) => a + c.byteLength, 0));
+  let off = 0;
+  for (const c of tarChunks) {
+    tarBuffer.set(c, off);
+    off += c.byteLength;
+  }
+
+  const liveFiles = new Map<string, Uint8Array>([
+    ["master/data.json", ENCODER.encode("original data")],
+  ]);
+  let liveKv: Record<string, any> = { key1: "orig-val" };
+
+  let writeCount = 0;
+  let errorCaught = false;
+
+  try {
+    await streamRestoreArchive({
+      stream: new ReadableStream({
+        start(c) {
+          c.enqueue(tarBuffer);
+          c.close();
+        },
+      }),
+      opfs: {
+        listFiles: async () => [...liveFiles.keys()],
+        readFile: async (p: string) => liveFiles.get(p) ?? new Uint8Array(0),
+        writeFile: async (p: string, b: Uint8Array) => {
+          // Allow staging write, but fail during the commit phase
+          if (!p.startsWith(".staging-restore-")) {
+            writeCount++;
+            if (writeCount === 1) {
+              throw new Error("simulated disk error during atomic swap");
+            }
+          }
+          liveFiles.set(p, b);
+        },
+        removeFile: async (p: string) => {
+          liveFiles.delete(p);
+        },
+      },
+      kvGet: async () => liveKv,
+      kvSet: async (items: any) => {
+        liveKv = { ...liveKv, ...items };
+      },
+      kvRemove: async (keys: string[]) => {
+        for (const k of keys) delete liveKv[k];
+      },
+      alarms: { getAll: async () => [], create: async () => {}, clear: async () => {} },
+      overwrite: true,
+    });
+  } catch (err: any) {
+    errorCaught = true;
+    assert(err.message.includes("simulated disk error"), "error must be reported");
+  }
+
+  assert(errorCaught, "swap error must be caught");
+  // Assert rollback restored original file and KV
+  assertEquals(DECODER.decode(liveFiles.get("master/data.json")!), "original data");
+  assertEquals(liveKv.key1, "orig-val");
 });
