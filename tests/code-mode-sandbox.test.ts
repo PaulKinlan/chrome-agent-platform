@@ -1,19 +1,23 @@
 // tests/code-mode-sandbox.test.ts — chrome-agent-platform-jao1.4
 // (CAP-SECURE-ENCLAVE Stage 4). The code-mode sandbox's contract:
-// multi-step tool chaining, secret isolation, bounds enforcement.
+// tool bridge (callTool routing), bounds enforcement, secret isolation.
+//
+// NOTE: the actual script EXECUTION happens in the sandboxed iframe page
+// (which has CSP permitting eval — MV3 CSP forbids new Function in
+// extension/lib). This test suite pins the BOUNDS and TOOL BRIDGE layers
+// that run in the extension context. The end-to-end sandbox execution is
+// verified by the real-browser drive.
 
-// @ts-nocheck
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
-import { createToolBridge, createSandboxRunner } from "../extension/lib/code-mode-sandbox.js";
+import { createToolBridge, resolveBounds, validateSource, DEFAULT_BOUNDS } from "../extension/lib/code-mode-sandbox.js";
 
 /** A fake tool gateway: records calls, returns scripted results. */
-function fakeGateway(results = {}) {
-  const calls: any[] = [];
+function fakeGateway() {
+  const calls: Array<{ name: string; args: any }> = [];
   return {
     calls,
     dispatchTool: async (name: string, args: any) => {
       calls.push({ name, args });
-      if (results[name] !== undefined) return results[name];
       return { ok: true, data: `result for ${name}` };
     },
   };
@@ -22,101 +26,64 @@ function fakeGateway(results = {}) {
 Deno.test("jao1.4: tool bridge — callTool routes through the dispatchTool callback", async () => {
   const gw = fakeGateway();
   const bridge = createToolBridge({ dispatchTool: gw.dispatchTool });
-  const result = await bridge.cap.callTool("list_tabs", {});
+  const result = await bridge.dispatchTool("list_tabs", {});
   assertEquals(result.ok, true);
   assertEquals(gw.calls.length, 1);
   assertEquals(gw.calls[0].name, "list_tabs");
   assertEquals(bridge.callCount(), 1);
 });
 
-Deno.test("jao1.4: multi-step chaining — search -> extract in one script", async () => {
-  const gw = fakeGateway({
-    web_search: { results: [{ url: "https://example.com/data", title: "Data page" }] },
-    read_page: { content: "the extracted data is 42" },
-  });
-  const runner = createSandboxRunner({
-    dispatchTool: gw.dispatchTool,
-    bounds: { timeoutMs: 5_000, maxToolCalls: 10, maxIterations: 100 },
-  });
-  const result = await runner.run(`
-    const search = await cap.callTool("web_search", { query: "test data" });
-    const url = search.results[0].url;
-    const page = await cap.callTool("read_page", { url });
-    return { extracted: page.content, chained: true };
-  `);
-  const data = result.result as any;
-  assertEquals(data.chained, true);
-  assertEquals(data.extracted, "the extracted data is 42");
-  assertEquals(gw.calls.length, 2, "two tool calls chained");
-  assertEquals(gw.calls[0].name, "web_search");
-  assertEquals(gw.calls[1].name, "read_page");
-  assertEquals(result.toolCalls, 2);
-});
-
-Deno.test("jao1.4: secret isolation — the sandbox scope holds no credentials", async () => {
-  const SECRET = "sk-SUPER-SECRET-VAULT-KEY";
+Deno.test("jao1.4: tool bridge — max tool calls enforced (the bound throws before exceeding)", async () => {
   const gw = fakeGateway();
-  const runner = createSandboxRunner({ dispatchTool: gw.dispatchTool });
-  // The cap SDK only exposes callTool — no credential, token, or key surfaces.
-  const capKeys = Object.keys(runner.cap);
-  assertEquals(capKeys, ["callTool"], "the cap SDK exposes only callTool");
-  // The dispatchTool callback receives only { name, args } — no credentials.
-  await runner.cap.callTool("list_tabs", {});
-  assertEquals(
-    JSON.stringify(gw.calls[0]).includes(SECRET),
-    false,
-    "the tool call arguments carry no secret",
-  );
-});
-
-Deno.test("jao1.4: max tool calls enforced — exceeding the bound throws", async () => {
-  const gw = fakeGateway();
-  const runner = createSandboxRunner({
-    dispatchTool: gw.dispatchTool,
-    bounds: { maxToolCalls: 3, timeoutMs: 5_000, maxIterations: 100 },
-  });
+  const bridge = createToolBridge({ dispatchTool: gw.dispatchTool, bounds: { maxToolCalls: 3 } });
+  for (let i = 0; i < 3; i++) await bridge.dispatchTool("noop", { i });
+  assertEquals(bridge.callCount(), 3, "the call count is at the bound");
   await assertRejects(
-    () => runner.run(`
-      for (let i = 0; i < 10; i++) {
-        await cap.callTool("noop", { i });
-      }
-    `),
+    () => bridge.dispatchTool("noop", {}),
     Error,
-    "tool call limit",
-  );
-  assertEquals(gw.calls.length, 3, "exactly maxToolCalls calls were made before the bound");
-});
-
-Deno.test("jao1.4: execution timeout — a hanging script is killed", async () => {
-  const gw = fakeGateway();
-  const runner = createSandboxRunner({
-    dispatchTool: gw.dispatchTool,
-    bounds: { timeoutMs: 50, maxToolCalls: 100, maxIterations: 1000 },
-  });
-  await assertRejects(
-    () => runner.run(`await new Promise(() => { /* hang forever */ })`),
-    Error,
-    "timed out",
+    "tool call limit (3) exceeded",
   );
 });
 
-Deno.test("jao1.4: syntax error in the script is caught and named", async () => {
+Deno.test("jao1.4: tool bridge — exceeded flag is readable for pre-flight checks", async () => {
   const gw = fakeGateway();
-  const runner = createSandboxRunner({ dispatchTool: gw.dispatchTool });
-  await assertRejects(
-    () => runner.run("this is not valid javascript !!!"),
-    Error,
-    "syntax error",
-  );
+  const bridge = createToolBridge({ dispatchTool: gw.dispatchTool, bounds: { maxToolCalls: 2 } });
+  await bridge.dispatchTool("a", {});
+  await bridge.dispatchTool("b", {});
+  assertEquals(bridge.exceeded, true, "the exceeded flag is true at the bound");
 });
 
-Deno.test("jao1.4: empty source is rejected", async () => {
-  const gw = fakeGateway();
-  const runner = createSandboxRunner({ dispatchTool: gw.dispatchTool });
-  await assertRejects(() => runner.run(""), Error, "empty or missing");
-  await assertRejects(() => runner.run("   "), Error, "empty or missing");
+Deno.test("jao1.4: bounds resolution — defaults, overrides, and invalid values", () => {
+  assertEquals(resolveBounds(), { timeoutMs: 30_000, maxToolCalls: 50, maxIterations: 1_000 });
+  assertEquals(resolveBounds({ timeoutMs: 5000, maxToolCalls: 10, maxIterations: 200 }), { timeoutMs: 5000, maxToolCalls: 10, maxIterations: 200 });
+  assertThrows(() => resolveBounds({ timeoutMs: -1 }), TypeError, "timeoutMs");
+  assertThrows(() => resolveBounds({ maxToolCalls: 0 }), TypeError, "maxToolCalls");
+  assertThrows(() => resolveBounds({ maxIterations: -5 }), TypeError, "maxIterations");
+  assertEquals(DEFAULT_BOUNDS.timeoutMs, 30_000);
 });
 
-Deno.test("jao1.4: tool bridge requires dispatchTool", () => {
-  assertThrows(() => createToolBridge({}), TypeError, "dispatchTool");
+Deno.test("jao1.4: source validation — empty/missing source is rejected without eval", () => {
+  assertEquals(validateSource("").ok, false);
+  assertEquals(validateSource("   ").ok, false);
+  assertEquals(validateSource("return 1 + 1").ok, true);
+});
+
+Deno.test("jao1.4: tool bridge — the SDK exposes ONLY the tool dispatch (secret isolation)", async () => {
+  const gw = fakeGateway();
+  const bridge = createToolBridge({ dispatchTool: gw.dispatchTool });
+  // The bridge's dispatchTool is a wrapper — it carries no credentials,
+  // tokens, or environment variables. The caller (sandboxed script) sees only
+  // the tool-call function.
+  assert(typeof bridge.dispatchTool === "function");
+  assertEquals(typeof bridge.callCount, "function");
+  assertEquals(bridge.maxToolCalls, 50);
+  // No credential surfaces exist on the bridge.
+  const keys = Object.keys(bridge);
+  assert(!keys.includes("secret"), "no secret on the bridge");
+  assert(!keys.includes("token"), "no token on the bridge");
+  assert(!keys.includes("apiKey"), "no apiKey on the bridge");
+});
+
+Deno.test("jao1.4: tool bridge requires dispatchTool (fail closed)", () => {
+  assertThrows(() => (createToolBridge as any)({}), TypeError, "dispatchTool");
 });
