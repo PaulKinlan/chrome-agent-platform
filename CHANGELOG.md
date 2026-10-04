@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.568] — 2026-10-04
+- composer commands now say they are inserted as conversation text, not run as native commands
+
 ## [0.3.567] — 2026-10-04
 - Browse and insert commands and skills in the chat composer.
 - Saved service credentials are now bound to the exact service they were stored for, and the extension refuses to hand a raw credential to anything that cannot prove it is the service worker — so a vault entry cannot be swapped onto a different service and read.
