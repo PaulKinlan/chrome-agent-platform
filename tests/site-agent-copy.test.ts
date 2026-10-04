@@ -14,6 +14,83 @@ import { WEBMCP_ERROR_BOUND, applyWebmcpLifecycle, boundWebmcpError } from "../e
 
 const INTERNAL_CHATTER = /webmcp|inject(?:ed|ion)?|page[- ]report|scan(?:ned|ning)?/i;
 
+/** Strip COMMENTS from JS/HTML/CSS source while keeping every string and template
+ *  literal (chrome-agent-platform-aqgr).
+ *
+ *  The copy test below asserts on VISIBLE copy, but it used to scan raw text, so
+ *  three explanatory comments that mention a lowercase "site agent" made main red
+ *  while every rendered string was clean. A regex cannot do this job: `//` inside
+ *  "https://…" is not a comment and `/*` inside a string is not a block opener.
+ *  So this is a character walk with quote state; comment text is replaced by
+ *  spaces and newlines are kept, so line numbers still map onto the file.
+ *
+ *  Known limit: regex literals are not modelled, so a `//` written inside one
+ *  would look like a line comment. The scanned surfaces hold no such literal
+ *  today; if one appears, this comment is the place to name it. */
+function withoutComments(source: string): string {
+  const out: string[] = [];
+  let quote: string | null = null;
+  for (let i = 0; i < source.length;) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (quote) {
+      out.push(ch, next === undefined ? "" : "");
+      if (ch === "\\" && next !== undefined) {
+        out.push(next);
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      out.push(ch);
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") {
+        out.push(" ");
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
+        out.push(source[i] === "\n" ? "\n" : " ");
+        i += 1;
+      }
+      out.push(" ", " ");
+      i += 2;
+      continue;
+    }
+    if (ch === "<" && source.startsWith("<!--", i)) {
+      while (i < source.length && !source.startsWith("-->", i)) {
+        out.push(source[i] === "\n" ? "\n" : " ");
+        i += 1;
+      }
+      out.push(" ", " ", " ");
+      i += 3;
+      continue;
+    }
+    out.push(ch);
+    i += 1;
+  }
+  return out.join("");
+}
+
+/** Every line of `source` that `test` accepts, as "file:line: text" — so a
+ *  failure names WHERE the copy is instead of "somewhere in twelve files". */
+function findingLines(path: string, source: string, test: (line: string) => boolean): string[] {
+  return source
+    .split("\n")
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => test(line))
+    .map(({ line, index }) => `${path}:${index + 1}: ${line.trim().slice(0, 160)}`);
+}
+
 Deno.test("site-agent copy: actions describe finding tools for a Site Agent", () => {
   assertEquals(SITE_AGENT_COPY.siteAgentsEmpty, "No Site Agents yet.");
   assertEquals(SITE_AGENT_COPY.findToolsAction, "Find site tools");
@@ -228,13 +305,27 @@ Deno.test("site-agent copy: the centralized vocabulary is the ACTUAL consumer au
     "extension/shared/components.js",
     "extension/lib/capabilities.js", "extension/lib/browser-tools.js",
     "extension/background/service-worker.js"];
-  let all = "";
-  for (const path of surfaces) all += await Deno.readTextFile(path) + "\n";
+  // chrome-agent-platform-aqgr: this scan is about VISIBLE copy, so comments are
+  // stripped first (see withoutComments) and the files stay separate so every
+  // finding can report file:line. The blunt version read raw text, red-flagged
+  // three explanatory comments, and named no location at all.
+  const files: Array<[string, string]> = [];
+  for (const path of surfaces) files.push([path, withoutComments(await Deno.readTextFile(path))]);
+  const all = files.map(([, text]) => text).join("\n");
   // The case-insensitive inventory: no lowercase-'a' 'site agent(s)' form and
   // no 'sub-agent' visible copy anywhere.
-  assert(!/site agents?/i.test(all.replace(/Site Agents?/g, "")), "a lowercase site-agent form remains visible");
-  assert(!/sub-agent|subagent/i.test(all), "sub-agent copy remains visible");
-  assert(!/@mention a site agent/.test(all), "the site-only mention hint remains");
+  const lowercaseForms = files.flatMap(([path, text]) =>
+    findingLines(path, text, (line) => /site agents?/i.test(line.replace(/Site Agents?/g, ""))));
+  assert(
+    lowercaseForms.length === 0,
+    `a lowercase site-agent form remains visible (comments excluded):\n${lowercaseForms.join("\n")}`,
+  );
+  const subAgentForms = files.flatMap(([path, text]) =>
+    findingLines(path, text, (line) => /sub-agent|subagent/i.test(line)));
+  assert(subAgentForms.length === 0, `sub-agent copy remains visible:\n${subAgentForms.join("\n")}`);
+  const siteOnlyHint = files.flatMap(([path, text]) =>
+    findingLines(path, text, (line) => /@mention a site agent/.test(line)));
+  assert(siteOnlyHint.length === 0, `the site-only mention hint remains:\n${siteOnlyHint.join("\n")}`);
   // The removal action uses the centralized label.
   assert(all.includes("Remove Site Agent"), "the removal action is not the centralized label");
   // Only VISIBLE Disenroll copy is banned — the identifier names
@@ -244,12 +335,13 @@ Deno.test("site-agent copy: the centralized vocabulary is the ACTUAL consumer au
   // findToolsAction is CONSUMED at runtime (a static label alone would be a
   // dead constant — the ntp must read the authority on DOMContentLoaded).
   const ntp = await Deno.readTextFile("extension/ntp/ntp.js");
+  const ntpVisible = withoutComments(ntp);
   assert(
-    /discover-page[\s\S]*SITE_AGENT_COPY\.findToolsAction/.test(ntp),
+    /discover-page[\s\S]*SITE_AGENT_COPY\.findToolsAction/.test(ntpVisible),
     "findToolsAction is not consumed by the ntp discover action at runtime",
   );
   assert(
-    ntp.includes("SITE_AGENT_COPY.siteAgentsEmpty"),
+    ntpVisible.includes("SITE_AGENT_COPY.siteAgentsEmpty"),
     "siteAgentsEmpty is not consumed by the ntp empty state at runtime",
   );
 });
