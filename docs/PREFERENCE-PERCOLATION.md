@@ -32,27 +32,25 @@ in the frame's bootstrap:
    - `data.nonce === expectedNonce` — the one-time token (rejects forgery +
      replay; the nonce is consumed/scoped).
    - `data.preference` is a plain object containing ONLY the allowed keys
-     (currently `theme`, `locale`), each validated (theme ∈ the known theme set;
-     locale matches BCP-47). Unknown/extra keys are rejected.
+     (`locale`, `colorScheme`, `reduceMotion`), each strictly validated (locale matches BCP-47;
+     colorScheme ∈ {`light`, `dark`, `system`, `no-preference`}; reduceMotion is boolean or
+     `reduce`/`no-preference`). Unknown/extra keys are rejected.
 
 `extension/lib/preference-bridge.js` implements the pure helpers:
-`buildPreferenceMessage`, `validatePreferenceMessage`, and `applyPreference`.
+`buildPreferenceMessage`, `validatePreferenceMessage`, `applyPreference`,
+`buildPreferenceBootstrapScript`, `injectPreferenceBootstrap`,
+`createPageAgentPreferenceChannel`, and `sendPageAgentPreference`.
 
-## The start (implemented)
+## The implementation
 
-- `preference-bridge.js` — the schema, the nonce + source + shape validation,
-  and the apply step (`data-theme` attribute + `document.documentElement.lang`).
-- `renderHtmlFrame` now also exposes the bridge so an outer surface can push the
-  theme/locale into a rendered frame with one call.
-
-## Next steps (future)
-
-- Thread the nonce + listener into the frame's bootstrap automatically when a
-  preference is requested (so the model's HTML can't strip it).
-- Extend the allowed preference set (e.g. `reduceMotion`, `colorScheme`) only
-  with the same schema + validation.
-- Percolate the same channel into the content-script + page-agent layers, with
-  origin-scoped nonces.
+- `preference-bridge.js` — the schema, the nonce + source + origin validation,
+  and the apply step (`lang`, `data-color-scheme`, `style.colorScheme`, and `data-reduce-motion`).
+- `injectPreferenceBootstrap` — automatically threads nonce + listener into the
+  frame bootstrap prior to any model content so the model's HTML cannot strip or bypass it.
+- `createPageAgentPreferenceChannel` / `sendPageAgentPreference` — percolates the
+  channel into content-script and page-agent layers with origin-scoped nonces.
+- `renderHtmlFrame` — exposes the bridge so an outer surface can push preferences
+  into a rendered frame with one call.
 
 ## Non-goals
 

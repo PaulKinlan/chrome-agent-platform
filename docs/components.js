@@ -494,10 +494,9 @@ export function preferenceBootstrapScript(nonce) {
   return `<script data-cap-bootstrap>${[
     "(function(){var nonce=" + n + ";",
     "function apply(p){if(!p)return;",
-    // Closes BOTH the if and apply() — the message listener + ready post
-    // below must sit at IIFE level, not inside apply (a dangling open brace
-    // made every generated frame throw SyntaxError: Unexpected token ')').
-    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}}",
+    "if(p.locale){try{document.documentElement.setAttribute('lang',p.locale);}catch(e){}}",
+    "if(p.colorScheme){try{document.documentElement.setAttribute('data-color-scheme',p.colorScheme);if(document.documentElement.style)document.documentElement.style.colorScheme=p.colorScheme==='system'||p.colorScheme==='no-preference'?'light dark':p.colorScheme;}catch(e){}}",
+    "if(typeof p.reduceMotion==='boolean'){try{document.documentElement.setAttribute('data-reduce-motion',p.reduceMotion?'reduce':'no-preference');}catch(e){}}}",
     "window.addEventListener('message',function(e){if(e.source!==window.parent)return;",
     "var d=e.data;if(d&&d.type==='cap:preference'&&d.nonce===nonce)apply(d.preference);});",
     "try{window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},'*');}catch(e){}",
