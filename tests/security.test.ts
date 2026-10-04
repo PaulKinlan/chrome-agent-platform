@@ -282,3 +282,40 @@ Deno.test("security: preference percolation rejects forgery + replay + unknown k
   const e = validatePreferenceMessage(buildPreferenceMessage({ locale: "!!!" }, "n"), { nonce: "n", sourceIsParent: true });
   assertEquals(e.ok, false);
 });
+
+Deno.test("security: preference percolation origin-scoped nonce channel rejects origin mismatch (v5ee / n2bz)", async () => {
+  const { buildPreferenceMessage, validatePreferenceMessage } = await import("../extension/lib/preference-bridge.js");
+  const expectedOrigin = "chrome-extension://allowed-parent-id";
+
+  // Valid origin-scoped message
+  const msg = buildPreferenceMessage({ locale: "en-US" }, "nonce-abc", { targetOrigin: expectedOrigin });
+  const valid = validatePreferenceMessage(msg, {
+    nonce: "nonce-abc",
+    sourceIsParent: true,
+    expectedOrigin,
+    eventOrigin: expectedOrigin,
+  });
+  assertEquals(valid.ok, true);
+  assertEquals(valid.preference.locale, "en-US");
+
+  // Mismatched event.origin (e.g. untrusted page attempting cross-origin injection)
+  const spoofedOrigin = validatePreferenceMessage(msg, {
+    nonce: "nonce-abc",
+    sourceIsParent: true,
+    expectedOrigin,
+    eventOrigin: "https://evil.attacker.example",
+  });
+  assertEquals(spoofedOrigin.ok, false);
+  assertEquals(spoofedOrigin.error, "origin mismatch");
+
+  // Mismatched targetOrigin
+  const msgMismatch = buildPreferenceMessage({ locale: "en-US" }, "nonce-abc", { targetOrigin: "https://other.example" });
+  const targetMismatch = validatePreferenceMessage(msgMismatch, {
+    nonce: "nonce-abc",
+    sourceIsParent: true,
+    expectedOrigin,
+    eventOrigin: expectedOrigin,
+  });
+  assertEquals(targetMismatch.ok, false);
+  assertEquals(targetMismatch.error, "target origin mismatch");
+});
