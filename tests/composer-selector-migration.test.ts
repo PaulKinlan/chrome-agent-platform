@@ -57,10 +57,10 @@ const EXEMPT = new Set([
 // named harnesses, then one-off evidence, then unit tests that mention the ids.
 const INVENTORY: Record<string, number> = {
   // ── gates inside test:all ────────────────────────────────────────────────
-  "scripts/chrome-journeys.ts": 44, // most route through boxOf()'s compat mapping; :2688 and :2721 do not
-  "scripts/component-gallery-smoke.ts": 3, // :200,:216,:217
+  "scripts/chrome-journeys.ts": 4, // all call sites migrated to composerInput/composerSend; only 4 lines in boxOf() compat mapping remain
   // MIGRATED, so pruned from the ledger (a clean file that stays listed fails the
   // second test on purpose — the ledger must list only work that is left):
+  //   scripts/component-gallery-smoke.ts (was 3) — migrated to composerInput/composerPopup/composerSend.
   //   scripts/a11y-audit.ts (was 3) — it was the red gate: four combobox checks
   //     read ARIA attributes off the absent element with ?., so attrs came back {}
   //     and a missing element reported itself as a product ARIA defect.

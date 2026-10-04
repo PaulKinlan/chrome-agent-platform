@@ -15,6 +15,7 @@
 
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { composerInput, composerSend, composerPopup } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const DOCS = `${ROOT}docs`;
@@ -196,12 +197,9 @@ async function main() {
     // composer / command palette opens (the static namespace registry; the
     // data-driven sub-items need chrome.runtime, which the showcase lacks).
     const pal = await evl(s.sessionId, `(()=>{
-      const c = document.querySelector('#composer');
-      // Stable component IDs: the composer's input is [data-composer-input]
-      // (the old #task-input light-DOM id is gone — the b5q4 stable-IDs change;
-      // this harness was still selecting it and red at baseline).
-      const ta = c.querySelector('[data-composer-input]');
-      const pop = c.querySelector('.popup');
+      const ta = document.querySelector('${composerInput("hub")}');
+      const pop = document.querySelector('${composerPopup("hub")}');
+      if (!ta || !pop) return { hidden: true, count: 0 };
       ta.focus(); ta.value = "/"; ta.dispatchEvent(new Event('input', { bubbles: true }));
       return new Promise(r => setTimeout(() => r({ hidden: pop.hidden, count: pop.querySelectorAll('.item').length }), 100));
     })()`);
@@ -216,8 +214,8 @@ async function main() {
       const c = document.querySelector('#composer');
       const cv = document.getElementById('conv-example');
       return {
-        taskInput: vis(c?.querySelector('[data-composer-input]')),
-        runTask: vis(c?.querySelector('[data-composer-send], .run')),
+        taskInput: vis(document.querySelector('${composerInput("hub")}')),
+        runTask: vis(document.querySelector('${composerSend("hub")}, .run')),
         composer: vis(c),
         conversation: vis(cv),
       };
