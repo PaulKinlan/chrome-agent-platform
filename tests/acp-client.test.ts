@@ -1,7 +1,7 @@
 // tests/acp-client.test.ts — Unit tests for the core ACP client.
 // CAP-FB-20260912-ACP-INTEGRATION-01 (tracking epic chrome-agent-platform-qlho)
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import { AcpClient, acpAllowOptionId, acpDenyOptionId, type AcpTurnEvent } from "../extension/lib/acp-client.js";
 
 /** Mock transport simulating bidirectional JSON-RPC frames */
@@ -92,6 +92,72 @@ Deno.test("AcpClient: loads and resumes an existing session", async () => {
   assertEquals(res.sessionId, "ses_prev_456");
   assertEquals(res.resumed, true);
   assertEquals(client.activeSessionId, "ses_prev_456");
+});
+
+Deno.test("tliw: a refused session/load restores the previous session and stops advertising the refused id", async () => {
+  const transport = new MockTransport();
+  const client = new AcpClient({ transport });
+  let duringLoad: string | null = null;
+  let loadAttempts = 0;
+  transport.onSend = (msg: any) => {
+    if (msg.method === "session/new") {
+      client.handleMessage({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "ses_live" } });
+    } else if (msg.method === "session/load") {
+      loadAttempts++;
+      // The optimistic assignment is deliberate: session/update frames arriving
+      // while the load is in flight must attribute to the session being loaded.
+      // Pinning it here means a "cleanup" that deletes the pre-assignment breaks
+      // this test rather than silently misrouting notifications.
+      duringLoad = client.activeSessionId;
+      client.handleMessage({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "Pi's ACP adapter does not mount supplied MCP servers" },
+      });
+    }
+  };
+
+  await client.connect();
+  await client.newSession({ cwd: "/tmp" });
+  assertEquals(client.activeSessionId, "ses_live");
+
+  await assertRejects(
+    () => client.loadSession({ sessionId: "ses_refused" }),
+    Error,
+    "does not mount supplied MCP servers",
+  );
+  assertEquals(duringLoad, "ses_refused", "in-flight updates belong to the session being loaded");
+  assertEquals(
+    client.activeSessionId,
+    "ses_live",
+    "a refused load must restore the previous session, not adopt the refused id",
+  );
+  assertEquals(loadAttempts, 1);
+});
+
+Deno.test("tliw: a refused session/load with no prior session leaves the client unattached", async () => {
+  const transport = new MockTransport();
+  const client = new AcpClient({ transport });
+  transport.onSend = (msg: any) => {
+    if (msg.method === "session/load") {
+      client.handleMessage({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "Pi's ACP adapter does not mount supplied MCP servers" },
+      });
+    }
+  };
+
+  await client.connect();
+  await assertRejects(
+    () => client.loadSession({ sessionId: "ses_fake_1" }),
+    Error,
+    "does not mount supplied MCP servers",
+  );
+  // The exact shape tests/acp-end-to-end.test.ts:151 asserts: a rejected request
+  // must not activate a session, or the next turn talks to a session the server
+  // never acknowledged.
+  assertEquals(client.activeSessionId, null, "rejected requests must not activate a session");
 });
 
 Deno.test("AcpClient: dispatches prompt and streams thoughts, chunks, and tool updates", async () => {
