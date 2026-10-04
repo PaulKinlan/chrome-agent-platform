@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.567] — 2026-10-04
+- Browse and insert commands and skills in the chat composer.
+
 ## [0.3.566] — 2026-10-03
 - connected agents can ask to use browser tools through CAP with approval cards before permitted actions
 
