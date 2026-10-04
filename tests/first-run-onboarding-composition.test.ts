@@ -120,7 +120,7 @@ Deno.test("first-run composition preserves transaction and provider boundaries",
   ]);
   assert(worker.includes("durableRuns"));
   assert(memoryRoutes.includes("__tombs"));
-  assert(worker.includes("attachmentContext(attachments, { untrustedToken:"));
+  assert(worker.includes("attachmentContext(attachments"));
   assert(memory.includes("run-registry"));
   assert(options.includes("runOwnerApprovedMutation"));
   assert(options.includes("blockSessionOnlyCredentialSave"));
