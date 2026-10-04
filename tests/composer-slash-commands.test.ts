@@ -48,6 +48,7 @@ const AgentComposer = registry.get("agent-composer");
 
 import {
   COMMAND_NAMESPACES,
+  COMMAND_INSERTION_DISCLOSURE,
   loadComposerCommandItems,
   resolveComposerCommandSelection,
 } from "../extension/shared/composer-commands.js";
@@ -529,4 +530,39 @@ Deno.test("6yfm/wp7y: the harness picker discloses insert-text-only, visibly and
   assertMatch(String(note.textContent), /inserts text only/iu);
   assertMatch(String(note.textContent), /CAP cannot run these as harness commands/iu);
   assertEquals(popup.getAttribute("aria-describedby"), note.id, "the disclosure is also the listbox's accessible description");
+});
+
+Deno.test("fwf6: the composer command picker discloses insertion-only, visibly and accessibly", () => {
+  // /skill:x and /x are the composer's OWN commands (the wp7y harness list is
+  // pinned just above). Selecting one inserts text; it is never dispatched as a
+  // bare command — so the picker says so at the point of choice, from the one
+  // constant. Deleting the note branch in components.js makes this RED: no note
+  // child, no aria-describedby, and the label falls back to mentions.
+  const composer = new AgentComposer();
+  const popup = new FakeNode("div");
+  composer._popup = popup;
+  composer._popupToken = { type: "command", start: 0, end: 0, ns: "skill" };
+  composer._popupItems = [{ id: "skill:reader-mode", label: "/skill:reader-mode", kind: "skill", description: "Reader mode" }];
+  composer._renderPopupItems();
+  const note = popup.children.find((child) => /insertion-note$/u.test(String(child.id)));
+  assert(note, "the command popup must render its insertion disclosure");
+  assertEquals(
+    String(note.textContent),
+    COMMAND_INSERTION_DISCLOSURE,
+    "the picker shows the registry's sentence verbatim, so renderer and registry cannot drift",
+  );
+  assertEquals(popup.getAttribute("aria-describedby"), note.id, "the disclosure is the listbox's accessible description");
+  assertEquals(popup.getAttribute("aria-label"), "Composer commands", "the listbox is labelled for what it is");
+  // The sentence is a claim, not a vacuous constant (canon: a pin that survives
+  // the removal it names is no pin) — each clause must still be there.
+  assert(COMMAND_INSERTION_DISCLOSURE.length >= 80, "an empty or stub constant would make the pins vacuous");
+  assertMatch(COMMAND_INSERTION_DISCLOSURE, /conversation text/iu);
+  assertMatch(COMMAND_INSERTION_DISCLOSURE, /protected prompt/iu);
+  assertMatch(COMMAND_INSERTION_DISCLOSURE, /not run as a bare native command/iu);
+  // A mention is not a command: no disclosure, and the mention label stays true.
+  composer._popupToken = { type: "mention", start: 0, end: 0 };
+  composer._popupItems = [{ id: "named:1", label: "Ada" }];
+  composer._renderPopupItems();
+  assertEquals(popup.getAttribute("aria-describedby"), null, "the mention picker must not carry the command disclosure");
+  assertEquals(popup.getAttribute("aria-label"), "Agent and resource mentions");
 });

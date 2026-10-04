@@ -50,6 +50,7 @@ import { artifactCardTitle, artifactIdentityFromPayloads, isScrolledToBottom, tu
 import { lineDiffSummary } from "./diff-core.bundle.js";
 import {
   ATTACH_MENU_ICONS,
+  COMMAND_INSERTION_DISCLOSURE,
   COMMAND_NAMESPACES as ALL_COMMAND_NAMESPACES,
   loadComposerCommandItems,
   resolveComposerCommandSelection,
@@ -8968,6 +8969,19 @@ class AgentComposer extends Component {
       if (this._harnessId === "pi") note.textContent += " Pi cannot run CAP tools yet; choose Claude Code or Codex to run.";
       this._popup.appendChild(note);
       this._popup.setAttribute("aria-describedby", note.id);
+    } else if (this._popupToken?.type === "command") {
+      // chrome-agent-platform-fwf6: composer commands (/skill:x, /x) are
+      // insertion-only too — selecting one puts text in the message, it is not
+      // dispatched as a bare command. Shown at the point of choice and hung off
+      // the listbox as its accessible description, from the ONE constant the
+      // registry exports (COMMAND_INSERTION_DISCLOSURE).
+      const note = document.createElement("div");
+      note.className = "empty";
+      note.id = `cmp-${this._uid}-insertion-note`;
+      note.textContent = COMMAND_INSERTION_DISCLOSURE;
+      this._popup.appendChild(note);
+      this._popup.setAttribute("aria-describedby", note.id);
+      this._popup.setAttribute("aria-label", "Composer commands");
     } else this._popup.setAttribute("aria-label", "Agent and resource mentions");
     const groups = new Set(this._popupItems.map((it) => it.group).filter(Boolean));
     const isFiltered = Boolean(this._popupToken?.query || this._popupToken?.arg);

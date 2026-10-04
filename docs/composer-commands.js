@@ -3,6 +3,23 @@
 
 import { skillMatchesUrl } from "./match-patterns.js";
 
+/** chrome-agent-platform-fwf6 — the composer's half of the 6yfm ruling (coord
+ *  seq944, option C: insertion-only, no bare-command bypass).
+ *
+ *  A picked composer command (/skill:x, /x, $x) is INSERTED into the owner's
+ *  message as conversation text; it is never dispatched as a bare top-level
+ *  ACP command. CAP reads it inside the protected prompt — the same envelope
+ *  extension/lib/acp-model.js wraps harness prompts in — so the protection the
+ *  ruling demands (untrusted fences intact, tool authority and approvals
+ *  unchanged) holds for commands exactly as for typed text.
+ *
+ *  This constant is the ONE source for the sentence the picker shows, so
+ *  composer-commands.js (registry) and components.js (renderer) cannot drift;
+ *  tests/composer-slash-commands.test.ts DRIVES the renderer and pins this text
+ *  plus the listbox's aria-describedby, so deleting the note is RED. */
+export const COMMAND_INSERTION_DISCLOSURE =
+  "Inserted into your message as conversation text inside CAP's protected prompt — not run as a bare native command.";
+
 export const COMMAND_NAMESPACES = Object.freeze([
   { id: "skill", label: "skill", description: "invoke a skill", kind: "skill", group: "Run & switch" },
   {
