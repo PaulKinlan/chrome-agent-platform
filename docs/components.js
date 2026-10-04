@@ -7037,8 +7037,47 @@ class AgentConversation extends Component {
   /** Load an artifact-card's live preview AND authoritative name/type/size from
    *  the asset store — the store is the source of truth, the tool result only a
    *  hint (a bounded update result carries no name/type at all). Bounded and
-   *  best-effort: a slow or absent worker leaves the card's type placeholder. */
+   *  best-effort: a slow or absent worker leaves the card's type placeholder.
+   *
+   *  DEFERRED: a reopened long thread mounts dozens of artifact cards at once,
+   *  and an eager load fires every asset.get RPC synchronously — flooding the
+   *  worker with offscreen reads. The card's preview load waits until the card
+   *  is actually visible (IntersectionObserver); when the observer API is
+   *  absent (unit-test harnesses, very old browsers) the load is immediate,
+   *  preserving the eager contract everywhere else. */
   _loadArtifactPreview(card, origin, id) {
+    if (!RUNTIME_SEND) return;
+    if (typeof IntersectionObserver === "undefined") {
+      this._loadArtifactPreviewNow(card, origin, id);
+      return;
+    }
+    if (!this._artifactPreviewObserver) {
+      // ONE observer per conversation (not per card); pending jobs are dropped
+      // when a card is removed before ever becoming visible, so the deferred
+      // set never outlives the cards it belongs to.
+      this._pendingArtifactPreviews = new Map();
+      this._artifactPreviewObserver = new IntersectionObserver((entries) => {
+        for (const entry of Array.isArray(entries) ? entries : []) {
+          const target = entry?.target;
+          if (!target || !this._pendingArtifactPreviews?.has(target)) continue;
+          // Visible → load; disconnected → drop. A connected, not-yet-visible
+          // card keeps waiting (that is the deferral).
+          const visible = entry.isIntersecting === true && target.isConnected;
+          if (visible || !target.isConnected) {
+            const job = visible ? this._pendingArtifactPreviews.get(target) : null;
+            this._pendingArtifactPreviews.delete(target);
+            this._artifactPreviewObserver.unobserve(target);
+            if (job) this._loadArtifactPreviewNow(target, job.origin, job.id);
+          }
+        }
+      });
+    }
+    this._pendingArtifactPreviews.set(card, { origin, id });
+    this._artifactPreviewObserver.observe(card);
+  }
+  /** The eager read itself — invoked on first visibility (or immediately when
+   *  no IntersectionObserver exists). */
+  _loadArtifactPreviewNow(card, origin, id) {
     if (!RUNTIME_SEND) return;
     RUNTIME_SEND("asset.get", { origin, id }).then((full) => {
       if (!full?.ok || !full.asset || !card.isConnected) return;

@@ -26,19 +26,24 @@ export function createTerminalThreadProjectionLifecycle({
 
   function onRunSnapshot(snapshot) {
     const openThreadId = getOpenOwnerThreadId();
-    const jobs = [];
+    // Coalesce: every execution/revision is still consumed exactly once (the
+    // dedupe bookkeeping below), but a snapshot with N newly-observed terminal
+    // runs for the open thread performs at most ONE loadThread(openThreadId)
+    // — thread.get is the sole projection authority, so one authoritative
+    // re-read settles every terminal run the snapshot carries. The latest
+    // revision wins as the `run` handed to the commit.
+    let coalesced = null;
     for (const run of (Array.isArray(snapshot?.runs) ? snapshot.runs : [])) {
       if (!run?.executionId || !run?.threadId || !Number.isFinite(run?.revision)) continue;
       if (!TERMINAL_PHASES.has(run.phase)) continue;
 
       const duplicate = observedTerminalRevisions.get(run.executionId) === run.revision;
       observedTerminalRevisions.set(run.executionId, run.revision);
-      if (!duplicate && openThreadId && run.threadId === openThreadId) {
-        jobs.push(refresh(run, openThreadId));
-      }
+      if (duplicate || !openThreadId || run.threadId !== openThreadId) continue;
+      if (!coalesced || run.revision >= coalesced.revision) coalesced = run;
     }
-    if (!jobs.length) return Promise.resolve(false);
-    return Promise.all(jobs).then((results) => results.some(Boolean));
+    if (!coalesced) return Promise.resolve(false);
+    return refresh(coalesced, openThreadId);
   }
 
   return Object.freeze({ onRunSnapshot });
