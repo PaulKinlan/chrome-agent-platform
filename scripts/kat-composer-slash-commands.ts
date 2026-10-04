@@ -1,6 +1,7 @@
 // Browser KAT: /tabs lists real tabs from every Chrome window and attaches one.
 // deno run -A scripts/kat-composer-slash-commands.ts [extension-dir] [evidence-dir]
 import { wireValue } from "./lib/cdp-eval.ts";
+import { composerInput } from "./lib/composer-target.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -134,7 +135,7 @@ try {
 
   await evaluate(
     `(() => {
-    const input = document.querySelector("#composer #task-input");
+    const input = document.querySelector("${composerInput("hub")}");
     input.value = "/tabs";
     input.setSelectionRange(5, 5);
     input.dispatchEvent(new Event("input", { bubbles:true }));
@@ -191,7 +192,7 @@ try {
     `(() => {
     const composer = document.querySelector("#composer");
     return {
-      value:composer.querySelector("#task-input")?.value,
+      value:document.querySelector("${composerInput("hub")}")?.value,
       chips:[...composer.querySelectorAll(".chips .chip")].map((chip) => chip.textContent),
       attachments:composer.attachments.map((item) => ({ kind:item.kind, url:item.url, tabId:item.tabId, windowId:item.windowId })),
     };
@@ -230,7 +231,7 @@ try {
   const bookmarksState = await evaluate(
     `(async () => {
       const granted = await chrome.permissions.contains({ permissions:["bookmarks"] });
-      const input = document.querySelector("#composer #task-input");
+      const input = document.querySelector("${composerInput("hub")}");
       input.value = "/bookmarks";
       input.setSelectionRange(10, 10);
       input.dispatchEvent(new Event("input", { bubbles:true }));

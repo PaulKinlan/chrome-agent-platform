@@ -404,12 +404,6 @@ async function boxOf(cdp, session, selector) {
     session,
     `(() => {
       let el = document.querySelector(${JSON.stringify(selector)});
-      if (!el && ${JSON.stringify(selector)}.includes("#task-input")) {
-        el = document.querySelector(${JSON.stringify(selector)}.replace("#task-input", "[data-composer-input]"));
-      }
-      if (!el && ${JSON.stringify(selector)}.includes("#run-task")) {
-        el = document.querySelector(${JSON.stringify(selector)}.replace("#run-task", "[data-composer-send]"));
-      }
       if (!el) return null;
       el.scrollIntoView({ block: "center", inline: "center" });
       const r = el.getBoundingClientRect();
