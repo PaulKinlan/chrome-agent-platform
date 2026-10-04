@@ -790,6 +790,8 @@ const EXPECTED = [
   "Settings: retained a driven-UI screenshot",
   "keyless: developer flag off for the fresh-profile run",
   "Cookies: the cookie value reader and the cookie writers are absent from the default build",
+  "bundled wasm: imageops info executes live through the hub run",
+  "bundled wasm: imageops resize round-trip through the hub run",
   "keyless: typed 'group my tabs by topic' into the hub composer",
   "keyless: clicked Run task",
   "keyless: the first run pauses on ONE Allow card naming tabs (never a bare error)",
@@ -4198,6 +4200,57 @@ async function main() {
         [0, 1, 2].every((i) => !cookieCutNames[i].includes(["get_cookie", "set_cookie", "remove_cookie"][i])) &&
         cookieCutNames[3].includes("list_cookies"),
       { names: cookieCutNames, ...cookieCutCounts, runPhase: cookieCutRun?.phase ?? null, terminalOk: cookieCutRun?.terminal?.ok ?? null },
+    );
+    // ─────────────────────────────────────────────────────────────
+    // JOURNEY (voicebox-beads-vmja): the BUNDLED wasm imageops tool executes
+    // LIVE through the hub run — the permanent form of the 6s2c one-off probe
+    // (cap-evidence/cap-wasm-catalogue/imageops-live-verify.ts). The scripted
+    // model plays the hub path end to end: search_tools(imageops) →
+    // execute_tool over the real 2x2 PNG → the model's answer.
+    // ─────────────────────────────────────────────────────────────
+    // 2x2 red PNG, base64 — the tool's stdin contract (base64 image text).
+    const IMAGEOPS_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+    const { provider: imageopsInfoProvider, run: imageopsInfoRun } = await runScriptedToolProbe(cdp, ntpSession, optsSession, [
+      { tool: "search_tools", args: { query: "imageops", limit: 1 } },
+      { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["info"], stdin: IMAGEOPS_PNG_B64 } }) },
+      { text: "The image is 2x2 png." },
+    ], "probe the image with imageops", 3);
+    const imageopsInfoResult = lastToolResult(imageopsInfoProvider.requests[2] ?? {});
+    const imageopsInfoText = typeof imageopsInfoResult === "string" ? imageopsInfoResult : JSON.stringify(imageopsInfoResult ?? "");
+    const imageopsInfoOk = /"width"\s*:\s*2/.test(imageopsInfoText) &&
+      /"format"\s*:\s*"png"/.test(imageopsInfoText) &&
+      /"phase"\s*:\s*"completed"/.test(imageopsInfoText);
+    await imageopsInfoProvider.close();
+    await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
+    check(
+      "bundled wasm: imageops info executes live through the hub run",
+      imageopsInfoRun?.phase === "terminal" && imageopsInfoRun?.terminal?.ok === true && imageopsInfoOk,
+      { result: imageopsInfoText.slice(0, 300), phase: imageopsInfoRun?.phase ?? null, terminalOk: imageopsInfoRun?.terminal?.ok ?? null },
+    );
+
+    // RESIZE ROUND-TRIP: resize --width 4 over the same PNG. The output is
+    // BINARY (120 bytes) stored by ref — stdout is null by design for binary
+    // lanes — so the row pins the DETERMINISTIC receipt: exitCode 0, 120 bytes,
+    // sha256 085de7b5…, which was proven byte-level (PNG signature + IHDR
+    // width 4, height 4) by driving the digest-pinned imageops.wasm directly
+    // under node:wasi with the same argv and stdin. Same input + same args +
+    // same digest ⇒ the pinned receipt IS the valid-PNG proof.
+    const { provider: imageopsResizeProvider, run: imageopsResizeRun } = await runScriptedToolProbe(cdp, ntpSession, optsSession, [
+      { tool: "search_tools", args: { query: "imageops", limit: 1 } },
+      { tool: "execute_tool", args: (req) => ({ selectionRef: selectionRefOf(req), arguments: { toolId: "imageops", args: ["resize", "--width", "4"], stdin: IMAGEOPS_PNG_B64 } }) },
+      { text: "Resized to width 4." },
+    ], "resize the image with imageops to width 4", 3);
+    const imageopsResizeResult = lastToolResult(imageopsResizeProvider.requests[2] ?? {});
+    const imageopsResizeInner = imageopsResizeResult?.result ?? imageopsResizeResult ?? {};
+    await imageopsResizeProvider.close();
+    await evalOpts(`chrome.runtime.sendMessage(${JSON.stringify({ type: "provider.set", config: { provider: "demo", apiKey: "" } })}).then(v => v, e => ({ err: String(e?.message ?? e) }))`).catch(() => {});
+    check(
+      "bundled wasm: imageops resize round-trip through the hub run",
+      imageopsResizeRun?.phase === "terminal" && imageopsResizeRun?.terminal?.ok === true &&
+        imageopsResizeInner?.phase === "completed" && imageopsResizeInner?.exitCode === 0 &&
+        imageopsResizeInner?.output?.bytes === 120 &&
+        imageopsResizeInner?.output?.sha256 === "085de7b5f422a7474cbd6502934befa346a57628f933cdb0dd345653d505c623",
+      { inner: { phase: imageopsResizeInner?.phase ?? null, exitCode: imageopsResizeInner?.exitCode ?? null, output: imageopsResizeInner?.output ?? null }, phase: imageopsResizeRun?.phase ?? null, terminalOk: imageopsResizeRun?.terminal?.ok ?? null },
     );
     const keylessBefore = await msgValue({ type: "thread.list" });
     const keylessThreadsBefore = new Set((keylessBefore?.threads ?? []).map((t) => t?.id));
