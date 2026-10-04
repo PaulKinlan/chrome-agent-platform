@@ -10,7 +10,20 @@ import { assert, assertEquals, assertObjectMatch, assertRejects, assertStringInc
 import { z } from "zod";
 import { tool } from "ai";
 import { SERVICE_DESCRIPTORS, synthesizeServiceTools, braveWebTransform } from "../extension/lib/service-tools.js";
-import { createSecretVault } from "../extension/lib/secret-vault.js";
+import {
+  createSecretVault,
+  createServiceWorkerAccess,
+} from "../extension/lib/secret-vault.js";
+
+/** The service worker wraps its vault with the minted access token before any route or
+ *  synthesized tool sees it (chrome-agent-platform-jao1.7); these tests wrap it the same
+ *  way rather than bypassing the boundary under test. */
+const SW_ACCESS = createServiceWorkerAccess();
+const swVault = (vault: any) => ({
+  ...vault,
+  getSecretRaw: (keyId: string, opts: any = {}) =>
+    vault.getSecretRaw(keyId, { ...opts, access: SW_ACCESS }),
+});
 import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
 
 const ENCODER = new TextEncoder();
@@ -74,14 +87,14 @@ async function composedTools(profile: any = {}) {
     } as any;
   };
   const routes = (createEnclaveProxyRoutes as any)({
-    vault,
+    vault: swVault(vault),
     fetchImpl,
     isAllowedCaller: () => true,
   });
   const tools: Record<string, any> = synthesizeServiceTools({
     descriptors: SERVICE_DESCRIPTORS,
     proxyCall: (message: any, context: any) => routes["enclave.proxy"](message, context),
-    vault,
+    vault: swVault(vault),
   });
   return { tools, fetchCalls, storage };
 }
@@ -131,7 +144,7 @@ Deno.test("jao1.3: a ref usal from the enclave proxy surfaces as a named error, 
   });
   // NO secret configured: the substitution fails closed before any I/O.
   const routes = (createEnclaveProxyRoutes as any)({
-    vault,
+    vault: swVault(vault),
     fetchImpl: async () => {
       throw new Error("no network I/O may happen for an unconfigured secret");
     },
@@ -140,7 +153,7 @@ Deno.test("jao1.3: a ref usal from the enclave proxy surfaces as a named error, 
   const tools: Record<string, any> = synthesizeServiceTools({
     descriptors: SERVICE_DESCRIPTORS,
     proxyCall: (message: any, context: any) => routes["enclave.proxy"](message, context),
-    vault,
+    vault: swVault(vault),
   });
   const err = await assertRejects(
     () => tools.brave_search.execute({ query: "x" }, {}),
@@ -182,13 +195,13 @@ Deno.test("jao1.5 wiring: secretGate controls which services are synthesized", a
     extensionId: "a".repeat(32) + "b",
     installSaltB64: "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==",
   });
-  const routes = (createEnclaveProxyRoutes as any)({ vault, fetchImpl: async () => { throw new Error("no I/O"); }, isAllowedCaller: () => true });
+  const routes = (createEnclaveProxyRoutes as any)({ vault: swVault(vault), fetchImpl: async () => { throw new Error("no I/O"); }, isAllowedCaller: () => true });
 
   // Gate OFF: nothing configured — brave_search must be ABSENT.
   const toolsOff = synthesizeServiceTools({
     descriptors: SERVICE_DESCRIPTORS,
     proxyCall: (message: any, context: any) => routes["enclave.proxy"](message, context),
-    vault,
+    vault: swVault(vault),
     secretGate: () => false,
   });
   assertEquals(toolsOff.brave_search, undefined, "brave_search must be ABSENT when the gate is off");
@@ -197,7 +210,7 @@ Deno.test("jao1.5 wiring: secretGate controls which services are synthesized", a
   const toolsOn = synthesizeServiceTools({
     descriptors: SERVICE_DESCRIPTORS,
     proxyCall: (message: any, context: any) => routes["enclave.proxy"](message, context),
-    vault,
+    vault: swVault(vault),
     secretGate: () => true,
   });
   assert(toolsOn.brave_search !== undefined, "brave_search must be PRESENT when the gate is on");

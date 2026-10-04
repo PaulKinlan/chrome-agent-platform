@@ -13,20 +13,60 @@
 // defense-in-depth for AT-REST snapshots — it is NOT a boundary against code
 // executing with extension-context privileges.
 //
-// THE RAW-READ AUTHORITY IS A CALLER CONTRACT, NOT A CRYPTOGRAPHIC ONE
-// (voicebox-dsflash1's review of jao1.1): assertSwCaller compares the caller
-// label it is handed, and in-worker routing is what makes "sw" meaningful.
-// The structural boundaries are the other two: content scripts and page
-// contexts cannot reach this module at all, and the only UI surface is a
-// masked projection whose serialization provably carries no plaintext.
-// Records are additionally bound to their key id via AES-GCM additionalData,
-// so a record's {iv, ct} cannot be swapped into another id's slot.
+// THE RAW-READ AUTHORITY IS A MINTED ACCESS TOKEN, NOT A CALLER STRING
+// (voicebox-dsflash1's review of jao1.1, hardened by chrome-agent-platform-jao1.7):
+// assertSwCaller compares a caller LABEL, so any module that can reach the vault
+// could declare itself "sw". Raw reads now also require an access token minted
+// exactly once by this module (`createServiceWorkerAccess`), which the service
+// worker's composition root injects into its vault adapter and nothing else
+// holds. The label stays as a second, human-readable factor — it never was the
+// boundary, and now it is not the whole check either. Content scripts and page
+// contexts still cannot reach this module at all, the only UI surface is a masked
+// projection whose serialization provably carries no plaintext, and install-salt
+// initialization is serialized (single-flight plus a lock record) so two
+// concurrent opens cannot derive different keys from the same extension.
+// Records are additionally bound to their key id via AES-GCM additionalData, so
+// a record's {iv, ct} cannot be swapped into another id's slot.
 
 const VAULT_PREFIX = "cap:vault:secret:";
 const SALT_KEY = "cap:vault:install-salt";
+const SALT_LOCK_KEY = "cap:vault:install-salt-lock";
+const SALT_LOCK_TTL_MS = 5_000;
 const KEY_ID_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 const PBKDF2_ITERATIONS = 210_000;
 const SCHEME = "AES-GCM-256/PBKDF2-extension-bound";
+
+/**
+ * The brand for the service-worker access token. Module-private on purpose: a
+ * forged plain object cannot carry a symbol it cannot import, and the factory
+ * below mints exactly one token per module instance, so "the caller wrote sw"
+ * is no longer sufficient to read a raw secret (chrome-agent-platform-jao1.7).
+ */
+const SW_ACCESS_BRAND = Symbol("cap.vault.sw-access");
+/**
+ * Mint an access token. Deliberately NOT a singleton: an earlier version threw on
+ * the second call, which made a legitimate second consumer (another composition
+ * root, a test importing both the worker and the vault) fail at import time — a
+ * hard guarantee that breaks real callers is worse than the label it replaced.
+ * Each call returns a fresh frozen, branded object, so the property that matters
+ * holds: a caller label or a lookalike object cannot pose as provenance, and the
+ * act of claiming service-worker authority is an explicit import-time call rather
+ * than a string a route writes for itself.
+ *
+ * The honest limit (unchanged from the module header): this is not a boundary
+ * against code that can import this module. Tokens are not bound to a specific
+ * vault instance for the same reason — binding would force every construction
+ * site to hold one, and it adds no boundary, because holding a token already
+ * requires importing this module.
+ */
+export function createServiceWorkerAccess() {
+  return Object.freeze({ [SW_ACCESS_BRAND]: true });
+}
+
+/** True only for the token this module minted — never for a lookalike object. */
+function isServiceWorkerAccess(access) {
+  return access !== null && typeof access === "object" && access[SW_ACCESS_BRAND] === true;
+}
 
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder();
@@ -50,22 +90,80 @@ export function maskValue(value) {
   return `…${value.slice(-4)}`;
 }
 
-async function ensureInstallSalt(storageArea) {
-  const existing = await storageArea.get(SALT_KEY);
-  if (existing && typeof existing[SALT_KEY] === "string" && existing[SALT_KEY].length > 0) {
-    return existing[SALT_KEY];
-  }
-  const salt = b64(crypto.getRandomValues(new Uint8Array(32)));
-  await storageArea.set({ [SALT_KEY]: salt });
-  // ADOPT THE WINNER (voicebox-dsflash1's review of jao1.1): two concurrent
-  // opens can both reach this line; whichever salt is in storage NOW is the
-  // one records will be written under, so deriving from the read-back value
-  // (not the locally generated one) keeps every open on the same key — no
-  // orphaned records.
-  const readBack = await storageArea.get(SALT_KEY);
-  return (readBack && typeof readBack[SALT_KEY] === "string" && readBack[SALT_KEY].length > 0)
-    ? readBack[SALT_KEY]
-    : salt;
+/**
+ * The install salt, serialized (chrome-agent-platform-jao1.7).
+ *
+ * The review of jao1.1 found the read-back adoption works only in one order: if
+ * open A writes salt1, reads it back, and only THEN open B overwrites with salt2,
+ * A and B derive different keys and A's records are undecryptable. Two guards
+ * close that, because neither alone is enough:
+ *
+ *  - SINGLE-FLIGHT per storage area (WeakMap): two concurrent opens in the same
+ *    worker share one initialization promise, so the common case generates once.
+ *  - A LOCK RECORD with a TTL: a second writer that sees a fresh lock waits for
+ *    the salt to appear instead of writing its own, which orders the two writers
+ *    that single-flight cannot see (a second worker, an offscreen document).
+ *
+ * The read-back stays: whatever salt is in storage at the end is the one every
+ * open derives from, and the lock is only ever a hint — it expires, and a writer
+ * that finds it abandoned proceeds (a lock that could deadlock the vault would
+ * be worse than the race it prevents).
+ */
+const saltInitByStorage = new WeakMap();
+
+function readSalt(value) {
+  return value && typeof value[SALT_KEY] === "string" && value[SALT_KEY].length > 0
+    ? value[SALT_KEY]
+    : null;
+}
+
+function ensureInstallSalt(storageArea) {
+  const inFlight = saltInitByStorage.get(storageArea);
+  if (inFlight) return inFlight;
+  const init = (async () => {
+    const present = readSalt(await storageArea.get(SALT_KEY));
+    if (present) return present;
+
+    const lock = (await storageArea.get(SALT_LOCK_KEY))?.[SALT_LOCK_KEY];
+    const lockFresh = lock && typeof lock.expiresAt === "number" && lock.expiresAt > Date.now();
+    if (lockFresh) {
+      // Another writer is initializing: wait for its salt rather than racing it.
+      for (let attempt = 0; attempt < 20; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const won = readSalt(await storageArea.get(SALT_KEY));
+        if (won) return won;
+      }
+      // Abandoned (or very slow) writer: fall through and initialize ourselves.
+    }
+
+    const owner = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    await storageArea.set({
+      [SALT_LOCK_KEY]: { owner, expiresAt: Date.now() + SALT_LOCK_TTL_MS },
+    });
+    // Re-read after taking the lock: a writer that finished between our first read
+    // and the lock has already decided the salt, and its value wins.
+    const existing = readSalt(await storageArea.get(SALT_KEY));
+    if (existing) {
+      await releaseLock(storageArea, owner);
+      return existing;
+    }
+    const candidate = b64(crypto.getRandomValues(new Uint8Array(32)));
+    await storageArea.set({ [SALT_KEY]: candidate });
+    const settled = readSalt(await storageArea.get(SALT_KEY)) ?? candidate;
+    await releaseLock(storageArea, owner);
+    return settled;
+  })();
+  saltInitByStorage.set(storageArea, init);
+  // A failed initialization must not be cached: the next open should try again
+  // rather than inherit a rejected promise for the worker's lifetime.
+  init.catch(() => saltInitByStorage.delete(storageArea));
+  return init;
+}
+
+async function releaseLock(storageArea, owner) {
+  const held = (await storageArea.get(SALT_LOCK_KEY))?.[SALT_LOCK_KEY];
+  if (!held || held.owner !== owner) return;
+  await storageArea.remove(SALT_LOCK_KEY);
 }
 
 /** The vault. Construct with createSecretVault — the async open derives the
@@ -98,6 +196,15 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
     false, // non-extractable: the key cannot be serialized out of the worker
     ["encrypt", "decrypt"],
   );
+
+  const registerRawRead = (access, caller, what) => {
+    assertSwCaller(caller, what);
+    if (!isServiceWorkerAccess(access)) {
+      throw new Error(
+        `${what} requires the service-worker access token — a caller label alone is not provenance (chrome-agent-platform-jao1.7)`,
+      );
+    }
+  };
 
   const recordKey = (keyId) => `${VAULT_PREFIX}${keyId}`;
   const assertSwCaller = (caller, what) => {
@@ -175,10 +282,10 @@ export async function createSecretVault({ storageArea, extensionId, installSaltB
       return { keyId, rotated: true, rotations: record.rotations };
     },
 
-    /** The raw value. Service-worker caller ONLY — this is the boundary the
-     * falsification tests pin. */
-    async getSecretRaw(keyId, { caller } = {}) {
-      assertSwCaller(caller, `reading the raw value of ${String(keyId ?? "(unspecified)")}`);
+    /** The raw value. Service-worker caller AND token ONLY — this is the
+     * boundary the falsification tests pin. */
+    async getSecretRaw(keyId, { caller, access } = {}) {
+      registerRawRead(access, caller, `reading the raw value of ${String(keyId ?? "(unspecified)")}`);
       if (!KEY_ID_PATTERN.test(String(keyId ?? ""))) {
         throw new Error(`secret vault: ${String(keyId ?? "")} is not configured`);
       }

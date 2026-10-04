@@ -114,7 +114,7 @@ import {
   createOpfsAdapter,
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
-import { createSecretVault } from "../lib/secret-vault.js";
+import { createSecretVault, createServiceWorkerAccess } from "../lib/secret-vault.js";
 import { synthesizeServiceTools, SERVICE_DESCRIPTORS } from "../lib/service-tools.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
@@ -6462,6 +6462,12 @@ function isOwnerPrincipal(ctx) {
 // proxy route is fenced to sanctioned surfaces via the SW's own principal
 // fence, the same fence browser.callTool uses.
 let enclaveVaultPromise = null;
+// The vault's raw-read token (chrome-agent-platform-jao1.7): minted HERE, at module
+// initialization in the service worker's composition root, and injected into every
+// adapter that reads raw secrets. A route that declares { caller: "sw" } no longer
+// decides its own provenance — this module does, once, and the token is the only one
+// this module instance will ever mint.
+const enclaveSwAccess = createServiceWorkerAccess();
 function enclaveVault() {
   enclaveVaultPromise ??= createSecretVault({
     storageArea: chrome.storage.local,
@@ -6471,7 +6477,8 @@ function enclaveVault() {
 }
 const enclaveProxyRoutes = createEnclaveProxyRoutes({
   vault: {
-    getSecretRaw: (keyId, opts) => enclaveVault().then((v) => v.getSecretRaw(keyId, opts)),
+    getSecretRaw: (keyId, opts) =>
+      enclaveVault().then((v) => v.getSecretRaw(keyId, { ...opts, access: enclaveSwAccess })),
   },
   isAllowedCaller: (context) => isOwnerPrincipal(context),
 });
@@ -6532,7 +6539,8 @@ async function enclaveServiceToolsForRun() {
     descriptors: SERVICE_DESCRIPTORS,
     proxyCall: (message, context) => enclaveProxyRoutes["enclave.proxy"](message, context),
     vault: {
-      getSecretRaw: (keyId, o) => enclaveVault().then((v) => v.getSecretRaw(keyId, o)),
+      getSecretRaw: (keyId, o) =>
+        enclaveVault().then((v) => v.getSecretRaw(keyId, { ...o, access: enclaveSwAccess })),
     },
     secretGate: (svc) => Boolean(svc.auth?.secretId && configuredIds.has(svc.auth.secretId)),
   });

@@ -11,7 +11,15 @@
 //  5. tampered ciphertext fails closed (integrity, not silent truncation).
 
 import { assert, assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
-import { createSecretVault, maskValue } from "../extension/lib/secret-vault.js";
+import {
+  createSecretVault,
+  createServiceWorkerAccess,
+  maskValue,
+} from "../extension/lib/secret-vault.js";
+
+/** The service-worker access token (chrome-agent-platform-jao1.7). Deno runs each
+ *  test file in its own process, so this module instance mints exactly one. */
+const SW_ACCESS = createServiceWorkerAccess();
 
 const SECRET_A = "sk-brave-9f8e7d6c5b4a3210-feeds-back";
 const SECRET_B = "ghp_a1b2c3d4e5f6g7h8i9j0klmnop";
@@ -55,7 +63,7 @@ Deno.test("jao1.1: set + raw get round-trips for the service-worker caller", asy
   const storage = fakeStorage();
   const vault = await openTestVault(storage);
   await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
-  const got = await vault.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw" });
+  const got = await vault.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS });
   assertEquals(got.value, SECRET_A, "the exact secret round-trips");
   assertEquals(got.keyId, "BRAVE_SEARCH_API_KEY");
 });
@@ -101,7 +109,7 @@ Deno.test("jao1.1: a different extension derivation cannot decrypt the record (e
     installSaltB64: "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==",
   });
   await assertRejects(
-    () => stranger.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw" }),
+    () => stranger.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS }),
     Error,
   );
 });
@@ -154,7 +162,7 @@ Deno.test("jao1.1: delete removes the record and its ciphertext", async () => {
   assert(!serialized.includes("cap:vault:secret:BRAVE_SEARCH_API_KEY"), "the record is gone");
   const list = await vault.listMasked({ caller: "ui" });
   assertEquals(list.length, 0, "the masked list drops the deleted key");
-  await assertRejects(() => vault.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw" }), Error, "not configured");
+  await assertRejects(() => vault.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS }), Error, "not configured");
 });
 
 Deno.test("jao1.1: rotation replaces the ciphertext and keeps the id; lastUsed tracks reads", async () => {
@@ -162,12 +170,12 @@ Deno.test("jao1.1: rotation replaces the ciphertext and keeps the id; lastUsed t
   const vault = await openTestVault(storage);
   await vault.setSecret("GITHUB_TOKEN", SECRET_A, { by: "sw" });
   const before = (await vault.listMasked({ caller: "ui" }))[0];
-  await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw" });
+  await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
   const afterRead = (await vault.listMasked({ caller: "ui" }))[0];
   assert(afterRead.lastUsed >= before.lastUsed, "a read updates lastUsed");
 
   await vault.rotateSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
-  const got = await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw" });
+  const got = await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
   assertEquals(got.value, SECRET_B, "rotation round-trips the new value");
   const [proj] = await vault.listMasked({ caller: "ui" });
   assertEquals(proj.masked, `…${SECRET_B.slice(-4)}`, "the mask reflects the rotated value");
@@ -186,7 +194,7 @@ Deno.test("jao1.1: tampered ciphertext fails closed (integrity, not silent garba
   const flipped = btoa(String.fromCharCode(raw.charCodeAt(0) ^ 0xFF) + raw.slice(1));
   record.ct = flipped;
   await assertRejects(
-    () => vault.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw" }),
+    () => vault.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS }),
     Error,
   );
 });
@@ -279,4 +287,131 @@ Deno.test("jao1.5: set/rotate/delete through the routes round-trip, and the test
   assertEquals(tc.ok, true, "the test connection passes");
   assertEquals(testCalls.length, 1, "the test connection ran through the enclave proxy once");
   assertEquals(JSON.stringify(tc).includes(SECRET_B), false, "the test result never echoes the secret");
+});
+
+// ── chrome-agent-platform-jao1.7 ─────────────────────────────────────────
+// Three findings from the review of jao1.1:
+//   1. AAD-bind the ciphertext to its key id so a record cannot be swapped between slots;
+//   2. make the raw-read authority a minted token, not a caller string;
+//   3. serialize install-salt initialization (single-flight + a lock record).
+// The existing helper injects a fixed salt via `installSaltB64`, which is why the salt
+// path had no test at all: these cases open vaults the way production does.
+
+const SALT_KEY = "cap:vault:install-salt";
+const SALT_LOCK_KEY = "cap:vault:install-salt-lock";
+const TEST_EXTENSION_ID = "a".repeat(32) + "b";
+const A_SLOT = "cap:vault:secret:BRAVE_SEARCH_API_KEY";
+const B_SLOT = "cap:vault:secret:GITHUB_TOKEN";
+
+/** Production-shaped open: no injected salt, so ensureInstallSalt runs. */
+async function openFreshVault(storage: any) {
+  return createSecretVault({ storageArea: storage, extensionId: TEST_EXTENSION_ID });
+}
+
+Deno.test("jao1.7: a record's ciphertext cannot be swapped into another key id's slot (AAD binding)", async () => {
+  const storage = fakeStorage();
+  const vault = await openTestVault(storage);
+  await vault.setSecret("BRAVE_SEARCH_API_KEY", SECRET_A, { by: "sw" });
+  await vault.setSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
+  // Move B's {iv, ct} into A's slot, metadata and all. Without additionalData this decrypts
+  // cleanly to the wrong secret — a silent credential swap, which is the finding.
+  const a = storage.map.get(A_SLOT);
+  const b = storage.map.get(B_SLOT);
+  storage.map.set(A_SLOT, { ...a, iv: b.iv, ct: b.ct });
+  await assertRejects(
+    () => vault.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS }),
+    Error,
+    "failed integrity verification",
+    "a swapped record must fail closed, not decrypt to the other key's value",
+  );
+  // B is untouched and still reads: the failure is the swap, not a broken vault.
+  const stillB = await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
+  assertEquals(stillB.value, SECRET_B);
+});
+
+Deno.test("jao1.7: a caller label alone is not provenance — the minted token is required", async () => {
+  const storage = fakeStorage();
+  const vault = await openTestVault(storage);
+  await vault.setSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
+  const lookalikes: any[] = [
+    undefined,
+    {},
+    { caller: "sw" },
+    Object.freeze({ sw: true }),
+    { brand: "cap.vault.sw-access" },
+  ];
+  for (const access of lookalikes) {
+    await assertRejects(
+      () => vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access }),
+      Error,
+      "access token",
+      `a lookalike access value must not read raw secrets: ${JSON.stringify(access)}`,
+    );
+  }
+  const real = await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
+  assertEquals(real.value, SECRET_B, "the minted token reads");
+});
+
+Deno.test("jao1.7: every minted token is branded, and none is a lookalike of another", () => {
+  // Not a singleton on purpose (the first shape broke legitimate second consumers at
+  // import time); what must hold is that minting is an explicit act and the result is
+  // branded, so `{ caller: "sw" }` and `{}` cannot stand in for it.
+  const second = createServiceWorkerAccess();
+  assert(second !== SW_ACCESS, "tokens are distinct objects");
+  assertEquals(typeof second, "object");
+  assertEquals(Object.isFrozen(second), true, "a token cannot be mutated into a brand");
+});
+
+Deno.test("jao1.7: two concurrent opens generate ONE install salt and derive the same key", async () => {
+  const storage = fakeStorage();
+  let saltWrites = 0;
+  const countingSet = storage.set;
+  storage.set = async (items: Record<string, any>) => {
+    if (SALT_KEY in items) saltWrites++;
+    return await countingSet(items);
+  };
+  const [first, second] = await Promise.all([openFreshVault(storage), openFreshVault(storage)]);
+  assertEquals(saltWrites, 1, "single-flight: the concurrent opens must not each generate a salt");
+  await first.setSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
+  const fromSecond = await second.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
+  assertEquals(fromSecond.value, SECRET_B, "both opens derive the same key");
+});
+
+Deno.test("jao1.7: a live lock makes the second writer wait for the first writer's salt", async () => {
+  const storage = fakeStorage();
+  // A lock held by another writer (another worker or an offscreen document) with no salt yet.
+  await storage.set({ [SALT_LOCK_KEY]: { owner: "other-writer", expiresAt: Date.now() + 3_000 } });
+  const opening = openFreshVault(storage);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assertEquals(
+    storage.map.has(SALT_KEY),
+    false,
+    "the waiter must not write a salt while another writer holds the lock",
+  );
+  // The lock owner finishes: the waiter must adopt that salt rather than overwrite it.
+  const winnerSalt = "d2lubmVyLXNhbHQtZm9yLXRoZS13YWl0aW5nLW9wZW4=";
+  await storage.set({ [SALT_KEY]: winnerSalt });
+  const waiter = await opening;
+  assertEquals(storage.map.get(SALT_KEY), winnerSalt, "the winner's salt survives the waiter");
+  // The proof that it was ADOPTED, not merely left in storage: a vault opened with that salt
+  // can read what the waiter wrote. Under the pre-fix code the waiter generated its own salt,
+  // overwrote the winner, and this read fails.
+  await waiter.setSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
+  const control = await createSecretVault({
+    storageArea: storage,
+    extensionId: TEST_EXTENSION_ID,
+    installSaltB64: winnerSalt,
+  });
+  const got = await control.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
+  assertEquals(got.value, SECRET_B, "the waiting open derived the winner's key");
+});
+
+Deno.test("jao1.7: an abandoned lock does not deadlock initialization", async () => {
+  const storage = fakeStorage();
+  await storage.set({ [SALT_LOCK_KEY]: { owner: "dead-writer", expiresAt: Date.now() - 1 } });
+  const vault = await openFreshVault(storage);
+  assert(storage.map.get(SALT_KEY), "an expired lock must not stop this open from initializing");
+  await vault.setSecret("GITHUB_TOKEN", SECRET_B, { by: "sw" });
+  const got = await vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS });
+  assertEquals(got.value, SECRET_B);
 });

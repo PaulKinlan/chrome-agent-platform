@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.567] — 2026-10-04
+- Saved service credentials are now bound to the exact service they were stored for, and the extension refuses to hand a raw credential to anything that cannot prove it is the service worker — so a vault entry cannot be swapped onto a different service and read.
+
+## [0.3.566] — 2026-10-04
+- Saved service credentials are now bound to the exact service they were stored for, and the extension refuses to hand a raw credential to anything that cannot prove it is the service worker — so a vault entry cannot be swapped onto a different service and read.
+
 ## [0.3.565] — 2026-10-03
 - Add pure-Python wheel validator and OPFS wheel store routes with dispatch census classification
 - The Site Agents panel now states its setup action once with a concise empty state, removing duplicate instructions.
