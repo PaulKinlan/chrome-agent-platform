@@ -1,19 +1,20 @@
-// tests/ntp-rpc-census.test.ts — Hub RPC coalescing acceptance gate (chrome-agent-platform-9epn.1)
+// tests/ntp-rpc-census.test.ts — Hub RPC coalescing acceptance gate (chrome-agent-platform-9epn.1, zdaj)
 //
 // Asserts that:
-// 1. Fresh ntp.html boot fires <= 24 RPCs (down from 54).
+// 1. Fresh ntp.html boot fires <= 22 RPCs (lowered from 24 in zdaj: coalesced all 4 duplicate routes, down from 54).
 // 2. Idle window fires <= 2 RPCs (down from 11).
 // 3. Opening a thread fires <= 4 RPCs (down from 14–21).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
+import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
 
 const EXT = `${Deno.cwd()}/extension`;
-const BIN = "/Users/paulkinlan/.cache/puppeteer/chrome/mac_arm-149.0.7827.22/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+const BIN = resolveChromeForTesting();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const RPC_SHIM = `(() => {
-  const C = window.__rpc = { log: [], t0: performance.now() };
+  const C = window.__rpc = { log: [], t0: performance.now(), events: [] };
   const wrap = () => {
     const rt = globalThis.chrome && chrome.runtime;
     if (!rt || rt.__wrapped) return;
@@ -23,7 +24,7 @@ const RPC_SHIM = `(() => {
       const m = args.find(a => a && typeof a === 'object');
       const t = performance.now();
       const p = orig(...args);
-      const row = { type: m?.type ?? '?', at: Math.round(t), ms: null };
+      const row = { type: m?.type ?? '?', payload: m, at: Math.round(t), ms: null };
       C.log.push(row);
       if (p && p.then) {
         p.then(() => { row.ms = Math.round(performance.now() - t); }, () => { row.ms = -1; });
@@ -33,8 +34,15 @@ const RPC_SHIM = `(() => {
     const oc = rt.connect?.bind(rt);
     if (oc) {
       rt.connect = (...a) => {
-        C.log.push({ type: 'connect:' + (a.find(x => x && x.name)?.name ?? '?'), at: Math.round(performance.now()), ms: 0 });
-        return oc(...a);
+        const port = oc(...a);
+        const name = a.find(x => x && x.name)?.name ?? '?';
+        C.log.push({ type: 'connect:' + name, at: Math.round(performance.now()), ms: 0 });
+        try {
+          port.onMessage?.addListener?.((msg) => {
+            C.events.push({ at: Math.round(performance.now()), msg });
+          });
+        } catch {}
+        return port;
       };
     }
   };
@@ -51,11 +59,15 @@ function census(log: any[]) {
 }
 
 Deno.test({
-  name: "ntp-rpc-census: cold boot <= 24 RPCs, idle <= 2 RPCs, thread open <= 4 RPCs",
+  name: "ntp-rpc-census: cold boot <= 22 RPCs, idle <= 2 RPCs, thread open <= 4 RPCs",
   sanitizeOps: false,
   sanitizeResources: false,
   fn: async () => {
     // Skip if Chrome for Testing binary does not exist on this machine
+    if (!BIN) {
+      console.log("Chrome for Testing binary absent; skipping browser census test");
+      return;
+    }
     try {
       await Deno.stat(BIN);
     } catch {
@@ -99,10 +111,12 @@ Deno.test({
       const rawBootLog = await cdp.eval(o.sessionId, "JSON.parse(JSON.stringify(window.__rpc.log))");
       const bootCensus = census(rawBootLog);
 
-      // Check 1: NTP cold boot total <= 24
+      // Check 1: NTP cold boot total <= 22 (measured at exactly 22 in zdaj:
+      // coalesced artifacts.list, agent.directory, agent.tool-offers, board.messages
+      // so all 22 routes are asked exactly once).
       assert(
-        bootCensus.total <= 24,
-        `Boot RPC count ${bootCensus.total} must be <= 24 (was 54 before coalescing)`
+        bootCensus.total <= 22,
+        `Boot RPC count ${bootCensus.total} must be <= 22 (was 26 before zdaj coalescing, 54 before 9epn.1)`
       );
 
       // Check 2: 5s idle <= 2 RPCs

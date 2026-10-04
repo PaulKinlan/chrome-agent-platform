@@ -2147,7 +2147,7 @@ async function refreshBoard() {
   try {
     const [jobsRes, msgsRes] = await Promise.all([
       send("board.list"),
-      send("board.messages", { limit: 3 }).catch(() => null),
+      send("board.messages", { limit: 5 }).catch(() => null),
     ]);
     if (jobsRes?.ok !== false && Array.isArray(jobsRes?.jobs)) jobs = jobsRes.jobs;
     if (msgsRes?.ok && Array.isArray(msgsRes?.messages)) messages = msgsRes.messages;
@@ -4765,7 +4765,9 @@ export const bootPipelinePromise = runStagedBoot({
   stage2A: {
     ambientProgress: () => {
       subscribeAmbientProgress();
-      subscribeRunRegistry(() => scheduleRunLogRefresh(), { emitCurrent: false });
+      subscribeRunRegistry((s) => {
+        if (s?.runs?.length > 0) scheduleRunLogRefresh();
+      }, { emitCurrent: false });
     },
     providerStatus: () => renderProviderStatus(),
     commandStarters: () => refreshCommandStarters(),
