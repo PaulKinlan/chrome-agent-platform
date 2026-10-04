@@ -787,6 +787,9 @@ const EXPECTED = [
   "Settings: typed a loopback origin into the Enroll field",
   "Settings: clicked Enroll via a real click",
   "enrollment: origin enrolled under JIT grant",
+  "site agent: the registry carries the enrolled origin as a site agent",
+  "after enrolling a site agent the four agent surfaces agree (the picker projects it away like the rest)",
+  "after disenrolling the site agent the four agent surfaces return to the baseline",
   "Settings: retained a driven-UI screenshot",
   "keyless: developer flag off for the fresh-profile run",
   "Cookies: the cookie value reader and the cookie writers are absent from the default build",
@@ -4126,6 +4129,11 @@ async function main() {
       "Settings: typed a loopback origin into the Enroll field",
       await typeInto(cdp, optsSession, "#enroll-origin", enrollOrigin),
     );
+    // THE PRE-ENROLLMENT BASELINE (voicebox-beads-v15y): the created-agents
+    // census the site-agent measurement compares against — the site kind must
+    // add NO row to any surface.
+    const surfacesPreEnroll = await measureAgentSurfaces();
+    console.log("agent surfaces (pre-enrollment baseline):", JSON.stringify({ ...surfacesPreEnroll, shot: undefined }));
     check(
       "Settings: clicked Enroll via a real click",
       await clickSel(cdp, optsSession, "#enroll-btn"),
@@ -4142,6 +4150,46 @@ async function main() {
       "enrollment: origin enrolled under JIT grant",
       Array.isArray(enrolledAfterDeny) &&
         enrolledAfterDeny.includes(enrollOrigin),
+    );
+
+    // ─────────────────────────────────────────────────────────────
+    // voicebox-beads-v15y — THE FOUR-SURFACES INVARIANT WITH A SITE AGENT.
+    // The registry now carries an enrolled SITE agent; the four agent surfaces
+    // must still AGREE, because the picker excludes the site kind (the +1 row
+    // the other three surfaces never count is the divergence v15y measured and
+    // this run pins). The numbers are printed, not just asserted.
+    // ─────────────────────────────────────────────────────────────
+    const registryWithSite = await msgValue({ type: "agent.registry" });
+    const siteGroup = (registryWithSite?.groups ?? []).find((g) => g.id === "site");
+    check(
+      "site agent: the registry carries the enrolled origin as a site agent",
+      (siteGroup?.agents ?? []).some((a) => a.id === enrollOrigin && a.status === "enrolled"),
+      { groups: (registryWithSite?.groups ?? []).map((g) => ({ id: g.id, count: g.agents?.length ?? 0 })) },
+    );
+    const surfacesWithSite = await measureAgentSurfaces();
+    if (surfacesWithSite.shot) await writeEvidence("surfaces-with-site-agent.png", surfacesWithSite.shot);
+    console.log("agent surfaces (with an enrolled site agent):", JSON.stringify({
+      ...surfacesWithSite, shot: undefined,
+      siteAgents: (siteGroup?.agents ?? []).map((a) => a.name),
+    }));
+    check(
+      "after enrolling a site agent the four agent surfaces agree (the picker projects it away like the rest)",
+      surfacesWithSite.sidebarRows === surfacesPreEnroll.sidebarRows &&
+        surfacesWithSite.panelRows === surfacesPreEnroll.panelRows &&
+        surfacesWithSite.settingsRows === surfacesPreEnroll.settingsRows &&
+        surfacesWithSite.sidepanelRows === surfacesPreEnroll.sidepanelRows,
+      { baseline: { sidebar: surfacesPreEnroll.sidebarRows, panel: surfacesPreEnroll.panelRows, settings: surfacesPreEnroll.settingsRows, sidepanel: surfacesPreEnroll.sidepanelRows },
+        withSite: { sidebar: surfacesWithSite.sidebarRows, panel: surfacesWithSite.panelRows, settings: surfacesWithSite.settingsRows, sidepanel: surfacesWithSite.sidepanelRows } },
+    );
+    await msgValue({ type: "agent.delete", origin: enrollOrigin }).catch(() => {});
+    await sleep(800);
+    const surfacesAfterDisenroll = await measureAgentSurfaces();
+    check(
+      "after disenrolling the site agent the four agent surfaces return to the baseline",
+      surfacesAfterDisenroll.sidebarRows === surfacesPreEnroll.sidebarRows &&
+        surfacesAfterDisenroll.panelRows === surfacesPreEnroll.panelRows &&
+        surfacesAfterDisenroll.settingsRows === surfacesPreEnroll.settingsRows &&
+        surfacesAfterDisenroll.sidepanelRows === surfacesPreEnroll.sidepanelRows,
     );
 
     const optsShot = await captureShot(cdp, optsSession);
