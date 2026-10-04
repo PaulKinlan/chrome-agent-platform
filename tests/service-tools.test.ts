@@ -9,7 +9,7 @@
 import { assert, assertEquals, assertObjectMatch, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
 import { z } from "zod";
 import { tool } from "ai";
-import { SERVICE_DESCRIPTORS, synthesizeServiceTools, braveWebTransform } from "../extension/lib/service-tools.js";
+import { SERVICE_DESCRIPTORS, synthesizeServiceTools, braveWebTransform, enclaveToolsForRun } from "../extension/lib/service-tools.js";
 import { createSecretVault } from "../extension/lib/secret-vault.js";
 import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
 
@@ -201,4 +201,108 @@ Deno.test("jao1.5 wiring: secretGate controls which services are synthesized", a
     secretGate: () => true,
   });
   assert(toolsOn.brave_search !== undefined, "brave_search must be PRESENT when the gate is on");
+});
+
+Deno.test("chrome-agent-platform-1pr0: enclaveToolsForRun gates scoped, enabled, and configured states across all 4 combinations", () => {
+  let synthesizeCalls = 0;
+  const mockBraveSearch = { name: "brave_search", description: "Search the web" };
+  const mockSynthesize = (configuredIds: Set<string>) => {
+    synthesizeCalls++;
+    const tools: Record<string, any> = {};
+    if (configuredIds.has("BRAVE_SEARCH_API_KEY")) {
+      tools.brave_search = mockBraveSearch;
+    }
+    return tools;
+  };
+
+  // State 1: scoped = true => {} (synthesis NOT even called)
+  synthesizeCalls = 0;
+  const res1 = enclaveToolsForRun({
+    scoped: true,
+    enabled: true,
+    configuredIds: new Set(["BRAVE_SEARCH_API_KEY"]),
+    synthesize: mockSynthesize,
+  });
+  assertEquals(res1, {}, "State 1: scoped=true must return empty tools");
+  assertEquals(synthesizeCalls, 0, "State 1: scoped=true must not invoke synthesize callback");
+
+  // State 2: scoped = false + configured => { brave_search }
+  synthesizeCalls = 0;
+  const res2 = enclaveToolsForRun({
+    scoped: false,
+    enabled: true,
+    configuredIds: new Set(["BRAVE_SEARCH_API_KEY"]),
+    synthesize: mockSynthesize,
+  });
+  assertEquals(Object.keys(res2), ["brave_search"], "State 2: scoped=false + configured must return brave_search");
+  assertEquals(res2.brave_search, mockBraveSearch);
+  assertEquals(synthesizeCalls, 1, "State 2: synthesize callback invoked once");
+
+  // State 3: scoped = false + unconfigured => {}
+  synthesizeCalls = 0;
+  const res3 = enclaveToolsForRun({
+    scoped: false,
+    enabled: true,
+    configuredIds: new Set(),
+    synthesize: mockSynthesize,
+  });
+  assertEquals(res3, {}, "State 3: scoped=false + unconfigured must return empty tools");
+  assertEquals(synthesizeCalls, 0, "State 3: unconfigured must not invoke synthesize callback");
+
+  // State 4: enabled = false => {}
+  synthesizeCalls = 0;
+  const res4 = enclaveToolsForRun({
+    scoped: false,
+    enabled: false,
+    configuredIds: new Set(["BRAVE_SEARCH_API_KEY"]),
+    synthesize: mockSynthesize,
+  });
+  assertEquals(res4, {}, "State 4: enabled=false must return empty tools");
+  assertEquals(synthesizeCalls, 0, "State 4: enabled=false must not invoke synthesize callback");
+});
+
+Deno.test("chrome-agent-platform-1pr0: enclaveToolsForRun end-to-end with synthesizeServiceTools", async () => {
+  const { tools: _fullTools } = await composedTools();
+  const synth = (ids: Set<string>) => synthesizeServiceTools({
+    descriptors: SERVICE_DESCRIPTORS,
+    proxyCall: async () => ({ ok: true, body: "{}" }),
+    vault: {} as any,
+    secretGate: (svc: any) => Boolean(svc.auth?.secretId && ids.has(svc.auth.secretId)),
+  });
+
+  // State 1: scoped = true -> {}
+  const scopedTools = enclaveToolsForRun({
+    scoped: true,
+    enabled: true,
+    configuredIds: new Set(["BRAVE_SEARCH_API_KEY"]),
+    synthesize: synth,
+  });
+  assertEquals(scopedTools, {});
+
+  // State 2: scoped = false, enabled = true, configured -> { brave_search }
+  const normalTools = enclaveToolsForRun({
+    scoped: false,
+    enabled: true,
+    configuredIds: new Set(["BRAVE_SEARCH_API_KEY"]),
+    synthesize: synth,
+  });
+  assert(normalTools.brave_search !== undefined, "brave_search must be present for configured normal run");
+
+  // State 3: scoped = false, enabled = true, unconfigured -> {}
+  const unconfiguredTools = enclaveToolsForRun({
+    scoped: false,
+    enabled: true,
+    configuredIds: new Set(),
+    synthesize: synth,
+  });
+  assertEquals(unconfiguredTools, {});
+
+  // State 4: enabled = false -> {}
+  const disabledTools = enclaveToolsForRun({
+    scoped: false,
+    enabled: false,
+    configuredIds: new Set(["BRAVE_SEARCH_API_KEY"]),
+    synthesize: synth,
+  });
+  assertEquals(disabledTools, {});
 });

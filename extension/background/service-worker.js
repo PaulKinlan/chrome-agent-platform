@@ -115,7 +115,7 @@ import {
   createChromeAlarmsAdapter,
 } from "../lib/data-archive.js";
 import { createSecretVault } from "../lib/secret-vault.js";
-import { synthesizeServiceTools, SERVICE_DESCRIPTORS } from "../lib/service-tools.js";
+import { synthesizeServiceTools, SERVICE_DESCRIPTORS, enclaveToolsForRun } from "../lib/service-tools.js";
 import { admitDurableRun, durableQuotaResponse } from "../lib/durable-quota.js";
 import { attachmentContext, buildMultimodalTask, sanitizeAttachments, validateRunAttachments } from "../lib/attachments.js";
 import {
@@ -2850,8 +2850,8 @@ async function buildOrchestrator(onProgress, scoped, mem, modelOverride = null, 
     const bookedManagementTools = withRunToolBookkeeping(liveManagementTools, bkCtx, bkDeps);
     // The enclave's synthesized service tools (brave_search et al.) join
     // the run's extra tools when the enclave is enabled and the service
-    // credential exists (jao1.5 wiring).
-    const enclaveTools = scoped ? {} : await enclaveServiceToolsForRun();
+    // credential exists (jao1.5 wiring). Scoped (hook) runs receive none (1pr0).
+    const enclaveTools = await enclaveServiceToolsForRun({ scoped });
     const liveOnDeviceTools = onDeviceTextToolset({
       dispatchRoute: modelManagementDispatch,
     });
@@ -6515,7 +6515,7 @@ const vaultRoutes = createVaultRoutes({
 // vault. A service without a configured key would produce a tool that can
 // only fail at execution time, so it is not offered (secretGate).
 const ENCLAVE_ENABLED_KEY = "cap:enclave-enabled";
-async function enclaveServiceToolsForRun() {
+async function enclaveServiceToolsForRun({ scoped = false } = {}) {
   let enabled = true;
   try {
     const flag = await chrome.storage.local.get(ENCLAVE_ENABLED_KEY);
@@ -6524,17 +6524,22 @@ async function enclaveServiceToolsForRun() {
     // a storage failure defaults the surface ON — the tools fail honestly if
     // their secret is missing; it must not crash the run
   }
-  if (!enabled) return {};
+  if (scoped || !enabled) return {};
   // Only synthesize tools for services whose credential EXISTS in the vault
   const masked = await enclaveVault().then((v) => v.listMasked({ caller: "sw" })).catch(() => []);
   const configuredIds = new Set(masked.map((m) => m.keyId));
-  return synthesizeServiceTools({
-    descriptors: SERVICE_DESCRIPTORS,
-    proxyCall: (message, context) => enclaveProxyRoutes["enclave.proxy"](message, context),
-    vault: {
-      getSecretRaw: (keyId, o) => enclaveVault().then((v) => v.getSecretRaw(keyId, o)),
-    },
-    secretGate: (svc) => Boolean(svc.auth?.secretId && configuredIds.has(svc.auth.secretId)),
+  return enclaveToolsForRun({
+    scoped,
+    enabled,
+    configuredIds,
+    synthesize: (ids) => synthesizeServiceTools({
+      descriptors: SERVICE_DESCRIPTORS,
+      proxyCall: (message, context) => enclaveProxyRoutes["enclave.proxy"](message, context),
+      vault: {
+        getSecretRaw: (keyId, o) => enclaveVault().then((v) => v.getSecretRaw(keyId, o)),
+      },
+      secretGate: (svc) => Boolean(svc.auth?.secretId && ids.has(svc.auth.secretId)),
+    }),
   });
 }
 async function enclaveStatusForSettings() {

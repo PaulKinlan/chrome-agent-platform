@@ -186,3 +186,28 @@ export function synthesizeServiceTools({ descriptors, proxyCall, vault, secretGa
   }
   return tools;
 }
+
+/**
+ * Pure helper determining whether enclave service tools should be exposed for a run,
+ * and synthesizing them if permitted (chrome-agent-platform-1pr0).
+ *
+ * Scoped (hook/subagent) runs are strictly denied access to enclave tools.
+ * When enabled is false (user toggle off), returns {} without synthesizing.
+ * When unconfigured (no credentials in vault), returns {} without synthesizing.
+ *
+ * @param {object} opts
+ * @param {boolean} opts.scoped — whether the run is scoped (e.g. hook or subagent)
+ * @param {boolean} [opts.enabled=true] — whether the enclave toggle is enabled
+ * @param {Set<string>|Iterable<string>} [opts.configuredIds] — set of configured secret IDs in the vault
+ * @param {(configuredIds: Set<string>) => Record<string, any>} opts.synthesize — synthesis callback called only when permitted
+ * @returns {Record<string, any>} the tools exposed for the run
+ */
+export function enclaveToolsForRun({ scoped, enabled = true, configuredIds, synthesize }) {
+  if (scoped) return {};
+  if (!enabled) return {};
+  const set = configuredIds instanceof Set ? configuredIds : new Set(configuredIds ?? []);
+  if (set.size === 0) return {};
+  if (typeof synthesize !== "function") return {};
+  return synthesize(set);
+}
+
