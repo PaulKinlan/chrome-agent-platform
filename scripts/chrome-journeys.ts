@@ -790,6 +790,8 @@ const EXPECTED = [
   "Settings: retained a driven-UI screenshot",
   "keyless: developer flag off for the fresh-profile run",
   "Cookies: the cookie value reader and the cookie writers are absent from the default build",
+  "bundled wasm: imageops info executes live through the hub run",
+  "bundled wasm: imageops resize round-trip through the hub run",
   "keyless: typed 'group my tabs by topic' into the hub composer",
   "keyless: clicked Run task",
   "keyless: the first run pauses on ONE Allow card naming tabs (never a bare error)",
