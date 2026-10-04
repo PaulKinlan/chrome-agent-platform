@@ -16,8 +16,8 @@ Deno.test("journey-ledger-pairing: chrome-journeys.ts matches EXPECTED ledger in
   const file = `${ROOT}scripts/chrome-journeys.ts`;
   const result = verifyJourneyLedgerPairing(file);
   assertEquals(result.ok, true, `chrome-journeys ledger must be clean: ${result.errors.join("; ")}`);
-  assertEquals(result.expectedCount, 369, "clean chrome-journeys carries 369 non-meta checks (368 + the co35 disclosure hit-test check)");
-  assertEquals(result.actualCount, 369);
+  assertEquals(result.expectedCount, 372, "clean chrome-journeys carries 372 non-meta checks (368 + the co35 disclosure hit-test check + the v15y site-agent trio)");
+  assertEquals(result.actualCount, 372);
   assertEquals(result.missing.length, 0);
   assertEquals(result.extra.length, 0);
   assertEquals(result.orderMismatch, null);

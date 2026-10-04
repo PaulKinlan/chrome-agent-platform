@@ -10280,11 +10280,15 @@ export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = n
  *   exclude-current  — hide the current agent from the list
  *   callable-only    — list only callable agents (a disabled background agent is hidden)
  *   exclude-kinds    — space-separated kinds to hide entirely (e.g.
- *                      exclude-kinds="acp"): the side panel's agents list
- *                      projects the ONE created-agents set the hub and
- *                      Settings share — harness agents live in its
- *                      harness-quick affordance, not the agent rows
- *                      (chrome-agent-platform-h97m)
+ *                      exclude-kinds="acp site"): the side panel's picker
+ *                      projects the ONE created-agents set (named +
+ *                      background) that options/ntp/hub project — acp lives
+ *                      in the harness affordance, and an enrolled site agent
+ *                      (callable by design) would otherwise be the +1 row the
+ *                      other three surfaces never count
+ *                      (chrome-agent-platform-v15y, following h97m: the
+ *                      harness agents live in the harness-quick affordance,
+ *                      not the agent rows).
  *   label            — the visible label for the search combobox
  *   state / error    — "loading" | "error" (+ error message) overrides
  *   summary          — LIST presentation: the SAME grouped rows, no search row
