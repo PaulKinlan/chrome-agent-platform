@@ -6,6 +6,19 @@ import { assertEquals } from "jsr:@std/assert@1";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { launchChrome, openCdp, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
+import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
+
+// THE BROWSER IS RESOLVED, NOT PINNED (voicebox-beads-i76t). This test carried an absolute macOS
+// Chrome-for-Testing path: it existed on exactly one machine, so everywhere else the in-body statSync
+// fell into `catch { return }` and the test reported PASS having asserted nothing — test honesty mode 5,
+// CONDITIONAL DEATH — while tests/machine-path-honesty.test.ts failed the gate for the literal. Resolving
+// at MODULE LOAD lets a box with no browser report the test as IGNORED (a visible line in the tally)
+// instead of a green that ran nothing, and the probe below keeps the null case asserted, not silent.
+const CHROME_FOR_TESTING = resolveChromeForTesting();
+if (CHROME_FOR_TESTING === null) {
+  console.warn("716s.10 browser step: Chrome for Testing not found in the puppeteer cache — reporting this test as ignored (set up Chrome for Testing or run its harness to exercise it)");
+}
 
 function walkFiles(dir: string, predicate: (f: string) => boolean): string[] {
   let results: string[] = [];
@@ -80,16 +93,13 @@ Deno.test("716s.10: sidepanel tasks header is normalized without wide letter spa
   assertEquals(rule.includes("font-weight: 600"), true, ".tasks-h font-weight must be 600");
 });
 
-Deno.test("716s.10: browser verification of sentence-case kickers and no uppercase labels in Chrome for Testing", async () => {
-  const CFT_BINARY = "/Users/paulkinlan/.cache/puppeteer/chrome/mac_arm-149.0.7827.22/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-  try {
-    Deno.statSync(CFT_BINARY);
-  } catch {
-    console.warn("Chrome for Testing binary not found, skipping browser step");
-    return;
-  }
-
-  const tmpProfile = Deno.makeTempDirSync({ prefix: "cap-cft-716s10-" });
+Deno.test("716s.10: browser verification of sentence-case kickers and no uppercase labels in Chrome for Testing", { ignore: CHROME_FOR_TESTING === null }, async () => {
+  // The ignore above is the skip; this keeps a null from ever reaching launchChrome silently.
+  assertEquals(CHROME_FOR_TESTING !== null, true, "Chrome for Testing must be resolved when this test is not ignored");
+  const CFT_BINARY = CHROME_FOR_TESTING as string;
+  // A Chrome profile is scratch that must not sit on a RAM-backed tmpfs (tests/durable-root.test.ts's
+  // convention): durableDir() names it under $CAP_DURABLE_ROOT ?? $HOME/cap-evidence and refuses tmpfs.
+  const tmpProfile = durableDir("chrome-profiles", `cap-cft-716s10-${Date.now()}`);
   const lockPath = join(Deno.cwd(), ".cap-scratch", "chrome.lock");
   Deno.mkdirSync(join(Deno.cwd(), ".cap-scratch"), { recursive: true });
 

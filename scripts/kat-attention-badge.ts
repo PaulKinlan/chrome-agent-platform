@@ -60,7 +60,9 @@ async function unpackedExtensionId(path: string): Promise<string> {
 // we stage a temp copy of the extension with "notifications" declared in
 // manifest permissions (while keeping the shipped manifest.json with
 // optional_permissions).
-const tempExt = await Deno.makeTempDir({ prefix: "kat-attention-ext-" });
+// durableDir, not makeTempDir: this staged extension is scratch the guard wants OFF a RAM-backed tmpfs
+// (tests/durable-root.test.ts) — the KAT is allowlisted by CONVENTION through the helper, not by exemption.
+const tempExt = durableDir("kat-attention-badge", `ext-${Date.now()}`);
 async function copyDir(src: string, dest: string) {
   await Deno.mkdir(dest, { recursive: true });
   for await (const entry of Deno.readDir(src)) {
