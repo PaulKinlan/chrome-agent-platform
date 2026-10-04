@@ -88,8 +88,8 @@ that, so its Python statuses were re-derived from the tree:
     hash-pinned packages install only when the owner supplies wheel bytes
     (S3 of the `4p7j` arc — **PROPOSED**, no owning bead).
   - `micropip` is not called by first-party code — **PROPOSED**, no owning bead.
-  - There is no OPFS venv: `agent-workspaces/<agent>/python_env/` appears
-    nowhere in the tree — **PROPOSED**, no owning bead.
+  - There is no OPFS venv: no code under `extension/` or `wasm-tools/` references
+    `agent-workspaces/<agent>/python_env/` — **PROPOSED**, no owning bead.
   - Tier 3 (pyodide-build / PEP 783) — **PROPOSED / DEFERRED**, no owning bead.
 - The pin table is unchanged and still exact against
   `wasm-tools/python/pyodide-lock.json` (including matplotlib's `packaging`

@@ -36,11 +36,11 @@ Managed default tools run across three dedicated execution lanes:
   - Contract: Zero imports (no WASI, no POSIX glue); exports direct computation functions.
   - Communication: CAP-authored JS harness writes buffers directly into WebAssembly memory, invokes the export, and reads back return values. Instantiates in-thread within the offscreen document host via `extension/lib/wasm-callexport-host.js`.
   - Confinement: Memory32 bounds; zero side effects; runs in offscreen document without full Emscripten runtime.
-  - Status: **BUILT** (`extension/lib/wasm-callexport-host.js`, registered in `extension/offscreen/offscreen.js`; closed under `chrome-agent-platform-uslb`). Shipped package: `cap.bundled.hash.blake3-1.0.0` (in-repo build, entry `Hash_Calculate`).
+  - Status: **BUILT** (`extension/lib/wasm-callexport-host.js`, registered in `extension/offscreen/offscreen.js`; closed under `chrome-agent-platform-uslb`). Shipped package: `cap.bundled.hash.blake3-1.0.0` (byte-exact extraction from a sha512-pinned tarball, `packages/bundled/evidence/hashwasm-blake3/`; entry `Hash_Calculate`).
   - Proposed Admits: **SPECIFIED, NOT BUILT** — `awasm-noble` (owning bead: `chrome-agent-platform-2uhx`, IN_PROGRESS); `hash-wasm` (owning bead: `chrome-agent-platform-3wei`, BLOCKED).
 - **Lane C: Offscreen Emscripten/Pyodide Runtime (Complex System Runtimes):**
   - Contract: Python execution via Pyodide; fresh worker per run with a 30s timeout and `worker.terminate()` cleanup.
-  - Communication: Hosted within the extension's offscreen document (`offscreen/offscreen.html`), communicating with background service workers via structured message passing.
+  - Communication: Hosted within the extension's offscreen document (`extension/offscreen/offscreen.html`), communicating with background service workers via structured message passing.
   - Confinement: Dedicated Worker per run; hard timeouts kill worker threads; ambient network globals stripped per `4p7j.1`.
   - Status: **BUILT (Python-only)** (`extension/lib/python-host.js`, `extension/lib/python-runtime.js`; tested by `scripts/kat-pyodide.ts`).
   - General Emscripten runtime with SharedArrayBuffer and killable pthreads: **SPECIFIED, NOT BUILT** (owning epic: `chrome-agent-platform-ltkj` / `CAP-FB-20260905-EMSCRIPTEN-RUNTIME-01`).
@@ -50,7 +50,7 @@ Managed default tools run across three dedicated execution lanes:
 2. **Static Binary Integrity Audit:** Run `auditWasmBinary` (`extension/lib/wasm-package-authority.js`) to verify memory32 bounds, section header limits, zero network imports, and conformance to allowed import namespaces.
 3. **Content-Addressed Storage & Manifest Staging:** Store binary under `extension/wasm/cas/<sha256>.wasm`; author a canonical manifest in `extension/wasm/manifests/<package>-<version>.manifest.json` binding tools, capabilities, and parameters.
 4. **Cryptographic Provenance & SBOM:** Stage CycloneDX/SPDX SBOM and license texts in `extension/wasm/licenses/` and `extension/wasm/sbom/`.
-5. **Inventory Registration & Pre-Compilation:** Run `node scripts/build-bundled-tool-packages.mjs` to regenerate `bundled-inventory-data.js` and `bundled-tool-packages.data.js`, validating manifest and CAS byte-identity (freshness enforced at build by `scripts/dist-complete.mjs`).
+5. **Inventory Registration & Pre-Compilation:** Run `node scripts/build-bundled-tool-packages.mjs` to regenerate `bundled-inventory-data.js` and `bundled-tool-packages.data.js`, validating manifest and CAS byte-identity; the generator's own `--verify` mode fails closed on drift (`scripts/dist-complete.mjs` records the six shipped surface bundles, not these generated files).
 
 ---
 
@@ -1103,9 +1103,9 @@ No single canonical "Kite browser in wasm" exists. Candidates found:
   - The sanctioned route is **BUILT**: `cap.fetch` in the sandbox reaches the permissioned Service Worker proxy with per-origin grants and transcript logging (`extension/lib/python-network.js`, `wasm-tools/python/python-worker.js` `installCapModule`; `4p7j.2`, landed). `micropip` itself is **not called by first-party code**, so no wheel is downloaded today.
 - Storage & Execution:
   - Wheel storage is **BUILT**: the OPFS owner-blob store `cap-owner-blobs-v1` holds `kind: "wheel"` blobs behind `wheel.list` / `wheel.put` / `wheel.delete` (`extension/lib/user-wasm-store.js`, `extension/background/service-worker.js`; `4p7j.4`), refused unless `validatePurePythonWheel` accepts the archive (`extension/lib/python-wheel-validator.js`).
-  - Materialisation is **BUILT**: `loadWheels()` in the `python.execute` provider feeds store bytes to the worker, which unpacks them into `/lib/python3.12/site-packages` before user code runs (`4p7j.5`). There is no OPFS-backed venv: `agent-workspaces/<agent>/python_env/` appears nowhere in the tree (**PROPOSED**, no owning bead).
+  - Materialisation is **BUILT**: `loadWheels()` in the `python.execute` provider feeds store bytes to the worker, which unpacks them into `/lib/python3.12/site-packages` before user code runs (`4p7j.5`). There is no OPFS-backed venv: no code under `extension/` or `wasm-tools/` references `agent-workspaces/<agent>/python_env/` (**PROPOSED**, no owning bead).
   - Native extensions lacking prebuilt `pyodide_2024_0_wasm32` binaries fail with an actionable error directing callers to Tier 1 or native tool equivalents.
-- Long-tail coverage: Enables immediate on-demand use of pure Python utilities (`python-dateutil`, `rich`, `typer`, `attrs`, `pydantic`, `jinja2`, `beautifulsoup4`, `markdown`).
+- Long-tail coverage: would enable on-demand use of pure Python utilities (`python-dateutil`, `rich`, `typer`, `attrs`, `pydantic`, `jinja2`, `beautifulsoup4`, `markdown`) **once `micropip` is wired** — none of them is installable today.
 
 ## 60. Python / Pyodide — TIER 3 (pyodide-build, C/Rust extensions)
 
