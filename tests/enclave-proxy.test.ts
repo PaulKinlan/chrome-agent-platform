@@ -11,7 +11,20 @@
 //    tags the response untrusted, and never echoes a secret.
 
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
-import { createSecretVault } from "../extension/lib/secret-vault.js";
+import {
+  createSecretVault,
+  createServiceWorkerAccess,
+} from "../extension/lib/secret-vault.js";
+
+/** The service worker hands its routes a vault wrapped with the minted access token
+ *  (chrome-agent-platform-jao1.7). These tests wrap it the same way instead of bypassing the
+ *  boundary they exist to pin. */
+const SW_ACCESS = createServiceWorkerAccess();
+const swVault = (vault: any) => ({
+  ...vault,
+  getSecretRaw: (keyId: string, opts: any = {}) =>
+    vault.getSecretRaw(keyId, { ...opts, access: SW_ACCESS }),
+});
 import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
 
 const ENCODER = new TextEncoder();
@@ -88,7 +101,7 @@ async function buildRoute(profile: any) {
     installSaltB64: "c3RhcnRlci1zYWx0LWZpeGVkLWZvci10ZXN0cw==",
   });
   await vault.setSecret("BRAVE_SEARCH_API_KEY", "sk-brave-9f8e7d6c5b4a3210-feeds-back", { by: "sw" });
-  const route = (createEnclaveProxyRoutes as any)({ vault, fetchImpl: profile.fetchImpl, services: SERVICES, isAllowedCaller: () => true });
+  const route = (createEnclaveProxyRoutes as any)({ vault: swVault(vault), fetchImpl: profile.fetchImpl, services: SERVICES, isAllowedCaller: () => true });
   const handler = route["enclave.proxy"];
   assert(typeof handler === "function", "the route exposes the enclave.proxy handler");
   return { handler, calls: profile.fetchImpl.calls, vault };
@@ -200,7 +213,7 @@ Deno.test("jao1.2: the jao1.1 AAD hardening rides this branch — a swapped {iv,
   await storage.set({ "cap:vault:secret:GITHUB_TOKEN": brave });
 
   await assertRejects(
-    () => vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw" }),
+    () => vault.getSecretRaw("GITHUB_TOKEN", { caller: "sw", access: SW_ACCESS }),
     Error,
     "integrity",
     "a record swapped into another id's slot fails closed (AAD binding)",
@@ -215,7 +228,7 @@ Deno.test("jao1.2: concurrent opens adopt one install salt (the dsflash1 race cl
     createSecretVault({ storageArea: storage, extensionId: "a".repeat(32) + "b" }),
   ]);
   await v1.setSecret("BRAVE_SEARCH_API_KEY", "from-v1", { by: "sw" });
-  const got = await v2.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw" });
+  const got = await v2.getSecretRaw("BRAVE_SEARCH_API_KEY", { caller: "sw", access: SW_ACCESS });
   assertEquals(got.value, "from-v1", "a concurrent open decrypts records written before it");
   const salts = [...storage.map.keys()].filter((k) => k === "cap:vault:install-salt");
   assertEquals(salts.length, 1, "exactly one salt key exists");
@@ -232,7 +245,7 @@ Deno.test("jao1.2: the caller gate refuses unsanctioned callers before any resol
   });
   await vault.setSecret("BRAVE_SEARCH_API_KEY", "sk-brave-9f8e7d6c5b4a3210-feeds-back", { by: "sw" });
   const route = (createEnclaveProxyRoutes as any)({
-    vault,
+    vault: swVault(vault),
     fetchImpl,
     services: SERVICES,
     isAllowedCaller: (ctx: any) => {
