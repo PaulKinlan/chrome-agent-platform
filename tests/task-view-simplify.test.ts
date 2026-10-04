@@ -12,6 +12,25 @@ import { assert, assertStringIncludes } from "jsr:@std/assert@1";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const read = (rel) => Deno.readTextFileSync(ROOT + rel);
 
+/** The body of a top-level `function <name>(…) { … }`, found by NAME and ended by the matching brace —
+ *  so a pin names the wiring it means and a longer function cannot move it out of reach. */
+function functionBody(source: string, name: string): string | null {
+  const at = source.indexOf(`function ${name}(`);
+  if (at === -1) return null;
+  const open = source.indexOf("{", at);
+  if (open === -1) return null;
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return source.slice(open, i + 1);
+    }
+  }
+  return null;
+}
+
 Deno.test("task view: the registry lives INSIDE the debug overlay panel, not the thread-body flow", () => {
   const html = read("extension/ntp/ntp.html");
   // The debug overlay exists with a11y labelling.
@@ -48,10 +67,17 @@ Deno.test("task view: the toggle wiring is hover-reveal + click-pin + Escape-clo
   const hideIdx = js.indexOf("function hideThreadViewInner");
   assert(hideIdx !== -1, "hideThreadViewInner exists");
   assertStringIncludes(js.slice(hideIdx, hideIdx + 400), "setRunDebugOpen(false)");
-  // The toggle's visibility is driven by actionable runs for the surface.
-  const syncIdx = js.indexOf("function syncConversationRunControls");
-  assert(syncIdx !== -1, "syncConversationRunControls exists");
-  assertStringIncludes(js.slice(syncIdx, syncIdx + 800), "runDebugToggle.hidden = runs.length === 0");
+  // The toggle's visibility is driven by the runs for the current surface (since the 3p3e.6
+  // re-truth: SETTLED runs count too — filtering to actionable phases made the affordance vanish the
+  // moment a run succeeded). THE PIN BINDS THE FUNCTION, NOT A CHARACTER WINDOW: the previous version
+  // read the first 800 characters after the declaration, and the expression drifted past that window
+  // while the behaviour stayed (chrome-agent-platform-i76t) — a pin that fails because a function grew
+  // is testing the file's length, not the wiring.
+  const syncBody = functionBody(js, "syncConversationRunControls");
+  assert(syncBody !== null, "syncConversationRunControls exists");
+  assertStringIncludes(syncBody, "runDebugToggle.hidden = runs.length === 0");
+  // …and a toggle with nothing behind it must not leave the panel open.
+  assertStringIncludes(syncBody, "setRunDebugOpen(false)");
 });
 
 Deno.test("task view round-2: the toggle anchors to the inline-end of the view head", () => {

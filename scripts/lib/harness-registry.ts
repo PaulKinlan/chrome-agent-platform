@@ -129,7 +129,16 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   // validation vs the policy gate). Browser-only.
   "kat-sandbox-egress.ts": {
     class: "kat",
-    loadSensitive: "serialized-Chrome browser suite (up to three sequential launches per run, each taking a bounded-concurrency slot through launchChrome). Never start it above the core count: under heavy load the launches slow and the digest/import-map cases can time out rather than fail — a load red, not a product red.",
+    // A serialized-Chrome browser suite (up to three sequential launches, each taking a bounded-concurrency
+    // slot through launchChrome): under heavy load the launches slow and the digest/import-map cases can time
+    // out rather than fail — a load red, not a product red. IT IS NOT DECLARED loadSensitive, and that is the
+    // measured decision (chrome-agent-platform-i76t): its turns are taken by scripts/kat-runner.ts, which holds
+    // the fleet slot for the WHOLE batch (tests/heavy-gate-slot.test.ts asserts that runner wiring by name).
+    // Declaring the child loadSensitive would demand `fleetSlot`/`requireQuiet` in its own source, and
+    // acquireHeavyGateSlot has NO reentrancy for a descendant of the holder (it flocks the same path): the
+    // child would wait on its own runner's lock until the bound expired. A declaration nobody can honour is
+    // the thing both set-tests exist to refuse, so it is not declared here; the KAT's own runs are covered by
+    // the runner's lease.
     owner: "chrome-agent-platform-gafh",
   },
   "kat-artifact-library-capacity.ts": { class: "kat" },

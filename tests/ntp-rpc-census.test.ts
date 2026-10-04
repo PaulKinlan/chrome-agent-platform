@@ -8,9 +8,18 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const EXT = `${Deno.cwd()}/extension`;
-const BIN = resolveChromeForTesting();
+// THE BROWSER IS RESOLVED, NOT PINNED (chrome-agent-platform-i76t). This file named an absolute macOS
+// Chrome-for-Testing build: it existed on exactly one machine, so everywhere else the statSync below fell
+// into `catch { return }` and the census reported PASS having measured nothing (AGENTS.md test honesty mode
+// 5, CONDITIONAL DEATH) — while tests/machine-path-honesty.test.ts failed the gate for the literal.
+// Resolving at MODULE LOAD lets a box with no browser report this test as IGNORED in the tally instead.
+const CHROME_FOR_TESTING = resolveChromeForTesting();
+if (CHROME_FOR_TESTING === null) {
+  console.warn("ntp-rpc-census: Chrome for Testing not found in the puppeteer cache — reporting this test as ignored");
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const RPC_SHIM = `(() => {
@@ -62,20 +71,13 @@ Deno.test({
   name: "ntp-rpc-census: cold boot <= 22 RPCs, idle <= 2 RPCs, thread open <= 4 RPCs",
   sanitizeOps: false,
   sanitizeResources: false,
+  ignore: CHROME_FOR_TESTING === null,
   fn: async () => {
-    // Skip if Chrome for Testing binary does not exist on this machine
-    if (!BIN) {
-      console.log("Chrome for Testing binary absent; skipping browser census test");
-      return;
-    }
-    try {
-      await Deno.stat(BIN);
-    } catch {
-      console.log("Chrome for Testing binary absent; skipping browser census test");
-      return;
-    }
-
-    const profile = await Deno.makeTempDir({ prefix: "cap-census-test-" });
+    // The ignore above is the skip; this keeps a null from reaching launchChrome with no browser named.
+    assertEquals(CHROME_FOR_TESTING !== null, true, "Chrome for Testing must be resolved when this test is not ignored");
+    const BIN = CHROME_FOR_TESTING as string;
+    // A Chrome profile is scratch that must not sit on a RAM-backed tmpfs (tests/durable-root.test.ts).
+    const profile = durableDir("chrome-profiles", `cap-census-${Date.now()}`);
     const lockPath = `${Deno.cwd()}/.cap-scratch/chrome.lock`;
 
     let chrome: any = null;
@@ -116,7 +118,8 @@ Deno.test({
       // so all 22 routes are asked exactly once).
       assert(
         bootCensus.total <= 22,
-        `Boot RPC count ${bootCensus.total} must be <= 22 (was 26 before zdaj coalescing, 54 before 9epn.1)`
+        `Boot RPC count ${bootCensus.total} must be <= 22 (was 26 before zdaj coalescing, 54 before 9epn.1); by type: ` +
+          JSON.stringify(Object.fromEntries(Object.entries(bootCensus.by).sort((a: any, b: any) => b[1].n - a[1].n))),
       );
 
       // Check 2: 5s idle <= 2 RPCs
