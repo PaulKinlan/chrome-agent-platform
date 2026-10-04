@@ -31,6 +31,9 @@ export const SERIAL_REASONS = {
   "tests/reachability.test.ts": "asserts the repo tree's generated-artifact state",
   "tests/tool-exec-preview.test.ts": "revalidates the REAL shipped bytes (races with rebuilds)",
   "tests/package-extension-freshness.test.ts": "driver packages dist + writes the dist-complete marker",
+  // nz2r: writes a stale build stage dir under extension/ to prove the
+  // per-change gate is immune to killed-build residue (swept in its finally).
+  "tests/select-tests-residue.test.ts": "plants build residue under extension/ to prove test:changed ignores it (removed in finally)",
   // 76hu guard caught this post-merge arrival from main (390b2b3a): it stats
   // the built SW bundle and the dist.complete marker — shared build artifacts.
   "tests/bundle-budget.test.ts": "asserts the built dist bundle size + dist-complete marker (races with rebuilds)",

@@ -18,6 +18,18 @@ dist-archives/
 .cache/
 .build/
 .build/
+# Build scratch a killed build leaves behind (chrome-agent-platform-nz2r).
+# Untracked residue made `test:changed` fail closed to the FULL suite until a
+# human deleted it, so git must never report it as an untracked change. Keep the
+# family in step with scripts/evidence-runner.sh's leftover census and with
+# isBuildResidue() in scripts/select-tests.mjs (the selector's second defence).
+extension/.dist-stage-*
+extension/.dist-link-*
+extension/.dist-prev-*
+.build.lock*
+.lock-stage-*
+.lock-quarantine-*
+.owner.tmp-*
 .claude/worktrees/
 evidence/
 
