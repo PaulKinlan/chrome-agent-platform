@@ -41,7 +41,7 @@ changes that never updated the gate, all fixed 2026-08-27 under
    rot it.
 
 Task state lives in beads — `bd ready` is the claimable frontier, `bd list --status in_progress`
-is what is in flight (owner directive, 2026-09-02); this file is the roadmap view. `TASKS.md` is retired history.
+is what is in flight (owner directive, 2026-09-02); this file is the roadmap view. the retired tasks tracker file is retired history (deleted from the working tree, 2026-09-28).
 
 ## The project
 Chrome as the agent platform: a new-tab agent hub that orchestrates the web with
@@ -76,7 +76,7 @@ no `-vN+1` without a commit in `-vN`, durable worktrees) stands.
 
 **Lifecycle:** `OPEN → IN_REVIEW → DONE` with `BLOCKED`/`ABANDONED` off-ramps.
 **Merged is done** (Paul, 2026-08-28) — work on `origin/main` with the suite green is
-complete; the bead closes with the merge sha (`TASKS.md` and `TASKS-DONE.md` are retired history).
+complete; the bead closes with the merge sha (`the retired tasks tracker` and `the retired done tracker` are retired history).
 `DONE` does not require a
 per-task owner interaction. Real-browser verification is retained unchanged; the
 different-model review requirement was replaced on 2026-08-27 by a labelled review plus
@@ -268,7 +268,7 @@ defaults in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
       matrix pre-holds it in the variant leg.
 
 The claimable frontier is `bd ready`; in flight is `bd list --status in_progress`; waiting is `bd blocked`
-(the **Open work queue** table in `TASKS.md` is retired history).
+(the **Open work queue** table in the retired tasks tracker is retired history).
 **The demo path is the only P0 lane** (owner decision, 2026-08-27) — the Wasm platform
 dropped to P2 until after the exec demo, because it is invisible in one and largely blocked
 on owner licence/Store decisions.

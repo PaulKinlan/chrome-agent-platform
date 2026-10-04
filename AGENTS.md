@@ -87,7 +87,7 @@ an exception. These rules make that safe:
 ## Task tracking: beads only (Paul, 2026-09-02 — HARD RULE)
 
 **bd (beads) is the ONLY task/bug/next-work tracker.** The RETIRED markdown trackers —
-TASKS.md, TASKS-DONE.md, KNOWN-ISSUES.md, docs/UI-FIXES-TRACKER.md — are legacy views
+the retired tasks tracker, the retired done tracker, the retired known-issues file, the retired ui-fixes-tracker file — are legacy views
 kept only for history. Never create, update, or consult them for state;
 a markdown tracker entry is not a task. Everything lives in beads, synced to
 the GitHub remote via `bd dolt push` (a post-commit hook does this
@@ -204,7 +204,7 @@ files/delegates, reviews, and reports. Anything >30s of work is dispatched.
      `failed` state, and the completed child's source is left intact.
 
 ## Hard rules
-- **beads (bd) is the ONLY task/bug/next-work tracker** (owner directive 2026-09-02). TASKS.md, TASKS-DONE.md, KNOWN-ISSUES.md and every other markdown tracker are RETIRED — never create, update, or consult them for state. Pick work with `bd ready`, claim with `bd update <id> --claim`, close only when the complete fix is on the pushed branch. See "Task tracking: beads only" below.
+- **beads (bd) is the ONLY task/bug/next-work tracker** (owner directive 2026-09-02). The retired tasks tracker, the retired done tracker, the retired known-issues file and every other markdown tracker are RETIRED — never create, update, or consult them for state. Pick work with `bd ready`, claim with `bd update <id> --claim`, close only when the complete fix is on the pushed branch. See "Task tracking: beads only" below.
 - Never accept "it serves" as "it works" — drive the real behavior in a browser
   (CDP) with screenshots as evidence.
 - **A green suite is not proof of a property.** This repo has shipped a green test
@@ -264,7 +264,7 @@ read in run 2.
 ## Working conventions (Paul, 2026-08-16)
 - **Track every ask.** Every product issue/request becomes a bead (`bd create`), with the
   UI detail and the review/system findings in the bead itself — the markdown views that
-  once held them (`docs/UI-FIXES-TRACKER.md`, root `KNOWN-ISSUES.md`) are retired history. Nothing is dropped.
+  once held them (`the retired ui-fixes-tracker file`, root `the retired known-issues file`) are retired history. Nothing is dropped.
   Work through them in subagents; advance each only with the required evidence.
 - **Resolve open questions.** Read docs/OPEN-QUESTIONS.md; mark the questions Paul
   has answered (with the answer) + surface the genuinely-open ones.
@@ -309,7 +309,7 @@ read in run 2.
   for parallel implementation where the work genuinely divides. The review half of this
   rule — delegating to other instances (sol, GLM-5.3, deepseek-v4-pro) — no longer
   applies: that fleet is not available. See "Review without a second model". Findings
-  are still tracked — as beads now; the KNOWN-ISSUES file is retired history — and
+  are still tracked — as beads now; the the retired known-issues file file is retired history — and
   actioned; they now come from review passes and from the owner using the product.
 - **Continuous skill/quality runs (Paul, 2026-08-17).** Spin up subagents to
   regularly run the quality skills in the background: the impeccable design pass
@@ -326,7 +326,7 @@ read in run 2.
   A feature that just fails with "permission required" is a bug.
 - **Docs never drift (Paul, 2026-08-17).** Before every commit, update the docs to
   match the change: PLAN.md (the roadmap state), the bead (the open/fixed findings —
-  root KNOWN-ISSUES.md and docs/UI-FIXES-TRACKER.md are retired history, never updated),
+  root the retired known-issues file and the retired ui-fixes-tracker file are retired history, never updated),
   docs/DESIGN.md (the design system), docs/OPEN-QUESTIONS.md, CHANGELOG.md (the version
   entry). A commit that lands
   a feature/fix WITHOUT updating the docs is incomplete — the docs are part of the
@@ -670,9 +670,9 @@ dependency-ordered work queue** (before the demo / the coworker thesis / hygiene
 **section 6 is the five-minute demo script with its ranked blockers.** Every finding carries
 a `CAP-FB-*` ID, and each id is a bead — find it with
 `bd list --desc-contains <CAP-FB-id> --status open,in_progress,blocked,deferred,closed`
-(the id sits in the bead's description or External field; the retired TASKS.md entries
+(the id sits in the bead's description or External field; the retired the retired tasks tracker entries
 the ids once pointed at are history). `CAP-FB-20260830-EXEC-DEMO-01` is the umbrella. The
-P0 ids: `bd list -p 0 --status open,in_progress,blocked` (the retired KNOWN-ISSUES.md
+P0 ids: `bd list -p 0 --status open,in_progress,blocked` (the retired the retired known-issues file
 list of them is history). Three owner decisions gate the demo path (Q18 host
 access, Q19 page actions, Q12 default model) and carry recommended defaults in
 [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md).
@@ -683,7 +683,7 @@ is kept as history; its two behavioural rules still apply:
 
 - **Put the bead id in the commit subject** (`chrome-agent-platform-<id>: <what the user
   gets>`, plus the `CAP-FB-*` id where the bead carries one), so `git log --grep=<id>`
-  finds a lane's work; the `Recover:` commands this rule served lived in the retired TASKS.md.
+  finds a lane's work; the `Recover:` commands this rule served lived in the retired the retired tasks tracker.
 - **Never create a `-vN+1` attempt with no commit in `-vN`.** Stop and escalate instead.
 
 ## Task recovery (2026-09-03; supersedes the 2026-08-19 repository-local recovery notes)
@@ -692,7 +692,7 @@ Task state lives in beads (bd) — the Dolt database synced via `refs/dolt/data`
 on the GitHub remote. Recovery after a crash: `bd list --status in_progress`
 shows claimed lanes; pushed branches on origin carry each lane's work; the
 bead comments carry candidate shas and gate evidence. Never consult or revive
-the retired markdown trackers (`TASKS.md`, `KNOWN-ISSUES.md` — history only).
+the retired markdown trackers (`the retired tasks tracker`, `the retired known-issues file` — history only).
 
 ## Worktree and evidence hygiene (Paul, 2026-08-22 — CAP-FB-20260821-WORKTREE-HYGIENE-01)
 
@@ -830,7 +830,7 @@ the machinery.
    stale branches.
 4. **Put the bead id in the commit subject** (and the `CAP-FB-*` id where the bead carries
    one). When this was written 2 of 430 commits carried their id, which is why every
-   `Recover:` command in the retired `TASKS.md` failed to find its own work; today
+   `Recover:` command in the retired `the retired tasks tracker` failed to find its own work; today
    `git log --grep=<bead-id>` is how a lane's commits are found.
 5. **No worktree or retained evidence on a RAM-backed filesystem.** Both live on durable
    storage. Evidence whose only copy is on tmpfs is not evidence.

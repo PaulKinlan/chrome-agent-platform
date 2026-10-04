@@ -27,7 +27,7 @@ const RETIRED_TRACKERS = ["TASKS.md", "TASKS-DONE.md", "KNOWN-ISSUES.md", "docs/
 // AGENTS.md joined the list under chrome-agent-platform-w56b: the constitution
 // declared the beads-only rule and then pointed readers at the retired files in
 // six places below it.
-const POINTER_DOCS = ["README.md", "PLAN.md", "AGENTS.md", "docs/KNOWN-ISSUES.md", "docs/KNOWN-ISSUES-ARCHIVE.md", "docs/AGENT-MODEL.md", "docs/UI-FIXES-TRACKER.md"];
+const POINTER_DOCS = ["README.md", "PLAN.md", "AGENTS.md", "docs/KNOWN-ISSUES-ARCHIVE.md", "docs/AGENT-MODEL.md"]; // docs/KNOWN-ISSUES.md and docs/UI-FIXES-TRACKER.md were DELETED from the working tree (chrome-agent-platform-yz4e); git history keeps them
 const TRACKER_NAME_RE = /\b(TASKS\.md|TASKS-DONE\.md|KNOWN-ISSUES\.md|KNOWN-ISSUES\b(?!-ARCHIVE)|UI-FIXES-TRACKER)/;
 const RETIREMENT_MARKER_RE = /\b(retired|history|legacy)\b/i;
 
@@ -46,7 +46,7 @@ const STALE_PHRASES: Array<[string, RegExp]> = [
 // recorded the finding. Everything else — including every doc under docs/ —
 // is clean.
 const BANNED_NAME_RE = /chaos/i;
-const BANNED_NAME_ALLOWLIST = new Set(["AGENTS.md", "CLAUDE.md", "TASKS-DONE.md", "docs/DOCS-AUDIT-2026-09-05.md"]);
+const BANNED_NAME_ALLOWLIST = new Set(["AGENTS.md", "CLAUDE.md", "docs/DOCS-AUDIT-2026-09-05.md"]); // TASKS-DONE.md was deleted from the working tree (chrome-agent-platform-yz4e)
 
 function readmeDocMap(): string {
   const readme = read("README.md");
@@ -56,11 +56,15 @@ function readmeDocMap(): string {
   return readme.slice(start, end);
 }
 
-Deno.test("6j8i: every retired tracker opens with a RETIRED banner that points at beads", () => {
+Deno.test("yz4e: every retired tracker is DELETED from the working tree (git history keeps it)", () => {
+  // Re-pin (chrome-agent-platform-yz4e): the owner chose deletion over frozen
+  // banners, so the post-fix truth is ABSENCE on disk — the files must never
+  // return to the working tree (git history retains them).
   for (const rel of RETIRED_TRACKERS) {
-    const head = read(rel).split("\n").slice(0, 12).join("\n");
-    assert(/RETIRED/.test(head), `${rel}: the banner says RETIRED in its first 12 lines`);
-    assert(/\bbd (ready|list)\b/.test(head), `${rel}: the banner points at bd ready / bd list`);
+    const exists = (() => {
+      try { Deno.lstatSync(ROOT + rel); return true; } catch { return false; }
+    })();
+    assertEquals(exists, false, `${rel}: the retired tracker must stay deleted from the working tree`);
   }
 });
 
@@ -89,7 +93,13 @@ Deno.test("6j8i: the README document map leads with beads, lists the current rev
   assert(/\b(history|superseded)\b/i.test(rows[rowIndex("REVIEW-2026-08-21.md")]!), "…demoted to history");
   assert(rowIndex("`bd ready`") < rowIndex("REVIEW-2026-08-30.md"), "beads precede the reviews (precedence order)");
   assert(rowIndex("REVIEW-2026-08-30.md") < rowIndex("REVIEW-2026-08-21.md"), "the current review precedes the superseded one");
-  for (const t of RETIRED_TRACKERS) assert(rowIndex(t) >= 0, `${t} is still findable from the map (as retired)`);
+  // yz4e re-pin: the trackers are DELETED — the map keeps them findable as
+  // deleted (one consolidated row), not as live-file links.
+  assert(rowIndex("retired markdown trackers") >= 0, "the map keeps the retired trackers findable (as deleted)");
+  assert(
+    /deleted from the working tree/.test(rows[rowIndex("retired markdown trackers")]!),
+    "the map row says the trackers were deleted from the working tree",
+  );
 });
 
 Deno.test("6j8i: the README promises the labelled review that exists, not the fleet that was retired", () => {
@@ -116,7 +126,10 @@ Deno.test("6j8i: no tracked markdown names the owner's other project (AGENTS.md 
   // The allowlist is not a loophole: each entry is still tracked and still the
   // kind of file the exemption describes.
   for (const rel of BANNED_NAME_ALLOWLIST) assert(files.includes(rel), `${rel}: allowlisted file is tracked`);
-  assert(/^# .*RETIRED/m.test(read("TASKS-DONE.md").split("\n").slice(0, 3).join("\n")), "TASKS-DONE.md is exempt only as retired history");
+  // TASKS-DONE.md was DELETED from the working tree (chrome-agent-platform-yz4e);
+  // its allowlist entry and the companion RETIRED-banner check above are gone
+  // with it — an exemption for a file that does not exist is not a loophole, it
+  // is dead configuration.
 });
 
 Deno.test("i6n6: no tracked code files (.js, .mjs, .ts) name the owner's other project (AGENTS.md hard rule)", () => {

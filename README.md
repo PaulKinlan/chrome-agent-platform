@@ -265,7 +265,7 @@ This README is the overview. The document map, in precedence order:
 | **[docs/DESIGN.md](docs/DESIGN.md)** + **[PRODUCT.md](PRODUCT.md)** | The visual system and the product's voice. |
 | **[REVIEW-2026-08-30.md](REVIEW-2026-08-30.md)** | The current full-project reanalysis — the dependency-ordered work queue (§5) and the demo script with its ranked blockers (§6). AGENTS.md names it the required entry point before picking up work. |
 | **[REVIEW-2026-08-21.md](REVIEW-2026-08-21.md)** | History: the 2026-08-21 architectural review, superseded by the 2026-08-30 one. Its *delivery* diagnosis has since been acted on (`0.2.105 → 0.2.319`); read it for the method, not for current status. |
-| [TASKS.md](TASKS.md), [TASKS-DONE.md](TASKS-DONE.md), [KNOWN-ISSUES.md](KNOWN-ISSUES.md), [docs/UI-FIXES-TRACKER.md](docs/UI-FIXES-TRACKER.md) | **Retired** markdown trackers (2026-09-02) — kept as git history only, never consulted or updated for state. Each opens with a banner that says so and points at `bd`. |
+| the retired markdown trackers (tasks, done, known-issues, ui-fixes) | **Retired** 2026-09-02 and **deleted from the working tree** 2026-09-28 (chrome-agent-platform-yz4e) — git history keeps them; never consulted or updated for state. `bd` is the only tracker. |
 
 **Current gate status:** build clean (store bundle ceilings on every surface — SW ≤ 3.0 MB, agent worker ≤ 2.0 MB, options ≤ 880 kB, NTP ≤ 870 kB, side panel ≤ 660 kB, diff-core ≤ 17 kB) · full test suite
 green (`npm test` per-file runner over 445+ test files, 4100+ tests) · Chrome journeys **127/127** ·
