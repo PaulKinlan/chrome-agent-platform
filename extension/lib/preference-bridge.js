@@ -18,13 +18,16 @@ const LOCALE_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{1,8})*$/;
 
 /**
  * Build a preference message for the outer surface to post to a layer.
+ * Supports origin-scoping per docs/PREFERENCE-PERCOLATION.md (v5ee / n2bz).
  * @param {{theme?: string, locale?: string}} preference  a safe-subset
  * @param {string} nonce  the one-time token the layer is expecting
+ * @param {{ targetOrigin?: string }} [opts] optional target origin constraint
  */
-export function buildPreferenceMessage(preference, nonce) {
+export function buildPreferenceMessage(preference, nonce, { targetOrigin = "" } = {}) {
   return {
     type: PREFERENCE_MSG_TYPE,
     nonce: String(nonce ?? ""),
+    ...(targetOrigin ? { targetOrigin: String(targetOrigin) } : {}),
     preference: {
       ...(typeof preference?.locale === "string" ? { locale: preference.locale } : {}),
     },
@@ -37,18 +40,28 @@ export function buildPreferenceMessage(preference, nonce) {
  *
  * A message is accepted only if it came from the parent (the caller passes
  * `sourceIsParent` = `event.source === window.parent`), carries the expected
- * nonce, has the right type, and its preference object contains ONLY known keys
- * with valid values. This rejects forgery, replay, and unknown/oversized keys.
+ * nonce, matches the expected origin when scoped, has the right type, and its
+ * preference object contains ONLY known keys with valid values. This rejects
+ * forgery, replay, and unknown/oversized keys.
  *
  * @param {unknown} data  the message `event.data`
- * @param {{ nonce?: string, sourceIsParent?: boolean }} opts
+ * @param {{ nonce?: string, sourceIsParent?: boolean, expectedOrigin?: string, eventOrigin?: string }} opts
  */
-export function validatePreferenceMessage(data, { nonce = "", sourceIsParent = false } = {}) {
+export function validatePreferenceMessage(
+  data,
+  { nonce = "", sourceIsParent = false, expectedOrigin = "", eventOrigin = "" } = {},
+) {
   if (!data || typeof data !== "object") return { ok: false, error: "not an object" };
   if (!sourceIsParent) return { ok: false, error: "source is not the parent" };
   if (data.type !== PREFERENCE_MSG_TYPE) return { ok: false, error: "unknown message type" };
   if (typeof data.nonce !== "string" || data.nonce !== nonce) {
     return { ok: false, error: "nonce mismatch" };
+  }
+  if (expectedOrigin && eventOrigin && eventOrigin !== expectedOrigin) {
+    return { ok: false, error: "origin mismatch" };
+  }
+  if (data.targetOrigin && expectedOrigin && data.targetOrigin !== expectedOrigin) {
+    return { ok: false, error: "target origin mismatch" };
   }
   if (!data.preference || typeof data.preference !== "object" || Array.isArray(data.preference)) {
     return { ok: false, error: "preference must be an object" };
@@ -87,15 +100,17 @@ export function applyPreference(preference, ctx = {}) {
 
 /**
  * A convenience: wire the listener on a layer's window. The nonce must match
- * what the parent injected into this frame's bootstrap.
- * @param {{ nonce?: string, onPreference?: (pref) => void }} opts
+ * what the parent injected into this frame's bootstrap. Supports origin scoping.
+ * @param {{ nonce?: string, expectedOrigin?: string, onPreference?: (pref) => void }} opts
  */
-export function listenForPreferences({ nonce = "", onPreference = null } = {}) {
+export function listenForPreferences({ nonce = "", expectedOrigin = "", onPreference = null } = {}) {
   if (typeof window === "undefined" || !window.addEventListener) return () => {};
   const handler = (event) => {
     const res = validatePreferenceMessage(event.data, {
       nonce,
       sourceIsParent: event.source === window.parent,
+      expectedOrigin,
+      eventOrigin: event.origin,
     });
     if (res.ok) {
       applyPreference(res.preference);
