@@ -99,9 +99,18 @@ const drive = (seed: number) => `
   await render.catch(() => {});
   const totalMs = performance.now() - t0;
   const reads = R.calls.filter((c) => c.t1 != null).map((c) => c.t1 - c.t0).sort((a, b) => a - b);
+  // DOM-independent metric: how long the FIRST pool-sized batch of reads took.
+  // This is "the visible previews" without depending on custom-element internals:
+  // a serial loop cannot finish any batch before issuing ~all of them, so this
+  // single number separates "one read" from "24 reads" on its own.
+  const batch = R.calls.slice(0, ${CONCURRENCY}).filter((c) => c.t1 != null);
+  const firstBatchMs = batch.length
+    ? Math.round(Math.max(...batch.map((c) => c.t1)) - Math.min(...batch.map((c) => c.t0)))
+    : null;
   return {
     totalMs: Math.round(totalMs),
     firstPreviewMs: firstPreviewMs === null ? null : Math.round(firstPreviewMs),
+    firstBatchMs,
     fetched: R.calls.length,
     peakInflight: R.peak,
     readsDone: reads.length,
@@ -205,6 +214,11 @@ try {
     "visible previews land in about one read, not behind 24",
     result.firstPreviewMs !== null && result.firstPreviewMs <= result.readsP50 * 2 + 150,
     { firstPreviewMs: result.firstPreviewMs, readsP50: result.readsP50 },
+  );
+  check(
+    "the first pool-sized batch completes in about one read (DOM-independent)",
+    result.firstBatchMs !== null && result.firstBatchMs <= result.readsP50 * 2 + 150,
+    { firstBatchMs: result.firstBatchMs, readsP50: result.readsP50 },
   );
 
   await Deno.writeTextFile(`${OUT}/gallery-previews.json`, JSON.stringify(report, null, 2));
