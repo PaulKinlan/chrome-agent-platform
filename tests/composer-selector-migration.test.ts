@@ -57,9 +57,20 @@ const EXEMPT = new Set([
 // named harnesses, then one-off evidence, then unit tests that mention the ids.
 const INVENTORY: Record<string, number> = {
   // ── gates inside test:all ────────────────────────────────────────────────
-  "scripts/chrome-journeys.ts": 4, // all call sites migrated to composerInput/composerSend; only 4 lines in boxOf() compat mapping remain
+  // (chrome-agent-platform-ady6, 2026-10-05: chrome-journeys.ts reached 0 and was
+  // pruned — see MIGRATED below. No gate names a retired id any more.)
   // MIGRATED, so pruned from the ledger (a clean file that stays listed fails the
   // second test on purpose — the ledger must list only work that is left):
+  //   scripts/chrome-journeys.ts (was 38, then 4) — the last four lines were
+  //     boxOf()'s compat mapping: it retried with [data-composer-input]/
+  //     [data-composer-send] when the selector contained a retired id. Removed by
+  //     ady6 after this guard proved no file outside the inventory names one, so
+  //     the mapping could only ever fire for a caller that does not exist; the
+  //     mapping only inspected selectors that contained the id, which is also why
+  //     deleting it cannot change any canonical path.
+  //   scripts/kat-composer-slash-commands.ts (was 3) and scripts/kat-composer-grow.ts
+  //     (was 3) — the two composer KATs, migrated to composerInput("hub"/"thread"),
+  //     each verified by running that KAT (see the ady6 bead record).
   //   scripts/component-gallery-smoke.ts (was 3) — migrated to composerInput/composerPopup/composerSend.
   //   scripts/a11y-audit.ts (was 3) — it was the red gate: four combobox checks
   //     read ARIA attributes off the absent element with ?., so attrs came back {}
@@ -76,8 +87,6 @@ const INVENTORY: Record<string, number> = {
   "scripts/kat-thinking-trace.ts": 4,
   "scripts/kat-tool-call-clarity.ts": 3,
   "scripts/kat-mic-state.ts": 3,
-  "scripts/kat-composer-slash-commands.ts": 3,
-  "scripts/kat-composer-grow.ts": 3,
   "scripts/kat-webmcp-honest-errors.ts": 2,
   "scripts/kat-patch-asset.ts": 2,
   "scripts/kat-bundled-execute.ts": 2,
@@ -102,9 +111,24 @@ const INVENTORY: Record<string, number> = {
   "scripts/sidebar-parity.ts": 1, // migrated by bead cwy2; was 3
   "scripts/lib/harness-registry.ts": 1, // prose in cwy2's sidebar-parity reason row, not a selector
   // ── one-off evidence drivers ─────────────────────────────────────────────
+  // AUDITED 2026-10-05 (ady6): sndb-composer-unique-evidence.ts is a
+  // NEGATIVE-ASSERTION audit (bead 1z4y) — it asserts that ZERO elements carry
+  // the retired ids, so it MUST keep naming them; migrating it would delete the
+  // evidence that they are gone.
   "cap-evidence/sndb-composer-unique-evidence.ts": 15,
+  // AUDITED 2026-10-05 (ady6): STALE, and it cannot run — the four constants are
+  // live selectors (document.getElementById("task-input")), so typeInto/clickSel
+  // find nothing and the harness exits 1 before measuring anything. Filed as its
+  // own follow-up; it needs a real latency run to verify the repair, which is why
+  // it is not bundled into the mechanical migration.
   "cap-evidence/h638-open-trace.ts": 4,
-  // ── unit tests that mention the ids (audit: pin, fixture, or stale?) ─────
+  // ── unit tests: AUDITED, and they are NOT composer sites ─────────────────
+  // Measured 2026-10-05 (ady6): every counted line is the identifier `run-task` in
+  // ANOTHER sense — a local variable (runTaskEarly), an SW message name inside a
+  // census list ("run-task" beside "task.retry"), an assertion message ("run-task
+  // early quota"), and a hostile-input comment. They stay listed because the
+  // guard's regex is deliberately blunt; renaming a product message type to
+  // satisfy a harness scan would be the tail wagging the dog. No migration owed.
   "tests/durable-runs.test.ts": 3,
   "tests/sw-route-modularization.test.ts": 1,
   "tests/sw-dispatch-authority-census.test.ts": 1,

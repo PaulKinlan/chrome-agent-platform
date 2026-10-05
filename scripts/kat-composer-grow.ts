@@ -22,6 +22,7 @@
 //   deno run -A scripts/kat-composer-grow.ts <path-to-extension> [<out-dir>]
 
 import { wireValue } from "./lib/cdp-eval.ts";
+import { composerInput } from "./lib/composer-target.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
@@ -91,8 +92,7 @@ await sleep(1500);
 await evalIn(`(() => {
   window.__kat = {
     el: () => document.querySelector("#composer"),
-    input: () => document.querySelector("#composer")?.querySelector?.("#task-input")
-      ?? document.querySelector("#composer #task-input"),
+    input: () => document.querySelector("${composerInput("hub")}"),
     set(v) {
       const i = this.input();
       i.value = v;
@@ -155,7 +155,7 @@ await shot("03-composer-50-line-paste");
 
 // ── 6. hidden thread composer is NOT pinned to 0px ───────────────────────────
 const thread = await evalIn(`(() => {
-  const t = document.querySelector("#thread-composer #task-input");
+  const t = document.querySelector("${composerInput("thread")}");
   if (!t) return { missing: true };
   return { styleH: t.style.height, value: t.value };
 })()`, pageSession);
