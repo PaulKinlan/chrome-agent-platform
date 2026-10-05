@@ -46,7 +46,7 @@ Deno.test("foundation: tool descriptors declare disabled availability, none disp
   const data = JSON.parse(text);
   assertEquals(data.schemaVersion, 2);
   assert(Array.isArray(data.tools));
-  assertEquals(data.tools.length, 9);
+  assertEquals(data.tools.length, 11);
 
   for (const tool of data.tools) {
     assertEquals(tool.availability, "disabled", `${tool.toolId} must be disabled`);
@@ -54,5 +54,68 @@ Deno.test("foundation: tool descriptors declare disabled availability, none disp
     assertEquals(tool.dispatcherKind, "none", `${tool.toolId} must declare none dispatcher`);
     assertEquals(tool.admitted, false, `${tool.toolId} must not be admitted`);
     assertEquals(tool.canonicalNameClaim, false, `${tool.toolId} must not claim canonical naming`);
+  }
+});
+
+// chrome-agent-platform-ae5v: the two SQL modules are DECLARED and
+// NON-EXECUTABLE. Both are Emscripten builds — sqlite3.wasm imports env (27) +
+// wasi_snapshot_preview1 (9), wa-sqlite imports its bundled module a (73) — and
+// `auditWasmBinary` REFUSES them (import_not_allowed), so the honest posture is a
+// descriptor row that promises nothing runnable: no manifest, no CAS blob, no
+// dispatcher. These pins fail if a row is deleted, if a measured value drifts,
+// or if someone ships a manifest for them without wiring the Lane C host (ltkj)
+// and deliberately moving the row.
+const AE5V_EXPECTED = [
+  {
+    toolId: "sqlite_wasm_official",
+    version: "3.53.0-build1",
+    artifacts: [
+      { bytes: 864752, sha256: "02d7e48164395fa68f81c6ec33e9da5461be397dc57602ac0cd89b4bbba1d312", imports: { env: 27, wasi_snapshot_preview1: 9 } },
+    ],
+  },
+  {
+    toolId: "wa_sqlite",
+    version: "1.0.0",
+    artifacts: [
+      { bytes: 558343, sha256: "5384bc7d80d7981c2516f3ad6b02d886629985d178e5037e765d655f440bbf9f", imports: { a: 73 } },
+      { bytes: 1139398, sha256: "91376096fe56ddd9594db83074704f08fc2566edea2cb121aa624f72a67a86b5", imports: { a: 73 } },
+    ],
+  },
+];
+
+Deno.test("ae5v: sqlite-wasm + wa-sqlite are declared, disabled, and carry their measured pins", async () => {
+  const data = JSON.parse(await Deno.readTextFile("wasm-tools/descriptors/foundation-descriptors.json"));
+  for (const expected of AE5V_EXPECTED) {
+    const row = data.tools.find((t) => t.toolId === expected.toolId);
+    assert(row, `${expected.toolId} must be declared as a descriptor row`);
+    assertEquals(row.version, expected.version, `${expected.toolId} version pin`);
+    assertEquals(row.availability, "disabled", `${expected.toolId} must stay disabled`);
+    assertEquals(row.admitted, false, `${expected.toolId} must stay unadmitted`);
+    assertEquals(row.dispatcherKind, "none", `${expected.toolId} must declare no dispatcher`);
+    assertEquals(row.measuredArtifacts.length, expected.artifacts.length, `${expected.toolId} artifact count`);
+    expected.artifacts.forEach((artifact, i) => {
+      assertEquals(row.measuredArtifacts[i].bytes, artifact.bytes, `${expected.toolId} artifact ${i} size pin`);
+      assertEquals(row.measuredArtifacts[i].sha256, artifact.sha256, `${expected.toolId} artifact ${i} sha256 pin`);
+      assertEquals(row.measuredArtifacts[i].imports, artifact.imports, `${expected.toolId} artifact ${i} import census pin`);
+    });
+    assert(
+      typeof row.measurement?.authorityVerdict === "string" && row.measurement.authorityVerdict.includes("refused"),
+      `${expected.toolId} must record the bundled authority's refusal`,
+    );
+  }
+});
+
+Deno.test("ae5v: neither SQL module is executable — no shipped manifest declares it", async () => {
+  const dir = "extension/wasm/manifests";
+  const names = [];
+  for await (const entry of Deno.readDir(dir)) if (entry.isFile) names.push(entry.name);
+  for (const { toolId } of AE5V_EXPECTED) {
+    assert(!names.some((n) => n.includes(toolId)), `${toolId} must ship no bundled manifest`);
+  }
+  for (const name of names) {
+    const body = await Deno.readTextFile(`${dir}/${name}`);
+    for (const { toolId } of AE5V_EXPECTED) {
+      assert(!body.includes(`"${toolId}"`), `no shipped manifest may declare ${toolId} (${name})`);
+    }
   }
 });
