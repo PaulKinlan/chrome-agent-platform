@@ -1724,10 +1724,17 @@ async function runAgentProviderMutation({ message, agentName, description, trigg
 
 function openNamedAgentEditor(agent) {
   const message = { type: "cap:edit-named-agent", id: agent.id };
-  if (window.parent && window.parent !== window) {
-    window.parent.postMessage(message, "*");
-    return;
-  }
+  // Origin-scoped like returnToHubComposer above (chrome-agent-platform-wfxe): the parent that
+  // receives this is the extension's own hub page, so its origin IS knowable and a wildcard target
+  // only widens the audience for a message that names an action and an agent id. This is the
+  // reference implementation for the "extension page -> same-origin hub parent" class; the other
+  // channels in that class are listed with reasons in tests/postmessage-wildcard-guard.test.ts.
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(message, window.location.origin);
+      return;
+    }
+  } catch { /* cross-origin parent — fall through to the full navigation */ }
   window.location.href = chrome.runtime.getURL(`ntp/ntp.html#agent=named:${encodeURIComponent(agent.id)}&edit=1`);
 }
 

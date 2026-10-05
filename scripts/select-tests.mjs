@@ -68,6 +68,7 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/harness-registry.test.ts",
   "tests/source-materialization.test.ts",
   "tests/source-inspecting-tests-guard.test.ts",
+  "tests/postmessage-wildcard-guard.test.ts",
 ];
 
 export const ALWAYS_ON = Object.freeze([
