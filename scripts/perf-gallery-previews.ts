@@ -252,12 +252,13 @@ try {
   }
   if (!extId) throw new Error(`no service worker reports the manifest name ${JSON.stringify(wantName)} (tree ${EXT})`);
 
-  // Seed through the NTP page. An asset.create sent from the OPTIONS page never
-  // settled on this build (the bounded diagnostic said "seed message did not settle
-  // within 8000ms"), while ntp.html is the sender the existing kat-artifact-preview.ts
-  // harness uses successfully — so the page is part of the working recipe, not
-  // incidental.
-  const adminT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` })).result.targetId;
+  // Seed from the GALLERY page using the CALLBACK form, which is what the working
+  // kat-artifact-library-capacity.ts harness does:
+  //   const s = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, res))
+  // An asset.create from the OPTIONS page never settled, and the promise form from
+  // ntp.html hung intermittently on a loaded box (reads answered, writes did not), so
+  // this follows the proven sender rather than inventing another one.
+  const adminT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/artifacts/index.html` })).result.targetId;
   const adminS = await attach(adminT);
   if (!(await waitFor(adminS, CHROME_READY))) throw new Error(`the seed page never exposed chrome.runtime — context says ${await probe(adminS)}`);
   // Warm the service worker BEFORE seeding. The first sendMessage after a page load
@@ -281,15 +282,21 @@ try {
   );
   if (warm === -1) throw new Error("the service worker never answered asset.list");
   console.log(`service worker answered after ${warm}ms`);
-  const adminMsg = (o: unknown) => evalInT(adminS, `chrome.runtime.sendMessage(${JSON.stringify(o)})`, 20000, "seed message");
-  for (let i = 0; i < SEED; i++) {
-    const r = await adminMsg({ type: "asset.create", origin: "master", assetType: "text", name: `gallery-seed-${String(i).padStart(2, "0")}`, content: `seed artifact ${i}` });
-    if (!r?.ok) throw new Error(`asset.create ${i} failed: ${JSON.stringify(r)}`);
-    if (i % 5 === 4 || i === SEED - 1) console.log(`  seeded ${i + 1}/${SEED}`);
+  const seedExpr = `(async () => {
+    const s = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, res));
+    let created = 0;
+    for (let i = 0; i < ${SEED}; i++) {
+      const r = await s({ type: "asset.create", origin: "master", assetType: "text", name: "gallery-seed-" + String(i).padStart(2, "0"), content: "seed artifact " + i });
+      if (r && r.ok) created++;
+    }
+    const listed = await s({ type: "asset.list", origin: "master" });
+    return JSON.stringify({ created, asked: ${SEED}, listed: (listed && listed.assets) ? listed.assets.length : -1 });
+  })()`;
+  const seeded = JSON.parse(await evalInT(adminS, seedExpr, 180000, "seed batch"));
+  if (seeded.created !== SEED || seeded.listed < SEED) {
+    throw new Error(`seeding failed: ${JSON.stringify(seeded)}`);
   }
-  const listed = await adminMsg({ type: "asset.list", origin: "master" });
-  const listedCount = (listed?.assets ?? []).length;
-  console.log(`seeded ${SEED} artifacts; asset.list reports ${listedCount}`);
+  console.log(`seeded ${seeded.created}/${seeded.asked}; asset.list reports ${seeded.listed}`);
 
   // The MEASUREMENT page is the options page: it defines artifact-card (it imports
   // shared/components.js) and, unlike ntp.html, it does not mount an artifacts view of
