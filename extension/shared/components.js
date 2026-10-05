@@ -7037,9 +7037,42 @@ class AgentConversation extends Component {
   /** Load an artifact-card's live preview AND authoritative name/type/size from
    *  the asset store — the store is the source of truth, the tool result only a
    *  hint (a bounded update result carries no name/type at all). Bounded and
-   *  best-effort: a slow or absent worker leaves the card's type placeholder. */
+   *  best-effort: a slow or absent worker leaves the card's type placeholder.
+   *
+   *  DEFERRED: a reopened long thread mounts dozens of artifact cards at once,
+   *  and an eager load fires every asset.get RPC synchronously — flooding the
+   *  worker with offscreen reads. The card's preview load waits until the card
+   *  is actually visible (IntersectionObserver); when the observer API is
+   *  absent (unit-test harnesses, very old browsers) the load is immediate,
+   *  preserving the eager contract everywhere else. */
   _loadArtifactPreview(card, origin, id) {
     if (!RUNTIME_SEND) return;
+    if (typeof IntersectionObserver === "undefined") {
+      this._previewNow(card, origin, id);
+      return;
+    }
+    const obs = this._previewObserver ?? (this._previewObserver = new IntersectionObserver((entries) => {
+      // Visible → load; disconnected → drop its pending job. A connected,
+      // not-yet-visible card keeps waiting (that is the deferral). The job
+      // rides on the card itself; ONE observer serves the whole conversation.
+      for (const entry of entries) {
+        const target = entry.target;
+        const job = target._pendingPreview;
+        if (!job) continue;
+        if (entry.isIntersecting || !target.isConnected) {
+          target._pendingPreview = null;
+          obs.unobserve(target);
+          if (entry.isIntersecting && target.isConnected) this._previewNow(target, job[0], job[1]);
+        }
+      }
+    }));
+    card._pendingPreview = [origin, id];
+    obs.observe(card);
+  }
+  /** The eager read itself — invoked on first visibility (or immediately when
+   *  no IntersectionObserver exists). RUNTIME_SEND is checked by the only
+   *  caller; it is a module const and cannot change across the deferral. */
+  _previewNow(card, origin, id) {
     RUNTIME_SEND("asset.get", { origin, id }).then((full) => {
       if (!full?.ok || !full.asset || !card.isConnected) return;
       const asset = full.asset;

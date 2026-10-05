@@ -44,6 +44,7 @@ import { handleScriptRunMessage } from "../lib/script-host.js";
 import { initialAvatar } from "../lib/avatar.js";
 import { renderDurabilityState } from "../lib/durability-ui.js";
 import { createTaskSidebarLifecycle, loadThreadsWithOneRestartRetry } from "../lib/task-sidebar-lifecycle.js";
+import { threadRowsDigest } from "../lib/thread-rows-digest.js";
 import { createTerminalThreadProjectionLifecycle } from "../lib/terminal-thread-projection-lifecycle.js";
 import {
   clearAuthoritativeThreadProjection,
@@ -2454,7 +2455,14 @@ function syncTaskRowDots() {
   }
 }
 
-function renderTaskRows(threads, activeId = null) {
+// The last fully-rendered rows' content signature: a render whose rows would
+// be byte-identical (only the activeId highlight moved — openThread, a route
+// change) must not rebuild the sidebar DOM or re-fetch the failed-runs / board
+// sections. Null until the first full render so an initially-empty list still
+// builds its empty state.
+let lastThreadRowsDigest = null;
+
+function renderTaskRows(threads, activeId = null, meta = null) {
   const span = perfSpan("ntp:thread-list-hydrated");
   const el = document.getElementById("thread-sidebar");
   const tasksCountEl = document.getElementById("tasks-count");
@@ -2463,6 +2471,17 @@ function renderTaskRows(threads, activeId = null) {
     span.end();
     return;
   }
+  // Acceptance 2a: unchanged digest + not run-driven → in-place aria-current
+  // update only. A run-snapshot-driven render (meta.runsChanged) always takes
+  // the full path: a run that just failed may not have changed the thread LIST
+  // yet, and the failed-runs section projects run state, not thread state.
+  const digest = threadRowsDigest(threads, (t) => sidebarDotState(t));
+  if (meta?.runsChanged !== true && lastThreadRowsDigest === digest && el.children.length) {
+    highlightTaskSidebarRow(activeId);
+    span.end("unchanged");
+    return;
+  }
+  lastThreadRowsDigest = digest;
   el.replaceChildren();
   // UX-008: failed dispatches render as a bounded, retryable section ABOVE the
   // thread rows — a submitted prompt must never vanish into a silent failure.
@@ -2901,6 +2920,13 @@ async function openThread(id) {
   }
   showThreadView();
   highlightTaskSidebarRow(id);
+  // Acceptance 2b: the authoritative read below can take 400ms+ (a cold
+  // service worker gets one retry); the surface answers the click with a
+  // loading state instead of sitting on the previous thread's content. The
+  // projection + renderRunStatus at the end of openThread replace this row in
+  // the same tick the read resolves (a superseded call leaves the row to the
+  // new owner, who sets its own status first thing).
+  threadConversation?.setLiveStatus?.({ state: "running", activity: "Loading task…" });
 
   // A thread.get can transiently fail when the MV3 service worker is mid-
   // restart (the message wakes it, but the first attempt can race the boot).

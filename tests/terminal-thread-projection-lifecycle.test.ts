@@ -83,6 +83,44 @@ Deno.test("terminal thread projection: duplicate terminal snapshot and revision 
   assertEquals(h.commits.length, 1);
 });
 
+Deno.test("terminal thread projection: a snapshot with N newly-observed terminal runs for the open thread refreshes ONCE", async () => {
+  const h = harness();
+  // A snapshot can legitimately carry several terminal runs for the open
+  // thread (a burst of settled executions, or a reconnect re-reading the
+  // registry). Each used to cost its own thread.get; thread.get is the sole
+  // projection authority, so ONE re-read settles them all.
+  const res = await h.lifecycle.onRunSnapshot({
+    runs: [
+      run({ executionId: "exec:t-a", revision: 3 }),
+      run({ executionId: "exec:t-b", revision: 5 }),
+      run({ executionId: "exec:t-c", revision: 7 }),
+    ],
+  });
+  assertEquals(res, true);
+  assertEquals(h.loads, 1, "N terminal runs on the open thread coalesce to ONE thread.get");
+  assertEquals(h.commits.length, 1);
+});
+
+Deno.test("terminal thread projection: other-thread terminals never load, and consumed revisions stay consumed across coalesced snapshots", async () => {
+  const h = harness();
+  const others = [
+    run({ executionId: "exec:x-1", threadId: "thread-other", revision: 2 }),
+    run({ executionId: "exec:x-2", threadId: "thread-other", revision: 4 }),
+  ];
+  assertEquals(await h.lifecycle.onRunSnapshot({ runs: others }), false);
+  assertEquals(h.loads, 0);
+
+  // The open thread's terminal arrives in a snapshot that repeats the already
+  // consumed other-thread terminals: still exactly one load, for the open one.
+  assertEquals(
+    await h.lifecycle.onRunSnapshot({ runs: [...others, run({ executionId: "exec:t-z", revision: 9 })] }),
+    true,
+  );
+  assertEquals(h.loads, 1);
+  assertEquals(h.commits.length, 1);
+  assertEquals(h.commits[0].run.executionId, "exec:t-z");
+});
+
 Deno.test("terminal thread projection: nonterminal and other-thread events are no-ops", async () => {
   const h = harness();
   await h.lifecycle.onRunSnapshot({ runs: [run({ phase: "settling" })] });
