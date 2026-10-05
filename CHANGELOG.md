@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.576] — 2026-10-05
+- j5yz: eliminate the NTP thread-list heartbeat hydration storm, deduplicate terminal thread.get refreshes, show the thread surface immediately on click, and lazy-load offscreen artifact previews
+
 ## [0.3.575] — 2026-10-05
 - internal: the managed WebAssembly catalogue declares the official sqlite-wasm and wa-sqlite as unavailable entries with measured pins and a named blocker, instead of leaving them undeclared.
 
