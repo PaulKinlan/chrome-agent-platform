@@ -12,7 +12,7 @@ const EXT = fileURLToPath(new URL("../extension", import.meta.url));
 const profile = chromeProfileDir("kat-site-delegate");
 
 const { proc, wsUrl } = await launchChrome({
-  binary: "/usr/bin/chromium",
+  // chrome-agent-platform-fyvc: binary omitted — launchChrome resolves (CAP_CHROMIUM → cache → /usr/bin/chromium).
   args: [
     "--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,

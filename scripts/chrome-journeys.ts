@@ -34,7 +34,7 @@ function homeCacheProfile(name: string): string {
   return `${home}/.cache/cap-review/${name}`;
 }
 
-const CHROMIUM = "/usr/bin/chromium";
+// chrome-agent-platform-fyvc: no binary literal — spawnChrome (launchChrome) resolves CAP_CHROMIUM → CfT cache → /usr/bin/chromium.
 const PKILL = "/usr/bin/pkill";
 const PGREP = "/usr/bin/pgrep";
 const RM = "/bin/rm";
@@ -143,7 +143,6 @@ function launchJourneyChrome(profile: string) {
     // lane that cannot get the slot exits 75 with the holder named, and never
     // starts a browser. Paired with requireQuiet by chrome-launch itself.
     fleetSlot: { gate: "chrome-journeys", kind: "gate" },
-    binary: CHROMIUM,
     args: [
       "--headless=new",
       "--no-sandbox",

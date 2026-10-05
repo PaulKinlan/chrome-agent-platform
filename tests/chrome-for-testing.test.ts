@@ -270,3 +270,35 @@ Deno.test("chrome-for-testing: the resolver's own source names no machine, no us
   assertEquals(offences(codeOnly(pinned)).length, 3, "a re-introduced machine path, its version pin AND a user name must all be caught");
   assertEquals(offences(codeOnly(pinned.split("\n")[0])), [], "the comment line on its own is legal");
 });
+
+// ── chrome-agent-platform-fyvc/wvg: the silently-ignored cache layout ────────
+// Some installers and mirrors write the cache directory as a BARE version
+// (`chrome/154.0.8037.92/`) with no `linux-` prefix. versionOf used to accept
+// only the prefixed spelling, so a box whose ONLY browser lived in such a
+// directory resolved nothing — and the RPC census then self-ignored GREEN with
+// nothing measured, the exact conditional-death class this module's header
+// promises to prevent. RED on the unfixed resolver: null (filtered out).
+Deno.test("chrome-for-testing: a BARE version directory resolves too (fyvc/wvg)", () => {
+  const cache = fakeCache(["154.0.8037.92"]);
+  try {
+    assertEquals(
+      resolveChromeForTesting({ cacheRoot: cache.root }),
+      `${cache.root}/154.0.8037.92/chrome-linux64/chrome`,
+      "a bare-version cache dir is a real browser, not a shape to filter out",
+    );
+  } finally {
+    cache.done();
+  }
+  // Bare and prefixed spellings rank by VERSION together — the pick must not
+  // depend on which spelling an installer happened to use.
+  const mixed = fakeCache(["linux-150.0.1.1", "154.0.8037.92"]);
+  try {
+    assertEquals(
+      resolveChromeForTesting({ cacheRoot: mixed.root }),
+      `${mixed.root}/154.0.8037.92/chrome-linux64/chrome`,
+      "154 must beat 150 regardless of which spelling the installer used",
+    );
+  } finally {
+    mixed.done();
+  }
+});

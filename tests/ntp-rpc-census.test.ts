@@ -6,8 +6,7 @@
 // 3. Opening a thread fires <= 4 RPCs (down from 14–21).
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
-import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
+import { launchChrome, openCdp, waitForServiceWorker, computeUnpackedExtensionId, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const EXT = `${Deno.cwd()}/extension`;
@@ -15,11 +14,13 @@ const EXT = `${Deno.cwd()}/extension`;
 // Chrome-for-Testing build: it existed on exactly one machine, so everywhere else the statSync below fell
 // into `catch { return }` and the census reported PASS having measured nothing (AGENTS.md test honesty mode
 // 5, CONDITIONAL DEATH) — while tests/machine-path-honesty.test.ts failed the gate for the literal.
-// Resolving at MODULE LOAD lets a box with no browser report this test as IGNORED in the tally instead.
-const CHROME_FOR_TESTING = resolveChromeForTesting();
-if (CHROME_FOR_TESTING === null) {
-  console.warn("ntp-rpc-census: Chrome for Testing not found in the puppeteer cache — reporting this test as ignored");
-}
+// chrome-agent-platform-fyvc/wvg CLOSED the remaining hole: resolution used to be cache-only at module
+// load with a self-ignore attribute keyed on the resolver, so a box whose cache layout the glob missed (a
+// bare-version dir), or with no cache but a perfectly good CAP_CHROMIUM / /usr/bin/chromium, was silently
+// IGNORED — exit 0 GREEN having measured nothing. There is no self-ignore any more: the shared
+// resolution runs inside the test (CAP_CHROMIUM env → chrome-for-testing cache → /usr/bin/chromium) and
+// an unresolvable box FAILS LOUDLY naming everything it tried. A census that cannot launch a browser
+// is a failed census, never a silent pass.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const RPC_SHIM = `(() => {
@@ -71,11 +72,18 @@ Deno.test({
   name: "ntp-rpc-census: cold boot <= 22 RPCs, idle <= 2 RPCs, thread open <= 4 RPCs",
   sanitizeOps: false,
   sanitizeResources: false,
-  ignore: CHROME_FOR_TESTING === null,
   fn: async () => {
-    // The ignore above is the skip; this keeps a null from reaching launchChrome with no browser named.
-    assertEquals(CHROME_FOR_TESTING !== null, true, "Chrome for Testing must be resolved when this test is not ignored");
-    const BIN = CHROME_FOR_TESTING as string;
+    // fyvc/wvg: resolve INSIDE the test through the shared chain and fail
+    // loudly when nothing resolves — never the old self-ignore green.
+    const { binary: RESOLVED, tried } = resolveChromiumBinaryReport();
+    if (RESOLVED === null) {
+      throw new Error(
+        `ntp-rpc-census: no Chrome resolvable on this box — tried: ${tried.join("; ")}. ` +
+          "Set CAP_CHROMIUM, install Chrome for Testing into the puppeteer cache, or provide /usr/bin/chromium. " +
+          "A census that cannot launch a browser is a FAILED census, never a silent pass.",
+      );
+    }
+    const BIN = RESOLVED;
     // A Chrome profile is scratch that must not sit on a RAM-backed tmpfs (tests/durable-root.test.ts).
     const profile = durableDir("chrome-profiles", `cap-census-${Date.now()}`);
     const lockPath = `${Deno.cwd()}/.cap-scratch/chrome.lock`;

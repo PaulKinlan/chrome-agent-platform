@@ -38,9 +38,15 @@ export function chromeForTestingCacheRoot(): string {
 }
 
 /** `linux-140.0.7339.82` → [140, 0, 7339, 82]; null when the entry is not a version
- *  directory (a partial download, a temp dir, another channel's tree). */
+ *  directory (a partial download, a temp dir, another channel's tree).
+ *  chrome-agent-platform-fyvc/wvg: a BARE version dir (`154.0.8037.92/`, the
+ *  layout some installers and mirrors write) is accepted too — accepting only
+ *  the `linux-`-prefixed spelling silently filtered those boxes' browsers out
+ *  and handed the census an empty resolution, which it then reported GREEN
+ *  having measured nothing. */
 function versionOf(dirName: string): number[] | null {
-  const m = /^linux-(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(dirName);
+  const m = /^linux-(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(dirName)
+    ?? /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(dirName);
   return m ? m.slice(1).map(Number) : null;
 }
 

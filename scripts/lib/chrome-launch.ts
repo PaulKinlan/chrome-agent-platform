@@ -28,6 +28,7 @@ import { crypto } from "jsr:@std/crypto@1";
 import { acquireChromeSlot } from "./chrome-slots.ts";
 import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
+import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -114,6 +115,59 @@ export async function seedGrantedPermissions(
 
 export const CHROMIUM = "/usr/bin/chromium";
 
+// ── the shared browser resolution (chrome-agent-platform-fyvc) ──────────────
+// /usr/bin/chromium as a bare literal names exactly one machine's layout: on a
+// box whose only Chrome is a Chrome-for-Testing build in ~/.cache (the normal
+// case outside this VM), every harness importing this library failed at the
+// spawn — indistinguishable from "this machine has no browser capability" —
+// and a reviewer once had to create a system-level symlink just to run the
+// repo's own gates. Resolution order, ONE place, every consumer:
+//   1. the CAP_CHROMIUM env override (explicit, wins outright);
+//   2. the newest Chrome-for-Testing in the puppeteer cache
+//      (scripts/lib/chrome-for-testing.ts — includes bare-version cache dirs
+//      per chrome-agent-platform-fyvc/wvg);
+//   3. /usr/bin/chromium, the documented last resort.
+// Resolved AT SPAWN TIME (not module load) so a runner can set the env per
+// invocation; the cache glob is one readdir on a path that is usually absent.
+export function resolveChromiumBinary(
+  opts: { envGet?: (name: string) => string | undefined; cacheRoot?: string } = {},
+): string {
+  const envGet = opts.envGet ?? ((name: string) => Deno.env.get(name));
+  const override = envGet("CAP_CHROMIUM");
+  if (typeof override === "string" && override.trim()) return override;
+  const cached = resolveChromeForTesting(opts.cacheRoot != null ? { cacheRoot: opts.cacheRoot } : {});
+  if (cached) return cached;
+  return CHROMIUM;
+}
+
+/** The resolution as a REPORT for callers that must distinguish "resolved"
+ *  from "fell through to a default that may not exist" (the RPC census: a
+ *  census that cannot launch a browser is a FAILED census, never a silent
+ *  green — chrome-agent-platform-fyvc/wvg). `tried` names every step in order
+ *  so the failure message tells the operator exactly what to fix.
+ *  `exists` is injectable for deterministic tests. */
+export function resolveChromiumBinaryReport(
+  opts: { envGet?: (name: string) => string | undefined; cacheRoot?: string; exists?: (path: string) => boolean } = {},
+): { binary: string | null; tried: string[] } {
+  const exists = opts.exists ?? ((path: string) => {
+    try { return Deno.statSync(path).isFile; } catch { return false; }
+  });
+  const tried: string[] = [];
+  const override = (opts.envGet ?? ((name: string) => Deno.env.get(name)))("CAP_CHROMIUM");
+  if (typeof override === "string" && override.trim()) {
+    tried.push(`CAP_CHROMIUM=${override}`);
+    return { binary: override, tried };
+  }
+  const cached = resolveChromeForTesting(opts.cacheRoot != null ? { cacheRoot: opts.cacheRoot } : {});
+  if (cached) {
+    tried.push(`chrome-for-testing cache: ${cached}`);
+    return { binary: cached, tried };
+  }
+  tried.push(`default ${CHROMIUM}${exists(CHROMIUM) ? "" : " (missing on this box)"}`);
+  if (exists(CHROMIUM)) return { binary: CHROMIUM, tried };
+  return { binary: null, tried };
+}
+
 // ── the exclusive canonical lock (OPT-IN since chrome-agent-platform-uzik) ──
 // CAP-FB-20260830-SUITE-HONESTY-01 took this lock for EVERY launch, on the
 // theory that two lanes driving headless Chromes at the same time produce CDP
@@ -154,10 +208,28 @@ function canonicalLockPath(): string {
 // a real lane's 20-minute gate — and never dilute the real serialization.
 const lockStates = new Map<string, { holder: Deno.ChildProcess | null; refs: number }>();
 
-async function acquireChromeLock(lockPath: string = canonicalLockPath()): Promise<{ waitedMs: number; release: () => void }> {
+/** Acquire the exclusive file lock at `lockPath` (flock under the hood).
+ *  Exported for tests — the launch path itself goes through acquireLaunchScope.
+ *  chrome-agent-platform-fyvc/wvg: the lock's PARENT DIRECTORY is created
+ *  first (a caller-owned lockPath under a scratch dir that does not exist yet
+ *  used to die in ~400ms blaming "another lane's browser" — flock cannot
+ *  create the file when the directory is absent, and the misleading timeout
+ *  message hid the real reason). */
+export async function acquireChromeLock(lockPath: string = canonicalLockPath()): Promise<{ waitedMs: number; release: () => void }> {
   const noop = () => {};
   if (Deno.env.get("CAP_SECURITY_NONCE") || Deno.env.get("CAP_CHROME_LOCK_HELD") === "1") {
     return { waitedMs: 0, release: noop };
+  }
+  const lockDir = lockPath.slice(0, Math.max(lockPath.lastIndexOf("/"), 0));
+  if (lockDir && lockDir !== lockPath) {
+    try {
+      Deno.mkdirSync(lockDir, { recursive: true });
+    } catch (e) {
+      throw new Error(
+        `launchChrome: cannot create the chrome-lock directory ${lockDir} for ${lockPath}: ${e instanceof Error ? e.message : String(e)}. ` +
+          "The lock itself was never attempted — this is a filesystem problem, not another lane's browser.",
+      );
+    }
   }
   const state = lockStates.get(lockPath) ?? { holder: null, refs: 0 };
   lockStates.set(lockPath, state);
@@ -451,7 +523,7 @@ export async function launchChrome(opts: {
   }
   let proc: Deno.ChildProcess;
   try {
-    proc = new Deno.Command(opts.binary ?? CHROMIUM, {
+    proc = new Deno.Command(opts.binary ?? resolveChromiumBinary(), {
       args: [...args, "--remote-debugging-port=0"],
       stdout: opts.stdout ?? "null",
       stderr: "piped",
