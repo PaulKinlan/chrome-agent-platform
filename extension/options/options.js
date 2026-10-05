@@ -3399,17 +3399,49 @@ function setBackupStatus(text) {
   backupStatus.textContent = text;
 }
 
-// ── Web services & vault (chrome-agent-platform-jao1.5, CAP-SECURE-ENCLAVE
-// Stage 5): the Settings surface for service credentials. The routes are
-// Settings-gated in the service worker; this page only ever handles the
-// MASKED projection plus the key the owner is actively typing.
+// ── Web services & vault (chrome-agent-platform-jao1.5 + vyhl): the Settings
+// surface for service credentials, origin-pinned proxy rules, and audit ledger.
+// The routes are Settings-gated in the service worker; this page only ever
+// handles the MASKED projection plus the key the owner is actively typing.
 
-const VAULT_SERVICES = [
-  { id: "BRAVE_SEARCH_API_KEY", label: "Brave Search (web search)", testService: "brave-search" },
+const VAULT_PRESETS = [
+  {
+    id: "BRAVE_SEARCH_API_KEY",
+    serviceId: "brave-search",
+    name: "Brave Search",
+    origin: "https://api.search.brave.com",
+    authType: "header",
+    authName: "X-Subscription-Token",
+    testPath: "/res/v1/web/search?q=ping&count=1",
+    usage: "Tool: brave_search · Python: $VAULT{BRAVE_SEARCH_API_KEY}",
+  },
+  {
+    id: "GITHUB_TOKEN",
+    serviceId: "github",
+    name: "GitHub API",
+    origin: "https://api.github.com",
+    authType: "bearer",
+    authName: "Authorization",
+    testPath: "/rate_limit",
+    usage: "Python: $VAULT{GITHUB_TOKEN}",
+  },
 ];
 
 function vaultSend(type, payload = {}) {
-  return chrome.runtime.sendMessage({ type, ...payload }).then((v) => v, (e) => ({ ok: false, error: String(e?.message ?? e) }));
+  return chrome.runtime.sendMessage({ type, ...payload }).then(
+    (v) => v,
+    (e) => ({ ok: false, error: String(e?.message ?? e) }),
+  );
+}
+
+function formatAuthInjection(authType, authName, keyId) {
+  if (authType === "bearer") {
+    return `Bearer token: ${authName || "Authorization"} ← $VAULT{${keyId}}`;
+  }
+  if (authType === "query") {
+    return `Query param: ?${authName || "api_key"}=$VAULT{${keyId}}`;
+  }
+  return `Header: ${authName || "X-API-Key"} ← $VAULT{${keyId}}`;
 }
 
 function renderVaultPanel() {
@@ -3418,44 +3450,142 @@ function renderVaultPanel() {
   vaultSend("vault.status").then((res) => {
     host.replaceChildren();
     const rows = vaultPanelRows(res?.services ?? []);
-    if (!rows.length) {
-      const empty = document.createElement("div");
-      empty.className = "muted";
-      empty.textContent = "No service keys stored yet. Add one below.";
-      host.append(empty);
-      return;
+    const configuredMap = new Map(rows.map((r) => [r.keyId, r]));
+    const rulesMap = new Map((res?.proxyRules ?? []).map((r) => [r.keyId, r]));
+
+    // Render presets first
+    const renderedKeyIds = new Set();
+    for (const preset of VAULT_PRESETS) {
+      renderedKeyIds.add(preset.id);
+      const conf = configuredMap.get(preset.id);
+      const item = {
+        keyId: preset.id,
+        name: preset.name,
+        serviceId: preset.serviceId,
+        origin: preset.origin,
+        authType: preset.authType,
+        authName: preset.authName,
+        testPath: preset.testPath,
+        usage: preset.usage,
+        configured: Boolean(conf?.configured),
+        masked: conf?.masked ?? "…",
+        lastUsed: conf?.lastUsed ?? 0,
+      };
+      host.append(vaultCard(item));
     }
-    for (const row of rows) host.append(vaultRow(row));
+
+    // Render custom stored keys / proxy rules
+    const customKeys = new Set([...configuredMap.keys(), ...rulesMap.keys()]);
+    for (const keyId of customKeys) {
+      if (renderedKeyIds.has(keyId)) continue;
+      const conf = configuredMap.get(keyId);
+      const rule = rulesMap.get(keyId);
+      const origin = rule?.origin || (Array.isArray(rule?.origins) ? rule.origins[0] : "") || "Any approved origin";
+      const authType = rule?.authType || "bearer";
+      const authName = rule?.authName || "Authorization";
+      const item = {
+        keyId,
+        name: rule?.label || keyId,
+        serviceId: keyId.toLowerCase(),
+        origin,
+        authType,
+        authName,
+        testPath: rule?.testPath || "/",
+        usage: `Python: $VAULT{${keyId}}`,
+        configured: Boolean(conf?.configured),
+        masked: conf?.masked ?? "…",
+        lastUsed: conf?.lastUsed ?? 0,
+      };
+      host.append(vaultCard(item));
+    }
+
+    // Render Request Ledger
+    renderVaultLedger(res?.ledger ?? []);
   });
 }
 
-function vaultRow(row) {
+function vaultCard(item) {
   const wrap = document.createElement("div");
-  wrap.className = "vault-row";
-  wrap.dataset.keyId = row.keyId;
+  wrap.className = "vault-card vault-row";
+  wrap.dataset.keyId = item.keyId;
 
-  const name = document.createElement("span");
-  name.className = "vault-key-id";
-  name.textContent = row.keyId;
+  // Header row
+  const header = document.createElement("div");
+  header.className = "vault-card-header";
 
-  const mask = document.createElement("span");
-  mask.className = "vault-mask muted";
-  mask.textContent = row.masked;
+  const titleGroup = document.createElement("div");
+  titleGroup.className = "vault-card-title";
 
-  const lastUsed = document.createElement("span");
-  lastUsed.className = "muted";
-  lastUsed.textContent = row.lastUsed ? new Date(row.lastUsed).toLocaleString() : "never used";
+  const keyIdEl = document.createElement("span");
+  keyIdEl.className = "vault-key-id";
+  keyIdEl.textContent = item.keyId;
+
+  const nameEl = document.createElement("span");
+  nameEl.className = "vault-service-name";
+  nameEl.textContent = item.name ? `(${item.name})` : "";
+
+  const badge = document.createElement("span");
+  badge.className = `vault-badge ${item.configured ? "configured" : "unconfigured"}`;
+  badge.textContent = item.configured ? `Configured · ${item.masked}` : "Not configured";
+
+  titleGroup.append(keyIdEl, nameEl, badge);
+
+  const lastUsedEl = document.createElement("span");
+  lastUsedEl.className = "vault-last-used muted";
+  lastUsedEl.textContent = item.lastUsed ? new Date(item.lastUsed).toLocaleString() : "never used";
+
+  header.append(titleGroup, lastUsedEl);
+
+  // Meta box showing origin, auth, usage
+  const meta = document.createElement("div");
+  meta.className = "vault-proxy-meta";
+
+  const originRow = document.createElement("div");
+  originRow.className = "vault-meta-row";
+  const originLabel = document.createElement("span");
+  originLabel.className = "vault-meta-label";
+  originLabel.textContent = "Pinned Origin:";
+  const originVal = document.createElement("code");
+  originVal.className = "vault-meta-val";
+  originVal.textContent = item.origin;
+  originRow.append(originLabel, originVal);
+
+  const authRow = document.createElement("div");
+  authRow.className = "vault-meta-row";
+  const authLabel = document.createElement("span");
+  authLabel.className = "vault-meta-label";
+  authLabel.textContent = "Auth Injection:";
+  const authVal = document.createElement("code");
+  authVal.className = "vault-meta-val";
+  authVal.textContent = formatAuthInjection(item.authType, item.authName, item.keyId);
+  authRow.append(authLabel, authVal);
+
+  const usageRow = document.createElement("div");
+  usageRow.className = "vault-meta-row";
+  const usageLabel = document.createElement("span");
+  usageLabel.className = "vault-meta-label";
+  usageLabel.textContent = "Usage:";
+  const usageVal = document.createElement("span");
+  usageVal.className = "vault-meta-val";
+  usageVal.textContent = item.usage;
+  usageRow.append(usageLabel, usageVal);
+
+  meta.append(originRow, authRow, usageRow);
+
+  // Controls row
+  const controls = document.createElement("div");
+  controls.className = "vault-controls";
 
   const input = document.createElement("input");
   input.type = "password";
   input.className = "vault-input";
-  input.placeholder = "leave blank to keep";
+  input.placeholder = item.configured ? "leave blank to keep" : "paste API key";
   input.autocomplete = "off";
-  input.setAttribute("aria-label", `New key for ${row.keyId}`);
+  input.setAttribute("aria-label", `New key for ${item.keyId}`);
 
   const toggle = document.createElement("button");
   toggle.type = "button";
-  toggle.className = "btn small";
+  toggle.className = "btn small vault-toggle";
   toggle.textContent = "Show";
   toggle.addEventListener("click", () => {
     input.type = input.type === "password" ? "text" : "password";
@@ -3464,70 +3594,138 @@ function vaultRow(row) {
 
   const save = document.createElement("button");
   save.type = "button";
-  save.className = "btn small";
-  save.textContent = "Rotate";
+  save.className = "btn small vault-save";
+  save.textContent = item.configured ? "Rotate" : "Save";
   save.disabled = true;
+
   input.addEventListener("input", () => {
-    const action = resolveSaveAction({ configured: row.configured, inputValue: input.value });
+    const action = resolveSaveAction({ configured: item.configured, inputValue: input.value });
     save.textContent = action === "rotate" ? "Rotate" : "Save";
     save.disabled = action === "none";
   });
-  save.addEventListener("click", async () => {
-    const action = resolveSaveAction({ configured: true, inputValue: input.value });
-    if (action !== "rotate") return;
-    save.disabled = true;
-    const res = await vaultSend("vault.rotate", { keyId: row.keyId, value: input.value });
-    input.value = "";
-    save.disabled = false;
-    setVaultStatus(res?.ok ? `${row.keyId} rotated.` : `Rotation failed: ${res?.error ?? "unknown"}`, !res?.ok);
-    renderVaultPanel();
-  });
 
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.className = "btn small";
-  remove.textContent = "Remove";
-  remove.addEventListener("click", async () => {
-    remove.disabled = true;
-    const res = await vaultSend("vault.delete", { keyId: row.keyId });
-    remove.disabled = false;
-    // vault.deleteSecret returns { keyId, deleted: true } — no ok field.
-    const removedOk = res?.ok === true || res?.deleted === true;
-    setVaultStatus(removedOk ? `${row.keyId} removed.` : `Remove failed: ${res?.error ?? "unknown"}`, !removedOk);
+  save.addEventListener("click", async () => {
+    const action = resolveSaveAction({ configured: item.configured, inputValue: input.value });
+    if (action === "none") return;
+    save.disabled = true;
+    let res;
+    if (action === "rotate") {
+      res = await vaultSend("vault.rotate", { keyId: item.keyId, value: input.value });
+    } else {
+      res = await vaultSend("vault.set", {
+        keyId: item.keyId,
+        value: input.value,
+        origin: item.origin,
+        authType: item.authType,
+        authName: item.authName,
+        testPath: item.testPath,
+        label: item.name,
+      });
+    }
+    input.value = "";
+    save.disabled = true;
+    setVaultStatus(res?.ok ? `${item.keyId} saved.` : `Save failed: ${res?.error ?? "unknown"}`, !res?.ok);
     renderVaultPanel();
   });
 
   const test = document.createElement("button");
   test.type = "button";
-  test.className = "btn small";
+  test.className = "btn small vault-test";
   test.textContent = "Test connection";
   test.addEventListener("click", async () => {
     test.disabled = true;
-    setVaultStatus(`Testing ${row.keyId}…`, false);
-    const res = await vaultSend("vault.test", { service: row.keyId === "BRAVE_SEARCH_API_KEY" ? "brave-search" : row.keyId.toLowerCase() });
+    setVaultStatus(`Testing ${item.keyId}…`, false);
+    const res = await vaultSend("vault.test", { service: item.serviceId || item.keyId });
     const ok = res?.ok === true;
-    // The code is a STRICT whitelisted token from the SW — never an error
-    // string (a proxy error envelope can embed the request URL, which carries
-    // a query-injected token).
     setVaultStatus(ok ? `Connection OK (status ${res.status}).` : `Connection failed (${res?.code ?? "connection_failed"}).`, !ok);
     test.disabled = false;
+    renderVaultPanel();
   });
 
-  const controls = document.createElement("div");
-  controls.className = "vault-controls";
-  controls.style.display = "flex";
-  controls.style.gap = "6px";
-  controls.style.flexWrap = "wrap";
-  controls.append(input, toggle, save, test, remove);
+  controls.append(input, toggle, save, test);
 
-  const label = document.createElement("div");
-  label.style.display = "flex";
-  label.style.gap = "8px";
-  label.style.alignItems = "baseline";
-  label.append(name, mask, lastUsed);
+  if (item.configured) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn small vault-remove";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      const res = await vaultSend("vault.delete", { keyId: item.keyId });
+      remove.disabled = false;
+      const removedOk = res?.ok === true || res?.deleted === true;
+      setVaultStatus(removedOk ? `${item.keyId} removed.` : `Remove failed: ${res?.error ?? "unknown"}`, !removedOk);
+      renderVaultPanel();
+    });
+    controls.append(remove);
+  }
 
-  wrap.append(label, controls);
+  wrap.append(header, meta, controls);
   return wrap;
+}
+
+function renderVaultLedger(ledgerEntries) {
+  const host = document.getElementById("vault-ledger");
+  if (!host) return;
+  host.replaceChildren();
+
+  if (!Array.isArray(ledgerEntries) || ledgerEntries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "muted";
+    empty.style.padding = "12px";
+    empty.textContent = "No proxied requests recorded yet.";
+    host.append(empty);
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "vault-ledger-table";
+
+  const thead = document.createElement("thead");
+  const trHead = document.createElement("tr");
+  for (const col of ["Time", "Service / Key", "Method", "Target & Path", "Status", "Latency"]) {
+    const th = document.createElement("th");
+    th.textContent = col;
+    trHead.append(th);
+  }
+  thead.append(trHead);
+  table.append(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const entry of ledgerEntries) {
+    const tr = document.createElement("tr");
+
+    const tdTime = document.createElement("td");
+    tdTime.textContent = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "—";
+
+    const tdService = document.createElement("td");
+    tdService.textContent = entry.service || entry.keyId || "—";
+
+    const tdMethod = document.createElement("td");
+    const methodSpan = document.createElement("span");
+    methodSpan.className = "vault-method-tag";
+    methodSpan.textContent = entry.method || "GET";
+    tdMethod.append(methodSpan);
+
+    const tdPath = document.createElement("td");
+    const codePath = document.createElement("code");
+    codePath.textContent = `${entry.origin || ""}${entry.path || "/"}`;
+    tdPath.append(codePath);
+
+    const tdStatus = document.createElement("td");
+    const statusPill = document.createElement("span");
+    statusPill.className = `vault-status-pill ${entry.ok ? "ok" : "fail"}`;
+    statusPill.textContent = entry.status !== null ? String(entry.status) : (entry.code || (entry.ok ? "OK" : "Refused"));
+    tdStatus.append(statusPill);
+
+    const tdMs = document.createElement("td");
+    tdMs.textContent = `${entry.ms ?? 0}ms`;
+
+    tr.append(tdTime, tdService, tdMethod, tdPath, tdStatus, tdMs);
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  host.append(table);
 }
 
 function setVaultStatus(text, isError) {
@@ -3541,24 +3739,51 @@ function setVaultStatus(text, isError) {
 const vaultAddId = document.getElementById("vault-add-id");
 const vaultAddValue = document.getElementById("vault-add-value");
 const vaultAddToggle = document.getElementById("vault-add-toggle");
+const vaultAddOrigin = document.getElementById("vault-add-origin");
+const vaultAddAuthType = document.getElementById("vault-add-auth-type");
+const vaultAddAuthName = document.getElementById("vault-add-auth-name");
+
 vaultAddToggle?.addEventListener("click", () => {
   vaultAddValue.type = vaultAddValue.type === "password" ? "text" : "password";
   vaultAddToggle.textContent = vaultAddValue.type === "password" ? "Show" : "Hide";
 });
+
+vaultAddId?.addEventListener("input", () => {
+  const val = vaultAddId.value.trim().toUpperCase();
+  const match = VAULT_PRESETS.find(
+    (p) => p.id === val || p.serviceId === val.toLowerCase(),
+  );
+  if (match) {
+    if (vaultAddOrigin) vaultAddOrigin.value = match.origin;
+    if (vaultAddAuthType) vaultAddAuthType.value = match.authType;
+    if (vaultAddAuthName) vaultAddAuthName.value = match.authName;
+  }
+});
+
 document.getElementById("vault-add-save")?.addEventListener("click", async () => {
-  const keyId = vaultAddId?.value.trim() ?? "";
+  const keyId = vaultAddId?.value.trim().toUpperCase() ?? "";
   const value = vaultAddValue?.value ?? "";
+  const origin = vaultAddOrigin?.value.trim() ?? "";
+  const authType = vaultAddAuthType?.value ?? "bearer";
+  const authName = vaultAddAuthName?.value.trim() ?? "Authorization";
   if (!keyId || !value) {
     setVaultStatus("Both a key id and a value are required.", true);
     return;
   }
-  const res = await vaultSend("vault.set", { keyId, value });
+  const res = await vaultSend("vault.set", { keyId, value, origin, authType, authName });
   if (!res?.ok) {
     setVaultStatus(`Save failed: ${res?.error ?? "unknown"}`, true);
     return;
   }
   if (vaultAddValue) vaultAddValue.value = "";
-  setVaultStatus(`${keyId} saved. The key is stored encrypted and never sent to any model.`);
+  if (vaultAddId) vaultAddId.value = "";
+  if (vaultAddOrigin) vaultAddOrigin.value = "";
+  setVaultStatus(`${keyId} saved. The key is stored encrypted and origin-pinned.`);
+  renderVaultPanel();
+});
+
+document.getElementById("vault-ledger-clear")?.addEventListener("click", async () => {
+  await vaultSend("vault.ledger.clear");
   renderVaultPanel();
 });
 

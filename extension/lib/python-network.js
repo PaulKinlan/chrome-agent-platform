@@ -145,7 +145,17 @@ export function sanitizeRequestHeaders(headers) {
       refused.push(String(rawName ?? ""));
       continue;
     }
-    if (FORBIDDEN_REQUEST_HEADERS.has(name.toLowerCase())) {
+    const lower = name.toLowerCase();
+    if (lower === "authorization") {
+      const val = String(rawValue ?? "");
+      if (/\$VAULT\{[A-Z][A-Z0-9_]*\}/.test(val)) {
+        out[name] = val;
+        continue;
+      }
+      refused.push(name);
+      continue;
+    }
+    if (FORBIDDEN_REQUEST_HEADERS.has(lower)) {
       refused.push(name);
       continue;
     }

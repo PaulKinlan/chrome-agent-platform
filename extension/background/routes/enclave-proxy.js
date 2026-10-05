@@ -35,12 +35,26 @@ const MAX_BODY_BYTES = 1024 * 1024; // 1 MiB — the enclave response bound
 const ALLOWED_METHODS = ["GET", "POST"];
 const VAULT_TEMPLATE = /\$VAULT\{([A-Z][A-Z0-9_]*)\}/g;
 
-/** The v1 service allowlist: id -> approved origins + the vault key the
- * service authenticates with. Frozen; adding a service is a reviewed change. */
-const DEFAULT_SERVICES = Object.freeze({
+/** The built-in service allowlist: id -> approved origins + vault key and proxy metadata.
+ * Frozen; adding a service is a reviewed change. */
+export const DEFAULT_SERVICES = Object.freeze({
   "brave-search": Object.freeze({
+    id: "brave-search",
     origins: Object.freeze(["https://api.search.brave.com"]),
     secretKey: "BRAVE_SEARCH_API_KEY",
+    label: "Brave Search",
+    authType: "header",
+    authName: "X-Subscription-Token",
+    testPath: "/res/v1/web/search?q=ping&count=1",
+  }),
+  "github": Object.freeze({
+    id: "github",
+    origins: Object.freeze(["https://api.github.com"]),
+    secretKey: "GITHUB_TOKEN",
+    label: "GitHub API",
+    authType: "bearer",
+    authName: "Authorization",
+    testPath: "/rate_limit",
   }),
 });
 
@@ -96,14 +110,37 @@ function assertNoResidualTemplate(value, label) {
   }
 }
 
-/** The exported factory: `services` overrides the frozen default allowlist
- * (tests inject their own); `fetchImpl` replaces globalThis.fetch. */
+function extractVaultKeys(value, set = new Set()) {
+  if (typeof value === "string") {
+    for (const m of value.matchAll(VAULT_TEMPLATE)) {
+      set.add(m[1]);
+    }
+  } else if (Array.isArray(value)) {
+    for (const v of value) extractVaultKeys(v, set);
+  } else if (isPlainObject(value)) {
+    for (const v of Object.values(value)) extractVaultKeys(v, set);
+  }
+  return set;
+}
+
+/**
+ * The exported factory: `services` overrides the frozen default allowlist
+ * (tests inject their own); `fetchImpl` replaces globalThis.fetch.
+ * @param {{
+ *   vault: any,
+ *   fetchImpl?: (...args: any[]) => Promise<any>,
+ *   services?: Record<string, any>,
+ *   getDynamicServices?: null | (() => Promise<Record<string, any>> | Record<string, any>),
+ *   onRecord?: null | ((entry: any) => void),
+ *   isAllowedCaller?: (context: any) => boolean,
+ * }} [opts]
+ */
 export function createEnclaveProxyRoutes({
   vault,
   fetchImpl = (...args) => globalThis.fetch(...args),
   services = DEFAULT_SERVICES,
-  /** The caller gate. FAILS CLOSED by default — production wires the SW's own
-   * principal fence; tests inject an explicit allow-all when they mean it. */
+  getDynamicServices = null,
+  onRecord = null,
   isAllowedCaller = () => false,
 } = {}) {
   if (!vault || typeof vault.getSecretRaw !== "function") {
@@ -136,18 +173,49 @@ export function createEnclaveProxyRoutes({
 
   /**
    * enclave.proxy — one awaitable proxied request to an approved service.
-   * message: { service, path?, url?, method?, query?, headers?, body? }.
+   * message: { service, path?, url?, method?, query?, headers?, body?, injectServiceAuth? }.
    * Templates ($VAULT{KEY_ID}) in query/headers/body resolve from the vault.
    */
   const handler = async (message, context) => {
     if (!isAllowedCaller(context)) {
       return { ok: false, error: "the enclave proxy is restricted to sanctioned surfaces" };
     }
+    const startMs = Date.now();
     const serviceId = String(message?.service ?? "");
-    const service = services[serviceId];
-    if (!service || !Array.isArray(service.origins) || service.origins.length === 0) {
+    const dynamicServices = typeof getDynamicServices === "function" ? await getDynamicServices() : (getDynamicServices || {});
+    let service = services[serviceId] || dynamicServices[serviceId];
+    if (!service) {
+      const allServices = [
+        ...Object.entries(services).map(([k, s]) => ({ id: k, ...s })),
+        ...Object.entries(dynamicServices).map(([k, s]) => ({ id: k, ...s })),
+        ...Object.entries(DEFAULT_SERVICES).map(([k, s]) => ({ id: k, ...s })),
+      ];
+      const lower = serviceId.toLowerCase();
+      service = allServices.find((s) =>
+        s.id?.toLowerCase() === lower ||
+        s.secretKey?.toLowerCase() === lower ||
+        s.keyId?.toLowerCase() === lower
+      );
+    }
+
+    const origins = service?.origins || (service?.origin ? [service.origin] : null);
+    if (!service || !Array.isArray(origins) || origins.length === 0) {
       const e = new Error(`enclave proxy: unknown service "${serviceId}"`);
       e.code = "unknown_service";
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: serviceId,
+          method: String(message?.method ?? "GET").toUpperCase(),
+          origin: "",
+          path: String(message?.path ?? message?.url ?? ""),
+          status: null,
+          ok: false,
+          code: e.code,
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       throw e;
     }
 
@@ -155,7 +223,86 @@ export function createEnclaveProxyRoutes({
     if (!ALLOWED_METHODS.includes(method)) {
       const e = new Error(`enclave proxy: method ${method} is not allowed (${ALLOWED_METHODS.join(", ")})`);
       e.code = "bad_method";
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: service.secretKey || service.keyId || serviceId,
+          method,
+          origin: origins[0] || "",
+          path: String(message?.path ?? message?.url ?? ""),
+          status: null,
+          ok: false,
+          code: e.code,
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       throw e;
+    }
+
+    // Default service auth injection on enclave.proxy:
+    let queryInput = { ...(message?.query ?? {}) };
+    let headersInput = { ...(message?.headers ?? {}) };
+    const secretKey = service.secretKey || service.keyId;
+    const authType = service.authType;
+    const authName = service.authName;
+    if (message?.injectServiceAuth === true && secretKey && authType) {
+      if (authType === "bearer") {
+        const headerKey = authName || "Authorization";
+        if (!headersInput[headerKey] && !Object.keys(headersInput).some((k) => k.toLowerCase() === headerKey.toLowerCase())) {
+          headersInput[headerKey] = `Bearer $VAULT{${secretKey}}`;
+        }
+      } else if (authType === "header") {
+        const headerKey = authName || "X-API-Key";
+        if (!headersInput[headerKey] && !Object.keys(headersInput).some((k) => k.toLowerCase() === headerKey.toLowerCase())) {
+          headersInput[headerKey] = `$VAULT{${secretKey}}`;
+        }
+      } else if (authType === "query") {
+        const paramKey = authName || "api_key";
+        if (!queryInput[paramKey]) {
+          queryInput[paramKey] = `$VAULT{${secretKey}}`;
+        }
+      }
+    }
+
+    // Origin-Pinned Secret Resolution:
+    const referencedKeys = new Set();
+    extractVaultKeys(queryInput, referencedKeys);
+    extractVaultKeys(headersInput, referencedKeys);
+    if (message?.body !== undefined) extractVaultKeys(message.body, referencedKeys);
+
+    const allKnown = { ...DEFAULT_SERVICES, ...dynamicServices, ...services };
+    for (const refKey of referencedKeys) {
+      const matchingServices = Object.values(allKnown).filter(
+        (s) => s?.secretKey === refKey || s?.keyId === refKey || s?.id === refKey
+      );
+      const boundOrigins = new Set();
+      for (const s of matchingServices) {
+        const sOrigins = Array.isArray(s.origins) ? s.origins : (s.origin ? [s.origin] : []);
+        for (const o of sOrigins) boundOrigins.add(o);
+      }
+      if (boundOrigins.size > 0) {
+        const approved = origins.some((o) => boundOrigins.has(o));
+        if (!approved) {
+          const e = new Error(`enclave proxy: ${refKey} is not approved for service "${serviceId}" (approved origin: ${[...boundOrigins].join(", ")})`);
+          e.code = "origin_not_approved";
+          try {
+            onRecord?.({
+              service: serviceId,
+              keyId: refKey,
+              method,
+              origin: origins[0] || "",
+              path: String(message?.path ?? message?.url ?? ""),
+              status: null,
+              ok: false,
+              code: e.code,
+              ms: Date.now() - startMs,
+              timestamp: startMs,
+            });
+          } catch { /* ignore */ }
+          throw e;
+        }
+      }
     }
 
     // Resolve the templates BEFORE any URL/origin decision: an unresolvable
@@ -175,8 +322,8 @@ export function createEnclaveProxyRoutes({
       }
       return out;
     };
-    const query = await substituteTemplates(message?.query ?? {}, resolveSecretAndRecord);
-    const headers = await substituteTemplates(message?.headers ?? {}, resolveSecretAndRecord);
+    const query = await substituteTemplates(queryInput, resolveSecretAndRecord);
+    const headers = await substituteTemplates(headersInput, resolveSecretAndRecord);
     const rawBody = message?.body === undefined ? undefined : await substituteTemplates(message.body, resolveSecretAndRecord);
     assertNoResidualTemplate(query, "the query");
     assertNoResidualTemplate(headers, "the headers");
@@ -189,7 +336,7 @@ export function createEnclaveProxyRoutes({
     if (/^https?:\/\//i.test(rawPath)) {
       urlText = rawPath;
     } else {
-      urlText = service.origins[0] + (rawPath.startsWith("/") ? rawPath : `/${rawPath}`);
+      urlText = origins[0] + (rawPath.startsWith("/") ? rawPath : `/${rawPath}`);
     }
     const qs = new URLSearchParams(
       Object.entries(query).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v)]),
@@ -202,14 +349,42 @@ export function createEnclaveProxyRoutes({
     if (!target.ok) {
       const e = new Error(`enclave proxy: ${target.error}`);
       e.code = "target_refused";
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: secretKey || serviceId,
+          method,
+          origin: origins[0] || "",
+          path: rawPath,
+          status: null,
+          ok: false,
+          code: e.code,
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       throw e;
     }
     // Origin pin: the resolved URL's origin must be one of the service's
     // approved origins (an absolute-URL path cannot launder the allowlist).
     const origin = target.url.origin;
-    if (!service.origins.some((o) => o === origin)) {
-      const e = new Error(`enclave proxy: ${origin} is not an approved origin for service "${serviceId}" — approved: ${service.origins.join(", ")}`);
+    if (!origins.some((o) => o === origin)) {
+      const e = new Error(`enclave proxy: ${origin} is not an approved origin for service "${serviceId}" — approved: ${origins.join(", ")}`);
       e.code = "origin_not_approved";
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: secretKey || serviceId,
+          method,
+          origin,
+          path: rawPath,
+          status: null,
+          ok: false,
+          code: e.code,
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       throw e;
     }
 
@@ -246,10 +421,38 @@ export function createEnclaveProxyRoutes({
       // scrubbed detail stays in the worker console for diagnosis.
       const detail = scrub(String(err?.message ?? err)).slice(0, 200);
       capLog("enclave-proxy").warn(`enclave proxy: ${serviceId} request failed: ${detail}`);
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: secretKey || serviceId,
+          method,
+          origin,
+          path: rawPath,
+          status: null,
+          ok: false,
+          code: "connection_failed",
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       return { ok: false, code: "connection_failed", error: "connection_failed" };
     }
 
     if (res.type === "opaqueredirect" || (res.status >= 300 && res.status < 400)) {
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: secretKey || serviceId,
+          method,
+          origin,
+          path: rawPath,
+          status: res.status,
+          ok: false,
+          code: "redirect_refused",
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       return { ok: false, code: "redirect_refused", error: "redirect_refused" };
     }
 
@@ -259,6 +462,20 @@ export function createEnclaveProxyRoutes({
     // buffering happens — the fallback never buffers unbounded.
     const declared = Number(res.headers?.get?.("content-length") ?? "0");
     if (!Number.isNaN(declared) && declared > MAX_BODY_BYTES) {
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: secretKey || serviceId,
+          method,
+          origin,
+          path: rawPath,
+          status: res.status,
+          ok: false,
+          code: "bound_exceeded",
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       return { ok: false, error: `enclave proxy: the response from ${serviceId} declared ${declared} bytes, over the 1 MiB enclave bound` };
     }
     const parts = [];
@@ -272,6 +489,20 @@ export function createEnclaveProxyRoutes({
         size += value.byteLength;
         if (size > MAX_BODY_BYTES) {
           try { await reader.cancel(); } catch { /* gone */ }
+          try {
+            onRecord?.({
+              service: serviceId,
+              keyId: secretKey || serviceId,
+              method,
+              origin,
+              path: rawPath,
+              status: res.status,
+              ok: false,
+              code: "bound_exceeded",
+              ms: Date.now() - startMs,
+              timestamp: startMs,
+            });
+          } catch { /* ignore */ }
           return { ok: false, code: "bound_exceeded", error: "bound_exceeded" };
         }
         parts.push(value);
@@ -279,6 +510,20 @@ export function createEnclaveProxyRoutes({
     } else {
       // No stream and no declared length: the response cannot be bounded, so
       // it is refused — the enclave never accepts an unbounded body.
+      try {
+        onRecord?.({
+          service: serviceId,
+          keyId: secretKey || serviceId,
+          method,
+          origin,
+          path: rawPath,
+          status: res.status,
+          ok: false,
+          code: "unbounded_response",
+          ms: Date.now() - startMs,
+          timestamp: startMs,
+        });
+      } catch { /* ignore */ }
       return { ok: false, code: "unbounded_response", error: "unbounded_response" };
     }
     const bodyBytes = new Uint8Array(size);
@@ -287,6 +532,21 @@ export function createEnclaveProxyRoutes({
       bodyBytes.set(p, filled);
       filled += p.byteLength;
     }
+
+    try {
+      onRecord?.({
+        service: serviceId,
+        keyId: secretKey || serviceId,
+        method,
+        origin,
+        path: rawPath,
+        status: res.status,
+        ok: res.ok ?? true,
+        code: (res.ok ?? true) ? null : String(res.status),
+        ms: Date.now() - startMs,
+        timestamp: startMs,
+      });
+    } catch { /* ignore */ }
 
     return tagUntrusted({
       ok: res.ok ?? true,

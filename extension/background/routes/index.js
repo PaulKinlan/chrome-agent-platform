@@ -7,7 +7,7 @@ export { createProviderRoutes } from "./provider.js";
 export { createMcpRoutes } from "./mcp.js";
 export { createSchedulerRoutes } from "./scheduler.js";
 export { createFsGrantRoutes } from "./fs-grants.js";
-export { createEnclaveProxyRoutes } from "./enclave-proxy.js";
+export { createEnclaveProxyRoutes, DEFAULT_SERVICES } from "./enclave-proxy.js";
 export { createVaultRoutes } from "./vault.js";
 export { createAgentWorkspaceRoutes } from "./agent-workspace.js";
 export { createAgentScheduleRoutes, createApplyAgentSchedule, createNamedAgentDeleteGate, normalizeScheduleTask } from "./agent-schedule.js";

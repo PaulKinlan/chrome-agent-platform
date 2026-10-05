@@ -44,6 +44,7 @@ import {
   createSchedulerRoutes,
   createFsGrantRoutes,
   createEnclaveProxyRoutes,
+  DEFAULT_SERVICES,
   createVaultRoutes,
   createAgentWorkspaceRoutes,
   createMemoryRoutes,
@@ -57,6 +58,7 @@ import {
   permLeaseRoutes,
   requireSettingsSender,
 } from "./routes/index.js";
+import { createEnclaveLedger } from "../lib/enclave-ledger.js";
 import { describeError, formatError, errorDetail } from "../lib/error-report.js";
 import { BUDGET_CONTINUE_TASK, boundedIterations, budgetExhaustedTerminal, continuationStopTerminal, isBudgetTerminal, steerStopTerminal } from "../lib/run-budget.js";
 import { buildRetryDispatch, retryRunId } from "../lib/run-retry.js";
@@ -6490,6 +6492,34 @@ let enclaveVaultPromise = null;
 // decides its own provenance — this module does, once, and the token is the only one
 // this module instance will ever mint.
 const enclaveSwAccess = createServiceWorkerAccess();
+const ENCLAVE_SW_CALLER = Symbol("cap.enclave.sw-caller");
+const enclaveLedger = createEnclaveLedger({ maxEntries: 100 });
+
+async function getDynamicProxyRulesMap() {
+  try {
+    const got = await chrome.storage.local.get(["cap:vault:proxy-rules", "cap:vault:custom-services"]);
+    const raw = got?.["cap:vault:proxy-rules"] || got?.["cap:vault:custom-services"] || {};
+    const list = Array.isArray(raw) ? raw : Object.values(raw);
+    const map = {};
+    for (const rule of list) {
+      if (rule?.keyId) {
+        map[rule.keyId] = {
+          id: rule.keyId,
+          secretKey: rule.keyId,
+          origins: rule.origins || (rule.origin ? [rule.origin] : []),
+          authType: rule.authType || "bearer",
+          authName: rule.authName || "Authorization",
+          testPath: rule.testPath || "/",
+          label: rule.label || rule.keyId,
+        };
+      }
+    }
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 function enclaveVault() {
   enclaveVaultPromise ??= createSecretVault({
     storageArea: chrome.storage.local,
@@ -6502,7 +6532,9 @@ const enclaveProxyRoutes = createEnclaveProxyRoutes({
     getSecretRaw: (keyId, opts) =>
       enclaveVault().then((v) => v.getSecretRaw(keyId, { ...opts, access: enclaveSwAccess })),
   },
-  isAllowedCaller: (context) => isOwnerPrincipal(context),
+  getDynamicServices: getDynamicProxyRulesMap,
+  onRecord: (entry) => enclaveLedger.record(entry),
+  isAllowedCaller: (context) => Boolean(context?.[ENCLAVE_SW_CALLER] === true || isOwnerPrincipal(context)),
 });
 // The Settings surface for the vault (chrome-agent-platform-jao1.5): the
 // masked status + set/rotate/delete are Settings-gated; the connection test
@@ -6515,6 +6547,7 @@ const vaultRoutes = createVaultRoutes({
     rotateSecret: (keyId, value, o) => enclaveVault().then((v) => v.rotateSecret(keyId, value, o)),
     deleteSecret: (keyId, o) => enclaveVault().then((v) => v.deleteSecret(keyId, o)),
   },
+  ledger: enclaveLedger,
   requireSettingsSender: (context) => {
     if (context?.principal !== "owner-options") {
       const e = new Error("vault routes are restricted to the Settings surface");
@@ -6528,9 +6561,20 @@ const vaultRoutes = createVaultRoutes({
     // proxy's error text is settings-safe by code, but the mapping stays
     // total so nothing bypasses the whitelist).
     try {
+      let resolvedTestPath = "/";
+      let svc = DEFAULT_SERVICES[service];
+      if (!svc) {
+        const dynamic = await getDynamicProxyRulesMap();
+        svc = dynamic[service] || Object.values({ ...DEFAULT_SERVICES, ...dynamic }).find(
+          (s) => s.id === service || s.secretKey?.toLowerCase() === String(service).toLowerCase()
+        );
+      }
+      if (svc?.testPath) {
+        resolvedTestPath = svc.testPath;
+      }
       return await enclaveProxyRoutes["enclave.proxy"](
-        { service, path: "/", method: "GET" },
-        { principal: "owner-options" },
+        { service, path: resolvedTestPath, method: "GET", injectServiceAuth: true },
+        { principal: "owner-options", [ENCLAVE_SW_CALLER]: true },
       );
     } catch (err) {
       return { ok: false, code: err?.code || "unknown_error" };
@@ -6563,7 +6607,7 @@ async function enclaveServiceToolsForRun({ scoped = false } = {}) {
     configuredIds,
     synthesize: (ids) => synthesizeServiceTools({
       descriptors: SERVICE_DESCRIPTORS,
-      proxyCall: (message, context) => enclaveProxyRoutes["enclave.proxy"](message, context),
+      proxyCall: (message, context) => enclaveProxyRoutes["enclave.proxy"](message, { ...context, [ENCLAVE_SW_CALLER]: true }),
       vault: {
         getSecretRaw: (keyId, o) =>
           enclaveVault().then((v) => v.getSecretRaw(keyId, { ...o, access: enclaveSwAccess })),
@@ -6584,7 +6628,7 @@ async function enclaveStatusForSettings() {
     configured: configured.has(svc.auth?.secretId ?? ""),
     exposed: enabled && configured.has(svc.auth?.secretId ?? ""),
   }));
-  return { enabled, services };
+  return { enabled, services, ledger: enclaveLedger.list() };
 }
 const enclaveStatusRoutes = {
   "enclave.status": async (m, context) => {
@@ -6944,7 +6988,68 @@ const handlers = mergeRouteMaps(
     }
 
     const { headers: safeHeaders, refused: refusedHeaders } = sanitizePythonRequestHeaders(headers);
-    const u = new URL(verdict.url);
+
+    // Enclave secret resolution & origin pinning for python.fetch
+    const VAULT_PATTERN = /\$VAULT\{([A-Z][A-Z0-9_]*)\}/g;
+    const referencedKeys = new Set();
+    for (const match of String(url ?? "").matchAll(VAULT_PATTERN)) {
+      referencedKeys.add(match[1]);
+    }
+    for (const val of Object.values(safeHeaders)) {
+      for (const match of String(val ?? "").matchAll(VAULT_PATTERN)) {
+        referencedKeys.add(match[1]);
+      }
+    }
+
+    let urlToFetch = verdict.url;
+    const headersToFetch = { ...safeHeaders };
+
+    if (referencedKeys.size > 0) {
+      const dynamicRules = await getDynamicProxyRulesMap();
+      const allKnown = { ...DEFAULT_SERVICES, ...dynamicRules };
+
+      for (const keyId of referencedKeys) {
+        const matchingServices = Object.values(allKnown).filter(
+          (s) => s?.secretKey === keyId || s?.keyId === keyId || s?.id === keyId,
+        );
+        const boundOrigins = new Set();
+        for (const s of matchingServices) {
+          const sOrigins = Array.isArray(s.origins) ? s.origins : (s.origin ? [s.origin] : []);
+          for (const o of sOrigins) boundOrigins.add(o);
+        }
+
+        const isApproved = boundOrigins.has(verdict.origin);
+        if (!isApproved) {
+          const error = `enclave proxy: ${verdict.origin} is not an approved origin for secret ${keyId}`;
+          record({ ok: false, origin: verdict.origin, refused: true, error });
+          return { ok: false, refused: true, error };
+        }
+
+        let secretVal;
+        try {
+          const secretObj = await enclaveVault().then((v) =>
+            v.getSecretRaw(keyId, { caller: "sw", access: enclaveSwAccess })
+          );
+          secretVal = secretObj?.value;
+        } catch {
+          const error = `enclave proxy: the vault has no value for ${keyId}`;
+          record({ ok: false, origin: verdict.origin, refused: true, error });
+          return { ok: false, refused: true, error };
+        }
+        if (!secretVal) {
+          const error = `enclave proxy: the vault has no value for ${keyId}`;
+          record({ ok: false, origin: verdict.origin, refused: true, error });
+          return { ok: false, refused: true, error };
+        }
+
+        urlToFetch = urlToFetch.split(`$VAULT{${keyId}}`).join(secretVal);
+        for (const [k, v] of Object.entries(headersToFetch)) {
+          headersToFetch[k] = v.split(`$VAULT{${keyId}}`).join(secretVal);
+        }
+      }
+    }
+
+    const u = new URL(urlToFetch);
     const controller = new AbortController();
     const originKey = verdict.origin;
     if (!activePythonFetches.has(originKey)) {
@@ -6985,7 +7090,7 @@ const handlers = mergeRouteMaps(
         method: m,
         credentials: "omit", // never the owner's session — see the note above
         redirect: "manual", // a 3xx is refused below, never followed
-        headers: safeHeaders,
+        headers: headersToFetch,
         signal: controller.signal,
       };
       if (m === "POST") init.body = typeof body === "string" ? body : "";

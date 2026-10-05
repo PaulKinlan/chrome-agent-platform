@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.577] — 2026-10-05
+- Adds encrypted service secret management, origin-pinned proxy rules, live service-tool authorization, and request audit ledger to Settings → Web services.
+
 ## [0.3.576] — 2026-10-05
 - j5yz: eliminate the NTP thread-list heartbeat hydration storm, deduplicate terminal thread.get refreshes, show the thread surface immediately on click, and lazy-load offscreen artifact previews
 

@@ -59,6 +59,17 @@ export const SERVICE_DESCRIPTORS = Object.freeze({
       }),
     ]),
   }),
+  "github": Object.freeze({
+    id: "github",
+    name: "GitHub API",
+    origin: "https://api.github.com",
+    description: "Access GitHub API.",
+    auth: Object.freeze({
+      type: "bearer",
+      secretId: "GITHUB_TOKEN",
+    }),
+    tools: Object.freeze([]),
+  }),
 });
 
 /** The Brave web-search transform: raw API JSON -> concise result objects.
