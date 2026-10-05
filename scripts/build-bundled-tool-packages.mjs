@@ -31,6 +31,23 @@ import { canonicalJson, WasmPackageAuthority, auditWasmBinary, WASM_PACKAGE_LIMI
 import { collectSharedStrings, renderHoistedValue } from "./lib/shared-strings.mjs";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// 7rok: build.rebuildRef must name a file that exists in the tree, or the
+// provenance pointer rots the next time someone reads it — 7 of 38 manifests
+// pointed at packages/bundled/<name>/build.sh, which does not exist, while the
+// real script sat under packages/bundled/evidence/<name>/. Six of the seven keep
+// a build.sh there and hashwasm-blake3 reproduces by extraction (extract.mjs),
+// not by a build script. Resolve the real path at generation time and fail
+// closed when there is none, so a future admit cannot emit a dead reference.
+function rebuildRefFor(lane) {
+  const candidates = [
+    `packages/bundled/${lane}/build.sh`,
+    `packages/bundled/evidence/${lane}/build.sh`,
+    `packages/bundled/evidence/${lane}/extract.mjs`,
+  ];
+  for (const rel of candidates) if (existsSync(join(REPO, rel))) return rel;
+  throw new Error(`no reproduction script for lane '${lane}' (tried ${candidates.join(", ")})`);
+}
 const isMain = Boolean(
   (typeof import.meta.main === "boolean" && import.meta.main) ||
   (typeof process !== "undefined" && typeof process.argv?.[1] === "string" && (
@@ -613,23 +630,6 @@ for (const pkg of packages) {
   if (audit.measured.memoryMax != null && audit.measured.memoryMax > maxPages) throw new Error(`${pkg.toolId}: binary max ${audit.measured.memoryMax} exceeds declared ${maxPages}`);
   if (audit.measured.memoryInitial > initialPages) throw new Error(`${pkg.toolId}: binary initial ${audit.measured.memoryInitial} exceeds declared ${initialPages}`);
   if (maxPages > tierCeiling) throw new Error(`${pkg.toolId}: exceeds ${tier} tier`);
-
-// 7rok: build.rebuildRef must name a file that exists in the tree, or the
-// provenance pointer rots the next time someone reads it — 7 of 38 manifests
-// pointed at packages/bundled/<name>/build.sh, which does not exist, while the
-// real script sat under packages/bundled/evidence/<name>/. Six of the seven keep
-// a build.sh there and hashwasm-blake3 reproduces by extraction (extract.mjs),
-// not by a build script. Resolve the real path at generation time and fail
-// closed when there is none, so a future admit cannot emit a dead reference.
-function rebuildRefFor(lane) {
-  const candidates = [
-    `packages/bundled/${lane}/build.sh`,
-    `packages/bundled/evidence/${lane}/build.sh`,
-    `packages/bundled/evidence/${lane}/extract.mjs`,
-  ];
-  for (const rel of candidates) if (existsSync(join(REPO, rel))) return rel;
-  throw new Error(`no reproduction script for lane '${lane}' (tried ${candidates.join(", ")})`);
-}
 
   const meta = pkg.row ?? pkg;
   const capabilities = [...meta.capabilities].sort();
