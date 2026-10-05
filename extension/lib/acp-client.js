@@ -210,9 +210,22 @@ export class AcpClient {
     const mcpServers = Array.isArray(params.mcpServers) ? params.mcpServers : [];
 
     this._resetCommands();
+    // The id is optimistic ON PURPOSE: session/update frames that arrive while
+    // the load is in flight are filtered against activeSessionId
+    // (_handleSessionUpdate), so the session being loaded is the one they
+    // attribute to. What must NOT survive is that optimistic id when the load is
+    // REFUSED — the client would report a live session it never activated and
+    // keep filtering that session's notifications (chrome-agent-platform-tliw:
+    // the Pi tool-server refusal leaked ses_fake_1 into the client). Restore the
+    // previous value on rejection and let the error propagate unchanged.
+    const priorSessionId = this.activeSessionId;
     this.activeSessionId = params.sessionId;
-    await this.request("session/load", { sessionId: params.sessionId, cwd, mcpServers });
-    this.activeSessionId = params.sessionId;
+    try {
+      await this.request("session/load", { sessionId: params.sessionId, cwd, mcpServers });
+    } catch (error) {
+      this.activeSessionId = priorSessionId;
+      throw error;
+    }
     return { sessionId: params.sessionId, resumed: true };
   }
 

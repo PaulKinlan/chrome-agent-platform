@@ -1,6 +1,7 @@
 # Changelog
 
 ## [0.3.568] — 2026-10-04
+- a refused ACP session resume no longer leaves the client pointing at a session the agent never opened
 - composer commands now say they are inserted as conversation text, not run as native commands
 
 ## [0.3.567] — 2026-10-04
