@@ -4,9 +4,11 @@
 // Two layers, deliberately separated by the script's own `--classify` mode:
 //   * PARSER cases feed SYNTHETIC captured output, which is the only way to prove the branch ORDER
 //     (an output containing BOTH '[rejected]' and an update row must decide REFUSED).
-//   * LIVE cases run the block against a throwaway bare repo, so five of the six codes are produced
-//     by real git output rather than by strings this test wrote. The push stays stubbed
-//     (PUSH_MODE=stub), and controls assert that neither the target refs nor any probe ref moved.
+//   * LIVE cases run the block against a throwaway bare repo. The STUBBED cases produce the five
+//     dry-run codes (0, 2, 3, 4, 5) from real git output, and two further cases run PUSH_MODE=real
+//     to cover the codes the stub can never reach: 0 from a push that really lands, and 6 from a push
+//     the remote really declines. Controls assert that the stubbed cases moved nothing and that the
+//     real cases moved exactly what they should.
 //
 // The explicit-40-char-sha parser case is the guard for the correction this script carries: revert
 // the update-row regex to the HEAD-anchored form the fleet first settled on and that case returns
@@ -63,9 +65,12 @@ async function classify(body: string, head?: string): Promise<Result> {
   }
 }
 
-Deno.test("classify: '[rejected]' is tested first and wins over a concurrent update row", async () => {
-  // This is the load-bearing ordering case: a refusal's own output carries sha lines, so a positive
-  // update-row test placed first could classify a refusal as a pass.
+Deno.test("classify: a refusal wins over a concurrent update row (the real multi-ref case)", async () => {
+  // Where the ordering is LOAD-BEARING, and where it is not — both halves kept precise. The jfbn
+  // reviewer built a genuine MIXED capture from real git (one fast-forward row plus one '[rejected]'
+  // row) and showed that an inverted branch order returns OK on it. On this script's own
+  // single-refspec flow a refusal prints no update row, so there the ordering is defence-in-depth.
+  // This case is the multi-ref shape, which is where it decides the outcome.
   const both = [
     "   1111111..2222222  2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -> main",
     " ! [rejected]        3333333aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -> other (fetch first)",
@@ -119,7 +124,47 @@ Deno.test("classify: unrecognised and empty output fail closed as UNKNOWN (4)", 
   assertEquals(empty.code, 4, `expected UNKNOWN for empty output, got ${empty.code}`);
 });
 
-Deno.test("live: all six codes against real git output, with the push stubbed and controls", async () => {
+Deno.test("classify: a commit range printed BEFORE the row cannot hijack the sha (F3)", async () => {
+  // Git advice, a remote banner or a pre-receive hook can print its own old..new range before the
+  // update row. A global scan of the capture would take THAT range's new value and misreport the
+  // row's real one — here it would turn a legitimate OK into a MISMATCH.
+  const full = "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const capture = [
+    "remote: comparing 1111111..9999999 for the hook's own reason",
+    `   1111111..2222222  ${full} -> main`,
+  ].join("\n");
+  const res = await classify(`${capture}\n`, full);
+  assertEquals(res.code, 0, `the row's sha is the one that counts: ${res.out}`);
+  assert(res.out.includes("DECISION=OK"), res.out);
+  assert(res.out.includes("2222222"), "the decision must name the row's sha");
+});
+
+Deno.test("classify: a hook-declined push ('! [remote rejected]') is REFUSED, not UNKNOWN", async () => {
+  // git declares a refusal two ways and both mean nothing was pushed. This is the spelling a
+  // declined pre-receive hook produces (the real-push case in the live test produces exactly it),
+  // and it has no update row — so before the refusal family was matched, it classified as UNKNOWN.
+  const capture = [
+    "remote: r0v8 test hook declined this push",
+    " ! [remote rejected] HEAD -> main (pre-receive hook declined)",
+    "error: failed to push some refs to '../o.git'",
+  ].join("\n");
+  const res = await classify(`${capture}\n`, "2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  assertEquals(res.code, 3, `expected REFUSED for a hook-declined push: ${res.out}`);
+  assert(res.out.includes("DECISION=REFUSED"), res.out);
+});
+
+Deno.test("classify: without --head it must not claim the sha was checked (F4)", async () => {
+  const row = "   1111111..2222222  2222222aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -> main\n";
+  const res = await classify(row); // no --head
+  assertEquals(res.code, 0, res.out);
+  assert(
+    !res.out.includes("IS this HEAD"),
+    `nothing checked the sha, so the output must not assert it was checked: ${res.out}`,
+  );
+  assert(res.out.includes("NOT checked against HEAD"), res.out);
+});
+
+Deno.test("live: five dry-run codes (0,2,3,4,5) stubbed + the two real-push codes (0,6)", async () => {
   const root = await Deno.makeTempDir({ prefix: "closing-block-live-" });
   const origin = `${root}/origin.git`;
   const work = `${root}/work`;
@@ -153,6 +198,14 @@ Deno.test("live: all six codes against real git output, with the push stubbed an
     assert(ok.out.includes("DECISION=OK"), ok.out);
     assert(ok.out.includes("WOULD PUSH NOW"), "the mutation must be stubbed, the assertion exercised");
     assert(ok.out.includes("dry-run rc=0"), ok.out);
+    // F2 CONTROL: Case 1 ran with the push stubbed, so main must STILL BE c1 here — asserted NOW,
+    // before the harness's own push below moves main to c2. A control placed after that mutation
+    // would pass even if the stub had failed (review of 1a125b9a).
+    assertEquals(
+      await git(["rev-parse", "refs/heads/main"], origin),
+      c1,
+      "the stubbed case must not have pushed: main must still be c1 before the harness moves it",
+    );
 
     // 2. MISMATCH — src is an ancestor, so the row publishes c1 while HEAD is c2.
     const mismatch = await runBlock([], {
@@ -198,10 +251,55 @@ Deno.test("live: all six codes against real git output, with the push stubbed an
     assertEquals(noRemote.code, 4, `unreachable-remote branch: ${noRemote.out}`);
     assert(noRemote.out.includes("DECISION=UNKNOWN"), noRemote.out);
 
+    // 7. PUSH_MODE=real, SUCCESSFUL push: the path that actually mutates. A dedicated ref keeps it
+    //    clear of the stubbed cases above, and the ref moving IS the evidence that real mode acts.
+    await git(["push", "-q", "origin", `${c1}:refs/heads/real-target`], work);
+    const realOk = await runBlock([], {
+      cwd: work,
+      env: { SRC: c2, TARGET: "refs/heads/real-target", PUSH_MODE: "real" },
+    });
+    assertEquals(realOk.code, 0, `real push success must be 0: ${realOk.out}`);
+    assert(realOk.out.includes("DECISION=OK"), realOk.out);
+    assert(realOk.out.includes("PUSH rc=0"), realOk.out);
+    assertEquals(
+      await git(["rev-parse", "refs/heads/real-target"], origin),
+      c2,
+      "the real push must actually have landed",
+    );
+
+    // 8. PUSH_MODE=real, DECLINED push -> exit 6 (EXIT_PUSH_FAILED), the code the stubbed cases cannot
+    //    reach. A pre-receive hook declines the real push AFTER a passing assertion: git does not run
+    //    receive hooks for --dry-run, so the dry run still prints the update row and the decision is
+    //    OK — the failure comes from the push itself, which is exactly the branch under test.
+    await git(["push", "-q", "origin", `${c1}:refs/heads/reject-target`], work);
+    await Deno.writeTextFile(
+      `${origin}/hooks/pre-receive`,
+      "#!/bin/sh\necho 'r0v8 test hook declined this push' >&2\nexit 1\n",
+    );
+    await Deno.chmod(`${origin}/hooks/pre-receive`, 0o755);
+    const realDeclined = await runBlock([], {
+      cwd: work,
+      env: { SRC: c2, TARGET: "refs/heads/reject-target", PUSH_MODE: "real" },
+    });
+    assertEquals(realDeclined.code, 6, `a declined real push must be 6: ${realDeclined.out}`);
+    assert(
+      realDeclined.out.includes("DECISION=OK"),
+      "the assertion passed here on purpose — it is the PUSH that failed",
+    );
+    assert(realDeclined.out.includes("PUSH rc="), realDeclined.out);
+    assertEquals(
+      await git(["rev-parse", "refs/heads/reject-target"], origin),
+      c1,
+      "the declined push must not have moved the ref",
+    );
+
     // CONTROLS — the whole point of the stub: nothing may have moved, and the probe refs must not
     // exist. A rehearsal that claims no mutation has to be checked.
     assertEquals(await git(["rev-parse", "refs/heads/main"], origin), c2, "main must be unmoved");
     assertEquals(await git(["rev-parse", "refs/heads/behind"], origin), c0, "behind must be unmoved");
+    // The real-push cases moved exactly their own refs and nothing else.
+    assertEquals(await git(["rev-parse", "refs/heads/real-target"], origin), c2);
+    assertEquals(await git(["rev-parse", "refs/heads/reject-target"], origin), c1);
     const probes = await git(["for-each-ref", "--format=%(refname)", "refs/heads/tmp-merge-closing-block-probe-"], origin);
     assertEquals(probes, "", "no probe ref may be published");
     assertEquals(

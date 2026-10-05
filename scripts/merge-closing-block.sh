@@ -8,9 +8,20 @@
 # not the same claim as correctness by construction. Here the captured output DECIDES, and no action
 # is taken that the assertion did not authorise.
 #
-# BRANCH ORDER IS LOAD-BEARING: '[rejected]' is tested FIRST. A rejection is the only branch that
-# must win over every other match, because a refusal's output can carry sha lines that a positive
-# update-row test would otherwise satisfy incidentally.
+# BRANCH ORDER IS LOAD-BEARING, AND ITS SCOPE STATED EXACTLY: the refusal family is tested FIRST
+# because it is the only branch that must win over every other match. On a MULTI-REFSPEC capture git
+# really does print an update row ALONGSIDE a refusal — the jfbn reviewer built a genuine mixed
+# capture (one fast-forward row + one '[rejected]' row) and showed that an inverted order returns OK
+# on it, so THERE the order is what saves you. On THIS script's own single-refspec flow a refusal
+# prints no update row, so there the ordering is defence-in-depth rather than load-bearing. Both
+# halves are true; the scope is written down so the reason is not overstated.
+#
+# The family is matched rather than one spelling, because git declares a refusal two ways and both
+# mean nothing was pushed:
+#   " ! [rejected]        <sha> -> main (non-fast-forward)"         a refused fast-forward
+#   " ! [remote rejected] HEAD -> main (pre-receive hook declined)" the REMOTE declined it
+# Matching only the first spelling would classify a hook-declined push as UNKNOWN — still fail-closed,
+# but mislabelled — and the real-push case in the suite produces exactly that spelling.
 #
 # EXITS — distinct, so a caller cannot read "nothing to land" as success:
 #   0 OK               update row present, no '[rejected]', and the published sha IS this HEAD -> push
@@ -61,6 +72,9 @@ PUSH_MODE="${PUSH_MODE:-stub}"
 # Anchored: a line that merely MENTIONS a branch (git advice, a hook's output, prose) cannot satisfy
 # it. [^ ]+ is the refspec's local side and is deliberately not the literal token HEAD.
 UPDATE_ROW_RE='^ *[0-9a-f]{7,}\.\.[0-9a-f]{7,} +[^ ]+ -> '
+# The refusal family: "! [rejected]" (fast-forward refused) and "! [remote rejected]" (the remote's
+# hook declined). Both mean nothing was pushed, so both must be REFUSED.
+REFUSAL_RE='\[(remote )?rejected\]|\[remote failure\]'
 
 usage() {
   sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
@@ -72,9 +86,9 @@ usage() {
 # synthetic output containing BOTH '[rejected]' and an update row must decide REFUSED).
 classify() {
   local out="$1" head="${2:-}" new=""
-  if grep -q '\[rejected\]' "$out"; then
+  if grep -qE "$REFUSAL_RE" "$out"; then
     echo "DECISION=REFUSED"
-    grep -m1 '\[rejected\]' "$out" | sed 's/^ */  /'
+    grep -m1 -E "$REFUSAL_RE" "$out" | sed 's/^ */  /'
     echo "ACTION=DO NOT PUSH -> fetch, re-merge, RE-GATE the merged tree (never a blind retry)"
     return "$EXIT_REFUSED"
   fi
@@ -84,7 +98,10 @@ classify() {
     return "$EXIT_NOTHING_TO_LAND"
   fi
   if grep -qE "$UPDATE_ROW_RE" "$out"; then
-    new="$(grep -oE '[0-9a-f]{7,}\.\.[0-9a-f]{7,}' "$out" | head -1 | sed 's/.*\.\.//')"
+    # Scoped to the MATCHING update row: a commit range printed by git advice, a remote banner or a
+    # pre-receive hook before the row would otherwise be picked up by a global scan of the capture
+    # (F3, review of 1a125b9a).
+    new="$(grep -E "$UPDATE_ROW_RE" "$out" | grep -oE '[0-9a-f]{7,}\.\.[0-9a-f]{7,}' | head -1 | sed 's/.*\.\.//')"
     if [ -n "$head" ] && [ -n "$new" ]; then
       case "$head" in
         "$new"*) ;;
@@ -95,7 +112,14 @@ classify() {
           ;;
       esac
     fi
-    echo "DECISION=OK (update row present, no [rejected], published sha ${new:-unknown} IS this HEAD)"
+    if [ -n "$head" ]; then
+      echo "DECISION=OK (update row present, no [rejected], published sha ${new:-unknown} IS this HEAD)"
+    else
+      # --classify without --head: the row is present but NOTHING checked it against HEAD, so the
+      # "IS this HEAD" wording would assert something this run never verified (F4).
+      echo "DECISION=OK (update row present, no [rejected], published sha ${new:-unknown})"
+      echo "NOTE=no --head supplied: the published sha was NOT checked against HEAD"
+    fi
     return "$EXIT_OK"
   fi
   echo "DECISION=UNKNOWN (the output matched no branch)"
