@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.573] — 2026-10-05
+- internal: bundle sizes are now measured and reported against their reference sizes instead of failing the store build; the dependency-integrity checks still fail closed (owner decision, 2026-10-05).
+
 ## [0.3.572] — 2026-10-05
 - The WebAssembly tool catalogue now says what actually ships, so entries that are only proposed or not yet built are no longer described as available.
 
