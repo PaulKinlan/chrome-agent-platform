@@ -72,6 +72,125 @@ Deno.test("AcpClient: creates a new session and tracks session ID", async () => 
   assertEquals(sentMsg.params.cwd, "/test/custom");
 });
 
+Deno.test("1gf1: a refused session/new restores the previous session and its command list", async () => {
+  const transport = new MockTransport();
+  const client = new AcpClient({ transport });
+  let failNextNew = false;
+  let duringNew: string | null | undefined;
+  let newAttempts = 0;
+  transport.onSend = (msg: any) => {
+    if (msg.method !== "session/new") return;
+    newAttempts++;
+    if (failNextNew) {
+      // The in-flight de-targeting is deliberate: while the new session is being
+      // negotiated the OLD session must not collect updates, and commands for the
+      // session being created must land in pendingCommands instead.
+      duringNew = client.activeSessionId;
+      client.handleMessage({
+        method: "session/update",
+        params: {
+          sessionId: "ses_refused",
+          update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "$refused" }] },
+        },
+      });
+      client.handleMessage({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "Pi's ACP adapter does not mount supplied MCP servers" },
+      });
+      return;
+    }
+    client.handleMessage({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "ses_live" } });
+  };
+
+  await client.connect();
+  await client.newSession({ cwd: "/tmp" });
+  // The agent delivers the live session's commands as a notification, the same
+  // way the real adapter does.
+  client.handleMessage({
+    method: "session/update",
+    params: {
+      sessionId: "ses_live",
+      update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "$probe" }] },
+    },
+  });
+  assertEquals(client.activeSessionId, "ses_live");
+  assertEquals(client.commandsReceived, true);
+  assertEquals(client.availableCommands.length, 1);
+
+  failNextNew = true;
+  await assertRejects(
+    () => client.newSession({ cwd: "/tmp" }),
+    Error,
+    "does not mount supplied MCP servers",
+  );
+  assertEquals(duringNew, null, "the old session must not collect updates while the new one is negotiated");
+  assertEquals(client.activeSessionId, "ses_live", "a refused session/new must restore the previous session");
+  assertEquals(client.availableCommands.length, 1, "…and the command list that session advertised");
+  assertEquals(client.commandsReceived, true);
+  assertEquals(client.pendingCommands, null, "commands for the session that never opened are not kept");
+  assertEquals(newAttempts, 2);
+});
+
+Deno.test("1gf1: a refused session/new with nothing live leaves the client unattached and commandless", async () => {
+  const transport = new MockTransport();
+  const client = new AcpClient({ transport });
+  transport.onSend = (msg: any) => {
+    if (msg.method === "session/new") {
+      client.handleMessage({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "Pi's ACP adapter does not mount supplied MCP servers" },
+      });
+    }
+  };
+
+  await client.connect();
+  await assertRejects(
+    () => client.newSession({ mcpServers: [] }),
+    Error,
+    "does not mount supplied MCP servers",
+  );
+  assertEquals(client.activeSessionId, null);
+  assertEquals(client.availableCommands, []);
+  assertEquals(client.commandsReceived, false);
+  assertEquals(client.pendingCommands, null);
+});
+
+Deno.test("1gf1: a session/new response with no sessionId restores the previous session too", async () => {
+  const transport = new MockTransport();
+  const client = new AcpClient({ transport });
+  let malformedNextNew = false;
+  transport.onSend = (msg: any) => {
+    if (msg.method !== "session/new") return;
+    if (malformedNextNew) {
+      client.handleMessage({ jsonrpc: "2.0", id: msg.id, result: {} });
+      return;
+    }
+    client.handleMessage({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "ses_live" } });
+  };
+
+  await client.connect();
+  await client.newSession({ cwd: "/tmp" });
+  client.handleMessage({
+    method: "session/update",
+    params: {
+      sessionId: "ses_live",
+      update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "$probe" }] },
+    },
+  });
+
+  malformedNextNew = true;
+  await assertRejects(
+    () => client.newSession({ cwd: "/tmp" }),
+    Error,
+    "without a valid sessionId",
+  );
+  assertEquals(client.activeSessionId, "ses_live", "a malformed response is a failure, not a session switch");
+  assertEquals(client.availableCommands.length, 1, "…and the previous command list survives it");
+  assertEquals(client.commandsReceived, true);
+});
+
 Deno.test("AcpClient: loads and resumes an existing session", async () => {
   const transport = new MockTransport();
   const client = new AcpClient({ transport });

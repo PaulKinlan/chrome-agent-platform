@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.569] — 2026-10-05
+- a failed agent session attach no longer drops your active session or its commands
+
 ## [0.3.568] — 2026-10-04
 - a refused ACP session resume no longer leaves the client pointing at a session the agent never opened
 - composer commands now say they are inserted as conversation text, not run as native commands

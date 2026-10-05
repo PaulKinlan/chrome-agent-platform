@@ -182,11 +182,37 @@ export class AcpClient {
     const cwd = params.cwd ?? this.defaultCwd ?? "";
     const mcpServers = Array.isArray(params.mcpServers) ? params.mcpServers : [];
 
+    // The reset below is deliberate: clearing the id de-targets in-flight
+    // session/update frames from the OLD session while the new one is being
+    // negotiated, and the command list is the old session's. But a session/new
+    // that FAILS must not cost the caller the session it already had, so the
+    // prior values are captured first and restored on rejection or on a
+    // malformed response (chrome-agent-platform-1gf1). A session/new that
+    // SUCCEEDS keeps the new state — failures after that point (command
+    // callbacks) must not roll a live session back.
+    const priorSessionId = this.activeSessionId;
+    const priorAvailableCommands = this.availableCommands;
+    const priorCommandsReceived = this.commandsReceived;
+    const priorPendingCommands = this.pendingCommands;
+    const restorePriorSession = () => {
+      this.activeSessionId = priorSessionId;
+      this.availableCommands = priorAvailableCommands;
+      this.commandsReceived = priorCommandsReceived;
+      this.pendingCommands = priorPendingCommands;
+    };
+
     this._resetCommands();
     this.activeSessionId = null;
-    const result = await this.request("session/new", { cwd, mcpServers });
+    let result;
+    try {
+      result = await this.request("session/new", { cwd, mcpServers });
+    } catch (error) {
+      restorePriorSession();
+      throw error;
+    }
     const sessionId = String(result?.sessionId ?? "");
     if (!sessionId) {
+      restorePriorSession();
       throw new Error("ACP server returned session/new without a valid sessionId");
     }
     this.activeSessionId = sessionId;
