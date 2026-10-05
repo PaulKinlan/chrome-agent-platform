@@ -22,13 +22,13 @@
 // under KEYLESS_EVIDENCE_DIR (default: a fresh dir under the durable evidence root, printed).
 
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, resolveChromiumBinary } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
-const CHROMIUM = Deno.env.get("CAP_CHROMIUM") ?? "/usr/bin/chromium";
+const CHROMIUM = resolveChromiumBinary(); // fyvc: env override → CfT cache → /usr/bin/chromium, one shared resolution
 const EVIDENCE_DIR = Deno.env.get("KEYLESS_EVIDENCE_DIR") ?? durableDir(`cap-keyless-${Date.now()}`);
 const PROMPT = "group my tabs by topic";
 const DEMO_LITERAL = /\[demo model\]|Task received|\d+ chars/u;

@@ -28,14 +28,14 @@
 // page-actions-after-click.png, page-actions-after-type.png.
 
 import { fileURLToPath } from "node:url";
-import { launchChrome } from "./lib/chrome-launch.ts";
+import { launchChrome, resolveChromiumBinary } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
-const CHROMIUM = Deno.env.get("CAP_CHROMIUM") ?? "/usr/bin/chromium";
+const CHROMIUM = resolveChromiumBinary(); // fyvc: env override → CfT cache → /usr/bin/chromium, one shared resolution
 const EVIDENCE_DIR = Deno.env.get("PAGE_ACTIONS_EVIDENCE_DIR") ?? durableDir(`cap-page-actions-${Date.now()}`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

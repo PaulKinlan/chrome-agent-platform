@@ -10,7 +10,7 @@
 // reduced to wiring.
 
 import { createHash } from "node:crypto";
-import { withTimeout } from "./chrome-launch.ts";
+import { withTimeout, resolveChromiumBinary } from "./chrome-launch.ts";
 import { durableDir } from "./durable-root.mjs";
 import { allocateRunEvidenceDir, finalizeKatExecution, sanitizeKatLogError } from "./kat-finalizer.ts";
 
@@ -29,7 +29,7 @@ export const BISTRO_READY_EXPRESSION = `document.readyState === "complete" && ty
 
 /** The chromium binary, parameterized (was hardcoded in the caller): the
  * current value is the default, and a fake-browser harness can redirect it. */
-export const BISTRO_DEFAULT_BINARY = "/usr/bin/chromium";
+export const BISTRO_DEFAULT_BINARY = resolveChromiumBinary();
 
 export function buildBistroLaunchConfig({
   extensionDir,

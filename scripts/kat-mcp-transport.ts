@@ -26,7 +26,7 @@ import { durableDir } from "./lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
-const CHROMIUM = "/usr/bin/chromium";
+// chrome-agent-platform-fyvc: no binary literal — launchChrome resolves (CAP_CHROMIUM → chrome-for-testing cache → /usr/bin/chromium).
 const EVIDENCE = Deno.env.get("CAP_EVIDENCE_DIR") ?? durableDir("cap-mcp-transport-kats");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -101,7 +101,6 @@ async function main() {
 
   const profile = await Deno.makeTempDir({ prefix: "cap-mcp-transport-kat-" });
   const { proc, wsUrl } = await launchChrome({
-    binary: CHROMIUM,
     args: [
       "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
       "--silent-debugger-extension-api",

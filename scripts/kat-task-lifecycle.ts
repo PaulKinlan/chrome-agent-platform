@@ -19,7 +19,7 @@ import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
 const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-task-lifecycle`;
-const CHROMIUM = "/usr/bin/chromium";
+// chrome-agent-platform-fyvc: no binary literal — launchChrome resolves (CAP_CHROMIUM → chrome-for-testing cache → /usr/bin/chromium).
 
 let pass = 0, fail = 0;
 function check(name: string, cond: boolean, detail?: unknown) {
@@ -34,7 +34,6 @@ Deno.mkdir(OUT, { recursive: true });
 // launcher — a hard-coded port can silently attach to another lane's browser
 // (CAP-FB-20260829-FIXED-DEBUG-PORTS-01).
 const { proc, wsUrl } = await launchChrome({
-  binary: CHROMIUM,
   args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
     `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
     "--remote-allow-origins=*",
