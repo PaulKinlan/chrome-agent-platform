@@ -18,9 +18,8 @@
 //   deno run -A scripts/kat-bgagent-delete.ts <path-to-extension> [<out-dir>]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
-import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -34,9 +33,14 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-bgagent-delete`;
 // (bgagent-delete) resolves the same glob — at a DIFFERENT time, so a concurrent cache
 // refresh could in principle make the two disagree; the NOTE line below records the pick
 // on every run, and the gate asserts it, so a disagreement is loud rather than invisible.
-const CHROMIUM = resolveChromeForTesting();
+// The SAME unified resolution the gate uses (chrome-agent-platform-dsvq): CAP_CHROMIUM -> the
+// Chrome-for-Testing cache (bare-version dirs included) -> /usr/bin/chromium. Resolving only the
+// cache made this journey undrivable on a box whose browser lives elsewhere.
+const BROWSER_RESOLUTION = resolveChromiumBinaryReport();
+const CHROMIUM = BROWSER_RESOLUTION.binary;
 if (!CHROMIUM) {
-  console.log("FAIL: no Chrome for Testing binary in the puppeteer cache — expected $HOME/.cache/puppeteer/chrome/*/chrome-linux64/chrome (install one with: npx @puppeteer/browsers install chrome@stable). The Arch chromium wrapper ignores --load-extension, so this journey cannot run against it.");
+  console.log("FAIL: no Chrome resolvable - tried: " + BROWSER_RESOLUTION.tried.join("; ") +
+    ". Install one (npx @puppeteer/browsers install chrome@stable), set CAP_CHROMIUM, or provide /usr/bin/chromium. Note: a bare chromium WRAPPER may ignore --load-extension, which this journey needs.");
   Deno.exit(1);
 }
 console.log(`NOTE: Chrome for Testing: ${CHROMIUM}`);

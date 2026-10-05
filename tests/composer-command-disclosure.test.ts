@@ -16,14 +16,24 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, waitForServiceWorker } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
-import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
 import { COMMAND_INSERTION_DISCLOSURE } from "../extension/shared/composer-commands.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const EXT = `${ROOT}/extension`;
-const CHROME_FOR_TESTING = resolveChromeForTesting();
+// THE BROWSER COMES FROM THE UNIFIED RESOLUTION (chrome-agent-platform-dsvq, on fyvc):
+// CAP_CHROMIUM -> the Chrome-for-Testing cache (bare-version dirs included) -> /usr/bin/chromium.
+// Resolving ONLY the cache here (the previous behaviour) made a box whose browser lives at
+// /usr/bin/chromium or behind CAP_CHROMIUM self-skip this journey: work that never ran, wearing an
+// ignore. The ignore now fires only when NO browser is resolvable anywhere, and it says so with
+// everything that was tried, so the tally line can never be mistaken for a pass.
+const BROWSER_RESOLUTION = resolveChromiumBinaryReport();
+const BROWSER_BINARY = BROWSER_RESOLUTION.binary;
+if (BROWSER_BINARY === null) {
+  console.warn("composer-command-disclosure: no Chrome resolvable - tried: " + BROWSER_RESOLUTION.tried.join("; ") +
+    ". Reporting the browser journey as IGNORED (a visible tally line, never a pass); set CAP_CHROMIUM or install a browser to run it.");
+}
 
 Deno.test("fwf6 source pin: the picker note is rendered from the registry constant", async () => {
   const source = await Deno.readTextFile(new URL("../extension/shared/components.js", import.meta.url));
@@ -40,11 +50,11 @@ Deno.test("fwf6 source pin: the picker note is rendered from the registry consta
 
 Deno.test({
   name: "fwf6: the built extension shows the command-insertion disclosure in the picker (real browser)",
-  ignore: CHROME_FOR_TESTING === null,
+  ignore: BROWSER_BINARY === null,
   fn: async () => {
     const profile = chromeProfileDir("fwf6-composer-disclosure");
     const launched = await launchChrome({
-      binary: CHROME_FOR_TESTING,
+      binary: BROWSER_BINARY,
       args: [
         "--headless=new",
         "--no-sandbox",

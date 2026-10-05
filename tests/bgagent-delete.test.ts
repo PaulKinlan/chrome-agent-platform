@@ -8,7 +8,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertMatch, assertNotMatch, assertEquals } from "jsr:@std/assert@1";
-import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
+import { resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 
 const registry = new Map();
 
@@ -228,18 +228,22 @@ Deno.test("bgagent delete: the service-worker exposes the non-blocking routes", 
 // asserted nothing: AGENTS.md "Test honesty" mode 5, CONDITIONAL DEATH. Resolving during
 // load rather than inside the body is what lets a box with no browser report the test as
 // IGNORED — a visible line in the runner's tally — instead of a green that ran nothing.
-const CHROME_FOR_TESTING = resolveChromeForTesting();
+// THE BROWSER COMES FROM THE UNIFIED RESOLUTION (chrome-agent-platform-dsvq, on fyvc):
+// CAP_CHROMIUM -> the Chrome-for-Testing cache (bare-version dirs included) -> /usr/bin/chromium.
+// Resolving ONLY the cache here (the previous behaviour) made a box whose browser lives at
+// /usr/bin/chromium or behind CAP_CHROMIUM self-skip this journey: work that never ran, wearing an
+// ignore. The ignore now fires only when NO browser is resolvable anywhere, and it says so with
+// everything that was tried, so the tally line can never be mistaken for a pass.
+const BROWSER_RESOLUTION = resolveChromiumBinaryReport();
+const BROWSER_BINARY = BROWSER_RESOLUTION.binary;
+if (BROWSER_BINARY === null) {
+  console.warn("bgagent-delete: no Chrome resolvable - tried: " + BROWSER_RESOLUTION.tried.join("; ") +
+    ". Reporting the browser journey as IGNORED (a visible tally line, never a pass); set CAP_CHROMIUM or install a browser to run it.");
+}
 
 // The skip must explain itself where the reader is standing: the actionable message
-// lives in the harness, and the harness is never spawned on this path. Without this line
-// a fresh clone (or a box whose cache root is unreadable, which resolves null too) shows
-// "1 ignored" and has to go read the source to learn why.
-if (CHROME_FOR_TESTING === null) {
-  console.log(
-    "bgagent-delete: no Chrome for Testing resolved from $HOME/.cache/puppeteer/chrome/*/chrome-linux64/chrome — " +
-    "the real-browser delete journey is IGNORED (install one: npx @puppeteer/browsers install chrome@stable)",
-  );
-}
+// lives in the harness, and the harness is never spawned on this path. Without the
+// warning above a fresh clone shows "1 ignored" and has to read the source to learn why.
 
 // The journey's own check count (12 `check()` calls in the harness at the time of
 // writing). A FLOOR, not an equality: adding checks is fine, losing them is a coverage
@@ -249,14 +253,14 @@ const JOURNEY_CHECK_FLOOR = 15;
 
 Deno.test({
   name: "bgagent delete: the real-browser delete journey (loaded extension, real clicks)",
-  ignore: CHROME_FOR_TESTING === null,
+  ignore: BROWSER_BINARY === null,
   fn: async () => {
     // Belt, not coverage: `ignore` above is computed from the same constant, so this can
     // only fail if someone deletes the `ignore` field — which is exactly the regression
     // worth a loud failure for.
     assert(
-      CHROME_FOR_TESTING !== null,
-      "no Chrome for Testing resolved — this journey must be reported ignored, never run against a missing browser",
+      BROWSER_BINARY !== null,
+      "no browser resolvable — this journey must be reported ignored, never run against a missing browser",
     );
     // The harness resolves the same glob itself and PRINTS its pick ("NOTE: Chrome for
     // Testing: …"), so a run that passes still records which build drove it — this gate
@@ -271,9 +275,9 @@ Deno.test({
     });
     const out = await cmd.output();
     const log = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
-    assert(out.success, `the delete journey must pass (Chrome for Testing: ${CHROME_FOR_TESTING}):\n${log}`);
+    assert(out.success, `the delete journey must pass (Chrome for Testing: ${BROWSER_BINARY}):\n${log}`);
     assert(
-      log.includes(`Chrome for Testing: ${CHROME_FOR_TESTING}`),
+      log.includes(`Chrome for Testing: ${BROWSER_BINARY}`),
       `the journey must record which Chrome for Testing build it drove:\n${log}`,
     );
     assert(/FAIL:/.test(log) === false, `no journey check may fail:\n${log}`);
@@ -288,7 +292,7 @@ Deno.test({
     assert(
       Number(tally[1]) >= JOURNEY_CHECK_FLOOR,
       `the journey ran ${tally[1]} checks, below the ${JOURNEY_CHECK_FLOOR} it owns — a check went missing ` +
-      `(Chrome for Testing: ${CHROME_FOR_TESTING}):\n${log}`,
+      `(Chrome for Testing: ${BROWSER_BINARY}):\n${log}`,
     );
   },
 });

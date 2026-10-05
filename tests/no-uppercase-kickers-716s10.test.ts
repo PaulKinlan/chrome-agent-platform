@@ -5,8 +5,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { launchChrome, openCdp, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
-import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
+import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 // THE BROWSER IS RESOLVED, NOT PINNED (voicebox-beads-i76t). This test carried an absolute macOS
@@ -15,9 +14,17 @@ import { durableDir } from "../scripts/lib/durable-root.mjs";
 // CONDITIONAL DEATH — while tests/machine-path-honesty.test.ts failed the gate for the literal. Resolving
 // at MODULE LOAD lets a box with no browser report the test as IGNORED (a visible line in the tally)
 // instead of a green that ran nothing, and the probe below keeps the null case asserted, not silent.
-const CHROME_FOR_TESTING = resolveChromeForTesting();
-if (CHROME_FOR_TESTING === null) {
-  console.warn("716s.10 browser step: Chrome for Testing not found in the puppeteer cache — reporting this test as ignored (set up Chrome for Testing or run its harness to exercise it)");
+// THE BROWSER COMES FROM THE UNIFIED RESOLUTION (chrome-agent-platform-dsvq, on fyvc):
+// CAP_CHROMIUM -> the Chrome-for-Testing cache (bare-version dirs included) -> /usr/bin/chromium.
+// Resolving ONLY the cache here (the previous behaviour) made a box whose browser lives at
+// /usr/bin/chromium or behind CAP_CHROMIUM self-skip this journey: work that never ran, wearing an
+// ignore. The ignore now fires only when NO browser is resolvable anywhere, and it says so with
+// everything that was tried, so the tally line can never be mistaken for a pass.
+const BROWSER_RESOLUTION = resolveChromiumBinaryReport();
+const BROWSER_BINARY = BROWSER_RESOLUTION.binary;
+if (BROWSER_BINARY === null) {
+  console.warn("no-uppercase-kickers-716s10: no Chrome resolvable - tried: " + BROWSER_RESOLUTION.tried.join("; ") +
+    ". Reporting the browser journey as IGNORED (a visible tally line, never a pass); set CAP_CHROMIUM or install a browser to run it.");
 }
 
 function walkFiles(dir: string, predicate: (f: string) => boolean): string[] {
@@ -93,10 +100,10 @@ Deno.test("716s.10: sidepanel tasks header is normalized without wide letter spa
   assertEquals(rule.includes("font-weight: 600"), true, ".tasks-h font-weight must be 600");
 });
 
-Deno.test("716s.10: browser verification of sentence-case kickers and no uppercase labels in Chrome for Testing", { ignore: CHROME_FOR_TESTING === null }, async () => {
+Deno.test("716s.10: browser verification of sentence-case kickers and no uppercase labels in Chrome for Testing", { ignore: BROWSER_BINARY === null }, async () => {
   // The ignore above is the skip; this keeps a null from ever reaching launchChrome silently.
-  assertEquals(CHROME_FOR_TESTING !== null, true, "Chrome for Testing must be resolved when this test is not ignored");
-  const CFT_BINARY = CHROME_FOR_TESTING as string;
+  assertEquals(BROWSER_BINARY !== null, true, "Chrome for Testing must be resolved when this test is not ignored");
+  const CFT_BINARY = BROWSER_BINARY as string;
   // A Chrome profile is scratch that must not sit on a RAM-backed tmpfs (tests/durable-root.test.ts's
   // convention): durableDir() names it under $CAP_DURABLE_ROOT ?? $HOME/cap-evidence and refuses tmpfs.
   const tmpProfile = durableDir("chrome-profiles", `cap-cft-716s10-${Date.now()}`);

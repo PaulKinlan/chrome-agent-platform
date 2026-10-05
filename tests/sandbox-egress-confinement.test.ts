@@ -15,14 +15,24 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, openCdp, computeUnpackedExtensionId } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, computeUnpackedExtensionId, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
-import { resolveChromeForTesting } from "../scripts/lib/chrome-for-testing.ts";
 import { STORE_SANDBOX_CSP } from "../scripts/store-target-policy.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
 const EXT = `${ROOT}/extension`;
-const CHROME_FOR_TESTING = resolveChromeForTesting();
+// THE BROWSER COMES FROM THE UNIFIED RESOLUTION (chrome-agent-platform-dsvq, on fyvc):
+// CAP_CHROMIUM -> the Chrome-for-Testing cache (bare-version dirs included) -> /usr/bin/chromium.
+// Resolving ONLY the cache here (the previous behaviour) made a box whose browser lives at
+// /usr/bin/chromium or behind CAP_CHROMIUM self-skip this journey: work that never ran, wearing an
+// ignore. The ignore now fires only when NO browser is resolvable anywhere, and it says so with
+// everything that was tried, so the tally line can never be mistaken for a pass.
+const BROWSER_RESOLUTION = resolveChromiumBinaryReport();
+const BROWSER_BINARY = BROWSER_RESOLUTION.binary;
+if (BROWSER_BINARY === null) {
+  console.warn("sandbox-egress-confinement: no Chrome resolvable - tried: " + BROWSER_RESOLUTION.tried.join("; ") +
+    ". Reporting the browser journey as IGNORED (a visible tally line, never a pass); set CAP_CHROMIUM or install a browser to run it.");
+}
 
 Deno.test("4h2x source pin: sandbox CSP declares connect-src 'none' and img-src data: blob:", async () => {
   const manifestRaw = await Deno.readTextFile(new URL("../extension/manifest.json", import.meta.url));
@@ -36,7 +46,7 @@ Deno.test("4h2x source pin: sandbox CSP declares connect-src 'none' and img-src 
 
 Deno.test({
   name: "4h2x: real-browser script sandbox denies ambient connections and remote images while preserving host bridge and local data images",
-  ignore: CHROME_FOR_TESTING === null,
+  ignore: BROWSER_BINARY === null,
   fn: async () => {
     // 1. Start an owned HTTP endpoint on port 0 to detect any ambient network egress
     const seenPaths: string[] = [];
@@ -54,7 +64,7 @@ Deno.test({
 
     try {
       chromeInstance = await launchChrome({
-        binary: CHROME_FOR_TESTING,
+        binary: BROWSER_BINARY,
         args: [
           "--headless=new",
           "--no-sandbox",
