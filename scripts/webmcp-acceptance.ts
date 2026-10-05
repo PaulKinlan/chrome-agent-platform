@@ -62,6 +62,7 @@
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -633,7 +634,7 @@ async function main() {
       // with a real click — so the run is routed to that site's own worker
       // (agent.delegate), whose catalog carries the page's tools. The demo
       // model then calls add_to_cart through the REAL lazy protocol.
-      const focused = await c.clickExpr(ns, `document.querySelector("#task-input")`);
+      const focused = await c.clickExpr(ns, `document.querySelector("${composerInput("hub")}")`);
       check("showcase: focused the composer via a real click", focused);
       await c.send("Input.insertText", { text: "@127" }, ns);
       const mentionRow = await c.until(() => c.evalIn(ns, `(() => {
@@ -648,9 +649,9 @@ async function main() {
       check("showcase: the composer routes this task to the site agent (selected kind = site, id = the origin)", selected?.id === PAGE_ORIGIN, selected);
       const taskTail = ` add the cheapest widget to my cart and tell me the total @demo-site-tool add_to_cart {"sku":"widget-basic"}`;
       await c.send("Input.insertText", { text: taskTail }, ns);
-      const typed = await c.evalIn(ns, `document.querySelector("#task-input")?.value`);
+      const typed = await c.evalIn(ns, `document.querySelector("${composerInput("hub")}")?.value`);
       check("showcase: the task is in the composer", typeof typed === "string" && typed.endsWith(taskTail), typed);
-      const ran = await c.clickExpr(ns, `document.querySelector("#run-task")`);
+      const ran = await c.clickExpr(ns, `document.querySelector("${composerSend("hub")}")`);
       check("showcase: clicked Run task via a real click", ran);
       const firstUseCard = await c.until(() => c.evalIn(ns, `(() => {
         const cards = [...document.querySelectorAll("approval-card")];
@@ -755,14 +756,14 @@ async function main() {
       const activeComposerExpr = `(!document.querySelector("#thread-view")?.hidden ? document.querySelector("agent-composer#thread-composer") : document.querySelector("agent-composer#composer"))`;
       const waitForComposer = () => c.until(() => c.evalIn(ns, `(() => {
         const host = ${activeComposerExpr};
-        const input = host?.querySelector("#task-input");
+        const input = host?.querySelector('[data-composer-input]');
         const running = !document.querySelector("#thread-view")?.hidden && !document.querySelector("#run-control-bar")?.hidden;
         return input && !input.disabled && !running ? true : null;
       })()`), 30000, 100);
       const ensureSiteSelection = async () => {
         const current = await c.evalIn(ns, `(() => { const a = ${activeComposerExpr}?.selectedAgent; return a?.kind === "site" && a?.id === ${JSON.stringify(PAGE_ORIGIN)}; })()`);
         if (current === true) return true;
-        await c.clickExpr(ns, `${activeComposerExpr}?.querySelector("#task-input")`);
+        await c.clickExpr(ns, `${activeComposerExpr}?.querySelector('[data-composer-input]')`);
         await c.send("Input.insertText", { text: "@127" }, ns);
         const offered = await c.until(() => c.evalIn(ns, `[...(${activeComposerExpr}?.querySelectorAll('.popup .item[role="option"]') ?? [])].some((row) => (row.textContent || "").includes("127.0.0.1:8934")) ? true : null`), 5000, 100);
         if (!offered) return false;
@@ -771,10 +772,10 @@ async function main() {
       const runSiteTask = async (text: string) => {
         if (!(await waitForComposer())) return false;
         if (!(await ensureSiteSelection())) return false;
-        await c.clickExpr(ns, `${activeComposerExpr}?.querySelector("#task-input")`);
+        await c.clickExpr(ns, `${activeComposerExpr}?.querySelector('[data-composer-input]')`);
         await c.send("Input.insertText", { text }, ns);
-        const enabled = await c.until(() => c.evalIn(ns, `(() => { const button = ${activeComposerExpr}?.querySelector("#run-task"); return button && !button.disabled ? true : null; })()`), 3000, 50);
-        return enabled === true && await c.clickExpr(ns, `${activeComposerExpr}?.querySelector("#run-task")`);
+        const enabled = await c.until(() => c.evalIn(ns, `(() => { const button = ${activeComposerExpr}?.querySelector('[data-composer-send]'); return button && !button.disabled ? true : null; })()`), 3000, 50);
+        return enabled === true && await c.clickExpr(ns, `${activeComposerExpr}?.querySelector('[data-composer-send]')`);
       };
 
       // Persistent Allow: a second GENUINE model run of the same exact tool

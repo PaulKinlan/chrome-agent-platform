@@ -9,6 +9,7 @@
 import { fileURLToPath } from "node:url";
 import { CHROMIUM, launchChrome, safeCaptureScreenshot } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -148,7 +149,7 @@ try {
   // 1. The composer renders with its sub-controls (the input + mic + attach + run).
   const composer = await cdp.eval(hub, `(() => {
     const c = document.querySelector('agent-composer');
-    const inp = c ? (c.shadowRoot ? c.shadowRoot.querySelector('textarea,input') : c.querySelector('textarea,input')) : document.querySelector('#task-input,textarea');
+    const inp = c ? (c.shadowRoot ? c.shadowRoot.querySelector('textarea,input') : c.querySelector('textarea,input')) : document.querySelector('[data-composer-input],textarea');
     const hasMic = !!document.querySelector('mic-button');
     const btns = Array.from(document.querySelectorAll('button')).map(b => (b.getAttribute('aria-label') || b.title || b.textContent.trim().slice(0,12)));
     return { hasInput: !!inp, hasMic, hasAttach: !!document.querySelector('attach-button'), hasRun: btns.some(x=>/run task/i.test(x)) };
@@ -349,13 +350,13 @@ try {
   //    click on #run-task) → the demo provider (no key) runs → a thread is
   //    created; then reopen it through the sidebar thread-item (real pointer) and
   //    hit-test the nub with the thread overlay OPEN (not a forced hidden).
-  const inpRect = await cdp.eval(hub, `(() => { const r = document.querySelector('#task-input').getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
+  const inpRect = await cdp.eval(hub, `(() => { const r = document.querySelector("${composerInput("hub")}").getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2 }; })()`);
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: inpRect.x, y: inpRect.y }, hub);
   await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: inpRect.x, y: inpRect.y, button: "left", clickCount: 1 }, hub);
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: inpRect.x, y: inpRect.y, button: "left", clickCount: 1 }, hub);
   await cdp.send("Input.insertText", { text: "Summarise the docs" }, hub);
   await sleep(200);
-  const runBtn = await cdp.eval(hub, `(() => { const b = document.querySelector('#run-task'); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height }; })()`);
+  const runBtn = await cdp.eval(hub, `(() => { const b = document.querySelector("${composerSend("hub")}"); if (!b) return null; const r = b.getBoundingClientRect(); return { x: r.left + r.width/2, y: r.top + r.height/2, w: r.width, h: r.height }; })()`);
   if (runBtn && runBtn.w > 0 && runBtn.h > 0) {
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: runBtn.x, y: runBtn.y }, hub);
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: runBtn.x, y: runBtn.y, button: "left", clickCount: 1 }, hub);

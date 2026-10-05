@@ -10,6 +10,7 @@ import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -109,10 +110,10 @@ try {
     return true;
   })()`);
   await ev(sessionId, `(() => {
-    const input = document.querySelector('#composer #task-input');
+    const input = document.querySelector('${composerInput("hub")}');
     input.value = '@demo-think sum this up';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    document.querySelector('#composer #run-task').click();
+    document.querySelector('${composerSend("hub")}').click();
     return true;
   })()`);
 
@@ -174,10 +175,10 @@ try {
 
   // ── Run 2: a plain task — no thinking tokens, no trace surface ──
   await ev(sessionId, `(() => {
-    const input = document.querySelector('#composer #task-input');
+    const input = document.querySelector('${composerInput("hub")}');
     input.value = 'just a plain question';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    document.querySelector('#composer #run-task').click();
+    document.querySelector('${composerSend("hub")}').click();
     return true;
   })()`);
   let traceSeenOnPlainRun = false;

@@ -16,6 +16,7 @@
 import { fileURLToPath } from "node:url";
 import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -94,15 +95,15 @@ async function main() {
     await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 }, ntp);
     await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 }, ntp);
   };
-  const inputSel = `document.getElementById('composer')?.querySelector('#task-input')`;
-  const runSel = `document.getElementById('composer')?.querySelector('#run-task')`;
+  const inputSel = `document.querySelector('${composerInput("hub")}')`;
+  const runSel = `document.querySelector('${composerSend("hub")}')`;
   // Wait for the NTP to finish its async boot (the composer is defined late).
   {
     const deadline = Date.now() + 20000;
     let ready = false;
     let lastProbe = "";
     while (Date.now() < deadline && !ready) {
-      const probe = await evl(ntp, `JSON.stringify({c: !!document.getElementById('composer'), def: !!customElements.get('agent-composer'), ti: !!document.getElementById('composer')?.querySelector('#task-input'), url: location.href, ready: document.readyState})`).catch((e) => `ERR:${String(e).slice(0,120)}`);
+      const probe = await evl(ntp, `JSON.stringify({c: !!document.getElementById('composer'), def: !!customElements.get('agent-composer'), ti: !!document.querySelector('${composerInput("hub")}'), url: location.href, ready: document.readyState})`).catch((e) => `ERR:${String(e).slice(0,120)}`);
       lastProbe = String(probe);
       console.log("  probe:", lastProbe.slice(0, 160));
       try { ready = JSON.parse(probe).ti === true; } catch { ready = false; }

@@ -31,6 +31,7 @@
 import { fileURLToPath } from "node:url";
 import { killProcessTree } from "./lib/process-tree.ts";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -219,10 +220,10 @@ try {
     await ntp.ev(`(() => { const send = chrome.runtime.sendMessage.bind(chrome.runtime); chrome.runtime.sendMessage = (m, ...rest) => send(m && typeof m === "object" && m.type === "agent.run" ? { ...m, maxIterations: ${MAX_ITERATIONS} } : m, ...rest); return true; })()`);
     console.log(`forcing maxIterations=${MAX_ITERATIONS} (innerStepLimit ${Math.max(2, Math.min(MAX_ITERATIONS, 24))}) on the composer's agent.run`);
   }
-  await ntp.click("#task-input");
+  await ntp.click(composerInput("hub"));
   await send("Input.insertText", { text: TASK }, ntp.s);
   await sleep(300);
-  const clicked = await ntp.click("#run-task");
+  const clicked = await ntp.click(composerSend("hub"));
   console.log(`run started via the composer: ${clicked}`);
   const t0 = Date.now();
 

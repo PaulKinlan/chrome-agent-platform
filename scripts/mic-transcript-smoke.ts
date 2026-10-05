@@ -119,7 +119,7 @@ async function main() {
     // Fire a transcript result + assert the composer input shows it.
     const out = await evl(s.sessionId, `(()=>{
       const composer = document.querySelector('agent-composer#composer') || document.querySelector('agent-composer');
-      const ta = composer.querySelector('#task-input');
+      const ta = composer.querySelector('[data-composer-input]');
       const before = ta.value;
       const fired = window.__fireResult('hello world', false);
       return { fired, before, after: ta.value };

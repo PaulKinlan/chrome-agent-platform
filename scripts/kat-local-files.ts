@@ -17,6 +17,7 @@ import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -128,7 +129,7 @@ try {
 
   const commandShown = await evaluate(hub, `(async () => {
     const composer = document.querySelector("#composer");
-    const input = composer.querySelector("#task-input");
+    const input = composer.querySelector("[data-composer-input]");
     input.value = "/files";
     input.focus();
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -143,7 +144,7 @@ try {
   await screenshot(hub, "02-files-search-results.png");
   await evaluate(hub, `(async () => {
     const composer = document.querySelector("#composer");
-    const input = composer.querySelector("#task-input");
+    const input = composer.querySelector("[data-composer-input]");
     input.value = "/files:composer-local-file-known";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     for (let i = 0; i < 60; i++) {
@@ -181,7 +182,7 @@ try {
 
   const binaryShown = await evaluate(hub, `(async () => {
     const composer = document.querySelector("#composer");
-    const input = composer.querySelector("#task-input");
+    const input = composer.querySelector("[data-composer-input]");
     input.value = "/files:mislabelled-binary";
     input.focus();
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -331,13 +332,13 @@ try {
     const m = /\[demo model\] File write[^\n]*?(?=\s{2,}|$)/.exec(text);
     return m ? m[0].trim() : text.slice(-400);
   };
-  const composerHolds = (session: string) => evaluate(session, `document.querySelector("#composer #task-input")?.value ?? ""`);
+  const composerHolds = (session: string) => evaluate(session, `document.querySelector("${composerInput("hub")}")?.value ?? ""`);
   const runMarker = async (session: string) => {
     const targetId = targetIds.get(session);
     if (targetId) await send("Target.activateTarget", { targetId });
     await send("Page.bringToFront", {}, session);
     await evaluate(session, `(() => {
-      const input = document.querySelector("#composer #task-input");
+      const input = document.querySelector("${composerInput("hub")}");
       input.value = ${JSON.stringify(MARKER)};
       input.focus();
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -346,7 +347,7 @@ try {
     // The send itself needs no gesture (the APPROVAL does — that click below
     // is always genuine). Prefer the real button; fall back to a genuine
     // Enter, then to the composer's own send, and say which path fired.
-    const clicked = await clickGenuine(session, boxExpr("#composer #run-task"));
+    const clicked = await clickGenuine(session, boxExpr(composerSend("hub")));
     await sleep(400);
     if (clicked && (await composerHolds(session)) === "") return "click";
     await send("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, session);
@@ -378,7 +379,7 @@ try {
   if (!card) {
     const diag = await evaluate(hubWrite, `(() => ({
       status: [...document.querySelectorAll('conversation-run-status')].map((x) => ({ state: x.getAttribute('state'), label: ((x.shadowRoot ?? x).querySelector('.label')?.textContent ?? '').trim() })),
-      composerValue: document.querySelector('#composer #task-input')?.value ?? null,
+      composerValue: document.querySelector('${composerInput("hub")}')?.value ?? null,
       bubbles: document.querySelectorAll('#thread-conversation message-bubble').length,
       banner: document.querySelector('#provider-banner, .provider-banner')?.textContent?.trim() ?? null,
     }))()`).catch((e) => ({ error: String(e) }));

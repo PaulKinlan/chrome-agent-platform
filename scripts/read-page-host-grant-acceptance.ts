@@ -50,6 +50,7 @@ import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 import { wireValue } from "./lib/cdp-eval.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -348,8 +349,8 @@ async function main() {
     // ---- run 1: hub composer → card → Allow → the page is read ----
     await cdp.send("Page.bringToFront", {}, ntpSession);
     await sleep(300);
-    const typed1 = await typeInto(cdp, ntpSession, "#task-input", task);
-    const sent1 = typed1 && await clickSel(cdp, ntpSession, "#run-task");
+    const typed1 = await typeInto(cdp, ntpSession, composerInput("hub"), task);
+    const sent1 = typed1 && await clickSel(cdp, ntpSession, composerSend("hub"));
     if (!sent1) console.log("[debug] run 1: could not type/click the hub composer");
     await waitFor(async () => (await pendingCount()) > 0, 60000);
     await sleep(400); // the focus move is a rAF after the append
@@ -396,8 +397,8 @@ async function main() {
     await waitFor(async () => (await pendingCount()) === 0);
     await cdp.send("Page.bringToFront", {}, ntpSession);
     await sleep(300);
-    const typed2 = await typeInto(cdp, ntpSession, "#thread-composer #task-input", task);
-    const sent2 = typed2 && await clickSel(cdp, ntpSession, "#thread-composer #run-task");
+    const typed2 = await typeInto(cdp, ntpSession, composerInput("thread"), task);
+    const sent2 = typed2 && await clickSel(cdp, ntpSession, composerSend("thread"));
     if (!sent2) console.log("[debug] run 2: could not type/click the thread composer");
     await waitFor(async () => (await pendingCount()) > 0, 60000);
     await sleep(400);

@@ -274,7 +274,7 @@ async function main() {
   const PLUS = `${COMPOSER}.querySelector('#attach').shadowRoot.querySelector('.plus')`;
   const CHOOSE_AGENT = `${COMPOSER}.querySelector('#attach').shadowRoot.querySelector('button[data-kind="choose-agent"]')`;
   const NTP_PICK = `${COMPOSER}.querySelector('#agent-pick')`;
-  const NTP_INPUT = `${COMPOSER}.querySelector('#task-input')`;
+  const NTP_INPUT = `${COMPOSER}.querySelector('[data-composer-input]')`;
   const pickOptByName = (pickExpr, name) =>
     `[...${pickExpr}.shadowRoot.querySelectorAll('.opt')].find(o => o.querySelector('.name').textContent === ${JSON.stringify(name)})`;
   const SP_PICK = `document.getElementById('agents-picker')`;
@@ -427,7 +427,7 @@ async function main() {
       (await typeText(ntp, routedTask), await sleep(200),
         await evl(ntp, `${NTP_INPUT}.value === ${JSON.stringify(routedTask)}`)));
     const threadsBefore = (await msg(ntp, { type: "thread.list" }))?.threads?.length ?? 0;
-    check("plus flow: clicked Run via a real click", await clickExpr(ntp, `${COMPOSER}.querySelector('#run-task')`));
+    check("plus flow: clicked Run via a real click", await clickExpr(ntp, `${COMPOSER}.querySelector('[data-composer-send]')`));
     await sleep(8000); // the demo provider run + journal
     const readerHistory = await msg(ntp, { type: "named-agent.history", id: "reader" });
     const routed = (readerHistory?.entries ?? []).some((e) => e?.task === routedTask);
@@ -454,7 +454,7 @@ async function main() {
     await clickExpr(ntp, NTP_INPUT);
     await typeText(ntp, bgTask);
     const bgThreadsBefore = (await msg(ntp, { type: "thread.list" }))?.threads?.length ?? 0;
-    await clickExpr(ntp, `${COMPOSER}.querySelector('#run-task')`);
+    await clickExpr(ntp, `${COMPOSER}.querySelector('[data-composer-send]')`);
     await sleep(9000);
     const bgHistory = await msg(ntp, { type: "background-agent.history", id: bgFirst?.id });
     check("background routing: the task ran in the background agent's OWN journal (routing by canonical ref)",
@@ -476,7 +476,7 @@ async function main() {
     await clickExpr(ntp, NTP_INPUT);
     await typeText(ntp, siteTask);
     const siteThreadsBefore = (await msg(ntp, { type: "thread.list" }))?.threads?.length ?? 0;
-    await clickExpr(ntp, `${COMPOSER}.querySelector('#run-task')`);
+    await clickExpr(ntp, `${COMPOSER}.querySelector('[data-composer-send]')`);
     await sleep(10000); // the delegated worker run (demo provider) + journal commit
     const siteJournal = await msg(ntp, { type: "memory.get", origin: "https://example.com", key: "journal" });
     check("site routing: agent.delegate journaled the delegated result to the site's OWN memory",
@@ -494,7 +494,7 @@ async function main() {
       await clickExpr(ntp, NTP_INPUT) &&
       (await typeText(ntp, "/agent:pr"), await sleep(900), await evl(ntp, `(() => { const c = ${COMPOSER};
         return !c.querySelector('#agent-pop').hidden && c.querySelector('.popup').hidden &&
-          c.querySelector('#task-input').getAttribute('aria-expanded') === "true";
+          c.querySelector('[data-composer-input]').getAttribute('aria-expanded') === "true";
       })()`)));
     const slashFiltered = await evl(ntp, `[...${NTP_PICK}.shadowRoot.querySelectorAll('.opt .name')].map(n => n.textContent)`);
     check("slash: the typed query filters the shared picker",
@@ -505,13 +505,13 @@ async function main() {
     await sleep(200);
     const slashActive = await evl(ntp, `(() => { const p = ${NTP_PICK};
       return { active: [...p.shadowRoot.querySelectorAll('.opt')].findIndex(o => o.dataset.active === 'true'),
-        focusInComposer: document.activeElement === ${COMPOSER}.querySelector('#task-input') }; })()`);
+        focusInComposer: document.activeElement === ${COMPOSER}.querySelector('[data-composer-input]') }; })()`);
     check("slash: ArrowDown moves the shared picker's active option (forwarded keys)",
       slashActive.active === 0 && slashActive.focusInComposer === true, slashActive);
     await pressKey(ntp, "Enter");
     await sleep(500);
     const slashCommit = await evl(ntp, `(() => { const c = ${COMPOSER};
-      return { value: c.querySelector('#task-input').value,
+      return { value: c.querySelector('[data-composer-input]').value,
         chip: c.querySelector('#chips .chip.agent-chip')?.textContent ?? null,
         popClosed: c.querySelector('#agent-pop').hidden }; })()`);
     check("slash: Enter commits the canonical /agent:named:<id> reference exactly once + selects the chip",
@@ -568,7 +568,7 @@ async function main() {
     await pressKey(ntp, "Escape");
     await sleep(300);
     const escAfter = await evl(ntp, `(() => { const c = ${COMPOSER};
-      return { closed: c.querySelector('#agent-pop').hidden, value: c.querySelector('#task-input').value,
+      return { closed: c.querySelector('#agent-pop').hidden, value: c.querySelector('[data-composer-input]').value,
         chip: !!c.querySelector('#chips .chip.agent-chip') }; })()`);
     check("slash: Escape closes + reverts (text kept, no chip, no commit)",
       escBefore === true && escAfter.closed === true && escAfter.value === "/agent:" && escAfter.chip === false, escAfter);
@@ -589,7 +589,7 @@ async function main() {
     await sleep(1200); // the agent-registry-changed broadcast → live invalidation
     const staleState = await evl(ntp, `(() => { const c = ${COMPOSER};
       return { chip: !!c.querySelector('#chips .chip.agent-chip'),
-        text: c.querySelector('#task-input').value,
+        text: c.querySelector('[data-composer-input]').value,
         status: c.querySelector('.composer-status')?.textContent ?? '' };
     })()`);
     check("stale: the deleted agent's chip is invalidated live (text NOT auto-sent)",
@@ -807,9 +807,9 @@ async function main() {
 
     // direct a task to the agent from the side panel (a REAL run).
     const spTask = `sidepanel reader task ${Date.now()}`;
-    await clickExpr(sp, `document.getElementById('agent-composer').querySelector('#task-input')`);
+    await clickExpr(sp, `document.getElementById('agent-composer').querySelector('[data-composer-input]')`);
     await typeText(sp, spTask);
-    await clickExpr(sp, `document.getElementById('agent-composer').querySelector('#run-task')`);
+    await clickExpr(sp, `document.getElementById('agent-composer').querySelector('[data-composer-send]')`);
     await sleep(8000); // the demo run + journal
     const spHistory = await msg(sp, { type: "named-agent.history", id: "reader" });
     check("sidepanel: the directed task ran in the agent's own journal",

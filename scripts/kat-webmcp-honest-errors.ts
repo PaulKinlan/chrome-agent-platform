@@ -26,6 +26,7 @@ import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { copyBuiltTree } from "./lib/copy-built-tree.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -209,7 +210,7 @@ try {
   await send("Target.activateTarget", { targetId: nT.result.targetId });
   await sleep(500);
 
-  const focused = await clickSelector(ns, `document.querySelector("#task-input")`);
+  const focused = await clickSelector(ns, `document.querySelector("${composerInput("hub")}")`);
   check("922q fallback: focused the composer via a real click", focused);
   await send("Input.insertText", { text: "@127" }, ns);
   const mentionClicked = await until(async () => {
@@ -224,7 +225,7 @@ try {
   const mentionSelected = await until(() => evalIn(ns, `(() => { const a = document.querySelector("agent-composer#composer")?.selectedAgent; return a && a.kind === "site" ? a : null; })()`), 5000);
   check("922q fallback: the composer routes the task to the site agent (selected kind = site)", mentionSelected?.id === PAGE_ORIGIN, mentionSelected);
   await send("Input.insertText", { text: ` search the docs @demo-site-tool dispatch_broken_handler_throws {}` }, ns);
-  const ran = await clickSelector(ns, `document.querySelector("#run-task")`);
+  const ran = await clickSelector(ns, `document.querySelector("${composerSend("hub")}")`);
   check("922q fallback: clicked Run task via a real click", ran);
 
   const finalBubble = await until(() => evalIn(ns, `(() => {

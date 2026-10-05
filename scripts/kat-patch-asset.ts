@@ -27,6 +27,7 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-patch-asset`;
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const CHROMIUM = "/usr/bin/chromium";
 
@@ -141,10 +142,10 @@ await sleep(400);
 // uses in chrome-journeys.ts) so the run is owner-activated for approval.
 await clickSel("#home");
 await sleep(500);
-await clickSel("#task-input");
+await clickSel(composerInput("hub"));
 await typeText("@demo-patch-artifact change the bakery brand colour");
 await sleep(150);
-await clickSel("#run-task");
+await clickSel(composerSend("hub"));
 
 // Approve the single owner card (the first patch); the stale re-edit is refused
 // before the gate so it never raises a card. A real click on the card's approve
