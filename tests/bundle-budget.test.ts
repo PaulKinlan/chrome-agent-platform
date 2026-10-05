@@ -409,31 +409,35 @@ for (const report of ["bundle-report.json", "bundle-report-worker.json"]) {
   });
 }
 
-Deno.test("2eb5: an oversize error names a symlinked node_modules — and stays silent with a real one", async () => {
+Deno.test("2eb5: an oversize REPORT names a symlinked node_modules — and stays silent with a real one", async () => {
   // The environmental-vs-product distinction must cost zero gate runs: a
   // symlinked dependency root measured 688 bytes over budget with source
-  // unchanged, so the error must say when that is the case.
+  // unchanged, so the oversize REPORT must say when that is the case.
+  // (Re-anchored by the 74pb owner decision, 2026-10-05: sizes report instead
+  // of throwing — the note lives in bundleBudgetReport now. The old
+  // throwing pin was proven live by failing this file's first run on the
+  // changed module.)
   const root = durableDir("cap-budget-symlink/root");
   const real = durableDir("cap-budget-symlink/real");
   const plain = durableDir("cap-budget-symlink/plain");
   for (const d of [root, real, plain]) await Deno.mkdir(d, { recursive: true }).catch(() => {});
   try {
-    // Symlinked dependency root: the note names it.
+    // Symlinked dependency root: the note names it (in the REPORT — the call
+    // itself no longer throws on size).
     await Deno.symlink(real, `${root}/node_modules`);
-    const symlinkError = assertThrows(() =>
-      assertBundleBudget({ label: "background/service-worker.js", bytes: 3_000_001, root })
-    );
-    assertStringIncludes(symlinkError.message, "SYMLINK");
-    assertStringIncludes(symlinkError.message, "node_modules");
-    assertStringIncludes(symlinkError.message, "before treating this as product growth");
+    assertEquals(assertBundleBudget({ label: "background/service-worker.js", bytes: 3_000_001, root }), 3_000_001, "an oversize call returns its size (74pb)");
+    const symlinkReport = bundleBudgetReport({ label: "background/service-worker.js", bytes: 3_000_001, root });
+    assertStringIncludes(symlinkReport, "SYMLINK");
+    assertStringIncludes(symlinkReport, "node_modules");
+    assertStringIncludes(symlinkReport, "before treating this as product growth");
     // A real node_modules directory: no environmental note.
     await Deno.mkdir(`${plain}/node_modules`, { recursive: true }).catch(() => {});
-    const plainError = assertThrows(() =>
-      assertBundleBudget({ label: "background/service-worker.js", bytes: 3_000_001, root: plain })
-    );
-    assert(!plainError.message.includes("SYMLINK"), "a real node_modules carries no symlink note");
-    // A passing call is untouched in both worlds.
+    const plainReport = bundleBudgetReport({ label: "background/service-worker.js", bytes: 3_000_001, root: plain });
+    assert(!plainReport.includes("SYMLINK"), "a real node_modules carries no symlink note");
+    // A passing call is untouched in both worlds, and an in-reference size
+    // reports nothing at all.
     assertEquals(assertBundleBudget({ label: "background/service-worker.js", bytes: 100, root }), 100);
+    assertEquals(bundleBudgetReport({ label: "background/service-worker.js", bytes: 100, root }), "");
   } finally {
     await Deno.remove(durableDir("cap-budget-symlink"), { recursive: true }).catch(() => {});
   }
