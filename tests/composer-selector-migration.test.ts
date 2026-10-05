@@ -116,12 +116,14 @@ const INVENTORY: Record<string, number> = {
   // the retired ids, so it MUST keep naming them; migrating it would delete the
   // evidence that they are gone.
   "cap-evidence/sndb-composer-unique-evidence.ts": 15,
-  // AUDITED 2026-10-05 (ady6): STALE, and it cannot run — the four constants are
-  // live selectors (document.getElementById("task-input")), so typeInto/clickSel
-  // find nothing and the harness exits 1 before measuring anything. Filed as its
-  // own follow-up; it needs a real latency run to verify the repair, which is why
-  // it is not bundled into the mechanical migration.
-  "cap-evidence/h638-open-trace.ts": 4,
+  // MIGRATED 2026-10-05 (chrome-agent-platform-sxbz), AND PRUNED: the four
+  // constants were live selectors and the launch was the hand-rolled
+  // system-Chromium + --load-extension form that modern Chrome ignores, so the
+  // driver could not run at all. It now uses the house launcher and
+  // composerInput/composerSend per host, and it was RUN end to end (it builds a
+  // real task with history, sends the live turn, and refuses at its own
+  // running-open gate because a send during an in-flight run is queued into that
+  // run — that refusal is the separate finding filed with it).
   // ── unit tests: AUDITED, and they are NOT composer sites ─────────────────
   // Measured 2026-10-05 (ady6): every counted line is the identifier `run-task` in
   // ANOTHER sense — a local variable (runTaskEarly), an SW message name inside a

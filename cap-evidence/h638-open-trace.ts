@@ -18,7 +18,8 @@
 //
 //   deno run -A cap-evidence/h638-open-trace.ts [--runs=5] [--logs=50]
 
-import { CHROMIUM, launchChrome, waitForServiceWorker } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker } from "../scripts/lib/chrome-launch.ts";
+import { composerInput, composerSend } from "../scripts/lib/composer-target.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { fileURLToPath } from "node:url";
 
@@ -27,17 +28,17 @@ const EXT = `${ROOT}extension`;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const profile = durableDir(`h638-open-trace-${Date.now()}`);
-const chrome = await launchChrome({
-  binary: CHROMIUM,
-  args: [
-    "--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-    "--silent-debugger-extension-api",
-    `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
-    "--window-size=1400,1200",
-  ],
-  profile,
-  clearEnv: true,
-});
+// House-style consolidation, NOT a fix (see the correction below): this used to
+// pass the hand-rolled `binary: CHROMIUM` + --load-extension form; it now uses
+// the launcher's `extension:` option, which is the shape every other live
+// harness uses. Both forms load the extension on this box — `extension:` does
+// NOT resolve a Chrome-for-Testing binary; launchChrome uses /usr/bin/chromium
+// through the same CHROMIUM const (only the kat-* harnesses pass
+// resolveChromeForTesting() themselves). What actually stopped this driver
+// running was (a) a FRESH WORKTREE whose extension/ had not been built, so
+// "extension service worker not found" fired before any composer was touched,
+// and (b) the retired-id selectors below, which were the load-bearing fix.
+const chrome = await launchChrome({ extension: EXT, profile, windowSize: "1400,1200", clearEnv: true });
 
 const ws = new WebSocket(chrome.wsUrl);
 await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
@@ -152,10 +153,10 @@ const spanDelta = (before: Record<string, any>, after: Record<string, any>) => {
 // A store-level seed does not appear in the sidebar and is not what he clicks:
 // every filler turn below is a genuine run, and the transcript they leave is
 // what the measured open has to project.
-const HUB_INPUT = `document.getElementById("task-input")`;
-const HUB_SEND = `document.getElementById("run-task")`;
-const THREAD_INPUT = `document.getElementById("thread-composer")?.querySelector("#task-input")`;
-const THREAD_SEND = `document.getElementById("thread-composer")?.querySelector("#run-task")`;
+const HUB_INPUT = `document.querySelector(${JSON.stringify(composerInput("hub"))})`;
+const HUB_SEND = `document.querySelector(${JSON.stringify(composerSend("hub"))})`;
+const THREAD_INPUT = `document.querySelector(${JSON.stringify(composerInput("thread"))})`;
+const THREAD_SEND = `document.querySelector(${JSON.stringify(composerSend("thread"))})`;
 
 const waitForIdle = async (timeoutMs = 60000) => {
   const t0 = Date.now();
