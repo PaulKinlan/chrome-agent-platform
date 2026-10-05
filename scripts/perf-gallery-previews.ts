@@ -18,17 +18,32 @@
 //   CAP_EXT=<extension dir>      measure another tree — this is how the BASELINE
 //                               (pre-fix) run is produced, and the two runs are
 //                               the measurement the bead asks for.
+//
+// FIDELITY, stated plainly: this drives the SOURCE module
+// (chrome.runtime.getURL("artifacts/index.js")) on the OPTIONS page inside a
+// synthetic host div, not the built dist/artifacts.bundle.js on the real
+// artifacts/NTP page. It proves the source module's read pattern against a real
+// service worker and real OPFS. It does NOT prove the shipped bundle carries the
+// change (dist freshness must be gated separately), nor behaviour on the real Hub
+// view, nor anything about wall-clock benefit: on the measured pair the fixed run
+// was ~2% faster overall and ~19% LATER to first preview, because 8-way concurrency
+// inflated per-read latency 5.5x at near-identical throughput. The bottleneck is the
+// single-threaded service worker / OPFS path, not the await chain.
 //   CAP_GALLERY_CONCURRENCY=<n>  the pool bound the tree declares (default 8)
 //
 // JUDGEMENTS (HARD):
 //   1. peak in-flight asset.get <= pool bound   — no unbounded 24-way burst
-//   2. read window <= batches * readsMax        — converges in batches, not per read
-//      (the read window, not totalMs: totalMs also contains module import and DOM work)
-//   3. first preview <= ~one read + slack       — visible work is not queued behind 24
+//   2. read window <= 0.5 x sum(read durations) — the reads actually overlap
+//      This is a WITHIN-RUN ratio (readWindowShareOfSum), so it is scale-invariant:
+//      1.0 means strictly serial, ~1/concurrency means pooled. Thresholds that scaled
+//      with the run's own latency were removed after review: they let a slow pooled
+//      build pass and a fast pooled build fail.
 //
-// The headline number to read in the output is serialReadEquivalents: how many
-// p50 reads the gallery's wall time is worth. Serially that is ~the read count;
-// with a bounded pool it is ~ceil(count / concurrency).
+// The headline number to read is readWindowShareOfSum. It is NOT a speedup claim:
+// on the measured pair the fixed run was ~2% faster overall and ~19% LATER to first
+// preview, because 8-way concurrency inflated per-read latency 5.5x at near-identical
+// throughput. The structural win (peak in-flight 1 -> 8, window/sum 0.99 -> 0.16) is
+// what this harness evidences; the wall-clock benefit is not evidenced by it.
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 
@@ -147,6 +162,8 @@ const drive = (seed: number) => `
     readsDone: reads.length,
     readsP50: reads.length ? Math.max(1, Math.round(reads[Math.floor(reads.length / 2)])) : 0,
     readsMax: reads.length ? Math.round(reads[reads.length - 1]) : 0,
+    readsSumMs: Math.round(reads.reduce((t, v) => t + v, 0)),
+    readsMeanMs: reads.length ? Math.round(reads.reduce((t, v) => t + v, 0) / reads.length) : 0,
     previews: withPreview(),
     cards: cards().length,
   };
@@ -346,15 +363,22 @@ try {
   }
   const want = Math.min(SEED, MAX_PREVIEWS);
   const batches = Math.max(1, Math.ceil(result.fetched / CONCURRENCY));
-  const serialEquivalents = result.readsP50 ? +(result.totalMs / result.readsP50).toFixed(2) : null;
+  // readWindowShareOfSum is THE structural statistic: read window / sum of read
+  // durations. It is a WITHIN-RUN ratio, so it survives cross-arm latency drift
+  // (0.99 = strictly serial, 0.16 = pooled). An earlier revision published
+  // serialWouldBeMs = fetched * readsP50 and serialReadEquivalents as if they were
+  // counterfactuals; they are not, because p50 is measured UNDER pool contention, so
+  // they overstated the win by ~5x. They are gone, deliberately.
+  const readWindowShareOfSum = result.readsSumMs ? +(result.readsWindowMs! / result.readsSumMs).toFixed(3) : null;
   const report = {
     tree: EXT,
     seed: SEED,
-    poolBound: CONCURRENCY,
+    // Harness constants, NOT properties of the tree under test: they are env/default
+    // driven, so a baseline JSON reports the same 8/3 while having no pool at all.
+    harnessPoolBound: CONCURRENCY,
+    harnessBatchesIfPooled: batches,
     ...result,
-    batchesIfPooled: batches,
-    serialReadEquivalents: serialEquivalents,
-    serialWouldBeMs: result.fetched * result.readsP50,
+    readWindowShareOfSum,
   };
   console.log(JSON.stringify(report, null, 2));
   // Persist BEFORE the checks: if anything after this point dies, the numbers survive.
@@ -364,25 +388,24 @@ try {
   check("every fetched read completed", result.readsDone === result.fetched, { readsDone: result.readsDone, fetched: result.fetched });
   check("all previews rendered", result.previews >= want, { previews: result.previews, expected: want });
   check("no unbounded burst: peak in-flight within the pool bound", result.peakInflight <= CONCURRENCY, { peakInflight: result.peakInflight, poolBound: CONCURRENCY });
+  // The structural judgement, and the only convergence check: the read window must be
+  // a FRACTION of the sum of the reads' own durations. Strict serialization pins the
+  // ratio at ~1.0; a pooled run pulls it down. Thresholds that scaled with the run's
+  // own latency (batches * readsMax, readsP50 * 2) were removed: they let a slow
+  // pooled build pass and a fast pooled build fail, which is not scale-invariant.
   check(
-    "the reads converge in batches, not the sum of reads",
-    result.readsWindowMs !== null && result.readsWindowMs <= batches * result.readsMax + 250,
-    { readsWindowMs: result.readsWindowMs, batches, readsMax: result.readsMax, serialWouldBeMs: result.fetched * result.readsP50, totalMs: result.totalMs },
+    "the reads overlap: the read window is a fraction of the sum of read durations",
+    readWindowShareOfSum !== null && readWindowShareOfSum <= 0.5,
+    { readWindowShareOfSum, readsWindowMs: result.readsWindowMs, readsSumMs: result.readsSumMs, baselineWouldBe: "~1.0 (strictly serial)" },
   );
-  check(
-    "visible previews land in about one read, not behind 24",
-    result.firstPreviewMs !== null && result.firstPreviewMs <= result.readsP50 * 2 + 150,
-    { firstPreviewMs: result.firstPreviewMs, readsP50: result.readsP50 },
-  );
-  check(
-    "the first pool-sized batch completes in about one read (DOM-independent)",
-    result.firstBatchMs !== null && result.firstBatchMs <= result.readsP50 * 2 + 150,
-    { firstBatchMs: result.firstBatchMs, readsP50: result.readsP50 },
-  );
+  // Informational only, and reported for the record: on this box the fixed run's
+  // first preview was LATER than the baseline's (588ms vs 495ms), which no latency-
+  // scaled threshold should be allowed to spin as a pass.
+  console.log(`info: firstPreviewMs=${result.firstPreviewMs} firstBatchMs=${result.firstBatchMs} (informational — see the review: these move with contention, not with serialization)`);
 
   await Deno.writeTextFile(`${OUT}/gallery-previews.json`, JSON.stringify(report, null, 2));
   console.log(`wrote ${OUT}/gallery-previews.json`);
-  console.log(`SUMMARY: pass=${pass} fail=${fail} fetched=${result.fetched} peak=${result.peakInflight} totalMs=${result.totalMs} p50Ms=${result.readsP50} serialEquivalents=${serialEquivalents}`);
+  console.log(`SUMMARY: pass=${pass} fail=${fail} fetched=${result.fetched} peak=${result.peakInflight} totalMs=${result.totalMs} p50Ms=${result.readsP50} readWindowShareOfSum=${readWindowShareOfSum}`);
 } finally {
   clearTimeout(watchdog);
   await cleanup();
