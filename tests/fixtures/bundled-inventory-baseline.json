@@ -1,11 +1,11 @@
 {
   "_comment": [
-    "Baseline for tests/bundled-tool-packages.test.ts \u2014 the predecessor inventory that",
+    "Baseline for tests/bundled-tool-packages.test.ts — the predecessor inventory that",
     "regeneration must not silently change. Taken from git history at the commit named",
     "in takenAt (the test verifies that commit exists, so a hand-edited provenance fails).",
     "",
     "WHEN TO RE-TAKE: only when a digest change is REVIEWED as intentional. Adding a",
-    "package does NOT require re-taking this file \u2014 additions are asserted elsewhere and",
+    "package does NOT require re-taking this file — additions are asserted elsewhere and",
     "do not change an existing digest. A digest change must either be declared in",
     "intentionalReadmissions with a reason, or this baseline must be re-taken, which is a",
     "visible diff in review. That is the point: chrome-agent-platform-ne8u replaced a",
@@ -218,5 +218,34 @@
       "digest": "564e6f417e5a23f9ce85373df5ee6a8dc77814b98973a8bea81dc70e14c464b5"
     }
   },
-  "intentionalReadmissions": []
+  "intentionalReadmissions": [
+    {
+      "pkg": "cap.bundled.avif",
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+    },
+    {
+      "pkg": "cap.bundled.compressops",
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+    },
+    {
+      "pkg": "cap.bundled.hash.blake3",
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+    },
+    {
+      "pkg": "cap.bundled.imageops",
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+    },
+    {
+      "pkg": "cap.bundled.jxl",
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+    },
+    {
+      "pkg": "cap.bundled.oxipng",
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+    },
+    {
+      "pkg": "cap.bundled.zxing",
+      "reason": "chrome-agent-platform-7rok: build.rebuildRef now names the real reproduction script, so this manifest digest moves by design"
+    }
+  ]
 }

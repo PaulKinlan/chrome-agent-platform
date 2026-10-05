@@ -57,6 +57,7 @@ export const SOURCE_INSPECTING_GUARDS = [
   "tests/file-url-root-guard.test.ts",
   "tests/docs-process-truth.test.ts",
   "tests/wasm-catalogue-status-truth.test.ts",
+  "tests/wasm-manifest-rebuild-ref.test.ts",
   "tests/main-module-check-guard.test.ts",
   "tests/test-partition-guard.test.ts",
   "tests/package-scripts-exist.test.ts",
