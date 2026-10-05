@@ -79,14 +79,20 @@ const OBSERVER = `
 // Drives the real module the way ntp.js does, then reports what was observed.
 const drive = (seed: number) => `
 (async () => {
+  // The container MUST carry the gallery's own markup: renderArtifactsView looks for
+  // "#artifacts-grid, #grid, .grid" INSIDE it and returns immediately when there is no
+  // grid, so an empty div renders nothing and quietly measures zero reads (v10 did
+  // exactly that: fetched 0, cards 0, 20s of nothing).
   const el = (() => {
     const old = document.getElementById("qazo-gallery-host");
     if (old) old.remove();
     const host = document.createElement("div");
     host.id = "qazo-gallery-host";
+    host.innerHTML = '<div id="artifacts-grid"></div><div id="artifacts-status"></div>';
     document.body.appendChild(host);
     return host;
   })();
+  const gridFound = !!el.querySelector("#artifacts-grid");
   // The host page already loaded shared/components.js, so importing the module under
   // test would re-run customElements.define for the same tags and throw
   // "first-run-guide has already been used with this registry". Registration is
@@ -125,6 +131,7 @@ const drive = (seed: number) => `
     ? Math.round(Math.max(...batch.map((c) => c.t1)) - Math.min(...batch.map((c) => c.t0)))
     : null;
   return {
+    gridFound,
     totalMs: Math.round(totalMs),
     firstPreviewMs: firstPreviewMs === null ? null : Math.round(firstPreviewMs),
     firstBatchMs,
