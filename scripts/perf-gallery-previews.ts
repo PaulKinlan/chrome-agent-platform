@@ -284,7 +284,15 @@ try {
   if (!(await evalIn(pageS, `!!globalThis.__capPreviewReads`))) throw new Error("the observer did not install");
 
   console.log(`stage: driving the real gallery render (seed=${SEED}, pool=${CONCURRENCY})`);
-  const result = await evalInT(pageS, drive(SEED), 60000, "gallery drive");
+  let result;
+  try {
+    result = await evalInT(pageS, drive(SEED), 60000, "gallery drive");
+  } catch (e) {
+    // Never let a drive failure be silent: the earlier shape (rc=1, no message)
+    // cost a full slot to diagnose.
+    console.error(`DRIVE FAILED: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
+    throw e;
+  }
   const want = Math.min(SEED, MAX_PREVIEWS);
   const batches = Math.max(1, Math.ceil(result.fetched / CONCURRENCY));
   const serialEquivalents = result.readsP50 ? +(result.totalMs / result.readsP50).toFixed(2) : null;
@@ -298,6 +306,8 @@ try {
     serialWouldBeMs: result.fetched * result.readsP50,
   };
   console.log(JSON.stringify(report, null, 2));
+  // Persist BEFORE the checks: if anything after this point dies, the numbers survive.
+  await Deno.writeTextFile(`${OUT}/gallery-previews.json`, JSON.stringify(report, null, 2));
 
   check("gallery issues one asset.get per previewable card", result.fetched === want, { fetched: result.fetched, expected: want });
   check("every fetched read completed", result.readsDone === result.fetched, { readsDone: result.readsDone, fetched: result.fetched });
