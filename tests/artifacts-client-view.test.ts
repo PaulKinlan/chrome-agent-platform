@@ -93,3 +93,26 @@ Deno.test("artifacts client view: F2 & F3 dynamic origin resolution and filter r
   assert(artifactsJs.includes("selectedAssetId = initialParams.id || null;"),
     "selectedAssetId must reset to null when param is absent");
 });
+
+// 0iln: the live-preview reads used to be awaited one card at a time — up to
+// MAX_PREVIEWS = 24 sequential chrome.runtime -> SW -> OPFS round-trips, which is
+// the waterfall the perf-review station flagged. This pins the bounded-pool shape
+// so the fix cannot rot back into a per-card loop, and it pins it statically
+// because a timed browser measurement cannot run wherever Chrome is absent.
+Deno.test("artifacts previews: the reads are a bounded pool, not a per-card waterfall (0iln)", () => {
+  const cap = Number(artifactsJs.match(/const MAX_PREVIEWS = (\d+);/)?.[1] ?? "0");
+  const pool = Number(artifactsJs.match(/const PREVIEW_CONCURRENCY = (\d+);/)?.[1] ?? "0");
+  assert(cap > 0, "MAX_PREVIEWS must be declared");
+  assert(pool > 0 && pool <= cap,
+    `preview concurrency must be declared and bounded by the preview cap (got pool=${pool}, cap=${cap})`);
+  assert(artifactsJs.includes("const pending = cards.slice(0, MAX_PREVIEWS);"),
+    "the preview jobs must be collected into a pending list");
+  assert(artifactsJs.includes("for (let job = pending.shift(); job; job = pending.shift())"),
+    "bounded workers must drain the pending list");
+  assert(artifactsJs.includes("await Promise.all(workers)"),
+    "the pool must be awaited as a whole, not one read at a time");
+  assert(!artifactsJs.includes("for (const { card, a } of cards.slice(0, MAX_PREVIEWS))"),
+    "the per-card sequential waterfall must not come back (0iln)");
+  assert(!artifactsJs.includes('full.asset.type === "image" ?'),
+    "the no-op image ternary must not come back (0iln)");
+});
