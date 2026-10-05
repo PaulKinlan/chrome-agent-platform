@@ -179,20 +179,39 @@ async function main() {
     })()`);
     check("capability-row open-delete has a chevron + Delete and no switch", od.found && od.hasOpen && od.hasDelete && !od.hasToggle, od);
 
-    // The direct <switch-toggle> specimen still renders a visible 36×20 switch
-    // (the blank-toggle bug: the pill styling lived in document-scope
-    // theme.css, unreachable from the Shadow DOM — now in the component's own
-    // scoped style). The switch lives on permission rows and other non-agent
-    // controls — NOT on background-agent rows (delete is the primitive there).
+    // The direct <switch-toggle> specimen renders a visible switch at the
+    // CANONICAL 40×24 (chrome-agent-platform-716s.11 grew it from 36×20 for the
+    // ≥24×24 hit-area rule; tests/control-sizing-and-tab-order-716s11.test.ts is
+    // the source pin). The blank-toggle bug this check was written for — the pill
+    // styling lived in document-scope theme.css, unreachable from the Shadow DOM
+    // — now in the component's own scoped style. The check asserts the rendered
+    // track AND its knob, because losing the scoped style is what made the
+    // specimen invisible before. The switch lives on permission rows and other
+    // non-agent controls — NOT on background-agent rows (delete is the
+    // primitive there).
     const sw = await evl(s.sessionId, `(()=>{
       const st = document.querySelector('.stage switch-toggle');
       if (!st) return { found: false };
       const sw = st.shadowRoot ? st.shadowRoot.querySelector('.sw') : null;
       if (!sw) return { found: false };
       const cs = getComputedStyle(sw);
-      return { found: true, w: cs.width, h: cs.height, pressed: sw.getAttribute('aria-pressed') };
+      const knob = getComputedStyle(sw, '::after');
+      return {
+        found: true,
+        w: cs.width,
+        h: cs.height,
+        knobW: knob.width,
+        knobH: knob.height,
+        role: sw.getAttribute('role'),
+        checked: sw.getAttribute('aria-checked'),
+      };
     })()`);
-    check("standalone switch-toggle is a visible switch (36×20)", sw.found && sw.w === "36px" && sw.h === "20px", sw);
+    check(
+      "standalone switch-toggle is a visible 40×24 switch with an 18×18 knob and role=switch",
+      sw.found && sw.w === "40px" && sw.h === "24px" && sw.knobW === "18px" && sw.knobH === "18px" &&
+        sw.role === "switch" && (sw.checked === "true" || sw.checked === "false"),
+      sw,
+    );
 
     // composer / command palette opens (the static namespace registry; the
     // data-driven sub-items need chrome.runtime, which the showcase lacks).

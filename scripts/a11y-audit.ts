@@ -27,8 +27,17 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Each is still run and printed as EXPECTED-RED with its owner every time; the
 // run FAILS the moment one passes so the entry is removed here. Never a skip.
 const EXPECTED_RED: Record<string, string> = {
-  // The four "Get a … API key" provider links render 69x19 (under the 24px floor).
-  "settings: no interactive element under 24x24 px (canonical switch-toggle allowed)": "CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01",
+  // RETIRED (chrome-agent-platform-csr9): "settings: no interactive element under
+  // 24x24 px (canonical switch-toggle allowed)" was expected red for the four
+  // "Get a … API key" provider links (69x19,
+  // CAP-FB-20260830-PROVIDER-DEFAULT-AND-KEY-FLOW-01) — but the entry outlived
+  // that reason. The switch exemption below still matched the RETIRED 36x20 shape
+  // while the canonical switch had grown to 40x24 (716s.11), so the audit kept
+  // flagging the switches themselves and the entry stayed red for the wrong
+  // reason. With the shape filter corrected the check passes honestly (the
+  // provider links are >=24 now), which the harness reported as UNEXPECTED-GREEN
+  // until the entry was removed — exactly the pruning this file asks for.
+  //
   // RETIRED (chrome-agent-platform-57mu): "settings: contrast — no AA failures"
   // used to be owned by CAP-FB-20260827-SETTINGS-MONOLITH-01 and now passes, so
   // the harness reported UNEXPECTED-GREEN and failed the run by design. The
@@ -510,12 +519,15 @@ async function main() {
     check("settings: at least one heading present", a.landmarks.heading === true, a.landmarks);
     check("settings: contrast — no AA failures", (a.contrastFails || []).length === 0, a.contrastFails);
     check("settings: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
-    // The canonical <switch-toggle> is a shared app-wide control (36x20 track).
-    // WCAG 2.5.8 exempts targets constrained by a control's established design;
-    // resizing it app-wide is a separate visual decision (not this entry).
-    // The audit's smallTargets rows for switches carry the aria-label, e.g.
-    // "button[Provider server tool] 36x20" — identify them by the 36x20 shape.
-    const nonSwitch = (a.smallTargets || []).filter((s: string) => !/ 36x20$/.test(s));
+    // The canonical <switch-toggle> is a shared app-wide control (40x24 track
+    // since chrome-agent-platform-716s.11 grew it from 36x20 for the >=24x24
+    // hit-area rule). WCAG 2.5.8 exempts targets constrained by a control's
+    // established design; resizing it app-wide is a separate visual decision
+    // (not this entry). The audit's smallTargets rows for switches carry the
+    // aria-label, e.g. "button[Provider server tool] 40x24" — identify them by
+    // the 40x24 shape, so a switch that shrinks BACK to 36x20 is reported rather
+    // than excused.
+    const nonSwitch = (a.smallTargets || []).filter((s: string) => !/ 40x24$/.test(s));
     check("settings: no interactive element under 24x24 px (canonical switch-toggle allowed)", nonSwitch.length === 0, nonSwitch);
 
     // The Settings page is MULTI-SECTION and renders a section only when the
@@ -571,7 +583,7 @@ async function main() {
       (perm.unlabeled || []).length === 0, perm.unlabeled);
     check("settings:permissions: contrast — no AA failures",
       (perm.contrastFails || []).length === 0, perm.contrastFails);
-    const permNonSwitch = (perm.smallTargets || []).filter((s: string) => !/ 36x20$/.test(s));
+    const permNonSwitch = (perm.smallTargets || []).filter((s: string) => !/ 40x24$/.test(s));
     check("settings:permissions: no interactive element under 24x24 px (canonical switch-toggle allowed)",
       permNonSwitch.length === 0, permNonSwitch);
 
