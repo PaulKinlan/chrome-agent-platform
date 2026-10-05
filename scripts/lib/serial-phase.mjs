@@ -18,7 +18,10 @@
 // To preserve diagnostic visibility, the runner does NOT fail-fast: it runs
 // every file in the list and reports all failures.
 import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import os from "node:os";
+import { durableRoot } from "./durable-root.mjs";
 
 export const DEFAULT_SERIAL_FILE_TIMEOUT_MS = 180_000; // 3 minutes per file ON AN IDLE BOX
 
@@ -95,6 +98,9 @@ export function runSerialFile(file, {
     timeout: timeoutMs,
     killSignal: "SIGKILL",
     detached: true,
+    // A generous cap on CAPTURED output: spawnSync's 1 MiB default would turn a
+    // talkative-but-passing build file into an ENOBUFS "failure" (chrome-agent-platform-dsoq).
+    maxBuffer: 64 * 1024 * 1024,
   });
   if (r.error && r.error.code === "ETIMEDOUT") {
     // Kill the entire process group so no grandchild survives as an orphan.
@@ -121,28 +127,100 @@ export function runSerialFile(file, {
 }
 
 /**
+ * Where per-file serial logs are written: a DURABLE directory, never tmpfs (the
+ * repo's one durable-root rule). Returns null when that root is unusable, and says
+ * so — the captured output is still printed, so attribution never depends on it.
+ * @returns {string|null}
+ */
+function serialLogDir() {
+  try {
+    const dir = join(durableRoot(), "serial-phase-logs");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch (e) {
+    console.error(
+      `run-tests: WARNING — per-file serial logs unavailable (${e?.message ?? e}); ` +
+        `failing files are still named and their output printed below`,
+    );
+    return null;
+  }
+}
+
+/**
  * @param {string[]} files
  * @param {{ timeoutMs?: number, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {number}
+ *
+ * chrome-agent-platform-dsoq: this used to print only a COUNT — "serial phase (19 build/artifact
+ * files) FAILED (1/19 failed)" — with no file named, which made a landing gate UNREADABLE: the
+ * merger could not tell whether the change under test had caused the failure, and had to re-run the
+ * whole bounded gate (once losing it to queue-wait). Worse, several serial files print no
+ * "running N tests" banner when they fail early (a type-check error prints only "Check <file>" + an
+ * error), so "which file failed" was not even recoverable by reading the log. A gate verdict that
+ * reports a count without a name cannot be acted on.
+ *
+ * THE FIX: the per-file output is CAPTURED (stdio defaults to "pipe" here) instead of streamed, a
+ * header naming the file is printed BEFORE it runs — so a hang still says which file is hanging —
+ * every failing file is named with its exit code, its captured output is printed under a delimiter,
+ * and it is written to a durable per-file log whose path is named. Passing files print nothing but
+ * their header, which is what keeps the phase readable. `stdio` can still be passed explicitly
+ * (the focused tests pass ["ignore","ignore","ignore"]).
  */
 export function runSerialFiles(files, {
   timeoutMs = defaultSerialTimeoutMs(),
-  stdio = "inherit",
+  stdio = "pipe",
   cwd = undefined,
   env = process.env,
 } = {}) {
   const t0 = Date.now();
-  let firstFailure = 0;
-  let failedCount = 0;
+  /** @type {{ file: string, code: number, timedOut: boolean, secs: string, log: string|null }[]} */
+  const failures = [];
+  const logDir = serialLogDir();
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+
   for (const file of files) {
+    const started = Date.now();
+    console.log(`run-tests: serial file ${file}`);
     const result = runSerialFile(file, { timeoutMs, stdio, cwd, env });
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    const text = `${result.stdout?.toString?.() ?? ""}${result.stderr?.toString?.() ?? ""}`;
+
     if (result.code !== 0) {
-      if (firstFailure === 0) firstFailure = result.code;
-      failedCount++;
+      let log = null;
+      if (logDir) {
+        log = join(logDir, `${stamp}-${file.replaceAll("/", "_")}.log`);
+        try {
+          writeFileSync(log, text);
+        } catch {
+          log = null;
+        }
+      }
+      failures.push({ file, code: result.code, timedOut: Boolean(result.timedOut), secs, log });
+      // Named HERE as well as in the summary: the reader watching the log sees which file broke the
+      // moment it breaks, instead of scrolling back to guess from a missing banner.
+      console.error(
+        `\nrun-tests: serial file ${file} FAILED (exit ${result.code}${result.timedOut ? ", TIMED OUT" : ""}) in ${secs}s` +
+          `${log ? ` — captured output: ${log}` : ""}`,
+      );
+      if (text.trim()) console.error(text.replace(/\n$/, ""));
     }
   }
+
   const secs = ((Date.now() - t0) / 1000).toFixed(0);
-  const statusStr = failedCount === 0 ? "GREEN" : `FAILED (${failedCount}/${files.length} failed)`;
+  const statusStr = failures.length === 0 ? "GREEN" : `FAILED (${failures.length}/${files.length} failed)`;
   console.log(`\nrun-tests: serial phase (${files.length} build/artifact files) ${statusStr} in ${secs}s`);
-  return firstFailure;
+
+  if (failures.length > 0) {
+    // THE WHOLE POINT (dsoq): a COUNT without a NAME cannot be acted on. This block is what a
+    // landing gate must print, and tests/serial-phase-failure-attribution.test.ts fails if it stops.
+    console.error("run-tests: FAILING SERIAL FILE(S):");
+    for (const f of failures) {
+      console.error(
+        `  - ${f.file} (exit ${f.code}${f.timedOut ? ", TIMED OUT" : ""}) in ${f.secs}s` +
+          `${f.log ? ` — log: ${f.log}` : ""}`,
+      );
+    }
+  }
+
+  return failures.length > 0 ? failures[0].code : 0;
 }
