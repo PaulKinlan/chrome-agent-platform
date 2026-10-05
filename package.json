@@ -53,6 +53,7 @@
     "test:role-preview": "deno run -A scripts/agent-role-preview.ts",
     "test:security:injection": "deno run -A scripts/security-injection.ts",
     "test:perf:seeded": "deno run -A scripts/perf-seeded-scale.ts 120",
+    "test:perf:gallery": "deno run -A scripts/perf-gallery-previews.ts 30",
     "test:local-files": "deno run -A scripts/kat-local-files.ts",
     "test:read-page-host-grant": "deno run -A scripts/read-page-host-grant-acceptance.ts",
     "check:reachability": "node scripts/check-reachability.mjs",
