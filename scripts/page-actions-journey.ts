@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { SCRIPTED_DUMMY_KEY, executeEnvelope, selectionRefOf, startScriptedProvider } from "./lib/scripted-provider.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -290,12 +291,12 @@ try {
     // continues the open thread); click #home first like driveHubTask does.
     await evalIn(cdp, ntp, `document.querySelector("#home")?.click(); "home"`).catch(() => null);
     await sleep(700);
-    const input = await evalIn(cdp, ntp, `(() => { const i = document.querySelector("#task-input"); if (!i) return null; i.focus(); const r = i.getBoundingClientRect(); return { x: r.x + 6, y: r.y + r.height / 2 }; })()`);
+    const input = await evalIn(cdp, ntp, `(() => { const i = document.querySelector("${composerInput("hub")}"); if (!i) return null; i.focus(); const r = i.getBoundingClientRect(); return { x: r.x + 6, y: r.y + r.height / 2 }; })()`);
     if (!input) return false;
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: input.x, y: input.y, button: "left", buttons: 1, clickCount: 1 }, ntp);
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: input.x, y: input.y, button: "left", buttons: 0, clickCount: 1 }, ntp);
     await cdp.send("Input.insertText", { text: task }, ntp);
-    const btn = await evalIn(cdp, ntp, `(() => { const b = document.querySelector("#run-task"); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    const btn = await evalIn(cdp, ntp, `(() => { const b = document.querySelector("${composerSend("hub")}"); if (!b || b.disabled) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     if (!btn) return false;
     await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: btn.x, y: btn.y, button: "left", buttons: 1, clickCount: 1 }, ntp);
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: btn.x, y: btn.y, button: "left", buttons: 0, clickCount: 1 }, ntp);

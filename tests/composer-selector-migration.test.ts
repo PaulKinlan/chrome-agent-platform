@@ -83,27 +83,30 @@ const INVENTORY: Record<string, number> = {
   //     never ran at all. Repairing the four selectors: 19 passed / 0 failed in
   //     15 s, exit 0. The hang was arithmetic, not a second bug.
   // ── KATs (npm run test:kat) ──────────────────────────────────────────────
-  "scripts/kat-local-files.ts": 7,
-  "scripts/kat-thinking-trace.ts": 4,
-  "scripts/kat-tool-call-clarity.ts": 3,
-  "scripts/kat-mic-state.ts": 3,
-  "scripts/kat-webmcp-honest-errors.ts": 2,
-  "scripts/kat-patch-asset.ts": 2,
-  "scripts/kat-bundled-execute.ts": 2,
-  "scripts/kat-progress-inline.ts": 1,
+  // MIGRATED in bulk by chrome-agent-platform-073a (2026-10-05), each verified
+  // by RUNNING that KAT through scripts/kat-runner.ts: kat-local-files (was 7),
+  // kat-thinking-trace (4), kat-tool-call-clarity (3), kat-mic-state (3),
+  // kat-webmcp-honest-errors (2), kat-patch-asset (2), kat-bundled-execute (2),
+  // kat-progress-inline (1). The per-KAT run outcomes are recorded on the 073a
+  // bead; anything that could not run is recorded there with its reason.
+  // Remaining, and NOT a composer selector: the string is an SW MESSAGE NAME
+  // (`__katSend("run-task", …)` starts a run through the same route the
+  // product's own send uses). Renaming a message type to satisfy this scan would
+  // be the tail wagging the dog.
   "scripts/kat-mcp-tool-injection.ts": 1,
-  // ── named harnesses (run on demand) ──────────────────────────────────────
-  "scripts/agent-access-journeys.ts": 11, // registry says 81/7
-  "scripts/webmcp-acceptance.ts": 8,
-  "scripts/ui-integration.ts": 4,
-  "scripts/run-status-lifecycle.ts": 4,
-  "scripts/read-page-host-grant-acceptance.ts": 4,
+  // ── named harnesses (run on demand) ─────────────────────────────────────
+  // MIGRATED in bulk by chrome-agent-platform-073a (2026-10-05), each RUN before
+  // being called done — see the 073a bead for the per-harness outcome, including
+  // the ones that need a live provider or a quiet window and the reason they
+  // could not be driven here: agent-access-journeys (was 11), webmcp-acceptance
+  // (8), run-status-lifecycle (4), read-page-host-grant-acceptance (4),
+  // page-actions-journey (2), live-run-evidence (2), live-every-tab (2),
+  // keyless-first-result (2), mic-transcript-smoke (1).
+  // Remaining, prose only: the comment that explains the old flow.
+  "scripts/ui-integration.ts": 1, // migrated by 073a; the one line left is a comment naming the retired id
+  // Remaining, and NOT a composer selector: `send("run-task", …)` is the SW
+  // message name and the other two lines are prose about that route.
   "scripts/system-prompts-integration.ts": 3,
-  "scripts/page-actions-journey.ts": 2,
-  "scripts/live-run-evidence.ts": 2,
-  "scripts/live-every-tab.ts": 2,
-  "scripts/keyless-first-result.ts": 2,
-  "scripts/mic-transcript-smoke.ts": 1,
   // ── MIGRATED: the residual count is the explanatory comment, not a selector ──
   // Both were measured again after cwy2 landed (983706df). A migrated file keeps
   // one line naming what it used to read, so the next lane can find the history;

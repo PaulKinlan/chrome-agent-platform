@@ -17,6 +17,7 @@ import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
 import { resolveChromeForTesting } from "./lib/chrome-for-testing.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -264,9 +265,9 @@ try {
 console.log(`${pass} passed, ${fail} failed (mic-state core)`);
 
 // ── send / navigation lifecycle (owner: "sent a task, mic kept listening") ──
-const setText = (t: string) => evalJs(`(() => { const ta = document.querySelector("#composer #task-input"); ta.value = ${JSON.stringify(t)}; ta.dispatchEvent(new Event("input", { bubbles: true })); return ta.value; })()`);
-const getText = () => evalJs(`document.querySelector("#composer #task-input").value`);
-const clickSend = `(() => { document.querySelector("#composer #run-task").click(); return true; })()`;
+const setText = (t: string) => evalJs(`(() => { const ta = document.querySelector("${composerInput("hub")}"); ta.value = ${JSON.stringify(t)}; ta.dispatchEvent(new Event("input", { bubbles: true })); return ta.value; })()`);
+const getText = () => evalJs(`document.querySelector("${composerInput("hub")}").value`);
+const clickSend = `(() => { document.querySelector("${composerSend("hub")}").click(); return true; })()`;
 const hubVisible = `(() => { const m = document.querySelector("main.content"); return !!m && getComputedStyle(m).display !== "none"; })()`;
 const backToHub = `(() => { const tv = document.getElementById("thread-view"); if (tv && !tv.hidden) { document.getElementById("thread-back")?.click(); return "closed"; } return "already-hub"; })()`;
 

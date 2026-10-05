@@ -153,9 +153,9 @@ await sleep(400);
 const started = await evalPage(`(() => {
   const c = document.getElementById('composer');
   const root = c.shadowRoot ?? c;
-  const ta = root.querySelector('#task-input');
+  const ta = root.querySelector('[data-composer-input]');
   if (!ta || !ta.value.trim()) return 'INPUT_EMPTY';
-  const run = root.querySelector('#run-task');
+  const run = root.querySelector('[data-composer-send]');
   if (!run) return 'NO_RUN_BUTTON';
   // Read the length BEFORE clicking — the send clears the input, so reading
   // afterwards always reports 0.

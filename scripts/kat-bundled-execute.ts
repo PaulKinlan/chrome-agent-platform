@@ -41,6 +41,7 @@ import {
   lastToolResult,
   executeEnvelope,
 } from "./lib/scripted-provider.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXTENSION = `${ROOT}extension`;
@@ -294,14 +295,14 @@ try {
   const ntp = await cdp.open(`chrome-extension://${extensionId}/ntp/ntp.html`);
   await new Promise((r) => setTimeout(r, 2500));
   const typed = await cdp.eval(ntp.sessionId, `(() => {
-    const i = document.querySelector('#task-input');
+    const i = document.querySelector('${composerInput("hub")}');
     if (!i) return false;
     i.value = 'bundled wasm execute spot-check';
     i.dispatchEvent(new InputEvent('input', { bubbles: true }));
     return true;
   })()`);
   assert(typed === true, "composer input not found");
-  await cdp.eval(ntp.sessionId, `document.querySelector('#run-task')?.click()`);
+  await cdp.eval(ntp.sessionId, `document.querySelector('${composerSend("hub")}')?.click()`);
 
   // 12 searches + 12 executes + the final text = 25 model calls; the 25th
   // carries the last execute's result. Wait well past that.

@@ -24,6 +24,7 @@
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
@@ -221,8 +222,8 @@ try {
   await cdp.send("Page.bringToFront", {}, ntp);
   await clickSel(cdp, ntp, "#home").catch(() => false);
   await sleep(500);
-  check("phase 2: typed the prompt into the hub composer", await typeInto(cdp, ntp, "#task-input", PROMPT));
-  check("phase 2: clicked Run task", await clickSel(cdp, ntp, "#run-task"));
+  check("phase 2: typed the prompt into the hub composer", await typeInto(cdp, ntp, composerInput("hub"), PROMPT));
+  check("phase 2: clicked Run task", await clickSel(cdp, ntp, composerSend("hub")));
 
   const STATE = `(() => {
     const conv = document.getElementById('thread-conversation');

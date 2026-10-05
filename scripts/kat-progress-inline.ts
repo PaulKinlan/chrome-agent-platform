@@ -29,6 +29,7 @@ const OUT = Deno.args[1] ?? `${ROOT}.cache/kat-progress-inline`;
 import { fileURLToPath } from "node:url";
 import { launchChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const CHROMIUM = "/usr/bin/chromium";
 
@@ -181,7 +182,7 @@ while (Date.now() < deadline && !done) {
       // composer mid-run and prove the live row survives it as last + sticky.
       if (!composerGrow) {
         composerGrow = await ev(`(async () => {
-          const input = document.querySelector('#thread-composer #task-input');
+          const input = document.querySelector('${composerInput("thread")}');
           const conv = document.getElementById('thread-conversation');
           const row = conv?.querySelector('conversation-run-status.live-status');
           if (!input || !row) return { skipped: true, input: !!input, row: !!row };

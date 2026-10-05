@@ -267,8 +267,8 @@ async function main() {
   // SYNCHRONOUSLY in the click handler — a cleared field proves the send
   // genuinely began (a swallowed click leaves the field full).
   const sendWithWitness = async (session, composerExpr, text, beforeSend = null) => {
-    const INPUT = `${composerExpr}.querySelector('#task-input')`;
-    const BTN = `${composerExpr}.querySelector('#run-task')`;
+    const INPUT = `${composerExpr}.querySelector('[data-composer-input]')`;
+    const BTN = `${composerExpr}.querySelector('[data-composer-send]')`;
     await clickUntil(session, INPUT, `document.activeElement === ${INPUT}`);
     await pressKey(session, "a", 2);
     await pressKey(session, "Backspace");
@@ -386,7 +386,7 @@ async function main() {
     await sleep(1800);
 
     const COMPOSER = `document.getElementById('composer')`;
-    const NTP_INPUT = `${COMPOSER}.querySelector('#task-input')`;
+    const NTP_INPUT = `${COMPOSER}.querySelector('[data-composer-input]')`;
     check("NTP: opened with the hub composer present", await evl(ntp, `!!(${NTP_INPUT})`));
     // the marker demo model sits behind the developer flag (CAP-FB-20260830-KEYLESS-FIRST-RESULT-01)
     await msg(ntp, { type: "kv.set", values: { "cap:developerFeatures": true } });
@@ -703,7 +703,7 @@ async function main() {
     // Wait for the reloaded page to genuinely render the composer (driving it
     // earlier can race the module init).
     for (let i = 0; i < 40; i++) {
-      const ready = await evl(ntp, `!!(document.getElementById('composer')?.querySelector('#task-input'))`).catch(() => false);
+      const ready = await evl(ntp, `!!(document.getElementById('composer')?.querySelector('[data-composer-input]'))`).catch(() => false);
       if (ready) break;
       await sleep(150);
     }
