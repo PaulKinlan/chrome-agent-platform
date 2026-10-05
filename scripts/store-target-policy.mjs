@@ -262,12 +262,16 @@ export async function assertStoreTargetBoundary({
   // builds emit none. What was missing is the gate over that property: a map
   // that leaked into a package, or a generated file still POINTING at one, had
   // nothing refusing it — and the audit-nonce lane has no absence check yet.
-  // The vendored Python-runtime lane is EXEMPT from the directive rule only:
-  // those bytes are admitted by their sha256 pins and one of them legitimately
-  // names a map that does NOT ship (pyodide.js.map). Editing them would break
-  // admission, so the exemption is recorded here rather than by deleting the
-  // directive. Unknown/oversized inputs fail CLOSED (absence must be provable,
-  // not assumed).
+  // The vendored Python-runtime lane is EXEMPT from BOTH rules below — the
+  // directive rule AND the marker scan. Its bytes are admitted by the sha256
+  // pins in PYTHON_RUNTIME_PIN (unmanifested or drifted bytes are already
+  // violations above), so they are not text-policed here: one of them
+  // legitimately names a map that does NOT ship (pyodide.js.map), and rewriting
+  // a pinned byte to satisfy a scan would break admission. The exemption rests on
+  // that sha256 admission and is recorded rather than silently applied.
+  // Unknown/oversized AUTHORED inputs fail CLOSED (absence must be provable,
+  // not assumed): see the RED control for that clause in
+  // tests/store-target-policy.test.ts.
   const mapBoundaryViolations = [];
   for (const entry of inventory) {
     if (/\.map(?:\..*)?$/iu.test(entry.archivePath)) {
