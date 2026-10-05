@@ -235,6 +235,23 @@ export class AcpClient {
     const cwd = params.cwd ?? this.defaultCwd ?? "";
     const mcpServers = Array.isArray(params.mcpServers) ? params.mcpServers : [];
 
+    // Capture BEFORE the reset: the reset destroys the command list too, and a
+    // REFUSED load must put it back — the same contract 1gf1 gives a refused
+    // newSession (chrome-agent-platform-djz9). The reset itself stays: the
+    // session being loaded advertises its OWN commands (available_commands_update
+    // arrives against the optimistic id below), so the success path must start
+    // empty.
+    const priorSessionId = this.activeSessionId;
+    const priorAvailableCommands = this.availableCommands;
+    const priorCommandsReceived = this.commandsReceived;
+    const priorPendingCommands = this.pendingCommands;
+    const restorePriorSession = () => {
+      this.activeSessionId = priorSessionId;
+      this.availableCommands = priorAvailableCommands;
+      this.commandsReceived = priorCommandsReceived;
+      this.pendingCommands = priorPendingCommands;
+    };
+
     this._resetCommands();
     // The id is optimistic ON PURPOSE: session/update frames that arrive while
     // the load is in flight are filtered against activeSessionId
@@ -244,12 +261,11 @@ export class AcpClient {
     // keep filtering that session's notifications (chrome-agent-platform-tliw:
     // the Pi tool-server refusal leaked ses_fake_1 into the client). Restore the
     // previous value on rejection and let the error propagate unchanged.
-    const priorSessionId = this.activeSessionId;
     this.activeSessionId = params.sessionId;
     try {
       await this.request("session/load", { sessionId: params.sessionId, cwd, mcpServers });
     } catch (error) {
-      this.activeSessionId = priorSessionId;
+      restorePriorSession();
       throw error;
     }
     return { sessionId: params.sessionId, resumed: true };

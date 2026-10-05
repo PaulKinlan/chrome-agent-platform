@@ -279,6 +279,55 @@ Deno.test("tliw: a refused session/load with no prior session leaves the client 
   assertEquals(client.activeSessionId, null, "rejected requests must not activate a session");
 });
 
+Deno.test("djz9: a refused session/load restores the previous session's command list too", async () => {
+  // tliw restored the ID for a refused load; 1gf1 restored the COMMAND LIST for a
+  // refused newSession. This is the same contract for loadSession: the reset at
+  // entry is right for a load that SUCCEEDS (the loaded session advertises its own
+  // commands via available_commands_update), but a refusal must not leave the
+  // still-live session advertising nothing — the composer's acp.commands reads
+  // that list until the agent happens to re-advertise (chrome-agent-platform-djz9).
+  const transport = new MockTransport();
+  const client = new AcpClient({ transport });
+  transport.onSend = (msg: any) => {
+    if (msg.method === "session/new") {
+      client.handleMessage({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "ses_live" } });
+    } else if (msg.method === "session/load") {
+      client.handleMessage({
+        jsonrpc: "2.0",
+        id: msg.id,
+        error: { code: -32000, message: "Pi's ACP adapter does not mount supplied MCP servers" },
+      });
+    }
+  };
+
+  await client.connect();
+  await client.newSession({ cwd: "/tmp" });
+  client.handleMessage({
+    method: "session/update",
+    params: {
+      sessionId: "ses_live",
+      update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "$probe" }] },
+    },
+  });
+  assertEquals(client.activeSessionId, "ses_live");
+  assertEquals(client.commandsReceived, true);
+  assertEquals(client.availableCommands.length, 1);
+
+  await assertRejects(
+    () => client.loadSession({ sessionId: "ses_refused" }),
+    Error,
+    "does not mount supplied MCP servers",
+  );
+  assertEquals(client.activeSessionId, "ses_live", "the id is restored (tliw)");
+  assertEquals(
+    client.availableCommands.length,
+    1,
+    "the still-live session must still advertise its commands (1gf1's contract, djz9)",
+  );
+  assertEquals(client.commandsReceived, true, "commandsReceived comes back with the list");
+  assertEquals(client.pendingCommands, null, "nothing from the refused load is left pending");
+});
+
 Deno.test("AcpClient: dispatches prompt and streams thoughts, chunks, and tool updates", async () => {
   const transport = new MockTransport();
   const client = new AcpClient({ transport });
