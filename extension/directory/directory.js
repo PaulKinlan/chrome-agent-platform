@@ -10,14 +10,6 @@ import { discoveredOnly } from "../lib/pure.js";
 import "../shared/components.js";
 import { t, hydrateI18n } from "../shared/i18n.js";
 
-if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
-  document.documentElement.dataset.embedded = "1";
-}
-
-hydrateI18n();
-
-const rowsEl = document.getElementById("rows");
-
 /** Discovered-but-not-enrolled pages (chrome-agent-platform-cthe): the
  * passive detection surface reaches the Directory, not just Settings. The
  * Directory stays read-only — the row's action deep-links to Settings, the
@@ -31,7 +23,7 @@ const rowsEl = document.getElementById("rows");
  * detector's reports intersected with the open tabs and carries the
  * `enrolled` flag; the origin filter below still applies so this surface and
  * the hub chip cannot disagree. */
-async function renderDiscovered(enrolledOrigins) {
+export async function renderDiscovered(targetRowsEl, enrolledOrigins, { onNavigateSettings } = {}) {
   const res = await send("agent.tool-offers").catch(() => null);
   const discovered = discoveredOnly(res?.ok === true ? res.offers : [], enrolledOrigins);
   if (!discovered.length) return false;
@@ -58,17 +50,20 @@ async function renderDiscovered(enrolledOrigins) {
     add.className = "policy-select";
     add.textContent = "Add in Settings";
     add.setAttribute("aria-label", `Add ${t.origin} as a Site Agent in Settings`);
-    add.addEventListener("click", () => chrome.runtime.openOptionsPage());
+    add.addEventListener("click", () => {
+      if (onNavigateSettings) onNavigateSettings(t.origin);
+      else if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+    });
     row.append(note, add);
     item.append(row);
     list.append(item);
   }
   section.append(list);
-  rowsEl.prepend(section);
+  targetRowsEl.prepend(section);
   return true;
 }
 
-async function render() {
+export async function renderDirectoryContent(targetRowsEl, { onNavigateSettings } = {}) {
   const [originsRes, policiesRes] = await Promise.all([
     send("tools.allOrigins"),
     send("tools.policies"),
@@ -77,10 +72,10 @@ async function render() {
   const policies = policiesRes?.ok === true && policiesRes.policies && typeof policiesRes.policies === "object"
     ? policiesRes.policies
     : {};
-  rowsEl.replaceChildren();
+  targetRowsEl.replaceChildren();
   // Discovered pages render even when nothing is enrolled — the reported case
   // (cthe) is exactly "discovery exists, directory shows nothing".
-  const discoveredShown = await renderDiscovered(list);
+  const discoveredShown = await renderDiscovered(targetRowsEl, list, { onNavigateSettings });
   if (!list.length) {
     if (discoveredShown) return;
     const emptyState = document.createElement("empty-state");
@@ -88,13 +83,15 @@ async function render() {
     emptyState.setAttribute("description", t("directory_empty_desc"));
     emptyState.setAttribute("action-label", t("directory_empty_action"));
     emptyState.addEventListener("action", () => {
-      if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
+      if (onNavigateSettings) {
+        onNavigateSettings();
+      } else if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) {
         chrome.runtime.openOptionsPage();
       } else {
         location.href = "../options/options.html#section-agents";
       }
     });
-    rowsEl.append(emptyState);
+    targetRowsEl.append(emptyState);
     return;
   }
 
@@ -131,7 +128,10 @@ async function render() {
     manage.className = "policy-select";
     manage.textContent = "Open Settings";
     manage.setAttribute("aria-label", `Manage site tool permissions for ${origin} in Settings`);
-    manage.addEventListener("click", () => chrome.runtime.openOptionsPage());
+    manage.addEventListener("click", () => {
+      if (onNavigateSettings) onNavigateSettings(origin);
+      else if (typeof chrome !== "undefined" && chrome.runtime?.openOptionsPage) chrome.runtime.openOptionsPage();
+    });
     policyRow.append(note, manage);
     section.append(heading, policyRow);
 
@@ -140,7 +140,7 @@ async function render() {
       empty.className = "empty";
       empty.textContent = "No functions currently available.";
       section.append(empty);
-      rowsEl.append(section);
+      targetRowsEl.append(section);
       continue;
     }
 
@@ -160,8 +160,27 @@ async function render() {
       functionList.append(item);
     }
     section.append(functionList);
-    rowsEl.append(section);
+    targetRowsEl.append(section);
   }
 }
 
-render();
+// Standalone execution when loaded directly in directory.html
+if (typeof document !== "undefined" && typeof location !== "undefined") {
+  const isStandaloneDirectory =
+    (location.pathname?.endsWith("/directory.html") || location.pathname?.endsWith("/directory/directory.html")) &&
+    document.getElementById("rows") !== null;
+  if (isStandaloneDirectory) {
+    const rowsEl = document.getElementById("rows");
+    try {
+      if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+        if (document.documentElement?.dataset) {
+          document.documentElement.dataset.embedded = "1";
+        } else {
+          document.documentElement?.setAttribute?.("data-embedded", "1");
+        }
+      }
+    } catch { /* non-browser test environments */ }
+    hydrateI18n();
+    renderDirectoryContent(rowsEl);
+  }
+}

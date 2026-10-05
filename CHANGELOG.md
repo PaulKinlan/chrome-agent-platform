@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.570] — 2026-10-05
+- In-context Agent Directory renders natively inside the Hub document without an iframe, eliminating document-bootstrap latency and preserving single-entry back history (chrome-agent-platform-9xj8).
+
 ## [0.3.569] — 2026-10-05
 - a failed agent session attach no longer drops your active session or its commands
 

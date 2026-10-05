@@ -10398,7 +10398,7 @@ export function deleteAgentDialog({ name = "", kind = "named", returnFocusTo = n
  *                      exclude-kinds="acp site"): the side panel's picker
  *                      projects the ONE created-agents set (named +
  *                      background) that options/ntp/hub project — acp lives
- *                      in the harness affordance, and an enrolled site agent
+ *                      in the harness affordance, and an enrolled Site Agent
  *                      (callable by design) would otherwise be the +1 row the
  *                      other three surfaces never count
  *                      (chrome-agent-platform-v15y, following h97m: the
