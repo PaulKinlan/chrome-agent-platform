@@ -1,35 +1,41 @@
-// scripts/bundle-budget.mjs — the store-target bundle size gate
-// (CAP-FB-20260830-BUNDLE-BUDGET-01).
+// scripts/bundle-budget.mjs — the store-target bundle size report + the
+// dependency-integrity gate (CAP-FB-20260830-BUNDLE-BUDGET-01).
 //
 import { lstatSync, readlinkSync } from "node:fs";
 // The constitution watches the service-worker bundle (docs/CONSTITUTION.md):
-// unmeasured growth shipped 4.56 MB against a ~2.5 MB note in Aug 2026 because
-// nothing in the build failed when it grew. This module is the teeth: the
-// store build FAILS when the service-worker bundle exceeds the budget, and the
-// error names the top contributor inputs so the fix direction is obvious.
+// unmeasured growth once shipped 4.56 MB against a ~2.5 MB note because
+// nothing in the build NOTICED when it grew. This module keeps every bundle's
+// size measured and reported, and keeps the build FAILING CLOSED on the
+// dependency-integrity invariants (one instance per exact package version, no
+// lockfile drift, no zod CJS+ESM double-bundling).
 //
-// The budget measures the MINIFIED store bundle (the bytes the Store package
-// actually ships). The developer build stays unminified with source maps
-// (CAP-FB-20260826-OBSERVABILITY-01) and only warns.
+// OWNER DECISION (Paul, 2026-10-05): "The limits make no sense anymore." A
+// bundle exceeding its SIZE ceiling no longer fails the build — the size is
+// measured, recorded in extension/dist/dist.complete, and reported loudly
+// (with its top contributors) instead of blocking. The integrity invariants
+// below still throw. The developer build stays unminified with source maps
+// (CAP-FB-20260826-OBSERVABILITY-01).
 
 /** Store-target service-worker budget: 3.0 MB minified. */
 export const STORE_SW_BUDGET_BYTES = 3_000_000;
 
 /**
- * Store-target ceilings for EVERY generated bundle (minified bytes), keyed by
- * dist-relative path (chrome-agent-platform-9epn.4, perf audit #5). Before
- * this table only the SW and the agent worker had a number; ntp / sidepanel /
- * options / diff-core grew unobserved (832 867 / 635 119 / 841 261 B in the
- * 2026-10-01 audit). The UI ceilings were measured on the store build of the
- * tree that introduced them (ntp 830 013, sidepanel 633 728, options 839 829,
- * diff-core 16 611 B) and set at that size + 5 % headroom, rounded DOWN to the
- * nearest 10 kB (1 kB for diff-core). Lowering a ceiling is a ratchet (the
- * splitting bead 9epn.6 owns the next one); RAISING one is an owner decision
- * named in the change's report — never a silent edit.
+ * Store-target reference sizes for EVERY generated bundle (minified bytes),
+ * keyed by dist-relative path (chrome-agent-platform-9epn.4, perf audit #5).
+ * Before this table only the SW and the agent worker had a number; ntp /
+ * sidepanel / options / diff-core grew unobserved (832 867 / 635 119 /
+ * 841 261 B in the 2026-10-01 audit). The UI numbers were measured on the
+ * store build of the tree that introduced them (ntp 830 013, sidepanel
+ * 633 728, options 839 829, diff-core 16 611 B) and set at that size + 5 %
+ * headroom, rounded DOWN to the nearest 10 kB (1 kB for diff-core).
  *
- * The build fails the STORE target when a bundle exceeds its ceiling
- * (build.mjs → assertBundleBudget); tests/bundle-budget.test.ts asserts the
- * same ceilings against the sizes recorded in dist/dist.complete.
+ * OWNER DECISION (Paul, 2026-10-05): these numbers no longer BLOCK the store
+ * build. They are the reporting baseline the build prints per bundle and
+ * that dist/dist.complete records; a bundle over its reference size is
+ * REPORTED (bundleBudgetReport) with its top contributors, never fatal.
+ * build.mjs → assertBundleBudget still enforces the dependency-integrity
+ * invariants; tests/bundle-budget.test.ts holds the recorded sizes against
+ * this same table, report-only.
  */
 export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "background/service-worker.js": STORE_SW_BUDGET_BYTES,
@@ -159,9 +165,26 @@ function dependencyRootNote(root) {
 }
 
 /**
- * The gate: `bytes` over `budgetBytes` throws an error that names the bundle,
- * the actual size, the budget, and the top contributors (when a metafile is
- * available). Returns the measured size on pass.
+ * The over-reference REPORT (owner decision Paul, 2026-10-05: reported, not
+ * enforced): names the bundle, the actual size, the reference size and the
+ * top contributors (when a metafile is available). Pure — returns the text;
+ * the caller decides where it prints. An under-reference call returns "".
+ */
+export function bundleBudgetReport({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null, root = process.cwd() }) {
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size < 0 || size <= budgetBytes) return "";
+  return `bundle budget report: ${label} is ${size} bytes; the store reference size is ${budgetBytes} — OVER by ${size - budgetBytes} bytes (reported, not enforced; owner decision 2026-10-05).\n` +
+    `Top contributors:\n${formatContributors(metafile)}` +
+    dependencyRootNote(root);
+}
+
+/**
+ * The build-time check (build.mjs): FAILS CLOSED on an unmeasurable size and
+ * on the dependency-integrity invariants (one instance per exact package
+ * version, no lockfile drift, no zod CJS double-bundling — 63et / 9epn.3),
+ * and RETURNS the measured size otherwise. The SIZE itself is not fatal
+ * (owner decision Paul, 2026-10-05) — the caller reports an over-reference
+ * bundle via bundleBudgetReport; the bytes still land in dist.complete.
  */
 export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET_BYTES, metafile = null, root = process.cwd() }) {
   const size = Number(bytes);
@@ -201,13 +224,10 @@ export function assertBundleBudget({ label, bytes, budgetBytes = STORE_SW_BUDGET
       );
     }
   }
-  if (size > budgetBytes) {
-    throw new Error(
-      `bundle budget exceeded: ${label} is ${size} bytes; the store budget is ${budgetBytes}.\n` +
-      `Top contributors:\n${formatContributors(metafile)}\n` +
-      `Cut the largest contributors (lazy-load a feature, drop a dependency) or raise the budget with an owner decision in docs/CONSTITUTION.md.` +
-      dependencyRootNote(root),
-    );
-  }
+  // SIZE IS NOT FATAL HERE (owner decision Paul, 2026-10-05): an
+  // over-reference bundle is REPORTED by the caller via bundleBudgetReport
+  // and its bytes still land in dist/dist.complete. Nothing below depends on
+  // budgetBytes — the parameter stays so the call sites (and their pins) keep
+  // one shape for integrity + reporting.
   return size;
 }

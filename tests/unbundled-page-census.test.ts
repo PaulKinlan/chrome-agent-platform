@@ -2,8 +2,9 @@
 // pages that still load raw ES modules (chrome-agent-platform-9epn.4, perf
 // audit #5).
 //
-// The bundled surfaces have a store ceiling the build enforces
-// (tests/bundle-budget.test.ts). artifact / artifacts / directory / privacy /
+// The bundled surfaces have size references the store build REPORTS
+// (tests/bundle-budget.test.ts; owner decision 2026-10-05: measured and
+// reported, not enforced). artifact / artifacts / directory / privacy /
 // offscreen ship as ~20 separate module requests, ~1 MB each, and nobody
 // watched the number. Until the bundling bead lands this file PINS each
 // page's transitive static-import byte total at exactly the measured value
@@ -35,7 +36,8 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The pinned ceilings: post-9epn.5 all five pages are bundled into
- * dist/*.bundle.js (covered by STORE_BUNDLE_BUDGETS). The census remains active
+ * dist/*.bundle.js (sizes reported against STORE_BUNDLE_BUDGETS — owner
+ * decision 2026-10-05: reported, not enforced). The census remains active
  * to ensure any newly added unbundled page is detected and pinned. */
 const PAGE_CEILING_BYTES: Record<string, number> = {};
 
