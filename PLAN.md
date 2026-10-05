@@ -377,6 +377,6 @@ and `/capture` provides slash-command execution.
 
 ## Feature: View-Frame Collapse (chrome-agent-platform-lmq) — Staged
 - Stage 1: Client-side view host + Directory view (`chrome-agent-platform-9xj8`) — implemented. Directory renders as a client-side view in the Hub DOM (#view-client-host / #directory-view) without an iframe; single-history-entry preserved by construction; iframe pool retained for Settings/Artifacts.
-- Stage 2: Artifacts explorer client-side view & side inspector (`chrome-agent-platform-5r5s`) — queued.
+- Stage 2: Artifacts explorer client-side view & side inspector (`chrome-agent-platform-5r5s`) — implemented. Artifacts renders natively within Hub DOM (#view-client-host / #artifacts-view); cards grid, kind pill filter, search, capacity meter, and responsive split inspector integrated directly; cross-document postMessage eliminated for Reuse; deep link hash routes (#view=artifacts) supported.
 - Stage 3: Settings & Skills modular client view + sender authorization (`chrome-agent-platform-8v5l`) — queued.
 - Stage 4: Iframe pool retirement & layout unification (`chrome-agent-platform-p9it`) — queued.

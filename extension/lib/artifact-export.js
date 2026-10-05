@@ -2,8 +2,6 @@
 // and export to granted local folder / agent workspace.
 // (chrome-agent-platform-3p3e.7).
 
-import { cleanRelativePath, computeSha256 } from "./fs-grants.js";
-
 const EXT_MAP = {
   ".md": {
     mimeType: "text/markdown",
@@ -270,6 +268,7 @@ export async function exportAssetToFolder({
     return { ok: false, error: "invalid_artifact", message: "artifact is required" };
   }
 
+  const { cleanRelativePath, computeSha256 } = await import("./fs-grants.js");
   const targetName = filename || suggestArtifactFilename(artifact);
   let segments = [];
   try {

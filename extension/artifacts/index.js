@@ -2,8 +2,14 @@
 // artifact the agents have made. Each card shows a live preview thumbnail (an
 // html artifact renders in a sandboxed iframe), the name/type/size/origin/time,
 // and actions: open (the full live viewer / side inspector), reuse (attach to a new task via the
-// parent NTP), delete. Mirrors the directory view pattern (loaded in the
-// NTP's in-context view frame; messaging via lib/messages.js).
+// parent NTP), delete.
+//
+// Stage 2 view-frame collapse (chrome-agent-platform-5r5s):
+// - Renders natively inside the Hub document under #view-client-host #artifacts-view.
+// - Directly integrates cards grid, kind pill filter bar, search input, capacity meter,
+//   and responsive split inspector.
+// - Directly attaches artifacts to composer on Reuse without postMessage bridges.
+// - Retains standalone execution for artifacts/index.html.
 
 import { send } from "../lib/messages.js";
 import { saveArtifactToDisk } from "../lib/artifact-export.js";
@@ -17,20 +23,6 @@ import {
 } from "../shared/components.js";
 import { t, hydrateI18n } from "../shared/i18n.js";
 
-if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
-  document.documentElement.dataset.embedded = "1";
-}
-
-hydrateI18n();
-
-const grid = document.getElementById("grid");
-const status = document.getElementById("status");
-const foot = document.getElementById("foot");
-const capacity = document.getElementById("capacity");
-const searchInput = document.getElementById("q");
-const kindFilter = document.getElementById("kind");
-const inspector = document.getElementById("artifact-inspector");
-
 // Bound the live-preview work: preview at most this many artifacts (the most
 // recent), so a large gallery stays responsive. The rest render as placeholder
 // cards (still openable/deletable).
@@ -41,31 +33,29 @@ let filterKind = "";
 let searchQuery = "";
 let selectedAssetId = null;
 let inspectorCleanup = null;
-
-document.getElementById("back")?.addEventListener("click", () => {
-  if (history.length > 1) history.back();
-  else location.href = "../ntp/ntp.html";
-});
+let activeContainer = null;
+let activeOptions = {};
+let activeRefresh = null;
 
 // CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01 — the library never silently
 // evicts the owner's oldest artifact; at capacity a create is refused. This
 // indicator tells the owner the library is filling up (and when it is full,
 // that they must delete something) BEFORE that refusal is hit. Shown only once
 // the library is meaningfully full so it stays out of the way otherwise.
-async function renderCapacity() {
-  if (!capacity) return;
+export async function renderCapacity(capacityEl) {
+  if (!capacityEl) return;
   const cap = await send("asset.capacity", {}).catch(() => null);
-  if (!cap?.ok || !(cap.maxBytes > 0)) { capacity.hidden = true; return; }
+  if (!cap?.ok || !(cap.maxBytes > 0)) { capacityEl.hidden = true; return; }
   const pct = Math.min(100, Math.round((cap.fraction ?? 0) * 100));
-  if (pct < 75 && !cap.full) { capacity.hidden = true; return; }
+  if (pct < 75 && !cap.full) { capacityEl.hidden = true; return; }
   const full = cap.full === true;
-  capacity.classList.toggle("full", full);
-  capacity.classList.toggle("warn", !full);
+  capacityEl.classList.toggle("full", full);
+  capacityEl.classList.toggle("warn", !full);
   const label = full ? "Library full" : "Library filling up";
   const detail = full
     ? "New artifacts will be refused until you delete some. Nothing you made is ever removed automatically."
     : `${pct}% of the artifact index used. When it fills, new artifacts are refused rather than dropping your oldest — delete artifacts to keep room.`;
-  capacity.replaceChildren();
+  capacityEl.replaceChildren();
   const row = document.createElement("div");
   row.className = "cap-row";
   const l = document.createElement("span");
@@ -83,8 +73,38 @@ async function renderCapacity() {
   const p = document.createElement("div");
   p.style.marginTop = "6px";
   p.textContent = detail;
-  capacity.append(row, bar, p);
-  capacity.hidden = false;
+  capacityEl.append(row, bar, p);
+  capacityEl.hidden = false;
+}
+
+export function parseArtifactParams(path) {
+  let kind = "";
+  let id = "";
+  let search = "";
+  if (!path) return { kind, id, search };
+  const rawParams = path.includes("?")
+    ? path.slice(path.indexOf("?") + 1)
+    : path.includes("&")
+    ? path.slice(path.indexOf("&") + 1)
+    : path.includes("#")
+    ? path.slice(path.indexOf("#") + 1)
+    : "";
+
+  if (rawParams) {
+    const sp = new URLSearchParams(rawParams.replace(/^#/, ""));
+    kind = sp.get("kind") || "";
+    id = sp.get("id") || "";
+    search = sp.get("q") || sp.get("search") || "";
+    if (!kind && !id) {
+      const bare = rawParams.trim();
+      if (["html", "markdown", "md", "data", "image"].includes(bare.toLowerCase())) {
+        kind = bare.toLowerCase();
+      } else if (bare.startsWith("a_") || bare.length > 5) {
+        id = bare;
+      }
+    }
+  }
+  return { kind, id, search };
 }
 
 export function matchesFilter(a, kind, query) {
@@ -105,109 +125,8 @@ export function matchesFilter(a, kind, query) {
   return true;
 }
 
-async function render() {
-  renderCapacity();
-  // The LIBRARY — every artifact the owner has, not just the ones the hub agent
-  // made. Passing origin:"master" here is what hid every site-origin artifact
-  // (CAP-FB-20260828-ARTIFACT-DURABILITY-01).
-  const res = await send("asset.list", { origin: "all" }).catch(() => ({ assets: [] }));
-  const assets = (Array.isArray(res.assets) ? res.assets : []).slice().reverse();
-  allAssets = assets;
-
-  // If there are search or filter inputs on the page (#kind, #q), hide or disable them
-  // when total unfiltered artifact count is 0.
-  if (kindFilter) kindFilter.hidden = !assets.length;
-  if (searchInput) searchInput.hidden = !assets.length;
-
-  if (!assets.length) {
-    closeArtifactInspector();
-    grid.replaceChildren();
-    const emptyState = document.createElement("empty-state");
-    emptyState.setAttribute("title", t("artifacts_empty_title"));
-    emptyState.setAttribute("description", t("artifacts_empty_desc"));
-    emptyState.setAttribute("action-label", t("artifacts_empty_action"));
-    emptyState.setAttribute("action-href", "../ntp/ntp.html");
-    emptyState.addEventListener("action", () => {
-      if (window.parent && window.parent !== window) {
-        try {
-          window.parent.postMessage({ type: "cap:go-home" }, "*");
-          return;
-        } catch { /* fallback */ }
-      }
-      location.href = "../ntp/ntp.html";
-    });
-    grid.append(emptyState);
-    status.textContent = "";
-    foot.textContent = "";
-    return;
-  }
-
-  await updateFilteredView();
-}
-
-async function updateFilteredView() {
-  const filtered = allAssets.filter((a) => matchesFilter(a, filterKind, searchQuery));
-  grid.replaceChildren();
-
-  if (!filtered.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "No artifacts match your filter.";
-    grid.append(empty);
-    status.textContent = `0 of ${allAssets.length} artifacts match.`;
-    foot.textContent = "";
-    return;
-  }
-
-  const isFiltering = filterKind !== "" || searchQuery !== "";
-  status.textContent = isFiltering
-    ? `Showing ${filtered.length} of ${allAssets.length} artifacts.`
-    : `${allAssets.length} artifact${allAssets.length === 1 ? "" : "s"} — newest first.`;
-
-  foot.textContent = filtered.length > MAX_PREVIEWS
-    ? `Showing live previews for the newest ${MAX_PREVIEWS}; older artifacts are listed without a live preview.`
-    : "";
-
-  const cards = [];
-  for (const a of filtered.slice(0, MAX_PREVIEWS)) {
-    const card = document.createElement("artifact-card");
-    card.setAttribute("id", a.id ?? "");
-    card.setAttribute("name", a.name ?? "Untitled");
-    card.setAttribute("type", a.type ?? "data");
-    card.setAttribute("size", String(a.size ?? 0));
-    card.setAttribute("origin", a.origin ?? "master");
-    card.setAttribute("time", String(a.at ?? ""));
-    if (a.id === selectedAssetId) card.classList.add("selected");
-    cards.push({ card, a });
-  }
-  for (const a of filtered.slice(MAX_PREVIEWS)) {
-    const card = document.createElement("artifact-card");
-    card.setAttribute("id", a.id ?? "");
-    card.setAttribute("name", a.name ?? "Untitled");
-    card.setAttribute("type", a.type ?? "data");
-    card.setAttribute("size", String(a.size ?? 0));
-    card.setAttribute("origin", a.origin ?? "master");
-    card.setAttribute("time", String(a.at ?? ""));
-    if (a.id === selectedAssetId) card.classList.add("selected");
-    cards.push({ card, a });
-  }
-
-  for (const { card, a } of cards) {
-    wireCard(card);
-    grid.append(card);
-  }
-
-  // Fetch content for the live previews (bounded to MAX_PREVIEWS).
-  for (const { card, a } of cards.slice(0, MAX_PREVIEWS)) {
-    const full = await send("asset.get", { origin: a.origin ?? "master", id: a.id });
-    if (full?.ok && full.asset) {
-      card.preview = full.asset.type === "image" ? (full.asset.content ?? "") : (full.asset.content ?? "");
-    }
-  }
-}
-
 // Artifact deletion uses the SHARED confirm (CAP-FB-20260827-DIALOG-CONSOLIDATION-01).
-function confirmDeleteDialog(name, type) {
+export function confirmDeleteDialog(name, type) {
   return confirmActionDialog({
     title: "Delete artifact",
     body: `Delete "${name ?? "Untitled"}" (${type ?? "data"})? This permanently removes it from the artifact store.`,
@@ -216,9 +135,16 @@ function confirmDeleteDialog(name, type) {
   });
 }
 
-export async function openArtifactInspector(id, origin) {
+export async function openArtifactInspector(id, origin, opts = {}) {
+  const container = opts.container || activeContainer || (typeof document !== "undefined" ? document : null);
+  if (!container) return;
+  const grid = container.querySelector("#artifacts-grid, #grid, .grid");
+  const inspector = container.querySelector("#artifact-inspector, .inspector") || document.getElementById("artifact-inspector");
+  const status = opts.statusEl || container.querySelector("#artifacts-status, #status, .status");
+  const onAttachArtifact = opts.onAttachArtifact || activeOptions.onAttachArtifact;
+
   selectedAssetId = id;
-  grid.querySelectorAll("artifact-card").forEach((c) => {
+  grid?.querySelectorAll("artifact-card").forEach((c) => {
     c.classList.toggle("selected", c.getAttribute("id") === id);
   });
 
@@ -226,7 +152,7 @@ export async function openArtifactInspector(id, origin) {
   const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
   const asset = res?.ok ? res.asset : null;
   if (!asset) {
-    closeArtifactInspector();
+    closeArtifactInspector(container);
     return;
   }
 
@@ -260,7 +186,9 @@ export async function openArtifactInspector(id, origin) {
   openTabBtn.setAttribute("aria-label", "Open in new tab");
   openTabBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg><span>New tab</span>`;
   openTabBtn.addEventListener("click", () => {
-    const url = chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`);
+    const url = typeof chrome !== "undefined" && chrome.runtime?.getURL
+      ? chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`)
+      : `../artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`;
     if (typeof chrome !== "undefined" && chrome.tabs?.create) chrome.tabs.create({ url });
     else window.open(url, "_blank");
   });
@@ -273,6 +201,11 @@ export async function openArtifactInspector(id, origin) {
   reuseBtn.setAttribute("aria-label", "Reuse artifact");
   reuseBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg><span>Reuse</span>`;
   reuseBtn.addEventListener("click", async () => {
+    if (onAttachArtifact) {
+      await onAttachArtifact({ id, name: asset.name, type: asset.type, origin: origin ?? "master" });
+      if (status) status.textContent = `"${asset.name}" sent to the hub — it will attach to a new task.`;
+      return;
+    }
     const inOverlay = window.parent && window.parent !== window;
     if (inOverlay) {
       try {
@@ -280,15 +213,15 @@ export async function openArtifactInspector(id, origin) {
           type: "cap:attach-artifact",
           artifact: { id, name: asset.name, type: asset.type, origin: origin ?? "master" },
         }, "*");
-        status.textContent = `"${asset.name}" sent to the hub — it will attach to a new task.`;
+        if (status) status.textContent = `"${asset.name}" sent to the hub — it will attach to a new task.`;
         return;
       } catch { /* fallback */ }
     }
     try {
       await navigator.clipboard.writeText(asset.content ?? asset.name ?? "");
-      status.textContent = `"${asset.name}" copied — paste it into a new task on the hub.`;
+      if (status) status.textContent = `"${asset.name}" copied — paste it into a new task on the hub.`;
     } catch {
-      status.textContent = `Could not reach the hub.`;
+      if (status) status.textContent = `Could not reach the hub.`;
     }
   });
 
@@ -314,11 +247,11 @@ export async function openArtifactInspector(id, origin) {
     if (!(await confirmDeleteDialog(asset.name, asset.type))) return;
     const delRes = await send("asset.delete", { origin: origin ?? "master", id });
     if (delRes?.ok === false && delRes.error) {
-      status.textContent = `Delete failed: ${delRes.error}`;
+      if (status) status.textContent = `Delete failed: ${delRes.error}`;
       return;
     }
-    closeArtifactInspector();
-    await render();
+    closeArtifactInspector(container);
+    if (activeRefresh) await activeRefresh();
   });
 
   // Close button
@@ -329,7 +262,7 @@ export async function openArtifactInspector(id, origin) {
   closeBtn.title = "Close inspector";
   closeBtn.setAttribute("aria-label", "Close inspector");
   closeBtn.textContent = "×";
-  closeBtn.addEventListener("click", () => closeArtifactInspector());
+  closeBtn.addEventListener("click", () => closeArtifactInspector(container));
 
   actions.append(openTabBtn, reuseBtn, saveBtn, delBtn, closeBtn);
   head.append(metaBlock, actions);
@@ -360,92 +293,27 @@ export async function openArtifactInspector(id, origin) {
   inspector.append(head, body);
 }
 
-export function closeArtifactInspector() {
+export function closeArtifactInspector(container) {
   inspectorCleanup?.();
   inspectorCleanup = null;
   selectedAssetId = null;
+  const c = container || activeContainer || (typeof document !== "undefined" ? document : null);
+  if (!c) return;
+  const inspector = c.querySelector("#artifact-inspector, .inspector") || document.getElementById("artifact-inspector");
+  const grid = c.querySelector("#artifacts-grid, #grid, .grid") || document.getElementById("grid");
   if (inspector) inspector.hidden = true;
-  grid.querySelectorAll("artifact-card.selected").forEach((c) => c.classList.remove("selected"));
+  grid?.querySelectorAll("artifact-card.selected").forEach((el) => el.classList.remove("selected"));
 }
 
-function wireCard(card) {
-  card.addEventListener("open-tab", (e) => {
-    const { id, origin } = e.detail ?? {};
-    const url = chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`);
-    if (typeof chrome !== "undefined" && chrome.tabs?.create) {
-      chrome.tabs.create({ url });
-    } else {
-      window.open(url, "_blank");
-    }
-  });
-  card.addEventListener("open", (e) => {
-    const { id, origin } = e.detail ?? {};
-    if (window.innerWidth >= 960) {
-      openArtifactInspector(id, origin ?? "master");
-    } else {
-      openArtifactDialog(id, origin ?? "master");
-    }
-  });
-  card.addEventListener("dblclick", () => {
-    const id = card.getAttribute("id") || "";
-    const origin = card.getAttribute("origin") || "master";
-    openArtifactDialog(id, origin);
-  });
-  card.addEventListener("save", async (e) => {
-    const { id, origin } = e.detail ?? {};
-    if (!id) return;
-    try {
-      const full = await send("asset.get", { origin: origin ?? "master", id });
-      if (full?.ok && full.asset) {
-        await saveArtifactToDisk(full.asset);
-      }
-    } catch { /* save cancelled or failed */ }
-  });
-  card.addEventListener("delete", async (e) => {
-    const { id, name, type, origin } = e.detail ?? {};
-    if (!(await confirmDeleteDialog(name, type))) return;
-    const res = await send("asset.delete", { origin: origin ?? "master", id });
-    if (res?.ok === false && res.error) {
-      status.textContent = `Delete failed: ${res.error}`;
-      return;
-    }
-    if (selectedAssetId === id) {
-      closeArtifactInspector();
-    }
-    await render();
-  });
-  card.addEventListener("reuse", async (e) => {
-    const { id, name, type, origin } = e.detail ?? {};
-    const inOverlay = window.parent && window.parent !== window;
-    if (inOverlay) {
-      try {
-        window.parent.postMessage({
-          type: "cap:attach-artifact",
-          artifact: { id, name, type, origin: origin ?? "master" },
-        }, "*");
-        status.textContent = `"${name}" sent to the hub — it will attach to a new task.`;
-        return;
-      } catch { /* fall through to the copy fallback */ }
-    }
-    // Standalone fallback: copy the artifact content to the clipboard.
-    try {
-      const full = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
-      const asset = full?.ok ? full.asset : null;
-      await navigator.clipboard.writeText(asset?.content ?? name ?? "");
-      status.textContent = `"${name}" copied — paste it into a new task on the hub.`;
-    } catch {
-      status.textContent = `Could not reach the hub. Open the artifact + copy it manually.`;
-    }
-  });
-}
-
-// Item 53/54: the artifact expand dialog — the full live render (html in the
-// sandboxed iframe, image inline, or text) in an <agent-dialog>, without the
-// artifact.html viewer's doubled-up header.
-export async function openArtifactDialog(id, origin) {
+export async function openArtifactDialog(id, origin, opts = {}) {
+  const onAttachArtifact = opts.onAttachArtifact || activeOptions.onAttachArtifact;
+  const status = opts.statusEl || (activeContainer ? activeContainer.querySelector("#artifacts-status, #status, .status") : document.getElementById("status"));
   const res = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
   const asset = res?.ok ? res.asset : null;
-  if (!asset) { status.textContent = "Artifact not found."; return; }
+  if (!asset) {
+    if (status) status.textContent = "Artifact not found.";
+    return false;
+  }
   const frameCleanups = [];
   const dialog = document.createElement("agent-dialog");
   dialog.setAttribute("title", asset.name ?? "Artifact");
@@ -482,9 +350,11 @@ export async function openArtifactDialog(id, origin) {
   openTabBtn.style.borderRadius = "var(--radius-sm, 6px)";
   openTabBtn.style.background = "transparent";
   openTabBtn.style.color = "var(--text)";
-  openTabBtn.innerHTML = `<span>Open in new tab</span> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+  openTabBtn.innerHTML = `<span>Open in new tab</span> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="12" y2="3"/></svg>`;
   openTabBtn.addEventListener("click", () => {
-    const url = chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`);
+    const url = typeof chrome !== "undefined" && chrome.runtime?.getURL
+      ? chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`)
+      : `../artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`;
     if (typeof chrome !== "undefined" && chrome.tabs?.create) chrome.tabs.create({ url });
     else window.open(url, "_blank");
   });
@@ -545,26 +415,292 @@ export async function openArtifactDialog(id, origin) {
   dialog.append(body);
   document.body.append(dialog);
   dialog.show();
-  dialog.addEventListener("close", () => { frameCleanups.forEach((c) => { try { c(); } catch { /* one cleanup failing must not skip the rest */ } }); dialog.remove(); }, { once: true });
+  dialog.addEventListener("close", () => {
+    frameCleanups.forEach((c) => {
+      try { c(); } catch { /* one cleanup failing must not skip the rest */ }
+    });
+    dialog.remove();
+  }, { once: true });
+  return true;
 }
 
-// Wire search and kind filters
-searchInput?.addEventListener("input", (e) => {
-  searchQuery = e.target.value.trim();
-  updateFilteredView();
-});
-
-kindFilter?.addEventListener("click", (e) => {
-  const pill = e.target.closest(".kind-pill");
-  if (!pill) return;
-  kindFilter.querySelectorAll(".kind-pill").forEach((b) => {
-    b.classList.remove("active");
-    b.setAttribute("aria-selected", "false");
+function wireCard(card, { container, onAttachArtifact, onGoHome, refresh } = {}) {
+  const status = container?.querySelector("#artifacts-status, #status, .status");
+  card.addEventListener("open-tab", (e) => {
+    const { id, origin } = e.detail ?? {};
+    const url = typeof chrome !== "undefined" && chrome.runtime?.getURL
+      ? chrome.runtime.getURL(`artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`)
+      : `../artifact/artifact.html?id=${encodeURIComponent(id)}&origin=${encodeURIComponent(origin ?? "master")}`;
+    if (typeof chrome !== "undefined" && chrome.tabs?.create) {
+      chrome.tabs.create({ url });
+    } else {
+      window.open(url, "_blank");
+    }
   });
-  pill.classList.add("active");
-  pill.setAttribute("aria-selected", "true");
-  filterKind = pill.dataset.kind || "";
-  updateFilteredView();
-});
+  card.addEventListener("open", (e) => {
+    const { id, origin } = e.detail ?? {};
+    if (window.innerWidth >= 960) {
+      openArtifactInspector(id, origin ?? "master", { container, onAttachArtifact, statusEl: status });
+    } else {
+      openArtifactDialog(id, origin ?? "master", { onAttachArtifact, statusEl: status });
+    }
+  });
+  card.addEventListener("dblclick", () => {
+    const id = card.getAttribute("id") || "";
+    const origin = card.getAttribute("origin") || "master";
+    openArtifactDialog(id, origin, { onAttachArtifact, statusEl: status });
+  });
+  card.addEventListener("save", async (e) => {
+    const { id, origin } = e.detail ?? {};
+    if (!id) return;
+    try {
+      const full = await send("asset.get", { origin: origin ?? "master", id });
+      if (full?.ok && full.asset) {
+        await saveArtifactToDisk(full.asset);
+      }
+    } catch { /* save cancelled or failed */ }
+  });
+  card.addEventListener("delete", async (e) => {
+    const { id, name, type, origin } = e.detail ?? {};
+    if (!(await confirmDeleteDialog(name, type))) return;
+    const res = await send("asset.delete", { origin: origin ?? "master", id });
+    if (res?.ok === false && res.error) {
+      if (status) status.textContent = `Delete failed: ${res.error}`;
+      return;
+    }
+    if (selectedAssetId === id) {
+      closeArtifactInspector(container);
+    }
+    if (refresh) await refresh();
+  });
+  card.addEventListener("reuse", async (e) => {
+    const { id, name, type, origin } = e.detail ?? {};
+    if (onAttachArtifact) {
+      await onAttachArtifact({ id, name, type, origin: origin ?? "master" });
+      if (status) status.textContent = `"${name}" sent to the hub — it will attach to a new task.`;
+      return;
+    }
+    const inOverlay = window.parent && window.parent !== window;
+    if (inOverlay) {
+      try {
+        window.parent.postMessage({
+          type: "cap:attach-artifact",
+          artifact: { id, name, type, origin: origin ?? "master" },
+        }, "*");
+        if (status) status.textContent = `"${name}" sent to the hub — it will attach to a new task.`;
+        return;
+      } catch { /* fall through to the copy fallback */ }
+    }
+    // Standalone fallback: copy the artifact content to the clipboard.
+    try {
+      const full = await send("asset.get", { origin: origin ?? "master", id }).catch(() => ({ ok: false }));
+      const asset = full?.ok ? full.asset : null;
+      await navigator.clipboard.writeText(asset?.content ?? name ?? "");
+      if (status) status.textContent = `"${name}" copied — paste it into a new task on the hub.`;
+    } catch {
+      if (status) status.textContent = `Could not reach the hub. Open the artifact + copy it manually.`;
+    }
+  });
+}
 
-render();
+export async function renderArtifactsView(containerEl, options = {}) {
+  activeContainer = containerEl;
+  activeOptions = options;
+
+  const grid = containerEl.querySelector("#artifacts-grid, #grid, .grid");
+  const status = containerEl.querySelector("#artifacts-status, #status, .status");
+  const foot = containerEl.querySelector("#artifacts-foot, #foot, .foot");
+  const capacity = containerEl.querySelector("#artifacts-capacity, #capacity, .capacity");
+  const searchInput = containerEl.querySelector("#artifacts-q, #q, .search-input");
+  const kindFilter = containerEl.querySelector("#artifacts-kind, #kind, .kind-pills");
+  const inspector = containerEl.querySelector("#artifact-inspector, .inspector");
+
+  const { path = "", onAttachArtifact, onGoHome } = options;
+  const initialParams = parseArtifactParams(path);
+  if (initialParams.kind) filterKind = initialParams.kind;
+  if (initialParams.search) searchQuery = initialParams.search;
+  if (initialParams.id) selectedAssetId = initialParams.id;
+
+  if (kindFilter && filterKind) {
+    kindFilter.querySelectorAll(".kind-pill").forEach((b) => {
+      const active = (b.dataset.kind || "").toLowerCase() === filterKind.toLowerCase();
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-selected", active ? "true" : "false");
+    });
+  }
+  if (searchInput && searchQuery) {
+    searchInput.value = searchQuery;
+  }
+
+  const updateFilteredView = async () => {
+    const filtered = allAssets.filter((a) => matchesFilter(a, filterKind, searchQuery));
+    if (!grid) return;
+    grid.replaceChildren();
+
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "No artifacts match your filter.";
+      grid.append(empty);
+      if (status) status.textContent = `0 of ${allAssets.length} artifacts match.`;
+      if (foot) foot.textContent = "";
+      return;
+    }
+
+    const isFiltering = filterKind !== "" || searchQuery !== "";
+    if (status) {
+      status.textContent = isFiltering
+        ? `Showing ${filtered.length} of ${allAssets.length} artifacts.`
+        : `${allAssets.length} artifact${allAssets.length === 1 ? "" : "s"} — newest first.`;
+    }
+
+    if (foot) {
+      foot.textContent = filtered.length > MAX_PREVIEWS
+        ? `Showing live previews for the newest ${MAX_PREVIEWS}; older artifacts are listed without a live preview.`
+        : "";
+    }
+
+    const cards = [];
+    for (const a of filtered.slice(0, MAX_PREVIEWS)) {
+      const card = document.createElement("artifact-card");
+      card.setAttribute("id", a.id ?? "");
+      card.setAttribute("name", a.name ?? "Untitled");
+      card.setAttribute("type", a.type ?? "data");
+      card.setAttribute("size", String(a.size ?? 0));
+      card.setAttribute("origin", a.origin ?? "master");
+      card.setAttribute("time", String(a.at ?? ""));
+      if (a.id === selectedAssetId) card.classList.add("selected");
+      cards.push({ card, a });
+    }
+    for (const a of filtered.slice(MAX_PREVIEWS)) {
+      const card = document.createElement("artifact-card");
+      card.setAttribute("id", a.id ?? "");
+      card.setAttribute("name", a.name ?? "Untitled");
+      card.setAttribute("type", a.type ?? "data");
+      card.setAttribute("size", String(a.size ?? 0));
+      card.setAttribute("origin", a.origin ?? "master");
+      card.setAttribute("time", String(a.at ?? ""));
+      if (a.id === selectedAssetId) card.classList.add("selected");
+      cards.push({ card, a });
+    }
+
+    for (const { card, a } of cards) {
+      wireCard(card, { container: containerEl, onAttachArtifact, onGoHome, refresh: refreshAll });
+      grid.append(card);
+    }
+
+    // Fetch content for the live previews (bounded to MAX_PREVIEWS).
+    for (const { card, a } of cards.slice(0, MAX_PREVIEWS)) {
+      const full = await send("asset.get", { origin: a.origin ?? "master", id: a.id });
+      if (full?.ok && full.asset) {
+        card.preview = full.asset.type === "image" ? (full.asset.content ?? "") : (full.asset.content ?? "");
+      }
+    }
+  };
+
+  const refreshAll = async () => {
+    if (capacity) await renderCapacity(capacity);
+    const res = await send("asset.list", { origin: "all" }).catch(() => ({ assets: [] }));
+    const assets = (Array.isArray(res.assets) ? res.assets : []).slice().reverse();
+    allAssets = assets;
+
+    if (kindFilter) kindFilter.hidden = !assets.length;
+    if (searchInput) searchInput.hidden = !assets.length;
+
+    if (!assets.length) {
+      closeArtifactInspector(containerEl);
+      if (grid) {
+        grid.replaceChildren();
+        const emptyState = document.createElement("empty-state");
+        emptyState.setAttribute("title", t("artifacts_empty_title"));
+        emptyState.setAttribute("description", t("artifacts_empty_desc"));
+        emptyState.setAttribute("action-label", t("artifacts_empty_action"));
+        emptyState.setAttribute("action-href", "../ntp/ntp.html");
+        emptyState.addEventListener("action", () => {
+          if (onGoHome) {
+            onGoHome();
+            return;
+          }
+          if (window.parent && window.parent !== window) {
+            try {
+              window.parent.postMessage({ type: "cap:go-home" }, "*");
+              return;
+            } catch { /* fallback */ }
+          }
+          location.href = "../ntp/ntp.html";
+        });
+        grid.append(emptyState);
+      }
+      if (status) status.textContent = "";
+      if (foot) foot.textContent = "";
+      return;
+    }
+
+    await updateFilteredView();
+
+    if (selectedAssetId) {
+      if (window.innerWidth >= 960) {
+        openArtifactInspector(selectedAssetId, "master", { container: containerEl, onAttachArtifact, statusEl: status });
+      } else {
+        openArtifactDialog(selectedAssetId, "master", { onAttachArtifact, statusEl: status });
+      }
+    }
+  };
+
+  activeRefresh = refreshAll;
+
+  // Wire input listeners once on containerEl
+  if (!containerEl.dataset.capWired) {
+    containerEl.dataset.capWired = "1";
+    searchInput?.addEventListener("input", (e) => {
+      searchQuery = e.target.value.trim();
+      updateFilteredView();
+    });
+
+    kindFilter?.addEventListener("click", (e) => {
+      const pill = e.target.closest(".kind-pill");
+      if (!pill) return;
+      kindFilter.querySelectorAll(".kind-pill").forEach((b) => {
+        b.classList.remove("active");
+        b.setAttribute("aria-selected", "false");
+      });
+      pill.classList.add("active");
+      pill.setAttribute("aria-selected", "true");
+      filterKind = pill.dataset.kind || "";
+      if (typeof history !== "undefined" && history.replaceState) {
+        const hash = filterKind ? `#view=artifacts&kind=${encodeURIComponent(filterKind)}` : "#view=artifacts";
+        try { history.replaceState(history.state, "", hash); } catch { /* test env */ }
+      }
+      updateFilteredView();
+    });
+  }
+
+  await refreshAll();
+}
+
+export const render = async () => {
+  if (activeRefresh) await activeRefresh();
+};
+
+// Standalone execution when loaded directly in artifacts/index.html
+if (typeof document !== "undefined" && typeof location !== "undefined") {
+  const isStandaloneArtifacts =
+    (location.pathname?.endsWith("/artifacts/index.html") || location.pathname?.endsWith("/artifacts/")) &&
+    document.getElementById("grid") !== null;
+  if (isStandaloneArtifacts) {
+    if (new URLSearchParams(location.search).get("embedded") === "1" || window.self !== window.top) {
+      if (document.documentElement?.dataset) {
+        document.documentElement.dataset.embedded = "1";
+      } else {
+        document.documentElement?.setAttribute?.("data-embedded", "1");
+      }
+    }
+    hydrateI18n();
+    document.getElementById("back")?.addEventListener("click", () => {
+      if (history.length > 1) history.back();
+      else location.href = "../ntp/ntp.html";
+    });
+    const wrap = document.querySelector(".wrap") || document.body;
+    renderArtifactsView(wrap);
+  }
+}

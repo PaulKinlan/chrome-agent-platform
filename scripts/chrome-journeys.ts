@@ -1688,12 +1688,12 @@ async function main() {
     await sleep(900);
     const artifactsLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = frame?.contentDocument?.querySelector('.sub, .grid, .empty');
+      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty') ||
+        frame?.contentDocument?.querySelector('.sub, .grid, .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const artifactsTitleCount = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      if (!frame?.contentDocument) return null;
       const isRendered = (el) => {
         if (!el) return false;
         if (typeof el.checkVisibility === 'function') {
@@ -1703,8 +1703,9 @@ async function main() {
       };
       const parentTitle = document.getElementById('view-title');
       const isParentVisible = isRendered(parentTitle) && /artifacts/i.test(parentTitle.textContent || '');
-      const iframeHeadings = Array.from(frame.contentDocument.querySelectorAll('h1, .logo, [role="heading"]'))
-        .filter(e => /artifacts/i.test(e.textContent || '') && isRendered(e));
+      const doc = frame?.contentDocument || document.getElementById('artifacts-view');
+      const iframeHeadings = doc ? Array.from(doc.querySelectorAll('h1, .logo, [role="heading"]'))
+        .filter(e => /artifacts/i.test(e.textContent || '') && isRendered(e)) : [];
       return (isParentVisible ? 1 : 0) + iframeHeadings.length;
     })()`);
     const artShot1440 = await captureShot(cdp, ntpSession);
@@ -1761,7 +1762,8 @@ async function main() {
     await sleep(900);
     const artifactsLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-      const el = frame?.contentDocument?.querySelector('.sub, .grid, .empty');
+      const el = document.querySelector('#artifacts-view .sub, #artifacts-view .grid, #artifacts-view .empty') ||
+        frame?.contentDocument?.querySelector('.sub, .grid, .empty');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 
