@@ -59,6 +59,7 @@ import {
   VIEW_ROUTE,
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
+import { renderDirectoryContent } from "../directory/directory.js";
 import {
   ensureNtpHistoryRoot,
   navigateHome,
@@ -2741,6 +2742,8 @@ function hideThreadViewInner() {
 }
 function hideViewInner() {
   viewOverlay.hidden = true;
+  if (viewClientHost) viewClientHost.hidden = true;
+  if (directoryViewEl) directoryViewEl.hidden = true;
   // CAP-FB-20260826-BACK-STACK-02: do NOT navigate the frame with a plain
   // viewFrame.src= assignment here. A cross-document navigation (X →
   // about:blank) via src= APPENDS a JOINT session-history entry, so every close
@@ -5300,12 +5303,15 @@ function isPanelFrameSource(win) {
   return false;
 }
 const viewTitle = document.getElementById("view-title");
+const viewClientHost = document.getElementById("view-client-host");
+const directoryViewEl = document.getElementById("directory-view");
+const directoryRowsEl = document.getElementById("directory-rows");
 const viewFocus = createViewFocusController();
 
 function embeddedViewRoute(path) {
   const routePath = String(path ?? "").split(/[?#]/, 1)[0];
   if (routePath === "options/options.html") return VIEW_ROUTE.SETTINGS;
-  if (routePath === "directory/directory.html") return VIEW_ROUTE.DIRECTORY;
+  if (routePath === "directory/directory.html" || routePath === "directory") return VIEW_ROUTE.DIRECTORY;
   return VIEW_ROUTE.ARTIFACTS;
 }
 
@@ -5333,31 +5339,47 @@ function openView(path, title, trigger) {
   }
   const [basePath, hash] = String(path ?? "").split("#");
   const targetRoute = embeddedViewRoute(path);
-  const frame = panelFrameFor(path);
-  // Embedded panel documents boot at their exact canonical URL — NO query. The
-  // old approach appended ?embedded=1 as an embeddedness marker and then had
-  // the child strip it with history.replaceState, but Chrome reports a frame's
-  // COMMITTED url (query included) as sender.url on runtime messages, so the
-  // service worker still saw options/options.html?embedded=1 and the real
-  // Settings document failed isExactOptionsSender — every owner route
-  // (provider credentials, tool diagnostics) refused with a misleading key
-  // error (P0, 2026-09-02). Embeddedness self-detects in the child
-  // (window.self !== window.top, shared/embedded-boot.js), so the URL stays
-  // clean and exact-document authorization matches. The frame boots once per
-  // canonical path; later opens reuse the live document.
-  const frameUrl = chrome.runtime.getURL(String(path ?? ""));
-  if (!frame.src || frame.src === "about:blank" || frame.src === location.href) {
-    frame.src = frameUrl;
-  } else if (hash !== undefined) {
-    try {
-      if (frame.contentWindow?.location) {
-        frame.contentWindow.location.hash = `#${hash}`;
-      }
-    } catch { /* best effort */ }
+  const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY;
+
+  if (isClientSide) {
+    if (viewClientHost && directoryViewEl && directoryRowsEl) {
+      viewClientHost.hidden = false;
+      directoryViewEl.hidden = false;
+      renderDirectoryContent(directoryRowsEl, {
+        onNavigateSettings: () => openView("options/options.html#section-agents", "Settings"),
+      });
+    }
+    for (const other of panelFrames.values()) other.hidden = true;
+    activePanelFrame = null;
+  } else {
+    if (viewClientHost) viewClientHost.hidden = true;
+    if (directoryViewEl) directoryViewEl.hidden = true;
+    const frame = panelFrameFor(path);
+    // Embedded panel documents boot at their exact canonical URL — NO query. The
+    // old approach appended ?embedded=1 as an embeddedness marker and then had
+    // the child strip it with history.replaceState, but Chrome reports a frame's
+    // COMMITTED url (query included) as sender.url on runtime messages, so the
+    // service worker still saw options/options.html?embedded=1 and the real
+    // Settings document failed isExactOptionsSender — every owner route
+    // (provider credentials, tool diagnostics) refused with a misleading key
+    // error (P0, 2026-09-02). Embeddedness self-detects in the child
+    // (window.self !== window.top, shared/embedded-boot.js), so the URL stays
+    // clean and exact-document authorization matches. The frame boots once per
+    // canonical path; later opens reuse the live document.
+    const frameUrl = chrome.runtime.getURL(String(path ?? ""));
+    if (!frame.src || frame.src === "about:blank" || frame.src === location.href) {
+      frame.src = frameUrl;
+    } else if (hash !== undefined) {
+      try {
+        if (frame.contentWindow?.location) {
+          frame.contentWindow.location.hash = `#${hash}`;
+        }
+      } catch { /* best effort */ }
+    }
+    for (const other of panelFrames.values()) other.hidden = other !== frame;
+    activePanelFrame = frame;
+    frame.title = title;
   }
-  for (const other of panelFrames.values()) other.hidden = other !== frame;
-  activePanelFrame = frame;
-  frame.title = title;
   viewTitle.textContent = title;
 
   if (typeof window !== "undefined" && window.history?.pushState) {
@@ -5381,7 +5403,7 @@ function openView(path, title, trigger) {
       activeViewRoute = targetRoute;
       syncViewOpen();
     }, null), {
-    focusAfter: activePanelFrame,
+    focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? directoryViewEl) : null),
   });
 }
 function closeView({ fromNavigation = false } = {}) {
@@ -5490,12 +5512,16 @@ async function applyCurrentHashRoute(isTraverse = false) {
       // CAP-FB-20260828-PANEL-DOC-RETENTION-01: the route is open when its
       // pooled panel frame is the active one (an unbooted path has no frame
       // yet, so a traverse to a not-yet-opened view falls through to openView).
-      if (viewOverlay?.hidden || activePanelFrame !== panelFrames.get(parsed.path)) {
+      const isClient = embeddedViewRoute(parsed.path) === VIEW_ROUTE.DIRECTORY;
+      const isOpen = isClient
+        ? (!viewOverlay?.hidden && activeViewRoute === VIEW_ROUTE.DIRECTORY)
+        : (!viewOverlay?.hidden && activePanelFrame === panelFrames.get(parsed.path));
+      if (isOpen) {
+        if (viewTitle && meta.title && meta.title !== "View") {
+          viewTitle.textContent = meta.title;
+        }
+      } else {
         openView(parsed.path, title, null, { pushHistory: false });
-      } else if (viewTitle && meta.title && meta.title !== "View") {
-        // Already open with the correct src — restore the stored title (a
-        // traverse to the SAME view must not blank or rename it).
-        viewTitle.textContent = meta.title;
       }
     }
   } finally {

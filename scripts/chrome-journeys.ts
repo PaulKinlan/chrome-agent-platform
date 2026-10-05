@@ -1715,7 +1715,8 @@ async function main() {
     await sleep(900);
     const dirLeft1440 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
+      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows') ||
+        frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
     const dirShot1440 = await captureShot(cdp, ntpSession);
@@ -1751,7 +1752,8 @@ async function main() {
     await sleep(900);
     const dirLeft1024 = await evalIn(cdp, ntpSession, `(() => {
       const frame = document.querySelector('iframe[data-panel-path="directory/directory.html"]');
-      const el = frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
+      const el = document.querySelector('#directory-view .sub, #directory-view .site-group, #directory-rows') ||
+        frame?.contentDocument?.querySelector('.sub, #rows, .site-group');
       return el ? Math.round(el.getBoundingClientRect().left) : null;
     })()`);
 

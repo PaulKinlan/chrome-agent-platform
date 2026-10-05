@@ -1517,6 +1517,35 @@
       width: 100%;
       background: var(--bg);
     }
+    .view-client-host {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      width: 100%;
+      background: var(--bg);
+    }
+    .view-client-host[hidden] { display: none !important; }
+    .directory-view {
+      max-inline-size: var(--content-max);
+      min-inline-size: 0;
+      margin-inline: auto;
+      padding-inline: var(--content-gutter);
+      padding-block: 24px;
+      box-sizing: border-box;
+    }
+    .directory-view[hidden] { display: none !important; }
+    .directory-view .sub { margin: 0 0 20px; max-inline-size: 72ch; color: var(--muted); font-size: 13px; }
+    .directory-rows { display: grid; gap: 20px; min-inline-size: 0; }
+    .directory-rows .site-group { display: grid; gap: 10px; min-inline-size: 0; }
+    .directory-rows .site-heading { margin: 0; min-inline-size: 0; color: var(--text); font-size: var(--text-lg); overflow-wrap: anywhere; }
+    .directory-rows .policy-row { display: flex; flex-wrap: wrap; align-items: safe center; gap: 6px 12px; min-inline-size: 0; }
+    .directory-rows .policy-select { min-block-size: 36px; max-inline-size: 100%; padding: 4px 8px; border: 1px solid var(--border, #e3e0d9); border-radius: var(--radius-sm, 6px); background: var(--panel, #fff); color: var(--text, #1d1b18); font: 600 var(--text-sm, 13px)/1.4 inherit; cursor: pointer; }
+    .directory-rows .policy-select:hover { border-color: var(--accent); color: var(--accent); }
+    .directory-rows .policy-note { margin: 0; min-inline-size: 0; color: var(--muted); font-size: var(--text-xs, 12px); line-height: 1.5; overflow-wrap: anywhere; }
+    .directory-rows .tool-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-inline-size: 0; margin: 0; padding: 0; list-style: none; }
+    .directory-rows .tool-list > li { min-inline-size: 0; }
+    .directory-rows .empty { margin: 0; color: var(--muted); }
+    @media (forced-colors: active) { .directory-rows .site-heading { forced-color-adjust: auto; } }
 
     /* The task thread does NOT cover the sidebar: it fills the area to the
        RIGHT of the task sidebar so the sidebar (and its active-thread state)
@@ -1929,6 +1958,12 @@
           Back
         </button>
         <span class="view-title" id="view-title">Settings</span>
+      </div>
+      <div id="view-client-host" class="view-client-host" hidden>
+        <section id="directory-view" class="directory-view" tabindex="-1" aria-labelledby="view-title" hidden>
+          <p class="sub">Sites that offer agent tools will appear here automatically as you browse.</p>
+          <div id="directory-rows" class="directory-rows" aria-live="polite"></div>
+        </section>
       </div>
       <!-- CAP-FB-20260828-PANEL-DOC-RETENTION-01: panel frames are created
            lazily per panel path by ntp.js (panelFrameFor) — see the pool note. -->

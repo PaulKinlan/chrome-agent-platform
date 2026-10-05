@@ -166,32 +166,35 @@ try {
   for (let i = 0; i < 30; i++) {
     frame = await ev(ntpSession, `(() => {
       const f = [...document.querySelectorAll("iframe")].find((x) => (x.getAttribute("src") || "").includes("directory/directory.html"));
-      const d = f && f.contentDocument;
-      if (!d || !f) return { loaded: false };
-      const heading = d.getElementById("discovered-heading");
+      const clientView = document.getElementById("directory-view");
+      const d = clientView || (f && f.contentDocument);
+      if (!d) return { loaded: false };
+      const heading = d.querySelector("#discovered-heading") || (d.getElementById && d.getElementById("discovered-heading"));
       const section = heading ? heading.closest("section") : null;
       const rows = [...d.querySelectorAll(".policy-note")].map((p) => p.textContent);
       const addBtn = [...d.querySelectorAll("button")].find((b) => b.textContent === "Add in Settings") || null;
-      const fr = f.getBoundingClientRect();
+      const fr = f ? f.getBoundingClientRect() : (clientView ? clientView.getBoundingClientRect() : null);
       const sr = section ? section.getBoundingClientRect() : null;
       const br = addBtn ? addBtn.getBoundingClientRect() : null;
-      const vw = d.defaultView.innerWidth, vh = d.defaultView.innerHeight;
+      const vw = window.innerWidth, vh = window.innerHeight;
       const sectionVisible = !!(section && sr && sr.width > 1 && sr.height > 1 &&
         sr.bottom > 0 && sr.top < vh && sr.right > 0 && sr.left < vw &&
         section.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
-      const hitInFrame = !!(addBtn && br && d.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) === addBtn);
-      const topX = fr.left + (br ? br.left + br.width / 2 : 0);
-      const topY = fr.top + (br ? br.top + br.height / 2 : 0);
-      const hit = f.ownerDocument.elementFromPoint(topX, topY);
+      const isClient = !f;
+      const topX = br ? (br.left + br.width / 2) : 0;
+      const topY = br ? (br.top + br.height / 2) : 0;
+      const hit = document.elementFromPoint(topX, topY);
+      const hitInFrame = isClient ? (hit === addBtn) : !!(addBtn && br && d.elementFromPoint && d.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) === addBtn);
       return {
-        loaded: true, frameUrl: f.getAttribute("src"),
+        loaded: true, frameUrl: f ? f.getAttribute("src") : "client-view",
         heading: heading ? heading.textContent : null, rows,
         hasAdd: !!addBtn, empty: !!d.querySelector(".empty"),
         sectionVisible,
         sectionRect: sr ? { x: Math.round(sr.x), y: Math.round(sr.y), w: Math.round(sr.width), h: Math.round(sr.height) } : null,
-        iframeRect: { x: Math.round(fr.x), y: Math.round(fr.y), w: Math.round(fr.width), h: Math.round(fr.height) },
-        hitInFrame, hitAtTop: hit ? (hit.tagName + (hit.id ? "#" + hit.id : "")) : null,
+        iframeRect: fr ? { x: Math.round(fr.x), y: Math.round(fr.y), w: Math.round(fr.width), h: Math.round(fr.height) } : null,
+        hitInFrame, hitAtTop: isClient ? (hit ? (hit.tagName + (hit.id ? "#" + hit.id : "")) : null) : (f ? (f.ownerDocument.elementFromPoint(topX, topY)?.tagName || "") : null),
         topX: Math.round(topX), topY: Math.round(topY),
+        isClient,
       };
     })()`);
     if (frame?.heading) break;
@@ -205,23 +208,25 @@ try {
     frame?.sectionVisible === true,
     { sectionVisible: frame?.sectionVisible, sectionRect: frame?.sectionRect, iframeRect: frame?.iframeRect });
   check("the discovered row's action is REACHABLE: hit-testable inside the frame and through the iframe at the top level",
-    frame?.hitInFrame === true && /IFRAME/.test(String(frame?.hitAtTop)),
-    { hitInFrame: frame?.hitInFrame, hitAtTop: frame?.hitAtTop });
+    frame?.hitInFrame === true && (frame?.isClient ? true : /IFRAME/.test(String(frame?.hitAtTop))),
+    { hitInFrame: frame?.hitInFrame, hitAtTop: frame?.hitAtTop, isClient: frame?.isClient });
 
   // 4a. The same two properties at the narrow width the reviewer checked.
   await send("Emulation.setDeviceMetricsOverride", { width: 390, height: 650, deviceScaleFactor: 1, mobile: true }, ntpSession);
   await sleep(800);
   const narrow = await ev(ntpSession, `(() => {
     const f = [...document.querySelectorAll("iframe")].find((x) => (x.getAttribute("src") || "").includes("directory/directory.html"));
-    const d = f && f.contentDocument;
-    const section = d && d.getElementById("discovered-heading")?.closest("section");
+    const clientView = document.getElementById("directory-view");
+    const d = clientView || (f && f.contentDocument);
+    const section = d && (d.querySelector ? d.querySelector("#discovered-heading")?.closest("section") : d.getElementById("discovered-heading")?.closest("section"));
     const addBtn = d && [...d.querySelectorAll("button")].find((b) => b.textContent === "Add in Settings");
     const sr = section ? section.getBoundingClientRect() : null;
     const br = addBtn ? addBtn.getBoundingClientRect() : null;
-    const vw = d?.defaultView?.innerWidth ?? 0, vh = d?.defaultView?.innerHeight ?? 0;
+    const vw = window.innerWidth, vh = window.innerHeight;
     const visible = !!(section && sr && sr.width > 1 && sr.height > 1 && sr.bottom > 0 && sr.top < vh && sr.right > 0 && sr.left < vw &&
       section.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }));
-    const reachable = !!(addBtn && br && d.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) === addBtn);
+    const isClient = !f;
+    const reachable = !!(addBtn && br && (isClient ? document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) === addBtn : d.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) === addBtn));
     return { visible, reachable, rect: sr ? { x: Math.round(sr.x), y: Math.round(sr.y), w: Math.round(sr.width), h: Math.round(sr.height) } : null };
   })()`);
   check("at 390x650 the discovered section is still VISIBLE and its action reachable",

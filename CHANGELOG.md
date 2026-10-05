@@ -2,6 +2,7 @@
 
 ## [0.3.569] — 2026-10-05
 - a failed agent session attach no longer drops your active session or its commands
+- In-context Agent Directory renders natively inside the Hub document without an iframe, eliminating document-bootstrap latency and preserving single-entry back history (chrome-agent-platform-9xj8).
 
 ## [0.3.568] — 2026-10-04
 - a refused ACP session resume no longer leaves the client pointing at a session the agent never opened

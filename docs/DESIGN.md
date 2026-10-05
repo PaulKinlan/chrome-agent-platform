@@ -39,6 +39,13 @@ workhorse sans, deliberate grid. Earned familiarity over novelty.
 - `<tool-directory-card>` owns responsive behavior with intrinsic/logical sizing, `min-inline-size: 0`, wrapping state controls, and a card-level container query. Badges never float outside or detach from their function in narrow or RTL layouts.
 - Full settings/directory/skills views deactivate covered hub controls as view state; task threads remain the only overlay where the sidebar edge control stays available. The sidebar retains covered inert/AX state while one pure per-view policy owns the nub's hidden/inert/disabled/AX state without touching collapse state. Covered controls are hidden/inert, not raised through a z-index contest. Focus enters the frame only after reveal and returns on close only if the initiating control is still connected and visible.
 
+## View-Frame Collapse (Client-Side Hub Views — Stage 1)
+- In-context surfaces (Directory in Stage 1, followed by Artifacts and Settings) render as native client-side views within the Hub DOM (`#view-client-host`) rather than separate documents inside nested iframes.
+- Hub stylesheets, font metrics, and design tokens cascade directly into the client view, eliminating cross-document bootstrap latency and white-flash transitions.
+- Single history entry is guaranteed by construction through rooted `navigateNtpRoute(window, hash, ...)` and `window.history.back()`, with complete URL hash addressability (`#view=directory`).
+- Programmatic focus is synchronously routed to the view container upon mount (`tabindex="-1"`) or back button, and restored to the initiating trigger upon unmount/close via `viewFocus.close()`.
+- Unmigrated views (Settings & Artifacts) continue to use the pooled persistent iframe fallback.
+
 ## Settings responsive composition
 - The 240px navigation and multi-column forms are the wide composition. At the content-driven 680px breakpoint the navigation becomes a wrapping full-width header and every form/card grid becomes one shrink-safe column using `minmax(0, 1fr)` and `min-inline-size: 0`.
 - Every section and control remains present at 500px and 360px. The document reflows rather than clipping; intentionally scrollable data tables retain local `overflow: auto` without widening the Settings iframe.

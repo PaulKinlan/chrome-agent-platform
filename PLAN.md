@@ -370,6 +370,12 @@ Side panel deduplication and distinct harness presentation:
 - Page view empty state: one lead sentence plus suggestion chips (*Summarize page*, *Key takeaways*, *Explain page*) prefilling the composer, keeping empty vertical space above the composer ≤ 40% at 420×800.
 
 ## Feature: Reader-mode page capture → Artifacts (3p3e.4) — implemented
+
+## Feature: View-Frame Collapse (chrome-agent-platform-lmq) — Staged
+- Stage 1: Client-side view host + Directory view (`chrome-agent-platform-9xj8`) — implemented. Directory renders as a client-side view in the Hub DOM (#view-client-host / #directory-view) without an iframe; single-history-entry preserved by construction; iframe pool retained for Settings/Artifacts.
+- Stage 2: Artifacts explorer client-side view & side inspector (`chrome-agent-platform-5r5s`) — queued.
+- Stage 3: Settings & Skills modular client view + sender authorization (`chrome-agent-platform-8v5l`) — queued.
+- Stage 4: Iframe pool retirement & layout unification (`chrome-agent-platform-p9it`) — queued.
 `capture_page` tool (`extension/lib/page-reader.js`, `extension/lib/browser-tools.js`)
 extracts clean structured Markdown with YAML frontmatter from tabs and persists to the
 Artifacts store with `asArtifact: true`. Composer `+` attach menu provides "Capture this page",
