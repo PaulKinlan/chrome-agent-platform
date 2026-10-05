@@ -60,6 +60,7 @@ import {
 } from "./route-focus.js";
 import { applySidebarNubPolicy, SIDEBAR_NARROW_QUERY, sidebarWidthPolicy } from "./view-policy.js";
 import { renderDirectoryContent } from "../directory/directory.js";
+import { renderArtifactsView, closeArtifactInspector } from "../artifacts/index.js";
 import {
   ensureNtpHistoryRoot,
   navigateHome,
@@ -5306,13 +5307,15 @@ const viewTitle = document.getElementById("view-title");
 const viewClientHost = document.getElementById("view-client-host");
 const directoryViewEl = document.getElementById("directory-view");
 const directoryRowsEl = document.getElementById("directory-rows");
+const artifactsViewEl = document.getElementById("artifacts-view");
 const viewFocus = createViewFocusController();
 
 function embeddedViewRoute(path) {
   const routePath = String(path ?? "").split(/[?#]/, 1)[0];
   if (routePath === "options/options.html") return VIEW_ROUTE.SETTINGS;
   if (routePath === "directory/directory.html" || routePath === "directory") return VIEW_ROUTE.DIRECTORY;
-  return VIEW_ROUTE.ARTIFACTS;
+  if (routePath === "artifacts/index.html" || routePath === "artifacts" || routePath.startsWith("artifacts&")) return VIEW_ROUTE.ARTIFACTS;
+  return VIEW_ROUTE.SETTINGS;
 }
 
 function openView(path, title, trigger) {
@@ -5339,21 +5342,37 @@ function openView(path, title, trigger) {
   }
   const [basePath, hash] = String(path ?? "").split("#");
   const targetRoute = embeddedViewRoute(path);
-  const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY;
+  const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;
 
   if (isClientSide) {
-    if (viewClientHost && directoryViewEl && directoryRowsEl) {
+    if (viewClientHost) {
       viewClientHost.hidden = false;
-      directoryViewEl.hidden = false;
-      renderDirectoryContent(directoryRowsEl, {
-        onNavigateSettings: () => openView("options/options.html#section-agents", "Settings"),
-      });
+      if (targetRoute === VIEW_ROUTE.DIRECTORY) {
+        if (artifactsViewEl) artifactsViewEl.hidden = true;
+        if (directoryViewEl && directoryRowsEl) {
+          directoryViewEl.hidden = false;
+          renderDirectoryContent(directoryRowsEl, {
+            onNavigateSettings: () => openView("options/options.html#section-agents", "Settings"),
+          });
+        }
+      } else if (targetRoute === VIEW_ROUTE.ARTIFACTS) {
+        if (directoryViewEl) directoryViewEl.hidden = true;
+        if (artifactsViewEl) {
+          artifactsViewEl.hidden = false;
+          renderArtifactsView(artifactsViewEl, {
+            path,
+            onAttachArtifact: (artifact) => attachArtifactToComposer(artifact, { closeOverlay: true }),
+            onGoHome: () => goHome({ focusAfter: composer }),
+          });
+        }
+      }
     }
     for (const other of panelFrames.values()) other.hidden = true;
     activePanelFrame = null;
   } else {
     if (viewClientHost) viewClientHost.hidden = true;
     if (directoryViewEl) directoryViewEl.hidden = true;
+    if (artifactsViewEl) artifactsViewEl.hidden = true;
     const frame = panelFrameFor(path);
     // Embedded panel documents boot at their exact canonical URL — NO query. The
     // old approach appended ?embedded=1 as an embeddedness marker and then had
@@ -5403,13 +5422,17 @@ function openView(path, title, trigger) {
       activeViewRoute = targetRoute;
       syncViewOpen();
     }, null), {
-    focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? directoryViewEl) : null),
+    focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? (targetRoute === VIEW_ROUTE.DIRECTORY ? directoryViewEl : artifactsViewEl)) : null),
   });
 }
 function closeView({ fromNavigation = false } = {}) {
   if (!fromNavigation && typeof window !== "undefined" && window.history?.back && location.hash && location.hash !== "#") {
     window.history.back();
     return;
+  }
+
+  if (artifactsViewEl) {
+    closeArtifactInspector(artifactsViewEl);
   }
 
   runRouteUpdate(() => {
@@ -5512,13 +5535,21 @@ async function applyCurrentHashRoute(isTraverse = false) {
       // CAP-FB-20260828-PANEL-DOC-RETENTION-01: the route is open when its
       // pooled panel frame is the active one (an unbooted path has no frame
       // yet, so a traverse to a not-yet-opened view falls through to openView).
-      const isClient = embeddedViewRoute(parsed.path) === VIEW_ROUTE.DIRECTORY;
+      const targetRoute = embeddedViewRoute(parsed.path);
+      const isClient = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;
       const isOpen = isClient
-        ? (!viewOverlay?.hidden && activeViewRoute === VIEW_ROUTE.DIRECTORY)
+        ? (!viewOverlay?.hidden && activeViewRoute === targetRoute)
         : (!viewOverlay?.hidden && activePanelFrame === panelFrames.get(parsed.path));
       if (isOpen) {
         if (viewTitle && meta.title && meta.title !== "View") {
           viewTitle.textContent = meta.title;
+        }
+        if (targetRoute === VIEW_ROUTE.ARTIFACTS && artifactsViewEl) {
+          renderArtifactsView(artifactsViewEl, {
+            path: parsed.path,
+            onAttachArtifact: (artifact) => attachArtifactToComposer(artifact, { closeOverlay: true }),
+            onGoHome: () => goHome({ focusAfter: composer }),
+          });
         }
       } else {
         openView(parsed.path, title, null, { pushHistory: false });

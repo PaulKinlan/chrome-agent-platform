@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.571] — 2026-10-05
+- In-context Artifacts explorer renders natively within the Hub DOM without an iframe, eliminating cross-document message hops on Reuse and retiring view resize thrash (chrome-agent-platform-5r5s).
+
 ## [0.3.570] — 2026-10-05
 - In-context Agent Directory renders natively inside the Hub document without an iframe, eliminating document-bootstrap latency and preserving single-entry back history (chrome-agent-platform-9xj8).
 

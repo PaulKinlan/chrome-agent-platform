@@ -1547,6 +1547,243 @@
     .directory-rows .empty { margin: 0; color: var(--muted); }
     @media (forced-colors: active) { .directory-rows .site-heading { forced-color-adjust: auto; } }
 
+    /* Native in-context Artifacts view (chrome-agent-platform-5r5s) */
+    .artifacts-view {
+      max-inline-size: var(--content-max);
+      min-inline-size: 0;
+      margin-inline: auto;
+      padding-inline: var(--content-gutter);
+      padding-block: 24px;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    .artifacts-view:has(.inspector:not([hidden])) {
+      max-inline-size: 1680px;
+    }
+    .artifacts-view[hidden] { display: none !important; }
+    .artifacts-view .sub { margin: 0 0 20px; max-inline-size: 72ch; color: var(--muted); font-size: 13px; line-height: 1.4; }
+
+    .artifacts-view .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .artifacts-view .search-input {
+      flex: 1 1 240px;
+      min-width: 180px;
+      max-width: 380px;
+      height: 34px;
+      padding: 0 12px;
+      font: inherit;
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm, 6px);
+      background: var(--panel);
+      color: var(--text);
+      box-sizing: border-box;
+      outline: none;
+    }
+    .artifacts-view .search-input:focus { border-color: var(--accent); }
+    .artifacts-view .kind-pills {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--panel-2);
+      padding: 3px;
+      border-radius: var(--radius-sm, 6px);
+      border: 1px solid var(--border);
+    }
+    .artifacts-view .kind-pill {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .artifacts-view .kind-pill:hover { color: var(--text); }
+    .artifacts-view .kind-pill.active {
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: var(--shadow-1);
+      font-weight: 600;
+    }
+    .artifacts-view .status { color: var(--muted); font-size: 12.5px; margin-left: auto; }
+
+    .artifacts-view .workspace {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+      width: 100%;
+      min-width: 0;
+    }
+    .artifacts-view .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+      flex: 1 1 55%;
+      min-width: 0;
+      align-content: start;
+    }
+    .artifacts-view .grid:has(empty-state) { display: block; }
+    .artifacts-view .empty { color: var(--muted); padding: 24px 0; font-size: 13px; grid-column: 1 / -1; }
+
+    .artifacts-view .inspector {
+      flex: 0 0 min(52%, 780px);
+      position: sticky;
+      top: 16px;
+      height: calc(100vh - 96px);
+      min-height: 520px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md, 12px);
+      background: var(--panel);
+      overflow: hidden;
+      box-shadow: var(--shadow-2);
+    }
+    .artifacts-view .inspector[hidden] { display: none !important; }
+    @media (max-width: 959px) {
+      .artifacts-view .inspector { display: none !important; }
+    }
+
+    .artifacts-view .insp-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      flex-shrink: 0;
+    }
+    .artifacts-view .insp-meta-block {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    .artifacts-view .insp-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .artifacts-view .insp-meta {
+      font-size: 11.5px;
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .artifacts-view .insp-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .artifacts-view .insp-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 8px;
+      font: inherit;
+      font-size: 11.5px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm, 6px);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .artifacts-view .insp-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .artifacts-view .insp-btn.danger:hover { border-color: var(--danger); color: var(--danger); }
+    .artifacts-view .insp-btn svg { width: 13px; height: 13px; flex-shrink: 0; }
+    .artifacts-view .insp-close {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .artifacts-view .insp-close:hover { color: var(--text); background: var(--panel-2); }
+
+    .artifacts-view .insp-body {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      position: relative;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+    }
+    .artifacts-view .insp-body .html-frame {
+      width: 100%;
+      height: 100%;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .artifacts-view .insp-body .html-frame iframe {
+      width: 100%;
+      height: 100%;
+      flex: 1;
+      border: 0;
+      background: transparent;
+    }
+    .artifacts-view .insp-body img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+      margin: auto;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+    .artifacts-view .insp-body pre {
+      margin: 0;
+      padding: 16px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow: auto;
+      height: 100%;
+      box-sizing: border-box;
+    }
+
+    .artifacts-view artifact-card.selected {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: var(--radius-md, 12px);
+    }
+
+    .artifacts-view .foot { margin-top: 24px; color: var(--muted); font-size: 12px; }
+    .artifacts-view .capacity { margin: 0 0 16px; padding: 10px 12px; border: 1px solid var(--border);
+      border-radius: var(--radius-sm, 6px); background: var(--panel-2);
+      font-size: 12px; color: var(--muted); }
+    .artifacts-view .capacity[hidden] { display: none; }
+    .artifacts-view .capacity .cap-row { display: flex; justify-content: space-between; align-items: baseline;
+      gap: 12px; margin-bottom: 6px; }
+    .artifacts-view .capacity .cap-label { color: var(--text); font-weight: 600; }
+    .artifacts-view .capacity .cap-bar { height: 6px; border-radius: 3px; background: var(--border);
+      overflow: hidden; }
+    .artifacts-view .capacity .cap-fill { height: 100%; background: var(--accent); width: 0; }
+    .artifacts-view .capacity.warn .cap-fill { background: #e0a400; }
+    .artifacts-view .capacity.full .cap-fill { background: #d64545; }
+    .artifacts-view .capacity.full { border-color: #d64545; }
+
     /* The task thread does NOT cover the sidebar: it fills the area to the
        RIGHT of the task sidebar so the sidebar (and its active-thread state)
        stays visible while inside a task (item 26). The settings/directory/
@@ -1963,6 +2200,26 @@
         <section id="directory-view" class="directory-view" tabindex="-1" aria-labelledby="view-title" hidden>
           <p class="sub">Sites that offer agent tools will appear here automatically as you browse.</p>
           <div id="directory-rows" class="directory-rows" aria-live="polite"></div>
+        </section>
+        <section id="artifacts-view" class="artifacts-view" tabindex="-1" aria-labelledby="view-title" hidden>
+          <p class="sub" data-i18n="artifacts_sub">Everything the agents have made — generated pages, files, data, UI fragments. Click a card to open it live; Reuse attaches it to a new task; Delete removes it.</p>
+          <div class="capacity" id="artifacts-capacity" role="status" aria-live="polite" hidden></div>
+          <div class="toolbar" id="artifacts-toolbar">
+            <input type="search" id="artifacts-q" class="search-input" placeholder="Search artifacts by title or origin…" aria-label="Search artifacts">
+            <div class="kind-pills" id="artifacts-kind" role="tablist" aria-label="Filter by type">
+              <button type="button" class="kind-pill active" data-kind="" role="tab" aria-selected="true">All</button>
+              <button type="button" class="kind-pill" data-kind="html" role="tab" aria-selected="false">Pages</button>
+              <button type="button" class="kind-pill" data-kind="markdown" role="tab" aria-selected="false">Notes</button>
+              <button type="button" class="kind-pill" data-kind="data" role="tab" aria-selected="false">Data</button>
+              <button type="button" class="kind-pill" data-kind="image" role="tab" aria-selected="false">Images</button>
+            </div>
+            <div class="status" id="artifacts-status" aria-live="polite"></div>
+          </div>
+          <div class="workspace" id="artifacts-workspace">
+            <div class="grid" id="artifacts-grid"></div>
+            <aside class="inspector" id="artifact-inspector" aria-label="Artifact preview" hidden></aside>
+          </div>
+          <div class="foot" id="artifacts-foot"></div>
         </section>
       </div>
       <!-- CAP-FB-20260828-PANEL-DOC-RETENTION-01: panel frames are created

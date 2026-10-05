@@ -524,12 +524,12 @@ async function main() {
     const libCard = await waitFor(async () => {
       const r = await evaluate(ntp, `(() => {
         const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-        if (!frame?.contentDocument) return null;
-        const cards = Array.from(frame.contentDocument.querySelectorAll('artifact-card'));
+        const doc = frame?.contentDocument || document;
+        const cards = Array.from(doc.querySelectorAll('artifact-card'));
         const card = cards.find((c) => c.getAttribute('name') === 'Click game p45y B');
         const preview = card?.shadowRoot?.querySelector('.preview');
         if (!preview) return null;
-        const fr = frame.getBoundingClientRect();
+        const fr = frame ? frame.getBoundingClientRect() : { left: 0, top: 0 };
         const r = preview.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) return null;
         return { x: Math.round(fr.left + r.left + r.width / 2), y: Math.round(fr.top + r.top + r.height / 2) };
@@ -541,9 +541,10 @@ async function main() {
     const libDialogFrame = await waitFor(async () => {
       const r = await evaluate(ntp, `(() => {
         const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-        const host = frame?.contentDocument?.querySelector('agent-dialog .html-frame iframe');
-        if (!frame || !host) return null;
-        const fr = frame.getBoundingClientRect();
+        const doc = frame?.contentDocument || document;
+        const host = doc.querySelector('agent-dialog .html-frame iframe, #artifact-inspector .html-frame iframe, .inspector .html-frame iframe');
+        if (!host) return null;
+        const fr = frame ? frame.getBoundingClientRect() : { left: 0, top: 0 };
         const h = host.getBoundingClientRect();
         if (h.width <= 0 || h.height <= 0) return null;
         return { x: Math.round(fr.left + h.left), y: Math.round(fr.top + h.top), w: Math.round(h.width), h: Math.round(h.height) };
@@ -597,11 +598,12 @@ async function main() {
       const by = libBefore.best.y ?? 0;
       const hit = await evaluate(ntp, `(() => {
         const frame = document.querySelector('iframe[data-panel-path="artifacts/index.html"]');
-        const host = frame?.contentDocument?.querySelector('agent-dialog .html-frame iframe');
-        if (!frame || !host) return 'no host';
-        const fr = frame.getBoundingClientRect();
+        const doc = frame?.contentDocument || document;
+        const host = doc.querySelector('agent-dialog .html-frame iframe, #artifact-inspector .html-frame iframe, .inspector .html-frame iframe');
+        if (!host) return 'no host';
+        const fr = frame ? frame.getBoundingClientRect() : { left: 0, top: 0 };
         const h = host.getBoundingClientRect();
-        const top = frame.contentDocument.elementFromPoint(h.left + ${bx}, h.top + ${by});
+        const top = doc.elementFromPoint(h.left + ${bx}, h.top + ${by});
         const docTop = document.elementFromPoint(fr.left + h.left + ${bx}, fr.top + h.top + ${by});
         const desc = (e) => e ? e.tagName + '#' + (e.id ?? '') + '.' + (typeof e.className === 'string' ? e.className : '') : 'none';
         return { libDocHit: desc(top), ntpHit: desc(docTop) };
