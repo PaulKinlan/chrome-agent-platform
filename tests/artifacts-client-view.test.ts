@@ -22,8 +22,10 @@ Deno.test("artifacts client view: ntp.html contains client-side view host and ar
 
 Deno.test("artifacts client view: ntp.js mounts Artifacts natively without iframe", () => {
   const openView = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
-  assert(openView.includes("targetRoute === VIEW_ROUTE.ARTIFACTS"),
-    "openView must identify VIEW_ROUTE.ARTIFACTS as a client-side view");
+  assert(openView.includes("const isClientSide = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;"),
+    "openView must identify client-side views");
+  assert(openView.includes("else if (targetRoute === VIEW_ROUTE.ARTIFACTS) {"),
+    "openView must branch for VIEW_ROUTE.ARTIFACTS");
   assert(openView.includes("renderArtifactsView(artifactsViewEl"),
     "openView must render Artifacts into artifactsViewEl directly");
 });
@@ -59,7 +61,7 @@ Deno.test("artifacts client view: URL addressability and deep linking support (C
 
 Deno.test("artifacts client view: hash-restore on reload and traverse-to-unmounted fallthrough (C9)", () => {
   const applyRoute = ntpJs.slice(ntpJs.indexOf("async function applyCurrentHashRoute"), ntpJs.indexOf("// Support browser back/forward navigation"));
-  assert(applyRoute.includes("VIEW_ROUTE.ARTIFACTS"),
+  assert(applyRoute.includes("const isClient = targetRoute === VIEW_ROUTE.DIRECTORY || targetRoute === VIEW_ROUTE.ARTIFACTS;"),
     "applyCurrentHashRoute must identify client-side Artifacts route");
   assert(applyRoute.includes("openView(parsed.path, title, null, { pushHistory: false });"),
     "unmounted view traverse/reload must fall through to openView");
@@ -67,9 +69,27 @@ Deno.test("artifacts client view: hash-restore on reload and traverse-to-unmount
 
 Deno.test("artifacts client view: a11y focus movement on mount and restoration on unmount (C10)", () => {
   const openView = ntpJs.slice(ntpJs.indexOf("function openView("), ntpJs.indexOf("function closeView("));
-  assert(openView.includes("artifactsViewEl"),
+  assert(openView.includes('focusAfter: activePanelFrame ?? (isClientSide ? (document.getElementById("view-back") ?? (targetRoute === VIEW_ROUTE.DIRECTORY ? directoryViewEl : artifactsViewEl)) : null)'),
     "openView must route focus into client view upon mount");
   const closeView = ntpJs.slice(ntpJs.indexOf("function closeView("), ntpJs.indexOf("// ── Multi-Page App"));
   assert(closeView.includes("viewFocus.close(() => {})"),
     "closeView must restore focus to the initiating trigger upon unmount");
+});
+
+Deno.test("artifacts client view: F2 & F3 dynamic origin resolution and filter reset", () => {
+  // F2: parseArtifactParams extracts origin
+  const parsedWithOrigin = (artifactsJs.includes("origin = sp.get(\"origin\")") || artifactsJs.includes("origin = sp.get('origin')"));
+  assert(parsedWithOrigin, "parseArtifactParams must parse origin parameter");
+
+  // F2: targetOrigin resolution uses asset's origin or param, not master hardcode
+  assert(artifactsJs.includes("const targetOrigin = initialParams.origin || targetAsset?.origin || \"master\";"),
+    "targetOrigin must resolve from asset metadata or deep-link param, not hardcoded 'master'");
+
+  // F3: filter state resets when params are absent
+  assert(artifactsJs.includes("filterKind = initialParams.kind || \"\";"),
+    "filterKind must reset to empty string when param is absent");
+  assert(artifactsJs.includes("searchQuery = initialParams.search || \"\";"),
+    "searchQuery must reset to empty string when param is absent");
+  assert(artifactsJs.includes("selectedAssetId = initialParams.id || null;"),
+    "selectedAssetId must reset to null when param is absent");
 });

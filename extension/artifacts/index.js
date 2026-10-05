@@ -81,7 +81,8 @@ export function parseArtifactParams(path) {
   let kind = "";
   let id = "";
   let search = "";
-  if (!path) return { kind, id, search };
+  let origin = "";
+  if (!path) return { kind, id, search, origin };
   const rawParams = path.includes("?")
     ? path.slice(path.indexOf("?") + 1)
     : path.includes("&")
@@ -95,6 +96,7 @@ export function parseArtifactParams(path) {
     kind = sp.get("kind") || "";
     id = sp.get("id") || "";
     search = sp.get("q") || sp.get("search") || "";
+    origin = sp.get("origin") || "";
     if (!kind && !id) {
       const bare = rawParams.trim();
       if (["html", "markdown", "md", "data", "image"].includes(bare.toLowerCase())) {
@@ -104,7 +106,7 @@ export function parseArtifactParams(path) {
       }
     }
   }
-  return { kind, id, search };
+  return { kind, id, search, origin };
 }
 
 export function matchesFilter(a, kind, query) {
@@ -517,18 +519,18 @@ export async function renderArtifactsView(containerEl, options = {}) {
 
   const { path = "", onAttachArtifact, onGoHome } = options;
   const initialParams = parseArtifactParams(path);
-  if (initialParams.kind) filterKind = initialParams.kind;
-  if (initialParams.search) searchQuery = initialParams.search;
-  if (initialParams.id) selectedAssetId = initialParams.id;
+  filterKind = initialParams.kind || "";
+  searchQuery = initialParams.search || "";
+  selectedAssetId = initialParams.id || null;
 
-  if (kindFilter && filterKind) {
+  if (kindFilter) {
     kindFilter.querySelectorAll(".kind-pill").forEach((b) => {
       const active = (b.dataset.kind || "").toLowerCase() === filterKind.toLowerCase();
       b.classList.toggle("active", active);
       b.setAttribute("aria-selected", active ? "true" : "false");
     });
   }
-  if (searchInput && searchQuery) {
+  if (searchInput) {
     searchInput.value = searchQuery;
   }
 
@@ -639,10 +641,12 @@ export async function renderArtifactsView(containerEl, options = {}) {
     await updateFilteredView();
 
     if (selectedAssetId) {
+      const targetAsset = allAssets.find((a) => a.id === selectedAssetId);
+      const targetOrigin = initialParams.origin || targetAsset?.origin || "master";
       if (window.innerWidth >= 960) {
-        openArtifactInspector(selectedAssetId, "master", { container: containerEl, onAttachArtifact, statusEl: status });
+        openArtifactInspector(selectedAssetId, targetOrigin, { container: containerEl, onAttachArtifact, statusEl: status });
       } else {
-        openArtifactDialog(selectedAssetId, "master", { onAttachArtifact, statusEl: status });
+        openArtifactDialog(selectedAssetId, targetOrigin, { onAttachArtifact, statusEl: status });
       }
     }
   };
