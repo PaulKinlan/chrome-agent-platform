@@ -75,9 +75,11 @@ Tests: the runner's return carries the thread it journaled into; a focused test 
     task: `${RULES}
 WORK ITEM: chrome-agent-platform-ehsl (P2) "Store service-worker bundle is ~10 bytes under its budget".
 
-The store build currently reports 2,999,994 <= 3,000,000 — any new service-worker code fails the build. Reclaim headroom by REDUCING bytes, never by raising the budget: candidates are (a) building the ACP registry rows from the bridge's harness table at runtime instead of a literal list, (b) moving a feature behind a lazily-imported module, (c) trimming other SW literals. Measure with \`npm run build:production\` (the budget line prints the number) and report before/after. Aim for at least a few hundred bytes of headroom.
+UPDATED 2026-10-05 (owner decision, bead chrome-agent-platform-74pb): bundle SIZES are measured and reported, not enforced — an over-reference bundle no longer fails the build; the build prints "bundle budget report: … OVER by N bytes" with top contributors. The dependency-integrity checks (same-version duplicate instances, lockfile drift) still fail the build closed. The original headroom-reclamation goal below stands as hygiene: keep the SW lean.
 
-DO NOT: touch scripts/bundle-budget.mjs's number, delete a test, or weaken the budget check.`,
+The store build reports its size each run (the budget line prints the number). Reclaim headroom by REDUCING bytes: candidates are (a) building the ACP registry rows from the bridge's harness table at runtime instead of a literal list, (b) moving a feature behind a lazily-imported module, (c) trimming other SW literals. Measure with \`npm run build:production\` and report before/after.
+
+DO NOT: weaken or remove the dependency-integrity checks (duplicate-instance, lockfile-drift), delete a test, or edit the reporting references in scripts/bundle-budget.mjs without an owner decision.`,
   },
 ];
 

@@ -180,8 +180,11 @@ on paper is worse than no rule. See `AGENTS.md` for the normative rules.
       twice and the whole zod@4 major behind the second copy, while the build's duplicate
       guard only watched three AI SDK packages. Every SDK import now pins to the one
       zod@3-bound instance (store SW 2,696,520 → 2,539,813 B; agent worker 991,185 →
-      907,142 B), and `scripts/bundle-budget.mjs` fails the store build on a same-version
-      `_N` duplicate of ANY package.
+      907,142 B), and `scripts/bundle-budget.mjs` still fails the store build
+      on a same-version
+      `_N` duplicate of ANY package (the dependency-integrity invariant — kept
+      ENFORCED by the 2026-10-05 owner decision even though bundle-size
+      references are now report-only).
 
 ### The Wasm tool platform — what actually ships vs what is proven
 Owner-uploaded files are a separate storage/UI increment from tool registration

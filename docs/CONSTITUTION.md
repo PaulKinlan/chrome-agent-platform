@@ -178,8 +178,10 @@ These are long-living agents. Memory + perf degrade over time if unchecked.
   scripts/bundle-budget.mjs). The pages that
   still load raw modules (artifact, artifacts, directory, privacy, offscreen)
   are pinned at their measured static-import byte totals with zero headroom
-  (tests/unbundled-page-census.test.ts) until they are bundled. Lowering a
-  ceiling is a ratchet; raising one is an owner decision named in the change.
+  (tests/unbundled-page-census.test.ts) until they are bundled. (The old
+  "lowering a ceiling is a ratchet; raising one is an owner decision"
+  rule was retired with the 2026-10-05 decision — sizes are reported, not
+  enforced, so there is no ceiling to ratchet.)
   On a seeded profile (5 agents,
   50 artifacts, 60 runs): `agent.run` p50 < 400ms, `thread.get` < 40ms,
   `run.list` < 40ms, composer-ready < 150ms, data-visible < 250ms, zero long tasks > 50ms,
