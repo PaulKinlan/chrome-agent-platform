@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.575] — 2026-10-05
+- internal: the managed WebAssembly catalogue declares the official sqlite-wasm and wa-sqlite as unavailable entries with measured pins and a named blocker, instead of leaving them undeclared.
+
 ## [0.3.574] — 2026-10-05
 - internal: bundled WebAssembly manifests now point their rebuild reference at the reproduction script that actually exists, and the generator fails closed rather than emitting a dead reference.
 
