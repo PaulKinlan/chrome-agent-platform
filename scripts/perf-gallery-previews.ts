@@ -260,7 +260,28 @@ try {
   const adminT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` })).result.targetId;
   const adminS = await attach(adminT);
   if (!(await waitFor(adminS, CHROME_READY))) throw new Error(`the seed page never exposed chrome.runtime — context says ${await probe(adminS)}`);
-  const adminMsg = (o: unknown) => evalInT(adminS, `chrome.runtime.sendMessage(${JSON.stringify(o)})`, 8000, "seed message");
+  // Warm the service worker BEFORE seeding. The first sendMessage after a page load
+  // has to wake a cold extension, and on a box at load 17 that alone blew an 8s bound
+  // on the FIRST message (measured 2026-10-05), while the same harness had seeded
+  // 6/6 minutes earlier. A handshake that waits for one real answer removes the
+  // race instead of tuning the bound until it usually passes.
+  const warm = await evalInT(
+    adminS,
+    `(async () => {
+      const t0 = performance.now();
+      for (let i = 0; i < 120; i++) {
+        try { const r = await chrome.runtime.sendMessage({ type: "asset.list", origin: "master" }); if (r) return Math.round(performance.now() - t0); }
+        catch { /* service worker still waking */ }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      return -1;
+    })()`,
+    90000,
+    "service worker warm-up",
+  );
+  if (warm === -1) throw new Error("the service worker never answered asset.list");
+  console.log(`service worker answered after ${warm}ms`);
+  const adminMsg = (o: unknown) => evalInT(adminS, `chrome.runtime.sendMessage(${JSON.stringify(o)})`, 20000, "seed message");
   for (let i = 0; i < SEED; i++) {
     const r = await adminMsg({ type: "asset.create", origin: "master", assetType: "text", name: `gallery-seed-${String(i).padStart(2, "0")}`, content: `seed artifact ${i}` });
     if (!r?.ok) throw new Error(`asset.create ${i} failed: ${JSON.stringify(r)}`);
