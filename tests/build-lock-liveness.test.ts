@@ -25,11 +25,16 @@ import {
   parseProcStat,
   procStatFields,
 } from "../scripts/lib/build-lock.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const decoder = new TextDecoder();
 
+let tmpSeq = 0;
 async function tmpRoot(prefix: string): Promise<string> {
-  return await Deno.makeTempDir({ prefix: `build-lock-${prefix}-` });
+  // Durable, like every other scratch dir in this repo: tests/durable-root.test.ts polices a bare
+  // temp-dir factory on this tree (chrome-agent-platform-xnuu), and this file's own factory was one
+  // of the offenders. Each caller removes its root in its own finally, so nothing is retained.
+  return durableDir(`build-lock-${prefix}-${Deno.pid}-${tmpSeq++}`);
 }
 
 async function writeLock(root: string, owner: Record<string, unknown>): Promise<string> {
@@ -58,9 +63,16 @@ async function procStatText(pid: number): Promise<string | null> {
 
 /** A child process that outlives the test so a stolen lock cannot be an artefact of it exiting. */
 function spawnHolder(): Deno.ChildProcess {
-  // `true &` forks a child that exits; `exec sleep` replaces the shell with the SAME pid, so the
-  // exited child is reparented to a process that never waits for it and stays a ZOMBIE.
-  return new Deno.Command("bash", { args: ["-c", "true & exec sleep 60"] }).spawn();
+  // DETERMINISTIC ZOMBIE FIXTURE. `( sleep 0.3 ) &` forks a child that exits after a fixed delay, and
+  // `exec sleep 60` replaces the shell with the SAME pid, so the exited child is reparented to a
+  // process that never calls wait() and stays a ZOMBIE.
+  //
+  // The delay is the whole point, and its absence was a measured flake: with a bare `true &` the
+  // child can exit BEFORE the exec completes, in which case it is reparented to init, gets reaped
+  // there, and NO ZOMBIE EVER EXISTS — the test then failed after its full wait budget (1 run in 6,
+  // twice, at load 4-15) with a message that a reader could mistake for a product failure. Making the
+  // child outlive the exec removes the race rather than widening the timeout around it.
+  return new Deno.Command("bash", { args: ["-c", "( sleep 0.3 ) & exec sleep 60"] }).spawn();
 }
 
 /** The holder's unreaped children, from /proc (no dependency on ps). */
@@ -74,14 +86,26 @@ async function childPids(pid: number): Promise<number[]> {
 }
 
 async function waitForZombieChild(holderPid: number): Promise<number> {
-  for (let i = 0; i < 100; i++) {
-    for (const child of await childPids(holderPid)) {
+  // A DEADLINE, not an iteration count, and a message that says what timed out. The fixture forks
+  // `bash -c 'true & exec sleep 60'` and the zombie exists only once that forked child exits where
+  // nobody reaps it; under fleet load (>10) the old 2s budget expired in 2 of 6 measured runs, making
+  // this test RED for a FIXTURE-timing reason while the failure text read like a product failure.
+  // That is the same unattributable-red class this bead cluster exists to remove
+  // (chrome-agent-platform-xnuu), so the budget is 15s and the error names the fixture explicitly.
+  const deadline = Date.now() + 15_000;
+  let seen: number[] = [];
+  while (Date.now() < deadline) {
+    seen = await childPids(holderPid);
+    for (const child of seen) {
       const fields = procStatFields(child);
       if (fields.ok && fields.state === "Z") return child;
     }
     await new Promise((r) => setTimeout(r, 20));
   }
-  throw new Error(`no zombie child appeared under pid ${holderPid}`);
+  throw new Error(
+    `fixture FAILURE (not a product failure): no zombie appeared under pid ${holderPid} within 15s` +
+      ` — children seen: [${seen.join(", ")}]`,
+  );
 }
 
 Deno.test("r0v8: a ZOMBIE holder is dead, so the lock is stolen instead of refused", async () => {
