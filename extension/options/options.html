@@ -497,7 +497,7 @@
         <h2>Web services</h2>
         <p class="muted">API keys for the services agents can call. Keys are stored encrypted inside this extension only, are never sent to any model, and are delivered only to the service's own endpoint via the Secure Enclave proxy. Paste a key to configure or rotate it — leave the field blank to keep the stored key.</p>
 
-        <div id="vault-architecture" class="vault-architecture" aria-label="Architecture and isolation summary">
+        <div id="vault-architecture" class="vault-architecture vault-arch-grid" aria-label="Architecture and isolation summary">
           <div class="vault-arch-card">
             <div class="vault-arch-title">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -540,7 +540,7 @@
               <label for="vault-add-value">API key</label>
               <div class="vault-input-wrap">
                 <input id="vault-add-value" type="password" autocomplete="off" spellcheck="false" placeholder="paste the service's key">
-                <button id="vault-add-toggle" class="btn small" type="button" aria-label="Show key">Show</button>
+                <button id="vault-add-toggle" class="btn small ghost" type="button" aria-label="Show key">Show</button>
               </div>
             </div>
             <div class="field">
@@ -550,9 +550,9 @@
             <div class="field">
               <label for="vault-add-auth-type">Proxy injection</label>
               <select id="vault-add-auth-type" class="input-select">
-                <option value="bearer" selected>Bearer header (Authorization: Bearer $VAULT{KEY})</option>
+                <option value="bearer" selected>Bearer token (Authorization)</option>
                 <option value="header">Custom header ($VAULT{KEY})</option>
-                <option value="query">URL query param (?param=$VAULT{KEY})</option>
+                <option value="query">Query parameter (?key=$VAULT{KEY})</option>
               </select>
             </div>
             <div class="field">
@@ -569,7 +569,7 @@
         <div id="vault-ledger-section" class="vault-ledger-section">
           <div class="vault-ledger-header">
             <h3>Proxied request log</h3>
-            <button id="vault-ledger-clear" class="btn small" type="button">Clear log</button>
+            <button id="vault-ledger-clear" class="btn small ghost" type="button">Clear log</button>
           </div>
           <p class="muted">Live audit trail of requests proxied through the Secure Enclave. Headers, bodies, and credentials are never recorded.</p>
           <div id="vault-ledger" class="vault-ledger"></div>

@@ -3585,7 +3585,7 @@ function vaultCard(item) {
 
   const toggle = document.createElement("button");
   toggle.type = "button";
-  toggle.className = "btn small vault-toggle";
+  toggle.className = "btn small ghost vault-toggle";
   toggle.textContent = "Show";
   toggle.addEventListener("click", () => {
     input.type = input.type === "password" ? "text" : "password";
@@ -3630,8 +3630,12 @@ function vaultCard(item) {
 
   const test = document.createElement("button");
   test.type = "button";
-  test.className = "btn small vault-test";
+  test.className = "btn small ghost vault-test";
   test.textContent = "Test connection";
+  if (!item.configured) {
+    test.disabled = true;
+    test.title = "Save a key first to test the connection";
+  }
   test.addEventListener("click", async () => {
     test.disabled = true;
     setVaultStatus(`Testing ${item.keyId}…`, false);
@@ -3647,7 +3651,7 @@ function vaultCard(item) {
   if (item.configured) {
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.className = "btn small vault-remove";
+    remove.className = "btn small ghost vault-remove";
     remove.textContent = "Remove";
     remove.addEventListener("click", async () => {
       remove.disabled = true;
@@ -3683,7 +3687,7 @@ function renderVaultLedger(ledgerEntries) {
 
   const thead = document.createElement("thead");
   const trHead = document.createElement("tr");
-  for (const col of ["Time", "Service / Key", "Method", "Target & Path", "Status", "Latency"]) {
+  for (const col of ["Time", "Service", "Method", "Target & Path", "Status", "Latency"]) {
     const th = document.createElement("th");
     th.textContent = col;
     trHead.append(th);
@@ -3710,6 +3714,9 @@ function renderVaultLedger(ledgerEntries) {
     const tdPath = document.createElement("td");
     const codePath = document.createElement("code");
     codePath.textContent = `${entry.origin || ""}${entry.path || "/"}`;
+    codePath.style.whiteSpace = "normal";
+    codePath.style.overflowWrap = "anywhere";
+    codePath.style.wordBreak = "break-all";
     tdPath.append(codePath);
 
     const tdStatus = document.createElement("td");

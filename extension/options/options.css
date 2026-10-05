@@ -1837,11 +1837,18 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
 }
 
 /* ── Web services & Secure Enclave proxy (chrome-agent-platform-vyhl) ── */
-.vault-architecture {
+.vault-architecture,
+.vault-arch-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
   margin: 12px 0 20px;
+}
+@media (max-width: 680px) {
+  .vault-architecture,
+  .vault-arch-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .vault-arch-card {
   padding: 12px 14px;
@@ -2005,6 +2012,11 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   font: inherit;
   font-size: 12px;
 }
+.vault-add-grid select,
+.vault-add .input-select {
+  padding-right: 28px;
+  text-overflow: ellipsis;
+}
 .vault-input-wrap {
   display: flex;
   gap: 4px;
@@ -2034,6 +2046,7 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   margin-top: 10px;
   max-height: 280px;
   overflow-y: auto;
+  overflow-x: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--panel);
@@ -2048,6 +2061,11 @@ span.usage-swatch.usage-bar-out { background: var(--usage-out, color-mix(in okla
   padding: 6px 10px;
   text-align: left;
   border-bottom: 1px solid var(--border);
+}
+.vault-ledger-table code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .vault-ledger-table th {
   background: var(--surface-subtle, rgba(128, 128, 128, 0.05));
