@@ -22,6 +22,7 @@ import { assertNoDynamicEvaluators } from "../scripts/lib/dynamic-evaluator-scan
 import {
   assertBundleBudget,
   BUDGET_REPORTED_BUNDLES,
+  bundleBudgetReport,
   duplicateAiSdkInputs,
   duplicateStoreInputs,
   formatContributors,
@@ -56,18 +57,22 @@ Deno.test("bundle budget: topContributors sorts largest-first and truncates", ()
   assertEquals(topContributors({}), []);
 });
 
-Deno.test("bundle budget: under-budget passes; over-budget throws naming file, actual, budget and contributors", () => {
+Deno.test("bundle budget: sizes return measured bytes; an over-reference bundle is REPORTED, not thrown (owner decision 2026-10-05)", () => {
   assertEquals(assertBundleBudget({ label: "x.js", bytes: 100 }), 100);
   assertEquals(assertBundleBudget({ label: "x.js", bytes: 3_000_000 }), 3_000_000, "the exact boundary passes");
-
+  // OWNER DECISION (Paul, 2026-10-05): a size over the reference no longer
+  // fails the build — it is reported. The falsifiable property is now: the
+  // call RETURNS the size (never throws for size) and the REPORT names the
+  // bundle, the actual size, the reference size and the top contributors.
   const metafile = { inputs: { "huge-dep.js": { bytes: 9_999_999 } } };
-  const error = assertThrows(() =>
-    assertBundleBudget({ label: "background/service-worker.js", bytes: 4_500_000, metafile })
-  );
-  assertStringIncludes(error.message, "4_500_000".replaceAll("_", ""), "names the actual size");
-  assertStringIncludes(error.message, "3000000", "names the budget");
-  assertStringIncludes(error.message, "huge-dep.js", "names the top contributor");
-  assertStringIncludes(error.message, "service-worker", "names the bundle");
+  assertEquals(assertBundleBudget({ label: "background/service-worker.js", bytes: 4_500_000, metafile }), 4_500_000, "an over-reference size returns instead of throwing");
+  const report = bundleBudgetReport({ label: "background/service-worker.js", bytes: 4_500_000, metafile });
+  assertStringIncludes(report, "4500000", "the report names the actual size");
+  assertStringIncludes(report, "3000000", "the report names the reference size");
+  assertStringIncludes(report, "huge-dep.js", "the report names the top contributor");
+  assertStringIncludes(report, "service-worker", "the report names the bundle");
+  assertStringIncludes(report, "reported, not enforced", "the report states the policy");
+  assertEquals(bundleBudgetReport({ label: "x.js", bytes: 100 }), "", "an under-reference bundle reports nothing");
 
   assertThrows(() => assertBundleBudget({ label: "x.js", bytes: NaN }), undefined, "not measurable");
 });
@@ -119,10 +124,11 @@ Deno.test("bundle budget: no shipped source or built bundle references a CDN (Py
   }
 });
 
-Deno.test("bundle budget: a store-built dist ships a minified SW at or under budget (when present)", async () => {
+Deno.test("bundle budget: a store-built dist reports the SW size against the reference (report-only; owner decision 2026-10-05)", async () => {
   // build-bootstrap regenerates dist with --target=store ahead of this file
   // in the serial suite; when the marker says store, the REAL bytes are
-  // gated here too (CI-visible). A developer or absent dist skips honestly.
+  // REPORTED here (sizes are measured and reported, not enforced). A
+  // developer or absent dist skips honestly.
   let marker;
   try {
     marker = JSON.parse(await Deno.readTextFile("extension/dist/dist.complete"));
@@ -131,10 +137,9 @@ Deno.test("bundle budget: a store-built dist ships a minified SW at or under bud
   }
   if (marker?.target !== "store") return; // developer build: unminified by design
   const size = (await Deno.stat("extension/dist/background/service-worker.js")).size;
-  assert(
-    size <= STORE_SW_BUDGET_BYTES,
-    `store-built SW bundle is ${size} bytes — over the ${STORE_SW_BUDGET_BYTES} budget`,
-  );
+  const report = bundleBudgetReport({ label: "background/service-worker.js", bytes: size });
+  if (report) console.log(report);
+  else console.log(`bundle budget: store background/service-worker.js ${size} bytes <= ${STORE_SW_BUDGET_BYTES} reference`);
 });
 
 // ── chrome-agent-platform-9epn.4: a ceiling for EVERY surface ──────────────
@@ -162,25 +167,28 @@ Deno.test("9epn.4 bundle budget: every generated bundle has a ceiling and the ga
     assert(Number.isSafeInteger(budget) && budget > 0, `${surface} has a positive integer ceiling (got ${budget})`);
   }
   for (const [label, budgetBytes] of entries) {
-    // At the ceiling: passes and returns the size.
-    assertEquals(assertBundleBudget({ label, bytes: budgetBytes, budgetBytes }), budgetBytes, `${label}: the exact ceiling passes`);
-    // One byte over: throws, naming the bundle, the size and the ceiling.
-    const error = assertThrows(() => assertBundleBudget({ label, bytes: budgetBytes + 1, budgetBytes }));
-    assertStringIncludes(error.message, label, `${label}: the failure names the bundle`);
-    assertStringIncludes(error.message, String(budgetBytes + 1), `${label}: the failure names the actual size`);
-    assertStringIncludes(error.message, String(budgetBytes), `${label}: the failure names the ceiling`);
+    // At the reference: passes and returns the size.
+    assertEquals(assertBundleBudget({ label, bytes: budgetBytes, budgetBytes }), budgetBytes, `${label}: the exact reference passes`);
+    // One byte over (owner decision 2026-10-05): REPORTED, not thrown — the
+    // call returns the size and the report names bundle, size and reference.
+    assertEquals(assertBundleBudget({ label, bytes: budgetBytes + 1, budgetBytes }), budgetBytes + 1, `${label}: an over-reference size returns instead of throwing`);
+    const report = bundleBudgetReport({ label, bytes: budgetBytes + 1, budgetBytes });
+    assertStringIncludes(report, label, `${label}: the report names the bundle`);
+    assertStringIncludes(report, String(budgetBytes + 1), `${label}: the report names the actual size`);
+    assertStringIncludes(report, String(budgetBytes), `${label}: the report names the reference size`);
+    assertEquals(bundleBudgetReport({ label, bytes: budgetBytes, budgetBytes }), "", `${label}: at or under the reference reports nothing`);
   }
 });
 
-Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, each at or under its ceiling (store build)", async () => {
+Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, reported against its reference (store build; report-only)", async () => {
   // build-bootstrap regenerates dist with --target=store ahead of this file in
-  // the serial suite. An ABSENT marker is a failure here, not a skip: a budget
-  // check that cannot read its subject must refuse rather than pass.
+  // the serial suite. An ABSENT marker is a failure here, not a skip: a size
+  // report that cannot read its subject must refuse rather than pass.
   let marker;
   try {
     marker = JSON.parse(await Deno.readTextFile("extension/dist/dist.complete"));
   } catch {
-    throw new Error("9epn.4: dist.complete is missing — run `npm run build:production` first; the per-surface ceilings are held against the sizes the marker records.");
+    throw new Error("9epn.4: dist.complete is missing — run `npm run build:production` first; the per-surface sizes are reported from the marker.");
   }
   const recorded = Array.isArray(marker?.outputs) ? marker.outputs : [];
   assertEquals(
@@ -193,15 +201,16 @@ Deno.test("9epn.4 bundle budget: dist.complete records every generated bundle, e
     assert(Number.isSafeInteger(size) && size > 0, `${path}: the marker records a positive byte size (got ${size})`);
     assertEquals(size, (await Deno.stat(`extension/dist/${path}`)).size, `${path}: the recorded size is the shipped file's size`);
   }
-  if (marker.target !== "store") return; // developer build: unminified by design; the ceilings measure the store bytes
-  // One assertion per budgeted entry, held against the RECORDED store size.
+  if (marker.target !== "store") return; // developer build: unminified by design; the references measure the store bytes
+  // OWNER DECISION (Paul, 2026-10-05): sizes over a reference are REPORTED,
+  // not gated. The report stays LOUD — one line per budgeted entry, so
+  // growth is visible in every suite run — but it can never redden the build.
   for (const [path, budget] of Object.entries(STORE_BUNDLE_BUDGETS)) {
     const size = sizeOf.get(path);
     assert(size !== undefined, `${path}: budgeted but not recorded in dist.complete`);
-    assert(
-      size <= budget,
-      `${path}: the store build shipped ${size} bytes — over its ${budget} ceiling (STORE_BUNDLE_BUDGETS in scripts/bundle-budget.mjs). Cut the growth, or raise the ceiling as a named owner decision.`,
-    );
+    const report = bundleBudgetReport({ label: path, bytes: size, budgetBytes: budget });
+    if (report) console.log(report);
+    else console.log(`bundle budget: store ${path} ${size} bytes <= ${budget} reference`);
   }
 });
 

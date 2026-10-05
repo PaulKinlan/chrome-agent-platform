@@ -35,7 +35,8 @@ import {
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** The pinned ceilings: post-9epn.5 all five pages are bundled into
- * dist/*.bundle.js (covered by STORE_BUNDLE_BUDGETS). The census remains active
+ * dist/*.bundle.js (sizes reported against STORE_BUNDLE_BUDGETS — owner
+ * decision 2026-10-05: reported, not enforced). The census remains active
  * to ensure any newly added unbundled page is detected and pinned. */
 const PAGE_CEILING_BYTES: Record<string, number> = {};
 

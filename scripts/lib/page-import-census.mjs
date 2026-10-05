@@ -2,7 +2,10 @@
 // UNBUNDLED extension pages (chrome-agent-platform-9epn.4, perf audit #5).
 //
 // The bundled surfaces (ntp / sidepanel / options / diff-core / SW / worker)
-// have a byte ceiling the store build enforces (scripts/bundle-budget.mjs).
+// have a byte reference the store build reports (scripts/bundle-budget.mjs;
+// owner decision 2026-10-05: sizes are measured and reported, not enforced).
+// THIS census is still a hard pin: the raw pages' static-import totals are
+// held at their measured values by tests/unbundled-page-census.test.ts.
 // The pages that still load raw ES modules — artifact, artifacts, directory,
 // privacy, offscreen — ship as 18–22 separate requests and had no number
 // anyone watched. This module walks each page's <script type="module">

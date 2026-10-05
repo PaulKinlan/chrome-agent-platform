@@ -129,11 +129,11 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 
 ## Class 4 — Performance Ceilings & Operational Limits
 
-### R18 (H). Service Worker bundle budget ceiling with near-zero slack
-- **Risk:** The Chrome Web Store build strictly enforces `STORE_SW_BUDGET_BYTES = 3_000_000` (3.0 MB minified). As of version `0.3.364`, the built store bundle measures **2,999,909 bytes**, leaving exactly **91 bytes of headroom**. Multiple recent commits (`n0sh`, `repair-main`) came within bytes of breaking the build, necessitating string abbreviations. Any new feature, dependency, or error message added to `service-worker.js` will cause the store build to fail unless equivalent bytes are refactored out.
-- **Lives at:** `build.mjs:547-563` (`assertBundleBudget`), `scripts/bundle-budget.mjs:16` (`STORE_SW_BUDGET_BYTES = 3_000_000`), `tests/bundle-budget.test.ts:25-35`.
-- **Mitigation:** Mandatory build-time budget assertion; top-contributor metafile reporting; ongoing route modularization (`routes/`) to extract logic into separate modules.
-- **Open question:** The Service Worker bundle cannot sustain any further feature additions without major refactoring: which existing subsystems (such as Pyodide setup, legacy catalog generators, or inline handlers) should be moved to the Options or offscreen bundles?
+### R18 (M). Service Worker bundle size watched at near-zero slack (reported, not enforced)
+- **Risk:** The Chrome Web Store build MEASURES the service-worker bundle against `STORE_SW_BUDGET_BYTES = 3_000_000` (3.0 MB minified; the 2026-10-01 audit measured 2.54 MB, though periods of near-zero headroom — 91 bytes at `0.3.364` — have recurred). Since the owner decision of 2026-10-05 ("The limits make no sense anymore") an over-reference bundle no longer FAILS the build: the size is printed with its top contributors and recorded in `dist.complete`. The operational risk is now UNSEEN growth — bloat ships unless someone reads the report — and the build still fails closed on the dependency-integrity invariants (duplicated instances, lockfile drift).
+- **Lives at:** `build.mjs` (`assertBundleBudget` + `bundleBudgetReport`), `scripts/bundle-budget.mjs:16` (`STORE_SW_BUDGET_BYTES = 3_000_000`), `tests/bundle-budget.test.ts` (report-only against `dist.complete`).
+- **Mitigation:** Build-time size REPORT with top-contributor metafile breakdown; `dist.complete` records every bundle's size + sha256; the suite prints each bundle against its reference; ongoing route modularization (`routes/`) to extract logic into separate modules.
+- **Open question:** With sizes reported rather than enforced, what review step (if any) should treat a sustained over-reference bundle as a finding rather than noise?
 
 ### R19 (M). Monolithic data archive 512 MiB / 100k file caps & IPC buffering (2g90)
 - **Risk:** The existing "Export All" and "Import All" features buffer the entire OPFS file tree into in-memory base64 JSON strings transmitted over `chrome.runtime.sendMessage`. Profiles exceeding Chrome's ~64 MiB IPC buffer limit fail immediately, and large profiles risk V8 string allocation errors. Furthermore, `data-archive.js` enforces arbitrary caps of 512 MiB and 100,000 files, preventing backups of large user profiles.

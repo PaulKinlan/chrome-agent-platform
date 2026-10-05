@@ -106,7 +106,7 @@ Four architectural options were evaluated to resolve JavaScript modules inside t
 
 ### Option D: Host-Side Bundling / Transpilation (Rollup/esbuild in Offscreen Host)
 - **Mechanism:** The offscreen document runs a lightweight bundler (e.g. esbuild-wasm or a minimal single-pass module resolver) that rolls the script and its dependencies into a single standalone bundle before sending it to the sandbox.
-- **Cost / Complexity:** Prohibitive. Squeezing a bundler into the extension adds significant bundle size (violating the razor-thin Store SW bundle budget of 3.0 MB) and introduces complex AST parsing overhead.
+- **Cost / Complexity:** Prohibitive. Squeezing a bundler into the extension adds significant bundle size (pushing the Store SW bundle past its 3.0 MB reference) and introduces complex AST parsing overhead.
 - **Security:** Unnecessary complexity that duplicates browser-native module resolution.
 
 ---

@@ -181,13 +181,18 @@ whole-suite mutant run); **inspection** means read from the source, not executed
 - **Subject moves:** LOUD-BY-ACCIDENT: the message names marker authority, not your edit.
   This is also why those files are serial-phase: the marker is shared state.
 
-## 9a. The per-surface bundle ceilings and the unbundled-page census (9epn.4)
+## 9a. The per-surface bundle references and the unbundled-page census (9epn.4)
 
 - **Watches:** `STORE_BUNDLE_BUDGETS` (scripts/bundle-budget.mjs) — the store build
-  fails over any ceiling and `tests/bundle-budget.test.ts` holds the sizes recorded in
-  `dist.complete` against the same table. `tests/unbundled-page-census.test.ts` pins
-  the transitive STATIC-import byte total of each raw-module page (artifact, artifacts,
-  directory, privacy, offscreen) at its measured value with **zero headroom**.
+  REPORTS every bundle against its reference (owner decision Paul, 2026-10-05:
+  sizes are measured and reported, not enforced; `assertBundleBudget` still
+  fails closed on duplicated/drifted dependency inputs) and
+  `tests/bundle-budget.test.ts` prints the sizes recorded in
+  `dist.complete` against the same table (report-only).
+  `tests/unbundled-page-census.test.ts` pins
+  the transitive STATIC-import byte total of each raw-module page (artifact,
+  artifacts, directory, privacy, offscreen) at its measured value with
+  **zero headroom**.
 - **Owed by a re-anchor:** any byte added to a module in those graphs — above all
   `extension/shared/components.js`, which every page imports — reds the census. That is
   the design (growth must be accepted consciously), not a flake: re-measure with

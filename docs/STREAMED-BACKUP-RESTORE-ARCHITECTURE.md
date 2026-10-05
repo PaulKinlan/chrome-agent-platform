@@ -72,10 +72,9 @@ In the current implementation (originating from `chrome-agent-platform-ykb`), da
    The backup and restore operations must run completely client-side inside the user's browser. No external proxy, cloud bucket, or remote sync server is involved.
 2. **No Arbitrary Caps**:
    The solution must not simply raise the limit from 512 MiB to 1 GiB or 2 GiB. It must support arbitrarily large user profiles with $O(1)$ constant memory overhead.
-3. **Strict Service Worker Bundle Budget (Critical)**:
-   The Store Service Worker bundle budget is strictly capped at **3,000,000 bytes**.
-   Following recent landings, the unminified Store SW bundle currently sits with **under 350 bytes of headroom**.
-   **Invariant:** The streaming archive implementation **MUST NOT** be added to `service-worker.js`.
+3. **Strict Service Worker Bundle Discipline (Critical)**:
+   The Store Service Worker bundle reference size is **3,000,000 bytes** (measured and reported since the owner decision of 2026-10-05 — no longer a hard build cap, but growth stays visible in every build report and suite run).
+   **Invariant:** The streaming archive implementation **MUST NOT** be added to `service-worker.js` — for bundle discipline AND the MV3 lifecycle constraint below.
 4. **MV3 Background Lifecycle**:
    Service workers are subject to termination after 30 seconds of perceived inactivity. Long-running multi-gigabyte streams inside the Service Worker risk sudden termination unless complex keep-alive ports are maintained.
 5. **Origin-Keyed Storage Sharing**:

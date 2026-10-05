@@ -724,13 +724,17 @@ try {
       assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
     }
 
-    // The bundle budget gate (CAP-FB-20260830-BUNDLE-BUDGET-01, extended to
-    // every surface by chrome-agent-platform-9epn.4): the store build FAILS
-    // when ANY generated bundle exceeds its ceiling in STORE_BUNDLE_BUDGETS
-    // and names the top contributors of that bundle; the developer build warns
-    // (its unminified bytes are larger by design).
+    // The bundle budget report + integrity gate (CAP-FB-20260830-BUNDLE-
+    // BUDGET-01, extended to every surface by chrome-agent-platform-9epn.4;
+    // OWNER DECISION Paul, 2026-10-05: sizes are MEASURED AND REPORTED, not
+    // enforced): every generated bundle's size is checked against its
+    // reference in STORE_BUNDLE_BUDGETS — assertBundleBudget still fails the
+    // build on the dependency-integrity invariants (duplicated instances,
+    // lockfile drift) — and an over-reference bundle prints its top
+    // contributors instead of failing the build. The developer build notes
+    // its unminified bytes (larger by design).
     {
-      const { assertBundleBudget, STORE_BUNDLE_BUDGETS, STORE_SW_BUDGET_BYTES } = await import("./scripts/bundle-budget.mjs");
+      const { assertBundleBudget, bundleBudgetReport, STORE_BUNDLE_BUDGETS, STORE_SW_BUDGET_BYTES } = await import("./scripts/bundle-budget.mjs");
       const metafileFor = {
         "background/service-worker.js": swResult.metafile,
         "workers/agent-worker.js": workerResult.metafile,
@@ -753,10 +757,12 @@ try {
       } else {
         for (const [rel, budgetBytes] of Object.entries(STORE_BUNDLE_BUDGETS)) {
           const metafile = metafileFor[rel];
-          if (!metafile) throw new Error(`bundle budget: ${rel} has a ceiling but no build result — build.mjs must bundle every budgeted surface`);
+          if (!metafile) throw new Error(`bundle budget: ${rel} has a reference size but no build result — build.mjs must bundle every budgeted surface`);
           const size = (await stat(path.join(STAGE, rel))).size;
           assertBundleBudget({ label: rel, bytes: size, budgetBytes, metafile });
-          console.log(`bundle budget: store ${rel} ${size} bytes <= ${budgetBytes} budget`);
+          const over = bundleBudgetReport({ label: rel, bytes: size, budgetBytes, metafile });
+          if (over) console.log(over);
+          else console.log(`bundle budget: store ${rel} ${size} bytes <= ${budgetBytes} budget`);
         }
       }
     }

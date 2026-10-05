@@ -36,7 +36,7 @@ export const SERIAL_REASONS = {
   "tests/select-tests-residue.test.ts": "plants build residue under extension/ to prove test:changed ignores it (removed in finally)",
   // 76hu guard caught this post-merge arrival from main (390b2b3a): it stats
   // the built SW bundle and the dist.complete marker — shared build artifacts.
-  "tests/bundle-budget.test.ts": "asserts the built dist bundle size + dist-complete marker (races with rebuilds)",
+  "tests/bundle-budget.test.ts": "reports the built dist bundle sizes + asserts the dist-complete marker integrity (races with rebuilds)",
   // 76hu: the guard's reads-extension/dist class pins these two (previously
   // parallel; both consume the built diff-core bundle, a shared artifact).
   "tests/diff-core.test.ts": "imports/reads the built extension/dist diff-core bundle (shared build artifact)",

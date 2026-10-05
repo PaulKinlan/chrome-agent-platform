@@ -254,7 +254,10 @@ defaults in [docs/OPEN-QUESTIONS.md](docs/OPEN-QUESTIONS.md).
       mount cost, journal growth. **Landed first (9epn.4): a store ceiling for EVERY
       generated bundle**, not just the SW — options 880 kB, NTP 870 kB, side panel 660 kB,
       diff-core 17 kB, agent worker 2.0 MB, SW 3.0 MB (`STORE_BUNDLE_BUDGETS`); the build
-      fails over any of them, `dist.complete` records all six sizes, and the raw-module
+      reports every bundle's size against its reference (owner decision
+      2026-10-05: measured and reported, not enforced) and still fails closed on
+      duplicated/drifted dependency inputs, `dist.complete` records all six
+      sizes, and the raw-module
       pages (artifact / artifacts / directory / privacy / offscreen, ~1 MB of static
       imports each, `components.js` 772 kB of it) are pinned at zero headroom so growth is
       visible until 9epn.6 splits `components.js` and ratchets the ceilings down.
