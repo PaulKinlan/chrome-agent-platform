@@ -264,7 +264,7 @@ try {
   for (let i = 0; i < SEED; i++) {
     const r = await adminMsg({ type: "asset.create", origin: "master", assetType: "text", name: `gallery-seed-${String(i).padStart(2, "0")}`, content: `seed artifact ${i}` });
     if (!r?.ok) throw new Error(`asset.create ${i} failed: ${JSON.stringify(r)}`);
-    if (i % 10 === 9) console.log(`  seeded ${i + 1}/${SEED}`);
+    if (i % 5 === 4 || i === SEED - 1) console.log(`  seeded ${i + 1}/${SEED}`);
   }
   const listed = await adminMsg({ type: "asset.list", origin: "master" });
   const listedCount = (listed?.assets ?? []).length;
@@ -278,10 +278,12 @@ try {
   const pageT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` })).result.targetId;
   const pageS = await attach(pageT);
   if (!(await waitFor(pageS, CHROME_READY))) throw new Error(`the measurement page never exposed chrome.runtime — context says ${await probe(pageS)}`);
+  console.log("stage: seed page ready, measurement page ready");
   if (!(await waitFor(pageS, `!!customElements.get("artifact-card")`))) throw new Error("the measurement page never defined artifact-card");
   await evalInT(pageS, OBSERVER, 15000, "install observer");
   if (!(await evalIn(pageS, `!!globalThis.__capPreviewReads`))) throw new Error("the observer did not install");
 
+  console.log(`stage: driving the real gallery render (seed=${SEED}, pool=${CONCURRENCY})`);
   const result = await evalInT(pageS, drive(SEED), 60000, "gallery drive");
   const want = Math.min(SEED, MAX_PREVIEWS);
   const batches = Math.max(1, Math.ceil(result.fetched / CONCURRENCY));
@@ -325,4 +327,8 @@ try {
   await cleanup();
 }
 
-if (fail > 0) Deno.exit(1);
+// Natural exit, NOT Deno.exit(1): with stdout redirected to a file, Deno.exit
+// discards whatever is still buffered, so a completed run that failed a check
+// vanished entirely — rc=1 and an empty log, which reads like a crash and is the
+// worst possible shape for evidence. Setting exitCode lets the runtime flush.
+Deno.exitCode = fail > 0 ? 1 : 0;
