@@ -10,68 +10,101 @@ import { isRamBacked, durableRoot, durableDir } from "../scripts/lib/durable-roo
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
+// ── the env-dependent cases run in a CHILD process (chrome-agent-platform-5rwd)
+// CAP_DURABLE_ROOT is process-global, and `deno test --parallel` interleaves
+// test MODULES inside one process: while this file held
+// CAP_DURABLE_ROOT=/proc/cap-chp-impossible (one synchronous assertThrows, and
+// microsecoonds wide in practice), tests/dist-note-contract.test.ts called
+// durableDir() and died with ENOENT under /proc (full-suite witness on record;
+// reproduced deterministically by widening the window to 400 ms — 2 of its
+// tests red, 3 runs out of 3). A child process has its OWN environment, so a
+// case can poison its own durable root without any concurrently running file
+// observing it, and the two sibling cases below (a VALID probe root and an
+// EMPTY one) had the same exposure with a quieter failure mode: a concurrent
+// reader would silently resolve the wrong root instead of throwing.
+// The parent only ASSERTS on what the child reports, so the outcomes stay here.
+type Probe = { value?: unknown; threw?: string };
+let probeRun: Promise<Record<string, Probe>> | null = null;
+
+/** Resolve every env-dependent durable-root case in one throwaway child. */
+function probeEnvCases(): Promise<Record<string, Probe>> {
+  return probeRun ??= (async () => {
+    const moduleUrl = new URL("../scripts/lib/durable-root.mjs", import.meta.url).href;
+    // NOTE: no ${…} inside the child source — the only interpolations are the
+    // JSON.stringify ones below, so the child is plain JS with string concat.
+    const script = `(async () => {
+      const mod = await import(${JSON.stringify(moduleUrl)});
+      const probe = (fn) => { try { return { value: fn() }; } catch (e) { return { threw: String((e && e.message) || e) }; } };
+      const set = (v) => { if (v === undefined) Deno.env.delete("CAP_DURABLE_ROOT"); else Deno.env.set("CAP_DURABLE_ROOT", v); };
+      const out = {};
+      set(undefined);
+      out.defaultRoot = probe(() => mod.durableRoot());
+      set("/home/paulkinlan/cap-evidence-test-probe");
+      out.override = probe(() => mod.durableRoot());
+      set("");
+      out.empty = probe(() => mod.durableRoot());
+      set("   ");
+      out.blank = probe(() => mod.durableRoot());
+      set("/tmp/cap-chp-must-refuse");
+      out.tmpfs = probe(() => mod.durableRoot());
+      set("/dev/shm/cap-chp-must-refuse");
+      out.shm = probe(() => mod.durableRoot());
+      set("/proc/cap-chp-impossible");
+      out.impossible = probe(() => mod.durableDir("probe"));
+      console.log("PROBE " + JSON.stringify(out));
+    })()`;
+    const { stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+      args: ["eval", script],
+      // Its own environment: the parent's HOME (the default root is asserted
+      // against it) and NOTHING else — CAP_DURABLE_ROOT is set only inside the
+      // child, which is the whole point.
+      clearEnv: true,
+      env: { HOME: Deno.env.get("HOME") ?? "/home/paulkinlan" },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const text = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
+    const line = text.split("\n").find((l) => l.startsWith("PROBE "));
+    assert(line, `the child probe must report; got:\n${text.slice(0, 600)}`);
+    return JSON.parse(line.slice("PROBE ".length)) as Record<string, Probe>;
+  })();
+}
+
 Deno.test("isRamBacked identifies the tmpfs /tmp and disk-backed $HOME", () => {
   assertEquals(isRamBacked("/tmp"), true, "/tmp is tmpfs on the build host");
   assertEquals(isRamBacked("/dev/shm"), true, "/dev/shm is tmpfs");
   assertEquals(isRamBacked(Deno.env.get("HOME") ?? "/home"), false, "$HOME is disk");
 });
 
-Deno.test("durableRoot defaults to $HOME/cap-evidence (durable), honoring CAP_DURABLE_ROOT", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    Deno.env.delete("CAP_DURABLE_ROOT");
-    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
-    Deno.env.set("CAP_DURABLE_ROOT", "/home/paulkinlan/cap-evidence-test-probe");
-    assertEquals(durableRoot(), "/home/paulkinlan/cap-evidence-test-probe");
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
-  }
+Deno.test("durableRoot defaults to $HOME/cap-evidence (durable), honoring CAP_DURABLE_ROOT", async () => {
+  const probed = await probeEnvCases();
+  assertEquals(probed.defaultRoot.value, `${Deno.env.get("HOME")}/cap-evidence`);
+  assertEquals(probed.override.value, "/home/paulkinlan/cap-evidence-test-probe");
 });
 
-Deno.test("durableRoot treats an EMPTY CAP_DURABLE_ROOT as unset — never a relative CWD path", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    // CAP_DURABLE_ROOT="" is the classic result of shell parameter expansion
-    // of an unset var; ?? alone keeps "", and join("", …) would then yield a
-    // RELATIVE path silently (review P2 on 62696628). Pin: empty/whitespace
-    // means unset → the default.
-    Deno.env.set("CAP_DURABLE_ROOT", "");
-    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
-    Deno.env.set("CAP_DURABLE_ROOT", "   ");
-    assertEquals(durableRoot(), `${Deno.env.get("HOME")}/cap-evidence`);
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
-  }
+Deno.test("durableRoot treats an EMPTY CAP_DURABLE_ROOT as unset — never a relative CWD path", async () => {
+  // CAP_DURABLE_ROOT="" is the classic result of shell parameter expansion
+  // of an unset var; ?? alone keeps "", and join("", …) would then yield a
+  // RELATIVE path silently (review P2 on 62696628). Pin: empty/whitespace
+  // means unset → the default.
+  const probed = await probeEnvCases();
+  assertEquals(probed.empty.value, `${Deno.env.get("HOME")}/cap-evidence`);
+  assertEquals(probed.blank.value, `${Deno.env.get("HOME")}/cap-evidence`);
 });
 
-Deno.test("durableRoot THROWS on a RAM-backed root — no silent tmpfs fallback", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    Deno.env.set("CAP_DURABLE_ROOT", "/tmp/cap-chp-must-refuse");
-    const err = assertThrows(() => durableRoot());
-    assertStringIncludes((err as Error).message, "RAM-backed");
-    Deno.env.set("CAP_DURABLE_ROOT", "/dev/shm/cap-chp-must-refuse");
-    assertThrows(() => durableRoot());
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
-  }
+Deno.test("durableRoot THROWS on a RAM-backed root — no silent tmpfs fallback", async () => {
+  const probed = await probeEnvCases();
+  assertStringIncludes(probed.tmpfs.threw ?? "", "RAM-backed");
+  assert(probed.shm.threw !== undefined, "a /dev/shm root must throw too");
 });
 
-Deno.test("durableDir fails loudly when the durable location is unavailable", () => {
-  const saved = Deno.env.get("CAP_DURABLE_ROOT");
-  try {
-    // /proc is a read-only virtual filesystem: mkdir MUST fail, and the error
-    // must surface (this is the bead's falsification: evidence does NOT
-    // silently land back on /tmp when the durable location is gone).
-    Deno.env.set("CAP_DURABLE_ROOT", "/proc/cap-chp-impossible");
-    assertThrows(() => durableDir("probe"));
-  } finally {
-    if (saved === undefined) Deno.env.delete("CAP_DURABLE_ROOT");
-    else Deno.env.set("CAP_DURABLE_ROOT", saved);
-  }
+Deno.test("durableDir fails loudly when the durable location is unavailable", async () => {
+  // /proc is a read-only virtual filesystem: mkdir MUST fail, and the error
+  // must surface (this is the bead's falsification: evidence does NOT
+  // silently land back on /tmp when the durable location is gone).
+  const probed = await probeEnvCases();
+  assert(probed.impossible.threw !== undefined, "an unavailable durable root must throw");
+  assertStringIncludes(probed.impossible.threw ?? "", "/proc/cap-chp-impossible");
 });
 
 // --- Static guard (widened): no shipped source materializes evidence/scratch
