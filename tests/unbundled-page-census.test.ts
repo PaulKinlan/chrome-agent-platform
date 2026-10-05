@@ -2,8 +2,9 @@
 // pages that still load raw ES modules (chrome-agent-platform-9epn.4, perf
 // audit #5).
 //
-// The bundled surfaces have a store ceiling the build enforces
-// (tests/bundle-budget.test.ts). artifact / artifacts / directory / privacy /
+// The bundled surfaces have size references the store build REPORTS
+// (tests/bundle-budget.test.ts; owner decision 2026-10-05: measured and
+// reported, not enforced). artifact / artifacts / directory / privacy /
 // offscreen ship as ~20 separate module requests, ~1 MB each, and nobody
 // watched the number. Until the bundling bead lands this file PINS each
 // page's transitive static-import byte total at exactly the measured value
