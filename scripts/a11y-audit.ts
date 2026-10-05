@@ -521,12 +521,14 @@ async function main() {
     check("settings: has focusable elements + first is not body", a.focus.total > 0 && a.focus.first !== "none", a.focus);
     // The canonical <switch-toggle> is a shared app-wide control (40x24 track
     // since chrome-agent-platform-716s.11 grew it from 36x20 for the >=24x24
-    // hit-area rule). WCAG 2.5.8 exempts targets constrained by a control's
-    // established design; resizing it app-wide is a separate visual decision
-    // (not this entry). The audit's smallTargets rows for switches carry the
-    // aria-label, e.g. "button[Provider server tool] 40x24" — identify them by
-    // the 40x24 shape, so a switch that shrinks BACK to 36x20 is reported rather
-    // than excused.
+    // hit-area rule). The filter below aligns with the canonical 40x24 shape, but
+    // note the true mechanism (chrome-agent-platform-csr9 review finding): on this
+    // freshly opened Settings page, multi-section lazy loading leaves all switches in
+    // unrendered sections, so no switch is ever measured here. The historical verdict
+    // flip came solely from provider-key links (.get-key) reaching >=24px height;
+    // scripts/component-gallery-smoke.ts is the actual guard that asserts switch
+    // sizing (40x24 track, 18x18 knob). The filter is kept for consistency if
+    // landing-section switches are ever added.
     const nonSwitch = (a.smallTargets || []).filter((s: string) => !/ 40x24$/.test(s));
     check("settings: no interactive element under 24x24 px (canonical switch-toggle allowed)", nonSwitch.length === 0, nonSwitch);
 
