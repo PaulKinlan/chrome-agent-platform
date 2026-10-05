@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.572] — 2026-10-05
+- The WebAssembly tool catalogue now says what actually ships, so entries that are only proposed or not yet built are no longer described as available.
+
 ## [0.3.571] — 2026-10-05
 - In-context Artifacts explorer renders natively within the Hub DOM without an iframe, eliminating cross-document message hops on Reuse and retiring view resize thrash (chrome-agent-platform-5r5s).
 
