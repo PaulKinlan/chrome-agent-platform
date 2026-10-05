@@ -32,6 +32,7 @@ extension/.dist-prev-*
 .owner.tmp-*
 .claude/worktrees/
 evidence/
+.cap-scratch/
 
 # Beads / Dolt files (added by bd init)
 .dolt/
