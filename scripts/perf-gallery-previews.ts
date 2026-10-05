@@ -79,7 +79,14 @@ const OBSERVER = `
 // Drives the real module the way ntp.js does, then reports what was observed.
 const drive = (seed: number) => `
 (async () => {
-  const el = document.getElementById("artifacts-view");
+  const el = (() => {
+    const old = document.getElementById("qazo-gallery-host");
+    if (old) old.remove();
+    const host = document.createElement("div");
+    host.id = "qazo-gallery-host";
+    document.body.appendChild(host);
+    return host;
+  })();
   const mod = await import(chrome.runtime.getURL("artifacts/index.js"));
   const R = globalThis.__capPreviewReads;
   R.calls.length = 0; R.peak = 0; R.inflight = 0;
@@ -245,10 +252,14 @@ try {
   }
   if (!extId) throw new Error(`no service worker reports the manifest name ${JSON.stringify(wantName)} (tree ${EXT})`);
 
-  // Seed a gallery's worth of artifacts through the extension's own API.
-  const adminT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` })).result.targetId;
+  // Seed through the NTP page. An asset.create sent from the OPTIONS page never
+  // settled on this build (the bounded diagnostic said "seed message did not settle
+  // within 8000ms"), while ntp.html is the sender the existing kat-artifact-preview.ts
+  // harness uses successfully — so the page is part of the working recipe, not
+  // incidental.
+  const adminT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/ntp/ntp.html` })).result.targetId;
   const adminS = await attach(adminT);
-  if (!(await waitFor(adminS, CHROME_READY))) throw new Error(`the options page never exposed chrome.runtime — context says ${await probe(adminS)}`);
+  if (!(await waitFor(adminS, CHROME_READY))) throw new Error(`the seed page never exposed chrome.runtime — context says ${await probe(adminS)}`);
   const adminMsg = (o: unknown) => evalInT(adminS, `chrome.runtime.sendMessage(${JSON.stringify(o)})`, 8000, "seed message");
   for (let i = 0; i < SEED; i++) {
     const r = await adminMsg({ type: "asset.create", origin: "master", assetType: "text", name: `gallery-seed-${String(i).padStart(2, "0")}`, content: `seed artifact ${i}` });
@@ -259,20 +270,17 @@ try {
   const listedCount = (listed?.assets ?? []).length;
   console.log(`seeded ${SEED} artifacts; asset.list reports ${listedCount}`);
 
-  // The real NTP page, with the observer installed before any module runs.
-  const pageT = (await send("Target.createTarget", { url: "about:blank" })).result.targetId;
+  // The MEASUREMENT page is the options page: it defines artifact-card (it imports
+  // shared/components.js) and, unlike ntp.html, it does not mount an artifacts view of
+  // its own — so the reads being timed are the ones our render issues and nothing else.
+  // The observer is installed by evaluating it into the loaded page, which is enough
+  // because the gallery only reads when we call it.
+  const pageT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` })).result.targetId;
   const pageS = await attach(pageT);
-  await send("Page.enable", {}, pageS).catch(() => {});
-  await send("Page.addScriptToEvaluateOnNewDocument", { source: OBSERVER }, pageS);
-  await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, pageS);
-  if (!(await waitFor(pageS, CHROME_READY))) throw new Error(`the NTP page never exposed chrome.runtime — context says ${await probe(pageS)}`);
-  let domReady = false;
-  for (let i = 0; i < 150; i++) {
-    domReady = !!(await evalIn(pageS, `!!document.getElementById("artifacts-view")`));
-    if (domReady) break;
-    await sleep(100);
-  }
-  if (!domReady) throw new Error("ntp.html never exposed #artifacts-view");
+  if (!(await waitFor(pageS, CHROME_READY))) throw new Error(`the measurement page never exposed chrome.runtime — context says ${await probe(pageS)}`);
+  if (!(await waitFor(pageS, `!!customElements.get("artifact-card")`))) throw new Error("the measurement page never defined artifact-card");
+  await evalInT(pageS, OBSERVER, 15000, "install observer");
+  if (!(await evalIn(pageS, `!!globalThis.__capPreviewReads`))) throw new Error("the observer did not install");
 
   const result = await evalInT(pageS, drive(SEED), 60000, "gallery drive");
   const want = Math.min(SEED, MAX_PREVIEWS);
