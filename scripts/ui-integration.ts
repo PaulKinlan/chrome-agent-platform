@@ -7,7 +7,7 @@
 //   deno run -A scripts/ui-integration.ts
 
 import { fileURLToPath } from "node:url";
-import { CHROMIUM, launchChrome, safeCaptureScreenshot } from "./lib/chrome-launch.ts";
+import { CHROMIUM, launchChrome, safeCaptureScreenshot, withTimeout } from "./lib/chrome-launch.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 import { composerInput, composerSend } from "./lib/composer-target.ts";
 
@@ -75,6 +75,13 @@ class Cdp {
   ws: WebSocket;
   id = 0;
   pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>();
+  /** Per-call bound (chrome-agent-platform-s0fs): EVERY await in this harness is a
+   *  CDP call with no per-call timeout, which is why a hung renderer could only be
+   *  reported by the 6-minute watchdog as "a CDP call never resolved" — with no way
+   *  to say WHICH call. A bounded call names itself. Evidence screenshots are
+   *  handled separately (safeCaptureScreenshot skips instead of failing, because a
+   *  missing PNG must not take the run down). */
+  timeoutMs = 15000;
   constructor(ws: WebSocket) {
     this.ws = ws;
     ws.onmessage = (ev) => {
@@ -88,9 +95,14 @@ class Cdp {
   }
   send(method: string, params?: unknown, sessionId?: string): Promise<any> {
     const id = ++this.id;
-    return new Promise((res, rej) => {
+    const call = new Promise<any>((res, rej) => {
       this.pending.set(id, { res, rej });
       this.ws.send(JSON.stringify({ id, method, params, sessionId }));
+    });
+    return withTimeout(call, this.timeoutMs).catch((e: unknown) => {
+      // Drop the entry: a late reply must not resolve a call that already failed.
+      this.pending.delete(id);
+      throw new Error(`CDP ${method} did not resolve within ${this.timeoutMs}ms (${(e as Error)?.message ?? e})`);
     });
   }
   async eval(sessionId: string, expression: string): Promise<any> {
@@ -205,8 +217,12 @@ try {
   // Collapsed evidence (force the collapsed state first).
   await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (!side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
   await sleep(400);
-  const shotCollapsed = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${SHOTS}/sidebar-collapsed.png`, Uint8Array.from(atob(shotCollapsed.data), (c: string) => c.charCodeAt(0)));
+  // Evidence shot, bounded (chrome-agent-platform-s0fs, following f5lb's RTL shot
+  // below): forcing a frame mid-transition is the documented way this call
+  // deadlocks, and a deadlocked capture must cost the PNG, not the run.
+  const shotCollapsed = await safeCaptureScreenshot((m, p, s) => cdp.send(m, p, s), hub, { format: "png", fromSurface: true, timeoutMs: 5000 });
+  if (shotCollapsed) await Deno.writeFile(`${SHOTS}/sidebar-collapsed.png`, shotCollapsed);
+  else console.log("NOTE: sidebar-collapsed.png skipped — Page.captureScreenshot did not resolve in 5s (the f5lb deadlock class); the checks do not depend on it");
 
   // 2c. Keyboard Enter toggles + aria-expanded/label/title track the state.
   //     First prove the nub is TAB-REACHABLE (focus the last sidebar control
@@ -230,8 +246,9 @@ try {
   // Expanded evidence (force the expanded state first — Enter above toggled it).
   await cdp.eval(hub, `(() => { const side = document.querySelector('#side'); if (side.classList.contains('collapsed')) document.querySelector('#side-toggle').click(); })()`);
   await sleep(400);
-  const shotExpanded = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${SHOTS}/sidebar-expanded.png`, Uint8Array.from(atob(shotExpanded.data), (c: string) => c.charCodeAt(0)));
+  const shotExpanded = await safeCaptureScreenshot((m, p, s) => cdp.send(m, p, s), hub, { format: "png", fromSurface: true, timeoutMs: 5000 });
+  if (shotExpanded) await Deno.writeFile(`${SHOTS}/sidebar-expanded.png`, shotExpanded);
+  else console.log("NOTE: sidebar-expanded.png skipped — Page.captureScreenshot did not resolve in 5s (the f5lb deadlock class); the checks do not depend on it");
 
   // 2d. Space toggles too (native button activation).
   await cdp.eval(hub, `(() => { const t = document.querySelector('#side-toggle'); t.focus(); })()`);
@@ -559,8 +576,9 @@ try {
   check("overlay-open matrix: the thread overlay is OPEN", overlayOpen === true, { overlayOpen, reopen });
 
   // Baseline overlay-open evidence.
-  const shotOverlay = await cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }, hub);
-  await Deno.writeFile(`${SHOTS}/overlay-open.png`, Uint8Array.from(atob(shotOverlay.data), (c: string) => c.charCodeAt(0)));
+  const shotOverlay = await safeCaptureScreenshot((m, p, s) => cdp.send(m, p, s), hub, { format: "png", fromSurface: true, timeoutMs: 5000 });
+  if (shotOverlay) await Deno.writeFile(`${SHOTS}/overlay-open.png`, shotOverlay);
+  else console.log("NOTE: overlay-open.png skipped — Page.captureScreenshot did not resolve in 5s (the f5lb deadlock class); the checks do not depend on it");
 
   const overlayGeom = await cdp.eval(hub, `(() => {
     const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom), w: Math.round(b.width), h: Math.round(b.height), cx: Math.round(b.left + b.width/2) }; };
