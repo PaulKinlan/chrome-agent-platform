@@ -18,7 +18,7 @@ import { browserDependencies, browserDefines } from './scripts/browser-dependenc
 import { createRequire } from "node:module";
 import { readFile, writeFile, rename, mkdir, rm, readdir, stat, lstat, chmod, utimes, symlink, readlink, copyFile } from "node:fs/promises";
 import path, { join, extname } from "node:path";
-import { randomUUID, createHash } from "node:crypto";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -217,90 +217,17 @@ await syncChangelog({ check: true });
 // dir to a unique quarantine name FIRST (rename is atomic — exactly one
 // contender can succeed), then removes the quarantined dir; a successor's
 // fresh lock (a different directory inode) can never be deleted.
-import { mkdir as mkdirAtomic } from "node:fs/promises";
-import { readFileSync as rfSync } from "node:fs";
-const LOCK_DIR = path.join(ROOT, ".build.lock.d");
-const MACHINE_BOOT_ID = (() => {
-  try { return rfSync("/proc/sys/kernel/random/boot_id", "utf8").trim(); } catch { return "unknown-boot"; }
-})();
-const OWNER = {
-  pid: process.pid,
-  token: randomUUID(),
-  at: Date.now(),
-  start: (() => { try { return rfSync("/proc/self/stat", "utf8").split(" ")[21]; } catch { return "0"; } })(),
-  boot: MACHINE_BOOT_ID,
-};
-async function holderIsDeadWithDir(h, lockDir) {
-  if (!h?.pid) {
-    // Ownerless: with the rename-into-place construction this is either a
-    // pre-era artifact or manual — never a mid-creation window (the lock dir
-    // is born fully-populated). Steal ONLY if it is observably old.
-    try {
-      const st = await stat(lockDir);
-      return Date.now() - st.birthtimeMs > 60_000;
-    } catch { return false; }
-  }
-  // Boot identity: a different machine boot = certainly not alive now.
-  if (h.boot && h.boot !== MACHINE_BOOT_ID) return true;
-  let alive = false, reused = false;
-  try {
-    process.kill(h.pid, 0);
-    alive = true;
-    if (h.start) {
-      try {
-        const st = rfSync(`/proc/${h.pid}/stat`, "utf8").split(" ")[21];
-        reused = st !== String(h.start);
-      } catch { reused = false; }
-    }
-  } catch (e) { alive = e?.code !== "ESRCH"; }
-  return !alive || reused;
-}
-{
-  const ownerFile = "owner.json";
-  let acquired = false;
-  for (let attempt = 0; !acquired; attempt++) {
-    // mkdir-exclusive: the lock's existence is atomic. The owner file is
-    // written immediately after; the (sub-millisecond) ownerless window is
-    // safe because a YOUNG ownerless lock is treated as LIVE (never stolen) —
-    // only observably-old (>60s) ownerless locks are dead (pre-era/manual).
-    // (renaming a fully-populated dir into place would silently REPLACE an
-    // existing lock on Linux — rename-over-empty-dir succeeds — so it is NOT
-    // usable for acquisition.)
-    try {
-      await mkdirAtomic(LOCK_DIR); // EEXIST if held — atomic exclusivity
-      await writeFile(path.join(LOCK_DIR, ownerFile), JSON.stringify(OWNER));
-      acquired = true;
-      break;
-    } catch (e) {
-      if (e?.code !== "EEXIST") throw e;
-    }
-    // Held: read the owner; steal ONLY a provably-dead holder.
-    let holder = null;
-    try { holder = JSON.parse(await readFile(path.join(LOCK_DIR, ownerFile), "utf8")); } catch { holder = null; }
-    if (await holderIsDeadWithDir(holder, LOCK_DIR)) {
-      // RACE-FREE STEAL: rename the dead lock to a TOKEN-SPECIFIC quarantine
-      // (exactly one contender's rename succeeds — the loser's rename hits
-      // ENOENT and simply retries the acquire loop). The successor's fresh
-      // lock dir is a DIFFERENT directory and can never be quarantined.
-      const quarantine = path.join(ROOT, `.lock-quarantine-${holder?.token ?? "orphan"}-${process.pid}-${Date.now()}`);
-      try {
-        await rename(LOCK_DIR, quarantine);
-        await rm(quarantine, { recursive: true, force: true });
-        continue; // retry the acquire with our fully-populated staging
-      } catch { /* someone else quarantined it first — loop */ }
-    }
-    if (attempt >= 48) { // 48 × 500ms = 24s bounded refusal
-      throw new Error(`another LIVE build (pid ${holder?.pid}) holds the build lock and is not dead — refusing to steal; if truly stuck, kill pid ${holder?.pid} or remove ${LOCK_DIR} manually`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  // Stale staging/quarantine sweep (crashed contenders).
-  for (const f of await readdir(ROOT, { withFileTypes: true }).catch(() => [])) {
-    if (f.name.startsWith(".lock-stage-") || f.name.startsWith(".lock-quarantine-") || f.name.startsWith(".owner.tmp-")) {
-      await rm(path.join(ROOT, f.name), { recursive: true, force: true }).catch(() => {});
-    }
-  }
-}
+// Liveness (including the zombie hole this lock used to have) and acquisition live in
+// scripts/lib/build-lock.mjs, extracted so the steal decision is testable against a REAL zombie
+// holder rather than only through a full build (chrome-agent-platform-r0v8). Read that module for
+// why a zombie satisfied every check the old inline version had.
+import { acquireBuildLock, buildOwnerIdentity, LOCK_DIRNAME } from "./scripts/lib/build-lock.mjs";
+const LOCK_DIR = path.join(ROOT, LOCK_DIRNAME);
+const OWNER = buildOwnerIdentity();
+// Acquire the lock, stealing ONLY a provably-dead holder: the bounded refusal, the race-free
+// token-specific quarantine and the stale-temp sweep all live in the module above. A zombie holder
+// (state Z) or a vanished /proc entry is now dead, which is the r0v8 fix.
+await acquireBuildLock({ root: ROOT, lockDir: LOCK_DIR, owner: OWNER });
 
 // Module-scope state for the owner-requested build changelog delta: the
 // version probe runs inside the try below, but the record write happens AFTER
