@@ -179,6 +179,7 @@ const ALLOWED_FILES = new Set([
   "scripts/live-every-tab.ts",
   "scripts/mic-transcript-smoke.ts",
   "scripts/panel-leak-probe.ts",
+  "scripts/perf-gallery-previews.ts",
   "scripts/perf-leak-trace.ts",
   "scripts/perf-seeded-scale.ts",
   "scripts/read-page-host-grant-acceptance.ts",

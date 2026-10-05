@@ -55,6 +55,7 @@ function check(name: string, cond: boolean, detail?: unknown) {
 // number in flight. Deliberately does not alter the request or the resolution.
 const OBSERVER = `
 (() => {
+  if (!globalThis.chrome?.runtime?.sendMessage) return;
   const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
   const R = { inflight: 0, peak: 0, calls: [] };
   globalThis.__capPreviewReads = R;
@@ -123,6 +124,39 @@ const drive = (seed: number) => `
 `;
 
 const profile = await Deno.makeTempDir({ prefix: "cap-gallery-" });
+
+// Teardown discipline (coord, 2026-10-05): the reaper collected four orphaned
+// Chrome children from an earlier run of this harness. Two causes, both fixed
+// here: (1) chrome.proc.kill() kills the main process but NOT the renderer/GPU
+// children, which reparent to init and keep running; (2) a SIGTERM'd deno process
+// never reaches its finally block, so the browser outlives the harness. So: sweep
+// children by this run's unique profile dir, do it from signal handlers as well as
+// the finally, and bound the whole session with a watchdog that is far inside the
+// reaper's orphan window.
+const BUDGET_MS = Number(Deno.env.get("CAP_GALLERY_BUDGET_MS") ?? "300000");
+const killBrowser = async () => {
+  try { chrome.proc.kill("SIGKILL"); } catch { /* already gone */ }
+  try {
+    await new Deno.Command("pkill", { args: ["-f", `--user-data-dir=${profile}`] }).output();
+  } catch { /* pkill missing or nothing matched */ }
+};
+const cleanup = async () => {
+  await killBrowser();
+  await sleep(300);
+  await Deno.remove(profile, { recursive: true }).catch(() => {});
+};
+const hardStop = async (why: string, code: number) => {
+  console.error(`harness stop (${code}): ${why}`);
+  await cleanup().catch(() => {});
+  Deno.exit(code);
+};
+for (const [sig, code] of [["SIGTERM", 143], ["SIGINT", 130]] as const) {
+  try {
+    Deno.addSignalListener(sig, () => { hardStop(sig, code).catch(() => Deno.exit(code)); });
+  } catch { /* signal not supported here */ }
+}
+const watchdog = setTimeout(() => { hardStop(`wall-clock budget ${BUDGET_MS}ms exceeded`, 124).catch(() => Deno.exit(124)); }, BUDGET_MS);
+
 const chrome = await launchChrome({
   binary: "/usr/bin/chromium",
   args: [
@@ -153,20 +187,73 @@ try {
     await send("Runtime.enable", {}, s);
     return s;
   };
+  // A freshly created extension target does not expose chrome.* immediately:
+  // evaluating too early reads chrome off undefined (measured: the first harness
+  // run died on 'reading sendMessage' at 800 ms). Wait for the API, do not sleep
+  // and hope.
+  const waitFor = async (s: string, expr: string, tries = 40, ms = 150) => {
+    for (let i = 0; i < tries; i++) {
+      try { if (await evalIn(s, expr)) return true; } catch { /* context still coming up */ }
+      await sleep(ms);
+    }
+    return false;
+  };
+  // An evaluate whose promise never settles would hang the harness silently
+  // (awaitPromise waits forever), so every seed/drive evaluate goes through a bound.
+  const evalInT = async (s: string, expr: string, ms = 30000, label = "evaluate") => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const guard = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`${label} did not settle within ${ms}ms`)), ms); });
+    try {
+      return await Promise.race([evalIn(s, expr), guard]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const probe = async (s: string) => {
+    try {
+      return await evalIn(s, `JSON.stringify({ href: location.href, ready: document.readyState, title: document.title, chromeType: typeof chrome, runtimeType: typeof (globalThis.chrome && chrome.runtime), sendType: typeof (globalThis.chrome && chrome.runtime && chrome.runtime.sendMessage) })`);
+    } catch (e) {
+      return `probe threw: ${(e as Error).message}`;
+    }
+  };
+  const CHROME_READY = "typeof chrome !== 'undefined' && !!(chrome.runtime && chrome.runtime.sendMessage)";
 
-  const sw = await waitForServiceWorker(send, { match: (t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://") });
-  const extId = new URL(sw.url).host;
   console.log(`tree under test: ${EXT}`);
-  console.log(`extension id: ${extId}`);
+  // Identify OUR extension by asking each extension service worker for its own
+  // manifest name. Matching on "a chrome-extension:// service worker" is not
+  // enough: that picked a COMPONENT extension on this box, so every subsequent
+  // chrome-extension://<id>/... navigation landed on chrome-error:// (the first
+  // two harness runs proved it — the page title was the URL and href was the
+  // error page).
+  const wantName = JSON.parse(await Deno.readTextFile(`${EXT}/manifest.json`)).name as string;
+  await waitForServiceWorker(send, { match: (t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://") }).catch(() => null);
+  let extId = "";
+  for (let attempt = 0; attempt < 60 && !extId; attempt++) {
+    const targets = (await send("Target.getTargets")).result.targetInfos
+      .filter((t: any) => t.type === "service_worker" && String(t.url).startsWith("chrome-extension://"));
+    for (const t of targets) {
+      const s = await attach(t.targetId).catch(() => null);
+      if (!s) continue;
+      const gotName = await evalIn(s, "chrome.runtime.getManifest().name").catch(() => null);
+      if (gotName === wantName) {
+        extId = new URL(t.url).host;
+        console.log(`matched extension ${extId} (${gotName})`);
+        break;
+      }
+    }
+    if (!extId) await sleep(250);
+  }
+  if (!extId) throw new Error(`no service worker reports the manifest name ${JSON.stringify(wantName)} (tree ${EXT})`);
 
   // Seed a gallery's worth of artifacts through the extension's own API.
   const adminT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` })).result.targetId;
   const adminS = await attach(adminT);
-  await sleep(800);
-  const adminMsg = (o: unknown) => evalIn(adminS, `chrome.runtime.sendMessage(${JSON.stringify(o)})`);
+  if (!(await waitFor(adminS, CHROME_READY))) throw new Error(`the options page never exposed chrome.runtime — context says ${await probe(adminS)}`);
+  const adminMsg = (o: unknown) => evalInT(adminS, `chrome.runtime.sendMessage(${JSON.stringify(o)})`, 8000, "seed message");
   for (let i = 0; i < SEED; i++) {
     const r = await adminMsg({ type: "asset.create", origin: "master", assetType: "text", name: `gallery-seed-${String(i).padStart(2, "0")}`, content: `seed artifact ${i}` });
     if (!r?.ok) throw new Error(`asset.create ${i} failed: ${JSON.stringify(r)}`);
+    if (i % 10 === 9) console.log(`  seeded ${i + 1}/${SEED}`);
   }
   const listed = await adminMsg({ type: "asset.list", origin: "master" });
   const listedCount = (listed?.assets ?? []).length;
@@ -178,6 +265,7 @@ try {
   await send("Page.enable", {}, pageS).catch(() => {});
   await send("Page.addScriptToEvaluateOnNewDocument", { source: OBSERVER }, pageS);
   await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, pageS);
+  if (!(await waitFor(pageS, CHROME_READY))) throw new Error(`the NTP page never exposed chrome.runtime — context says ${await probe(pageS)}`);
   let domReady = false;
   for (let i = 0; i < 150; i++) {
     domReady = !!(await evalIn(pageS, `!!document.getElementById("artifacts-view")`));
@@ -186,7 +274,7 @@ try {
   }
   if (!domReady) throw new Error("ntp.html never exposed #artifacts-view");
 
-  const result = await evalIn(pageS, drive(SEED));
+  const result = await evalInT(pageS, drive(SEED), 60000, "gallery drive");
   const want = Math.min(SEED, MAX_PREVIEWS);
   const batches = Math.max(1, Math.ceil(result.fetched / CONCURRENCY));
   const serialEquivalents = result.readsP50 ? +(result.totalMs / result.readsP50).toFixed(2) : null;
@@ -225,7 +313,8 @@ try {
   console.log(`wrote ${OUT}/gallery-previews.json`);
   console.log(`SUMMARY: pass=${pass} fail=${fail} fetched=${result.fetched} peak=${result.peakInflight} totalMs=${result.totalMs} p50Ms=${result.readsP50} serialEquivalents=${serialEquivalents}`);
 } finally {
-  try { chrome.proc.kill(); } catch { /* already gone */ }
+  clearTimeout(watchdog);
+  await cleanup();
 }
 
 if (fail > 0) Deno.exit(1);
