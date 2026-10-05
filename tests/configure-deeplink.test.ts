@@ -116,7 +116,14 @@ Deno.test("Configure call sites in ntp.js use exact deep-link hash", async () =>
 Deno.test("named-agent editing works from embedded and standalone Settings", async () => {
   const options = await Deno.readTextFile(new URL("../extension/options/options.js", import.meta.url));
   const ntp = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
-  assert(options.includes('postMessage(message, "*")'), "embedded Settings must request its parent NTP editor");
+  // The guarantee is unchanged — embedded Settings still asks its parent NTP view to open the
+  // maintained editor — but this no longer pins the MEANS as a wildcard target
+  // (chrome-agent-platform-wfxe): the receiving parent is the extension's own hub page, so its
+  // origin is knowable and the wildcard was needlessly wide.
+  assert(
+    options.includes("postMessage(message, window.location.origin)"),
+    "embedded Settings must request its parent NTP editor, with an origin-scoped target",
+  );
   assert(options.includes("&edit=1"), "standalone Settings must navigate to the explicit edit route");
   assert(ntp.includes('parsed.kind === "named" && parsed.edit === true'), "the NTP must open the maintained editor for that route");
 });
