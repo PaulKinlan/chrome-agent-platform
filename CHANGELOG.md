@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.574] — 2026-10-05
+- internal: bundled WebAssembly manifests now point their rebuild reference at the reproduction script that actually exists, and the generator fails closed rather than emitting a dead reference.
+
 ## [0.3.573] — 2026-10-05
 - internal: bundle sizes are now measured and reported against their reference sizes instead of failing the store build; the dependency-integrity checks still fail closed (owner decision, 2026-10-05).
 
