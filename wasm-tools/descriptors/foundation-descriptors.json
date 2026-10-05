@@ -144,6 +144,50 @@
       "availabilityReason": "package-execution-unwired",
       "admitted": false,
       "dispatcherKind": "none"
+    },
+    {
+      "toolId": "sqlite_wasm_official",
+      "name": "sqlite_wasm_official",
+      "displayName": "Official SQLite WASM (OPFS-persistent)",
+      "category": "data",
+      "version": "3.53.0-build1",
+      "capabilities": ["compute", "data.read", "data.write"],
+      "replayClass": "mutating",
+      "canonicalNameClaim": false,
+      "upstreamEngine": "sqlite.org sqlite-wasm (Emscripten-compiled; imports env + wasi_snapshot_preview1)",
+      "spdxLicense": "blessing AND Apache-2.0",
+      "licenseNote": "SQLite core engine is under the SQLite public-domain blessing; the npm distribution wrapper (@sqlite.org/sqlite-wasm by Thomas Steiner) is Apache-2.0 — the same composite the bundled sqlite3 tool records.",
+      "availability": "disabled",
+      "availabilityReason": "package-execution-unwired",
+      "admitted": false,
+      "dispatcherKind": "none",
+      "blockedBy": "chrome-agent-platform-ltkj (Lane C Emscripten host unwired; the bundled authority refuses these imports)",
+      "measuredArtifacts": [
+        { "path": "dist/sqlite3.wasm", "bytes": 864752, "sha256": "02d7e48164395fa68f81c6ec33e9da5461be397dc57602ac0cd89b4bbba1d312", "imports": { "env": 27, "wasi_snapshot_preview1": 9 } }
+      ],
+      "measurement": { "at": "2026-10-05", "command": "npm pack @sqlite.org/sqlite-wasm@3.53.0-build1", "registryIntegrity": "sha512-PfWPWN2n+/37doa8oh2/oUXk4OOsRYZsxc1W1sDXIGb/Pu5Yrb+f2eyYpgQMGITVX7HVgxhs9P18Rc6I97ym/g==", "authorityVerdict": "refused by auditWasmBinary: import_not_allowed at env", "censusMethod": "import-section census, validated against cap.bundled.sqlite3.query.bounded (24 wasi imports)" }
+    },
+    {
+      "toolId": "wa_sqlite",
+      "name": "wa_sqlite",
+      "displayName": "wa-sqlite (JS VFS layer, sync + Asyncify build)",
+      "category": "data",
+      "version": "1.0.0",
+      "capabilities": ["compute", "data.read", "data.write"],
+      "replayClass": "mutating",
+      "canonicalNameClaim": false,
+      "upstreamEngine": "wa-sqlite (Emscripten-compiled; imports a)",
+      "spdxLicense": "MIT",
+      "availability": "disabled",
+      "availabilityReason": "package-execution-unwired",
+      "admitted": false,
+      "dispatcherKind": "none",
+      "blockedBy": "chrome-agent-platform-ltkj (Lane C Emscripten host unwired; the bundled authority refuses these imports)",
+      "measuredArtifacts": [
+        { "path": "dist/wa-sqlite.wasm", "bytes": 558343, "sha256": "5384bc7d80d7981c2516f3ad6b02d886629985d178e5037e765d655f440bbf9f", "imports": { "a": 73 } },
+        { "path": "dist/wa-sqlite-async.wasm", "bytes": 1139398, "sha256": "91376096fe56ddd9594db83074704f08fc2566edea2cb121aa624f72a67a86b5", "imports": { "a": 73 } }
+      ],
+      "measurement": { "at": "2026-10-05", "command": "npm pack wa-sqlite@1.0.0", "registryIntegrity": "sha512-Kyybo5/BaJp76z7gDWGk2J6Hthl4NIPsE+swgraEjy3IY6r5zIR02wAs1OJH4XtJp1y3puj3Onp5eMGS0z7nUA==", "authorityVerdict": "refused by auditWasmBinary: import_not_allowed at a", "censusMethod": "import-section census, validated against cap.bundled.sqlite3.query.bounded (24 wasi imports)" }
     }
   ]
 }

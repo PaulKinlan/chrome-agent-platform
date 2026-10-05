@@ -298,18 +298,36 @@ maintained npm wasm wrapper — would need own wasm-bindgen build)
 
 ## 9. Databases
 
-### sqlite-wasm (official) — ADMIT-NOW (strongest provenance in the catalogue)
+### sqlite-wasm (official) — DECLARED, NOT ADMITTED (strongest provenance in the catalogue)
 - Home: https://sqlite.org/wasm/doc/tip/about.md
-- License: SQLite public-domain blessing
+- License: `blessing AND Apache-2.0` — the SQLite core engine is under the SQLite public-domain blessing, and the npm distribution wrapper (`@sqlite.org/sqlite-wasm`, Thomas Steiner) is Apache-2.0; this is the same composite the bundled `cap.bundled.sqlite3.query.bounded` records
 - First-class wasm deliverable of the SQLite project; OPFS persistence
   backend; Chrome's designated Web SQL replacement
-- Determinism: official sqlite.org release artifacts; *pin at admission*
+- Measured 2026-10-05 with `npm pack @sqlite.org/sqlite-wasm@3.53.0-build1`
+  (registry integrity `sha512-PfWPWN2n+/37doa8oh2/oUXk4OOsRYZsxc1W1sDXIGb/Pu5Yrb+f2eyYpgQMGITVX7HVgxhs9P18Rc6I97ym/g==`):
+  `dist/sqlite3.wasm` **864,752 B**, sha256
+  `02d7e48164395fa68f81c6ec33e9da5461be397dc57602ac0cd89b4bbba1d312`,
+  imports **env ×27 + `wasi_snapshot_preview1` ×9** (36 total).
+- Verdict: **NOT ADMITTED — Lane C Emscripten host unwired (`chrome-agent-platform-ltkj`)**.
+  `auditWasmBinary` refuses it (`import_not_allowed at env`), so it cannot ship through the
+  bundled WASI/CAS authority. Descriptor row `sqlite_wasm_official` is declared with
+  `availability: "disabled"`, `admitted: false`, `dispatcherKind: "none"`; the bounded WASI
+  `cap.bundled.sqlite3.query.bounded` remains the SQL tool that actually ships.
 - Sources: https://developer.chrome.com/blog/sqlite-wasm-in-the-browser-backed-by-the-origin-private-file-system
 
-### wa-sqlite — ADMIT-NOW (alternative / fallback)
+### wa-sqlite — DECLARED, NOT ADMITTED (alternative / fallback)
 - Repo: https://github.com/rhashimoto/wa-sqlite
 - License: MIT
 - JS-writable VFS layer; sync + Asyncify/JSPI builds; OPFS VFS examples
+- Measured 2026-10-05 with `npm pack wa-sqlite@1.0.0`
+  (registry integrity `sha512-Kyybo5/BaJp76z7gDWGk2J6Hthl4NIPsE+swgraEjy3IY6r5zIR02wAs1OJH4XtJp1y3puj3Onp5eMGS0z7nUA==`):
+  `dist/wa-sqlite.wasm` **558,343 B**, sha256
+  `5384bc7d80d7981c2516f3ad6b02d886629985d178e5037e765d655f440bbf9f`, imports `a` ×73;
+  `dist/wa-sqlite-async.wasm` **1,139,398 B**, sha256
+  `91376096fe56ddd9594db83074704f08fc2566edea2cb121aa624f72a67a86b5`, imports `a` ×73.
+- Verdict: **NOT ADMITTED — Lane C Emscripten host unwired (`chrome-agent-platform-ltkj`)**.
+  Refused by `auditWasmBinary` (`import_not_allowed at a`); descriptor row `wa_sqlite` is
+  declared `disabled` / `admitted: false` / `dispatcherKind: "none"`.
 
 ### sql.js — INVESTIGATE (superseded by official sqlite-wasm; no first-class OPFS)
 - https://github.com/sql-js/sql.js
