@@ -14,9 +14,12 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { stripComments } from "../scripts/test-partition.mjs";
 
-const ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+// fileURLToPath, NOT .pathname: a URL pathname is percent-encoded, so a checkout path containing a
+// space or a non-ASCII character would produce a root that does not exist (bead e273's guard).
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 /** Directories scanned for wildcard postMessage targets. (The qcfc audit's marker.) */
 export const SCAN_DIRS = ["extension"];

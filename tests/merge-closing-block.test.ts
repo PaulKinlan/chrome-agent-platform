@@ -14,8 +14,11 @@
 // the update-row regex to the HEAD-anchored form the fleet first settled on and that case returns
 // UNKNOWN (4) instead of OK (0), failing this test.
 import { assert, assertEquals } from "jsr:@std/assert@1";
+import { fileURLToPath } from "node:url";
 
-const SCRIPT = new URL("../scripts/merge-closing-block.sh", import.meta.url).pathname;
+// fileURLToPath, NOT .pathname: a URL pathname is percent-encoded, so a checkout path containing a
+// space or a non-ASCII character would hand this a path that does not exist (bead e273's guard).
+const SCRIPT = fileURLToPath(new URL("../scripts/merge-closing-block.sh", import.meta.url));
 const decoder = new TextDecoder();
 
 type Result = { code: number; out: string };
