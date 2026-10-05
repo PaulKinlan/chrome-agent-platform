@@ -87,6 +87,15 @@ const drive = (seed: number) => `
     document.body.appendChild(host);
     return host;
   })();
+  // The host page already loaded shared/components.js, so importing the module under
+  // test would re-run customElements.define for the same tags and throw
+  // "first-run-guide has already been used with this registry". Registration is
+  // idempotent here: an existing tag wins, and we only want the module's render code.
+  const origDefine = customElements.define.bind(customElements);
+  customElements.define = function (name, ctor, options) {
+    if (customElements.get(name)) return;
+    return origDefine(name, ctor, options);
+  };
   const mod = await import(chrome.runtime.getURL("artifacts/index.js"));
   const R = globalThis.__capPreviewReads;
   R.calls.length = 0; R.peak = 0; R.inflight = 0;
