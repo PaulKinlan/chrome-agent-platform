@@ -153,6 +153,21 @@ function serialLogDir() {
 }
 
 /**
+ * chrome-agent-platform-ia4z: the per-file failure notices and the named failing-file
+ * block used to go to STDERR ONLY, while the phase headers and the summary went to
+ * STDOUT. A consumer that captures stdout alone therefore got a COUNT WITH NO NAME —
+ * which is how a red gets misattributed to whoever changed something, and it happened
+ * twice on 2026-10-06 (0iln's gate and o2t3's, where the name had to be recovered from
+ * the durable per-file belt). Attribution now goes to BOTH streams: stdout so it
+ * survives a stdout-only capture AND a mid-phase kill (a kill deletes any end-of-phase-
+ * only mechanism), stderr because a human running the command reads it there.
+ */
+function announce(line) {
+  console.log(line);
+  console.error(line);
+}
+
+/**
  * @param {string[]} files
  * @param {{ timeoutMs?: number, perFileTimeoutMs?: Record<string, number> | null, stdio?: import("node:child_process").StdioOptions, cwd?: string, env?: NodeJS.ProcessEnv }} [options]
  * @returns {number}
@@ -172,21 +187,6 @@ function serialLogDir() {
  * their header, which is what keeps the phase readable. `stdio` can still be passed explicitly
  * (the focused tests pass ["ignore","ignore","ignore"]).
  */
-/**
- * chrome-agent-platform-ia4z: the per-file failure notices and the named failing-file
- * block used to go to STDERR ONLY, while the phase headers and the summary went to
- * STDOUT. A consumer that captures stdout alone therefore got a COUNT WITH NO NAME —
- * which is how a red gets misattributed to whoever changed something, and it happened
- * twice on 2026-10-06 (0iln's gate and o2t3's, where the name had to be recovered from
- * the durable per-file belt). Attribution now goes to BOTH streams: stdout so it
- * survives a stdout-only capture AND a mid-phase kill (a kill deletes any end-of-phase-
- * only mechanism), stderr because a human running the command reads it there.
- */
-function announce(line) {
-  console.log(line);
-  console.error(line);
-}
-
 export function runSerialFiles(files, {
   timeoutMs = defaultSerialTimeoutMs(),
   perFileTimeoutMs = SERIAL_FILE_TIMEOUTS,
