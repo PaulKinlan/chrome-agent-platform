@@ -1,7 +1,9 @@
 # Threat Model — Chrome Agent Platform
 
 **Bead:** `chrome-agent-platform-oa3o` · **Date:** 2026-10-06 ·  
-**Tree pinned at:** `origin/main@75e032f7` (extension `0.3.577`).
+**Tree pinned at:** `origin/main@75e032f7` (extension `0.3.577`). A threat re-read after
+that pin carries its own `Evidence pin:` line naming the tree it was read at (T13 does);
+`docs/RISK-REGISTER.md` uses the same convention for entries it added after its base pin.
 
 This document is the entry point an audit or scanning agent reads BEFORE it reports a
 finding. It exists for one reason: a scan that does not know what this project has
@@ -167,7 +169,7 @@ should reason about; the threats that use them are in sections 5 and 6.
 | S9 | Provider responses and provider errors | `extension/lib/pure.js:1034`, `:1102` | an endpoint can echo a credential back into a log or a card |
 | S10 | Host-side ACP WebSocket clients | `scripts/acp-bridge.ts:636-646` | a browser page that can open the socket could drive a shell-capable agent |
 | S11 | Owner-supplied local folders (fs grants) | `extension/lib/fs-grants.js:47`, `:130` | path strings the owner grants are still resolved by the extension |
-| S12 | Hook event payloads | `extension/lib/hooks.js:481`, `:516` | a hook body is serialized into a model INSTRUCTION position |
+| S12 | Hook event payloads | `extension/lib/hooks.js:494`, `:550` | a hook body is serialized into a model INSTRUCTION position |
 
 ---
 
@@ -289,30 +291,42 @@ consequences are carried by the matching register entry where one exists.
 ### T13. Hooks: an event-driven model invocation as an un-gated write path
 
 - **Boundary:** S12. **Evidence:** `extension/lib/hooks.js:399` (`checkHookAllowed` —
-  the owner deny-list, checked FIRST and fail-closed), `:481` (`subscribeHook`), with the
+  the owner deny-list, checked FIRST and fail-closed), `:494` (`subscribeHook`), with the
   owner-approval seam invoked at `:550` (it was `:516` before 51cd). `hooks.subscribe` is
   classified approval-required in the dispatch census §4.4 and in
-  `tests/owner-approval-classification.test.ts:19`.
+  `tests/owner-approval-classification.test.ts:25`.
+- **Evidence pin: `origin/main@eb59da7e`.** The file:line citations in this threat (and in
+  the S12 row above) were re-read against that tree. They MOVED off the document pin when
+  4h47 and hlgr landed after 51cd — the `subscribeHook` declaration, the `service-worker.js`
+  route and the classification test line all shifted. Treat the named symbol as the anchor
+  and the line as the locator, and re-read both if the tree has moved again.
 - **CONTROL: LANDED (chrome-agent-platform-51cd, merge `2b4da1f3`).** The seam runs for
   EVERY subscribe rather than only a replacement — it is gated on
   `typeof gate === "function"`, not the old `if (existing && …)` — and it is invoked with
   `{ existing: existing ? { …existing } : null }`, so a FIRST-TIME `(hookId, skillId)` pair
   reaches the owner gate instead of being written on the deny-list check alone. A
   model-authored `promptTemplate` can no longer reach the instruction position either: the
-  model-facing schema no longer carries the field, and the route forces a model
-  principal's template to empty (`extension/background/service-worker.js:10855`) — which
+  model-callable tool carries no template field (`extension/lib/management-tools.js:459-463`,
+  its call at `:466`), and the route forces a model principal's template to empty
+  (`extension/background/service-worker.js:10918`, the route member at `:10911`) — which
   matters because `dispatchHook` executes that template verbatim as the recurring run's
-  task (`:12092-12093`).
+  task (`:12155-12156`).
 - **Falsifiable, not prose:** `tests/hook-subscribe-approval.test.ts` drives the REAL route
   through the MODEL path with the real approval store and asserts that a first-time
   subscribe publishes one approval card and leaves exactly one pending row, that nothing
   is persisted before the owner decides, and that a same-pair replacement still gates. The
-  file names the mutant it is calibrated against: restoring the old
+  file names the mutant it is calibrated against
+  (`tests/hook-subscribe-approval.test.ts:22-23`): restoring the old
   `if (existing && typeof gate === "function")` short-circuit must turn its first two
   tests RED. Those assertions, not this paragraph, are what would catch a regression.
 - **Residual, to re-read at audit time:** the seam stays OPTIONAL in `hooks.js` by design —
-  internal seed callers (agent-seeds, skill enable/disable) pass no gate — so the control
-  lives in the ROUTE, and a change to who may call `subscribeHook` directly reopens it.
+  internal seed callers pass no gate (`extension/lib/agent-seeds.js:164` and
+  `extension/background/service-worker.js:10590` for agent seeds and skill enable/disable) —
+  so the control lives in the ROUTE, and a change to who may call `subscribeHook` directly
+  reopens it.
+- **Register:** no entry — an ENFORCED decision is a delivered control, not a withheld one,
+  so it is held by this threat rather than by Class 5 (`docs/RISK-REGISTER.md`, Class 5
+  preamble).
 
 ### T14. MCP: unbounded server count and argument egress to a third party
 
@@ -437,8 +451,10 @@ one implies. `docs/CHROME-TEST-CONTRACT.md` §5 and the "Test honesty" section o
 
 1. **A control that exists only on one path — usually the replace path.** A gate written
    as `if (existing && …)` fires on update and not on create. *Verification:* for every
-   gated write in your diff, drive the CREATE case, not the update case. Live instance:
-   `extension/lib/hooks.js:516` (T13).
+   gated write in your diff, drive the CREATE case, not the update case. Historical
+   instance, now CLOSED (`2b4da1f3`): the hook subscribe seam at `extension/lib/hooks.js:550`,
+   which fired on the replace path only (T13) — and `tests/hook-subscribe-approval.test.ts`
+   is the guard that fails if the shape returns.
 2. **A fail-open default on an out-of-spec input.** A classifier that names a default for
    "I could not tell" rather than refusing. *Verification:* feed the classifier the
    degenerate sender (no tab, no url, no document id) and read what it returns.
