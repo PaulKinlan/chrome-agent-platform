@@ -109,6 +109,7 @@ export const SOURCE_INSPECTING_GUARDS = [
   // wiring) were split into tests/quiet-window-static.test.ts — 3 tests, ZERO spawns, measured 32ms —
   // and THAT is always-on below; the burner workload stays in npm test where it belongs.
   "tests/quiet-window-static.test.ts",
+
   // chrome-agent-platform-p1lp: tests/chrome-tools-t12.test.ts walks the extension root through a
   // LOWERCASE alias — `const root = new URL("../extension/", import.meta.url)` then `await walk(root)` —
   // which the kz27 widening missed because that pattern demanded an UPPERCASE identifier. That is the
@@ -143,6 +144,20 @@ export const SOURCE_INSPECTING_GUARDS = [
   // every test file. It asserts a cross-cutting invariant, is a static text walk, and is cheap, so it is
   // adjudicated IN.
   "tests/chrome-lock-fixture-scope.test.ts",
+  // chrome-agent-platform-ygxk: promoted WHOLE, with the measurement that justifies not splitting it.
+  // It is the repo-walking guard p1lp's widened detector caught (it reads the tests directory as data
+  // through `const TESTS = `${ROOT}tests/``), and it was held out only while it was RED — the fix is the
+  // documented-expectation update in the same commit, not a loosened comparison.
+  // WHY NOT THE SPLIT: coord's pattern (chrome-tools-t12) exists to keep a mixed file's expensive or
+  // host-dependent half out of every subset gate. Measured here, the two halves are not like that. The
+  // file's cost is the CENSUS — 4.0s on the first test, memoised afterwards — and every invariant test
+  // needs it; the resolver unit tests that make the file 'mixed' cost ~4ms in total (4s, 409µs, 148µs,
+  // 1ms, 968µs, 1ms, 463µs, 874µs, 90µs, 177µs, 10ms, 3ms, 1ms, 410µs). So promoting the whole file adds
+  // the census and essentially nothing else, while extracting the machinery into a helper would put the
+  // repo WALK somewhere the detector does not scan (tests/helpers/*.ts) — reopening exactly the hole
+  // p1lp closed. It reads tracked source, spawns nothing and needs no browser, so it is host-independent
+  // and the cost is disclosed here for the always-on budget: ~4s at low load.
+  "tests/substring-pin-honesty.test.ts",
 ];
 
 /**
@@ -159,8 +174,6 @@ export const SCANNER_EXCLUSIONS = Object.freeze({
   // with main's versions of this bead's files swapped in, so the failure is not caused here. An
   // always-on guard that is red on main makes EVERY subset gate red, which is worse than the gap it
   // closes; promotion is owed the moment that red is fixed, and the red itself needs its own bead.
-  "tests/substring-pin-honesty.test.ts":
-    "a real repo-walker over the test sources, deliberately held out because it is RED on current main (its 'attributed population and documented exclusions' guard), adjudicated by running it with main's copies of this bead's files, so the promotion would turn every subset gate red. Promotion is owed once that red is fixed; the red is the follow-up, owned by chrome-agent-platform-p1lp's report.",
   // chrome-agent-platform-p1lp: caught by the widened detector, and DELIBERATELY not always-on for the
   // reason the architecture demands — this file is 16 tests of manifest/schema/import policy over
   // fixtures, and only ONE of them walks the extension tree. Promoting it would run fifteen unit tests
