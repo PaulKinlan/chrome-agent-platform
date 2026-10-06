@@ -722,12 +722,15 @@ the retired markdown trackers (`TASKS.md`, `KNOWN-ISSUES.md` — history only).
   `--user-data-dir=${ROOT}.cache/…`; `tests/chrome-profile-location.test.ts`
   scans every launch site and copies the whole tree under a live browser to
   prove it. KAT evidence dirs (screenshots, verdicts) may stay under `.cache/` —
-  a file written once is not a directory a browser churns. Lockless profiles
-  older than 6 h self-prune once per `scripts/kat-runner.ts` run via
-  `pruneChromeProfileDirs()`: a profile with a live `SingletonLock` is never
-  touched at any threshold, and a locked profile whose owner cannot be verified
-  (`unknown`, including dead-PID locks from crashed browsers) is retained and
-  logged in the `unknown` count (`chrome-agent-platform-z5ym`,
+  a file written once is not a directory a browser churns. In normal operation,
+  `teardownChrome()` / `launched.close()` cleanly removes the per-instance profile
+  once the process tree is verified dead (`chrome-agent-platform-yfsf`), so evidence
+  must be written to evidence/`OUT` dirs rather than relying on profile directory persistence.
+  Lockless profiles older than 6 h self-prune once per `scripts/kat-runner.ts` run via
+  `pruneChromeProfileDirs()` as a backstop for crashed/unreaped runs: a profile with a
+  live `SingletonLock` is never touched at any threshold, and a locked profile whose
+  owner cannot be verified (`unknown`, including dead-PID locks from crashed browsers)
+  is retained and logged in the `unknown` count (`chrome-agent-platform-z5ym`,
   `chrome-agent-platform-xvco`). `reportChromeProfileDirs()` and
   `deno run -A scripts/report-chrome-profiles.ts` report each local dead-PID
   lock's owner host/PID, creator name/PID and age without deleting it; the KAT

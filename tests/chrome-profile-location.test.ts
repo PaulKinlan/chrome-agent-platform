@@ -18,6 +18,8 @@
 // profile while the whole tree is copied.
 import { fileURLToPath } from "node:url";
 import { hostname } from "node:os";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
 import {
   chromeProfileDir,
@@ -31,8 +33,11 @@ import {
 import { durableRoot, isRamBacked } from "../scripts/lib/durable-root.mjs";
 import { killProcessTree } from "../scripts/lib/process-tree.ts";
 
-/** The file's ONE browser-dependent test, named where the refusal counts it. */
-const BROWSER_DEPENDENT_TESTS = ["9t1b: a REAL browser holds its profile while the whole tree is copied"];
+/** The file's browser-dependent tests, named where the refusal counts them. */
+const BROWSER_DEPENDENT_TESTS = [
+  "9t1b: a REAL browser holds its profile while the whole tree is copied",
+  "yfsf: teardownChrome cleanly deletes the profile directory from disk for real browsers",
+];
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 const SCRIPTS = `${ROOT}/scripts`;
@@ -168,7 +173,7 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
     }
     await new Promise((r) => setTimeout(r, 500));
     Deno.removeSync(scratch, { recursive: true });
-    Deno.removeSync(profile, { recursive: true });
+    try { Deno.removeSync(profile, { recursive: true }); } catch { /* cleaned by teardownChrome */ }
     await Deno.remove(lockScope).catch(() => {});
   }
 });
@@ -376,6 +381,86 @@ Deno.test("9t1b/z5ym/xvco: an UNKNOWN lock is kept AND reported, never deleted b
     agentsDoc.includes("Lockless profiles") && agentsDoc.includes("`unknown`"),
     "AGENTS.md documents that lockless profiles self-prune while unknown locked profiles are retained and logged",
   );
+});
+
+Deno.test("yfsf: teardownChrome removes the profile directory even for mock processes", async () => {
+  const { teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
+  const profile = chromeProfileDir("yfsf-mock-test");
+  Deno.mkdirSync(profile, { recursive: true });
+  Deno.writeTextFileSync(join(profile, "dummy.txt"), "hello");
+  assertEquals(existsSync(profile), true, "mock profile directory created");
+
+  try {
+    await teardownChrome(null, profile);
+    assertEquals(existsSync(profile), false, "teardownChrome must delete profile directory even if proc is null/exited");
+  } finally {
+    if (existsSync(profile)) {
+      try { Deno.removeSync(profile, { recursive: true }); } catch { /* ignore */ }
+    }
+  }
+});
+
+Deno.test("yfsf: teardownChrome safety guards refuse relative, inside-repo, or live profile deletions", async () => {
+  const { teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
+
+  // 1. Relative marker path (e.g. process-tree-cleanup marker) must NEVER be deleted
+  assertEquals(Deno.cwd(), ROOT, "test process runs from repository root");
+  const relativeMarker = `2ypf-marker-test-${crypto.randomUUID()}`;
+  const relativePath = join(ROOT, relativeMarker);
+  Deno.mkdirSync(relativePath, { recursive: true });
+  try {
+    await teardownChrome({ proc: null, profile: relativeMarker });
+    assertEquals(existsSync(relativePath), true, "relative marker path must NOT be deleted");
+  } finally {
+    try { Deno.removeSync(relativePath, { recursive: true }); } catch { /* ignore */ }
+  }
+
+  // 2. An inside-repo path must NEVER be deleted (placed under gitignored .cache/)
+  const insideRepoPath = join(ROOT, ".cache", `yfsf-inside-repo-${crypto.randomUUID()}`);
+  Deno.mkdirSync(insideRepoPath, { recursive: true });
+  try {
+    await teardownChrome(null, insideRepoPath);
+    assertEquals(existsSync(insideRepoPath), true, "inside-repo path must NOT be deleted");
+  } finally {
+    try { Deno.removeSync(insideRepoPath, { recursive: true }); } catch { /* ignore */ }
+  }
+
+  // 3. A synthetic LIVE profile (held by Deno.pid) must NEVER be deleted (never-delete-live rule)
+  const liveProfile = chromeProfileDir("yfsf-live-guard-test");
+  Deno.mkdirSync(liveProfile, { recursive: true });
+  Deno.symlinkSync(`${hostname()}-${Deno.pid}`, join(liveProfile, "SingletonLock"));
+  try {
+    await teardownChrome(null, liveProfile);
+    assertEquals(existsSync(liveProfile), true, "LIVE profile held by active process must NOT be deleted");
+  } finally {
+    try { Deno.removeSync(liveProfile, { recursive: true }); } catch { /* ignore */ }
+  }
+});
+
+Deno.test("yfsf: teardownChrome cleanly deletes the profile directory from disk for real browsers", async () => {
+  const { launchChrome, resolveChromiumBinaryReport, teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
+  const { browserRefusal } = await import("../scripts/lib/browser-refusal.ts");
+  if (browserRefusal(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS)) return;
+
+  const profile = chromeProfileDir("yfsf-release-test");
+  const lockScope = await Deno.makeTempFile({ prefix: "yfsf-scope-" });
+  try {
+    const launched = await launchChrome({
+      extension: `${ROOT}/extension`,
+      profile,
+      timeoutMs: 25000,
+      lockPath: lockScope,
+    });
+    assertEquals(existsSync(profile), true, "profile must exist while Chrome is running");
+
+    await teardownChrome(launched, profile);
+    assertEquals(existsSync(profile), false, "teardownChrome must remove the profile directory from disk (yfsf)");
+  } finally {
+    if (existsSync(profile)) {
+      try { await Deno.remove(profile, { recursive: true }); } catch { /* ignore */ }
+    }
+    await Deno.remove(lockScope).catch(() => {});
+  }
 });
 
 // chrome-agent-platform-hlgr: the environmental verdict is emitted HERE, last, so a browserless host

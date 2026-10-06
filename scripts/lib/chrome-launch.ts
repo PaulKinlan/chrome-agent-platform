@@ -31,7 +31,7 @@ import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } 
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
 import { isolatedProcessGroup, killProcessTree } from "./process-tree.ts";
-import { chromeProfileDir } from "./chrome-profile-dir.ts";
+import { chromeProfileDir, isInsideRepo, profileLiveness } from "./chrome-profile-dir.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -784,6 +784,31 @@ export async function teardownChrome(
     const raw = matchedProfile.replace(/^--/, "");
     const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;
     await killProcessTree(proc, match, { group });
+    const profilePath = raw.startsWith("user-data-dir=") ? raw.slice("user-data-dir=".length) : raw;
+    if (profilePath && typeof profilePath === "string" && profilePath.length > 5 && !profilePath.endsWith("/..")) {
+      const normalized = profilePath.replace(/\/+$/, "");
+      const home = Deno.env.get("HOME");
+      if (
+        normalized.startsWith("/") &&
+        !isInsideRepo(normalized) &&
+        normalized !== "/" &&
+        normalized !== "/home" &&
+        (!home || normalized !== home.replace(/\/+$/, ""))
+      ) {
+        // Enforce the never-delete-live invariant via profileLiveness authority (chrome-agent-platform-yfsf)
+        if (profileLiveness(normalized) !== "live") {
+          try {
+            await Deno.remove(normalized, { recursive: true });
+          } catch {
+            /* already removed or absent */
+          }
+        } else {
+          console.error(
+            `teardownChrome: refusing to delete ${normalized} — SingletonLock still reads live (never-delete-live rule)`,
+          );
+        }
+      }
+    }
     return;
   }
   if (proc) {
