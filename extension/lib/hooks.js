@@ -478,9 +478,11 @@ export async function migrateHookSubscriptions() {
  *   serialized into `{{payload}}` when the hook fires (default: the skill's
  *   own prompt + the payload appended)
  */
+export const MAX_PROMPT_TEMPLATE_CHARS = 64 * 1024;
+
 export async function subscribeHook(
   { hookId, skillId = null, recipeId = null, promptTemplate = "" },
-  { gateOnReplace = null } = {},
+  { gate = null } = {},
 ) {
   const allowed = await checkHookAllowed(hookId);
   if (!allowed.ok) return allowed;
@@ -497,6 +499,19 @@ export async function subscribeHook(
     }
   }
   const template = typeof promptTemplate === "string" ? promptTemplate : "";
+  // chrome-agent-platform-51cd (folded-in audit finding 7): a template is an INSTRUCTION, and it is
+  // re-executed on EVERY matching event up to the 50-run fan-out cap, so an unbounded one is a
+  // storage-quota and token-cost amplifier. The old unbounded behaviour was DELIBERATE and pinned (the
+  // dptw "size/count are not the guard" policy, tests/hooks.test.ts + tests/security.test.ts); this bead
+  // changes that policy, so those pins change with it and the landing note states the old behaviour, why
+  // it was wrong and the chosen bound. 64 KiB is the cap this repo enforced before dptw, kept because it
+  // is already ~16k tokens of instruction and far above any real template (the skill prompts are KBs).
+  if (template.length > MAX_PROMPT_TEMPLATE_CHARS) {
+    return {
+      ok: false,
+      error: `promptTemplate is too large (max ${MAX_PROMPT_TEMPLATE_CHARS} characters)`,
+    };
+  }
   // The read-modify-write is SERIALIZED under the hook mutex (the wider-goal
   // review's finding: subscription RMW was unlocked, so concurrent subscribes
   // could last-write-wins one of them out).
@@ -513,9 +528,20 @@ export async function subscribeHook(
       enabled: true,
       at: new Date().toISOString(),
     };
-    if (existing && typeof gateOnReplace === "function") {
-      const gate = await gateOnReplace({ existing: { ...existing }, candidate: { ...entry } });
-      if (!gate?.ok) return gate ?? { ok: false, error: "owner approval required" };
+    // chrome-agent-platform-51cd: THE SEAM RUNS FOR EVERY SUBSCRIBE, not only a replacement. It used to be
+    // `existing && typeof gateOnReplace === "function"`, which left the CREATE path - the common case for a
+    // new (hookId, skillId) pair - with only the deny-list check, so a subscription authored through the
+    // model path never reached the owner gate that owner-approval.js:32, the dispatch census 4.4 and the
+    // route's own requireOwnerApproval call all declare for this action. `existing` is null on create and
+    // the caller's payload builder must accept that. The seam stays OPTIONAL here: the internal seed
+    // callers (agent-seeds, skill enable/disable) pass no gate and must keep working; the ROUTE is where
+    // the gate is mandatory.
+    if (typeof gate === "function") {
+      const decision = await gate({
+        existing: existing ? { ...existing } : null,
+        candidate: { ...entry },
+      });
+      if (!decision?.ok) return decision ?? { ok: false, error: "owner approval required" };
     }
     if (existing) {
       delete existing.recipeId;

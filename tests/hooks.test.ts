@@ -192,14 +192,26 @@ Deno.test("an unknown recipeId refuses subscription (fan-out bound)", async () =
   assertEquals(subs.length, 0);
 });
 
-Deno.test("a prompt template past the old 64 KiB cap subscribes whole (dptw)", async () => {
+Deno.test("51cd: a prompt template past the 64 KiB bound is REFUSED and writes nothing (was: stored whole, dptw)", async () => {
   reset();
-  const big = "x".repeat(256 * 1024); // 256 KiB — past the old 64 KiB cap
+  // ACCEPTED CONSEQUENCE CHANGE (chrome-agent-platform-51cd). OLD BEHAVIOUR: this test asserted that a
+  // 256 KiB template was stored WHOLE - the dptw "size/count are not the guard" policy, on the premise that
+  // a subscription was not model-authorable. WHY THAT WAS WRONG: the template IS model-authorable through
+  // subscribe_hook, it is later executed verbatim in the INSTRUCTION position, and it re-runs on every
+  // matching event up to the 50-run fan-out cap - so an unbounded template is a storage-quota and
+  // token-cost amplifier, not just a big string. THE BOUND: 64 KiB (hooks.js MAX_PROMPT_TEMPLATE_CHARS),
+  // the cap this repo enforced before dptw and already ~16k tokens of instruction.
+  const big = "x".repeat(64 * 1024 + 1);
   const r = await subscribeHook({ hookId: "runtime.onStartup", recipeId: null, promptTemplate: big });
-  assertEquals(r.ok, true, "the large template is accepted");
-  const subs = await getHookSubscriptions();
-  assertEquals(subs.length, 1);
-  assertEquals(subs[0].promptTemplate.length, big.length, "the template is stored whole, not truncated");
+  assertEquals(r.ok, false, "a template past the bound is refused");
+  assert(String(r.error).includes("too large"), `the refusal must name the bound: ${r.error}`);
+  assertEquals((await getHookSubscriptions()).length, 0, "a refused subscribe must write nothing");
+  // The BOUNDARY still stores whole: the cap is a cap, not a truncation.
+  const atBound = "y".repeat(64 * 1024);
+  const ok = await subscribeHook({ hookId: "runtime.onStartup", recipeId: null, promptTemplate: atBound });
+  assertEquals(ok.ok, true, "a template AT the bound is accepted");
+  const [saved] = await getHookSubscriptions();
+  assertEquals(saved.promptTemplate.length, atBound.length, "a template at the bound is stored whole, not truncated");
 });
 
 Deno.test("concurrent denies of DIFFERENT hooks do not last-write-wins (the deny-list RMW is serialized)", async () => {
@@ -228,18 +240,23 @@ Deno.test("concurrent subscribes of DISTINCT skills do not last-write-wins (the 
   assert(ids.includes("page-summary"), "page-summary subscription must survive");
 });
 
-Deno.test("concurrent same-key first subscriptions cannot produce an ungated replacement", async () => {
+Deno.test("51cd: concurrent same-key FIRST subscriptions are BOTH gated (was: only the second one was)", async () => {
   reset();
+  // ACCEPTED CONSEQUENCE CHANGE (chrome-agent-platform-51cd). OLD BEHAVIOUR: the seam ran only when a row
+  // already existed, so the FIRST of these two calls was an ungated CREATE (gates === 1) and one
+  // subscription landed. The seam now runs for EVERY subscribe - { existing: null } on create - so both
+  // calls are gated and neither lands until the owner approves. The test's INTENT ("a concurrent first
+  // subscribe can never produce an UNGATED replacement") is preserved and strengthened: the ungated
+  // create path no longer exists at all.
   let gates = 0;
-  const gateOnReplace = async () => { gates += 1; return { ok: false, error: "owner approval required" }; };
+  const gate = async () => { gates += 1; return { ok: false, error: "owner approval required" }; };
   const [a, b] = await Promise.all([
-    subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene", promptTemplate: "first" }, { gateOnReplace }),
-    subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene", promptTemplate: "second" }, { gateOnReplace }),
+    subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene", promptTemplate: "first" }, { gate }),
+    subscribeHook({ hookId: "runtime.onStartup", recipeId: "tab-hygiene", promptTemplate: "second" }, { gate }),
   ]);
-  assertEquals([a.ok, b.ok].filter(Boolean).length, 1);
-  assertEquals(gates, 1);
-  const [saved] = await getHookSubscriptions();
-  assert(["first", "second"].includes(saved.promptTemplate));
+  assertEquals(gates, 2, "EVERY subscribe is gated, including the first and a concurrent one");
+  assertEquals([a.ok, b.ok].filter(Boolean).length, 0, "neither subscription lands without approval");
+  assertEquals((await getHookSubscriptions()).length, 0, "a denied gate writes nothing");
 });
 
 Deno.test("the subscription registry has no count cap (dptw): 208 distinct subscriptions all land", async () => {
