@@ -273,30 +273,9 @@ function derivePolicyClass(toolName, mutationClass) {
   return mutationClass === "read" ? "read" : "act";
 }
 
-/** One capability row. `requiresOwnerGesture` is POSITIONALLY 7th of 10 — keep
- *  that in mind for anything below (see the deprecation note on the parameter). */
+/** One capability row (record row builder). */
 function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
-  productGrantScopeKind, replayClass,
-  // DEPRECATED, UNIFORMLY FALSE, GATES NOTHING (chrome-agent-platform-4h47).
-  // Every one of the table's rows passes `false` and NO code reads the value to
-  // make a decision — the two places that touch it are this table's own boolean
-  // validator and the summary projections that copy it forward. It is therefore
-  // the exact class this bead exists to remove: an authority column that reads
-  // as declared coverage while enforcing nothing. Do NOT set it true to express
-  // a gate: a `true` here changes no behaviour and would make the table claim a
-  // protection it cannot provide. Wire the gate first (browser-tools.js /
-  // owner-approval.js), then come back and either make this column the single
-  // source of that gate or delete it.
-  // DELETION IS DEFERRED ON PURPOSE, OWNED BY chrome-agent-platform-yx2h: it is
-  // positionally 7th of 10, so removing it shifts `mutationClass`, `routeFamily`
-  // and `developerOnly` at every one of the 191 record() calls below — a 191-site
-  // positional shift is too large a review surface for this change, and the
-  // row-count pins (139/52/191) would not catch the shift, because the counts
-  // stay identical while the arguments move. Until yx2h removes it,
-  // tests/chrome-tool-capabilities.test.ts pins both halves instead: the column
-  // is uniformly false, AND every call's 8th argument is still a mutationClass,
-  // so the shift this note warns about cannot happen silently.
-  requiresOwnerGesture, mutationClass,
+  productGrantScopeKind, replayClass, mutationClass,
   routeFamily, developerOnly = false) {
   return {
     toolName,
@@ -306,7 +285,6 @@ function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
     productGrantScopeKind,
     replayClass,
     trustedReplaySafety: replayClass,
-    requiresOwnerGesture,
     mutationClass,
     routeFamily,
     // DEVELOPER-ONLY (CAP-FB-20260830-COOKIE-TOOLS-CUT-01): the tool is in the
@@ -327,67 +305,67 @@ const rows = [
   // product-level File System Access grant (a persisted handle), scoped
   // strictly to the granted folder subtree. All read-only. Listed first to
   // match browserToolset()'s Object.keys order.
-  record("list_folders", "chrome-api", ["chrome.fs-grant.folders.list"], [], "none", "read-only", false, "read", "browser.fs-grant"),
-  record("list_files", "chrome-api", ["chrome.fs-grant.entries.list"], [], "none", "read-only", false, "read", "browser.fs-grant"),
-  record("find_files", "chrome-api", ["chrome.fs-grant.files.find"], [], "none", "read-only", false, "read", "browser.fs-grant"),
-  record("read_file", "chrome-api", ["chrome.fs-grant.file.read"], [], "none", "read-only", false, "read", "browser.fs-grant"),
-  record("grep_files", "chrome-api", ["chrome.fs-grant.content.grep"], [], "none", "read-only", false, "read", "browser.fs-grant"),
+  record("list_folders", "chrome-api", ["chrome.fs-grant.folders.list"], [], "none", "read-only", "read", "browser.fs-grant"),
+  record("list_files", "chrome-api", ["chrome.fs-grant.entries.list"], [], "none", "read-only", "read", "browser.fs-grant"),
+  record("find_files", "chrome-api", ["chrome.fs-grant.files.find"], [], "none", "read-only", "read", "browser.fs-grant"),
+  record("read_file", "chrome-api", ["chrome.fs-grant.file.read"], [], "none", "read-only", "read", "browser.fs-grant"),
+  record("grep_files", "chrome-api", ["chrome.fs-grant.content.grep"], [], "none", "read-only", "read", "browser.fs-grant"),
   // The mutating file tools: a model write pays an owner diff-approval card
   // (fs-grant.write-file-approved) before any byte lands
   // (CAP-FB-20260830-LOCAL-FILE-EDIT-TOOLS-01).
-  record("write_file", "chrome-api", ["chrome.fs-grant.file.write"], [], "none", "mutating", false, "mutating", "browser.fs-grant"),
-  record("delete_file", "chrome-api", ["chrome.fs-grant.file.delete"], [], "none", "mutating", false, "mutating", "browser.fs-grant"),
-  record("open_tab", "chrome-api", ["chrome.tabs.open.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
-  record("navigate_tab", "chrome-api", ["chrome.tabs.navigate.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.tabs"),
-  record("read_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),
-  record("capture_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", false, "read", "browser.page"),
-  record("capture_screenshot", "chrome-api", ["chrome.host.exact-origin", "chrome.screenshot.capture.tab-origin", "chrome.screenshot.capture.owner-gesture-alternative"], ["activeTab", "tabs"], "tab-scoped", "read-only", false, "read", "browser.capture"),
-  record("list_tabs", "chrome-api", ["chrome.tabs.list"], ["tabs"], "none", "read-only", false, "read", "browser.tabs"),
-  record("close_tab", "chrome-api", ["chrome.tabs.close.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("recent_browser_events", "chrome-api", ["chrome.events.recent.read"], [], "none", "read-only", false, "read", "browser.events"),
-  record("schedule_task", "chrome-api", ["chrome.alarms.schedule", "chrome.scripts.schedule"], ["alarms"], "none", "mutating", false, "mutating", "browser.scheduler"),
+  record("write_file", "chrome-api", ["chrome.fs-grant.file.write"], [], "none", "mutating", "mutating", "browser.fs-grant"),
+  record("delete_file", "chrome-api", ["chrome.fs-grant.file.delete"], [], "none", "mutating", "mutating", "browser.fs-grant"),
+  record("open_tab", "chrome-api", ["chrome.tabs.open.destination-origin"], ["tabs"], "destination-origin", "mutating", "mutating", "browser.tabs"),
+  record("navigate_tab", "chrome-api", ["chrome.tabs.navigate.destination-origin"], ["tabs"], "destination-origin", "mutating", "mutating", "browser.tabs"),
+  record("read_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", "read", "browser.page"),
+  record("capture_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.read"], ["activeTab", "scripting", "tabs"], "none", "read-only", "read", "browser.page"),
+  record("capture_screenshot", "chrome-api", ["chrome.host.exact-origin", "chrome.screenshot.capture.tab-origin", "chrome.screenshot.capture.owner-gesture-alternative"], ["activeTab", "tabs"], "tab-scoped", "read-only", "read", "browser.capture"),
+  record("list_tabs", "chrome-api", ["chrome.tabs.list"], ["tabs"], "none", "read-only", "read", "browser.tabs"),
+  record("close_tab", "chrome-api", ["chrome.tabs.close.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("recent_browser_events", "chrome-api", ["chrome.events.recent.read"], [], "none", "read-only", "read", "browser.events"),
+  record("schedule_task", "chrome-api", ["chrome.alarms.schedule", "chrome.scripts.schedule"], ["alarms"], "none", "mutating", "mutating", "browser.scheduler"),
 
   // Tranche-1 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // windows + action + commands. No NEW manifest permission anywhere in this
   // tranche; window mutations ride the SAME product browser-control grant as
   // their tabs siblings (the grant is not a manifest permission).
-  record("list_windows", "chrome-api", ["chrome.windows.list"], [], "none", "read-only", false, "read", "browser.windows"),
-  record("create_window", "chrome-api", ["chrome.windows.create.destination-origin"], ["tabs"], "destination-origin", "mutating", false, "mutating", "browser.windows"),
-  record("focus_window", "chrome-api", ["chrome.windows.focus.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.windows"),
-  record("close_window", "chrome-api", ["chrome.windows.close.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.windows"),
-  record("move_window", "chrome-api", ["chrome.windows.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.windows"),
-  record("set_action_state", "chrome-api", ["chrome.action.set"], [], "none", "mutating", false, "mutating", "browser.action"),
-  record("get_action_state", "chrome-api", ["chrome.action.get"], [], "none", "read-only", false, "read", "browser.action"),
-  record("list_commands", "chrome-api", ["chrome.commands.list"], [], "none", "read-only", false, "read", "browser.commands"),
+  record("list_windows", "chrome-api", ["chrome.windows.list"], [], "none", "read-only", "read", "browser.windows"),
+  record("create_window", "chrome-api", ["chrome.windows.create.destination-origin"], ["tabs"], "destination-origin", "mutating", "mutating", "browser.windows"),
+  record("focus_window", "chrome-api", ["chrome.windows.focus.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.windows"),
+  record("close_window", "chrome-api", ["chrome.windows.close.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.windows"),
+  record("move_window", "chrome-api", ["chrome.windows.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.windows"),
+  record("set_action_state", "chrome-api", ["chrome.action.set"], [], "none", "mutating", "mutating", "browser.action"),
+  record("get_action_state", "chrome-api", ["chrome.action.get"], [], "none", "read-only", "read", "browser.action"),
+  record("list_commands", "chrome-api", ["chrome.commands.list"], [], "none", "read-only", "read", "browser.commands"),
 
   // Tranche-2 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // alarms, bookmarks, notifications, idle, contextMenus (declared optional permissions).
-  record("create_alarm", "chrome-api", ["chrome.alarms.create"], ["alarms"], "none", "mutating", false, "mutating", "browser.alarms"),
-  record("list_alarms", "chrome-api", ["chrome.alarms.list"], ["alarms"], "none", "read-only", false, "read", "browser.alarms"),
-  record("clear_alarm", "chrome-api", ["chrome.alarms.clear"], ["alarms"], "none", "mutating", false, "mutating", "browser.alarms"),
-  record("create_bookmark", "chrome-api", ["chrome.bookmarks.create"], ["bookmarks"], "none", "mutating", false, "mutating", "browser.bookmarks"),
-  record("list_bookmarks", "chrome-api", ["chrome.bookmarks.list"], ["bookmarks"], "none", "read-only", false, "read", "browser.bookmarks"),
-  record("remove_bookmark", "chrome-api", ["chrome.bookmarks.remove"], ["bookmarks"], "none", "mutating", false, "mutating", "browser.bookmarks"),
-  record("notify", "chrome-api", ["chrome.notifications.create"], ["notifications"], "none", "mutating", false, "mutating", "browser.notifications"),
-  record("clear_notification", "chrome-api", ["chrome.notifications.clear"], ["notifications"], "none", "mutating", false, "mutating", "browser.notifications"),
-  record("query_idle_state", "chrome-api", ["chrome.idle.query"], ["idle"], "none", "read-only", false, "read", "browser.idle"),
-  record("create_context_menu", "chrome-api", ["chrome.context-menus.create"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
-  record("list_context_menus", "chrome-api", ["chrome.context-menus.list"], ["contextMenus"], "none", "read-only", false, "read", "browser.context-menus"),
-  record("remove_context_menu", "chrome-api", ["chrome.context-menus.remove"], ["contextMenus"], "none", "mutating", false, "mutating", "browser.context-menus"),
+  record("create_alarm", "chrome-api", ["chrome.alarms.create"], ["alarms"], "none", "mutating", "mutating", "browser.alarms"),
+  record("list_alarms", "chrome-api", ["chrome.alarms.list"], ["alarms"], "none", "read-only", "read", "browser.alarms"),
+  record("clear_alarm", "chrome-api", ["chrome.alarms.clear"], ["alarms"], "none", "mutating", "mutating", "browser.alarms"),
+  record("create_bookmark", "chrome-api", ["chrome.bookmarks.create"], ["bookmarks"], "none", "mutating", "mutating", "browser.bookmarks"),
+  record("list_bookmarks", "chrome-api", ["chrome.bookmarks.list"], ["bookmarks"], "none", "read-only", "read", "browser.bookmarks"),
+  record("remove_bookmark", "chrome-api", ["chrome.bookmarks.remove"], ["bookmarks"], "none", "mutating", "mutating", "browser.bookmarks"),
+  record("notify", "chrome-api", ["chrome.notifications.create"], ["notifications"], "none", "mutating", "mutating", "browser.notifications"),
+  record("clear_notification", "chrome-api", ["chrome.notifications.clear"], ["notifications"], "none", "mutating", "mutating", "browser.notifications"),
+  record("query_idle_state", "chrome-api", ["chrome.idle.query"], ["idle"], "none", "read-only", "read", "browser.idle"),
+  record("create_context_menu", "chrome-api", ["chrome.context-menus.create"], ["contextMenus"], "none", "mutating", "mutating", "browser.context-menus"),
+  record("list_context_menus", "chrome-api", ["chrome.context-menus.list"], ["contextMenus"], "none", "read-only", "read", "browser.context-menus"),
+  record("remove_context_menu", "chrome-api", ["chrome.context-menus.remove"], ["contextMenus"], "none", "mutating", "mutating", "browser.context-menus"),
 
   // Tranche-8 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // site-data control — cookies (API permission + exact-origin HOST permission),
   // browsingData (global-grant wipe of explicitly enumerated types), and
   // contentSettings (single-origin patterns only; broad/wildcard rejected).
-  record("list_cookies", "chrome-api", ["chrome.cookies.list"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
-  record("list_cookie_stores", "chrome-api", ["chrome.cookies.stores.list"], ["cookies"], "none", "read-only", false, "read", "browser.cookies"),
-  record("get_cookie", "chrome-api", ["chrome.cookies.get.exact-origin"], ["cookies"], "none", "read-only", false, "read", "browser.cookies", true),
-  record("set_cookie", "chrome-api", ["chrome.cookies.set.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies", true),
-  record("remove_cookie", "chrome-api", ["chrome.cookies.remove.exact-origin"], ["cookies"], "destination-origin", "mutating", false, "mutating", "browser.cookies", true),
-  record("wipe_browsing_data", "chrome-api", ["chrome.browsing-data.wipe.global"], ["browsingData"], "global", "mutating", false, "mutating", "browser.browsing-data"),
-  record("get_content_setting", "chrome-api", ["chrome.content-settings.get"], ["contentSettings"], "none", "read-only", false, "read", "browser.content-settings"),
-  record("set_content_setting", "chrome-api", ["chrome.content-settings.set.exact-origin"], ["contentSettings"], "destination-origin", "mutating", false, "mutating", "browser.content-settings"),
-  record("clear_content_settings", "chrome-api", ["chrome.content-settings.clear.exact-origin"], ["contentSettings"], "destination-origin", "mutating", false, "mutating", "browser.content-settings"),
+  record("list_cookies", "chrome-api", ["chrome.cookies.list"], ["cookies"], "none", "read-only", "read", "browser.cookies"),
+  record("list_cookie_stores", "chrome-api", ["chrome.cookies.stores.list"], ["cookies"], "none", "read-only", "read", "browser.cookies"),
+  record("get_cookie", "chrome-api", ["chrome.cookies.get.exact-origin"], ["cookies"], "none", "read-only", "read", "browser.cookies", true),
+  record("set_cookie", "chrome-api", ["chrome.cookies.set.exact-origin"], ["cookies"], "destination-origin", "mutating", "mutating", "browser.cookies", true),
+  record("remove_cookie", "chrome-api", ["chrome.cookies.remove.exact-origin"], ["cookies"], "destination-origin", "mutating", "mutating", "browser.cookies", true),
+  record("wipe_browsing_data", "chrome-api", ["chrome.browsing-data.wipe.global"], ["browsingData"], "global", "mutating", "mutating", "browser.browsing-data"),
+  record("get_content_setting", "chrome-api", ["chrome.content-settings.get"], ["contentSettings"], "none", "read-only", "read", "browser.content-settings"),
+  record("set_content_setting", "chrome-api", ["chrome.content-settings.set.exact-origin"], ["contentSettings"], "destination-origin", "mutating", "mutating", "browser.content-settings"),
+  record("clear_content_settings", "chrome-api", ["chrome.content-settings.clear.exact-origin"], ["contentSettings"], "destination-origin", "mutating", "mutating", "browser.content-settings"),
   // Tranche-3 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // tabGroups — the owner's "sorting hat" unlock. The `tabGroups` optional
   // permission gates the chrome.tabGroups namespace (the tools check it, the
@@ -396,66 +374,66 @@ const rows = [
   // same browser-control grant as the tabs/windows siblings); reads are
   // un-scoped. Both permissions are listed so `requirementFor` derives the
   // FULL ask before the first denial (CAP-FB-20260901-ONE-CARD-PER-STEP-01).
-  record("list_tab_groups", "chrome-api", ["chrome.tab-groups.list"], ["tabGroups"], "none", "read-only", false, "read", "browser.tab-groups"),
-  record("group_tabs", "chrome-api", ["chrome.tab-groups.group.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
-  record("update_tab_group", "chrome-api", ["chrome.tab-groups.update.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
-  record("ungroup_tabs", "chrome-api", ["chrome.tab-groups.ungroup.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
-  record("move_tab_to_group", "chrome-api", ["chrome.tab-groups.move.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tab-groups"),
+  record("list_tab_groups", "chrome-api", ["chrome.tab-groups.list"], ["tabGroups"], "none", "read-only", "read", "browser.tab-groups"),
+  record("group_tabs", "chrome-api", ["chrome.tab-groups.group.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", "mutating", "browser.tab-groups"),
+  record("update_tab_group", "chrome-api", ["chrome.tab-groups.update.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", "mutating", "browser.tab-groups"),
+  record("ungroup_tabs", "chrome-api", ["chrome.tab-groups.ungroup.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", "mutating", "browser.tab-groups"),
+  record("move_tab_to_group", "chrome-api", ["chrome.tab-groups.move.tab-origin"], ["tabGroups", "tabs"], "tab-scoped", "mutating", "mutating", "browser.tab-groups"),
 
   // Tranche-4 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // downloads — the "downloads" optional permission is already declared;
   // mutations are GLOBAL-grant-scoped (downloads are browser-wide; an
   // origin-scoped grant must never authorize them). open_download is the
   // owner-OVERRIDDEN Phase-1 exclusion — kept hard grant-gated.
-  record("download_file", "chrome-api", ["chrome.downloads.create.destination-scheme"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
-  record("list_downloads", "chrome-api", ["chrome.downloads.list"], ["downloads"], "none", "read-only", false, "read", "browser.downloads"),
-  record("pause_download", "chrome-api", ["chrome.downloads.pause"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
-  record("resume_download", "chrome-api", ["chrome.downloads.resume"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
-  record("cancel_download", "chrome-api", ["chrome.downloads.cancel"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
-  record("erase_download", "chrome-api", ["chrome.downloads.erase"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
-  record("show_download", "chrome-api", ["chrome.downloads.show"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
-  record("open_download", "chrome-api", ["chrome.downloads.open"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
-  record("remove_download_file", "chrome-api", ["chrome.downloads.remove-file"], ["downloads"], "global", "mutating", false, "mutating", "browser.downloads"),
+  record("download_file", "chrome-api", ["chrome.downloads.create.destination-scheme"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
+  record("list_downloads", "chrome-api", ["chrome.downloads.list"], ["downloads"], "none", "read-only", "read", "browser.downloads"),
+  record("pause_download", "chrome-api", ["chrome.downloads.pause"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
+  record("resume_download", "chrome-api", ["chrome.downloads.resume"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
+  record("cancel_download", "chrome-api", ["chrome.downloads.cancel"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
+  record("erase_download", "chrome-api", ["chrome.downloads.erase"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
+  record("show_download", "chrome-api", ["chrome.downloads.show"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
+  record("open_download", "chrome-api", ["chrome.downloads.open"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
+  record("remove_download_file", "chrome-api", ["chrome.downloads.remove-file"], ["downloads"], "global", "mutating", "mutating", "browser.downloads"),
   // Tranche-13 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // deep tab control + action enable/disable + sidePanel options/behavior.
   // NO new manifest permissions (already-declared "tabs"/"sidePanel" only).
   // Tab mutations ride the SAME product browser-control grant as close_tab
   // (tab-scoped origin re-checked inside the grant lock); the two sidePanel
   // mutations are browser-level surfaces requiring a GLOBAL grant.
-  record("move_tab", "chrome-api", ["chrome.tabs.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("duplicate_tab", "chrome-api", ["chrome.tabs.duplicate.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("set_tab_pinned", "chrome-api", ["chrome.tabs.set-pinned.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("reload_tab", "chrome-api", ["chrome.tabs.reload.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("tab_go_back", "chrome-api", ["chrome.tabs.go-back.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("tab_go_forward", "chrome-api", ["chrome.tabs.go-forward.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("get_tab_zoom", "chrome-api", ["chrome.tabs.get-zoom"], ["tabs"], "none", "read-only", false, "read", "browser.tabs"),
-  record("set_tab_zoom", "chrome-api", ["chrome.tabs.set-zoom.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("discard_tab", "chrome-api", ["chrome.tabs.discard.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("highlight_tabs", "chrome-api", ["chrome.tabs.highlight.tab-origin"], ["tabs"], "tab-scoped", "mutating", false, "mutating", "browser.tabs"),
-  record("enable_action", "chrome-api", ["chrome.action.enable"], [], "none", "mutating", false, "mutating", "browser.action"),
-  record("disable_action", "chrome-api", ["chrome.action.disable"], [], "none", "mutating", false, "mutating", "browser.action"),
-  record("get_side_panel_options", "chrome-api", ["chrome.side-panel.get-options"], ["sidePanel"], "none", "read-only", false, "read", "browser.side-panel"),
-  record("set_side_panel_options", "chrome-api", ["chrome.side-panel.set-options"], ["sidePanel"], "global", "mutating", false, "mutating", "browser.side-panel"),
-  record("set_panel_behavior", "chrome-api", ["chrome.side-panel.set-behavior"], ["sidePanel"], "global", "mutating", false, "mutating", "browser.side-panel"),
+  record("move_tab", "chrome-api", ["chrome.tabs.move.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("duplicate_tab", "chrome-api", ["chrome.tabs.duplicate.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("set_tab_pinned", "chrome-api", ["chrome.tabs.set-pinned.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("reload_tab", "chrome-api", ["chrome.tabs.reload.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("tab_go_back", "chrome-api", ["chrome.tabs.go-back.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("tab_go_forward", "chrome-api", ["chrome.tabs.go-forward.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("get_tab_zoom", "chrome-api", ["chrome.tabs.get-zoom"], ["tabs"], "none", "read-only", "read", "browser.tabs"),
+  record("set_tab_zoom", "chrome-api", ["chrome.tabs.set-zoom.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("discard_tab", "chrome-api", ["chrome.tabs.discard.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("highlight_tabs", "chrome-api", ["chrome.tabs.highlight.tab-origin"], ["tabs"], "tab-scoped", "mutating", "mutating", "browser.tabs"),
+  record("enable_action", "chrome-api", ["chrome.action.enable"], [], "none", "mutating", "mutating", "browser.action"),
+  record("disable_action", "chrome-api", ["chrome.action.disable"], [], "none", "mutating", "mutating", "browser.action"),
+  record("get_side_panel_options", "chrome-api", ["chrome.side-panel.get-options"], ["sidePanel"], "none", "read-only", "read", "browser.side-panel"),
+  record("set_side_panel_options", "chrome-api", ["chrome.side-panel.set-options"], ["sidePanel"], "global", "mutating", "mutating", "browser.side-panel"),
+  record("set_panel_behavior", "chrome-api", ["chrome.side-panel.set-behavior"], ["sidePanel"], "global", "mutating", "mutating", "browser.side-panel"),
   // Tranche-5 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01
   // T5, CAP-FB-20260825 implementation): system.* + topSites + permissions
   // inventory — ALL read-only; the optional permission is requested by the
   // owner in Settings and each tool fails HONEST when denied (no grant gate:
   // nothing here mutates or touches page data).
-  record("get_system_memory", "chrome-api", ["chrome.system.memory.read"], ["system.memory"], "none", "read-only", false, "read", "browser.system"),
-  record("get_system_cpu", "chrome-api", ["chrome.system.cpu.read"], ["system.cpu"], "none", "read-only", false, "read", "browser.system"),
-  record("get_system_storage", "chrome-api", ["chrome.system.storage.read"], ["system.storage"], "none", "read-only", false, "read", "browser.system"),
-  record("get_system_display", "chrome-api", ["chrome.system.display.read"], ["system.display"], "none", "read-only", false, "read", "browser.system"),
-  record("list_top_sites", "chrome-api", ["chrome.top-sites.read"], ["topSites"], "none", "read-only", false, "read", "browser.top-sites"),
-  record("list_granted_permissions", "chrome-api", ["chrome.permissions.inventory.read"], [], "none", "read-only", false, "read", "browser.permissions"),
+  record("get_system_memory", "chrome-api", ["chrome.system.memory.read"], ["system.memory"], "none", "read-only", "read", "browser.system"),
+  record("get_system_cpu", "chrome-api", ["chrome.system.cpu.read"], ["system.cpu"], "none", "read-only", "read", "browser.system"),
+  record("get_system_storage", "chrome-api", ["chrome.system.storage.read"], ["system.storage"], "none", "read-only", "read", "browser.system"),
+  record("get_system_display", "chrome-api", ["chrome.system.display.read"], ["system.display"], "none", "read-only", "read", "browser.system"),
+  record("list_top_sites", "chrome-api", ["chrome.top-sites.read"], ["topSites"], "none", "read-only", "read", "browser.top-sites"),
+  record("list_granted_permissions", "chrome-api", ["chrome.permissions.inventory.read"], [], "none", "read-only", "read", "browser.permissions"),
   // Tranche-6: readingList (http/https-only entries; mutations assert durable
   // run ownership) + pageCapture (EXACTLY capture_screenshot consent: origin
   // host permission + product grant under the grant lock + hard byte cap).
-  record("add_reading_list_entry", "chrome-api", ["chrome.reading-list.add"], ["readingList"], "none", "mutating", false, "mutating", "browser.reading-list"),
-  record("query_reading_list", "chrome-api", ["chrome.reading-list.query"], ["readingList"], "none", "read-only", false, "read", "browser.reading-list"),
-  record("update_reading_list_entry", "chrome-api", ["chrome.reading-list.update"], ["readingList"], "none", "mutating", false, "mutating", "browser.reading-list"),
-  record("remove_reading_list_entry", "chrome-api", ["chrome.reading-list.remove"], ["readingList"], "none", "mutating", false, "mutating", "browser.reading-list"),
-  record("save_page_as_mhtml", "chrome-api", ["chrome.host.exact-origin", "chrome.page-capture.save.tab-origin"], ["pageCapture", "tabs"], "tab-scoped", "read-only", false, "read", "browser.capture"),
+  record("add_reading_list_entry", "chrome-api", ["chrome.reading-list.add"], ["readingList"], "none", "mutating", "mutating", "browser.reading-list"),
+  record("query_reading_list", "chrome-api", ["chrome.reading-list.query"], ["readingList"], "none", "read-only", "read", "browser.reading-list"),
+  record("update_reading_list_entry", "chrome-api", ["chrome.reading-list.update"], ["readingList"], "none", "mutating", "mutating", "browser.reading-list"),
+  record("remove_reading_list_entry", "chrome-api", ["chrome.reading-list.remove"], ["readingList"], "none", "mutating", "mutating", "browser.reading-list"),
+  record("save_page_as_mhtml", "chrome-api", ["chrome.host.exact-origin", "chrome.page-capture.save.tab-origin"], ["pageCapture", "tabs"], "tab-scoped", "read-only", "read", "browser.capture"),
   // Tranche-7 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // sessions + history, both already-declared optional permissions
   // (chrome-agent-platform-3p3e.1: `chrome.sessions` DOES require the
@@ -464,15 +442,15 @@ const rows = [
   // product browser-control grant covering every restored origin; per-URL
   // history writes/deletes are destination-origin scoped; range/all wipes
   // require a GLOBAL grant (clear_all also needs an explicit confirm:true).
-  record("list_recently_closed", "chrome-api", ["chrome.sessions.list-recently-closed"], ["sessions"], "none", "read-only", false, "read", "browser.sessions"),
-  record("restore_closed", "chrome-api", ["chrome.sessions.restore.tab-origin"], ["sessions"], "tab-scoped", "mutating", false, "mutating", "browser.sessions"),
-  record("list_synced_devices", "chrome-api", ["chrome.sessions.list-devices"], ["sessions"], "none", "read-only", false, "read", "browser.sessions"),
-  record("search_history", "chrome-api", ["chrome.history.search"], ["history"], "none", "read-only", false, "read", "browser.history"),
-  record("get_history_visits", "chrome-api", ["chrome.history.visits.list"], ["history"], "none", "read-only", false, "read", "browser.history"),
-  record("add_history_url", "chrome-api", ["chrome.history.add.destination-origin"], ["history"], "destination-origin", "mutating", false, "mutating", "browser.history"),
-  record("delete_history_url", "chrome-api", ["chrome.history.delete.destination-origin"], ["history"], "destination-origin", "mutating", false, "mutating", "browser.history"),
-  record("delete_history_range", "chrome-api", ["chrome.history.delete-range"], ["history"], "global", "mutating", false, "mutating", "browser.history"),
-  record("clear_all_history", "chrome-api", ["chrome.history.clear-all"], ["history"], "global", "mutating", false, "mutating", "browser.history"),
+  record("list_recently_closed", "chrome-api", ["chrome.sessions.list-recently-closed"], ["sessions"], "none", "read-only", "read", "browser.sessions"),
+  record("restore_closed", "chrome-api", ["chrome.sessions.restore.tab-origin"], ["sessions"], "tab-scoped", "mutating", "mutating", "browser.sessions"),
+  record("list_synced_devices", "chrome-api", ["chrome.sessions.list-devices"], ["sessions"], "none", "read-only", "read", "browser.sessions"),
+  record("search_history", "chrome-api", ["chrome.history.search"], ["history"], "none", "read-only", "read", "browser.history"),
+  record("get_history_visits", "chrome-api", ["chrome.history.visits.list"], ["history"], "none", "read-only", "read", "browser.history"),
+  record("add_history_url", "chrome-api", ["chrome.history.add.destination-origin"], ["history"], "destination-origin", "mutating", "mutating", "browser.history"),
+  record("delete_history_url", "chrome-api", ["chrome.history.delete.destination-origin"], ["history"], "destination-origin", "mutating", "mutating", "browser.history"),
+  record("delete_history_range", "chrome-api", ["chrome.history.delete-range"], ["history"], "global", "mutating", "mutating", "browser.history"),
+  record("clear_all_history", "chrome-api", ["chrome.history.clear-all"], ["history"], "global", "mutating", "mutating", "browser.history"),
 
   // Tranche-11 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // extension/browser management. chrome.management is a NEW optional
@@ -480,134 +458,134 @@ const rows = [
   // gesture); runtime/sidePanel/action need no new permission. ALL mutations
   // are browser-wide / this-extension-own-surface = GLOBAL browser-control
   // grant (an origin-scoped grant must never authorize them); reads un-scoped.
-  record("list_extensions", "chrome-api", ["chrome.management.list"], ["management"], "none", "read-only", false, "read", "browser.management"),
-  record("get_extension", "chrome-api", ["chrome.management.get"], ["management"], "none", "read-only", false, "read", "browser.management"),
-  record("get_extension_permission_warnings", "chrome-api", ["chrome.management.permission-warnings"], ["management"], "none", "read-only", false, "read", "browser.management"),
-  record("set_extension_enabled", "chrome-api", ["chrome.management.set-enabled.global"], ["management"], "global", "mutating", false, "mutating", "browser.management"),
-  record("uninstall_extension", "chrome-api", ["chrome.management.uninstall.global"], ["management"], "global", "mutating", false, "mutating", "browser.management"),
-  record("get_platform_info", "chrome-api", ["chrome.runtime.platform-info"], [], "none", "read-only", false, "read", "browser.runtime"),
-  record("get_extension_manifest", "chrome-api", ["chrome.runtime.manifest"], [], "none", "read-only", false, "read", "browser.runtime"),
+  record("list_extensions", "chrome-api", ["chrome.management.list"], ["management"], "none", "read-only", "read", "browser.management"),
+  record("get_extension", "chrome-api", ["chrome.management.get"], ["management"], "none", "read-only", "read", "browser.management"),
+  record("get_extension_permission_warnings", "chrome-api", ["chrome.management.permission-warnings"], ["management"], "none", "read-only", "read", "browser.management"),
+  record("set_extension_enabled", "chrome-api", ["chrome.management.set-enabled.global"], ["management"], "global", "mutating", "mutating", "browser.management"),
+  record("uninstall_extension", "chrome-api", ["chrome.management.uninstall.global"], ["management"], "global", "mutating", "mutating", "browser.management"),
+  record("get_platform_info", "chrome-api", ["chrome.runtime.platform-info"], [], "none", "read-only", "read", "browser.runtime"),
+  record("get_extension_manifest", "chrome-api", ["chrome.runtime.manifest"], [], "none", "read-only", "read", "browser.runtime"),
 
   // Tranche-9 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // browser settings — chrome.privacy / proxy / fontSettings / power / search /
   // tts. Reads are un-scoped observe-only. Every mutation is BROWSER-WIDE (no
   // destination origin) and is therefore GLOBAL-grant-scoped: an origin-scoped
   // grant must never authorize a browser-wide settings change.
-  record("get_privacy_setting", "chrome-api", ["chrome.privacy.get"], ["privacy"], "none", "read-only", false, "read", "browser.privacy"),
-  record("set_privacy_setting", "chrome-api", ["chrome.privacy.set.global"], ["privacy"], "global", "mutating", false, "mutating", "browser.privacy"),
-  record("get_proxy_settings", "chrome-api", ["chrome.proxy.get"], ["proxy"], "none", "read-only", false, "read", "browser.proxy"),
-  record("set_proxy_settings", "chrome-api", ["chrome.proxy.set.global"], ["proxy"], "global", "mutating", false, "mutating", "browser.proxy"),
-  record("clear_proxy_settings", "chrome-api", ["chrome.proxy.clear.global"], ["proxy"], "global", "mutating", false, "mutating", "browser.proxy"),
-  record("get_font_settings", "chrome-api", ["chrome.font-settings.get"], ["fontSettings"], "none", "read-only", false, "read", "browser.font-settings"),
-  record("set_font_size", "chrome-api", ["chrome.font-settings.set-size.global"], ["fontSettings"], "global", "mutating", false, "mutating", "browser.font-settings"),
-  record("set_default_font", "chrome-api", ["chrome.font-settings.set-default.global"], ["fontSettings"], "global", "mutating", false, "mutating", "browser.font-settings"),
-  record("clear_font_settings", "chrome-api", ["chrome.font-settings.clear.global"], ["fontSettings"], "global", "mutating", false, "mutating", "browser.font-settings"),
-  record("request_keep_awake", "chrome-api", ["chrome.power.keep-awake.global"], ["power"], "global", "mutating", false, "mutating", "browser.power"),
-  record("release_keep_awake", "chrome-api", ["chrome.power.release.global"], ["power"], "global", "mutating", false, "mutating", "browser.power"),
-  record("search_query", "chrome-api", ["chrome.search.query.global"], ["search"], "global", "mutating", false, "mutating", "browser.search"),
-  record("tts_speak", "chrome-api", ["chrome.tts.speak.global"], ["tts"], "global", "mutating", false, "mutating", "browser.tts"),
-  record("tts_stop", "chrome-api", ["chrome.tts.stop.global"], ["tts"], "global", "mutating", false, "mutating", "browser.tts"),
-  record("list_tts_voices", "chrome-api", ["chrome.tts.voices.list"], ["tts"], "none", "read-only", false, "read", "browser.tts"),
-  record("tts_is_speaking", "chrome-api", ["chrome.tts.speaking.get"], ["tts"], "none", "read-only", false, "read", "browser.tts"),
+  record("get_privacy_setting", "chrome-api", ["chrome.privacy.get"], ["privacy"], "none", "read-only", "read", "browser.privacy"),
+  record("set_privacy_setting", "chrome-api", ["chrome.privacy.set.global"], ["privacy"], "global", "mutating", "mutating", "browser.privacy"),
+  record("get_proxy_settings", "chrome-api", ["chrome.proxy.get"], ["proxy"], "none", "read-only", "read", "browser.proxy"),
+  record("set_proxy_settings", "chrome-api", ["chrome.proxy.set.global"], ["proxy"], "global", "mutating", "mutating", "browser.proxy"),
+  record("clear_proxy_settings", "chrome-api", ["chrome.proxy.clear.global"], ["proxy"], "global", "mutating", "mutating", "browser.proxy"),
+  record("get_font_settings", "chrome-api", ["chrome.font-settings.get"], ["fontSettings"], "none", "read-only", "read", "browser.font-settings"),
+  record("set_font_size", "chrome-api", ["chrome.font-settings.set-size.global"], ["fontSettings"], "global", "mutating", "mutating", "browser.font-settings"),
+  record("set_default_font", "chrome-api", ["chrome.font-settings.set-default.global"], ["fontSettings"], "global", "mutating", "mutating", "browser.font-settings"),
+  record("clear_font_settings", "chrome-api", ["chrome.font-settings.clear.global"], ["fontSettings"], "global", "mutating", "mutating", "browser.font-settings"),
+  record("request_keep_awake", "chrome-api", ["chrome.power.keep-awake.global"], ["power"], "global", "mutating", "mutating", "browser.power"),
+  record("release_keep_awake", "chrome-api", ["chrome.power.release.global"], ["power"], "global", "mutating", "mutating", "browser.power"),
+  record("search_query", "chrome-api", ["chrome.search.query.global"], ["search"], "global", "mutating", "mutating", "browser.search"),
+  record("tts_speak", "chrome-api", ["chrome.tts.speak.global"], ["tts"], "global", "mutating", "mutating", "browser.tts"),
+  record("tts_stop", "chrome-api", ["chrome.tts.stop.global"], ["tts"], "global", "mutating", "mutating", "browser.tts"),
+  record("list_tts_voices", "chrome-api", ["chrome.tts.voices.list"], ["tts"], "none", "read-only", "read", "browser.tts"),
+  record("tts_is_speaking", "chrome-api", ["chrome.tts.speaking.get"], ["tts"], "none", "read-only", "read", "browser.tts"),
   // Tranche-10 Chrome API coverage (CAP-FB-20260823-COMPREHENSIVE-CHROME-TOOLS-01):
   // declarativeNetRequest dynamic rules are BROWSER-WIDE -> global grant;
   // webNavigation frame reads + webRequest observation are reads.
-  record("list_network_rules", "chrome-api", ["chrome.network-rules.list"], ["declarativeNetRequest"], "none", "read-only", false, "read", "browser.network-rules"),
-  record("add_network_rule", "chrome-api", ["chrome.network-rules.add.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
-  record("update_network_rule", "chrome-api", ["chrome.network-rules.update.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
-  record("remove_network_rule", "chrome-api", ["chrome.network-rules.remove.global"], ["declarativeNetRequest"], "global", "mutating", false, "mutating", "browser.network-rules"),
-  record("get_network_rule_matches", "chrome-api", ["chrome.network-rules.match-test"], ["declarativeNetRequest"], "none", "read-only", false, "read", "browser.network-rules"),
-  record("get_navigation_frames", "chrome-api", ["chrome.navigation.frames.list"], ["webNavigation"], "none", "read-only", false, "read", "browser.navigation"),
-  record("get_navigation_frame", "chrome-api", ["chrome.navigation.frame.get"], ["webNavigation"], "none", "read-only", false, "read", "browser.navigation"),
-  record("get_request_activity", "chrome-api", ["chrome.requests.activity.read"], ["webRequest"], "none", "read-only", false, "read", "browser.requests"),
+  record("list_network_rules", "chrome-api", ["chrome.network-rules.list"], ["declarativeNetRequest"], "none", "read-only", "read", "browser.network-rules"),
+  record("add_network_rule", "chrome-api", ["chrome.network-rules.add.global"], ["declarativeNetRequest"], "global", "mutating", "mutating", "browser.network-rules"),
+  record("update_network_rule", "chrome-api", ["chrome.network-rules.update.global"], ["declarativeNetRequest"], "global", "mutating", "mutating", "browser.network-rules"),
+  record("remove_network_rule", "chrome-api", ["chrome.network-rules.remove.global"], ["declarativeNetRequest"], "global", "mutating", "mutating", "browser.network-rules"),
+  record("get_network_rule_matches", "chrome-api", ["chrome.network-rules.match-test"], ["declarativeNetRequest"], "none", "read-only", "read", "browser.network-rules"),
+  record("get_navigation_frames", "chrome-api", ["chrome.navigation.frames.list"], ["webNavigation"], "none", "read-only", "read", "browser.navigation"),
+  record("get_navigation_frame", "chrome-api", ["chrome.navigation.frame.get"], ["webNavigation"], "none", "read-only", "read", "browser.navigation"),
+  record("get_request_activity", "chrome-api", ["chrome.requests.activity.read"], ["webRequest"], "none", "read-only", "read", "browser.requests"),
 
-  record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", false, "mutating", "management.agents"),
-  record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", false, "mutating", "management.agents"),
-  record("delete_agent", "management", ["management.agent.delete"], [], "none", "mutating", false, "mutating", "management.agents"),
-  record("get_agent", "management", ["management.agent.get"], [], "none", "read-only", false, "read", "management.agents"),
-  record("list_agents", "management", ["management.agent.list"], [], "none", "read-only", false, "read", "management.agents"),
-  record("disenroll_origin", "management", ["management.origin.disenroll"], [], "none", "mutating", false, "mutating", "management.agents"),
-  record("create_asset", "management", ["management.asset.create"], [], "none", "mutating", false, "mutating", "management.assets"),
-  record("update_asset", "management", ["management.asset.update"], [], "none", "mutating", false, "mutating", "management.assets"),
-  record("patch_asset", "management", ["management.asset.patch"], [], "none", "mutating", false, "mutating", "management.assets"),
-  record("append_asset", "management", ["management.asset.append"], [], "none", "mutating", false, "mutating", "management.assets"),
-  record("delete_asset", "management", ["management.asset.delete"], [], "none", "mutating", false, "mutating", "management.assets"),
-  record("list_assets", "management", ["management.asset.list"], [], "none", "read-only", false, "read", "management.assets"),
-  record("get_asset", "management", ["management.asset.get"], [], "none", "read-only", false, "read", "management.assets"),
-  record("export_asset_to_folder", "management", ["management.asset.export"], [], "none", "mutating", false, "mutating", "management.assets"),
-  record("get_usage", "management", ["management.usage.get"], [], "none", "read-only", false, "read", "management.usage"),
-  record("get_memory_overview", "management", ["management.memory.overview.get"], [], "none", "read-only", false, "read", "management.memory"),
-  record("create_named_agent", "management", ["management.named-agent.create"], [], "none", "mutating", false, "mutating", "management.named-agents"),
-  record("update_named_agent", "management", ["management.named-agent.update"], [], "none", "mutating", false, "mutating", "management.named-agents"),
-  record("delete_named_agent", "management", ["management.named-agent.delete"], [], "none", "mutating", false, "mutating", "management.named-agents"),
-  record("get_named_agent", "management", ["management.named-agent.get"], [], "none", "read-only", false, "read", "management.named-agents"),
-  record("list_named_agents", "management", ["management.named-agent.list"], [], "none", "read-only", false, "read", "management.named-agents"),
-  record("set_agent_provider", "management", ["management.provider.set"], [], "none", "mutating", false, "mutating", "management.named-agents"),
-  record("list_hooks", "management", ["management.hooks.list"], [], "none", "read-only", false, "read", "management.hooks"),
-  record("subscribe_hook", "management", ["management.hooks.subscribe"], [], "none", "mutating", false, "mutating", "management.hooks"),
-  record("unsubscribe_hook", "management", ["management.hooks.unsubscribe"], [], "none", "mutating", false, "mutating", "management.hooks"),
-  record("generate_ui", "management", ["management.ui.generate"], [], "none", "mutating", false, "mutating", "management.ui"),
-  record("create_script", "management", ["management.script.create"], [], "none", "mutating", false, "mutating", "management.scripts"),
-  record("update_script", "management", ["management.script.update"], [], "none", "mutating", false, "mutating", "management.scripts"),
-  record("delete_script", "management", ["management.script.delete"], [], "none", "mutating", false, "mutating", "management.scripts"),
-  record("list_scripts", "management", ["management.script.list"], [], "none", "read-only", false, "read", "management.scripts"),
-  record("get_script", "management", ["management.script.get"], [], "none", "read-only", false, "read", "management.scripts"),
-  record("run_script", "management", ["management.script.run"], [], "none", "mutating", false, "mutating", "management.scripts"),
-  record("python_execute", "management", ["management.python.execute"], [], "none", "mutating", false, "mutating", "management.compute"),
+  record("create_agent", "management", ["management.agent.create"], [], "none", "mutating", "mutating", "management.agents"),
+  record("update_agent", "management", ["management.agent.update"], [], "none", "mutating", "mutating", "management.agents"),
+  record("delete_agent", "management", ["management.agent.delete"], [], "none", "mutating", "mutating", "management.agents"),
+  record("get_agent", "management", ["management.agent.get"], [], "none", "read-only", "read", "management.agents"),
+  record("list_agents", "management", ["management.agent.list"], [], "none", "read-only", "read", "management.agents"),
+  record("disenroll_origin", "management", ["management.origin.disenroll"], [], "none", "mutating", "mutating", "management.agents"),
+  record("create_asset", "management", ["management.asset.create"], [], "none", "mutating", "mutating", "management.assets"),
+  record("update_asset", "management", ["management.asset.update"], [], "none", "mutating", "mutating", "management.assets"),
+  record("patch_asset", "management", ["management.asset.patch"], [], "none", "mutating", "mutating", "management.assets"),
+  record("append_asset", "management", ["management.asset.append"], [], "none", "mutating", "mutating", "management.assets"),
+  record("delete_asset", "management", ["management.asset.delete"], [], "none", "mutating", "mutating", "management.assets"),
+  record("list_assets", "management", ["management.asset.list"], [], "none", "read-only", "read", "management.assets"),
+  record("get_asset", "management", ["management.asset.get"], [], "none", "read-only", "read", "management.assets"),
+  record("export_asset_to_folder", "management", ["management.asset.export"], [], "none", "mutating", "mutating", "management.assets"),
+  record("get_usage", "management", ["management.usage.get"], [], "none", "read-only", "read", "management.usage"),
+  record("get_memory_overview", "management", ["management.memory.overview.get"], [], "none", "read-only", "read", "management.memory"),
+  record("create_named_agent", "management", ["management.named-agent.create"], [], "none", "mutating", "mutating", "management.named-agents"),
+  record("update_named_agent", "management", ["management.named-agent.update"], [], "none", "mutating", "mutating", "management.named-agents"),
+  record("delete_named_agent", "management", ["management.named-agent.delete"], [], "none", "mutating", "mutating", "management.named-agents"),
+  record("get_named_agent", "management", ["management.named-agent.get"], [], "none", "read-only", "read", "management.named-agents"),
+  record("list_named_agents", "management", ["management.named-agent.list"], [], "none", "read-only", "read", "management.named-agents"),
+  record("set_agent_provider", "management", ["management.provider.set"], [], "none", "mutating", "mutating", "management.named-agents"),
+  record("list_hooks", "management", ["management.hooks.list"], [], "none", "read-only", "read", "management.hooks"),
+  record("subscribe_hook", "management", ["management.hooks.subscribe"], [], "none", "mutating", "mutating", "management.hooks"),
+  record("unsubscribe_hook", "management", ["management.hooks.unsubscribe"], [], "none", "mutating", "mutating", "management.hooks"),
+  record("generate_ui", "management", ["management.ui.generate"], [], "none", "mutating", "mutating", "management.ui"),
+  record("create_script", "management", ["management.script.create"], [], "none", "mutating", "mutating", "management.scripts"),
+  record("update_script", "management", ["management.script.update"], [], "none", "mutating", "mutating", "management.scripts"),
+  record("delete_script", "management", ["management.script.delete"], [], "none", "mutating", "mutating", "management.scripts"),
+  record("list_scripts", "management", ["management.script.list"], [], "none", "read-only", "read", "management.scripts"),
+  record("get_script", "management", ["management.script.get"], [], "none", "read-only", "read", "management.scripts"),
+  record("run_script", "management", ["management.script.run"], [], "none", "mutating", "mutating", "management.scripts"),
+  record("python_execute", "management", ["management.python.execute"], [], "none", "mutating", "mutating", "management.compute"),
   // Per-agent schedule visibility + control (pause/resume/update are gated
   // owner-approved mutations; list is a read, scoped to the calling agent).
-  record("schedules_list", "management", ["management.schedules.list"], [], "none", "read-only", false, "read", "management.schedules"),
-  record("schedules_pause", "management", ["management.task.pause"], [], "none", "mutating", false, "mutating", "management.schedules"),
-  record("schedules_resume", "management", ["management.task.resume"], [], "none", "mutating", false, "mutating", "management.schedules"),
-  record("schedules_update", "management", ["management.task.update"], [], "none", "mutating", false, "mutating", "management.schedules"),
+  record("schedules_list", "management", ["management.schedules.list"], [], "none", "read-only", "read", "management.schedules"),
+  record("schedules_pause", "management", ["management.task.pause"], [], "none", "mutating", "mutating", "management.schedules"),
+  record("schedules_resume", "management", ["management.task.resume"], [], "none", "mutating", "mutating", "management.schedules"),
+  record("schedules_update", "management", ["management.task.update"], [], "none", "mutating", "mutating", "management.schedules"),
   // Agent→agent delegation (G5): spawns a child run — mutating, and the
   // route's own fail-closed guard (per-edge allow-list + depth/cycle/cap/budget)
   // is the authority; no Chrome permission is involved.
-  record("delegate_to_agent", "management", ["management.agent.delegate"], [], "none", "mutating", false, "mutating", "management.named-agents"),
+  record("delegate_to_agent", "management", ["management.agent.delegate"], [], "none", "mutating", "mutating", "management.named-agents"),
   // The shared jobs board (async/broadcast agent→agent work): posting,
   // claiming, and settling mutate the hub-level board store; list/read are
   // read-only. No Chrome permission is involved; the route's own guard (known
   // poster/claimant, atomic claim, lease) is the authority.
-  record("board_post_job", "management", ["management.board.post"], [], "none", "mutating", false, "mutating", "management.board"),
-  record("board_claim_job", "management", ["management.board.claim"], [], "none", "mutating", false, "mutating", "management.board"),
-  record("board_complete_job", "management", ["management.board.complete"], [], "none", "mutating", false, "mutating", "management.board"),
-  record("board_send_message", "management", ["management.board.message"], [], "none", "mutating", false, "mutating", "management.board"),
-  record("board_list", "management", ["management.board.list"], [], "none", "read-only", false, "read", "management.board"),
-  record("board_read", "management", ["management.board.read"], [], "none", "read-only", false, "read", "management.board"),
-  record("board_read_messages", "management", ["management.board.messages"], [], "none", "read-only", false, "read", "management.board"),
+  record("board_post_job", "management", ["management.board.post"], [], "none", "mutating", "mutating", "management.board"),
+  record("board_claim_job", "management", ["management.board.claim"], [], "none", "mutating", "mutating", "management.board"),
+  record("board_complete_job", "management", ["management.board.complete"], [], "none", "mutating", "mutating", "management.board"),
+  record("board_send_message", "management", ["management.board.message"], [], "none", "mutating", "mutating", "management.board"),
+  record("board_list", "management", ["management.board.list"], [], "none", "read-only", "read", "management.board"),
+  record("board_read", "management", ["management.board.read"], [], "none", "read-only", "read", "management.board"),
+  record("board_read_messages", "management", ["management.board.messages"], [], "none", "read-only", "read", "management.board"),
   // Deterministic local table transforms publish an immutable artifact under a
   // full operation identity that includes the output digest. They need no
   // Chrome permission or owner prompt; exact replays resolve to the same key.
-  record("table_filter", "management", ["management.table.filter"], [], "none", "idempotent", false, "idempotent", "management.table"),
-  record("table_select", "management", ["management.table.select"], [], "none", "idempotent", false, "idempotent", "management.table"),
-  record("table_join", "management", ["management.table.join"], [], "none", "idempotent", false, "idempotent", "management.table"),
-  record("table_group_aggregate", "management", ["management.table.group-aggregate"], [], "none", "idempotent", false, "idempotent", "management.table"),
-  record("table_pivot", "management", ["management.table.pivot"], [], "none", "idempotent", false, "idempotent", "management.table"),
-  record("table_formula", "management", ["management.table.formula"], [], "none", "idempotent", false, "idempotent", "management.table"),
-  record("write_clipboard", "management", ["management.clipboard.write"], [], "none", "mutating", false, "mutating", "management.clipboard"),
+  record("table_filter", "management", ["management.table.filter"], [], "none", "idempotent", "idempotent", "management.table"),
+  record("table_select", "management", ["management.table.select"], [], "none", "idempotent", "idempotent", "management.table"),
+  record("table_join", "management", ["management.table.join"], [], "none", "idempotent", "idempotent", "management.table"),
+  record("table_group_aggregate", "management", ["management.table.group-aggregate"], [], "none", "idempotent", "idempotent", "management.table"),
+  record("table_pivot", "management", ["management.table.pivot"], [], "none", "idempotent", "idempotent", "management.table"),
+  record("table_formula", "management", ["management.table.formula"], [], "none", "idempotent", "idempotent", "management.table"),
+  record("write_clipboard", "management", ["management.clipboard.write"], [], "none", "mutating", "mutating", "management.clipboard"),
   // Tranche-12 Chrome API coverage:
   // browser-wide global grant), user scripts + dynamic content scripts
   // (single-origin matches; destination-origin grant coverage; host
   // permissions granted via the Settings flow). desktopCapture intentionally
   // absent (documented exclusion).
-  record("register_user_script", "chrome-api", ["chrome.user-scripts.register"], ["userScripts"], "destination-origin", "mutating", false, "mutating", "browser.user-scripts"),
-  record("update_user_script", "chrome-api", ["chrome.user-scripts.update"], ["userScripts"], "destination-origin", "mutating", false, "mutating", "browser.user-scripts"),
-  record("unregister_user_script", "chrome-api", ["chrome.user-scripts.unregister"], ["userScripts"], "destination-origin", "mutating", false, "mutating", "browser.user-scripts"),
-  record("list_user_scripts", "chrome-api", ["chrome.user-scripts.list"], ["userScripts"], "none", "read-only", false, "read", "browser.user-scripts"),
-  record("register_content_script", "chrome-api", ["chrome.content-scripts.register"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
-  record("update_content_script", "chrome-api", ["chrome.content-scripts.update"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
-  record("unregister_content_script", "chrome-api", ["chrome.content-scripts.unregister"], ["scripting"], "destination-origin", "mutating", false, "mutating", "browser.content-scripts"),
-  record("list_content_scripts", "chrome-api", ["chrome.content-scripts.list"], ["scripting"], "none", "read-only", false, "read", "browser.content-scripts"),
+  record("register_user_script", "chrome-api", ["chrome.user-scripts.register"], ["userScripts"], "destination-origin", "mutating", "mutating", "browser.user-scripts"),
+  record("update_user_script", "chrome-api", ["chrome.user-scripts.update"], ["userScripts"], "destination-origin", "mutating", "mutating", "browser.user-scripts"),
+  record("unregister_user_script", "chrome-api", ["chrome.user-scripts.unregister"], ["userScripts"], "destination-origin", "mutating", "mutating", "browser.user-scripts"),
+  record("list_user_scripts", "chrome-api", ["chrome.user-scripts.list"], ["userScripts"], "none", "read-only", "read", "browser.user-scripts"),
+  record("register_content_script", "chrome-api", ["chrome.content-scripts.register"], ["scripting"], "destination-origin", "mutating", "mutating", "browser.content-scripts"),
+  record("update_content_script", "chrome-api", ["chrome.content-scripts.update"], ["scripting"], "destination-origin", "mutating", "mutating", "browser.content-scripts"),
+  record("unregister_content_script", "chrome-api", ["chrome.content-scripts.unregister"], ["scripting"], "destination-origin", "mutating", "mutating", "browser.content-scripts"),
+  record("list_content_scripts", "chrome-api", ["chrome.content-scripts.list"], ["scripting"], "none", "read-only", "read", "browser.content-scripts"),
   // CAP-FB-20260830-PAGE-ACTION-TOOLS-01: the page-action family. Each injects
   // through chrome.scripting.executeScript (the `scripting` permission) and is
   // gated by the per-origin browser-control grant (tab-scoped). find_elements /
   // scroll_page / wait_for observe (read); click / type / select mutate.
-  record("find_elements", "chrome-api", ["chrome.host.exact-origin", "chrome.page.find-elements"], ["scripting"], "tab-scoped", "read-only", false, "read", "browser.page"),
-  record("click_element", "chrome-api", ["chrome.host.exact-origin", "chrome.page.click"], ["scripting"], "tab-scoped", "mutating", false, "mutating", "browser.page"),
-  record("type_text", "chrome-api", ["chrome.host.exact-origin", "chrome.page.type"], ["scripting"], "tab-scoped", "mutating", false, "mutating", "browser.page"),
-  record("select_option", "chrome-api", ["chrome.host.exact-origin", "chrome.page.select"], ["scripting"], "tab-scoped", "mutating", false, "mutating", "browser.page"),
-  record("scroll_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.scroll"], ["scripting"], "tab-scoped", "read-only", false, "read", "browser.page"),
-  record("wait_for", "chrome-api", ["chrome.host.exact-origin", "chrome.page.wait"], ["scripting"], "tab-scoped", "read-only", false, "read", "browser.page"),
+  record("find_elements", "chrome-api", ["chrome.host.exact-origin", "chrome.page.find-elements"], ["scripting"], "tab-scoped", "read-only", "read", "browser.page"),
+  record("click_element", "chrome-api", ["chrome.host.exact-origin", "chrome.page.click"], ["scripting"], "tab-scoped", "mutating", "mutating", "browser.page"),
+  record("type_text", "chrome-api", ["chrome.host.exact-origin", "chrome.page.type"], ["scripting"], "tab-scoped", "mutating", "mutating", "browser.page"),
+  record("select_option", "chrome-api", ["chrome.host.exact-origin", "chrome.page.select"], ["scripting"], "tab-scoped", "mutating", "mutating", "browser.page"),
+  record("scroll_page", "chrome-api", ["chrome.host.exact-origin", "chrome.page.scroll"], ["scripting"], "tab-scoped", "read-only", "read", "browser.page"),
+  record("wait_for", "chrome-api", ["chrome.host.exact-origin", "chrome.page.wait"], ["scripting"], "tab-scoped", "read-only", "read", "browser.page"),
 ];
 
 function validateRow(row, seen) {
@@ -622,11 +600,7 @@ function validateRow(row, seen) {
   if (!GRANT_SCOPES.has(row.productGrantScopeKind)) throw new Error("invalid_grant_scope");
   if (!REPLAY.has(row.replayClass) || row.trustedReplaySafety !== row.replayClass) throw new Error("invalid_replay_class");
   // The DEPRECATED column's only reader: a boolean-shape check, NOT a gate
-  // (chrome-agent-platform-4h47; removal owned by chrome-agent-platform-yx2h).
-  // It stays so a future lane cannot set the value to a non-boolean and pretend
-  // it means something; the enforcement is the uniformly-false pin in
-  // tests/chrome-tool-capabilities.test.ts.
-  if (typeof row.requiresOwnerGesture !== "boolean" || !MUTATION.has(row.mutationClass)) throw new Error("invalid_mutation_metadata");
+  if (!MUTATION.has(row.mutationClass)) throw new Error("invalid_mutation_metadata");
   if (typeof row.routeFamily !== "string" || !ROUTE.test(row.routeFamily) || bytes(row.routeFamily) > CHROME_TOOL_CAPABILITY_BOUNDS.maxRouteFamilyBytes) throw new Error("invalid_route_family");
   if (typeof row.developerOnly !== "boolean") throw new Error("invalid_developer_only");
 }
@@ -745,10 +719,6 @@ export function selectedCapabilitySummary(name, sourceKind, fallbackCapabilities
       optionalPermissions: row.optionalPermissions,
       productGrantScopeKind: row.productGrantScopeKind,
       replayClass: row.replayClass,
-      // DEPRECATED, uniformly false, gates nothing — copied forward only so this
-      // projection's shape is unchanged (chrome-agent-platform-4h47). Do not
-      // read it as coverage.
-      requiresOwnerGesture: row.requiresOwnerGesture,
       mutationClass: row.mutationClass,
       routeFamily: row.routeFamily,
     });
@@ -764,8 +734,6 @@ export function selectedCapabilitySummary(name, sourceKind, fallbackCapabilities
     optionalPermissions: Object.freeze([]),
     productGrantScopeKind: "none",
     replayClass: REPLAY.has(fallbackReplay) ? fallbackReplay : "unknown",
-    // DEPRECATED, uniformly false, gates nothing (chrome-agent-platform-4h47).
-    requiresOwnerGesture: false,
     mutationClass: fallbackReplay === "read-only" ? "read" : fallbackReplay === "idempotent" ? "idempotent" : "mutating",
     routeFamily: sourceKind === "extension-builtin" ? "catalog.builtin" : "catalog.webmcp",
   });

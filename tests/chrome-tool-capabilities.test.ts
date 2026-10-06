@@ -296,42 +296,22 @@ Deno.test("unsafe-for-cutover list remains policy metadata and does not filter t
   assertEquals(new Set(CHROME_TOOL_CAPABILITY_TABLE.map((row) => row.toolName)).size, 191);
 });
 
-// chrome-agent-platform-4h47: `requiresOwnerGesture` is a DEAD AUTHORITY COLUMN.
-// All 191 rows pass false and nothing in the shipped extension reads the value
-// to make a decision, so the column cannot express the gate its name promises —
-// a declaration that is not enforced, which is the class this bead removes. It
-// is deprecated in place (deleting it would shift `mutationClass`, `routeFamily`
-// and `developerOnly` at every positional record() call, and the 139/52/191
-// count pins would NOT see that shift) and pinned here instead, in two halves:
-//   1. the value is uniformly FALSE, so a `true` cannot arrive as a silent claim;
-//   2. the POSITIONAL contract of the row builder — the declaration's exact
-//      parameter list, and the 8th argument of every call (a mutationClass
-//      literal). Measured teeth, mutant by mutant: dropping one call site's 7th
-//      argument leaves 1/191 calls with "browser.fs-grant" where a mutationClass
-//      belongs, which assertion 2 reports by offset; and a whole-declaration
-//      change is reported by the parameter-list assertion.
-// HONEST LIMIT (measured, not assumed): a half-done removal that drops the
-// PARAMETER and leaves the 191 call sites alone is caught FIRST by this module's
-// own validateRow — `mutationClass` then binds the old `false` and the table
-// throws "invalid_mutation_metadata" at import, before any test body runs. So
-// assertion 2 is the SECOND net, and the one that still holds if the yx2h lane
-// relaxes that validator in the same change (which removing the column requires
-// it to do: the boolean clause on the removed column), plus it states the
-// argument order the 191 sites are written against instead of leaving it
-// implicit in the declaration.
-const REQUIRES_OWNER_GESTURE_DEPRECATION =
-  "requiresOwnerGesture is DEPRECATED and uniformly false (chrome-agent-platform-4h47): no shipped code reads it, so it cannot express an owner gesture. " +
-  "Do not set it true to declare a gate — wire the gate in browser-tools.js/owner-approval.js and make this column its single source (or delete the column, which requires shifting the positional record() arguments). " +
-  "The removal is owned by chrome-agent-platform-yx2h; tests/requires-owner-gesture-column-allowlist.test.ts pins the READ side (which files may even mention the name).";
+// chrome-agent-platform-yx2h: `requiresOwnerGesture` was a DEAD AUTHORITY COLUMN
+// (originally deprecated in chrome-agent-platform-4h47). It has been completely
+// removed from record(), validateRow, all 191 row definitions, and capability summaries.
+// All 191 rows remain intact with their 9-parameter signatures.
+Deno.test("requiresOwnerGesture has been retired and removed from all capability table rows (yx2h)", () => {
+  for (const row of CHROME_TOOL_CAPABILITY_TABLE) {
+    assert(!("requiresOwnerGesture" in row), `row "${row.toolName}" must not have requiresOwnerGesture`);
+  }
+  // The count is re-asserted here so this pin cannot be satisfied by an empty table.
+  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 191, "all 191 tools remain in table");
 
-Deno.test("requiresOwnerGesture is a deprecated, uniformly-false column that gates nothing", () => {
-  const claiming = CHROME_TOOL_CAPABILITY_TABLE
-    .filter((row) => row.requiresOwnerGesture !== false)
-    .map((row) => row.toolName);
-  assertEquals(claiming, [], REQUIRES_OWNER_GESTURE_DEPRECATION);
-  // The count is re-asserted here so this pin cannot be satisfied by an empty
-  // table (a filter over nothing is trivially uniform).
-  assertEquals(CHROME_TOOL_CAPABILITY_TABLE.length, 191, REQUIRES_OWNER_GESTURE_DEPRECATION);
+  // Also assert that selectedCapabilitySummary does not include requiresOwnerGesture
+  const summary = selectedCapabilitySummary("open_tab", "chrome-api");
+  assert(!("requiresOwnerGesture" in summary), "summary must not have requiresOwnerGesture");
+  const fallback = selectedCapabilitySummary("unknown", "unknown");
+  assert(!("requiresOwnerGesture" in fallback), "fallback summary must not have requiresOwnerGesture");
 });
 
 Deno.test("the capability table's positional record() arguments still line up with the declaration", async () => {
@@ -343,11 +323,12 @@ Deno.test("the capability table's positional record() arguments still line up wi
     declaration.params.map((param) => param.name ?? param.left?.name),
     [
       "toolName", "sourceKind", "capabilityTokens", "optionalPermissions", "productGrantScopeKind",
-      "replayClass", "requiresOwnerGesture", "mutationClass", "routeFamily", "developerOnly",
+      "replayClass", "mutationClass", "routeFamily", "developerOnly",
     ],
     "record()'s positional parameter list is the contract every row call site is written against",
   );
   const mutationClasses = new Set(["read", "idempotent", "mutating"]);
+  const routePattern = /^[\w.-]+$/;
   const calls = [];
   const walk = (node) => {
     if (!node || typeof node !== "object") return;
@@ -360,11 +341,20 @@ Deno.test("the capability table's positional record() arguments still line up wi
   walk(ast);
   assertEquals(calls.length, 191, "every catalogue row is built through record()");
   for (const call of calls) {
-    const mutationClass = call.arguments[7];
+    const mutationClass = call.arguments[6];
     assert(
       mutationClass?.type === "Literal" && mutationClasses.has(mutationClass.value),
-      `record() call at offset ${call.start} must pass a mutationClass literal 8th (got ${source.slice(mutationClass?.start ?? 0, mutationClass?.end ?? 0) || "nothing"}) — ` +
-        "if the deprecated requiresOwnerGesture parameter moved or was dropped, every argument after it shifted.",
+      `record() call at offset ${call.start} must pass a mutationClass literal 7th (got ${source.slice(mutationClass?.start ?? 0, mutationClass?.end ?? 0) || "nothing"}) — ` +
+        "if an argument shifted or was dropped incorrectly, mutationClass would not be at index 6.",
+    );
+    const routeFamily = call.arguments[7];
+    assert(
+      routeFamily?.type === "Literal" && typeof routeFamily.value === "string" && routePattern.test(routeFamily.value),
+      `record() call at offset ${call.start} must pass a routeFamily literal 8th`,
+    );
+    assert(
+      call.arguments.length === 8 || call.arguments.length === 9,
+      `record() call at offset ${call.start} must have 8 or 9 arguments, got ${call.arguments.length}`,
     );
   }
 });

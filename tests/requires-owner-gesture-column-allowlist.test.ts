@@ -48,19 +48,9 @@ const COLUMN_NAME = "requiresOwnerGesture";
  *  the column and is not listed here fails the guard below; a listed file that
  *  stops mentioning it also fails, because a stale exception hides a fix. */
 const MENTION_ALLOWLIST: Readonly<Record<string, string>> = {
-  "extension/lib/chrome-tool-capabilities.js":
-    "The column's DECLARATION (record()'s positional 7th parameter, marked DEPRECATED in place), its " +
-    "one reader (validateRow's boolean-shape check) and the two summary projections that copy the value " +
-    "forward. None of the three decides anything from it: the validator checks its SHAPE, the projections " +
-    "preserve an object's shape. Removal is deferred to chrome-agent-platform-yx2h.",
-  "extension/lib/lazy-tool-wire.js":
-    "The catch-fallback capability summary fabricates `requiresOwnerGesture: false` so the projection's " +
-    "shape is unchanged when a catalogue lookup throws. A shape placeholder, never a decision — and it " +
-    "carries the same deprecation marker as the table's own fallback.",
   "tests/chrome-tool-capabilities.test.ts":
-    "The two ENFORCING pins this bead added: every row's value must be FALSE (a `true` cannot arrive as a " +
-    "silent claim), and every positional record() call's 8th argument must still be a mutationClass, so " +
-    "the deprecated 7th parameter cannot be dropped without shifting the arguments that follow it.",
+    "The ENFORCING pin proving requiresOwnerGesture is completely removed from all 191 catalogue rows, " +
+    "and that record() parameter list and calls line up with the 9-parameter signature (chrome-agent-platform-yx2h).",
   "tests/requires-owner-gesture-column-allowlist.test.ts":
     "THIS guard. It names the column because the column is what it searches for — its own mentions are the " +
     "search key, not a read of the value.",
@@ -113,8 +103,19 @@ Deno.test("requiresOwnerGesture: only the allowlisted files may mention the dead
 
 Deno.test("requiresOwnerGesture: every allowlist entry carries a real reason", () => {
   const entries = Object.entries(MENTION_ALLOWLIST);
-  assertEquals(entries.length, 5, "the allowlist is exactly the five known mention sites — a sixth needs review");
+  assertEquals(entries.length, 3, "the allowlist is exactly the three known mention sites (all test/script documentation; zero in extension/lib/)");
   for (const [file, reason] of entries) {
     assert(reason.trim().length > 80, `allowlist entry ${file} must carry a real reason, not a placeholder`);
   }
+});
+
+Deno.test("requiresOwnerGesture: zero occurrences in extension/ (the column is deleted and unreadable)", () => {
+  const result = spawnSync("git", ["grep", "-n", "-e", COLUMN_NAME, "--", "extension/"], { cwd: ROOT, encoding: "utf8" });
+  assertEquals(result.status, 1, `extension/ must have zero mentions of ${COLUMN_NAME} (got stdout: ${result.stdout})`);
+});
+
+Deno.test("requiresOwnerGesture: falsification — a simulated reader outside the allowlist is flagged", () => {
+  const simulatedFiles = ["extension/lib/browser-tools.js", ...Object.keys(MENTION_ALLOWLIST)];
+  const unexpected = simulatedFiles.filter((file) => !Object.hasOwn(MENTION_ALLOWLIST, file));
+  assertEquals(unexpected, ["extension/lib/browser-tools.js"], "a simulated reader outside the allowlist must be flagged");
 });
