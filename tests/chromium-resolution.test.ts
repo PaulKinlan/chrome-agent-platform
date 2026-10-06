@@ -14,11 +14,19 @@
 // and (b) the census wiring pins at the bottom of this file. The order pins
 // below are the teeth for any future re-ordering of the resolution chain.
 import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 import { CHROMIUM, resolveChromiumBinary, resolveChromiumBinaryReport, acquireChromeLock } from "../scripts/lib/chrome-launch.ts";
+
+/** Unique suffix for the durable scratch dirs below, so a repeated call cannot collide. */
+let tmpSeq = 0;
 
 /** A fixture puppeteer cache holding one executable fake browser. */
 function fixtureCache(version: string): string {
-  const root = Deno.makeTempDirSync({ prefix: "fyvc-resolution-cache-" });
+  // Durable, not a bare temp-dir factory: this host's scratch filesystem is RAM-backed tmpfs and
+  // tests/durable-root.test.ts polices it (chrome-agent-platform-fyvc's own new test added these and
+  // tripped that guard, which no gate selected because the guard is NOT in ALWAYS_ON). Removed by the
+  // caller's finally, so nothing is retained.
+  const root = durableDir(`fyvc-resolution-cache-${Deno.pid}-${tmpSeq++}`);
   const dir = `${root}/${version}/chrome-linux64`;
   Deno.mkdirSync(dir, { recursive: true });
   Deno.writeTextFileSync(`${dir}/chrome`, "#!/bin/sh\nexit 0\n");
@@ -80,7 +88,7 @@ Deno.test("fyvc report: names every step it tried; a null binary only when the l
 });
 
 Deno.test("fyvc lock: a lockPath under a not-yet-existing directory acquires — the parent is created, never the misleading other-lane blame", async () => {
-  const dir = Deno.makeTempDirSync({ prefix: "fyvc-lock-" });
+  const dir = durableDir(`fyvc-lock-${Deno.pid}-${tmpSeq++}`);
   try {
     const lockPath = `${dir}/deep/nested/chrome.lock`;
     const lock = await acquireChromeLock(lockPath);
@@ -97,7 +105,7 @@ Deno.test("fyvc lock: a lockPath under a not-yet-existing directory acquires —
 });
 
 Deno.test("fyvc lock: an uncreatable parent fails with the REAL reason, not another lane's browser", async () => {
-  const dir = Deno.makeTempDirSync({ prefix: "fyvc-lock-real-" });
+  const dir = durableDir(`fyvc-lock-real-${Deno.pid}-${tmpSeq++}`);
   try {
     Deno.writeTextFileSync(`${dir}/a-file`, "in the way\n");
     const error = await assertRejects(
