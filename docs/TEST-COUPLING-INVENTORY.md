@@ -25,7 +25,11 @@ whole-suite mutant run); **inspection** means read from the source, not executed
 - **Watches:** every file under `tests/` (recursive walk, asserts >100 files) for an
   absolute path under `/home`, `/root`, `/Users` reaching a filesystem call — as a
   literal or through a const. Line comments are skipped; `file://` URLs and env-fixture
-  values are legal.
+  values are legal — EXCEPT a `file://` URL naming a home directory that reaches
+  `import(…)`, literal or through a const (`detectUrlImportHomeLiteral`, added
+  2026-10-06 by hi7t after review49-regression.test.ts imported the author's own
+  worktree and died 0/9 on every other machine). A file URL that is only parsed or
+  compared (`new URL(…)`) stays legal, and its probe holds that boundary.
 - **Owed by a re-anchor:** `git grep -n "/home/\|/root/\|/Users/" -- tests/` before
   removing any absolute path from a test; the allowlist key is `` file::path `` so a
   one-line move does not break it.
