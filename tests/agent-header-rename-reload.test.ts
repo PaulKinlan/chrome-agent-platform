@@ -35,6 +35,41 @@ if (BROWSER_BINARY === null) {
     ". Reporting the browser journey as IGNORED (a visible tally line, never a pass); set CAP_CHROMIUM or install a browser to run it.");
 }
 
+// Hub rows arrive asynchronously from named-agent.list; a fixed delay after Page.navigate
+// measures CPU scheduling, not whether the picker finished rendering. Keep the real click,
+// but wait for the named row and fail with the observed picker state if it never arrives.
+async function clickAgentRowWhenReady(ev: (expression: string) => Promise<any>, name: string, waitMs = 15000) {
+  const deadline = Date.now() + waitMs;
+  let observed;
+  do {
+    observed = await ev(`(() => {
+      const picker = document.querySelector("#named-agents agent-picker");
+      const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
+      const names = rows.map((r) => r.querySelector(".name")?.textContent || "");
+      const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === ${JSON.stringify(name)});
+      if (row) row.click();
+      return { clicked: !!row, pickerFound: !!picker, names };
+    })()`);
+    if (observed?.clicked) return;
+    if (Date.now() < deadline) await new Promise((r) => setTimeout(r, 150));
+  } while (Date.now() < deadline);
+  throw new Error(`Agent row ${JSON.stringify(name)} did not render within ${waitMs}ms: ${JSON.stringify(observed)}`);
+}
+
+Deno.test("agent-picker readiness retries delayed rows and fails visibly for a missing row", async () => {
+  let calls = 0;
+  await clickAgentRowWhenReady(async () => {
+    calls++;
+    return { clicked: calls === 3, pickerFound: true, names: calls === 3 ? ["V1"] : [] };
+  }, "V1", 3000);
+  assertEquals(calls, 3, "a late picker row must not be mistaken for a missing agent");
+  let error;
+  try {
+    await clickAgentRowWhenReady(async () => ({ clicked: false, pickerFound: true, names: ["Other"] }), "V1", 0);
+  } catch (e) { error = e; }
+  assert(error?.message?.includes('"Other"'), "a truly missing row must fail with observed picker names");
+});
+
 Deno.test("7zf0 source pin: ntp.js updates threadTitle and history.state on rename, reload, and list refresh", async () => {
   const ntpJs = await Deno.readTextFile(new URL("../extension/ntp/ntp.js", import.meta.url));
 
@@ -142,21 +177,9 @@ Deno.test({
       await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
       await new Promise((r) => setTimeout(r, 1500));
 
-      const opened = await ev(`(() => {
-        // muc moved the hub's agent rows into the shared agent-picker summary list
-        // (CAP-FB-20260825-AGENT-PICKER-HUB-ROWS-01): the row is the .opt button in
-        // that component's shadow root and a real click emits agent-select, which is
-        // the path the other five drivers were moved to. This test landed while muc
-        // was in flight and was missed, leaving main red with "Agent row must be
-        // found and opened". (No backticks in this template literal.)
-        const picker = document.querySelector("#named-agents agent-picker");
-        const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
-        const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === "ZZZ Original Name");
-        if (!row) return false;
-        row.click();
-        return true;
-      })()`);
-      assertEquals(opened, true, "Agent row must be found and opened");
+      // muc moved the hub rows into agent-picker's shadow-root .opt buttons;
+      // clicking one emits the real agent-select path, not a direct route call.
+      await clickAgentRowWhenReady(ev, "ZZZ Original Name");
       await new Promise((r) => setTimeout(r, 1000));
 
       const titleBefore = await ev("document.getElementById('thread-title')?.textContent");
@@ -278,15 +301,7 @@ Deno.test({
       // turns so its journal has the weight a real agent has.
       await send("Page.navigate", { url: `chrome-extension://${extId}/ntp/ntp.html` }, sessionId);
       await new Promise((r) => setTimeout(r, 1500));
-      const opened = await ev(`(() => {
-        const picker = document.querySelector("#named-agents agent-picker");
-        const rows = [...(picker?.shadowRoot?.querySelectorAll(".opt") ?? [])];
-        const row = rows.find((r) => (r.querySelector(".name")?.textContent || "") === "V1");
-        if (!row) return false;
-        row.click();
-        return true;
-      })()`);
-      assertEquals(opened, true, "Agent row must be found and opened");
+      await clickAgentRowWhenReady(ev, "V1");
       await new Promise((r) => setTimeout(r, 1200));
       for (let i = 0; i < 2; i++) {
         await ev(`(() => {
