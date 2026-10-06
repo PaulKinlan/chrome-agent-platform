@@ -28,7 +28,6 @@ import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
-const CHROMIUM = resolveChromiumBinary(); // fyvc: env override → CfT cache → /usr/bin/chromium, one shared resolution
 const EVIDENCE_DIR = Deno.env.get("KEYLESS_EVIDENCE_DIR") ?? durableDir(`cap-keyless-${Date.now()}`);
 const PROMPT = "group my tabs by topic";
 const DEMO_LITERAL = /\[demo model\]|Task received|\d+ chars/u;
@@ -155,6 +154,9 @@ const ORIGIN_B = `http://127.0.0.1:${siteB.addr.port}`;
 let launched: Awaited<ReturnType<typeof launchChrome>> | null = null;
 
 try {
+  // Resolve only within the guarded run, after both fixtures are started, so a missing browser
+  // is a named environmental error AND the fixtures still close in finally.
+  const CHROMIUM = resolveChromiumBinary();
   // ── phase 1: a fresh profile, materialised ───────────────────────────────
   launched = await launchChrome({ binary: CHROMIUM, args: chromeArgs(profile) });
   let { cdp, port, ws } = await connect(launched.wsUrl);

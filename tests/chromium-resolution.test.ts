@@ -13,9 +13,9 @@
 // tests/chrome-for-testing.test.ts (assertion-level RED on the old versionOf)
 // and (b) the census wiring pins at the bottom of this file. The order pins
 // below are the teeth for any future re-ordering of the resolution chain.
-import { assert, assertEquals, assertRejects, assertStringIncludes } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertRejects, assertStringIncludes, assertThrows } from "jsr:@std/assert@1";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
-import { CHROMIUM, resolveChromiumBinary, resolveChromiumBinaryReport, acquireChromeLock } from "../scripts/lib/chrome-launch.ts";
+import { BrowserUnresolvedError, CHROMIUM, resolveChromiumBinary, resolveChromiumBinaryReport, acquireChromeLock } from "../scripts/lib/chrome-launch.ts";
 
 /** Unique suffix for the durable scratch dirs below, so a repeated call cannot collide. */
 let tmpSeq = 0;
@@ -37,37 +37,97 @@ function fixtureCache(version: string): string {
 const envOf = (kv: Record<string, string>) => (name: string) => kv[name];
 const noEnv = envOf({});
 
-Deno.test("fyvc resolution: CAP_CHROMIUM wins outright, the cache is next, /usr/bin/chromium is the last resort", () => {
-  // 1. The explicit override wins over everything (it is never
-  // existence-checked: a wrong override surfaces as a loud spawn error).
-  assertEquals(resolveChromiumBinary({ envGet: envOf({ CAP_CHROMIUM: "/opt/a-chrome" }) }), "/opt/a-chrome");
-  // An override that is only whitespace does not count as one (and with no
-  // cache in play, the last resort is the deterministic result).
+Deno.test("fyvc/oy4m resolution: a USABLE override wins, the cache is next, the default is the last resort, and an unresolvable browser THROWS rather than returning a doomed path", () => {
+  // chrome-agent-platform-oy4m CHANGED THIS PIN DELIBERATELY. It used to assert that the override "is never
+  // existence-checked: a wrong override surfaces as a loud spawn error", and that justification is exactly
+  // what failed in the original defect: an environment difference reached the user as a product-shaped
+  // ENOENT instead of a named environmental refusal. The sibling now takes the s7wr shape.
+  //
+  // 1. A USABLE override wins over everything.
   assertEquals(
-    resolveChromiumBinary({ envGet: envOf({ CAP_CHROMIUM: "   " }), cacheRoot: "/nonexistent-fyvc-probe" }),
+    resolveChromiumBinary({
+      envGet: envOf({ CAP_CHROMIUM: "/opt/a-chrome" }),
+      exists: () => true,
+      usable: () => true,
+    }),
+    "/opt/a-chrome",
+  );
+  // An UNUSABLE override cannot silently resolve into a launch: it throws with the tried list.
+  const missing = assertThrows(
+    () =>
+      resolveChromiumBinary({
+        envGet: envOf({ CAP_CHROMIUM: "/opt/a-chrome" }),
+        exists: () => false,
+        usable: () => false,
+      }),
+    BrowserUnresolvedError,
+  );
+  assertStringIncludes(missing.message, "CAP_CHROMIUM=/opt/a-chrome (missing)");
+  // A BARE name is resolved through $PATH (the s7wr review's false-refusal lesson), and a trailing space is
+  // trimmed rather than stat'ed as part of the filename.
+  assertEquals(
+    resolveChromiumBinary({
+      envGet: envOf({ CAP_CHROMIUM: "chromium ", PATH: "/one:/two" }),
+      usable: (p) => p === "/two/chromium",
+    }),
+    "/two/chromium",
+  );
+  // 2. A whitespace-only override is not an override (and with no cache in play, the last resort is the result).
+  assertEquals(
+    resolveChromiumBinary({
+      envGet: envOf({ CAP_CHROMIUM: "   " }),
+      cacheRoot: "/nonexistent-fyvc-probe",
+      exists: () => true,
+    }),
     CHROMIUM,
     "a whitespace-only override is not an override",
   );
 
   const cache = fixtureCache("150.0.1.1");
   try {
-    // 2. A resolvable cache beats the default literal…
+    // 3. A resolvable cache beats the default literal…
     assertEquals(
       resolveChromiumBinary({ envGet: noEnv, cacheRoot: cache }),
       `${cache}/150.0.1.1/chrome-linux64/chrome`,
     );
-    // …but never the override.
+    // …but never a usable override, and an unusable override does NOT silently pick the cache.
+    const refused = assertThrows(
+      () => resolveChromiumBinary({
+        envGet: envOf({ CAP_CHROMIUM: "/not-installed/chromium" }),
+        cacheRoot: cache,
+        exists: () => false,
+        usable: () => false,
+      }),
+      BrowserUnresolvedError,
+    );
+    assertStringIncludes(refused.message, "CAP_CHROMIUM=/not-installed/chromium (missing)");
+    assertEquals(refused.tried, ["CAP_CHROMIUM=/not-installed/chromium (missing)"]);
     assertEquals(
-      resolveChromiumBinary({ envGet: envOf({ CAP_CHROMIUM: "/opt/a-chrome" }), cacheRoot: cache }),
+      resolveChromiumBinary({
+        envGet: envOf({ CAP_CHROMIUM: "/opt/a-chrome" }),
+        cacheRoot: cache,
+        exists: () => true,
+        usable: () => true,
+      }),
       "/opt/a-chrome",
     );
   } finally {
     Deno.removeSync(cache, { recursive: true });
   }
 
-  // 3. No override, no cache → the documented last resort (the ONE place the
-  // literal lives now; every other site imports this resolution).
-  assertEquals(resolveChromiumBinary({ envGet: noEnv, cacheRoot: "/nonexistent-fyvc-probe" }), CHROMIUM);
+  // 4. No override, no cache, a present last resort → the documented literal (the ONE place it lives now).
+  assertEquals(
+    resolveChromiumBinary({ envGet: noEnv, cacheRoot: "/nonexistent-fyvc-probe", exists: () => true }),
+    CHROMIUM,
+  );
+  // 5. …and NOTHING present → the NAMED throw, not a path that dies ENOENT at the spawn. This is the half of
+  // oy4m the old contract could not express: a string-returning resolver has no way to refuse.
+  const nothing = assertThrows(
+    () => resolveChromiumBinary({ envGet: noEnv, cacheRoot: "/nonexistent-fyvc-probe", exists: () => false }),
+    BrowserUnresolvedError,
+  );
+  assertStringIncludes(nothing.message, "ENVIRONMENT: no usable browser resolved");
+  assertStringIncludes(nothing.message, "missing on this box");
 });
 
 Deno.test("fyvc/s7wr report: names every step it tried; a null binary when the OVERRIDE is unusable or the last resort is missing", () => {
@@ -134,6 +194,18 @@ Deno.test("s7wr: the REAL filesystem predicate refuses a non-executable override
     assertEquals(refused.tried, [`CAP_CHROMIUM=${plain} (not executable)`]);
     const resolved = resolveChromiumBinaryReport({ envGet: envOf({ CAP_CHROMIUM: runnable }) });
     assertEquals(resolved, { binary: runnable, tried: [`CAP_CHROMIUM=${runnable}`] });
+    // oy4m: drive the string variant through the REAL filesystem, not merely injected predicates.
+    const notExecutable = assertThrows(
+      () => resolveChromiumBinary({ envGet: envOf({ CAP_CHROMIUM: plain }) }),
+      BrowserUnresolvedError,
+    );
+    assertStringIncludes(notExecutable.message, `CAP_CHROMIUM=${plain} (not executable)`);
+    assertEquals(resolveChromiumBinary({ envGet: envOf({ CAP_CHROMIUM: runnable }) }), runnable);
+    const directory = assertThrows(
+      () => resolveChromiumBinary({ envGet: envOf({ CAP_CHROMIUM: dir }) }),
+      BrowserUnresolvedError,
+    );
+    assertStringIncludes(directory.message, `CAP_CHROMIUM=${dir} (a directory)`);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

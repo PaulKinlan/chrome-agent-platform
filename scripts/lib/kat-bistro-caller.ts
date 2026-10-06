@@ -10,7 +10,7 @@
 // reduced to wiring.
 
 import { createHash } from "node:crypto";
-import { withTimeout, resolveChromiumBinary } from "./chrome-launch.ts";
+import { withTimeout } from "./chrome-launch.ts";
 import { durableDir } from "./durable-root.mjs";
 import { allocateRunEvidenceDir, finalizeKatExecution, sanitizeKatLogError } from "./kat-finalizer.ts";
 
@@ -27,9 +27,10 @@ export const WEBMCP_LAUNCH_ARGS = ["--enable-features=WebMCP"];
  * and expose a REAL modelContext with getTools — not merely any loaded page. */
 export const BISTRO_READY_EXPRESSION = `document.readyState === "complete" && typeof document.modelContext?.getTools === "function"`;
 
-/** The chromium binary, parameterized (was hardcoded in the caller): the
- * current value is the default, and a fake-browser harness can redirect it. */
-export const BISTRO_DEFAULT_BINARY = resolveChromiumBinary();
+/** No eager browser lookup: pure caller tests must import this module on browserless hosts.
+ * Passing undefined delegates to launchChrome's verified resolver at spawn time;
+ * a fake-browser harness can still provide its own binary. */
+export const BISTRO_DEFAULT_BINARY: string | undefined = undefined;
 
 export function buildBistroLaunchConfig({
   extensionDir,
