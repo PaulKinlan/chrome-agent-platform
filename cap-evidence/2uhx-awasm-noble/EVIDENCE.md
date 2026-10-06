@@ -1,8 +1,8 @@
 # chrome-agent-platform-2uhx — Admit awasm-noble as Managed Wasm Tool (Auditable Crypto)
 
 **Bead:** `chrome-agent-platform-2uhx`  
-**Candidate branch:** `cap/gemini-2uhx-awasm-noble` @ worktree `/home/paulkinlan/worktrees/cap-gemini-2uhx`  
-**Base:** `origin/main` @ `3a5d002f0`  
+**Candidate branch:** `fleet/2uhx`  
+**Base:** `origin/main` @ `61b8e4c9`  
 **Author:** `cap-gemini` (Gemini 3.8 Flash)  
 **Date:** 2026-09-26  
 
@@ -49,7 +49,7 @@ This expands CAP's native on-device cryptographic capability with authenticated 
 ## 4. Verification & Gates
 
 - **Targeted Callexport Tests:**
-  - `tests/callexport-admission.test.ts`: **10 passed / 0 failed** in 22ms.
+  - `tests/callexport-admission.test.ts`: **12 passed / 0 failed** in 22ms.
     - Verified audit of real `chacha_poly1305.wasm`.
     - Verified round-trip encrypt and decrypt, and verified against RFC 8439 §2.8.2 known-answer vector.
     - Verified authenticated associated data (AAD) binding.

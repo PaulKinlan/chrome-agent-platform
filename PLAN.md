@@ -11,7 +11,7 @@ by building and running the gates — not by reading trackers.**
 
 | Gate | Result |
 |---|---|
-| `npm run build` | **clean** — 141 generated files byte-identical, 38 packages, 111 shipped files, no `eval`/`new Function` across shipped JS files |
+| `npm run build` | **clean** — 144 generated files byte-identical, 39 packages, 114 shipped files, no `eval`/`new Function` across shipped JS files |
 | `npm test` | **445 files green (4100+ tests passed)** via two-phase runner (Phase 1 serial, Phase 2 parallel with real Chromium) |
 | `npm run test:chrome` | **127/127** |
 | `npm run test:security` | **PASS** (production scenario, no survivor/residue/poison) |
@@ -197,7 +197,7 @@ without upload-size, file-count, import, or parse admission gates. Uploading gra
 no execution authority. See [USER-WASM-STORAGE.md](docs/USER-WASM-STORAGE.md) for the
 storage contract; review and delivery state live in beads `9ux7.1` and `9ux7.2`.
 
-- [x] **38 bundled Wasm packages ship** and are verified at build time (`build.mjs:108`, exact manifest,
+- [x] **39 bundled Wasm packages ship** and are verified at build time (`build.mjs:108`, exact manifest,
       CAS digests, bounded raw import/memory scan, SBOM + licence records):
       sed, jq, imageops, oxipng, jxl, avif, zxing, compressops, hashwasm-blake3,
       awk-filter-bounded, base64, csvtool, cut, date-formatter-bounded, diff, du, grep,
@@ -215,7 +215,7 @@ storage contract; review and delivery state live in beads `9ux7.1` and `9ux7.2`.
       route with retained byte-identical rebuilds and lock-faithful licence records.
 - [ ] **The remaining candidate lanes are separate** — htmlq, numbat, bttf,
       xan, and tokei retain their own build/admission status under
-      `docs/plans/rust-lane/` and `docs/admissions/` (`sed` and `jq` were admitted into the 38 shipped packages); this tranche makes no completion
+      `docs/plans/rust-lane/` and `docs/admissions/` (`sed` and `jq` were admitted into the 39 shipped packages); this tranche makes no completion
       claim for the others. Admission is `CAP-FB-20260823-EXTENDED-TOOL-FAMILIES-01`.
 - [x] **Python via Pyodide** — official Pyodide 0.26.4 core admitted under bead `4usu`
       (hash-verified against MANIFEST.json), executed in dedicated classic-worker dispatcher

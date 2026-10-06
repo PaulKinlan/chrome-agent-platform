@@ -12701,7 +12701,7 @@ class ActivityExplorer extends Component {
       wrap.appendChild(plainDetailBlock(label, String(parsed.value ?? raw ?? "")));
     };
     switch (e?.type) {
-      case "tool-call": addBlock("inputs", e.args); break;
+      case "tool-call": addBlock("inputs", redactToolArgs(e.tool ?? "", e.args)); break;
       // Normalize + redact ONCE (redactToolResult): the collapsed-row summary,
       // this detail tree, and its copy path all render the same redacted
       // decoded view — wrapped modelContent JSON strings included.

@@ -197,6 +197,22 @@ Deno.test("run digest: chacha20_poly1305 key argument is redacted and never reac
   assert(!turnText.includes(rawKey), "run-digest must NOT contain raw chacha key bytes");
   assertStringIncludes(turnText, "[REDACTED]", "chacha key argument must be redacted to [REDACTED]");
 
+  // 3. Lazy execute_tool invocation WITHOUT selected (e.g. before result lands or unresolved)
+  digest.record({
+    step: 1,
+    tool: "execute_tool",
+    args: {
+      selectionRef: "sel_unresolved_ref_1234",
+      arguments: { key: rawKey, nonce, data: btoa(plaintext), mode: "encrypt" },
+    },
+    ok: true,
+    result: { modelContent: "running", userSummary: "running" },
+  });
+
+  const turn1Text = digest.renderTurn(1);
+  assert(!turn1Text.includes(rawKey), "run-digest turn 1 must NOT contain raw chacha key bytes");
+  assertStringIncludes(turn1Text, "[REDACTED]", "unresolved execute_tool key must be redacted to [REDACTED]");
+
   // Verify attachment to continuation nudge prompt
   const prompt = [
     { role: "user", content: "task" },

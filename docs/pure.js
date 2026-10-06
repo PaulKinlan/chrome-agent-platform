@@ -1152,10 +1152,17 @@ export const KNOWN_TOOL_SECRET_ARGS = Object.freeze({
   chacha20_poly1305: Object.freeze(["key"]),
 });
 
+const ALL_KNOWN_TOOL_SECRET_ARGS = Object.freeze(
+  Array.from(new Set(Object.values(KNOWN_TOOL_SECRET_ARGS).flat()))
+);
+
 /**
  * Redact tool arguments declared as secret for a specific tool.
  * Targeted: avoids widening SECRET_KEY_RE globally while ensuring bare secret
  * arguments (such as AEAD keys) never reach continuation digests or tool cards.
+ * When the tool is a protocol tool (e.g. execute_tool) or unknown/unresolved,
+ * arguments (including nested arguments envelopes) are redacted against the union
+ * of known tool secret argument names.
  * @param {string} toolName
  * @param {any} args
  * @param {readonly string[]|string[]|null} [extraSecretArgs]
@@ -1165,10 +1172,11 @@ export function redactToolArgs(toolName, args, extraSecretArgs = null) {
   if (args == null || (typeof args !== "object" && typeof args !== "string")) return args;
   const tool = String(toolName ?? "").slice(0, 64);
   const effectiveTool = tool || (typeof args?.toolId === "string" ? args.toolId : "");
+  const isProtocolOrUnknown = !effectiveTool || effectiveTool === "execute_tool" || effectiveTool === "search_tools" || effectiveTool === "tool";
   const secretSet = new Set(
     Array.isArray(extraSecretArgs)
       ? extraSecretArgs
-      : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? KNOWN_TOOL_SECRET_ARGS[tool] ?? [])
+      : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? (isProtocolOrUnknown ? ALL_KNOWN_TOOL_SECRET_ARGS : []))
   );
   if (secretSet.size === 0) return args;
 
@@ -1192,7 +1200,7 @@ export function redactToolArgs(toolName, args, extraSecretArgs = null) {
   for (const [k, v] of Object.entries(args)) {
     if (secretSet.has(k)) {
       out[k] = "[REDACTED]";
-    } else if (k === "arguments" && v && typeof v === "object") {
+    } else if (k === "arguments" && v && (typeof v === "object" || typeof v === "string")) {
       out[k] = redactToolArgs(toolName, v, extraSecretArgs);
     } else {
       out[k] = v;
