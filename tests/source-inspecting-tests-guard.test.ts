@@ -124,8 +124,8 @@ export function findUnclassifiedSourceScanners(
   // flagged `const probe = `${extension}/_emscripten_abi_probe`` (a temp probe dir INSIDE extension)
   // and `path.join(..., "scripts", "git-hooks")` (a subdir) — both false positives of exactly the
   // over-match class this bead exists to prevent.
-  const REPO_ROOT_URL = /new URL\(\s*["']\.\.\/?["']/;
-  const TOP_LEVEL_URL = new RegExp(`new URL\\(\\s*["']\\.\\.?\\/(?:${TOP_LEVEL_DIRS})\\/?["']`);
+  const REPO_ROOT_URL = /new URL\(\s*["']\.\.(?:\/\.\.)*\/?["']/;
+  const TOP_LEVEL_URL = new RegExp(`new URL\\(\\s*["']\\.\\.(?:\\/\\.\\.)*\\/(?:${TOP_LEVEL_DIRS})\\/?["']`);
   // path.join(..., "extension") — the LAST literal is a top-level dir and closes the call.
   const JOIN_ENDS_AT_TOP_LEVEL = new RegExp(
     `(?:ROOT|\\$\\{[^}]*\\}|["'][^"']*\\.\\.\\/(?:${TOP_LEVEL_DIRS})[^"']*["'])[^)]*["'](?:${TOP_LEVEL_DIRS})\\/?["']\\s*\\)`,
@@ -190,7 +190,13 @@ export function findUnclassifiedSourceScanners(
     // If it dynamically scans source directories, it must be in ALWAYS_ON. The literal
     // patterns catch the ROOT-rooted shapes; the source-root test catches a walk over an
     // identifier that this file derives from a source root (p1lp), including lowercase ones.
-    if (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0) {
+    // For non-test support modules/helpers, only definition-based walks (walkOrReadRoots) apply:
+    // prose patterns (SCAN_DIRS, git ls-files, GUARD_ROOTS) cannot match support modules because
+    // helpers have no exemption path and comment mentions must not cause unactionable reds (afpl Finding 2).
+    const matchesScanner = isTest
+      ? (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0)
+      : (walkOrReadRoots(code, rel).length > 0);
+    if (matchesScanner) {
       unclassified.push(rel);
     }
   }
@@ -209,6 +215,10 @@ export function findUnclassifiedSourceScanners(
  * fixture reader is how an over-broad pattern once put a 23s esbuild-spawning file into the always-on
  * set and tripled every subset gate (chrome-agent-platform-fgik, and the reason p1lp replaced names
  * with DEFINITIONS).
+ *
+ * Scope note (afpl Finding 3): this audit scans tests/** (test guards and shared support modules). It does
+ * not scan shared test-support machinery under scripts/lib/ (e.g. scripts/lib/harness-registry.ts) that tests
+ * may import; tests consuming such helpers must be listed in ALWAYS_ON directly.
  */
 
 /** Every shared test-support source file: subdirectories under tests/ (except fixtures/), plus non-test modules directly under tests/. */
@@ -328,7 +338,7 @@ export function formatUnclassifiedScannersMessage(unclassified: string[]): strin
 export function enumerateTestFiles(testsDir = join(ROOT, "tests")): { rel: string; code: string }[] {
   return readdirSync(testsDir, { recursive: true })
     .map(String)
-    .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/"))
+    .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/") && !f.includes("/node_modules/"))
     .map((f) => ({
       rel: `tests/${f}`,
       code: readFileSync(join(testsDir, f), "utf8"),
@@ -461,6 +471,8 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
   await Deno.mkdir(helpersDir, { recursive: true });
 
   const walker = join(helpersDir, "zz-afpl-repo-walk.ts");
+  const depth2Walker = join(helpersDir, "zz-afpl-depth2-walk.ts");
+  const proseHelper = join(helpersDir, "zz-afpl-prose-only.ts");
   const fixtureReader = join(helpersDir, "zz-afpl-fixture-read.ts");
   const nestedTest = join(helpersDir, "zz-nested.test.ts");
 
@@ -471,11 +483,22 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
         `export function census() { for (const f of Deno.readDirSync(join(ROOT, "tests"))) void f; }\n`,
     );
+    // (i-b) A depth-2 helper with lowercase-alias repo-root URL (Finding 1 mutant).
+    await Deno.writeTextFile(
+      depth2Walker,
+      `const root = new URL("../../", import.meta.url);\n` +
+        `export function census() { for (const f of Deno.readDirSync(root)) void f; }\n`,
+    );
     const named = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
     assertEquals(
       named.includes("tests/helpers/zz-afpl-repo-walk.ts"),
       true,
       `a repo-walking helper must be SCANNED and NAMED — this is the coverage proof, not a skip: ${JSON.stringify(named)}`,
+    );
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-depth2-walk.ts"),
+      true,
+      `a depth-2 lowercase-alias repo-walking helper must be SCANNED and NAMED: ${JSON.stringify(named)}`,
     );
     // ...and the audit must say WHAT TO DO, because a helper can never be an ALWAYS_ON member.
     const guidance = formatUnclassifiedScannersMessage(named);
@@ -483,7 +506,22 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
     assertStringIncludes(guidance, "Move the walk into the test file", "the guidance must say what to do");
     assertStringIncludes(guidance, "can never be an ALWAYS_ON member", "the guidance must say why not");
 
-    // (ii) A helper that walks ONLY its own fixture directory must NOT be admitted — the over-match half.
+    // (ii) A helper with prose comments mentioning SCAN_DIRS, git ls-files, or GUARD_ROOTS must NOT
+    // trigger a false-positive red (Finding 2).
+    await Deno.writeTextFile(
+      proseHelper,
+      `// Shared helper. Deliberately does NOT shell out to git ls-files; it reads two files.\n` +
+        `// See SCAN_DIRS and GUARD_ROOTS for context.\n` +
+        `export function add(a: number, b: number): number { return a + b; }\n`,
+    );
+    const afterProse = findUnclassifiedSourceScanners(sharedSupportFiles(scratch), new Set());
+    assertEquals(
+      afterProse.includes("tests/helpers/zz-afpl-prose-only.ts"),
+      false,
+      `a support module with prose mentioning SCAN_DIRS/git ls-files must NOT be flagged: ${JSON.stringify(afterProse)}`,
+    );
+
+    // (iii) A helper that walks ONLY its own fixture directory must NOT be admitted — the over-match half.
     // Tests join(ROOT, "tests", "fixtures") to ensure definition-aware matching does not over-flag
     // fixture directories, and avoids /tmp string literals (durable-root rule).
     await Deno.writeTextFile(
@@ -498,7 +536,7 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       `a fixture-walking helper must NOT be admitted: ${JSON.stringify(after)}`,
     );
 
-    // (iii) Evasion resistance: adding a helper to alwaysOnSet or SCANNER_EXCLUSIONS must NOT exempt it.
+    // (iv) Evasion resistance: adding a helper to alwaysOnSet or SCANNER_EXCLUSIONS must NOT exempt it.
     const evasionAttempt = findUnclassifiedSourceScanners(
       sharedSupportFiles(scratch),
       new Set(["tests/helpers/zz-afpl-repo-walk.ts"]),
