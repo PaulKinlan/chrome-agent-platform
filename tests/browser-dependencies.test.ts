@@ -4,6 +4,7 @@ import { build, stop } from 'npm:esbuild@0.25.12';
 import { createRequire } from 'node:module';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { durableDir } from '../scripts/lib/durable-root.mjs';
 import { browserDependencies, browserProcessEnvOptions, EMPTY_PROCESS_ENV_DEFINE_NAME, projectAgentDoBrowser } from '../scripts/browser-dependencies.mjs';
 
 const require = createRequire(import.meta.url);
@@ -205,7 +206,9 @@ Deno.test('browser dependencies (3337): the REAL agent-worker entry builds with 
   assertEquals((text.match(/\bprocess\.env/g) || []).length, 0, 'the worker bundle must substitute every process.env');
   // Execute the REAL built worker under the same fakes tests/agent-worker-protocol.test.ts uses. A
   // missing banner (undeclared identifier) throws here — the one failure a byte compare cannot see.
-  const dir = await Deno.makeTempDir({ prefix: 'cap-3337-worker-exec-' });
+  // durableDir, not makeTempDir: the always-on durable-root guard (and the fleet's own rule) requires a
+  // NEW file to put scratch in the durable evidence root, with its own teardown (merger block on 3337).
+  const dir = durableDir(`3337-worker-exec-${Deno.pid}`);
   try {
     const file = join(dir, 'agent-worker.mjs');
     await Deno.writeTextFile(file, text);
