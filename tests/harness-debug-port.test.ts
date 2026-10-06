@@ -13,7 +13,7 @@
 // scripts/ is `=0`, and it may only be written by the shared launcher.
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertRejects } from "jsr:@std/assert@1";
-import { CHROME_LOCK_PATH, launchChrome } from "../scripts/lib/chrome-launch.ts";
+import { CHROME_LOCK_PATH, launchChrome, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 
 // chrome-agent-platform-51x4: these fixtures launch STAND-IN "browsers"
 // (/bin/true, a shell script) — no real Chrome starts, so they take an
@@ -104,7 +104,6 @@ Deno.test("launchChrome reads the real port back out of the child's own stderr",
   const { proc, wsUrl, port } = await launchChrome({ binary: fake, args: [], timeoutMs: 5000, lockPath: FAKE_LOCK });
   assertEquals(port, 31337);
   assertEquals(wsUrl, "ws://127.0.0.1:31337/devtools/browser/abc");
-  try { proc.kill("SIGKILL"); } catch { /* already gone */ }
-  await proc.status;
+  await teardownChrome(proc);
   await Deno.remove(fake);
 });

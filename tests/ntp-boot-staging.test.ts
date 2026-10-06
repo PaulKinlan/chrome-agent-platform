@@ -34,7 +34,7 @@ if (!globalThis.customElements) {
 
 import { runStagedBoot } from "../extension/ntp/ntp-boot-scheduler.js";
 const { NON_HUB_ELEMENTS, flushDeferredComponents } = await import("../extension/shared/components.js");
-import { launchChrome, openCdp, waitForServiceWorker } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, openCdp, waitForServiceWorker, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -206,10 +206,7 @@ Deno.test("ntp-boot-staging: headless Chrome for Testing boots ntp.html with 0 l
     }
   } finally {
     if (client) client.close();
-    if (chrome) {
-      try { chrome.proc.kill("SIGKILL"); } catch {}
-      await chrome.proc.status.catch(() => {});
-    }
+    await teardownChrome(chrome, tmp);
     await Deno.remove(tmp, { recursive: true }).catch(() => {});
   }
 });

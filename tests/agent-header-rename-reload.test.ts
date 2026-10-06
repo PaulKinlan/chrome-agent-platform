@@ -17,7 +17,7 @@
 
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/, "");
@@ -192,9 +192,8 @@ Deno.test({
       assertEquals(titleAfter, "ZZZ Renamed Name", "Thread header must show updated name after reload");
       assertEquals(stateAfter, "ZZZ Renamed Name", "History state must be updated to fresh name");
     } finally {
-      ws.close();
-      try { launched.proc.kill("SIGKILL"); } catch { /* gone */ }
-      try { await launched.proc.status; } catch { /* reaped */ }
+      try { ws.close(); } catch { /* closed */ }
+      await teardownChrome(launched, profile);
     }
   },
 });
@@ -326,9 +325,8 @@ Deno.test({
       assertEquals(title, "V2", "the header must read the newer list-resolved name, never the stale caller name");
       assertEquals(stateName, "V2", "history.state must agree with the header after the surface settles");
     } finally {
-      ws.close();
-      try { launched.proc.kill("SIGKILL"); } catch { /* gone */ }
-      try { await launched.proc.status; } catch { /* reaped */ }
+      try { ws.close(); } catch { /* closed */ }
+      await teardownChrome(launched, profile);
     }
   },
 });

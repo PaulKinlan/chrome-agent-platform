@@ -96,7 +96,7 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
   // browser; resolveChromiumBinaryReport is the repo's resolver that distinguishes "resolved" from
   // "fell through to a default that may not exist".
   // (review P2: the block that used to precede this one was a duplicate of it and was deleted.)
-  const { launchChrome, resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
+  const { launchChrome, resolveChromiumBinaryReport, teardownChrome } = await import("../scripts/lib/chrome-launch.ts");
   // (review P2 delta: refuseWithoutBrowser was imported here and never used in this test — the refusal
   // is emitted by the LAST test in the file, which imports it for itself.)
   // chrome-agent-platform-hlgr review P1: do NOT exit from here. This test sits before five STATIC
@@ -163,8 +163,7 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
     assertEquals(offenders, [], "a live Chrome profile is still inside the working tree");
   } finally {
     if (proc) {
-      try { proc.kill("SIGKILL"); } catch { /* gone */ }
-      try { await proc.status; } catch { /* reaped */ }
+      await teardownChrome(proc, profile);
     }
     await new Promise((r) => setTimeout(r, 500));
     Deno.removeSync(scratch, { recursive: true });
