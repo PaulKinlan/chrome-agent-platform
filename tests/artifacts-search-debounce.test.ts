@@ -64,3 +64,27 @@ Deno.test("artifacts search cancels a pending rebuild on teardown or remount", (
   newMount.cancel(); // Idempotent after the timer has fired.
   assertEquals(clock.pending(), 0);
 });
+
+Deno.test("artifacts search re-arms the same debounce after a pending search is cancelled", () => {
+  const clock = fakeTimers();
+  const rebuilt: string[] = [];
+  let query = "alpha";
+  const search = createSearchDebounce(() => rebuilt.push(query), clock);
+
+  search();
+  clock.advance(90);
+  search.cancel(); // Refresh or kind-pill changes reuse this debounce instance.
+  assertEquals(clock.pending(), 0);
+
+  query = "beta";
+  search();
+  clock.advance(SEARCH_SETTLE_MS);
+  assertEquals(rebuilt, ["beta"]); // Cancel must not permanently disarm search.
+  assertEquals(clock.pending(), 0);
+
+  search();
+  clock.advance(50);
+  search.cancel();
+  clock.advance(SEARCH_SETTLE_MS * 2);
+  assertEquals(rebuilt, ["beta"]); // The re-armed instance remains cancellable.
+});
