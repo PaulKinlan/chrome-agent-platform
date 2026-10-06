@@ -35,7 +35,6 @@ import { composerInput, composerSend } from "./lib/composer-target.ts";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const EXT = `${ROOT}extension`;
-const CHROMIUM = resolveChromiumBinary(); // fyvc: env override → CfT cache → /usr/bin/chromium, one shared resolution
 const EVIDENCE_DIR = Deno.env.get("PAGE_ACTIONS_EVIDENCE_DIR") ?? durableDir(`cap-page-actions-${Date.now()}`);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -157,6 +156,9 @@ const profile = `${Deno.env.get("HOME")}/.cache/cap-review/page-actions-${Date.n
 let launched: Awaited<ReturnType<typeof launchChrome>> | null = null;
 
 try {
+  // Resolve only within the guarded run, after the fixture is started, so a missing browser
+  // is a named environmental error AND the fixture still closes in finally.
+  const CHROMIUM = resolveChromiumBinary();
   // ── phase 1: materialise the profile, then seed tabs + scripting ──
   launched = await launchChrome({ binary: CHROMIUM, args: chromeArgs(profile) });
   let { cdp, port, ws } = await connect(launched.wsUrl);

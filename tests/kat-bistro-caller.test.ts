@@ -50,12 +50,28 @@ Deno.test("bistro caller: the demo URL carries the toolautosubmit flag (U1)", ()
 Deno.test("bistro caller: launch config keeps the WebMCP feature flag and parameterizes the binary (U2)", () => {
   const cfg = buildBistroLaunchConfig({ extensionDir: "/ext", profileDir: "/prof" });
   assertEquals(cfg.args, ["--enable-features=WebMCP"], "the WebMCP flag is launched, never disabled/absent");
-  assertEquals(cfg.binary, BISTRO_DEFAULT_BINARY, "the default binary is the repo's chromium");
+  assertEquals(cfg.binary, BISTRO_DEFAULT_BINARY);
+  assertEquals(cfg.binary, undefined, "the default resolves only at launch, not while importing pure caller units");
   assertEquals(cfg.extension, "/ext");
   assertEquals(cfg.profile, "/prof");
   assertEquals(cfg.timeoutMs, 30_000);
   const redirected = buildBistroLaunchConfig({ extensionDir: "/e", profileDir: "/p", binary: "/usr/bin/google-chrome", timeoutMs: 5_000 });
   assertEquals(redirected.binary, "/usr/bin/google-chrome", "a harness can redirect the binary");
+});
+
+Deno.test("oy4m: pure bistro caller import does not resolve a missing browser at module load", async () => {
+  // A browserless host must be able to run the pure caller units. The invalid override would make
+  // an eager resolveChromiumBinary() throw before even one test could execute.
+  const moduleUrl = new URL("../scripts/lib/kat-bistro-caller.ts", import.meta.url).href;
+  const code = `import { buildBistroLaunchConfig } from ${JSON.stringify(moduleUrl)};\n` +
+    `if (buildBistroLaunchConfig({extensionDir:"/ext",profileDir:"/prof"}).binary !== undefined) throw Error("eager browser resolution");`;
+  const result = await new Deno.Command(Deno.execPath(), {
+    args: ["eval", "-A", code],
+    env: { ...Deno.env.toObject(), CAP_CHROMIUM: "/definitely-missing-browser-oy4m" },
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  assertEquals(result.code, 0, new TextDecoder().decode(result.stderr));
 });
 
 Deno.test("bistro caller: the readiness expression demands a REAL modelContext (U17)", () => {
