@@ -36,8 +36,9 @@ export const SERIAL_REASONS = {
   "tests/select-tests-residue.test.ts": "plants build residue under extension/ to prove test:changed ignores it (removed in finally)",
   // mwz3/yx2h: the allowlist guard writes extension/lib/__probe_stray_gesture_reader.js
   // to the REAL repo tree for its end-to-end falsification, then removes it in finally.
-  // Parallel build/tree scanners can observe that temporary shipped-path write.
-  "tests/requires-owner-gesture-column-allowlist.test.ts": "writes a falsification probe under repo extension/lib and removes it in finally; races with parallel build/tree scans",
+  // A kill before finally leaves untracked shipped-path residue that poisons
+  // the guard's own allowlist and makes test:changed fail closed to the full suite.
+  "tests/requires-owner-gesture-column-allowlist.test.ts": "writes an untracked probe in the real repo extension/lib tree; killed-run residue trips its allowlist and changed-file selection",
   // 76hu guard caught this post-merge arrival from main (390b2b3a): it stats
   // the built SW bundle and the dist.complete marker — shared build artifacts.
   "tests/bundle-budget.test.ts": "reports the built dist bundle sizes + asserts the dist-complete marker integrity (races with rebuilds)",
