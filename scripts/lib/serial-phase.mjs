@@ -176,14 +176,25 @@ export function runSerialFiles(files, {
   /** @type {{ file: string, code: number, timedOut: boolean, secs: string, log: string|null }[]} */
   const failures = [];
   const logDir = serialLogDir();
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  // (2) chrome-agent-platform-grj9: the durable per-file log directory is SHARED across worktrees
+  // ($HOME/cap-evidence/serial-phase-logs), so a millisecond-resolution stamp alone let two runs
+  // that failed the same file in the same millisecond write the same path and overwrite each
+  // other's evidence — losing exactly what this cluster exists to preserve. The pid namespaces the
+  // run; the millisecond stamp still orders runs within one process.
+  const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-p${process.pid}`;
 
   for (const file of files) {
     const started = Date.now();
     console.log(`run-tests: serial file ${file}`);
     const result = runSerialFile(file, { timeoutMs, stdio, cwd, env });
     const secs = ((Date.now() - started) / 1000).toFixed(1);
-    const text = `${result.stdout?.toString?.() ?? ""}${result.stderr?.toString?.() ?? ""}`;
+    // (1) chrome-agent-platform-grj9: an OS-level spawnSync failure (ENOENT when the runtime is
+    // missing, EACCES, ENOBUFS when maxBuffer is exceeded) carries NO stdout and NO stderr — the
+    // REASON lives in result.error. Without it the file was named with exit 1 and no explanation,
+    // which is the unreadable-gate class this cluster exists to fix. stdout/stderr stay in their
+    // order after the reason, so an ordinary failing test reads exactly as before.
+    const spawnError = result.error ? `${result.error.stack ?? String(result.error)}\n` : "";
+    const text = `${spawnError}${result.stdout?.toString?.() ?? ""}${result.stderr?.toString?.() ?? ""}`;
 
     if (result.code !== 0) {
       let log = null;
