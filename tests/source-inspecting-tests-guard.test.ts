@@ -16,7 +16,7 @@
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import type { Dirent } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   ALWAYS_ON,
   CORE,
@@ -28,19 +28,8 @@ import {
 } from "../scripts/select-tests.mjs";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
-/** Pattern matching test filenames (.test.ts, .test.js, or _test.ts Deno convention). */
-export const IS_TEST_RE = /(\.test|_test)\.(ts|js)$/;
-
-/**
- * Strips comments from JS/TS code before scanning.
- * Prevents prose (such as a doc comment mentioning `git ls-files` or path examples) from
- * triggering false-positive classifier matches.
- */
-export function stripComments(code: string): string {
-  return code
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => "\n".repeat(m.split("\n").length - 1))
-    .replace(/(^|[^:])\/\/[^\n]*/gm, "$1");
-}
+/** Pattern matching test filenames (.test.ts or .test.js, matching runner conventions). */
+export const IS_TEST_RE = /\.test\.(ts|js)$/;
 
 Deno.test("qcfc: every declared source-inspecting guard exists on disk", () => {
   for (const file of SOURCE_INSPECTING_GUARDS) {
@@ -201,8 +190,7 @@ export function findUnclassifiedSourceScanners(
     // If it dynamically scans source directories, it must be in ALWAYS_ON. The literal
     // patterns catch the ROOT-rooted shapes; the source-root test catches a walk over an
     // identifier that this file derives from a source root (p1lp), including lowercase ones.
-    const cleanCode = stripComments(code);
-    if (SCANNER_PATTERNS.some((pat) => pat.test(cleanCode)) || walkOrReadRoots(cleanCode, rel).length > 0) {
+    if (SCANNER_PATTERNS.some((pat) => pat.test(code)) || walkOrReadRoots(code, rel).length > 0) {
       unclassified.push(rel);
     }
   }
@@ -241,7 +229,7 @@ export function sharedSupportFiles(testsDir = join(ROOT, "tests")): { rel: strin
     } catch {
       return;
     }
-    if (!realDir.startsWith(realTestsDir)) return; // symlink confinement to testsDir
+    if (realDir !== realTestsDir && !realDir.startsWith(realTestsDir + sep)) return; // symlink confinement to testsDir
     if (visited.has(realDir)) return; // loop prevention
     visited.add(realDir);
 
@@ -271,7 +259,7 @@ export function sharedSupportFiles(testsDir = join(ROOT, "tests")): { rel: strin
         continue;
       }
       if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !IS_TEST_RE.test(e.name)) {
-        out.push({ rel: childRel, code: stripComments(readFileSync(childAbs, "utf8")) });
+        out.push({ rel: childRel, code: readFileSync(childAbs, "utf8") });
       }
     }
   };
@@ -301,7 +289,7 @@ export function sharedSupportFiles(testsDir = join(ROOT, "tests")): { rel: strin
     if (isDir) {
       collect(abs, rel);
     } else if (isFile && /\.(ts|js|mjs)$/.test(e.name) && !IS_TEST_RE.test(e.name)) {
-      out.push({ rel, code: stripComments(readFileSync(abs, "utf8")) });
+      out.push({ rel, code: readFileSync(abs, "utf8") });
     }
   }
   return out;
@@ -336,16 +324,20 @@ export function formatUnclassifiedScannersMessage(unclassified: string[]): strin
   return parts.join("\n\n");
 }
 
-Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
-  const testsDir = join(ROOT, "tests");
-  // Recursive enumeration: matches run-tests.mjs so nested tests/**/ files cannot evade the audit.
-  const testFiles = readdirSync(testsDir, { recursive: true })
+/** Enumerate all test files recursively under testsDir (excluding fixtures). */
+export function enumerateTestFiles(testsDir = join(ROOT, "tests")): { rel: string; code: string }[] {
+  return readdirSync(testsDir, { recursive: true })
     .map(String)
     .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/"))
     .map((f) => ({
       rel: `tests/${f}`,
       code: readFileSync(join(testsDir, f), "utf8"),
     }));
+}
+
+Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
+  // Recursive enumeration: matches run-tests.mjs so nested tests/**/ files cannot evade the audit.
+  const testFiles = enumerateTestFiles();
 
   const alwaysOnSet = new Set(ALWAYS_ON);
   // afpl: TEST FILES AND THE SHARED SUPPORT MODULES, through the SAME classifier. A repo walk in a helper
@@ -517,14 +509,20 @@ Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fi
       "a helper cannot be exempted by alwaysOnSet: support modules must fail closed",
     );
 
-    // (iv) A nested test file under a subdirectory is identified as a test guard, NOT a helper module.
+    // (iv) A nested test file under a subdirectory is identified by enumerateTestFiles as a test guard, NOT a helper module.
     await Deno.writeTextFile(
       nestedTest,
       `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
         `export function testRepo() { for (const f of Deno.readDirSync(join(ROOT, "scripts"))) void f; }\n`,
     );
+    const enumerated = enumerateTestFiles(scratch);
+    assertEquals(
+      enumerated.map((e) => e.rel).includes("tests/helpers/zz-nested.test.ts"),
+      true,
+      "nested test files must be discovered on disk by enumerateTestFiles",
+    );
     const nestedNamed = findUnclassifiedSourceScanners(
-      [{ rel: "tests/helpers/zz-nested.test.ts", code: await Deno.readTextFile(nestedTest) }],
+      enumerated,
       new Set(),
     );
     assertEquals(
