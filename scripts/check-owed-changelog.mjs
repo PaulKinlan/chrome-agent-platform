@@ -13,8 +13,13 @@
 //
 // WHAT IT CHECKS (all against the COMMITTED tree — HEAD, never the working tree;
 // a release exists when it is committed, the same philosophy as dist.complete):
-//   1. The newest CHANGELOG.md heading matches package.json's version (the
-//      "version bumped with no entry" case — self-contained, mirrors check-changelog).
+//   1. The newest CHANGELOG.md heading matches EVERY surface that declares the
+//      version: package.json, extension/manifest.json (version + version_name —
+//      the extension's build identity, the load-bearing one), package-lock.json
+//      (root + packages[""]) and the generated inventory's `release`. A heading
+//      quoted inside a fenced code block is documentation, not a release, and
+//      cannot satisfy either leg (fences are stripped before the scan — the
+//      reviewed web-uplift reference's rule, sha256 c01a65f5).
 //   2. No COMMIT after the commit that introduced the newest changelog heading
 //      changes shipped product code without a release. Product code = files under
 //      extension/ except Markdown docs (*.md), the generated bundled-inventory-data.js
@@ -38,9 +43,38 @@ const DEFAULT_REPO = fileURLToPath(new URL("..", import.meta.url));
 
 // --- pure helpers (unit-tested in tests/owed-changelog-ledger.test.ts) ---
 
-/** Newest `## [x.y.z] — date` heading in a changelog body (the file is newest-first). */
+/** Drop fenced code blocks before scanning. A version heading quoted inside a
+ *  ``` / ~~~ fence is documentation (an example, a pasted transcript), not a
+ *  release entry — treated as one, it satisfies the check and hides a missing
+ *  entry. Ported from the reviewed web-uplift reference: the opener tolerates
+ *  trailing text (an info string) and up to 3 leading spaces; only a fence of
+ *  the SAME character, at least as long, closes it. */
+export function stripFencedCode(text) {
+  const opener = /^\s{0,3}(`{3,}|~{3,})/;
+  const closer = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+  const kept = [];
+  let fence = null;
+  for (const line of String(text ?? "").split("\n")) {
+    if (fence === null) {
+      const open = opener.exec(line);
+      if (open) fence = open[1];
+      else kept.push(line);
+    } else {
+      const close = closer.exec(line);
+      // Only a fence of the same character, at least as long, closes it.
+      if (close && close[1][0] === fence[0] && close[1].length >= fence.length) {
+        fence = null;
+      }
+    }
+  }
+  return kept.join("\n");
+}
+
+/** Newest `## [x.y.z] — date` heading in a changelog body (the file is
+ *  newest-first). Fenced blocks are stripped first, so a heading quoted inside
+ *  a fence is never the newest release. */
 export function parseNewestEntry(md) {
-  const m = String(md ?? "").match(/^## \[(\d+\.\d+\.\d+)\][^\n]*$/m);
+  const m = stripFencedCode(md).match(/^## \[(\d+\.\d+\.\d+)\][^\n]*$/m);
   return m ? { version: m[1] } : null;
 }
 
@@ -85,20 +119,89 @@ export function bumpCommitFor(repo, version, run = git) {
   return out || null;
 }
 
+// Every surface where this repo declares its version — the release-identity
+// rule: a release carries the version in every file it appears in, and
+// bump-version.mjs keeps all of these in lockstep. extension/manifest.json is
+// the extension's BUILD identity: a package.json that agrees while the manifest
+// drifts still ships the wrong extension, so each surface is read independently
+// rather than one standing in for the rest. Surfaces absent from HEAD declare
+// nothing and are skipped (fixture repos, partial checkouts); present-but-
+// unreadable ones fail closed, named.
+const VERSION_SURFACES = [
+  { path: "package.json", label: "package.json", read: (text) => JSON.parse(text)?.version },
+  {
+    path: "extension/manifest.json",
+    label: "extension/manifest.json version",
+    read: (text) => JSON.parse(text)?.version,
+  },
+  {
+    path: "extension/manifest.json",
+    label: "extension/manifest.json version_name",
+    read: (text) => JSON.parse(text)?.version_name,
+  },
+  {
+    path: "package-lock.json",
+    label: "package-lock.json (root)",
+    read: (text) => JSON.parse(text)?.version,
+  },
+  {
+    path: "package-lock.json",
+    label: "package-lock.json (packages[\"\"])",
+    read: (text) => JSON.parse(text)?.packages?.[""]?.version,
+  },
+  {
+    path: "extension/lib/bundled-inventory-data.js",
+    label: "bundled-inventory-data.js release",
+    // A JS module, not JSON: read the unique top-level `release` field. Per-package
+    // manifests use "version" and SBOM refs use "rel", so the key is unambiguous
+    // (the same reasoning as bump-version.mjs's targeted patch).
+    read: (text) => /"release"\s*:\s*"([^"]*)"/.exec(text)?.[1],
+  },
+];
+
+/** Every version-declaring surface at HEAD, as { label, path, version }. One
+ *  `git show` per unique path; absent paths are skipped, broken ones throw
+ *  naming the surface. */
+function readVersionSurfaces(repo, run = git) {
+  const texts = new Map();
+  const surfaces = [];
+  for (const surface of VERSION_SURFACES) {
+    if (!texts.has(surface.path)) {
+      try {
+        texts.set(surface.path, run(repo, ["show", `HEAD:${surface.path}`]));
+      } catch {
+        texts.set(surface.path, null); // absent from HEAD: it declares nothing
+      }
+    }
+    const text = texts.get(surface.path);
+    if (text === null) continue;
+    let version;
+    try {
+      version = surface.read(text);
+    } catch (err) {
+      throw new Error(`${surface.label}: cannot read the declared version — ${err.message}`);
+    }
+    if (typeof version !== "string" || version === "") {
+      throw new Error(`${surface.label}: declares no usable version`);
+    }
+    surfaces.push({ label: surface.label, path: surface.path, version });
+  }
+  return surfaces;
+}
+
 /** Walk the non-merge commits after `anchor` and classify each owed / not-owed. */
 export function deriveLedger({ repo, run = git }) {
   const headChangelog = run(repo, ["show", "HEAD:CHANGELOG.md"]);
-  const headPkgRaw = run(repo, ["show", "HEAD:package.json"]);
   const newest = parseNewestEntry(headChangelog);
   if (!newest) {
     throw new Error("no `## [x.y.z]` heading found in HEAD's CHANGELOG.md");
   }
-  let pkgVersion;
-  try {
-    pkgVersion = JSON.parse(headPkgRaw).version;
-  } catch {
-    throw new Error(`cannot parse HEAD's package.json`);
+  const surfaces = readVersionSurfaces(repo, run);
+  const pkg = surfaces.find((s) => s.label === "package.json");
+  if (!pkg) {
+    throw new Error("HEAD's package.json is missing or declares no version");
   }
+  const pkgVersion = pkg.version;
   const anchor = bumpCommitFor(repo, newest.version, run);
   if (!anchor) {
     throw new Error(
@@ -133,7 +236,7 @@ export function deriveLedger({ repo, run = git }) {
       else notOwed += 1;
     }
   }
-  return { newest, pkgVersion, anchor, owed, notOwed };
+  return { newest, pkgVersion, surfaces, anchor, owed, notOwed };
 }
 
 // --- CLI ---
@@ -151,12 +254,19 @@ if (import.meta.url === SELF) {
     fail(`OWED-CHANGELOG FAIL: the ledger could not be derived — ${err.message}`);
   }
 
-  const { newest, pkgVersion, anchor, owed, notOwed } = ledger;
-  if (pkgVersion !== newest.version) {
+  const { newest, surfaces, anchor, owed, notOwed } = ledger;
+  const disagreeing = surfaces.filter((s) => s.version !== newest.version);
+  if (disagreeing.length > 0) {
+    // Name EVERY surface with its version (agreeing ones unmarked), so the
+    // message can never shrink back to "package.json says X" while the manifest
+    // — the extension's build identity — is what drifted.
+    const lines = surfaces.map((s) =>
+      `  - ${s.label}: ${s.version}${s.version !== newest.version ? "  (disagrees)" : ""}`);
     fail(
-      `OWED-CHANGELOG FAIL: package.json says ${pkgVersion} but the newest changelog ` +
-      `entry is ${newest.version} (introduced by ${anchor.slice(0, 12)}). A version bump ` +
-      `without its entry is an unreleasable tree — add the \`## [${pkgVersion}]\` entry or ` +
+      `OWED-CHANGELOG FAIL: ${disagreeing.length} version-declaring surface(s) disagree with the ` +
+      `newest changelog entry [${newest.version}] (introduced by ${anchor.slice(0, 12)}):\n` +
+      lines.join("\n") +
+      `\nThe version, its entry and every surface that declares it are ONE coherent change — ` +
       `run: node scripts/bump-version.mjs patch --user-note "<what the user gets>"`,
     );
   }

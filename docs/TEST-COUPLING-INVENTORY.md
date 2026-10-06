@@ -392,11 +392,17 @@ the literal.
 - **What watches what:** the owed-changelog ledger — `scripts/check-owed-changelog.mjs`
   (chained into `npm run check:changelog` by `scripts/sync-changelog.mjs`, aliased as
   `npm run check:changelog-ledger`, and live-asserted by the last test in
-  `tests/owed-changelog-ledger.test.ts`) reads **HEAD's** `CHANGELOG.md` + `package.json`,
-  finds the commit that introduced the newest `## [x.y.z]` heading (pickaxe `-S`), and
-  fails when any non-merge commit after it changes shipped product code (`extension/`
-  minus `*.md`, `bundled-inventory-data.js`, `dist/`) without a release entry, or when
-  `package.json`'s version and the newest heading disagree.
+  `tests/owed-changelog-ledger.test.ts`) reads **HEAD's** `CHANGELOG.md` plus EVERY
+  surface that declares the version (package.json, `extension/manifest.json`
+  `version` + `version_name` — the extension's build identity, package-lock.json
+  root + `packages[""]`, and the generated inventory's `release`), with fenced
+  code blocks stripped before the heading scan (a `## [x.y.z]` quoted inside a
+  fence is documentation, not a release). It finds the commit that introduced the
+  newest `## [x.y.z]` heading (pickaxe `-S`), and fails when any non-merge commit
+  after it changes shipped product code (`extension/` minus `*.md`,
+  `bundled-inventory-data.js`, `dist/`) without a release entry, or when ANY
+  surface's version and the newest heading disagree — each disagreeing surface
+  named with its version, never just "package.json".
 - **The trap it exists around:** the identity check (`check-changelog.mjs`) compares the
   changelog against `package.json` — a STALL keeps both sides equally stale and green
   (0.3.577 sat unchanged for a full day while 200+ commits landed; the post-commit bump
@@ -406,8 +412,9 @@ the literal.
   truth lives in `tests/owed-changelog-ledger.test.ts`'s classifier test. The ledger is
   HEAD-based by design: uncommitted entries are invisible, so the gate reads clean only
   once the release commit exists.
-- **Subject moves:** LOUD — the failure names each owed commit (sha + subject + files)
-  and the release it falls behind.
+- **Subject moves:** LOUD — the failure names each owed commit (sha + subject + files),
+  the release it falls behind, and (for the agreement leg) every disagreeing
+  version surface with its version.
 
 ---
 
