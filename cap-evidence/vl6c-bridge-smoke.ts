@@ -10,12 +10,16 @@
 // @ts-nocheck
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+
+// jsjy: the bridge refuses an unauthenticated upgrade (loopback included), so this instrument
+// requires a secret of its own and presents it — the same shape an operator uses, with no bypass.
+const TOKEN = "cap-acp-instrument-token";
 import { AcpClient } from "../extension/lib/acp-client.js";
 import { createAcpModel } from "../extension/lib/acp-model.js";
 
 const PORT = 3291;
 console.log(`[acceptance] Starting ACP bridge on port ${PORT}...`);
-const server = createAcpServer(PORT);
+const server = createAcpServer(PORT, {}, "", TOKEN);
 
 let passed = 0;
 let failed = 0;
@@ -54,7 +58,7 @@ try {
 
   // In-process client connecting to bridge with tools enabled
   let wsConnected = false;
-  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/acp?harness=claude-code`);
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/acp?token=${TOKEN}&harness=claude-code`);
   await new Promise<void>((resolve, reject) => {
     ws.onopen = () => { wsConnected = true; resolve(); };
     ws.onerror = (e) => reject(e);
@@ -139,7 +143,7 @@ try {
 
   // ── TEST 2: Pi pure chat turn ──
   console.log("\n[test 2] Verifying Pi pure chat turn over bridge (tool-less chat path)...");
-  const piWs = new WebSocket(`ws://127.0.0.1:${PORT}/acp?harness=pi`);
+  const piWs = new WebSocket(`ws://127.0.0.1:${PORT}/acp?token=${TOKEN}&harness=pi`);
   let piConnected = false;
   await new Promise<void>((resolve, reject) => {
     piWs.onopen = () => { piConnected = true; resolve(); };
