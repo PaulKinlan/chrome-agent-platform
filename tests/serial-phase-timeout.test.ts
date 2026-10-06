@@ -78,25 +78,52 @@ Deno.test("86gg: the bound still BOUNDS — a hung file is killed (exit 124)", a
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("86gg: the SAME slow file is killed by the flat bound and survives the scaled one", async () => {
-  // A file that does real work for ~3.5s. With a 2s flat bound it dies (the
-  // false red the fleet was seeing); with the same file under 3x load the
-  // default scales to 6s and it passes — which is the whole change.
-  const dir = await durableDir("86gg-serial-timeout");
-  const slow = `${dir}/zz-slow-${Date.now()}.test.ts`;
+Deno.test("cihz/86gg: the scaled bound is STRICTLY above the flat bound, and a kill happens only below the fixture's DECLARED work", async () => {
+  // WHY THIS REPLACED THE OLD FORM (chrome-agent-platform-cihz): it used a 3.5s fixture, a 2s flat bound and a
+  // 6s scaled bound, so the "survives" half left only ~2.5s for deno STARTUP — and at loadavg ~7 deno's own
+  // startup ate it, flipping a real assertion on the box rather than on the code (measured: 3/5 fails at the
+  // ia4z tip, 1/4 with main's runner, and 4/4 at loadavg ~7.2 including 2/2 on the pristine base).
+  // The fix is to stop letting the clock decide: the fixture DECLARES its work, the flat bound sits BELOW that
+  // declared work (so a kill is structural — the file cannot exit before its own timer), and the scaled bound
+  // sits far enough ABOVE it that deno startup cannot consume the difference.
+  const dir = await durableDir("cihz-scaled-bound");
+  const SLOW_MS = 5_000; // the fixture's DECLARED work, asserted directly rather than inferred from elapsed time
+  const FLAT_MS = 4_000; // strictly below SLOW_MS -> the kill cannot be a race with the box's load
+  const slow = `${dir}/zz-cihz-slow-${Date.now()}.test.ts`;
   await Deno.writeTextFile(
     slow,
-    'Deno.test("slow but progressing", async () => { await new Promise((r) => setTimeout(r, 3500)); });\n',
+    `Deno.test("slow but progressing", async () => { await new Promise((r) => setTimeout(r, ${SLOW_MS})); });\n`,
   );
-  const flat = runSerialFile(slow, { timeoutMs: 2_000, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT });
-  assertEquals(flat.timedOut, true, "the flat bound kills a 3.5s file at a 2s bound");
-
-  const scaled = serialFileTimeoutMs({ base: 2_000, loadPerCpu: 3 });
-  assertEquals(scaled, 6_000);
-  const survived = runSerialFile(slow, { timeoutMs: scaled, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT });
-  assertEquals(survived.timedOut, false, "the scaled bound lets the same file finish");
-  assertEquals(survived.code, 0);
-  await Deno.remove(dir, { recursive: true });
+  try {
+    // (1) THE CONTRACT, pure and clock-free: scaling must be STRICTLY greater than the flat bound, and it must
+    // still be the documented formula. This is the assertion that fails if the scaling is removed.
+    const scaled = serialFileTimeoutMs({ base: FLAT_MS, loadPerCpu: 3 });
+    assertEquals(scaled, 12_000, "the scaled bound must remain base x loadPerCpu");
+    assert(
+      scaled > FLAT_MS,
+      `the scaled bound must be STRICTLY greater than the flat bound (${scaled} vs ${FLAT_MS})`,
+    );
+    // (2) BELOW the declared work: a kill is STRUCTURAL. The fixture cannot exit before SLOW_MS, so any bound
+    // under it kills on every run, at every load — there is nothing here for load to flip.
+    const killed = runSerialFile(slow, { timeoutMs: FLAT_MS, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT });
+    assertEquals(
+      killed.timedOut,
+      true,
+      `a ${FLAT_MS}ms bound must kill a file that declares ${SLOW_MS}ms of work`,
+    );
+    assertEquals(killed.code, 124, "a killed file reports exit 124");
+    // (3) ABOVE it: the same file finishes under the scaled bound, with SLOW_MS + deno startup <= scaled. The
+    // 7s of headroom (12_000 - 5_000) is the load allowance that the old 6_000 - 3_500 = 2.5s did not have.
+    const survived = runSerialFile(slow, { timeoutMs: scaled, stdio: ["ignore", "ignore", "ignore"], cwd: ROOT });
+    assertEquals(
+      survived.timedOut,
+      false,
+      `the scaled bound (${scaled}ms) must let ${SLOW_MS}ms of declared work finish even with startup inside it`,
+    );
+    assertEquals(survived.code, 0, "the surviving file must exit cleanly");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
 
 // ── chrome-agent-platform-kj9s: per-file windows ──────────────────────────────
