@@ -381,18 +381,48 @@ Deno.test("preference-bridge (yi5q): sendPageAgentPreference fails closed on mis
 });
 
 Deno.test("preference-bridge (yi5q): buildPreferenceBootstrapScript fails closed when targetOrigin is absent or wildcard", () => {
-  // 1. When targetOrigin is omitted, expectedOrigin is "" and postMessage is guarded (never posts to "*")
-  const scriptNoOrigin = buildPreferenceBootstrapScript({ nonce: "test-nonce" });
+  const extractBody = (scriptTag: string) => scriptTag.replace(/<script[^>]*>/, "").replace(/<\/script>/, "");
+
+  // 1. Behavioral execution test (P1): When targetOrigin is omitted, expectedOrigin is ""
+  // and the IIFE fails closed: postMessage is NEVER called (posted.length === 0).
+  const scriptNoOrigin = buildPreferenceBootstrapScript({ nonce: "test-nonce-1" });
   assert(!scriptNoOrigin.includes("expectedOrigin||'*'"), "must not contain dynamic fallback expectedOrigin||'*'");
   assert(!scriptNoOrigin.includes("expectedOrigin || '*'"), "must not contain dynamic fallback expectedOrigin || '*'");
-  assert(scriptNoOrigin.includes("if(expectedOrigin&&expectedOrigin!=='*')"), "must guard postMessage fail-closed");
 
-  // 2. When targetOrigin is explicitly provided, expectedOrigin is bound and target is expectedOrigin
+  const postedNoOrigin: Array<{ msg: any; target: string }> = [];
+  const winShimNoOrigin = {
+    parent: {
+      postMessage: (msg: any, target: string) => postedNoOrigin.push({ msg, target }),
+    },
+    addEventListener: () => {},
+  };
+  const docShim = { documentElement: { setAttribute: () => {}, style: {} } };
+
+  // Parse and execute against shims — proves syntax validity and behavior
+  const fnNoOrigin = new Function("window", "document", extractBody(scriptNoOrigin));
+  fnNoOrigin(winShimNoOrigin, docShim);
+  assertEquals(postedNoOrigin.length, 0, "must fail closed without targetOrigin: zero messages posted");
+
+  // 2. Behavioral execution test (P1): When targetOrigin is provided, expectedOrigin is bound
+  // and the frame posts cap:preference-ready strictly to expectedOrigin (never '*').
+  const expectedTarget = "chrome-extension://my-extension-id";
   const scriptWithOrigin = buildPreferenceBootstrapScript({
-    nonce: "test-nonce",
-    targetOrigin: "chrome-extension://my-extension-id",
+    nonce: "test-nonce-2",
+    targetOrigin: expectedTarget,
   });
-  assert(scriptWithOrigin.includes('expectedOrigin="chrome-extension://my-extension-id"'));
-  assert(scriptWithOrigin.includes("window.parent.postMessage({type:'cap:preference-ready',nonce:nonce},expectedOrigin)"));
+
+  const postedWithOrigin: Array<{ msg: any; target: string }> = [];
+  const winShimWithOrigin = {
+    parent: {
+      postMessage: (msg: any, target: string) => postedWithOrigin.push({ msg, target }),
+    },
+    addEventListener: () => {},
+  };
+
+  const fnWithOrigin = new Function("window", "document", extractBody(scriptWithOrigin));
+  fnWithOrigin(winShimWithOrigin, docShim);
+  assertEquals(postedWithOrigin.length, 1, "exactly one message posted when targetOrigin is set");
+  assertEquals(postedWithOrigin[0].target, expectedTarget, "target must match expectedOrigin exactly");
+  assertEquals(postedWithOrigin[0].msg, { type: "cap:preference-ready", nonce: "test-nonce-2" });
 });
 

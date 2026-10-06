@@ -38,6 +38,10 @@ const SKIP_DIRS = new Set(["node_modules", "dist", "dist-versions", ".git"]);
 /**
  * A wildcard target is the literal "*" in any quoting, or a dynamic fallback/ternary resolving to "*"
  * (chrome-agent-platform-yi5q).
+ *
+ * NOTE: Variable indirection (e.g. const ANY = "*"; postMessage(m, origin || ANY)) and wildcards passed
+ * via wrapper options are outside this static call-site rule; they are enforced at runtime by each wrapper
+ * failing closed on falsy, whitespace, or "*" origin.
  */
 export const WILDCARD_RE =
   /^["'`]\*["'`]$|(?:(?:\|\||\?\?)\s*["'`]\*["'`])|(?:\?\s*["'`]\*["'`]\s*:)|(?::\s*["'`]\*["'`]\s*$)/;
@@ -656,6 +660,16 @@ Deno.test("wfxe: the hardened reference channel is actually scoped (it left the 
 });
 
 Deno.test("yi5q: falsification — a dynamic wildcard fallback (origin || '*') is refused by the rule", () => {
+  // Directly verify the regex discriminator matches dynamic fallback shapes:
+  assert(WILDCARD_RE.test('origin || "*"'));
+  assert(WILDCARD_RE.test("expectedOrigin || '*'"));
+  assert(WILDCARD_RE.test('origin ?? "*"'));
+  assert(WILDCARD_RE.test('cond ? "*" : origin'));
+  assert(WILDCARD_RE.test('cond ? origin : "*"'));
+  assert(!WILDCARD_RE.test("origin"));
+  assert(!WILDCARD_RE.test("expectedOrigin"));
+  assert(!WILDCARD_RE.test("window.location.origin"));
+
   const syntheticSource = `
     const origin = getTargetOrigin();
     window.parent.postMessage({ type: "run-action", apiKey: "super-secret" }, origin || "*");
@@ -684,18 +698,6 @@ Deno.test("yi5q: preference-bridge has zero wildcard postMessage calls (literal 
     found,
     [],
     `preference-bridge must have zero wildcard postMessage calls, found: ${JSON.stringify(found)}`,
-  );
-  assert(
-    !prefBridgeSource.includes('expectedOrigin||"*"') &&
-      !prefBridgeSource.includes("expectedOrigin || '*'") &&
-      !prefBridgeSource.includes('expectedOrigin||\'*\''),
-    "preference-bridge must not contain expectedOrigin||'*' fallback",
-  );
-  assert(
-    !prefBridgeSource.includes('origin || "*"') &&
-      !prefBridgeSource.includes('origin||"*"') &&
-      !prefBridgeSource.includes("origin || '*'"),
-    "preference-bridge must not contain origin || '*' fallback",
   );
 });
 
