@@ -30,6 +30,9 @@ import {
 } from "../scripts/lib/chrome-profile-dir.ts";
 import { durableRoot, isRamBacked } from "../scripts/lib/durable-root.mjs";
 
+/** The file's ONE browser-dependent test, named where the refusal counts it. */
+const BROWSER_DEPENDENT_TESTS = ["9t1b: a REAL browser holds its profile while the whole tree is copied"];
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 const SCRIPTS = `${ROOT}/scripts`;
 
@@ -86,12 +89,33 @@ Deno.test("9t1b: isInsideRepo sees through a symlink into the tree", () => {
 });
 
 Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied", async () => {
+  // chrome-agent-platform-hlgr: this file's ONE browser-dependent test. On a host with no resolvable
+  // browser it must refuse ENVIRONMENTALLY — NAMED and COUNTED — never a silent ignore (which reads as
+  // a pass) and never a product red (which blames the tree for an environment difference). The verdict
+  // lives in scripts/lib/browser-refusal.ts so its wording and count are unit-testable without a
+  // browser; resolveChromiumBinaryReport is the repo's resolver that distinguishes "resolved" from
+  // "fell through to a default that may not exist".
+  // (review P2: the block that used to precede this one was a duplicate of it and was deleted.)
+  const { launchChrome, resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
+  // (review P2 delta: refuseWithoutBrowser was imported here and never used in this test — the refusal
+  // is emitted by the LAST test in the file, which imports it for itself.)
+  // chrome-agent-platform-hlgr review P1: do NOT exit from here. This test sits before five STATIC
+  // tests in this file, and Deno.exit(75) would abort them, losing coverage that needs no browser at
+  // all. Without a browser this test declines to assert and the refusal is emitted by the LAST test in
+  // the file, which runs after every static one has had its chance.
+  //
+  // review P1 (delta): a REPORTED binary is not a RESOLVED one. resolveChromiumBinaryReport trusts a
+  // CAP_CHROMIUM override without checking the path, so testing `.binary` here let a missing (or a
+  // directory, or a non-executable) override through, and this test then died ENOENT/EISDIR/EACCES —
+  // a product red for an environment difference, which is the exact class this bead removes.
+  // browserRefusal() owns that judgement, so ask IT rather than the resolver.
+  const { browserRefusal } = await import("../scripts/lib/browser-refusal.ts");
+  if (browserRefusal(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS)) return;
   // The race, driven for real: launch Chrome with a profile from the helper,
   // keep it alive, and copy the WHOLE working tree underneath it — the exact
   // command that failed in tests/cdp-client.test.ts (`cp -a <repo>/. <dst>/.`).
   // Before this bead the profile was inside the tree, so the copy died on files
   // Chrome unlinked mid-copy. It costs a few seconds of I/O; that is the point.
-  const { launchChrome } = await import("../scripts/lib/chrome-launch.ts");
   const profile = chromeProfileDir("kat-live-copy");
   const scratch = Deno.makeTempDirSync({ prefix: "9t1b-copy-" });
   const lockScope = await Deno.makeTempFile({ prefix: "9t1b-scope-" });
@@ -352,4 +376,14 @@ Deno.test("9t1b/z5ym/xvco: an UNKNOWN lock is kept AND reported, never deleted b
     agentsDoc.includes("Lockless profiles") && agentsDoc.includes("`unknown`"),
     "AGENTS.md documents that lockless profiles self-prune while unknown locked profiles are retained and logged",
   );
+});
+
+// chrome-agent-platform-hlgr: the environmental verdict is emitted HERE, last, so a browserless host
+// still runs every static test above before the file reports that its browser test was refused. The
+// refusal NAMES the reason and COUNTS what went unverified, and exits 75 — the repo's third verdict,
+// distinguishable from a pass (0) and from a product failure (1).
+Deno.test("hlgr: no resolvable browser => the environmental refusal (named, counted, exit 75)", async () => {
+  const { refuseWithoutBrowser } = await import("../scripts/lib/browser-refusal.ts");
+  const { resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
+  refuseWithoutBrowser(resolveChromiumBinaryReport(), BROWSER_DEPENDENT_TESTS);
 });
