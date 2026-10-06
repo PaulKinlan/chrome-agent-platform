@@ -102,6 +102,11 @@ Deno.test("artifacts search: final query debounced, filters immediate, pending w
   assert(artifactsJs.includes("pendingSearch?.cancel(); // A discrete filter choice renders now"),
     "kind selection must cancel a pending typing timer and render immediately");
   assert(artifactsJs.includes("export function teardownArtifactsView()"), "the hub must have a teardown seam");
+  const mount = artifactsJs.split("export async function renderArtifactsView(containerEl, options = {}) {")[1]?.split("activeContainer = containerEl;")[0];
+  assert(mount?.includes("teardownArtifactsView();"),
+    "remount must cancel the old timer before a new render owns the container");
+  assert(artifactsJs.includes("const refreshAll = async () => {\n    pendingSearch?.cancel();"),
+    "refresh must cancel pending typing before its authoritative list replaces the grid");
   assert(ntpJs.includes("function hideViewInner() {\n  teardownArtifactsView();"),
     "closing the hub view must cancel pending search work");
   assert(ntpJs.includes("if (targetRoute !== VIEW_ROUTE.ARTIFACTS) teardownArtifactsView();"),

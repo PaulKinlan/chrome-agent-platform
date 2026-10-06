@@ -49,6 +49,7 @@ let pendingSearch = null;
 export function teardownArtifactsView() {
   pendingSearch?.cancel();
   pendingSearch = null;
+  activeRefresh = null;
 }
 
 // CAP-FB-20260828-ARTIFACT-LIBRARY-CAPACITY-01 — the library never silently
