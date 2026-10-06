@@ -91,11 +91,52 @@ export function reconcileFixtureResidue() {
       restored.push("packages/bundled/stray-uncommitted-file.txt (fixture stray)");
     }
   } catch { /* absent, or real content — leave it */ }
+  reapOrphanedGenerators();
   return restored;
 }
-// At load: heal a previous kill's residue before any test in this file reads
-// the shared tree.
+
+/**
+ * chrome-agent-platform-of6z: a killed gate run (rc=124) can leave
+ * build-bundled-tool-packages.mjs generator children running as orphans
+ * (ppid 1, futex_wait). When the next serial phase runs, that orphan
+ * wedges regeneration and causes timeouts. Reap any generator orphan
+ * reparented to init (ppid 1) before running tests.
+ */
+export function reapOrphanedGenerators(): number[] {
+  const reaped: number[] = [];
+  try {
+    for (const entry of Deno.readDirSync("/proc")) {
+      if (!/^\d+$/.test(entry.name)) continue;
+      const pid = Number(entry.name);
+      if (pid === Deno.pid) continue;
+      try {
+        const stat = Deno.readTextFileSync(`/proc/${pid}/stat`);
+        const match = /\)\s+\S+\s+(\d+)/.exec(stat);
+        if (!match || Number(match[1]) !== 1) continue; // Only orphans reparented to init (ppid 1)
+
+        const cmdline = Deno.readTextFileSync(`/proc/${pid}/cmdline`);
+        if (cmdline.includes("build-bundled-tool-packages.mjs")) {
+          try {
+            Deno.kill(pid, "SIGKILL");
+            reaped.push(pid);
+          } catch {
+            /* already gone */
+          }
+        }
+      } catch {
+        /* transient process exited */
+      }
+    }
+  } catch {
+    /* non-Linux or /proc unreadable */
+  }
+  return reaped;
+}
+
+// At load: heal a previous kill's residue and reap stuck generator orphans
+// before any test in this file reads the shared tree.
 reconcileFixtureResidue();
+reapOrphanedGenerators();
 
 Deno.test("verify mode: the committed generated tree has zero drift", async () => {
   const r = await verify();
@@ -197,4 +238,16 @@ Deno.test("build wiring: the DEFAULT build fails closed on generated drift (prov
     Deno.writeFileSync(DRIFT_TARGET, original);
   }
   assertEquals((await verify()).code, 0);
+});
+
+Deno.test("of6z: reapOrphanedGenerators sweeps ppid-1 generator orphans and ignores active non-orphans", () => {
+  // Spawning a child with this test process as PPID (ppid === Deno.pid !== 1)
+  const child = new Deno.Command("sleep", { args: ["10"] }).spawn();
+  try {
+    const reaped = reapOrphanedGenerators();
+    // Must NOT reap child because child's PPID is Deno.pid, not 1
+    assert(!reaped.includes(child.pid), "active non-orphan child must not be reaped");
+  } finally {
+    try { child.kill("SIGKILL"); } catch { /* ignore */ }
+  }
 });
