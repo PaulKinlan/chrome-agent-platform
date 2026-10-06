@@ -183,7 +183,7 @@ Actions that require an explicit owner approval card with a payload digest befor
 | Route Name | Owning Module | Description | Action Identifier |
 |---|---|---|---|
 | `capability.revoke` | `service-worker.js` | Revokes an optional browser capability | `capability.revoke` |
-| `named-agent.create` | `service-worker.js` | Creates a new named agent | `named-agent.create` |
+| `named-agent.create` | `service-worker.js` | Creates a new named agent | `named-agent.create` — classed here because a MODEL caller pays the digest-bound card (pinned by `tests/named-agent-create-approval.test.ts`); an OWNER-principal create is direct (`owner-approval.js` `OWNER_DIRECT_ACTIONS`) and the route carries an owner fence, because `isOwnerDirectApproval` requires a browser-attested `documentId` while `requireOwnerApproval`'s early `!executionId` validation runs first — which refused the extension's own DOCUMENTLESS senders with the message an unapprovable non-owner call gets (chrome-agent-platform-4h47) |
 | `named-agent.set-provider` | `service-worker.js` | Sets per-agent provider override | `named-agent.set-provider` |
 | `agent.update` | `service-worker.js` | Updates site-agent configuration | `agent.update` |
 | `asset.update` | `service-worker.js` | Overwrites an artifact | `asset.update` |

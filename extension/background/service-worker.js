@@ -7973,6 +7973,29 @@ const handlers = mergeRouteMaps(
       { id, name, role, avatar, skills, coreAssets, profileGrants, canDelegateTo, tools },
       {
         gateOnReplace: async ({ slug, existing, candidate }) => {
+          // chrome-agent-platform-4h47: THE OWNER'S OWN CREATE IS THE OWNER'S AUTHORITY, and this
+          // branch is what keeps it reachable now that the seam runs for EVERY create. The rule is
+          // declared in owner-approval.js (OWNER_DIRECT_ACTIONS contains `named-agent.create`) and
+          // the owner's IN-DOCUMENT create is already direct through isOwnerDirectApproval() — but
+          // that predicate deliberately requires a browser-attested `documentId`
+          // ("no browser-attested document → fail closed", pinned in
+          // tests/owner-approval-security.test.ts), and requireOwnerApproval() validates
+          // `executionId` BEFORE it consults the predicate: approvalExecutionId() returns "" for an
+          // owner principal with no document, so the extension's OWN documentless senders — the
+          // service worker's internal callers, and the hub in the test harness — were refused by
+          // the early `!executionId` return in requireOwnerApproval. That refusal carries the same
+          // sentence as an unapprovable non-owner call, which is why it read as an
+          // approval-classification failure while the real cause was the missing execution binding.
+          // The seam below therefore runs for NON-owner principals only: an owner
+          // (`extension`/`owner-options`) creating an agent IS the owner acting, there is no
+          // non-owner decision to obtain, and the refusal is not even answerable (a pending row
+          // needs a `ui:<documentId>` execution id, which a documentless sender by definition
+          // cannot supply). Nothing untrusted becomes able to create agents: `principal` is set by
+          // the router from the browser-attested sender, never from the message body (dispatchRoute
+          // strips it), page senders are refused for this route by the closed page-route allowlist,
+          // and a MODEL run keeps paying the full digest-bound card below (pinned in
+          // tests/named-agent-create-approval.test.ts).
+          if (isOwnerPrincipal(context)) return { ok: true };
           let payload;
           try {
             // chrome-agent-platform-4h47: `existing` is NULL on the create path

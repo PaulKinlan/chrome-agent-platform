@@ -342,3 +342,46 @@ Deno.test("a MODEL create is NOT owner-direct, even when the model is hosted in 
   assertEquals(await namedAgents.getNamedAgent("forged-owner"), null, "the forged create wrote nothing");
   assertEquals(approvalStore.approvals.size, 0);
 });
+
+Deno.test("named-agent.create from the extension's OWN documentless sender lands, while the SAME shape under the model principal still pays the card", async () => {
+  reset();
+  const approvalStore = approvals.createApprovalStore();
+  const { dispatch } = await loadModelRoute(approvalStore);
+
+  // chrome-agent-platform-4h47: THE OWNER FENCE, and the exact red this bead's
+  // first attempt shipped with. `isOwnerDirectApproval()` deliberately requires a
+  // browser-attested `documentId` ("no browser-attested document → fail closed",
+  // pinned in tests/owner-approval-security.test.ts) and `requireOwnerApproval()`
+  // validates `executionId` BEFORE it consults that predicate, so an owner create
+  // from the extension's own documentless sender — the service worker's internal
+  // callers, and the hub under a test harness — was refused by the early
+  // `!executionId` return, carrying the same sentence an unapprovable non-owner
+  // call gets. The owner IS the authority for its own create, so the route lets an
+  // owner principal through and runs the seam for NON-owner principals only.
+  const owner = await dispatch("named-agent.create", { id: "docless-owner", name: "Docless Owner" }, {
+    principal: "extension",
+    documentId: "",
+    senderUrl: "",
+  });
+  assertEquals(owner.ok, true, `the extension's own documentless create must land: ${JSON.stringify(owner)}`);
+  assertEquals(approvalStore.approvals.size, 0, "an owner create raises no pending row");
+  assert(await namedAgents.getNamedAgent("docless-owner"), "the owner create persisted the agent");
+
+  // THE SAME ROUTE, THE SAME DOCUMENTLESS SHAPE, THE MODEL PRINCIPAL: still gated.
+  // The principal is set by the router from the browser-attested sender (never the
+  // body), so this is what the owner fence must NOT swallow.
+  let sawCard = false;
+  const asModel = await dispatch("named-agent.create", { id: "docless-model", name: "Docless Model" }, {
+    principal: "model",
+    executionId: EXECUTION_ID,
+    onApprovalEvent: async (event) => {
+      if (event.type !== "approval-request") return;
+      sawCard = true;
+      approvals.resolvePendingApproval(approvalStore, event.approvalId, false);
+    },
+  });
+  assert(sawCard, "a MODEL create from the same documentless shape still publishes the owner's card");
+  assertEquals(asModel.ok, false, `the denied model create refuses: ${JSON.stringify(asModel)}`);
+  assertEquals(await namedAgents.getNamedAgent("docless-model"), null, "the denied model create wrote no agent");
+  assertEquals(approvalStore.approvals.size, 0);
+});
