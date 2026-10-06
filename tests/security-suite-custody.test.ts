@@ -171,6 +171,7 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
   });
   assertEquals(production.selfTest, false);
   assertEquals(production.timeoutMs, 120_000);
+  assertEquals(production.attestDeadlineMs, 2_000, "production keeps the old attestation clock");
   assertEquals(production.runner, RUNNER);
 
   await assertRejects(
@@ -185,6 +186,16 @@ Deno.test("security-suite custody: production mode is immutable and fake runners
       }),
     Error,
     "self-test-only override refused",
+  );
+
+  await assertRejects(
+    () => resolveSupervisorConfig({
+      env: { HOME: Deno.env.get("HOME") ?? "", CAP_SECURITY_TEST_ATTEST_DEADLINE_MS: "5000" },
+      repoRoot: ROOT,
+      expectedFixtureHash: "unused-in-production",
+    }),
+    Error,
+    "self-test-only override refused in production mode",
   );
 
   const fake = await Deno.makeTempFile({ prefix: "cap-hostile-runner-" });
@@ -265,15 +276,54 @@ Deno.test("security-suite custody: direct/no-lock/stale-parent/stale-nonce/wrong
   await Deno.remove(guardDir, { recursive: true });
 });
 
-Deno.test("security-suite custody: the valid supervisor chain passes the live inherited-lock guard", async () => {
-  const result = await runSupervisor("guard", 2_000);
+Deno.test("security-suite custody: the valid supervisor chain declares its attestation window", async () => {
+  const declaredAttestDeadlineMs = 5_000;
+  const result = await runSupervisor("guard", 2_000, {
+    CAP_SECURITY_TEST_ATTEST_DEADLINE_MS: String(declaredAttestDeadlineMs),
+  });
   try {
     assertEquals(result.code, 0);
     assertEquals(result.receipt?.result, "PASS");
+    assertEquals(result.receipt?.attestDeadlineMs, declaredAttestDeadlineMs,
+      "the receipt records the NUMBER the supervisor was given, not a private clock");
     const guardResult = result.state.find((row) =>
       row.event === "guard-result"
     );
     assertEquals(guardResult?.error, null);
+  } finally {
+    await removeEvidence(result);
+  }
+});
+
+Deno.test("zfsl: invalid attestation declaration refuses by name before a runner is spawned", async () => {
+  for (const bad of ["not-a-number", "0", "20001"]) {
+    const result = await command("bash", [SUPERVISOR], {
+      CAP_SECURITY_SELF_TEST: SELF_TEST_TOKEN,
+      CAP_SECURITY_RUNNER: FIXTURE,
+      CAP_SECURITY_TEST_SCENARIO: "guard",
+      CAP_SECURITY_SELF_TEST_TIMEOUT_MS: "1000",
+      CAP_SECURITY_TEST_ATTEST_DEADLINE_MS: bad,
+    }, 20, "CAP_SECURITY_LOCK_ACQUIRED");
+    assertEquals(result.code, 2);
+    assert(result.text.includes("SECURITY-SUITE SUPERVISOR REFUSED: CAP_SECURITY_TEST_ATTEST_DEADLINE_MS out of bounds"));
+    assert(!result.text.includes("CAP_SECURITY_RESULT"), "config refusal must precede spawning and receipt");
+  }
+});
+
+Deno.test("zfsl: exhausted declared attestation window refuses by name and reaps the child", async () => {
+  const declaredAttestDeadlineMs = 100;
+  const result = await runSupervisor("timeout", 1_000, {
+    CAP_SECURITY_TEST_ATTEST_DEADLINE_MS: String(declaredAttestDeadlineMs),
+    CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED: "1",
+  });
+  try {
+    assertEquals(result.code, 2);
+    assertEquals(result.receipt?.result, "REFUSED");
+    assertEquals(result.receipt?.attestDeadlineMs, declaredAttestDeadlineMs);
+    assertEquals(result.receipt?.reason,
+      `PGID/SID attestation deadline exceeded after ${declaredAttestDeadlineMs} ms`);
+    assertEquals(result.receipt?.cleaned, true);
+    await assertRecordedPidsGone(result);
   } finally {
     await removeEvidence(result);
   }
