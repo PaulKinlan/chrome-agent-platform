@@ -9,7 +9,7 @@
 //   5. tests/chrome-profile-location.test.ts runs in the parallel phase of npm test.
 
 import { fileURLToPath } from "node:url";
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { partition } from "../scripts/test-partition.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -26,10 +26,7 @@ function stripComments(src: string): string {
 // read one of those fixtures as a second real browser launch
 // (chrome-agent-platform-qepn: that made this always-on guard red on main
 // 28fde694, in every lane's subset gate). Strip string literals too, so this
-// guard measures calls. It does not weaken the guard for real calls — it
-// strengthens them: a template literal in an argument list can no longer hide
-// the closing `})` the pattern needs. Escapes and newlines are honoured so one
-// unterminated quote cannot swallow the rest of the file.
+// guard measures calls.
 //
 // In chrome-agent-platform-m7b1:
 //   1. stripRegexes strips regex literals (/.../flags) before stripStrings, so
@@ -39,7 +36,7 @@ function stripComments(src: string): string {
 //      stray backtick cannot swallow real calls across newlines.
 //   3. extractLaunchChromeCalls tracks balanced braces { ... }, so nested
 //      parentheses (e.g. { profile: getDir("x"), args: [] }) do not truncate
-//      the argument object.
+//      the argument object. Unbalanced or unclosed calls fail closed by throwing.
 const REGEX_PREFIX =
   /(^|[=(,;:!&|?+*\-%^~<>{}[\n\r]|(?:\b(?:return|case|default|throw|yield|await|typeof|void|delete)\b))\s*(\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\r\n])*\]|[^\\\/\r\n])+\/[a-z]*)/g;
 
@@ -59,8 +56,9 @@ export function codeOnly(src: string): string {
   return stripStrings(stripRegexes(stripComments(src)));
 }
 
-/** Extract launchChrome({ ... }) call sites, robust to nested parens, braces, and brackets (m7b1). */
-export function* extractLaunchChromeCalls(code: string): Generator<{ full: string; callArgs: string }> {
+/** Extract launchChrome({ ... }) call sites, robust to nested parens, braces, and brackets (m7b1).
+ * Fails closed if a launchChrome({ site cannot be parsed or closed. */
+export function* extractLaunchChromeCalls(code: string, file = "<unknown>"): Generator<{ full: string; callArgs: string }> {
   const re = /\blaunchChrome\s*\(\s*\{/g;
   let match: RegExpExecArray | null;
   while ((match = re.exec(code)) !== null) {
@@ -78,10 +76,14 @@ export function* extractLaunchChromeCalls(code: string): Generator<{ full: strin
         }
       }
     }
-    if (objEnd === -1) continue;
+    if (objEnd === -1) {
+      throw new Error(`launchChrome call site in ${file} at offset ${match.index} has unbalanced braces (cannot be closed)`);
+    }
     const after = code.slice(objEnd + 1);
     const closeParenMatch = after.match(/^\s*\)/);
-    if (!closeParenMatch) continue;
+    if (!closeParenMatch) {
+      throw new Error(`launchChrome call site in ${file} at offset ${match.index} is missing closing ')'`);
+    }
     const callArgs = code.slice(objStart + 1, objEnd);
     yield { full: code.slice(match.index, objEnd + 1 + closeParenMatch[0].length), callArgs };
   }
@@ -111,7 +113,7 @@ Deno.test("contract: chrome-profile-location.test.ts is the SOLE real-browser te
   for (const rel of files.sort()) {
     const raw = await Deno.readTextFile(`${ROOT}${rel}`);
     const code = codeOnly(raw);
-    for (const { callArgs } of extractLaunchChromeCalls(code)) {
+    for (const { callArgs } of extractLaunchChromeCalls(code, rel)) {
       if (/\bbinary\s*:/.test(callArgs)) {
         if (!fakeRunnerTests.includes(rel)) fakeRunnerTests.push(rel);
       } else {
@@ -143,7 +145,7 @@ Deno.test("contract: no unit test in tests/ requests canonicalLock on launchChro
   for (const rel of files) {
     const raw = await Deno.readTextFile(`${ROOT}${rel}`);
     const code = codeOnly(raw);
-    for (const { callArgs } of extractLaunchChromeCalls(code)) {
+    for (const { callArgs } of extractLaunchChromeCalls(code, rel)) {
       // Canonical lock is reserved for scripts/ acceptance suites; unit tests never take it
       if (/\bcanonicalLock\s*:\s*true\b/.test(callArgs) && !/\bbinary\s*:/.test(callArgs)) {
         offenders.push(rel);
@@ -210,8 +212,23 @@ Deno.test("contract (m7b1): launch-site scanner handles nested parens, regex bac
     "const y = `done`;",
   ].join("\n");
 
+  const legacyStrayCode = legacyStringsOnly(stripComments(strayBacktickSnippet));
+  assert(!legacyStrayCode.includes("launchChrome"), "falsification proof: legacy stripStrings swallows call following stray backtick line");
+
   const newStrayCode = codeOnly(strayBacktickSnippet);
   assert(newStrayCode.includes("launchChrome"), "new codeOnly preserves call following stray backtick line");
   const newStrayHits = [...extractLaunchChromeCalls(newStrayCode)];
   assertEquals(newStrayHits.length, 1, "call following stray backtick line is extracted");
+
+  // 4. Fail-closed on unclosed/unbalanced call site (never silently skipped):
+  assertThrows(
+    () => [...extractLaunchChromeCalls("await launchChrome({ unclosed: 1", "test.ts")],
+    Error,
+    "unbalanced braces",
+  );
+  assertThrows(
+    () => [...extractLaunchChromeCalls("await launchChrome({ foo: 1 } bad", "test.ts")],
+    Error,
+    "missing closing ')'",
+  );
 });
