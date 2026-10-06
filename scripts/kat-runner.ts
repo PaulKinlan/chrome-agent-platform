@@ -31,7 +31,7 @@ import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, heavyGateRefusalPayloa
 import { HeavyGateSlotSetupError, heavyGateSetupFailurePayload } from "./lib/heavy-gate-slot.ts";
 import { ENVIRONMENTAL_REFUSAL_EXIT, ENVIRONMENTAL_REFUSAL_MARKER } from "./lib/quiet-window.ts";
 import { durableDir } from "./lib/durable-root.mjs";
-import { pruneChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
+import { MAX_CHROME_PROFILE_DIRS, pruneChromeProfileDirs, reportChromeProfileDirs } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const GREEN_BUDGET_MS = 600_000;
@@ -84,10 +84,17 @@ async function runOne(file: string, budgetMs: number): Promise<{ code: number; m
 const pruned = await pruneChromeProfileDirs();
 if (pruned.removed > 0 || pruned.unknown > 0 || pruned.errors.length > 0) {
   console.log(
-    `kat-runner: pruned ${pruned.removed} stale Chrome profile(s), kept ${pruned.kept} (${pruned.unknown} unknown lock(s) retained)` +
+    `kat-runner: pruned ${pruned.removed} lockless Chrome profile(s), kept ${pruned.kept} (${pruned.unknown} unknown lock(s) retained)` +
       `${pruned.errors.length ? `, ${pruned.errors.length} error(s): ${pruned.errors.slice(0, 3).join("; ")}` : ""}`,
   );
 }
+// vk1t: diagnosis is NOT deletion authority. Keep the full owner/age/PID
+// evidence for every dead-lock directory, not just the first few log lines.
+const profileReport = reportChromeProfileDirs();
+const profileReportPath = `${LOG_DIR}/chrome-profile-report.json`;
+await Deno.writeTextFile(profileReportPath, JSON.stringify(profileReport, null, 2));
+console.log(`kat-runner: Chrome profiles ${profileReport.directories}/${MAX_CHROME_PROFILE_DIRS} admission cap, ` +
+  `${profileReport.stale.length} local dead-PID lock(s) retained (report: ${profileReportPath})`);
 
 console.log(`kat-runner: ${kats.length} KATs (${Object.keys(expectedRed).length} owned reds) — logs in ${LOG_DIR}`);
 // 0lj3: a KAT batch is a load-sensitive gate in its own right — 40-odd real
