@@ -20,6 +20,8 @@
 // fails after `budgetMs` of its OWN time: nothing here can turn a real failure
 // green — it only stops queueing from masquerading as one.
 
+import { setsidSpawnSpec } from "./process-tree.ts";
+
 export interface LockAwareResult {
   code: number;
   text: string;
@@ -47,17 +49,17 @@ export async function runLockAware(opts: {
   // whole tree: a `flock … deno run …` wrapper killed on its own leaves the
   // harness alive, still holding the inherited lock fd, and the drain below
   // never ends (observed with a hanging KAT on 2026-09-02).
-  const proc = new Deno.Command("setsid", {
-    args: [opts.executable, ...opts.args],
+  const spec = setsidSpawnSpec(opts.executable, opts.args);
+  const proc = new Deno.Command(spec.command, {
+    args: spec.args,
     env: opts.env ? { ...Deno.env.toObject(), ...opts.env } : undefined,
     stdout: "piped",
     stderr: "piped",
   }).spawn();
   const killGroup = async (signal: "TERM" | "KILL") => {
-    try {
-      await new Deno.Command("kill", { args: [`-${signal}`, "--", `-${proc.pid}`], stdout: "null", stderr: "null" }).output();
-    } catch { /* gone */ }
-    try { proc.kill(signal === "TERM" ? "SIGTERM" : "SIGKILL"); } catch { /* gone */ }
+    const sig = signal === "TERM" ? "SIGTERM" : "SIGKILL";
+    try { Deno.kill(-proc.pid, sig); } catch { /* gone */ }
+    try { proc.kill(sig); } catch { /* gone */ }
   };
   const decoder = new TextDecoder();
   let text = "";

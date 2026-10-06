@@ -178,13 +178,15 @@ Deno.test("11rm.1: multi-file TAR with empty, binary, Unicode and long paths int
     await Deno.writeFile(tarFile, fullArchive);
 
     // 1. System tar lists archive without error
+    const tarEnv = { ...Deno.env.toObject(), LC_ALL: "en_US.UTF-8", LANG: "en_US.UTF-8" };
     const listProc = new Deno.Command("tar", {
       args: ["-tvf", tarFile],
+      env: tarEnv,
       stdout: "piped",
       stderr: "piped",
     }).outputSync();
     assertEquals(listProc.code, 0, `tar -tvf failed: ${new TextDecoder().decode(listProc.stderr)}`);
-    const listOut = new TextDecoder().decode(listProc.stdout);
+    const listOut = (new TextDecoder().decode(listProc.stdout) + new TextDecoder().decode(listProc.stderr)).normalize("NFC");
     assert(listOut.includes("empty.txt"));
     assert(listOut.includes("small.txt"));
     assert(listOut.includes("binary.dat"));
@@ -194,6 +196,7 @@ Deno.test("11rm.1: multi-file TAR with empty, binary, Unicode and long paths int
     // 2. System tar extracts archive cleanly
     const extractProc = new Deno.Command("tar", {
       args: ["-xvf", tarFile, "-C", extractDir],
+      env: tarEnv,
       stdout: "piped",
       stderr: "piped",
     }).outputSync();

@@ -482,7 +482,22 @@ try {
     const OPT = path.join(STAGE, "options.bundle.js");
     const NTP_BUNDLE = path.join(STAGE, "ntp.bundle.js");
     const SIDEPANEL_BUNDLE = path.join(STAGE, "sidepanel.bundle.js");
-    await mkdir(path.dirname(SW), { recursive: true });
+    const ARTIFACTS_BUNDLE = path.join(STAGE, "artifacts.bundle.js");
+    const ARTIFACT_BUNDLE = path.join(STAGE, "artifact.bundle.js");
+    const DIRECTORY_BUNDLE = path.join(STAGE, "directory.bundle.js");
+    const PRIVACY_BUNDLE = path.join(STAGE, "privacy.bundle.js");
+    const OFFSCREEN_BUNDLE = path.join(STAGE, "offscreen.bundle.js");
+    const USER_WASM_STORE_CLIENT_BUNDLE = path.join(STAGE, "user-wasm-store-client.bundle.js");
+    const DIFF_CORE = path.join(STAGE, "shared/diff-core.bundle.js");
+    const WORKER = path.join(STAGE, "workers/agent-worker.js");
+
+    await Promise.all([
+      mkdir(path.dirname(SW), { recursive: true }),
+      mkdir(path.dirname(DIFF_CORE), { recursive: true }),
+      mkdir(path.dirname(WORKER), { recursive: true }),
+      mkdir(path.join(ROOT, ".build"), { recursive: true }),
+    ]);
+
     // DEVELOPER-ONLY MCP transport-spike probe
     // (CAP-FB-20260831-MCP-TRANSPORT-SPIKE-01). scripts/mcp-probe-entry.js
     // imports the remote-MCP client (lib/mcp-client.js → the browser-safe
@@ -493,51 +508,46 @@ try {
     // developer target and is absent from every store build.
     const swInject = [];
     if (DEBUG_BUILD) swInject.push(path.join(ROOT, "scripts/mcp-probe-entry.js"));
-    const swResult = await build({
-      ...shared,
-      entryPoints: [path.join(EXT_DIR, "background/service-worker.js")],
-      outfile: SW,
-      inject: swInject,
-      // metafile feeds the bundle-budget report + gate
-      // (CAP-FB-20260830-BUNDLE-BUDGET-01): the contributors are visible in
-      // every build log, and the store gate failure names them.
-      metafile: true,
-    });
-    {
-      // The budget report NEVER lands in dist/: the shipped package must not
-      // carry build-host paths (the shipped-bytes scrub rule). Stdout always;
-      // .build/ (gitignored) for inspection.
-      const { formatContributors } = await import("./scripts/bundle-budget.mjs");
-      console.log(`bundle report (service-worker, pre-minify inputs):\n${formatContributors(swResult.metafile)}`);
-      await mkdir(path.join(ROOT, ".build"), { recursive: true });
-      await writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile));
-    }
-    const optResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT });
-    const ntpResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE });
-    const sidepanelResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE });
-    // chrome-agent-platform-9epn.5: the remaining UI documents and the offscreen
-    // document were the LAST raw native-ESM loads — artifacts / artifact /
-    // directory / privacy each pulled shared/components.js + its graph as
-    // 18–22 unminified module requests (≈1 MB), offscreen.html 31 requests
-    // (685 KB) on every ensure, and options/user-wasm-panel.js dynamic-imported
-    // a raw lib file — all bypassing minify, the eval scrub and the evaluator
-    // gate. They are real entries now: one request each, same `shared` config,
-    // and every loop below (scrub → minify → evaluator gate → budget → mode →
-    // dist.complete) covers them. Name → entry → output; the output name is
-    // what the HTML / dynamic import references under dist/.
-    const ARTIFACTS_BUNDLE = path.join(STAGE, "artifacts.bundle.js");
-    const ARTIFACT_BUNDLE = path.join(STAGE, "artifact.bundle.js");
-    const DIRECTORY_BUNDLE = path.join(STAGE, "directory.bundle.js");
-    const PRIVACY_BUNDLE = path.join(STAGE, "privacy.bundle.js");
-    const OFFSCREEN_BUNDLE = path.join(STAGE, "offscreen.bundle.js");
-    const USER_WASM_STORE_CLIENT_BUNDLE = path.join(STAGE, "user-wasm-store-client.bundle.js");
 
-    const artifactsResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifacts/index.js")], outfile: ARTIFACTS_BUNDLE });
-    const artifactResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifact/artifact.js")], outfile: ARTIFACT_BUNDLE });
-    const directoryResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "directory/directory.js")], outfile: DIRECTORY_BUNDLE });
-    const privacyResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "privacy/privacy.js")], outfile: PRIVACY_BUNDLE });
-    const offscreenResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "offscreen/offscreen.js")], outfile: OFFSCREEN_BUNDLE });
-    const userWasmClientResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "lib/user-wasm-store-client.js")], outfile: USER_WASM_STORE_CLIENT_BUNDLE });
+    // chrome-agent-platform-9epn.5 + jjsz: build all 12 bundles concurrently.
+    const [
+      swResult,
+      optResult,
+      ntpResult,
+      sidepanelResult,
+      artifactsResult,
+      artifactResult,
+      directoryResult,
+      privacyResult,
+      offscreenResult,
+      userWasmClientResult,
+      diffCoreResult,
+      workerResult,
+    ] = await Promise.all([
+      build({
+        ...shared,
+        entryPoints: [path.join(EXT_DIR, "background/service-worker.js")],
+        outfile: SW,
+        inject: swInject,
+        metafile: true,
+      }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "options/options.js")], outfile: OPT }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "ntp/ntp.js")], outfile: NTP_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "sidepanel/sidepanel.js")], outfile: SIDEPANEL_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifacts/index.js")], outfile: ARTIFACTS_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "artifact/artifact.js")], outfile: ARTIFACT_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "directory/directory.js")], outfile: DIRECTORY_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "privacy/privacy.js")], outfile: PRIVACY_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "offscreen/offscreen.js")], outfile: OFFSCREEN_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "lib/user-wasm-store-client.js")], outfile: USER_WASM_STORE_CLIENT_BUNDLE }),
+      build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE }),
+      build({
+        ...shared,
+        entryPoints: [path.join(EXT_DIR, "workers/agent-worker.js")],
+        outfile: WORKER,
+        format: "esm",
+      }),
+    ]);
 
     const SURFACE_BUNDLES = [
       { name: "artifacts", entry: "artifacts/index.js", out: "artifacts.bundle.js", path: ARTIFACTS_BUNDLE, result: artifactsResult, budget: 600_000 },
@@ -548,40 +558,31 @@ try {
       { name: "user-wasm-store-client", entry: "lib/user-wasm-store-client.js", out: "user-wasm-store-client.bundle.js", path: USER_WASM_STORE_CLIENT_BUNDLE, result: userWasmClientResult, budget: 10_000 },
     ];
     const SURFACE_BUNDLE_PATHS = SURFACE_BUNDLES.map((s) => s.path);
-    // The diff core (CAP-FB-20260830-DIFF-LIBRARY-01): jsdiff lives in
-    // node_modules, so the ONE wrapper module is bundled and every page /
-    // component / the SW imports this single build by relative path.
-    const DIFF_CORE = path.join(STAGE, "shared/diff-core.bundle.js");
-    await mkdir(path.dirname(DIFF_CORE), { recursive: true });
-    const diffCoreResult = await build({ ...shared, entryPoints: [path.join(EXT_DIR, "shared/diff-core.js")], outfile: DIFF_CORE });
-    // PHASE-2 agent worker bundle: the per-agent shared worker runs the
-    // agent-do loop (lib/agent-loop.js → agent-do + ai) — those live in
-    // node_modules, so the worker MUST be bundled (native ESM can't resolve
-    // node_modules in the browser). Same `shared` config, no node shims (the
-    // loop stack is browser-only: fetch/streams).
-    const WORKER = path.join(STAGE, "workers/agent-worker.js");
-    await mkdir(path.dirname(WORKER), { recursive: true });
-    const workerResult = await build({
-      ...shared,
-      entryPoints: [path.join(EXT_DIR, "workers/agent-worker.js")],
-      outfile: WORKER,
-      format: "esm",
-    });
-    await writeFile(path.join(ROOT, ".build", "bundle-report-worker.json"), JSON.stringify(workerResult.metafile));
-    await writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(optResult.metafile));
-    await writeFile(path.join(ROOT, ".build", "bundle-report-ntp.json"), JSON.stringify(ntpResult.metafile));
-    await writeFile(path.join(ROOT, ".build", "bundle-report-sidepanel.json"), JSON.stringify(sidepanelResult.metafile));
-    await writeFile(path.join(ROOT, ".build", "bundle-report-diff-core.json"), JSON.stringify(diffCoreResult.metafile));
-    // 9epn.5: one report per surface bundle (.build/bundle-report-<name>.json)
-    // for the composition + budget tests.
-    for (const s of SURFACE_BUNDLES) {
-      await writeFile(path.join(ROOT, ".build", `bundle-report-${s.name}.json`), JSON.stringify(s.result.metafile));
+    const ALL_BUNDLE_PATHS = [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS];
+
+    {
+      // The budget report NEVER lands in dist/: the shipped package must not
+      // carry build-host paths (the shipped-bytes scrub rule). Stdout always;
+      // .build/ (gitignored) for inspection.
+      const { formatContributors } = await import("./scripts/bundle-budget.mjs");
+      console.log(`bundle report (service-worker, pre-minify inputs):\n${formatContributors(swResult.metafile)}`);
+      await Promise.all([
+        writeFile(path.join(ROOT, ".build", "bundle-report.json"), JSON.stringify(swResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-worker.json"), JSON.stringify(workerResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-options.json"), JSON.stringify(optResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-ntp.json"), JSON.stringify(ntpResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-sidepanel.json"), JSON.stringify(sidepanelResult.metafile)),
+        writeFile(path.join(ROOT, ".build", "bundle-report-diff-core.json"), JSON.stringify(diffCoreResult.metafile)),
+        ...SURFACE_BUNDLES.map((s) =>
+          writeFile(path.join(ROOT, ".build", `bundle-report-${s.name}.json`), JSON.stringify(s.result.metafile))
+        ),
+      ]);
     }
 
-    // Scrub + seam-scan IN STAGING over ALL FOUR generated bundles (the SW,
+    // Scrub + seam-scan IN STAGING over ALL generated bundles (the SW,
     // the agent-worker bundle — agent-do/ai/mcp-sdk carry a `new Function`/
     // `new F("")` evaluator that the store-target policy forbids — the Options
-    // bundle, and diff-core). chrome-agent-platform-tptx (+4f3j, absorbed):
+    // bundle, diff-core, and surface bundles). chrome-agent-platform-tptx (+4f3j, absorbed):
     // the pinned Zod Doc.compile denial runs here too, and OPT is inside the
     // loop — before this change OPT was the one bundle still taking zod's JIT
     // path (its allowsEval probe and Doc.compile survived). After it, OPT's
@@ -593,14 +594,14 @@ try {
     let zodProbes = 0;
     let zodDocCompiles = 0;
     const { denyZodDocCompiles } = await import("./scripts/lib/scrub-zod-doc.mjs");
-    for (const scrubPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS]) {
+    const scrubCounts = await Promise.all(ALL_BUNDLE_PATHS.map(async (scrubPath) => {
       let bundle = await readFile(scrubPath, "utf8");
       if (bundle.includes("key-sentinel") || bundle.includes("__CAP_TEST_SEAM")) {
         throw new Error("production bundle unexpectedly contains test-seam markers — refusing to publish");
       }
-      occurrences += (bundle.match(/new Function\s*\(/g) ?? []).length;
+      const occ = (bundle.match(/new Function\s*\(/g) ?? []).length;
       bundle = bundle.replace(/new Function\s*\(/g, "(function(){ throw new Error('eval disabled (MV3 CSP)'); })(");
-      zodProbes += (bundle.match(/new F\(""\)/g) ?? []).length;
+      const probes = (bundle.match(/new F\(""\)/g) ?? []).length;
       bundle = bundle.replace(/new F\(""\)/g, '(() => { throw new Error("eval disabled (MV3 CSP)"); })()');
       // The pinned Doc.compile denial: hash-recognized class bodies only, and
       // (chrome-agent-platform-ol0j) only when the constructor's own lexical
@@ -608,10 +609,15 @@ try {
       // `Function` binding is preserved.
       const denied = denyZodDocCompiles(bundle);
       bundle = denied.code;
-      zodDocCompiles += denied.count;
       await writeFile(scrubPath, bundle);
       const remaining = (bundle.match(/new Function\s*\(|eval\s*\(|new F\(""\)/g) ?? []).length;
       if (remaining > 0) throw new Error(`bundle still contains ${remaining} eval sites after cleaning`);
+      return { occ, probes, docCompiles: denied.count };
+    }));
+    for (const c of scrubCounts) {
+      occurrences += c.occ;
+      zodProbes += c.probes;
+      zodDocCompiles += c.docCompiles;
     }
 
     // Store-target minification (CAP-FB-20260830-BUNDLE-BUDGET-01). The
@@ -622,7 +628,7 @@ try {
     // only reliable on unminified code, and minification never reintroduces
     // them (globals are never renamed). The developer build is untouched.
     if (!DEBUG_BUILD) {
-      for (const minifyPath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS]) {
+      await Promise.all(ALL_BUNDLE_PATHS.map(async (minifyPath) => {
         const source = await readFile(minifyPath, "utf8");
         const minified = await transform(source, {
           minify: true,
@@ -637,7 +643,7 @@ try {
           throw new Error(`minified bundle ${path.basename(minifyPath)} contains ${evalSites} eval site(s) — refusing to publish`);
         }
         await writeFile(minifyPath, minified.code);
-      }
+      }));
     }
 
     // Final evaluator gate (chrome-agent-platform-kdax): parse the ACTUAL final
@@ -646,13 +652,13 @@ try {
     // regex checks above are defense in depth; this whole-AST classifier pass is
     // what sees ALIAS/MEMBER/SEQUENCE evaluators (the zod Doc.compile aliases a
     // regex could never name — 8 live sites on unmodified main, 2026-09-18).
-    // Scope is exactly the four generated bundles: the wasm-tools runtime ships
+    // Scope is every generated bundle: the wasm-tools runtime ships
     // as a separately reviewed, manifest-hash-pinned blob lane
     // (scripts/store-target-policy.mjs), not generated JavaScript.
     const { assertNoDynamicEvaluators } = await import("./scripts/lib/dynamic-evaluator-scan.mjs");
-    for (const gatePath of [SW, WORKER, OPT, DIFF_CORE, NTP_BUNDLE, SIDEPANEL_BUNDLE, ...SURFACE_BUNDLE_PATHS]) {
+    await Promise.all(ALL_BUNDLE_PATHS.map(async (gatePath) => {
       assertNoDynamicEvaluators(await readFile(gatePath, "utf8"), gatePath);
-    }
+    }));
 
     // The bundle budget report + integrity gate (CAP-FB-20260830-BUNDLE-
     // BUDGET-01, extended to every surface by chrome-agent-platform-9epn.4;
@@ -713,26 +719,25 @@ try {
       const RUNTIME_SRC = path.join(ROOT, "wasm-tools/python");
       const manifest = JSON.parse(await readFile(path.join(RUNTIME_SRC, "MANIFEST.json"), "utf8"));
       const runtimeFiles = Object.keys(manifest.files); // 7 pinned files incl. python-worker.js
-      for (const file of runtimeFiles) {
-        const digest = createHash("sha256").update(await readFile(path.join(RUNTIME_SRC, file))).digest("hex");
+      const PY = path.join(STAGE, "wasm-tools/python");
+      await mkdir(PY, { recursive: true });
+      await Promise.all(runtimeFiles.map(async (file) => {
         const expected = manifest.files[file]?.sha256;
         if (!expected) throw new Error(`pyodide runtime ${file} has no admission hash in wasm-tools/python/MANIFEST.json`);
+        const srcFile = path.join(RUNTIME_SRC, file);
+        const digest = createHash("sha256").update(await readFile(srcFile)).digest("hex");
         if (digest !== expected) {
           throw new Error(`pyodide runtime admission mismatch: ${file} sha256 ${digest} != manifest ${expected}`);
         }
-      }
-      const PY = path.join(STAGE, "wasm-tools/python");
-      await mkdir(PY, { recursive: true });
-      for (const file of runtimeFiles) {
-        await copyFile(path.join(RUNTIME_SRC, file), path.join(PY, file));
-      }
+        await copyFile(srcFile, path.join(PY, file));
+      }));
       console.log(`build: admitted Pyodide runtime staged (${runtimeFiles.length} files, sha256-verified against MANIFEST.json)`);
     }
 
-    for (const rel of ["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js", ...SURFACE_BUNDLES.map((s) => s.out)]) {
+    await Promise.all(["background/service-worker.js", "options.bundle.js", "ntp.bundle.js", "sidepanel.bundle.js", "shared/diff-core.bundle.js", ...SURFACE_BUNDLES.map((s) => s.out)].map(async (rel) => {
       const mode = await prevMode(rel);
       if (mode != null) await chmod(path.join(STAGE, rel), mode); // mode failure = publish failure (fatal)
-    }
+    }));
     // Directory boundary: previous dist's own mode/times — failures FATAL.
     try {
       const st = await stat(DIST);
@@ -756,10 +761,11 @@ try {
         "indexed source changed during build — refusing to publish a mixed-generation dist",
       );
     }
-    await writeDistCompleteMarker({
+    const writtenMarker = await writeDistCompleteMarker({
       root: ROOT,
       distRoot: STAGE,
       target: BUILD_TARGET,
+      source: sourceAfter,
     });
     await validateDistCompleteMarker({
       root: ROOT,
@@ -834,10 +840,11 @@ try {
     }
     // Success: garbage-collect every version EXCEPT the live one, with
     // verification (a GC failure is FATAL — unbounded version growth is a
-    // real leak, not a note). A 2s grace delay lets any reader that resolved
+    // real leak, not a note). A brief grace delay lets any reader that resolved
     // the PREVIOUS link mid-open complete (the pointer swap is atomic; this
     // covers the open-then-read window on the old target).
-    await new Promise((r) => setTimeout(r, 2_000));
+    const gcGraceMs = Number(process.env.CAP_BUILD_GC_GRACE_MS ?? 50);
+    if (gcGraceMs > 0) await new Promise((r) => setTimeout(r, gcGraceMs));
     try {
       for (const d of await readdir(VERSIONS, { withFileTypes: true })) {
         if (d.isSymbolicLink()) {
@@ -871,7 +878,22 @@ try {
     } catch (e) {
       throw new Error(`FATAL: version GC failed after publish (${e?.message ?? e}) — the live tree at ${VERSIONED} is valid, but stale versions remain under ${VERSIONS}`);
     }
-    console.log(`built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes + ${zodDocCompiles} pinned Doc.compile methods; seam scan clean; dist.complete marker; rollback-fatal)`);
+    const publishSummary = `built ${path.join("extension", "dist", "background", "service-worker.js")} + dist/options.bundle.js ATOMICALLY (serialized owner-token lock; one dist dir; removed ${occurrences} new-Function + ${zodProbes} probes + ${zodDocCompiles} pinned Doc.compile methods; seam scan clean; dist.complete marker; rollback-fatal)`;
+    console.log(publishSummary);
+    if (isStoreBuild) {
+      try {
+        const { durableRoot } = await import("./scripts/lib/durable-root.mjs");
+        const recDir = path.join(durableRoot(), "serial-build-once");
+        await mkdir(recDir, { recursive: true });
+        const recKey = `${writtenMarker.commit}-${writtenMarker.source.digest}`;
+        await writeFile(
+          path.join(recDir, `${recKey}.json`),
+          JSON.stringify({ code: 0, stdout: `${publishSummary}\n`, at: new Date().toISOString() }),
+        );
+      } catch {
+        /* non-fatal cache population for storeBuildOnce */
+      }
+    }
     // The dist is published and the marker validated — the build is a genuine
     // success from here. The changelog-delta print + version record are NOT
     // done here: they run AFTER the final fatal step (staging cleanup + lock

@@ -75,13 +75,26 @@ function spawnHolder(): Deno.ChildProcess {
   return new Deno.Command("bash", { args: ["-c", "( sleep 0.3 ) & exec sleep 60"] }).spawn();
 }
 
-/** The holder's unreaped children, from /proc (no dependency on ps). */
+/** The holder's unreaped children, from /proc (falling back to /bin/ps when /proc is absent). */
 async function childPids(pid: number): Promise<number[]> {
   try {
     const raw = await Deno.readTextFile(`/proc/${pid}/task/${pid}/children`);
     return raw.trim().split(/\s+/).filter(Boolean).map(Number);
   } catch {
-    return [];
+    try {
+      const out = await new Deno.Command("/bin/ps", {
+        args: ["-axo", "pid=,ppid="],
+        stdout: "piped",
+        stderr: "null",
+      }).output();
+      return decoder.decode(out.stdout).split("\n").flatMap((line) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 2) return [];
+        return Number(parts[1]) === pid ? [Number(parts[0])] : [];
+      });
+    } catch {
+      return [];
+    }
   }
 }
 

@@ -83,14 +83,22 @@ Deno.test("hangs in parallel phase", async () => {
     // Wait boundedly for process to be gone or zombie
     let alive = true;
     for (let i = 0; i < 20; i++) {
+      let state: string | null = null;
       try {
         const stat = await Deno.readTextFile(`/proc/${orphanPid}/stat`);
-        const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
-        if (state === "Z" || state === "X") {
-          alive = false;
-          break;
-        }
+        state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
       } catch {
+        if (Deno.build.os === "darwin") {
+          const out = await new Deno.Command("/bin/ps", {
+            args: ["-o", "state=", "-p", String(orphanPid)],
+            stdout: "piped",
+            stderr: "null",
+          }).output().catch(() => null);
+          const s = out ? new TextDecoder().decode(out.stdout).trim() : "";
+          state = s ? s[0] : null;
+        }
+      }
+      if (state === null || state === "Z" || state === "X") {
         alive = false;
         break;
       }
@@ -148,14 +156,22 @@ Deno.test("passes leaving an orphan", () => {
     // Residual group kill must have killed the orphan sleeper
     let alive = true;
     for (let i = 0; i < 20; i++) {
+      let state: string | null = null;
       try {
         const stat = await Deno.readTextFile(`/proc/${orphanPid}/stat`);
-        const state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
-        if (state === "Z" || state === "X") {
-          alive = false;
-          break;
-        }
+        state = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0];
       } catch {
+        if (Deno.build.os === "darwin") {
+          const out = await new Deno.Command("/bin/ps", {
+            args: ["-o", "state=", "-p", String(orphanPid)],
+            stdout: "piped",
+            stderr: "null",
+          }).output().catch(() => null);
+          const s = out ? new TextDecoder().decode(out.stdout).trim() : "";
+          state = s ? s[0] : null;
+        }
+      }
+      if (state === null || state === "Z" || state === "X") {
         alive = false;
         break;
       }

@@ -70,7 +70,7 @@ Deno.test("copy-built-tree: a copy that still contains a symlink is REFUSED — 
   const root = await scratch();
   const src = await makeBuiltTree("relative", root);
   const wrapper = join(root, "link-preserving-cp.sh");
-  await writeFile(wrapper, '#!/bin/sh\nexec /usr/bin/cp -r "$2" "$3"\n');
+  await writeFile(wrapper, '#!/bin/sh\nif [ -x /usr/bin/cp ]; then exec /usr/bin/cp -RP "$2" "$3"; else exec /bin/cp -RP "$2" "$3"; fi\n');
   await new Deno.Command("chmod", { args: ["+x", wrapper] }).output();
   const dest = join(root, "copy");
   await assertRejects(() => copyBuiltTree({ src, dest, cpBin: wrapper }), Error, "still contains symlink");

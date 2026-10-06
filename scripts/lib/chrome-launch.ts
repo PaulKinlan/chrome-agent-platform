@@ -30,7 +30,7 @@ import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
-import { isolatedProcessGroup, killProcessTree } from "./process-tree.ts";
+import { attachProcessLifeline, isolatedProcessGroup, killProcessTree, setsidSpawnSpec } from "./process-tree.ts";
 import { chromeProfileDir, isInsideRepo, profileLiveness } from "./chrome-profile-dir.ts";
 
 export interface LaunchedChrome {
@@ -645,8 +645,9 @@ export async function launchChrome(opts: {
     // setsid execs the browser in a new process group (without -f, the spawned
     // child is not a group leader). This makes descendants identifiable even
     // when Chromium rewrites their command line or a wrapper replaces the binary.
-    proc = new Deno.Command("/usr/bin/setsid", {
-      args: [opts.binary ?? resolveChromiumBinary(), ...args, "--remote-debugging-port=0"],
+    const spec = setsidSpawnSpec(opts.binary ?? resolveChromiumBinary(), [...args, "--remote-debugging-port=0"]);
+    proc = new Deno.Command(spec.command, {
+      args: spec.args,
       stdout: opts.stdout ?? "null",
       stderr: "piped",
       ...(opts.clearEnv ? { clearEnv: true } : {}),
@@ -661,6 +662,10 @@ export async function launchChrome(opts: {
   try {
     group = await isolatedProcessGroup(proc);
     if (group !== undefined) procGroups.set(proc, group);
+    attachProcessLifeline(proc, {
+      group,
+      treeMatch: resolvedProfile ? `user-data-dir=${resolvedProfile}` : undefined,
+    });
   } catch (e) {
     await teardownChrome(proc, resolvedProfile);
     lock.release();

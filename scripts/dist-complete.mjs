@@ -154,40 +154,50 @@ function indexedRows(root) {
   return rows;
 }
 
+async function readIndexedRow(root, row) {
+  const file = path.join(root, ...row.repoPath.split("/"));
+  const info = await lstat(file).catch(() => null);
+  if (!info) throw markerError(`indexed source is missing: ${row.repoPath}`);
+  let bytes;
+  if (row.mode === "120000") {
+    if (!info.isSymbolicLink()) {
+      throw markerError(`indexed symlink changed type: ${row.repoPath}`);
+    }
+    bytes = Buffer.from(await readlink(file), "utf8");
+  } else {
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw markerError(
+        `indexed regular source changed type: ${row.repoPath}`,
+      );
+    }
+    if ((info.mode & 0o111) !== (row.mode === "100755" ? 0o111 : 0)) {
+      throw markerError(`indexed source mode drift: ${row.repoPath}`);
+    }
+    if (info.size > MAX_SOURCE_FILE_BYTES) {
+      throw markerError(`indexed source exceeds file bound: ${row.repoPath}`);
+    }
+    bytes = await readFile(file);
+  }
+  return { row, bytes };
+}
+
 export async function computeIndexedSourceAuthority({ root }) {
   root = path.resolve(root);
   const hash = createHash("sha256");
   let totalBytes = 0;
   const rows = indexedRows(root);
-  for (const row of rows) {
-    const file = path.join(root, ...row.repoPath.split("/"));
-    const info = await lstat(file).catch(() => null);
-    if (!info) throw markerError(`indexed source is missing: ${row.repoPath}`);
-    let bytes;
-    if (row.mode === "120000") {
-      if (!info.isSymbolicLink()) {
-        throw markerError(`indexed symlink changed type: ${row.repoPath}`);
+  const BATCH_SIZE = 64;
+  for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+    const batch = await Promise.all(
+      rows.slice(start, start + BATCH_SIZE).map((row) => readIndexedRow(root, row)),
+    );
+    for (const { row, bytes } of batch) {
+      totalBytes += bytes.length;
+      if (totalBytes > MAX_SOURCE_TOTAL_BYTES) {
+        throw markerError("indexed source bytes exceed aggregate bound");
       }
-      bytes = Buffer.from(await readlink(file), "utf8");
-    } else {
-      if (!info.isFile() || info.isSymbolicLink()) {
-        throw markerError(
-          `indexed regular source changed type: ${row.repoPath}`,
-        );
-      }
-      if ((info.mode & 0o111) !== (row.mode === "100755" ? 0o111 : 0)) {
-        throw markerError(`indexed source mode drift: ${row.repoPath}`);
-      }
-      if (info.size > MAX_SOURCE_FILE_BYTES) {
-        throw markerError(`indexed source exceeds file bound: ${row.repoPath}`);
-      }
-      bytes = await readFile(file);
+      hashRecord(hash, `${row.mode}:${row.repoPath}`, bytes);
     }
-    totalBytes += bytes.length;
-    if (totalBytes > MAX_SOURCE_TOTAL_BYTES) {
-      throw markerError("indexed source bytes exceed aggregate bound");
-    }
-    hashRecord(hash, `${row.mode}:${row.repoPath}`, bytes);
   }
   return Object.freeze({
     digest: hash.digest("hex"),
@@ -196,8 +206,7 @@ export async function computeIndexedSourceAuthority({ root }) {
 }
 
 async function outputAuthority(distRoot) {
-  const outputs = [];
-  for (const outputPath of DIST_COMPLETE_OUTPUTS) {
+  const outputs = await Promise.all(DIST_COMPLETE_OUTPUTS.map(async (outputPath) => {
     const file = path.join(distRoot, ...outputPath.split("/"));
     const info = await lstat(file).catch(() => null);
     if (!info?.isFile() || info.isSymbolicLink()) {
@@ -211,12 +220,12 @@ async function outputAuthority(distRoot) {
       );
     }
     const bytes = await readFile(file);
-    outputs.push(Object.freeze({
+    return Object.freeze({
       path: outputPath,
       sha256: createHash("sha256").update(bytes).digest("hex"),
       size: bytes.length,
-    }));
-  }
+    });
+  }));
   return Object.freeze(outputs);
 }
 
@@ -224,15 +233,18 @@ function validTarget(value) {
   return DIST_COMPLETE_TARGETS.includes(value);
 }
 
-export async function createDistCompleteMarker({ root, distRoot, target }) {
+export async function createDistCompleteMarker({ root, distRoot, target, source: precomputedSource = null }) {
   if (!validTarget(target)) throw markerError("marker target is invalid");
-  const source = await computeIndexedSourceAuthority({ root });
+  const [source, outputs] = await Promise.all([
+    precomputedSource ?? computeIndexedSourceAuthority({ root }),
+    outputAuthority(distRoot),
+  ]);
   // The key order is part of the canonical v2 byte contract. `target` is an
   // intent/mismatch declaration, not independent proof of output content; the
   // Store scanner must still inspect the actual package bytes.
   const marker = {
     commit: gitCommit(root),
-    outputs: await outputAuthority(distRoot),
+    outputs,
     schema: DIST_COMPLETE_SCHEMA,
     source: { digest: source.digest, files: source.files },
     target,
@@ -243,8 +255,8 @@ export async function createDistCompleteMarker({ root, distRoot, target }) {
   });
 }
 
-export async function writeDistCompleteMarker({ root, distRoot, target }) {
-  const marker = await createDistCompleteMarker({ root, distRoot, target });
+export async function writeDistCompleteMarker({ root, distRoot, target, source = null }) {
+  const marker = await createDistCompleteMarker({ root, distRoot, target, source });
   await writeFile(path.join(distRoot, "dist.complete"), canonicalJson(marker), {
     flag: "wx",
     mode: 0o644,

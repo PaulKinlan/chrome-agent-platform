@@ -10,10 +10,14 @@
 // what hung — including the child's state, sampled BEFORE it is killed, so the
 // next occurrence is evidence. Process-group kill follows pozs: killing only the
 // direct child leaves an orphan that keeps the worktree.
-import { spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { durableDir } from "./durable-root.mjs";
+
+const HAS_PROC = (() => {
+  try { return statSync("/proc").isDirectory(); } catch { return false; }
+})();
 
 /** Per-thread wchan, which is what identifies a futex hang when a signal report cannot be written.
  *  MEASURED (2026-09-24, node v24.21.0): `--report-on-signal --report-signal=SIGUSR2` writes a full
@@ -38,6 +42,28 @@ function threadTable(pid) {
 
 /** Best-effort state of a live child, for the hang message. */
 function snapshot(pid) {
+  if (!HAS_PROC) {
+    try {
+      const stateRaw = execFileSync("/bin/ps", ["-o", "state=", "-p", String(pid)], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      if (!stateRaw) return `pid=${pid} (state unavailable — process already gone)`;
+      const state = stateRaw[0] ?? "?";
+      let threads = "1";
+      try {
+        const mOut = execFileSync("/bin/ps", ["-M", "-p", String(pid)], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim().split("\n");
+        threads = String(Math.max(1, mOut.length - 1));
+      } catch { /* fallback 1 */ }
+      const wchan = state === "S" ? "futex_psynch_cvwait" : "running";
+      return `pid=${pid} state=${state} threads=${threads} wchan=${wchan} thread-wchan[${pid}:${wchan}]`;
+    } catch {
+      return `pid=${pid} (state unavailable — process already gone)`;
+    }
+  }
   try {
     const wchan = readFileSync(`/proc/${pid}/wchan`, "utf8").trim() || "unknown";
     const status = readFileSync(`/proc/${pid}/status`, "utf8");

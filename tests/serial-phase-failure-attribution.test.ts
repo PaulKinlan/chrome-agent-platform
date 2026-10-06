@@ -240,8 +240,9 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
   await Deno.writeTextFile(
     driver,
     `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
-      `import { readdirSync } from "node:fs";\n` +
+      `import { mkdirSync, readdirSync } from "node:fs";\n` +
       `const logDir = ${JSON.stringify(join(Deno.env.get("HOME") ?? "", "cap-evidence", "serial-phase-logs"))};\n` +
+      `mkdirSync(logDir, { recursive: true });\n` +
       `const files = [process.argv[2], process.argv[3], process.argv[4]];\n` +
       `const opts = { stdio: "pipe", cwd: ${JSON.stringify(ROOT)}, timeoutMs: 120000, perFileTimeoutMs: { [process.argv[4]]: 2000 } };\n` +
       `const runs = [];\n` +
@@ -260,7 +261,7 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
       `    rc,\n` +
       `    out: text,\n` +
       `    id: (text.match(/FAILED \\(2\\/3 failed\\) in \\d+s \\[run ([^\\]]+)\\]/) || [])[1] ?? null,\n` +
-      `    added: readdirSync(logDir).filter((f) => !before.has(f)),\n` +
+      `    added: readdirSync(logDir).filter((f) => !before.has(f) && f.includes("-p" + process.pid + "-")),\n` +
       `  });\n` +
       `}\n` +
       `console.log("ULCW_RUNS=" + JSON.stringify(runs));\n`,

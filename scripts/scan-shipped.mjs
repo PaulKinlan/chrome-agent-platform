@@ -345,8 +345,15 @@ export async function scanShippedJs(files, {
   }
   const violations = [];
 
-  for (const file of files) {
-    const text = await readText(file);
+  const BATCH_SIZE = 32;
+  for (let start = 0; start < files.length; start += BATCH_SIZE) {
+    const batch = await Promise.all(
+      files.slice(start, start + BATCH_SIZE).map(async (file) => ({
+        file,
+        text: await readText(file),
+      })),
+    );
+    for (const { file, text } of batch) {
     const inGeneratedBundle = generatedBundles.has(file);
     const archivePath = archiveMap.get(file);
 
@@ -377,8 +384,10 @@ export async function scanShippedJs(files, {
     }
 
     const sinkAliases = new Map();
-    // Resolve direct/computed global sinks and simple alias chains. This is a
-    // bounded heuristic, not a substitute for CSP or exact package hashes.
+    const scriptObjects = new Set();
+    // Resolve direct/computed global sinks, simple alias chains, and script-element
+    // bindings in one pass. This is a bounded heuristic, not a substitute for CSP
+    // or exact package hashes.
     walk(ast, (node) => {
       if (
         node.type === "VariableDeclarator" &&
@@ -386,26 +395,18 @@ export async function scanShippedJs(files, {
       ) {
         const sink = sinkName(node.init, sinkAliases);
         if (sink) sinkAliases.set(node.id.name, sink);
+        if (createsScriptElement(node.init)) scriptObjects.add(node.id.name);
       }
       if (
         node.type === "AssignmentExpression" &&
-        node.operator === "=" && node.left?.type === "Identifier"
+        node.left?.type === "Identifier"
       ) {
-        const sink = sinkName(node.right, sinkAliases);
-        if (sink) sinkAliases.set(node.left.name, sink);
+        if (node.operator === "=") {
+          const sink = sinkName(node.right, sinkAliases);
+          if (sink) sinkAliases.set(node.left.name, sink);
+        }
+        if (createsScriptElement(node.right)) scriptObjects.add(node.left.name);
       }
-    });
-
-    const scriptObjects = new Set();
-    walk(ast, (node) => {
-      if (
-        node.type === "VariableDeclarator" && node.id?.type === "Identifier" &&
-        createsScriptElement(node.init)
-      ) scriptObjects.add(node.id.name);
-      if (
-        node.type === "AssignmentExpression" && node.left?.type === "Identifier" &&
-        createsScriptElement(node.right)
-      ) scriptObjects.add(node.left.name);
     });
 
     walk(ast, (node) => {
@@ -701,6 +702,7 @@ export async function scanShippedJs(files, {
         violations.push(`${file}: dynamic source evaluator is forbidden`);
       }
     }
+    }
   }
 
   return violations;
@@ -715,18 +717,18 @@ export async function scanBundledWasmFiles(files, {
   if (typeof readBytes !== "function") {
     throw new Error("scanBundledWasmFiles requires readBytes(file)");
   }
-  const violations = [];
-  for (const file of [...files].sort()) {
+  const sorted = [...files].sort();
+  const results = await Promise.all(sorted.map(async (file) => {
     const executable = manifestByFile.get(file);
     if (!executable) {
-      violations.push(`${file}: unmanifested_binary`);
-      continue;
+      return `${file}: unmanifested_binary`;
     }
     try {
       auditWasmBinary(new Uint8Array(await readBytes(file)), executable);
+      return null;
     } catch (error) {
-      violations.push(`${file}: ${error?.code ?? "wasm_scan_failed"}`);
+      return `${file}: ${error?.code ?? "wasm_scan_failed"}`;
     }
-  }
-  return violations;
+  }));
+  return results.filter(Boolean);
 }
