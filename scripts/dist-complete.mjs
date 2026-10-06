@@ -32,6 +32,18 @@ export const DIST_COMPLETE_OUTPUTS = Object.freeze([
   "sidepanel.bundle.js",
   "shared/diff-core.bundle.js",
   "workers/agent-worker.js",
+  // chrome-agent-platform-o2t3: the six secondary surface bundles are shipped dist
+  // artifacts (five page-loaded, one dynamically imported by options/user-wasm-panel.js)
+  // and BUNDLE_ARCHIVE_MAP already archives all six, but the marker recorded sizes and
+  // hashes for the six primary outputs only — so a secondary bundle's bytes could change
+  // with nothing recording it. tests/bundle-budget.test.ts now pins every bundle the store
+  // archives into this list, so one cannot silently drop out of the marker again.
+  "artifacts.bundle.js",
+  "artifact.bundle.js",
+  "directory.bundle.js",
+  "privacy.bundle.js",
+  "offscreen.bundle.js",
+  "user-wasm-store-client.bundle.js",
 ]);
 export const INDEXED_SOURCE_EXCLUDED_PATHS = Object.freeze(new Set([
   "docs/diff-core.bundle.js",

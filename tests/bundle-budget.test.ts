@@ -33,6 +33,7 @@ import {
   zodCjsInputs,
 } from "../scripts/bundle-budget.mjs";
 import { DIST_COMPLETE_OUTPUTS } from "../scripts/dist-complete.mjs";
+import { BUNDLE_ARCHIVE_MAP } from "../scripts/store-target-policy.mjs";
 
 Deno.test("bundle budget: the store SW budget is exactly the constitution number (3.0 MB)", () => {
   assertEquals(STORE_SW_BUDGET_BYTES, 3_000_000);
@@ -157,11 +158,28 @@ Deno.test("9epn.4 bundle budget: every generated bundle has a ceiling and the ga
     "the budget table and the marker's output list name the SAME bundles — a bundle recorded without a ceiling (or a ceiling for a bundle the marker does not record) is the gap this bead closed",
   );
   assertEquals(BUDGET_REPORTED_BUNDLES, Object.keys(STORE_BUNDLE_BUDGETS));
-  // The six surfaces by name: agreement between two lists is not a pin if
-  // both can lose the same entry.
+  // Every surface by name: agreement between two lists is not a pin if
+  // both can lose the same entry. o2t3 added the six SECONDARY bundles, which
+  // declared a budget in build.mjs but were reported by nothing at all.
   assertEquals(
     [...Object.keys(STORE_BUNDLE_BUDGETS)].sort(),
-    ["background/service-worker.js", "ntp.bundle.js", "options.bundle.js", "shared/diff-core.bundle.js", "sidepanel.bundle.js", "workers/agent-worker.js"],
+    [
+      "artifacts.bundle.js",
+      "artifact.bundle.js",
+      "background/service-worker.js",
+      "directory.bundle.js",
+      "ntp.bundle.js",
+      "offscreen.bundle.js",
+      "options.bundle.js",
+      "privacy.bundle.js",
+      "shared/diff-core.bundle.js",
+      "sidepanel.bundle.js",
+      "user-wasm-store-client.bundle.js",
+      "workers/agent-worker.js",
+      // Sorted here rather than by hand: the actual list is sorted, and the two
+      // "artifact" names differ only at the 9th character ('.' < 's'), which is
+      // exactly the kind of hand-ordering that fails for the wrong reason.
+    ].sort(),
   );
   for (const [surface, budget] of entries) {
     assert(Number.isSafeInteger(budget) && budget > 0, `${surface} has a positive integer ceiling (got ${budget})`);
@@ -897,3 +915,59 @@ Deno.test("bd06: build.mjs auto-materializes node_modules/.deno via deno install
 });
 
 
+
+// chrome-agent-platform-o2t3. The gap this closes was structural, not a typo:
+// build.mjs declared `budget:` for six secondary surface bundles that neither
+// STORE_BUNDLE_BUDGETS (which the build's reporting loop iterates) nor
+// DIST_COMPLETE_OUTPUTS knew about, so they could neither be observed to grow nor
+// lose their recorded hash. Two pins, because the two halves fail differently:
+//   1. every budget build.mjs DECLARES is a budget this table REPORTS, at the same
+//      ceiling — a new bundle cannot land size-unreported;
+//   2. every bundle the store ARCHIVES is RECORDED in the marker — a shipped bundle
+//      cannot silently drop out of dist.complete.
+Deno.test("o2t3: the declared budgets and the reported/marked bundle sets cannot drift apart", async () => {
+  const buildSrc = await Deno.readTextFile(new URL("../build.mjs", import.meta.url));
+  // Order-independent, so a harmless reformat of build.mjs (reordering keys, adding
+  // a property) cannot turn this pin red for the wrong reason. The >=6 guard below
+  // still fails closed if the block is renamed or restructured enough to parse none.
+  const surfaceStart = buildSrc.indexOf("const SURFACE_BUNDLES");
+  assert(surfaceStart >= 0, "build.mjs must declare SURFACE_BUNDLES for this pin to bind anything");
+  const surfaceSrc = buildSrc.slice(surfaceStart, buildSrc.indexOf("];", surfaceStart));
+  const decls = [...surfaceSrc.matchAll(/\{([^{}]*)\}/gs)]
+    .map((m) => m[1])
+    .map((block) => ({
+      name: /name:\s*"([^"]+)"/.exec(block)?.[1] ?? "",
+      out: /out:\s*"([^"]+)"/.exec(block)?.[1] ?? "",
+      budget: Number((/budget:\s*([0-9_]+)/.exec(block)?.[1] ?? "0").replace(/_/g, "")),
+    }))
+    .filter((d) => d.out && d.budget > 0);
+
+  // A parse that silently matches nothing would make every assertion below vacuous.
+  assert(decls.length > 0, "build.mjs must declare at least one bundle budget for this pin to mean anything");
+  assert(
+    decls.length >= 6,
+    `build.mjs declares the six secondary surface budgets (parsed ${decls.length}: ${decls.map((d) => d.out).join(", ")})`,
+  );
+
+  for (const { name, out, budget } of decls) {
+    assertEquals(
+      STORE_BUNDLE_BUDGETS[out],
+      budget,
+      `${out} (surface "${name}") declares a budget in build.mjs, so STORE_BUNDLE_BUDGETS must report it at the SAME ceiling`,
+    );
+    assert(
+      DIST_COMPLETE_OUTPUTS.includes(out),
+      `${out} is a shipped dist output, so the marker must record its size and hash`,
+    );
+  }
+
+  // The marker half, from the list that already knew the truth: BUNDLE_ARCHIVE_MAP
+  // maps every bundle into the store archive.
+  const archived = [...BUNDLE_ARCHIVE_MAP.keys()].map((k) => k.replace(/^dist\//u, ""));
+  const unrecorded = archived.filter((p) => !DIST_COMPLETE_OUTPUTS.includes(p));
+  assertEquals(
+    unrecorded,
+    [],
+    "every bundle the store archives must be recorded in the dist marker (a shipped bundle with no recorded size or hash is the o2t3 gap)",
+  );
+});

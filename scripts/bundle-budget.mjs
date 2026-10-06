@@ -44,6 +44,24 @@ export const STORE_BUNDLE_BUDGETS = Object.freeze({
   "ntp.bundle.js": 920_000,
   "sidepanel.bundle.js": 700_000,
   "shared/diff-core.bundle.js": 17_000,
+  // chrome-agent-platform-o2t3: the six SECONDARY surface bundles declare a budget
+  // in build.mjs SURFACE_BUNDLES but were in neither this table nor
+  // DIST_COMPLETE_OUTPUTS, so the build's budget loop (which iterates this table)
+  // never reported them and the marker never recorded their size or hash. They are
+  // shipped artifacts — five are loaded by shipped pages (artifacts/index.html,
+  // artifact/artifact.html, directory/directory.html, privacy/privacy.html,
+  // offscreen/offscreen.html) and user-wasm-store-client.bundle.js is dynamically
+  // imported by options/user-wasm-panel.js — and BUNDLE_ARCHIVE_MAP already maps all
+  // six into the store archive, so "measured by nothing" was the worst of the three
+  // states under the 2026-10-05 owner decision (measured and reported, not enforced).
+  // The ceilings below are build.mjs's, and tests/bundle-budget.test.ts pins this
+  // table against build.mjs's declarations so the two cannot drift apart again.
+  "artifacts.bundle.js": 600_000,
+  "artifact.bundle.js": 600_000,
+  "directory.bundle.js": 600_000,
+  "privacy.bundle.js": 600_000,
+  "offscreen.bundle.js": 250_000,
+  "user-wasm-store-client.bundle.js": 10_000,
 });
 
 /** The bundle outputs the budget report covers (relative to dist/). */
