@@ -132,6 +132,9 @@ if (config.selfTest) {
   delete childEnv.CAP_SECURITY_TEST_SCENARIO;
   delete childEnv.CAP_SECURITY_TEST_STATE;
 }
+// Supervisor-only declarations must not reach the spawned runner in either mode.
+delete childEnv.CAP_SECURITY_TEST_ATTEST_DEADLINE_MS;
+delete childEnv.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED;
 
 const stdio = ["ignore", runnerHandle.fd, runnerHandle.fd];
 while (stdio.length < 9) stdio.push("ignore");
@@ -153,9 +156,12 @@ const exitPromise = new Promise((resolve) => {
 });
 
 let attestation = null;
-const attestDeadline = Date.now() + 2_000;
+const attestDeadline = Date.now() + config.attestDeadlineMs;
 while (Date.now() < attestDeadline) {
   try {
+    // A self-test-only injection forces this loop to exhaust its declared window,
+    // so the named deadline refusal is falsifiable without racing CPU scheduling.
+    if (config.forceAttestationUnsettled) throw new Error("self-test: attestation did not settle");
     const readIdentity = config.forceAttestationMismatch
       ? async (pid) => {
         const identity = await readProcIdentity(pid);
@@ -203,6 +209,7 @@ async function finalizeEarlyFailure(reason) {
     runId,
     result: "REFUSED",
     reason,
+    attestDeadlineMs: config.attestDeadlineMs,
     pid: child.pid,
     cleaned: cleanup.ok && cleanup.removed,
     selfTest: config.selfTest,
@@ -228,7 +235,7 @@ async function finalizeEarlyFailure(reason) {
 
 if (!attestation?.ok) {
   await finalizeEarlyFailure(
-    attestation?.reason ?? "PGID/SID attestation failed: child did not settle",
+    attestation?.reason ?? `PGID/SID attestation deadline exceeded after ${config.attestDeadlineMs} ms`,
   );
 }
 
@@ -392,6 +399,7 @@ const receipt = {
   result: exitCode === 0 ? "PASS" : "FAIL",
   selfTest: config.selfTest,
   scenario: config.scenario,
+  attestDeadlineMs: config.attestDeadlineMs,
   pid: child.pid,
   pgid: attestation.identity.pgid,
   sid: attestation.identity.sid,

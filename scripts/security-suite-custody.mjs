@@ -361,6 +361,8 @@ export async function resolveSupervisorConfig({
     if (
       env.CAP_SECURITY_RUNNER || env.CAP_SECURITY_SELF_TEST_TIMEOUT_MS ||
       env.CAP_SECURITY_TEST_FORCE_ATTEST_MISMATCH ||
+      env.CAP_SECURITY_TEST_ATTEST_DEADLINE_MS !== undefined ||
+      env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED !== undefined ||
       env.CAP_SECURITY_TEST_SCENARIO
     ) throw new Error("self-test-only override refused in production mode");
     if (!env.HOME || !path.isAbsolute(env.HOME)) {
@@ -372,6 +374,8 @@ export async function resolveSupervisorConfig({
       command: "deno",
       args: ["run", "-A", productionRunner],
       timeoutMs: PRODUCTION_TIMEOUT_MS,
+      attestDeadlineMs: 2_000,
+      forceAttestationUnsettled: false,
       termWaitMs: 5_000,
       killWaitMs: 5_000,
       evidenceRoot: path.join(
@@ -426,12 +430,24 @@ export async function resolveSupervisorConfig({
   ) {
     throw new Error("self-test timeout is out of bounds");
   }
+  // zfsl: the second, PRE-SAMPLE handshake clock. Preserve the production/default 2 s,
+  // but make a self-test's settle window declared and bounded rather than a private literal.
+  const attestDeadlineMs = Number(env.CAP_SECURITY_TEST_ATTEST_DEADLINE_MS ?? "2000");
+  if (!Number.isSafeInteger(attestDeadlineMs) || attestDeadlineMs < 1 || attestDeadlineMs > 20_000) {
+    throw new Error("CAP_SECURITY_TEST_ATTEST_DEADLINE_MS out of bounds (1..20000)");
+  }
+  if (env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED !== undefined &&
+      env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED !== "1") {
+    throw new Error("CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED must be 1");
+  }
   return {
     selfTest: true,
     runner: fixture,
     command: process.execPath,
     args: [fixture],
     timeoutMs,
+    attestDeadlineMs,
+    forceAttestationUnsettled: env.CAP_SECURITY_TEST_FORCE_ATTEST_UNSETTLED === "1",
     termWaitMs: 250,
     killWaitMs: 1_000,
     evidenceRoot: durableDir("cap-sec-selftest-evidence"),
