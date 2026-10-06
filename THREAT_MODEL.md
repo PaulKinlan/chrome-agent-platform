@@ -353,7 +353,7 @@ consequences are carried by the matching register entry where one exists.
   `:127-141` (`originAllowed` admits extension origins and local clients without Origin),
   `:723-743` (403 on a refused Origin or wrong token, including loopback), and
   `:80-125` (the default shared secret persists across restarts). **Test:**
-  `tests/acp-bridge-security.test.ts:44-56` (a web Origin is refused, an extension
+  `tests/acp-bridge-security.test.ts:49-60` (a web Origin is refused, an extension
   Origin is accepted); `:189-230` (the persisted token survives restart).
 - **Residual (accepted, `chrome-agent-platform-6hly`):** the loopback WebSocket
   bridge authenticates the client, not the server. If an unprivileged local
@@ -428,7 +428,7 @@ and each names the executable check that would catch a regression.
 - **INV-14 — The ACP bridge refuses any non-extension Origin unless one was named
   explicitly, requires a token even on loopback, and binds loopback by default.**
   `scripts/acp-bridge.ts:49`, `scripts/acp-bridge.ts:136-141`,
-  `scripts/acp-bridge.ts:723-743`; `tests/acp-bridge-security.test.ts:44-56`.
+  `scripts/acp-bridge.ts:723-743`; `tests/acp-bridge-security.test.ts:49-60`.
 
 ---
 
