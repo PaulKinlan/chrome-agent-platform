@@ -13,7 +13,7 @@
 //      census of tracked files without being in ALWAYS_ON fails RED.
 //   5. Falsification: an unlisted source-inspecting test fails the audit closed.
 
-import { assert, assertEquals } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -190,6 +190,61 @@ export function findUnclassifiedSourceScanners(
   return unclassified;
 }
 
+/**
+ * The shared test-support roots this audit must scan too (chrome-agent-platform-afpl). The audit used to
+ * enumerate tests/*.test.ts ONLY, so a repo walk moved into a HELPER was invisible — and that is the
+ * shape a faithful `-static` split encourages, because the shared machinery has to live somewhere. The
+ * same blind spot covered the non-test support modules sitting directly under tests/.
+ *
+ * tests/fixtures/ is deliberately NOT scanned: it is data, and a fixture reader must not be admitted.
+ * That half matters as much as the other — widening a scan until it admits every fixture reader is how
+ * an over-broad pattern once put a 23s esbuild-spawning file into the always-on set and tripled every
+ * subset gate (chrome-agent-platform-fgik, and the reason p1lp replaced names with DEFINITIONS).
+ */
+const SHARED_SUPPORT_ROOTS = ["tests/helpers"];
+
+/** Every shared test-support source file: the support roots above, plus non-test modules under tests/. */
+export function sharedSupportFiles(
+  readDir: (dir: string) => { name: string; isDirectory: () => boolean; isFile: () => boolean }[] = (dir) =>
+    readdirSync(dir, { withFileTypes: true }),
+): { rel: string; code: string }[] {
+  const out: { rel: string; code: string }[] = [];
+  const collect = (dir: string, rel: string) => {
+    let entries: ReturnType<typeof readDir>;
+    try { entries = readDir(dir); } catch { return; }
+    for (const e of entries) {
+      if (e.name.startsWith(".") || e.name === "node_modules") continue;
+      const childRel = `${rel}/${e.name}`;
+      if (e.isDirectory()) { collect(join(dir, e.name), childRel); continue; }
+      if (!/\.(ts|js|mjs)$/.test(e.name) || /\.test\.(ts|js)$/.test(e.name)) continue;
+      out.push({ rel: childRel, code: readFileSync(join(dir, e.name), "utf8") });
+    }
+  };
+  for (const root of SHARED_SUPPORT_ROOTS) {
+    const abs = join(ROOT, root);
+    if (existsSync(abs)) collect(abs, root);
+  }
+  for (const e of readDir(join(ROOT, "tests"))) {
+    if (!e.isFile() || !/\.(ts|js|mjs)$/.test(e.name) || /\.test\.(ts|js)$/.test(e.name)) continue;
+    out.push({ rel: `tests/${e.name}`, code: readFileSync(join(ROOT, "tests", e.name), "utf8") });
+  }
+  return out;
+}
+
+/**
+ * What to DO about a flagged shared-support module (coord's refinement on afpl): a helper cannot be an
+ * ALWAYS_ON member, so naming it without saying so leaves the next splitter a red they cannot act on —
+ * the same count-without-a-name failure this cluster has been removing all night, in a new place.
+ */
+export function supportModuleGuidance(unclassified: string[]): string {
+  const support = unclassified.filter((rel) => !/\.test\.(ts|js)$/.test(rel));
+  if (support.length === 0) return "";
+  return `\n\n${support.length} of these are SHARED TEST-SUPPORT MODULE(S), which can never be an ALWAYS_ON member: ${support.join(", ")}. ` +
+    `Move the walk into the test file that needs it, or put the static half in a test file. ` +
+    `Do NOT silence this by adding a helper to SOURCE_INSPECTING_GUARDS — the list is for test files, ` +
+    `and a helper there would be selected as a guard it is not.`;
+}
+
 Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards are in ALWAYS_ON", () => {
   const testsDir = join(ROOT, "tests");
   const testFiles = readdirSync(testsDir)
@@ -200,12 +255,18 @@ Deno.test("qcfc: self-checking audit: all dynamic source-scanning test guards ar
     }));
 
   const alwaysOnSet = new Set(ALWAYS_ON);
-  const unclassified = findUnclassifiedSourceScanners(testFiles, alwaysOnSet);
+  // afpl: TEST FILES AND THE SHARED SUPPORT MODULES, through the SAME classifier. A repo walk in a helper
+  // is therefore a NAMED failure rather than an invisible hole, and it fails closed because a helper can
+  // never legitimately be classified (it is not a guard and cannot be an ALWAYS_ON member).
+  const scanned = [...testFiles, ...sharedSupportFiles()];
+  const unclassified = findUnclassifiedSourceScanners(scanned, alwaysOnSet);
 
   assertEquals(
     unclassified,
     [],
-    `Dynamic source-scanning test(s) found without being in ALWAYS_ON: ${unclassified.join(", ")}. Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.`,
+    `Dynamic source-scanning guard(s) found without being in ALWAYS_ON: ${unclassified.join(", ")}. ` +
+      `Add them to SOURCE_INSPECTING_GUARDS in scripts/select-tests.mjs.` +
+      supportModuleGuidance(unclassified),
   );
 });
 
@@ -291,4 +352,55 @@ Deno.test("qcfc: falsification: unclassified source scanner fails the audit clos
     ["tests/fake-unclassified-scanner.test.ts", "tests/fake-unlisted-walk-scanner.test.ts"],
     "Audit must catch unclassified source scanners, including a REPO-WALK scanner (kz27)",
   );
+});
+
+// chrome-agent-platform-afpl — the augmentation's proof, in BOTH directions and against a REAL file.
+// The real tree has no repo-walking helper today (tests/helpers/ does not even exist), so the honest
+// evidence is a helper CREATED on disk, asserted, and removed in a finally — a killed run must not leave
+// residue (the reaper lesson). Substituting a synthetic string here would prove the parser and not the
+// scan: the whole point is that the scan reaches that directory at all.
+Deno.test("afpl: a repo-walking HELPER is named and fails the audit closed; a fixture-walking helper is NOT admitted", async () => {
+  const dir = join(ROOT, "tests", "helpers");
+  const walker = join(dir, "zz-afpl-repo-walk.ts");
+  const fixtureReader = join(dir, "zz-afpl-fixture-read.ts");
+  const dirWasAbsent = !existsSync(dir);
+  try {
+    await Deno.mkdir(dir, { recursive: true });
+    // (i) A helper that walks a SOURCE root — the shape a -static split's shared machinery could hide.
+    await Deno.writeTextFile(
+      walker,
+      `import { join } from "node:path";\nconst ROOT = "/repo";\n` +
+        `export function census() { for (const f of Deno.readDirSync(join(ROOT, "tests"))) void f; }\n`,
+    );
+    const named = findUnclassifiedSourceScanners(sharedSupportFiles(), new Set());
+    assertEquals(
+      named.includes("tests/helpers/zz-afpl-repo-walk.ts"),
+      true,
+      `a repo-walking helper must be SCANNED and NAMED — this is the coverage proof, not a skip: ${JSON.stringify(named)}`,
+    );
+    // ...and the audit must say WHAT TO DO, because a helper can never be an ALWAYS_ON member.
+    const guidance = supportModuleGuidance(named);
+    assertStringIncludes(guidance, "zz-afpl-repo-walk.ts", "the guidance must name the module");
+    assertStringIncludes(guidance, "Move the walk into the test file", "the guidance must say what to do");
+    assertStringIncludes(guidance, "can never be an ALWAYS_ON member", "the guidance must say why not");
+
+    // (ii) A helper that walks ONLY its own fixture directory must NOT be admitted — the over-match half,
+    // which is what stops the scan being widened until every fixture reader is a "guard" (p1lp's lesson).
+    await Deno.writeTextFile(
+      fixtureReader,
+      `import { join } from "node:path";\nconst SCRATCH = "/tmp/afpl-fixtures";\n` +
+        `export function list() { for (const f of Deno.readDirSync(SCRATCH)) void f; }\n`,
+    );
+    const after = findUnclassifiedSourceScanners(sharedSupportFiles(), new Set());
+    assertEquals(
+      after.includes("tests/helpers/zz-afpl-fixture-read.ts"),
+      false,
+      `a fixture-walking helper must NOT be admitted: ${JSON.stringify(after)}`,
+    );
+  } finally {
+    // No residue, even on a kill: the finally covers an exception, and the names are unmistakable.
+    await Deno.remove(walker).catch(() => {});
+    await Deno.remove(fixtureReader).catch(() => {});
+    if (dirWasAbsent) await Deno.remove(dir).catch(() => {});
+  }
 });
