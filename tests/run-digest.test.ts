@@ -157,3 +157,54 @@ Deno.test("run digest: the status counter shows the running results beside the s
   assertEquals(formatBudgetProgress({ step: 1, total: 96, results: { count: 0, ok: 0, failed: 0 } }), "Step 1 of 96");
   assertEquals(formatBudgetProgress({ step: 1, total: 96 }), "Step 1 of 96");
 });
+
+Deno.test("run digest: chacha20_poly1305 key argument is redacted and never reaches continuation digest (P1-3)", () => {
+  const digest = createRunDigest({ token: TOKEN });
+  const rawKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // 32-byte secret key in base64
+  const nonce = "BwAAAAQAQUJDREVGRw==";
+  const plaintext = "super-confidential-payload";
+
+  // 1. Direct tool invocation
+  digest.record({
+    step: 0,
+    tool: "chacha20_poly1305",
+    args: { key: rawKey, nonce, data: btoa(plaintext), mode: "encrypt" },
+    ok: true,
+    result: { modelContent: JSON.stringify({ data: "ciphertext" }), userSummary: "done" },
+  });
+
+  // 2. Lazy execute_tool invocation with selectedTool
+  digest.record({
+    step: 0,
+    tool: "execute_tool",
+    selected: "chacha20_poly1305",
+    args: {
+      selectionRef: "sel_12345678-1234-1234-1234-123456789abc",
+      arguments: { key: rawKey, nonce, data: btoa(plaintext), mode: "encrypt" },
+    },
+    ok: true,
+    result: {
+      modelContent: JSON.stringify({
+        ok: true,
+        selectedTool: "chacha20_poly1305",
+        result: { data: "ciphertext2" },
+      }),
+      userSummary: "done",
+    },
+  });
+
+  const turnText = digest.renderTurn(0);
+  assert(!turnText.includes(rawKey), "run-digest must NOT contain raw chacha key bytes");
+  assertStringIncludes(turnText, "[REDACTED]", "chacha key argument must be redacted to [REDACTED]");
+
+  // Verify attachment to continuation nudge prompt
+  const prompt = [
+    { role: "user", content: "task" },
+    { role: "assistant", content: [{ type: "text", text: "..." }] },
+    NUDGE,
+  ];
+  const { options } = digest.attach({ prompt }, 1);
+  const promptText = JSON.stringify(options.prompt);
+  assert(!promptText.includes(rawKey), "provider-bound continuation prompt must NOT contain raw chacha key");
+  assertStringIncludes(promptText, "[REDACTED]");
+});

@@ -11,11 +11,14 @@ import {
   authorizeToolReport,
   discoveredOnly,
   fnv1a,
+  KNOWN_TOOL_SECRET_ARGS,
   PAGE_ALLOWED_ROUTES,
   parseOmniboxContent,
   redactSecrets,
+  redactToolArgs,
   sanitizeToolName,
   schemaToZod,
+  SECRET_KEY_RE,
 } from "../extension/lib/pure.js";
 
 Deno.test("canonicalOrigin accepts http/https and rejects everything else", () => {
@@ -588,4 +591,41 @@ Deno.test("discoveredOnly: discovered pages minus enrolled, deduped by origin", 
   // non-arrays fail closed:
   assertEquals(discoveredOnly(null, []), []);
   assertEquals(discoveredOnly(undefined, []), []);
+});
+
+Deno.test("redactToolArgs: per-tool secretArgs redaction (P1-3)", () => {
+  // 1. Bare "key" is NOT in SECRET_KEY_RE (targeted; no global widening)
+  assertEquals(SECRET_KEY_RE.test("key"), false, "SECRET_KEY_RE must not match bare key");
+
+  // 2. chacha20_poly1305 is declared in KNOWN_TOOL_SECRET_ARGS with ["key"]
+  assertEquals(KNOWN_TOOL_SECRET_ARGS["chacha20_poly1305"], ["key"]);
+
+  // 3. chacha20_poly1305 redacts key argument in structured object
+  const chachaObj = { key: "raw-secret-key-32-bytes", nonce: "nonce123", data: "aGk=" };
+  const redactedObj = redactToolArgs("chacha20_poly1305", chachaObj);
+  assertEquals(redactedObj, { key: "[REDACTED]", nonce: "nonce123", data: "aGk=" });
+
+  // 4. Unrelated tools do NOT have bare "key" redacted (no false positives)
+  const otherObj = { key: "normal-map-key", name: "foo" };
+  assertEquals(redactToolArgs("other_tool", otherObj), otherObj);
+
+  // 5. Nested arguments under execute_tool envelope are redacted
+  const lazyEnvelope = {
+    selectionRef: "sel_12345678-1234-1234-1234-123456789abc",
+    arguments: { key: "secret-key", data: "aGk=" },
+  };
+  const redactedLazy = redactToolArgs("chacha20_poly1305", lazyEnvelope);
+  assertEquals(redactedLazy.arguments.key, "[REDACTED]");
+  assertEquals(redactedLazy.arguments.data, "aGk=");
+
+  // 6. JSON string arguments are parsed, redacted, and stringified
+  const jsonStr = JSON.stringify({ key: "secret-in-json", nonce: "n", data: "d" });
+  const redactedJson = redactToolArgs("chacha20_poly1305", jsonStr);
+  const parsed = JSON.parse(redactedJson);
+  assertEquals(parsed.key, "[REDACTED]");
+  assertEquals(parsed.nonce, "n");
+
+  // 7. Extra secret args can be supplied per call
+  const custom = redactToolArgs("custom_tool", { customSecret: "foo", safe: "bar" }, ["customSecret"]);
+  assertEquals(custom, { customSecret: "[REDACTED]", safe: "bar" });
 });

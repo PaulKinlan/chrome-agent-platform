@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.579] — 2026-10-06
+- Add ChaCha20-Poly1305 on-device authenticated encryption tool with targeted key redaction.
+
 ## [0.3.578] — 2026-10-06
 
 ### Features

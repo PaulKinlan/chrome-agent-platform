@@ -1145,6 +1145,62 @@ export function redactSecrets(value, seen = new WeakSet()) {
   return value;
 }
 
+/** Known per-tool secret argument names (P1-3 / 2uhx). Bare argument names
+ * like "key" are not covered by generic SECRET_KEY_RE to avoid global false
+ * positives, but are redacted on tool egress, digest, and display paths. */
+export const KNOWN_TOOL_SECRET_ARGS = Object.freeze({
+  chacha20_poly1305: Object.freeze(["key"]),
+});
+
+/**
+ * Redact tool arguments declared as secret for a specific tool.
+ * Targeted: avoids widening SECRET_KEY_RE globally while ensuring bare secret
+ * arguments (such as AEAD keys) never reach continuation digests or tool cards.
+ * @param {string} toolName
+ * @param {any} args
+ * @param {readonly string[]|string[]|null} [extraSecretArgs]
+ * @returns {any}
+ */
+export function redactToolArgs(toolName, args, extraSecretArgs = null) {
+  if (args == null || (typeof args !== "object" && typeof args !== "string")) return args;
+  const tool = String(toolName ?? "").slice(0, 64);
+  const effectiveTool = tool || (typeof args?.toolId === "string" ? args.toolId : "");
+  const secretSet = new Set(
+    Array.isArray(extraSecretArgs)
+      ? extraSecretArgs
+      : (KNOWN_TOOL_SECRET_ARGS[effectiveTool] ?? KNOWN_TOOL_SECRET_ARGS[tool] ?? [])
+  );
+  if (secretSet.size === 0) return args;
+
+  if (typeof args === "string") {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === "object") {
+        return JSON.stringify(redactToolArgs(toolName, parsed, extraSecretArgs));
+      }
+    } catch {
+      return args;
+    }
+    return args;
+  }
+
+  if (Array.isArray(args)) {
+    return args.map((item) => redactToolArgs(toolName, item, extraSecretArgs));
+  }
+
+  const out = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (secretSet.has(k)) {
+      out[k] = "[REDACTED]";
+    } else if (k === "arguments" && v && typeof v === "object") {
+      out[k] = redactToolArgs(toolName, v, extraSecretArgs);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
 /** redactDeep — BOTH redaction layers for a structured value crossing a
  * UI/broadcast/journal boundary (the tool-call clarity fix): secret-valued
  * KEYS (SECRET_KEY_RE) AND credential-SHAPED string values (redactSecretText:

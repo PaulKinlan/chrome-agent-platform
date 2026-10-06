@@ -500,11 +500,11 @@ Deno.test("preview: the result envelope is bounded (never unbounded bytes)", () 
   }
 });
 
-Deno.test("preview: the EXACT 38-tool static allowlist admits every shipped package", async () => {
+Deno.test("preview: the EXACT 39-tool static allowlist admits every shipped package", async () => {
   const admitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted === true);
-  // uslb: hash_blake3 admits WITHOUT a settings preview (call-export host).
+  // uslb + 2uhx: hash_blake3 and chacha20_poly1305 admit WITHOUT a settings preview (call-export host).
   assertEquals(JSON.stringify(admitted.map((row) => row.toolId).sort()), JSON.stringify(
-    ["avif", "awk", "awk_filter_bounded", "base64", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_blake3", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
+    ["avif", "awk", "awk_filter_bounded", "base64", "chacha20_poly1305", "compressops", "csvtool", "cut", "date_formatter_bounded", "diff", "du", "grep", "gzip", "hash_blake3", "head", "imageops", "jq", "jxl", "markdown", "md5sum", "oxipng", "patch", "sed", "sha256sum", "sha512sum", "sort", "sqlite3_query_bounded", "stat", "tail", "toml2json", "touch", "tr", "tree", "truncate", "uniq", "uuid", "wc", "xxd", "zxing"],
   ));
   for (const row of admitted) {
     if (row.callexport === true) {
@@ -516,7 +516,7 @@ Deno.test("preview: the EXACT 38-tool static allowlist admits every shipped pack
     assertEquals(row.disabledReason, null, row.toolId);
   }
   const notAdmitted = BUNDLED_TOOL_PACKAGE_ROWS.filter((row) => row.admitted !== true);
-  assertEquals(notAdmitted.length, 0, "all 38 are enabled");
+  assertEquals(notAdmitted.length, 0, "all 39 are enabled");
   assertEquals(notAdmitted.map((row) => row.toolId).sort(), []);
   for (const toolId of ["stat", "du"]) {
     const spec = previewSpecFor(toolId);

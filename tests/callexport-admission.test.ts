@@ -8,7 +8,9 @@ import {
   WasmPackageAuthority,
   WasmPackageAuthorityError,
 } from "../extension/lib/wasm-package-authority.js";
-import { executeCallexportRun } from "../extension/lib/wasm-callexport-host.js";
+import { CALLEXPORT_RUN_TYPE, executeCallexportRun } from "../extension/lib/wasm-callexport-host.js";
+import { executableBundledToolRecords } from "../extension/lib/lazy-tool-protocol.js";
+import { BUNDLED_TOOL_PACKAGE_ROWS } from "../extension/lib/bundled-tool-packages.data.js";
 
 const enc = new TextEncoder();
 const leb = (value) => {
@@ -133,4 +135,238 @@ Deno.test("callexport: non-base64 input and missing spec fail closed", async () 
   caught = null;
   try { await executeCallexportRun({ wasmBytes: bytes, executable: { memory: { tier: "tiny", maxPages: 512 }, imports: { allowed: [], disallowed: [] } }, data: btoa("x") }); } catch (e) { caught = e; }
   assert(caught && String(caught.message).includes("no_callexport_spec"), "missing spec refuses");
+});
+
+Deno.test("callexport: the real chacha_poly1305 module passes the audit with abi declaration", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const audit = auditWasmBinary(bytes, executable, {});
+  assertEquals(audit.ok, true);
+  assertEquals(audit.imports.length, 0, "zero imports by measurement");
+});
+
+Deno.test("callexport: the harness runs chacha20_poly1305 round-trip encrypt and decrypt", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(7)));
+  const nonce = btoa(String.fromCharCode(...new Uint8Array(12).fill(3)));
+  const plaintext = "Hello from CAP call-export lane with ChaCha20-Poly1305!";
+  const data = btoa(plaintext);
+
+  // Encrypt
+  const encResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data,
+    args: { key, nonce, data, mode: "encrypt" },
+  });
+  assertEquals(encResult.algorithm, "chacha20_poly1305");
+  assertEquals(encResult.mode, "encrypt");
+  assert(encResult.data && encResult.data !== data);
+
+  // Decrypt
+  const decResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data: encResult.data,
+    args: { key, nonce, data: encResult.data, mode: "decrypt" },
+  });
+  assertEquals(decResult.algorithm, "chacha20_poly1305");
+  assertEquals(decResult.mode, "decrypt");
+  assertEquals(atob(decResult.data), plaintext);
+});
+
+Deno.test("callexport: chacha20_poly1305 authenticated data (AAD) binds to ciphertext", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)));
+  const nonce = btoa(String.fromCharCode(...new Uint8Array(12).fill(4)));
+  const data = btoa("Sensitive mission directive");
+  const aad = btoa("authenticated-session-header");
+
+  const enc = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data,
+    args: { key, nonce, data, aad, mode: "encrypt" },
+  });
+
+  // Decrypt with matching AAD succeeds
+  const dec = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data: enc.data,
+    args: { key, nonce, data: enc.data, aad, mode: "decrypt" },
+  });
+  assertEquals(atob(dec.data), "Sensitive mission directive");
+
+  // Decrypt with mismatched or missing AAD fails closed
+  let caught = null;
+  try {
+    await executeCallexportRun({
+      wasmBytes: bytes,
+      executable,
+      data: enc.data,
+      args: { key, nonce, data: enc.data, aad: btoa("tampered-aad"), mode: "decrypt" },
+    });
+  } catch (err) { caught = err; }
+  assert(caught, "mismatched AAD throws");
+  assert(String(caught.message).includes("invalid_tag"), caught.message);
+});
+
+Deno.test("callexport: chacha20_poly1305 tampered ciphertext fails closed (invalid_tag)", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+  const key = btoa(String.fromCharCode(...new Uint8Array(32).fill(1)));
+  const nonce = btoa(String.fromCharCode(...new Uint8Array(12).fill(2)));
+  const data = btoa("Confidential payload");
+
+  const enc = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data,
+    args: { key, nonce, data, mode: "encrypt" },
+  });
+
+  // Tamper with the raw ciphertext
+  const rawBytes = Uint8Array.from(atob(enc.data), (c) => c.charCodeAt(0));
+  rawBytes[0] ^= 0x01; // flip 1 bit
+  const tamperedB64 = btoa(String.fromCharCode(...rawBytes));
+
+  let caught = null;
+  try {
+    await executeCallexportRun({
+      wasmBytes: bytes,
+      executable,
+      data: tamperedB64,
+      args: { key, nonce, data: tamperedB64, mode: "decrypt" },
+    });
+  } catch (err) { caught = err; }
+  assert(caught, "tampered ciphertext throws");
+  assert(String(caught.message).includes("invalid_tag"), caught.message);
+});
+
+Deno.test("callexport: chacha20_poly1305 known-answer test — RFC 8439 §2.8.2 vector", async () => {
+  const bytes = await Deno.readFile("packages/bundled/evidence/awasm-chacha/binaries/chacha_poly1305.wasm");
+  const executable = {
+    memory: { tier: "default", maxPages: 512 },
+    imports: { allowed: [], disallowed: [] },
+    callExport: { abi: "chacha20_poly1305" },
+  };
+
+  // RFC 8439 §2.8.2: key 80..9f (32 bytes)
+  const keyBytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) keyBytes[i] = 0x80 + i;
+  const key = btoa(String.fromCharCode(...keyBytes));
+
+  // nonce: 070000004041424344454647 (12 bytes)
+  const nonceBytes = new Uint8Array([0x07, 0x00, 0x00, 0x00, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47]);
+  const nonce = btoa(String.fromCharCode(...nonceBytes));
+
+  // AAD: 50515253c0c1c2c3c4c5c6c7 (12 bytes)
+  const aadBytes = new Uint8Array([0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7]);
+  const aad = btoa(String.fromCharCode(...aadBytes));
+
+  // Plaintext: "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it."
+  const plaintext = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+  const data = btoa(plaintext);
+
+  // Expected ciphertext (hex):
+  const expectedCtHex = "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116";
+  // Expected tag (hex):
+  const expectedTagHex = "1ae10b594f09e26a7e902ecbd0600691";
+
+  // Encrypt
+  const encResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data,
+    args: { key, nonce, data, aad, mode: "encrypt" },
+  });
+  assertEquals(encResult.algorithm, "chacha20_poly1305");
+  assertEquals(encResult.mode, "encrypt");
+
+  // Verify ciphertext + tag bytes
+  const outBytes = Uint8Array.from(atob(encResult.data), (c) => c.charCodeAt(0));
+  const ctLen = outBytes.length - 16;
+  const ctHex = [...outBytes.subarray(0, ctLen)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  const tagHex = [...outBytes.subarray(ctLen)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  assertEquals(ctHex, expectedCtHex, "ciphertext matches RFC 8439 §2.8.2 exactly");
+  assertEquals(tagHex, expectedTagHex, "tag matches RFC 8439 §2.8.2 exactly");
+
+  // Decrypt of KAT ciphertext + tag reproduces plaintext
+  const decResult = await executeCallexportRun({
+    wasmBytes: bytes,
+    executable,
+    data: encResult.data,
+    args: { key, nonce, data: encResult.data, aad, mode: "decrypt" },
+  });
+  assertEquals(decResult.algorithm, "chacha20_poly1305");
+  assertEquals(decResult.mode, "decrypt");
+  assertEquals(atob(decResult.data), plaintext);
+});
+
+Deno.test("callexport: executableBundledToolRecords chacha20_poly1305 validator and SW envelope args (P2-1)", async () => {
+  const records = executableBundledToolRecords(BUNDLED_TOOL_PACKAGE_ROWS, {
+    scope: { hub: true, agentId: "hub", origin: "", documentId: "" },
+  });
+  const chachaRec = records.find((r) => r.descriptorInput.toolId === "chacha20_poly1305");
+  assert(chachaRec, "chacha20_poly1305 executable record must exist");
+  assert(typeof chachaRec.validateArguments === "function", "validateArguments must be a function");
+
+  // 1. Invalid shape
+  assertEquals((await chachaRec.validateArguments(null)).error, "invalid_arguments: shape");
+  assertEquals((await chachaRec.validateArguments("string")).error, "invalid_arguments: shape");
+  assertEquals((await chachaRec.validateArguments([])).error, "invalid_arguments: shape");
+
+  // 2. Mismatched toolId
+  assertEquals((await chachaRec.validateArguments({ toolId: "other" })).error, "invalid_arguments: toolId");
+
+  // 3. Unexpected keys
+  assertEquals((await chachaRec.validateArguments({ data: "aGk=", key: "k", nonce: "n", bogus: 123 })).error, "invalid_arguments: unexpected_keys");
+
+  // 4. Required fields missing or wrong type
+  assertEquals((await chachaRec.validateArguments({ key: "k", nonce: "n" })).error, "invalid_arguments: required_fields");
+  assertEquals((await chachaRec.validateArguments({ data: "aGk=", nonce: "n" })).error, "invalid_arguments: required_fields");
+  assertEquals((await chachaRec.validateArguments({ data: "aGk=", key: "k" })).error, "invalid_arguments: required_fields");
+  assertEquals((await chachaRec.validateArguments({ data: 123, key: "k", nonce: "n" })).error, "invalid_arguments: required_fields");
+
+  // 5. Invalid mode
+  assertEquals((await chachaRec.validateArguments({ data: "aGk=", key: "k", nonce: "n", mode: "invalid" })).error, "invalid_arguments: mode");
+
+  // 6. Invalid AAD
+  assertEquals((await chachaRec.validateArguments({ data: "aGk=", key: "k", nonce: "n", aad: 42 })).error, "invalid_arguments: aad");
+
+  // 7. Valid arguments -> frozen result with default mode "encrypt"
+  const valid = await chachaRec.validateArguments({ data: "aGk=", key: "k", nonce: "n" });
+  assertEquals(valid.ok, true);
+  assertEquals(valid.data.toolId, "chacha20_poly1305");
+  assertEquals(valid.data.mode, "encrypt");
+  assertEquals(valid.data.data, "aGk=");
+  assertEquals(valid.data.key, "k");
+  assertEquals(valid.data.nonce, "n");
+  assert(Object.isFrozen(valid.data), "validated arguments data must be frozen");
+
+  // 8. Service Worker envelope carries args and references CALLEXPORT_RUN_TYPE
+  assertEquals(CALLEXPORT_RUN_TYPE, "cap:wasm-callexport-run");
+  const swCode = await Deno.readTextFile("extension/background/service-worker.js");
+  assert(swCode.includes("type: CALLEXPORT_RUN_TYPE"), "service-worker must dispatch CALLEXPORT_RUN_TYPE");
+  assert(swCode.includes("args: validatedArgs ?? {}"), "service-worker callexport envelope must forward args");
 });
