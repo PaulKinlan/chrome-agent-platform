@@ -338,7 +338,7 @@ export function formatUnclassifiedScannersMessage(unclassified: string[]): strin
 export function enumerateTestFiles(testsDir = join(ROOT, "tests")): { rel: string; code: string }[] {
   return readdirSync(testsDir, { recursive: true })
     .map(String)
-    .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/") && !f.includes("/node_modules/"))
+    .filter((f) => IS_TEST_RE.test(f) && !f.includes("/fixtures/") && !f.startsWith("fixtures/") && !f.includes("/node_modules/") && !f.startsWith("node_modules/"))
     .map((f) => ({
       rel: `tests/${f}`,
       code: readFileSync(join(testsDir, f), "utf8"),
@@ -467,11 +467,21 @@ Deno.test("afpl: every ALWAYS_ON and SCANNER_EXCLUSIONS entry is a test file, ne
 // proves prose-only helpers are not falsely flagged, and cleans up the tree in a finally block.
 Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NAMED and fails closed; prose helper is NOT flagged", async () => {
   const realHelpersDir = join(ROOT, "tests", "helpers");
-  await Deno.mkdir(realHelpersDir, { recursive: true });
-
   const depth2Walker = join(realHelpersDir, "zz-afpl-depth2-walk.ts");
   const proseHelper = join(realHelpersDir, "zz-afpl-prose-only.ts");
   const fixtureReader = join(realHelpersDir, "zz-afpl-fixture-read.ts");
+  const testFiles = [depth2Walker, proseHelper, fixtureReader];
+
+  // NEW-3: Self-healing residue reconciliation from any prior SIGKILL before starting
+  for (const f of testFiles) {
+    try { await Deno.remove(f); } catch { /* ignore if absent */ }
+  }
+
+  // NEW-1: Record whether tests/helpers existed prior to this test
+  const helpersDirPreexisted = existsSync(realHelpersDir);
+  if (!helpersDirPreexisted) {
+    await Deno.mkdir(realHelpersDir, { recursive: true });
+  }
 
   try {
     // 1. (F1) Depth-2 helper walking root via "../../" (the repo's own depth-2 idiom).
@@ -527,7 +537,15 @@ Deno.test("afpl: REAL-TREE falsification — a depth-2 repo-walking helper is NA
       `REAL-TREE: a fixture-walking helper must NOT be admitted: ${JSON.stringify(named)}`,
     );
   } finally {
-    try { await Deno.remove(realHelpersDir, { recursive: true }); } catch { /* ignore */ }
+    // NEW-1: Clean up ONLY our own test files, never wiping existing/tracked files in tests/helpers
+    for (const f of testFiles) {
+      try { await Deno.remove(f); } catch { /* ignore */ }
+    }
+    if (!helpersDirPreexisted) {
+      try {
+        await Deno.remove(realHelpersDir); // Non-recursive rmdir; fails harmlessly if directory contains other files
+      } catch { /* ignore */ }
+    }
   }
 });
 
