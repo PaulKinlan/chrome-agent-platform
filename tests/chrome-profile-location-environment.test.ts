@@ -59,8 +59,12 @@ Deno.test("hlgr: no browser => NAMED and COUNTED environmental refusal at exit 7
 });
 
 Deno.test("hlgr: a RESOLVED browser never refuses — the guard cannot refuse spuriously", () => {
+  // review P1 (delta): Deno.execPath(), NOT a hardcoded /usr/bin/chromium. browserRefusal now STATS
+  // the reported path (isUsableBinary), so a literal that does not exist on the host turns this
+  // assertion into the very product red the suite exists to prevent — green on this VM, red on any
+  // host without that exact path. The running Deno binary is a real executable file everywhere.
   assertEquals(
-    browserRefusal({ binary: "/usr/bin/chromium", tried: ["default /usr/bin/chromium"] }, [BROWSER_TEST]),
+    browserRefusal({ binary: Deno.execPath(), tried: [Deno.execPath()] }, [BROWSER_TEST]),
     null,
     "a resolved browser must NOT produce a refusal, or the guard would skip work it can do",
   );

@@ -97,7 +97,8 @@ Deno.test("9t1b: a REAL browser holds its profile while the whole tree is copied
   // "fell through to a default that may not exist".
   // (review P2: the block that used to precede this one was a duplicate of it and was deleted.)
   const { launchChrome, resolveChromiumBinaryReport } = await import("../scripts/lib/chrome-launch.ts");
-  const { refuseWithoutBrowser } = await import("../scripts/lib/browser-refusal.ts");
+  // (review P2 delta: refuseWithoutBrowser was imported here and never used in this test — the refusal
+  // is emitted by the LAST test in the file, which imports it for itself.)
   // chrome-agent-platform-hlgr review P1: do NOT exit from here. This test sits before five STATIC
   // tests in this file, and Deno.exit(75) would abort them, losing coverage that needs no browser at
   // all. Without a browser this test declines to assert and the refusal is emitted by the LAST test in
