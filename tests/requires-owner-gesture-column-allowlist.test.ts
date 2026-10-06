@@ -55,7 +55,18 @@ const MENTION_ALLOWLIST: Readonly<Record<string, string>> = {
  *  `--untracked` keeps this guard honest for the file that is adding it, which is
  *  not tracked until it lands. */
 function filesMentioningColumn(): string[] {
-  const result = spawnSync("git", ["grep", "-l", "-I", "--untracked", "-e", COLUMN_NAME], { cwd: ROOT, encoding: "utf8" });
+  // `.beads/` is the GENERATED tracker export — bead DATA, not a source mention site.
+  // A bead description may legitimately quote the column name while retiring it, so the
+  // generated export must not count as an un-allowlisted mention: allowlisting the file
+  // (rather than excluding the generated path) would bless arbitrary future bead text as
+  // a permitted mention and make this guard true-by-churn. Excluding the generated path
+  // keeps a real source mention caught, and stops the guard's verdict depending on
+  // unrelated bead text that is regenerated on every commit.
+  const result = spawnSync(
+    "git",
+    ["grep", "-l", "-I", "--untracked", "-e", COLUMN_NAME, "--", ".", ":(exclude).beads"],
+    { cwd: ROOT, encoding: "utf8" },
+  );
   // 1 is "no match" — an empty tree is a legitimate (and loud, via the stale check) state.
   assert(
     result.status === 0 || result.status === 1,
