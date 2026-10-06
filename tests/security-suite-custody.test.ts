@@ -16,6 +16,7 @@ import {
   SELF_TEST_TOKEN,
   waitUntil,
 } from "../scripts/security-suite-custody.mjs";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url)).replace(/\/$/u, "");
 const SUPERVISOR = `${ROOT}/scripts/security-suite-supervisor.sh`;
@@ -32,6 +33,22 @@ const decoder = new TextDecoder();
 // nothing to clear now: the supervisor never reads or writes it, and the guard
 // test below fails if the mechanism comes back.
 const RETIRED_POISON = "/tmp/cap-chrome-slot-POISON";
+// chrome-agent-platform-2zqd: the DECLARED numbers for the escape cases, asserted as a CONTRACT rather
+// than raced as clocks. The supervisor's own budget is the arbiter of a supervisor that never samples,
+// so the fixture's loud refusal is a BACKSTOP LOAD CANNOT REACH: FREEZE_MS < BUDGET_MS < ACK_DEADLINE_MS,
+// with the budget ~3.6x above the worst first-sample/ACK latency measured on this box (2_800 ms at
+// loadavg ~10). Before this the fixture's private 1_500 ms deadline decided the outcome, so the BOX
+// decided the red: the fixture gave up and exited 97 before the supervisor could observe the escape,
+// and the red looked like a custody failure.
+const ESCAPE_SELF_TEST_BUDGET_MS = 10_000;
+const ESCAPE_ACK_DEADLINE_MS = 12_000;
+const ESCAPE_SAMPLE_FREEZE_MS = 400;
+// chrome-agent-platform-2zqd: how long the reap/cleanup assertions wait for a recorded pid to STOP being a
+// live process before calling it a survivor. The PROPERTY is unchanged (a survivor still REDs) - only the
+// BOUND is declared, because under parallel always-on load the box delayed cleanup past the old hard-coded
+// 2 s: the third case in this file redded at loadavg ~9.5 while passing 12/0 alone. Measured reap on an idle
+// box is 5-45 ms, so a healthy run still returns immediately - this bound only decides how long a FAILURE waits.
+const REAP_SETTLE_TIMEOUT_MS = 10_000;
 
 type RunResult = {
   code: number;
@@ -110,6 +127,20 @@ async function removeEvidence(result: RunResult) {
   }
 }
 
+async function escapeChildPidFrom(stateFile: string): Promise<number> {
+  const rows = (await Deno.readTextFile(stateFile).catch(() => "")).trim().split("\n")
+    .filter(Boolean);
+  for (const line of rows) {
+    try {
+      const row = JSON.parse(line);
+      if (typeof row.childPid === "number" && row.childPid > 0) return row.childPid;
+    } catch {
+      // a partial trailing line is not a pid
+    }
+  }
+  return 0;
+}
+
 async function assertRecordedPidsGone(result: RunResult) {
   const pids = new Set<number>();
   for (const row of result.state) {
@@ -124,7 +155,7 @@ async function assertRecordedPidsGone(result: RunResult) {
       } catch {
         return false;
       }
-    }, 2_000);
+    }, REAP_SETTLE_TIMEOUT_MS);
     assert(gone, `fixture pid ${pid} survived owned-group cleanup`);
   }
 }
@@ -360,11 +391,31 @@ Deno.test("security-suite custody: live cleanup helper refuses real symlink/wron
 
 Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) and leaves no shared marker behind", async () => {
   assertEquals(pidAlive(Deno.pid), true);
-  const result = await runSupervisor("escape", 2_000);
+  // DECLARED-ORDER PRECONDITION, stated honestly: these three values are declared in THIS file, and this
+  // check only fails a future edit that inverts them - nothing at runtime enforces the ordering, so it is
+  // NOT a system-contract assertion (independent review finding 1 asked for that to be said rather than
+  // implied). The SYSTEM contract is the two checks that follow: the fixture must have RECORDED the window
+  // it was handed, and the backstop case must still refuse loudly for a window the ACK cannot meet.
+  assert(
+    ESCAPE_SAMPLE_FREEZE_MS < ESCAPE_SELF_TEST_BUDGET_MS &&
+      ESCAPE_SELF_TEST_BUDGET_MS < ESCAPE_ACK_DEADLINE_MS,
+    `declared-order precondition broken (freeze < budget < ack deadline): ${ESCAPE_SAMPLE_FREEZE_MS}/${ESCAPE_SELF_TEST_BUDGET_MS}/${ESCAPE_ACK_DEADLINE_MS}`,
+  );
+  const result = await runSupervisor("escape", ESCAPE_SELF_TEST_BUDGET_MS, {
+    CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(ESCAPE_ACK_DEADLINE_MS),
+  });
   let escapedPid = 0;
   let escapedStart = "";
   try {
     assertEquals(result.code, 70);
+    // The fixture must have honoured the DECLARED window rather than a private literal: this is what
+    // makes the outcome above a property of the contract instead of of the machine's load.
+    assertEquals(
+      result.state.find((row) => row.event === "escape-ack-deadline-declared")
+        ?.ackDeadlineMs,
+      ESCAPE_ACK_DEADLINE_MS,
+      "the fixture must record the DECLARED window it was given",
+    );
     assertEquals(result.receipt?.custodyReason, "descendant-residue");
     const residue = result.receipt?.residue as Array<Record<string, unknown>>;
     assert(residue.length >= 1);
@@ -395,7 +446,7 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
       } catch {
         // Already gone.
       }
-      await waitUntil(() => pidAlive(escapedPid), 2_000);
+      await waitUntil(() => pidAlive(escapedPid), REAP_SETTLE_TIMEOUT_MS);
     }
     await removeEvidence(result);
   }
@@ -475,13 +526,22 @@ Deno.test(
     // observation, so the forced window now ends in a DETECTED escape.
     // CAP_SECURITY_TEST_SAMPLE_FREEZE_MS delays the supervisor's first
     // sample past the point where an un-handshaked runner has already exited.
-    const result = await runSupervisor("escape", 2_000, {
-      CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: "400",
+    const result = await runSupervisor("escape", ESCAPE_SELF_TEST_BUDGET_MS, {
+      CAP_SECURITY_TEST_SAMPLE_FREEZE_MS: String(ESCAPE_SAMPLE_FREEZE_MS),
+      CAP_SECURITY_TEST_ACK_DEADLINE_MS: String(ESCAPE_ACK_DEADLINE_MS),
     });
     let escapedPid = 0;
     let escapedStart = "";
     try {
       assertEquals(result.code, 70);
+      // Same declaration check as the sibling case: the forced blind window must still sit inside the
+      // window the fixture was GIVEN, not inside a literal only the fixture knew.
+      assertEquals(
+        result.state.find((row) => row.event === "escape-ack-deadline-declared")
+          ?.ackDeadlineMs,
+        ESCAPE_ACK_DEADLINE_MS,
+        "the fixture must record the DECLARED window it was given",
+      );
       assertEquals(result.receipt?.custodyReason, "descendant-residue");
       const residue = result.receipt?.residue as Array<Record<string, unknown>>;
       assert(residue.length >= 1);
@@ -521,10 +581,99 @@ Deno.test(
         } catch {
           // Already gone.
         }
-        const gone = await waitUntil(() => pidAlive(escapedPid), 2_000);
+        const gone = await waitUntil(() => pidAlive(escapedPid), REAP_SETTLE_TIMEOUT_MS);
         assert(gone, `the fixture's escaped child ${escapedPid} must be gone after teardown`);
       }
       await removeEvidence(result);
     }
   },
 );
+
+// ── chrome-agent-platform-2zqd: the BACKSTOP stays pinned ────────────────────────────────────────────
+// The two escape cases above now hand the fixture a window that the supervisor's own budget settles
+// first, so the fixture's refusal no longer fires in the POSITIVE case. This is the case that stops the
+// refusal path becoming vacuous: run the fixture DIRECTLY (no supervisor, so the ACK can never list the
+// child) with a DECLARED window of 1 ms. The refusal must be loud and BY NAME, and the window it was
+// given must be the window it records - so deleting the deadline branch, or ignoring the declaration,
+// reds here instead of silently passing.
+Deno.test("2zqd: a declared window the ACK cannot meet still records the loud refusal by name (the backstop is pinned)", async () => {
+  const dir = durableDir(`2zqd-ack-refusal-${Deno.pid}`);
+  const stateFile = `${dir}/self-test-state.jsonl`;
+  const ackPath = `${dir}/sample-ack.json`;
+  // A well-formed ACK that NEVER lists the child: the handshake can never confirm.
+  await Deno.writeTextFile(ackPath, `${JSON.stringify({ pids: [] })}\n`);
+  let childPid = 0;
+  try {
+    const r = await command("node", [FIXTURE], {
+      CAP_SECURITY_TEST_SCENARIO: "escape",
+      CAP_SECURITY_TEST_STATE: stateFile,
+      CAP_SECURITY_SAMPLE_ACK: ackPath,
+      CAP_SECURITY_TEST_ACK_DEADLINE_MS: "1",
+    }, 20);
+    assertEquals(r.code, 97, "a window the ACK can never meet must produce the fixture's loud refusal");
+    const events = (await Deno.readTextFile(stateFile)).trim().split("\n")
+      .filter(Boolean).map((line) => JSON.parse(line));
+    const named = events.map((row) => row.event);
+    const declared = events.find((row) => row.event === "escape-ack-deadline-declared");
+    assert(named.includes("escape-ack-deadline-declared"), `the declared window must be recorded: ${named.join(",")}`);
+    assertEquals(declared?.ackDeadlineMs, 1, "the recorded window must be the value the fixture was GIVEN");
+    assert(named.includes("escape-unconfirmed"), `the refusal must be recorded BY NAME: ${named.join(",")}`);
+    childPid = Number(declared?.childPid ?? 0);
+  } finally {
+    // Recover the pid from ANY state row that recorded one, not only the row this test happened to read
+    // before asserting: independent review finding 2 showed that when the code-97 assertion throws, the
+    // local was still 0 and the escape child was left running until its 30 s unref timer (which is exactly
+    // what the drill that produced code 143 did). The fixture records escape-child-spawned in every escape
+    // run, so this always finds it.
+    if (childPid === 0) childPid = await escapeChildPidFrom(stateFile);
+    if (childPid > 0) {
+      try {
+        Deno.kill(childPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+// chrome-agent-platform-2zqd: the BOUNDS CHECK is a branch of its own and needs its own pin - independent
+// review finding 3 measured that DELETING it left the whole suite green. An invalid declaration must be
+// refused LOUDLY and BY NAME rather than silently defaulted, and it must not be recorded as honoured.
+Deno.test("2zqd: an INVALID declared window is refused loudly and by name (the bounds check is pinned)", async () => {
+  const dir = durableDir(`2zqd-ack-invalid-${Deno.pid}`);
+  const stateFile = `${dir}/self-test-state.jsonl`;
+  const ackPath = `${dir}/sample-ack.json`;
+  await Deno.writeTextFile(ackPath, `${JSON.stringify({ pids: [] })}\n`);
+  let childPid = 0;
+  try {
+    const r = await command("node", [FIXTURE], {
+      CAP_SECURITY_TEST_SCENARIO: "escape",
+      CAP_SECURITY_TEST_STATE: stateFile,
+      CAP_SECURITY_SAMPLE_ACK: ackPath,
+      CAP_SECURITY_TEST_ACK_DEADLINE_MS: "not-a-number",
+    }, 20);
+    assertEquals(r.code, 97, "an invalid declared window must be refused loudly, never silently defaulted");
+    const events = (await Deno.readTextFile(stateFile)).trim().split("\n")
+      .filter(Boolean).map((line) => JSON.parse(line));
+    const named = events.map((row) => row.event);
+    assert(
+      named.includes("escape-ack-deadline-invalid"),
+      `the refusal must be recorded BY NAME: ${named.join(",")}`,
+    );
+    assert(
+      !named.includes("escape-ack-deadline-declared"),
+      `an invalid window must not be recorded as honoured: ${named.join(",")}`,
+    );
+  } finally {
+    childPid = await escapeChildPidFrom(stateFile);
+    if (childPid > 0) {
+      try {
+        Deno.kill(childPid, "SIGKILL");
+      } catch {
+        // already gone
+      }
+    }
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
