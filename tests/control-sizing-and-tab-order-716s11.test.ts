@@ -82,7 +82,7 @@ Deno.test("716s.11: Hub sidebar controls meet hit target floor (new-task, delete
   );
 });
 
-Deno.test("716s.11: #side-toggle focus-visible outline ring and Tab navigation keydown handler", async () => {
+Deno.test("716s.11 / g09i: #side-toggle focus ring and native Tab order into the sidebar", async () => {
   const ntpHtml = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.html`);
   const ntpJs = await Deno.readTextFile(`${ROOT}/extension/ntp/ntp.js`);
 
@@ -96,12 +96,17 @@ Deno.test("716s.11: #side-toggle focus-visible outline ring and Tab navigation k
     ".side-toggle:focus-visible must provide a standard outline ring",
   );
 
-  // Tab keydown handler in ntp.js: advances from sideToggle without body stop
+  // The toggle moved from after the sidebar into .side-top. Native DOM order
+  // now leads into Tasks and the rail; the former Tab trap skipped every control.
+  const sidebar = ntpHtml.slice(ntpHtml.indexOf('<aside class="side" id="side"'));
+  const toggle = sidebar.indexOf('id="side-toggle"');
+  const newTask = sidebar.indexOf('id="new-task"');
+  const rail = sidebar.indexOf('id="side-rail-nav"');
+  assert(toggle >= 0 && newTask > toggle && rail > newTask,
+    "the in-flow toggle must precede Tasks and the collapsed rail in DOM order");
   assert(
-    /sideToggle\??\.addEventListener\(\s*["']keydown["']/s.test(ntpJs) &&
-      ntpJs.includes('event.key === "Tab"') &&
-      ntpJs.includes("event.preventDefault()"),
-    "sideToggle must have a keydown listener for Tab that prevents default to cycle cleanly to composer",
+    !/sideToggle\??\.addEventListener\(\s*["']keydown["'][\s\S]{0,350}event\.key === ["']Tab["']/.test(ntpJs),
+    "the toggle must not intercept forward Tab and skip visible sidebar controls",
   );
 });
 
