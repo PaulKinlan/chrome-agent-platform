@@ -29,6 +29,7 @@ import { acquireChromeSlot } from "./chrome-slots.ts";
 import { requireQuietWindow, type QuietSpec } from "./quiet-window.ts";
 import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } from "./heavy-gate-slot.ts";
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
+import { isUsableBinary } from "./browser-refusal.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -122,7 +123,10 @@ export const CHROMIUM = "/usr/bin/chromium";
 // spawn — indistinguishable from "this machine has no browser capability" —
 // and a reviewer once had to create a system-level symlink just to run the
 // repo's own gates. Resolution order, ONE place, every consumer:
-//   1. the CAP_CHROMIUM env override (explicit, wins outright);
+//   1. the CAP_CHROMIUM env override (explicit; wins outright). resolveChromiumBinaryReport VERIFIES it -
+//      missing, not executable, or a bare name absent from $PATH means it REFUSES and names the reason,
+//      never reporting an unusable path as resolved (chrome-agent-platform-s7wr); resolveChromiumBinary
+//      returns the raw override, because its callers spawn it directly and a bad value fails there;
 //   2. the newest Chrome-for-Testing in the puppeteer cache
 //      (scripts/lib/chrome-for-testing.ts — includes bare-version cache dirs
 //      per chrome-agent-platform-fyvc/wvg);
@@ -147,16 +151,69 @@ export function resolveChromiumBinary(
  *  so the failure message tells the operator exactly what to fix.
  *  `exists` is injectable for deterministic tests. */
 export function resolveChromiumBinaryReport(
-  opts: { envGet?: (name: string) => string | undefined; cacheRoot?: string; exists?: (path: string) => boolean } = {},
+  opts: {
+    envGet?: (name: string) => string | undefined;
+    cacheRoot?: string;
+    exists?: (path: string) => boolean;
+    usable?: (path: string) => boolean;
+  } = {},
 ): { binary: string | null; tried: string[] } {
+  const envGet = opts.envGet ?? ((name: string) => Deno.env.get(name));
   const exists = opts.exists ?? ((path: string) => {
     try { return Deno.statSync(path).isFile; } catch { return false; }
   });
+  // chrome-agent-platform-s7wr: an override is the OPERATOR's explicit instruction, so it is VERIFIED
+  // (existence AND executability) before it is reported as resolved. Reporting a missing override as
+  // resolved made the hlgr environmental refusal unreachable and the launch died ENOENT - an environment
+  // difference surfacing as a product-shaped red, which is the failure class hlgr exists to remove. The
+  // predicate is the refusal module's, shared, so the two cannot drift on what "usable" means.
+  const usable = opts.usable ?? isUsableBinary;
+  // The REFUSAL REASON is as precise as the evidence allows: with injected predicates it comes from them
+  // (tests drive it), and against the real filesystem it distinguishes a directory from a missing file, so
+  // an operator who pointed CAP_CHROMIUM at a directory is told that rather than "missing" (review finding 3).
+  const unusableReason = opts.exists
+    ? (path: string) => (exists(path) ? " (not executable)" : " (missing)")
+    : (path: string) => {
+      try {
+        const st = Deno.statSync(path);
+        if (st.isDirectory) return " (a directory)";
+        if (!st.isFile) return " (not a regular file)";
+        return " (not executable)";
+      } catch {
+        return " (missing)";
+      }
+    };
   const tried: string[] = [];
-  const override = (opts.envGet ?? ((name: string) => Deno.env.get(name)))("CAP_CHROMIUM");
-  if (typeof override === "string" && override.trim()) {
-    tried.push(`CAP_CHROMIUM=${override}`);
-    return { binary: override, tried };
+  const rawOverride = envGet("CAP_CHROMIUM");
+  if (typeof rawOverride === "string" && rawOverride.trim()) {
+    // TRIM ONCE and use the trimmed value for the checks AND the report (review finding 4): a stray trailing
+    // space must not make a real browser look missing.
+    const override = rawOverride.trim();
+    // A BARE NAME is not a filesystem path: a spawn resolves it through $PATH, so stat'ing it against the CWD
+    // would REFUSE a configuration that used to work - a false refusal introduced by verification itself
+    // (review finding 2). Follow the spawn's own rule and search $PATH with the same usability predicate,
+    // reporting the absolute path found.
+    const bareName = !override.includes("/") && !override.includes("\\");
+    if (bareName) {
+      const found = (envGet("PATH") ?? "").split(":").filter(Boolean)
+        .map((dir) => `${dir}/${override}`)
+        .find((candidate) => usable(candidate));
+      if (found) {
+        tried.push(`CAP_CHROMIUM=${override} (resolved on $PATH: ${found})`);
+        return { binary: found, tried };
+      }
+      tried.push(`CAP_CHROMIUM=${override} (not found on $PATH)`);
+      return { binary: null, tried };
+    }
+    if (usable(override)) {
+      tried.push(`CAP_CHROMIUM=${override}`);
+      return { binary: override, tried };
+    }
+    // REFUSE, and do not fall through: quietly using a DIFFERENT browser behind an explicit override
+    // would hide the operator's misconfiguration. The reason and the path are both named so the refusal
+    // line says exactly what to fix.
+    tried.push(`CAP_CHROMIUM=${override}${unusableReason(override)}`);
+    return { binary: null, tried };
   }
   const cached = resolveChromeForTesting(opts.cacheRoot != null ? { cacheRoot: opts.cacheRoot } : {});
   if (cached) {
