@@ -43,6 +43,12 @@ const RETIRED_POISON = "/tmp/cap-chrome-slot-POISON";
 const ESCAPE_SELF_TEST_BUDGET_MS = 10_000;
 const ESCAPE_ACK_DEADLINE_MS = 12_000;
 const ESCAPE_SAMPLE_FREEZE_MS = 400;
+// chrome-agent-platform-2zqd: how long the reap/cleanup assertions wait for a recorded pid to STOP being a
+// live process before calling it a survivor. The PROPERTY is unchanged (a survivor still REDs) - only the
+// BOUND is declared, because under parallel always-on load the box delayed cleanup past the old hard-coded
+// 2 s: the third case in this file redded at loadavg ~9.5 while passing 12/0 alone. Measured reap on an idle
+// box is 5-45 ms, so a healthy run still returns immediately - this bound only decides how long a FAILURE waits.
+const REAP_SETTLE_TIMEOUT_MS = 10_000;
 
 type RunResult = {
   code: number;
@@ -135,7 +141,7 @@ async function assertRecordedPidsGone(result: RunResult) {
       } catch {
         return false;
       }
-    }, 2_000);
+    }, REAP_SETTLE_TIMEOUT_MS);
     assert(gone, `fixture pid ${pid} survived owned-group cleanup`);
   }
 }
@@ -424,7 +430,7 @@ Deno.test("security-suite custody: escaped descendant fails THIS run (exit 70) a
       } catch {
         // Already gone.
       }
-      await waitUntil(() => pidAlive(escapedPid), 2_000);
+      await waitUntil(() => pidAlive(escapedPid), REAP_SETTLE_TIMEOUT_MS);
     }
     await removeEvidence(result);
   }
@@ -559,7 +565,7 @@ Deno.test(
         } catch {
           // Already gone.
         }
-        const gone = await waitUntil(() => pidAlive(escapedPid), 2_000);
+        const gone = await waitUntil(() => pidAlive(escapedPid), REAP_SETTLE_TIMEOUT_MS);
         assert(gone, `the fixture's escaped child ${escapedPid} must be gone after teardown`);
       }
       await removeEvidence(result);
