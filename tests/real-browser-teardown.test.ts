@@ -148,6 +148,19 @@ function aliases(code: string, site: Site, end: number): Set<string> {
   return names;
 }
 
+// A cleanup declared before a single launch is valid only when the local
+// helper containing it is actually invoked after launch. This admits the
+// ensureCleanup()/teardownTree() patterns without accepting a dead helper.
+function prelaunchCleanupInvoked(code: string, teardownAt: number, afterLaunch: number): boolean {
+  for (const m of code.matchAll(/\b(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{}]+)?\s*\{/g)) {
+    const open = code.indexOf("{", m.index!);
+    if (m.index! > teardownAt || closing(code, open, "{", "}") < teardownAt) continue;
+    const calls = new RegExp(`\\b${m[1]}\\s*\\(`);
+    if (calls.test(code.slice(afterLaunch))) return true;
+  }
+  return false;
+}
+
 /** Source-level association, not a control-flow proof that finally always runs. */
 function unguardedLaunches(src: string, rel = "<fixture>"): string[] {
   if (!src.includes("launchChrome")) return [];
@@ -162,7 +175,8 @@ function unguardedLaunches(src: string, rel = "<fixture>"): string[] {
     const end = sites.length === 1 ? code.length : (sites[i + 1]?.start ?? code.length);
     const start = sites.length === 1 ? 0 : site.end;
     const owned = aliases(code, site, end);
-    const matched = site.binding && teardowns.some((t) => t.start >= start && t.start < end && owned.has(t.target));
+    const matched = site.binding && teardowns.some((t) => t.start >= start && t.start < end &&
+      owned.has(t.target) && (t.start >= site.end || prelaunchCleanupInvoked(code, t.start, site.end)));
     return matched ? [] : [`${rel}:${site.line} (${site.binding || "unbound"}: no associated process-tree teardown)`];
   });
 }
@@ -280,6 +294,13 @@ Deno.test("elst: falsification — dropping teardownChrome or using bare proc.ki
   const alias = `const browser = await launchChrome({ binary: "/usr/bin/chromium" });
     try { doWork(); } finally { await closeChrome(browser); }`;
   assertEquals(unguardedLaunches(alias), [], "closeChrome(launched) is a supported alias");
+  const helper = `let launched;
+    async function cleanup() { await launched.close(); }
+    launched = await launchChrome({ binary: "/usr/bin/chromium" });
+    await cleanup();`;
+  assertEquals(unguardedLaunches(helper), [], "predeclared cleanup invoked after launch is valid");
+  assertEquals(unguardedLaunches(helper.replace("await cleanup();", "" )).length, 1,
+    "an uncalled predeclared cleanup does not prove teardown");
   const unrelatedClose = `const launched = await launchChrome({ binary: "/usr/bin/chromium" });
     try { doWork(); } finally { await cdp.close(); }`;
   assertEquals(unguardedLaunches(unrelatedClose).length, 1, "an unrelated close() is not a Chrome teardown");
