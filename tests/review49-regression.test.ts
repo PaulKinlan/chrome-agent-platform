@@ -17,7 +17,7 @@ function dirNode(){return {kind:"directory",children:new Map()};}
 function fileNode(c){return {kind:"file",content:c};}
 class W{constructor(n){this.n=n;this.p=[];} async write(s){this.p.push(String(s));} async close(){this.n.content=this.p.join(""); if(globalThis.failClose?.has(this.n.name)) throw new Error("close committed then threw");}}
 class F{constructor(n){this.n=n;this.name=null;} get kind(){return "file";} async getFile(){const n=this.n;return {size:(n.content??"").length,async text(){return n.content??"";}};} async createWritable(){const nth=globalThis.failNth?.get(this.name);if(typeof nth==="number"){if(nth<=1){globalThis.failNth.delete(this.name);throw new Error("createWritable failed");}globalThis.failNth.set(this.name,nth-1);}const w=new W(this.n);w.n.name=this.name;return w;}}
-class D{constructor(n){this.n=n;}get kind(){return "directory";}async getDirectoryHandle(name,o={}){if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,dirNode());}return new D(this.n.children.get(name));}async getFileHandle(name,o={}){if(globalThis.failGet?.has(name))throw new Error("I/O read failure");if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,fileNode(""));}const f=new F(this.n.children.get(name));f.name=name;return f;}async removeEntry(name){this.n.children.delete(name);}async *entries(){for(const [name,n] of this.n.children){const h=n.kind==="file"?new F(n):new D(n);if(h instanceof F)h.name=name;yield [name,h];}}}
+class D{constructor(n){this.n=n;}get kind(){return "directory";}async getDirectoryHandle(name,o={}){if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,dirNode());}return new D(this.n.children.get(name));}async getFileHandle(name,o={}){if(!o.create&&globalThis.failGet?.has(name))throw new Error("I/O read failure");if(!this.n.children.has(name)){if(!o.create)throw Object.assign(new Error("not found"),{name:"NotFoundError"});this.n.children.set(name,fileNode(""));}const f=new F(this.n.children.get(name));f.name=name;return f;}async removeEntry(name){this.n.children.delete(name);}async *entries(){for(const [name,n] of this.n.children){const h=n.kind==="file"?new F(n):new D(n);if(h instanceof F)h.name=name;yield [name,h];}}}
 const root=dirNode();Object.defineProperty(globalThis,"navigator",{value:{storage:{async getDirectory(){return new D(root);}}},configurable:true});
 const memUrl=new URL("./fixtures/artifact-tx-4eaf0d34/memory.js", import.meta.url).href;
 const artUrl=new URL("./fixtures/artifact-tx-4eaf0d34/artifacts.js", import.meta.url).href;
@@ -62,10 +62,11 @@ Deno.test("regress: an unreadable WAL FAILS the operation (never swallowed as ab
   await m.setTrusted("__tx", { op: "create", id: "old", bodyGen: await m.getVersion("asset:old"), state: "prepared" });
   globalThis.failGet = new Set(["__tx.json"]);
   const a = await import(artUrl + "?reg3-art");
-  let failed = false;
-  try { await a.createAsset("master", { type: "text", name: "new", content: "n" }); } catch { failed = true; }
+  let err = null;
+  try { await a.createAsset("master", { type: "text", name: "new", content: "n" }); } catch (e) { err = e; }
   globalThis.failGet = new Set();
-  assert(failed, "an unreadable WAL refuses the operation");
+  assert(err !== null, "an unreadable WAL refuses the operation");
+  assert(err.message.includes("the transaction WAL is unreadable"), `expected unreadable WAL error, got: ${err?.message}`);
 });
 
 Deno.test("regress: a tombstone failure does NOT remove the live value or reset authority", async () => {
@@ -134,8 +135,14 @@ Deno.test("regress: tombstones are BOUNDED (pruned beyond the retention cap)", a
   reset();
   const m = (await import(memUrl + "?reg8")).masterMemory();
   for (let i = 0; i < 600; i++) { const k = `u${i}`; await m.set(k, i); await m.delete(k); }
-  const tombs = [...md().children.keys()].filter((n) => n.endsWith(".json.tomb"));
-  assert(tombs.length <= 512, `tombstones are bounded (${tombs.length})`);
+  const raw = md()?.children.get("__tombs.json")?.content;
+  assert(raw, "__tombs.json must exist in store");
+  const parsed = JSON.parse(raw);
+  assert(parsed && typeof parsed === "object", "__tombs.json must parse as an object");
+  const mapSize = Object.keys(parsed.map ?? {}).length;
+  assert(mapSize <= 512, `persisted tombstone map size must be bounded by MAX_TOMBSTONES (got ${mapSize})`);
+  assertEquals(mapSize, 512, `persisted tombstone map size must equal MAX_TOMBSTONES (512, got ${mapSize})`);
+  assert(parsed.floor > 0, `tombstone floor must advance past folded generations (got floor=${parsed.floor})`);
 });
 
 Deno.test("regress: clear does NOT reopen stale expected-0 per-key ABA (removed keys are tombstoned)", async () => {
