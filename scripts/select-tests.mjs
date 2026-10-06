@@ -192,7 +192,30 @@ export const SCANNER_EXCLUSIONS = Object.freeze({
   "tests/quiet-window.test.ts":
     "its BURNER helper locates the real esbuild binary by reading a ROOT-rooted node_modules path, which the widened detector matches because the pattern accepts any ROOT-rooted read. That read is a fixture lookup, not a scan of tracked source, and it is NOT the reason this file is interesting: its tracked-source assertions (registry <-> source consistency, the no-interference pin, the journey harness's exit wiring) were SPLIT into tests/quiet-window-static.test.ts, which is always-on and spawns nothing. The file itself must stay out of the set because it spawns real esbuild --minify burners and costs 23s, tripling every subset gate and injecting compiler load during other lanes' gates — see chrome-agent-platform-fgik. p1lp RESULT: the exclusion is STILL NECESSARY, and that is a residual detection limit rather than an oversight. Narrowing the walk pattern moved the match to the ROOT-rooted read instead: `Deno.readDir(`${ROOT}node_modules/@esbuild`)` matches /Deno\.readDir\(\s*`\$\{ROOT\}/, so the detector still sees a ROOT-rooted directory read. Distinguishing 'reads node_modules' from 'walks tracked source' needs the TARGET PATH, not the root, and no pattern-based detector here has that — so the decision stays written down in this list, where a reader can find it.",
   "tests/chrome-profile-location.test.ts":
-    "it still matches the repo-walk detector through its helper reads, but it also holds the LIVE race test that launches a real browser — and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES that a subset gate launches a browser only when this file or its dependencies changed. Listing it as always-on would break that promise fleet-wide, on every VM without a working browser. Its cross-cutting half (the static scripts/ scan) was SPLIT OUT into tests/chrome-profile-static.test.ts, which is always-on; what remains here is helper semantics plus the live race. chrome-agent-platform-hlgr added the ENVIRONMENTAL REFUSAL this file was missing: with no resolvable browser it now prints a NAMED and COUNTED ENVIRONMENT: line and exits 75 (scripts/lib/browser-refusal.ts), so a browserless host cannot red a gate by accident and there is no silent ignore either. The file still STAYS OUT of ALWAYS_ON, because promoting it would end every browserless subset gate at exit 75 for a guard the change under test did not ask for — noise that hides other signals. Assumed fleet state, as coord swept on 2026-10-06: six of eight VMs have a usable browser, this one included; promotion is one line once that is uniform."
+    "it still matches the repo-walk detector through its helper reads, but it also holds the LIVE race test that launches a real browser — and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES that a subset gate launches a browser only when this file or its dependencies changed. Listing it as always-on would break that promise fleet-wide, on every VM without a working browser. Its cross-cutting half (the static scripts/ scan) was SPLIT OUT into tests/chrome-profile-static.test.ts, which is always-on; what remains here is helper semantics plus the live race, and the environmental-refusal path that would let the browser case report honestly is chrome-agent-platform-hlgr.",
+});
+
+/**
+ * The always-on guard files that exist on disk (chrome-agent-platform-kz27).
+ * Exposed because a SUBSET gate cannot see them: they have no static import edges, so a FAIL-CLOSED
+ * selector, a focused test:file run, and a serial failure that skips the parallel phase each hide
+ * them. Whatever else a gate does, a lane must be able to run exactly this set.
+ */
+export function alwaysOnGuards() {
+  return ALWAYS_ON.filter((f) => existsSync(join(ROOT, f)));
+}
+
+/**
+ * What a FAIL-CLOSED selection must do (chrome-agent-platform-kz27). Pure and exported so the
+ * regression test can prove the always-on guard set is SURFACED rather than asserting the shape of a
+ * print statement: a lane told only "FULL_SUITE" has no way to learn which guards it just failed to
+ * run, which is exactly how the jfbn and fyvc violations reached main.
+ * @returns {{ output: string[], action: "list" | "run" }}
+ */
+export function failClosedPlan({ uncovered, list }) {
+  const guards = alwaysOnGuards();
+  return {
+    action: list ? "list" : "run",
     output: [
       `select-tests: FAIL CLOSED — changed file(s) with no reachable test cannot be proved covered by a subset:`,
       ...uncovered.map((f) => `  ${f}`),
