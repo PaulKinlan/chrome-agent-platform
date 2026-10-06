@@ -242,30 +242,53 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
     `import { runSerialFiles } from ${JSON.stringify(join(ROOT, "scripts/lib/serial-phase.mjs"))};\n` +
       `import { readdirSync } from "node:fs";\n` +
       `const logDir = ${JSON.stringify(join(Deno.env.get("HOME") ?? "", "cap-evidence", "serial-phase-logs"))};\n` +
-      `const before = new Set(readdirSync(logDir));\n` +
-      `const rc = runSerialFiles([process.argv[2], process.argv[3], process.argv[4]], {\n` +
-      `  stdio: "pipe", cwd: ${JSON.stringify(ROOT)}, timeoutMs: 120000,\n` +
-      `  perFileTimeoutMs: { [process.argv[4]]: 2000 },\n});\n` +
-      `console.log("ULCW_DRIVER_RC=" + rc);\n` +
-      `console.log("ULCW_ADDED_LOGS=" + JSON.stringify(readdirSync(logDir).filter((f) => !before.has(f))));\n`,
+      `const files = [process.argv[2], process.argv[3], process.argv[4]];\n` +
+      `const opts = { stdio: "pipe", cwd: ${JSON.stringify(ROOT)}, timeoutMs: 120000, perFileTimeoutMs: { [process.argv[4]]: 2000 } };\n` +
+      `const runs = [];\n` +
+      // TWO calls in ONE process: the only shape that can prove the IN-PROCESS counter. Two separate
+      // node processes would each start the counter at r1, which is exactly how the FIRST version of
+      // this test was vacuous (it would have passed with the counter deleted).
+      `for (let i = 0; i < 2; i++) {\n` +
+      `  const before = new Set(readdirSync(logDir));\n` +
+      `  const captured = [];\n` +
+      `  const realLog = console.log;\n` +
+      `  console.log = (...a) => captured.push(a.join(" "));\n` +
+      `  const rc = runSerialFiles(files, opts);\n` +
+      `  console.log = realLog;\n` +
+      `  const text = captured.join("\\n");\n` +
+      `  runs.push({\n` +
+      `    rc,\n` +
+      `    out: text,\n` +
+      `    id: (text.match(/FAILED \\(2\\/3 failed\\) in \\d+s \\[run ([^\\]]+)\\]/) || [])[1] ?? null,\n` +
+      `    added: readdirSync(logDir).filter((f) => !before.has(f)),\n` +
+      `  });\n` +
+      `}\n` +
+      `console.log("ULCW_RUNS=" + JSON.stringify(runs));\n`,
   );
-  const runOnce = async () => {
-    const r = await new Deno.Command("node", {
-      args: [driver, passFile, exitFile, hangFile],
-      cwd: ROOT,
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
-    return decoder.decode(r.stdout) + decoder.decode(r.stderr);
-  };
+  const driverRun = await new Deno.Command("node", {
+    args: [driver, passFile, exitFile, hangFile],
+    cwd: ROOT,
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
+  const out = decoder.decode(driverRun.stdout) + decoder.decode(driverRun.stderr);
+  const runsLine = out.split("\n").find((l) => l.startsWith("ULCW_RUNS="));
+  assert(runsLine, `the driver must report its two runs:\n${out}`);
+  const runs = JSON.parse(runsLine.slice("ULCW_RUNS=".length)) as {
+    rc: number;
+    out: string;
+    id: string | null;
+    added: string[];
+  }[];
   try {
-    const out = await runOnce();
-    // (1) THE COUNT: two of three failed, and BOTH are named - the count is not a lower bound.
+    assertEquals(runs.length, 2, "the driver must make TWO calls in ONE process");
+    // (1) THE COUNT, from the FIRST call's own captured output: two of three failed, BOTH named.
+    const first = runs[0].out;
     assert(
-      /serial phase \(3 build\/artifact files\) FAILED \(2\/3 failed\)/.test(out),
-      `the count must be 2/3:\n${out}`,
+      /serial phase \(3 build\/artifact files\) FAILED \(2\/3 failed\)/.test(first),
+      `the count must be 2/3:\n${first}`,
     );
-    const failingBlock = out.slice(out.indexOf("FAILING SERIAL FILE(S)"));
+    const failingBlock = first.slice(first.indexOf("FAILING SERIAL FILE(S)"));
     assert(
       failingBlock.includes("zz-ulcw-exit.test.ts") && failingBlock.includes("zz-ulcw-hang.test.ts"),
       `both failing files must be named:\n${failingBlock}`,
@@ -278,22 +301,23 @@ Deno.test("ulcw: TWO failing files (one exit, one TIMEOUT) are both counted, bot
       failingBlock.includes("exit 1") && failingBlock.includes("exit 124, TIMED OUT"),
       `the exit failure and the TIMEOUT must be distinguished:\n${failingBlock}`,
     );
-    // (2) THE INVARIANT: exactly one durable log per counted failure, and every one carries the run id
-    // the summary printed - the count and its evidence are tied by one value, not by a timestamp.
-    const added = JSON.parse(out.match(/ULCW_ADDED_LOGS=(\[.*?\])/s)?.[1] ?? "[]");
-    assertEquals(added.length, 2, `one durable log per counted failure (got ${JSON.stringify(added)})`);
-    const runId = out.match(/FAILED \(2\/3 failed\) in \d+s \[run ([^\]]+)\]/)?.[1];
-    assert(runId, `the summary must print its run id:\n${out}`);
-    for (const log of added) {
-      assert(log.includes(runId), `log ${log} must carry the summary's run id ${runId}`);
+    // (2) THE INVARIANT, per call: exactly one durable log per counted failure, EVERY one carrying that
+    // call's run id - the count and its evidence are tied by one value, not inferred from a timestamp.
+    for (const run of runs) {
+      assertEquals(run.added.length, 2, `one durable log per counted failure (got ${JSON.stringify(run.added)})`);
+      assert(run.id, `every call must print its run id:\n${run.out}`);
+      for (const log of run.added) {
+        assert(log.includes(run.id), `log ${log} must carry its own call's run id ${run.id}`);
+      }
     }
-    // (3) two calls in ONE process get DIFFERENT ids, so one run's logs can never be counted as another's.
-    const out2 = await runOnce();
-    const runId2 = out2.match(/FAILED \(2\/3 failed\) in \d+s \[run ([^\]]+)\]/)?.[1];
-    assert(runId2, `the second run must also print a run id:\n${out2}`);
-    assert(runId2 !== runId, `a second call must not reuse the run id (${runId} vs ${runId2})`);
+    // (3) THE COUNTER, NOT THE CLOCK - what the first version of this test got WRONG: it ran each call
+    // in a separate node process, so both ids ended -r1 and the assertion passed even with the counter
+    // DELETED. Two calls in ONE process must be separated by the SEQUENCE.
+    assert(/-r1$/.test(runs[0].id ?? ""), `the first call's run id must end in -r1 (got ${runs[0].id})`);
+    assert(/-r2$/.test(runs[1].id ?? ""), `the second call in the SAME process must end in -r2 (got ${runs[1].id})`);
+    assert(runs[0].id !== runs[1].id, `two calls must not share a run id (${runs[0].id} vs ${runs[1].id})`);
     // (4) the aggregator's contract is unchanged: first failing code.
-    assert(out.includes("ULCW_DRIVER_RC=1"), `the aggregator must return the first failing code:\n${out}`);
+    assertEquals(runs[0].rc, 1, `the aggregator must return the first failing code (got ${runs[0].rc})`);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
