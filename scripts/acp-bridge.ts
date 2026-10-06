@@ -729,10 +729,16 @@ export function createAcpServer(
     // An unauthenticated upgrade is refused rather than served, and the comparison
     // is CONSTANT-TIME (jsjy review F2) so a local attacker cannot recover the
     // secret from response timing. The length check leaks only the length.
-    const presented = url.searchParams.get("token") ?? "";
+    // Compare BYTE lengths, not string lengths (delta-review polish): a token of 32
+    // MULTI-BYTE characters has a string length of 32 but a larger byte length, and
+    // timingSafeEqual THROWS on unequal buffers — Deno.serve would turn that into a
+    // 500 rather than an auth decision. Encoding first keeps every mismatched input
+    // on the refusal path.
     const encoder = new TextEncoder();
-    const tokenAccepted = presented.length === tokenOverride.length &&
-      timingSafeEqual(encoder.encode(presented), encoder.encode(tokenOverride));
+    const presented = encoder.encode(url.searchParams.get("token") ?? "");
+    const expected = encoder.encode(tokenOverride);
+    const tokenAccepted = presented.byteLength === expected.byteLength &&
+      timingSafeEqual(presented, expected);
     if (!tokenAccepted) {
       return new Response("ACP Bridge: missing or wrong token", { status: 403 });
     }
