@@ -4,7 +4,9 @@
 // Invariants guarded:
 //   1. docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited in AGENTS.md and routes/ROUTE_MAP.md.
 //   2. Every registered route in handlers (via mergeRouteMaps) is extracted from actual AST composition.
-//   3. The census classification is complete, disjoint, and covers all 276 registered routes.
+//   3. The census classification is complete, disjoint, and covers 100% of registered routes (285 total).
+//      (l0r: recipe.list catalog fork deleted; wfo5: browser.callTool added;
+//       s7wl: the vault/enclave maps the resolver below used to skip, +9.)
 //   4. Any new route added to mergeRouteMaps without explicit census classification fails RED.
 //   5. Unclassified mutations (e.g. named-agent.set-tools) are pinned to an explicit inventory.
 //   6. The document's §3/§4 categories exactly match the tested classifications (4h47).
@@ -29,6 +31,8 @@ import { kvRoutes } from "../extension/background/routes/kv.js";
 import { permLeaseRoutes } from "../extension/background/routes/perm-lease.js";
 import { createProviderRoutes } from "../extension/background/routes/provider.js";
 import { createMcpRoutes } from "../extension/background/routes/mcp.js";
+import { createVaultRoutes } from "../extension/background/routes/vault.js";
+import { createEnclaveProxyRoutes } from "../extension/background/routes/enclave-proxy.js";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
@@ -52,6 +56,11 @@ export const CENSUS_CATEGORIES = {
     "tool-stream.tabular-transform",
     "python.network.grant", "python.network.revoke",
     "wheel.put", "wheel.delete",
+    // The vault + enclave Settings surface (jao1.5, bd17634f): every one of these
+    // calls requireSettingsSender, or checks principal === "owner-options" itself
+    // (enclave.status). chrome-agent-platform-s7wl added them to the population.
+    "vault.status", "vault.set", "vault.configureProxy", "vault.rotate", "vault.delete",
+    "vault.ledger.clear", "vault.test", "enclave.status",
   ]),
   OWNER_APPROVAL_DIRECT: new Set([
     "named-agent.update", "named-agent.delete", "named-agent.set-schedule", "named-agent.set-mcp-servers",
@@ -74,6 +83,9 @@ export const CENSUS_CATEGORIES = {
     "run.control.queue.enqueue", "run.control.queue.remove", "run.control.queue.move",
     "run.retry", "run.logs", "site-skills.set", "agent-workspace.clear",
     "browser.callTool",
+    // isAllowedCaller() is isOwnerPrincipal(context) or the SW-internal caller flag
+    // (routes/enclave-proxy.js:180); pages and model runs are refused.
+    "enclave.proxy",
   ]),
   EXECUTION_AND_WORKER_ORCHESTRATION: new Set([
     "agent.run", "named-agent.run", "named-agent.delegate", "agent.delegate",
@@ -150,6 +162,36 @@ function extractAllRegisteredRoutes(): Set<string> {
 
   assert(mergeCall, "handlers must be initialized via mergeRouteMaps");
 
+  // The module's own map declarations. Before chrome-agent-platform-s7wl this
+  // extractor SKIPPED any mergeRouteMaps argument it did not recognize, silently:
+  // `vaultRoutes`, `enclaveProxyRoutes` and `enclaveStatusRoutes` (9 routes,
+  // landed 2026-10-03 in bd17634f) were never in the population the census
+  // called complete. Every argument form is now resolved, and an unknown one
+  // THROWS rather than shrinking the population.
+  const swConsts = new Map<string, any>();
+  for (const node of ast.body) {
+    if (node.type !== "VariableDeclaration") continue;
+    for (const decl of node.declarations) {
+      if (decl.id?.type === "Identifier" && decl.init) swConsts.set(decl.id.name, decl.init);
+    }
+  }
+
+  // The factories service-worker.js composes a map from. The stubs only satisfy
+  // each factory's own argument validation — the keys come from the real returned
+  // object, never from a parallel hand-kept list.
+  const SW_ROUTE_FACTORY_STUBS: Record<string, () => object> = {
+    createVaultRoutes: () => createVaultRoutes({ vault: { listMasked: () => [] }, requireSettingsSender: () => {} }),
+    createEnclaveProxyRoutes: () => createEnclaveProxyRoutes({ vault: { getSecretRaw: () => null } }),
+  };
+  const keysOfObjectExpression = (node: any): string[] => {
+    const keys: string[] = [];
+    for (const prop of node.properties) {
+      if (prop.type !== "Property") continue;
+      keys.push(prop.key.type === "Literal" ? String(prop.key.value) : prop.key.name);
+    }
+    return keys;
+  };
+
   const routes = new Set<string>();
   for (const arg of mergeCall.arguments) {
     if (arg.type === "Identifier") {
@@ -161,20 +203,48 @@ function extractAllRegisteredRoutes(): Set<string> {
       else if (arg.name === "permLeaseRoutes") for (const k of Object.keys(permLeaseRoutes)) routes.add(k);
       else if (arg.name === "providerRoutes") for (const k of Object.keys(createProviderRoutes({}))) routes.add(k);
       else if (arg.name === "mcpRoutes") for (const k of Object.keys(createMcpRoutes({}))) routes.add(k);
+      else {
+        const init = swConsts.get(arg.name);
+        assert(init, `mergeRouteMaps argument "${arg.name}" is an identifier this extractor cannot resolve`);
+        if (init.type === "ObjectExpression") {
+          for (const k of keysOfObjectExpression(init)) routes.add(k);
+        } else if (
+          init.type === "CallExpression" && init.callee?.type === "Identifier" && SW_ROUTE_FACTORY_STUBS[init.callee.name]
+        ) {
+          for (const k of Object.keys(SW_ROUTE_FACTORY_STUBS[init.callee.name]())) routes.add(k);
+        } else {
+          throw new Error(
+            `mergeRouteMaps argument "${arg.name}" resolves to a ${init.type} this extractor cannot read — ` +
+              "teach it the form rather than letting the population shrink",
+          );
+        }
+      }
     } else if (arg.type === "CallExpression") {
       if (arg.callee.name === "createAgentWorkspaceRoutes") for (const k of Object.keys(createAgentWorkspaceRoutes())) routes.add(k);
       else if (arg.callee.name === "createMemoryRoutes") for (const k of Object.keys(createMemoryRoutes())) routes.add(k);
       else if (arg.callee.name === "createAgentWorkerRoutes") for (const k of Object.keys(createAgentWorkerRoutes({}))) routes.add(k);
+      else if (SW_ROUTE_FACTORY_STUBS[arg.callee.name]) for (const k of Object.keys(SW_ROUTE_FACTORY_STUBS[arg.callee.name]())) routes.add(k);
+      else {
+        throw new Error(
+          `mergeRouteMaps argument calls ${arg.callee.name}(...) and this extractor cannot resolve it — ` +
+            "teach it the form rather than letting the population shrink",
+        );
+      }
     } else if (arg.type === "MemberExpression") {
       if (arg.object.name === "boardRoutes" && arg.property.name === "routes") {
         for (const k of Object.keys(createAgentBoardRoutes({}).routes)) routes.add(k);
+      } else {
+        throw new Error(
+          `mergeRouteMaps argument ${arg.object.name}.${arg.property.name} is a member expression this extractor cannot resolve`,
+        );
       }
     } else if (arg.type === "ObjectExpression") {
-      for (const prop of arg.properties) {
-        if (prop.type !== "Property") continue;
-        const key = prop.key.type === "Literal" ? prop.key.value : prop.key.name;
-        routes.add(key);
-      }
+      for (const k of keysOfObjectExpression(arg)) routes.add(k);
+    } else {
+      throw new Error(
+        `mergeRouteMaps argument of type ${arg.type} is not handled by this extractor — ` +
+          "teach it the form rather than letting the population shrink",
+      );
     }
   }
 
@@ -193,9 +263,9 @@ Deno.test("census: docs/SW-DISPATCH-AUTHORITY-CENSUS.md exists and is cited", as
   assert(agents.includes("docs/SW-DISPATCH-AUTHORITY-CENSUS.md"), "AGENTS.md must cite census");
 });
 
-Deno.test("census: all registered routes in handlers are derived via AST and total 276", () => {
+Deno.test("census: all registered routes in handlers are derived via AST and total 285", () => {
   const registered = extractAllRegisteredRoutes();
-  assertEquals(registered.size, 276, `registered routes population must equal 276 (got ${registered.size})`);
+  assertEquals(registered.size, 285, `registered routes population must equal 285 (got ${registered.size})`);
 });
 
 Deno.test("census: classification categories are exhaustive and mutually disjoint", () => {
@@ -238,13 +308,26 @@ Deno.test("census: named-agent.set-tools is pinned as an unclassified mutation g
 //
 // Until this bead, tests/sw-dispatch-authority-census.test.ts held its own copy
 // of the classification and NEVER parsed the markdown, so the doc rotted while
-// every gate stayed green: it said 260 total where this file pins 276, and six
+// every gate stayed green: it said 260 total where this file pinned 276, and six
 // section headers disagreed with their OWN tables (4.2 36/40, 4.4 16/17, 4.5
 // 23/24, 4.6 21/23, 4.9 31/37, 4.10 88/91). The assertion below parses the doc
 // and requires, per section, that the route-name SET equals this file's
 // CENSUS_CATEGORIES set AND that the section header's stated count matches its
 // own table. A number that rots, or a route that moves between sections in only
 // one of the two authorities, now REDs here naming the section.
+//
+// ── chrome-agent-platform-s7wl: the same parser was blind to three maps ──────
+//
+// 4h47 pinned the doc to this file's sets, and BOTH still undercounted: the
+// resolver above recognized only a hardcoded identifier list and skipped every
+// other mergeRouteMaps argument without a word, which is exactly `vaultRoutes`,
+// `enclaveProxyRoutes` and `enclaveStatusRoutes` — 9 routes that landed
+// 2026-10-03 (bd17634f), three days BEFORE the landing that set 276. Evaluating
+// the real composition (`mergeRouteMaps` over the same argument list, factories
+// called with the same stubs) at `origin/main@f507d58f` returns 285. The counts
+// that follow are 285 population, 48 SETTINGS_ONLY_DIRECT, 25
+// OWNER_EXTENSION_FENCED, 37 UNCLASSIFIED_MUTATIONS (none of the 9 is an
+// unclassified mutation: all are gated).
 //
 // The document's shape, stated so the parse is not a guess:
 //   • §4.1–4.9 are markdown tables whose FIRST cell is the route name (4.9's

@@ -1,8 +1,11 @@
 # Threat Model — Chrome Agent Platform
 
 **Bead:** `chrome-agent-platform-oa3o` · **Date:** 2026-10-06 ·  
-**Tree pinned at:** `origin/main@75e032f7` (extension `0.3.577`). A threat re-read after
-that pin carries its own `Evidence pin:` line naming the tree it was read at (T13 does);
+**Tree pinned at:** `origin/main@75e032f7` (extension `0.3.577`). A threat OR SECTION
+re-read after that pin carries its own `Evidence pin:` line naming the tree it was read at
+(T13 does): TB2, S1, T2 and INV-1 carry `origin/main@213bafbc`, and §1 and T4 — whose route
+and unclassified-mutation counts were re-measured by composition — carry
+`origin/main@f507d58f`, the tree their pin lines name.
 `docs/RISK-REGISTER.md` uses the same convention for entries it added after its base pin.
 
 This document is the entry point an audit or scanning agent reads BEFORE it reports a
@@ -20,7 +23,7 @@ section 9 and is marked as an open question — it is not asserted as a threat.
 | [`docs/RISK-REGISTER.md`](docs/RISK-REGISTER.md) | the architectural risk register (R1–R21 + the withheld decisions) |
 | [`docs/CONSTITUTION.md`](docs/CONSTITUTION.md) §1 | the security vector list every change is reviewed against |
 | [`docs/INTERNAL-SENDER-CONTRACT-AUDIT.md`](docs/INTERNAL-SENDER-CONTRACT-AUDIT.md) | the sender-classifier adjudication (bead `lw6d`) |
-| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 260-route dispatch census and its 31 unclassified mutations |
+| [`docs/SW-DISPATCH-AUTHORITY-CENSUS.md`](docs/SW-DISPATCH-AUTHORITY-CENSUS.md) | the 285-route dispatch census and its 37 unclassified mutations |
 | [`docs/CHROME-TEST-CONTRACT.md`](docs/CHROME-TEST-CONTRACT.md) | which gate runs a real browser, and why a subset gate cannot see a cross-cutting guard |
 | [`docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md`](docs/STREAMING-CREDENTIAL-FILTER-RESERVED-MEMBERS.md) | the archive credential/`__proto__` filter parity contract |
 | [`docs/PERMISSION-MATRIX.md`](docs/PERMISSION-MATRIX.md) | the permission-state mechanism classes and their headless acceptance |
@@ -36,11 +39,11 @@ http(s) page) and it acts on two different untrusted feeds at once: web page con
 and model output.
 
 Component map, with the file that owns each surface:
-- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this section were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
+- **Evidence pin: `origin/main@f507d58f`.** The file:line citations in this section were re-read at `origin/main@213bafbc` and resolve identically here; the registered-route count in the component map was re-measured at this pin by evaluating the composition (`mergeRouteMaps`) the service worker builds, which returns 285. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 | Component | Where | Notes |
 |---|---|---|
-| Service worker (the privileged broker) | `extension/background/service-worker.js:11923` | the ONE `chrome.runtime.onMessage` listener; 260 registered routes |
+| Service worker (the privileged broker) | `extension/background/service-worker.js:11923` | the ONE `chrome.runtime.onMessage` listener; 285 registered routes |
 | Route modules | `extension/background/routes/` | dispatched through `mergeRouteMaps` (census §2) |
 | New-tab hub / Settings / side panel | `extension/ntp/`, `extension/options/`, `extension/sidepanel/` | extension documents; principal `extension` / `owner-options` |
 | Offscreen document | `extension/offscreen/offscreen.js` | one document multiplexes five subsystems (register R12) |
@@ -196,7 +199,7 @@ consequences are carried by the matching register entry where one exists.
   `extension/background/service-worker.js:11960` (the receiver OVERWRITES `message.origin`
   with the browser-derived origin) and `:11953-11957` (route allowlist). **Answer:** the
   origin comes from the sender, never from the body; a claimed-origin mismatch is
-  refused. **Live proof:** `scripts/security-suite.ts:306-308` (a page MAIN world has no
+  refused. **Live proof:** `scripts/security-suite.ts:307-308` (a page MAIN world has no
   `chrome.runtime` at all) and `docs/CONSTITUTION.md:17`.
 - **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this threat were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
@@ -207,19 +210,19 @@ consequences are carried by the matching register entry where one exists.
   **Adjudication:** ADJUDICATED AND WITHHELD. There is no known producer for the
   browser-attested tabless/opaque sender shape:
   `docs/INTERNAL-SENDER-CONTRACT-AUDIT.md` §3 and §5 (Assumption 2), pinned by
-  `tests/internal-sender-contract-audit.test.ts:14-32` (synthetic fixture) and
+  `tests/internal-sender-contract-audit.test.ts:14-25` (synthetic fixture) and
   `:113-114` (no `externally_connectable`, no `onMessageExternal`). **Register entry:
   R22** — with its reopen trigger. Audits MUST NOT re-report this as new; cite R22.
 
 ### T4. Unclassified service-worker mutations
 
-- **Boundary:** TB2. **Evidence:** `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9 — 31
+- **Boundary:** TB2. **Evidence:** `docs/SW-DISPATCH-AUTHORITY-CENSUS.md` §4.9 — 37
   routes mutate persistent state with no route-local principal check and no approval
   gate (for example `named-agent.set-tools` at `extension/background/service-worker.js:8087`
   and `background-agent.delete` at `:10655`). **Answer:** the central listener refuses every
   non-page-allowed route to page senders (`extension/background/service-worker.js:11953`),
   so the class is reachable only from extension principals. **Register:** R11.
-- **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this threat were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
+- **Evidence pin: `origin/main@f507d58f`.** The file:line citations in this threat were re-read at `origin/main@213bafbc` and resolve identically here; the unclassified-mutation count is the census §4.9 table's (37 of the 285 registered routes). Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 
 ### T5. Sandbox escape and network egress from the script sandbox
 
@@ -374,7 +377,7 @@ and each names the executable check that would catch a regression.
 
 - **INV-1 — Authority is derived from the browser-attested sender, never from the body.**
   `extension/background/service-worker.js:11933-11938`, `:11960`, `:11969`;
-  `scripts/security-suite.ts:306-308`. A new route that reads an origin, tab id or
+  `scripts/security-suite.ts:307-308`. A new route that reads an origin, tab id or
   document id out of the message body breaks this.
 - **Evidence pin: `origin/main@213bafbc`.** The file:line citations in this invariant were re-read against that tree. Treat the named symbol as the anchor and the line as the locator, and re-read both if the tree has moved again.
 - **INV-2 — The page-reachable route set is closed and tiny.**
@@ -444,7 +447,7 @@ decision and, where one exists, the trigger that would reopen it.
 6. **The 60-second approval TTL (T17).** Accepted; the correct behaviour is an honest
    expiration failure rather than an approval that outlives the moment it was requested.
    Register R7.
-7. **The 31 unclassified mutation routes (T4).** Inventory accepted; only extension
+7. **The 37 unclassified mutation routes (T4).** Inventory accepted; only extension
    principals can reach them. Register R11.
 8. **The `debugger` permission is absent.** Not an accepted risk so much as a standing
    prohibition: `tests/chrome-tools-t12.test.ts` holds the removal guard and the journey
