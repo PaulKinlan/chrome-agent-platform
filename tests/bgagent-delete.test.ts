@@ -9,6 +9,7 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertMatch, assertNotMatch, assertEquals } from "jsr:@std/assert@1";
 import { resolveChromiumBinaryReport } from "../scripts/lib/chrome-launch.ts";
+import { parseHardTimeout } from "../scripts/lib/hard-timeout.ts";
 
 const registry = new Map();
 
@@ -325,12 +326,6 @@ Deno.test("bgagent delete: survivingChrome treats pgrep exit 0 as surviving, exi
   assertEquals(survivingChrome("test-profile", () => ({ code: 127 })), true, "pgrep error (exit 127) must fail closed as surviving");
 });
 
-// Parser matching kat-bgagent-delete's parseHardTimeout to allow pure unit validation
-export function parseHardTimeout(raw?: string | null): number {
-  const parsed = raw != null ? Number(raw) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 300_000;
-}
-
 Deno.test("bgagent delete: parseHardTimeout input validation (N3)", () => {
   assertEquals(parseHardTimeout(undefined), 300_000, "unset defaults to 300_000");
   assertEquals(parseHardTimeout(null), 300_000, "null defaults to 300_000");
@@ -435,6 +430,7 @@ Deno.test("bgagent delete: verifyJourneyTeardown paired discrimination (N2 falsi
   // Scenario D: Missing profile line
   const noProfileStatus = verifyJourneyTeardown("NOTE: teardownChrome complete", () => false);
   assertEquals(noProfileStatus.profile, null, "missing profile must be flagged");
+  assertEquals(noProfileStatus.survives, true, "a missing profile must fail closed as surviving");
 });
 
 Deno.test({

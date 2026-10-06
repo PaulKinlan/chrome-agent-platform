@@ -20,6 +20,7 @@ import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
 import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome, withTimeout } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
+import { parseHardTimeout } from "./lib/hard-timeout.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const EXT = Deno.args[0] ?? `${ROOT}extension`;
@@ -83,10 +84,6 @@ async function teardownTree() {
 // collect (the observed rc=124 shape). The finally below alone is not enough:
 // a hung await never reaches it, so the timer is the backstop. Overridable so
 // the falsification test can fire it in seconds rather than 5 minutes.
-export function parseHardTimeout(raw?: string | null): number {
-  const parsed = raw != null ? Number(raw) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 300_000;
-}
 const HARD_TIMEOUT_MS = parseHardTimeout(Deno.env.get("CAP_BGAGENT_DELETE_HARD_TIMEOUT_MS"));
 let hardTimer: ReturnType<typeof setTimeout> | undefined;
 
