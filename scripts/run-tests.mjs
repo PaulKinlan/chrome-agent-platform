@@ -21,23 +21,23 @@
 // kept running the serial sweep per edit (Paul, 2026-09-04). The runner passes
 // --config deno.runner.jsonc to see every file.
 // This script is the merge gate via `npm test`; explicit files still run directly.
-import { readdirSync } from "node:fs";
+import { readdirSync, realpathSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { resolve as resolvePath } from "node:path";
 import { SERIAL, partition } from "./test-partition.mjs";
-import { runSerialFiles } from "./lib/serial-phase.mjs";
+import { announce, runSerialFiles } from "./lib/serial-phase.mjs";
 import { ALWAYS_ON } from "./select-tests.mjs";
 import { parallelPlan } from "./lib/parallel-plan.mjs";
 
 export const DEFAULT_PARALLEL_TIMEOUT_MS = 1800_000;
 const PARALLEL_PHASE_TIMEOUT_MS = Number(process.env.CAP_PARALLEL_TEST_TIMEOUT_MS ?? DEFAULT_PARALLEL_TIMEOUT_MS);
 
-function announce(line) {
-  console.error(line);
-}
-
 function runParallel(files) {
   if (!files || files.length === 0) return Promise.resolve(0);
+  // Concurrent scheduling cannot identify the stalled file. Announce every
+  // candidate BEFORE spawn so even a mid-phase kill leaves names on both streams.
+  announce(`run-tests: parallel phase candidates (${files.length} file(s)):\n${files.map((file) => `  - ${file}`).join("\n")}`);
   const t0 = Date.now();
   return new Promise((resolve) => {
     const child = spawn("deno", ["test", "-A", "--config", "deno.runner.jsonc", "--parallel", ...files], {
@@ -83,6 +83,8 @@ function runParallel(files) {
       cleanup();
       if (timedOut) {
         announce(`\nrun-tests: parallel phase TIMED OUT after ${PARALLEL_PHASE_TIMEOUT_MS / 1000}s`);
+        announce("run-tests: TIMED-OUT PARALLEL PHASE CANDIDATE FILE(S) (culprit unconfirmed):");
+        for (const file of files) announce(`  - ${file} (parallel phase timed out; individual culprit unknown)`);
         resolve(124);
         return;
       }
@@ -137,6 +139,9 @@ export async function main(args = process.argv.slice(2)) {
   process.exit(rc);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main();
+// Node canonicalizes the module URL but not a symlinked argv path. Without
+// realpath, a symlink invocation silently exits 0 having run no gate tests.
+export function isRunTestsEntry(entry = process.argv[1]) {
+  return Boolean(entry) && realpathSync(resolvePath(entry)) === fileURLToPath(import.meta.url);
 }
+if (isRunTestsEntry()) main();
