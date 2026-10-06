@@ -109,6 +109,23 @@ export const SOURCE_INSPECTING_GUARDS = [
   // wiring) were split into tests/quiet-window-static.test.ts — 3 tests, ZERO spawns, measured 32ms —
   // and THAT is always-on below; the burner workload stays in npm test where it belongs.
   "tests/quiet-window-static.test.ts",
+  // chrome-agent-platform-p1lp: tests/chrome-tools-t12.test.ts walks the extension root through a
+  // LOWERCASE alias — `const root = new URL("../extension/", import.meta.url)` then `await walk(root)` —
+  // which the kz27 widening missed because that pattern demanded an UPPERCASE identifier. That is the
+  // original failure mode in a different spelling: a guard that reads tracked source as data with no
+  // import edge, invisible to the audit. Its assertion is cross-cutting (no extension source may
+  // reference the single-driver lease), and the walk is pure static file reading with NO spawn and no
+  // browser, so it is host-independent and costs milliseconds — the three properties an always-on
+  // guard must have (the lesson from qepn/3bv7/j3o1). Adjudicated IN, not excluded.
+  "tests/chrome-tools-t12.test.ts",
+  // chrome-agent-platform-p1lp: the same symmetry caught two more real repo-walkers that read the
+  // tests directory itself as data — substring-pin-honesty via `const TESTS = `${ROOT}tests/`` and
+  // chrome-lock-fixture-scope via `const TESTS_DIR = fileURLToPath(new URL("./", import.meta.url))`.
+  // Both assert cross-cutting invariants over the test sources (pin honesty; fixture scoping), both
+  // are static text walks with no spawn and no browser, so both are host-independent and cheap.
+  // Adjudicated IN.
+  "tests/substring-pin-honesty.test.ts",
+  "tests/chrome-lock-fixture-scope.test.ts",
 ];
 
 /**
@@ -120,7 +137,7 @@ export const SOURCE_INSPECTING_GUARDS = [
  */
 export const SCANNER_EXCLUSIONS = Object.freeze({
   "tests/quiet-window.test.ts":
-    "its BURNER helper locates the real esbuild binary by reading a ROOT-rooted node_modules path, which the widened detector matches because the pattern accepts any ROOT-rooted read. That read is a fixture lookup, not a scan of tracked source, and it is NOT the reason this file is interesting: its tracked-source assertions (registry <-> source consistency, the no-interference pin, the journey harness's exit wiring) were SPLIT into tests/quiet-window-static.test.ts, which is always-on and spawns nothing. The file itself must stay out of the set because it spawns real esbuild --minify burners and costs 23s, tripling every subset gate and injecting compiler load during other lanes' gates — see chrome-agent-platform-fgik. NOTE FOR p1lp: fixing the detector to match KNOWN SOURCE ROOTS explicitly (rather than any uppercase identifier or ROOT-rooted read) would make this exclusion unnecessary, since the only matched read is node_modules.",
+    "its BURNER helper locates the real esbuild binary by reading a ROOT-rooted node_modules path, which the widened detector matches because the pattern accepts any ROOT-rooted read. That read is a fixture lookup, not a scan of tracked source, and it is NOT the reason this file is interesting: its tracked-source assertions (registry <-> source consistency, the no-interference pin, the journey harness's exit wiring) were SPLIT into tests/quiet-window-static.test.ts, which is always-on and spawns nothing. The file itself must stay out of the set because it spawns real esbuild --minify burners and costs 23s, tripling every subset gate and injecting compiler load during other lanes' gates — see chrome-agent-platform-fgik. p1lp RESULT: the exclusion is STILL NECESSARY, and that is a residual detection limit rather than an oversight. Narrowing the walk pattern moved the match to the ROOT-rooted read instead: `Deno.readDir(`${ROOT}node_modules/@esbuild`)` matches /Deno\.readDir\(\s*`\$\{ROOT\}/, so the detector still sees a ROOT-rooted directory read. Distinguishing 'reads node_modules' from 'walks tracked source' needs the TARGET PATH, not the root, and no pattern-based detector here has that — so the decision stays written down in this list, where a reader can find it.",
   "tests/chrome-profile-location.test.ts":
     "it still matches the repo-walk detector through its helper reads, but it also holds the LIVE race test that launches a real browser — and docs/CHROME-TEST-CONTRACT.md §2.3 PROMISES that a subset gate launches a browser only when this file or its dependencies changed. Listing it as always-on would break that promise fleet-wide, on every VM without a working browser. Its cross-cutting half (the static scripts/ scan) was SPLIT OUT into tests/chrome-profile-static.test.ts, which is always-on; what remains here is helper semantics plus the live race, and the environmental-refusal path that would let the browser case report honestly is chrome-agent-platform-hlgr.",
 });
