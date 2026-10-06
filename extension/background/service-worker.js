@@ -10887,18 +10887,29 @@ const handlers = mergeRouteMaps(
   },
   async "hooks.subscribe"({ hookId, skillId, recipeId, promptTemplate }, context) {
     const resolvedSkillId = skillId !== undefined ? skillId : recipeId;
+    // chrome-agent-platform-51cd: the MODEL path may not author a template. Authorship belongs to the
+    // owner; there is no owner subscribe UI today, so in practice a model-authored template is simply
+    // unreachable, and the dispatch fallback (skill prompt + the fenced payload) is what runs instead
+    // when the stored template is empty. Belt-and-braces on purpose: even if a future route forgets its
+    // gate, an empty template cannot put model text into the instruction position.
+    const authoredTemplate = context?.principal === "model" ? "" : promptTemplate;
     return await subscribeHook(
-      { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId, promptTemplate },
+      { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId, promptTemplate: authoredTemplate },
       {
-        gateOnReplace: async ({ existing, candidate }) => {
+        gate: async ({ existing, candidate }) => {
           let payload;
           try {
+            // `existing` is NULL on the create path (51cd made the gate unconditional), and the digest must
+            // be STABLE across create and retry - an approved retry only matches when the payload it re-sends
+            // is identical, so the absent-row form gets an explicit, fixed marker rather than throwing.
             payload = canonicalRecord(
               canonicalField("request", payloadFields([["hookId", candidate.hookId], ["recipeId", candidate.skillId ?? candidate.recipeId], ["promptTemplate", candidate.promptTemplate]])),
-              canonicalField("existing", payloadFields([["hookId", existing.hookId], ["recipeId", existing.skillId ?? existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]])),
+              existing
+                ? canonicalField("existing", payloadFields([["hookId", existing.hookId], ["recipeId", existing.skillId ?? existing.recipeId], ["promptTemplate", existing.promptTemplate], ["enabled", existing.enabled], ["at", existing.at]]))
+                : canonicalField("existing", payloadFields([["present", "false"]])),
             );
           }
-          catch { return { ok: false, error: "hook replacement payload is not approvable" }; }
+          catch { return { ok: false, error: "hook subscription payload is not approvable" }; }
           return await requireOwnerApproval(
             context,
             "hooks.subscribe",

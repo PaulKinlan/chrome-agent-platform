@@ -236,17 +236,29 @@ Deno.test("security: a DENIED hook refuses subscription (the prompt-injection ga
   assertEquals(check.ok, false);
 });
 
-Deno.test("security: hook fan-out is guarded by KNOWN-recipe validation (dptw: size/count are not the guard)", async () => {
+Deno.test("security: hook fan-out is guarded by KNOWN-recipe validation AND the template bound (51cd)", async () => {
   reset();
-  const { subscribeHook } = await import("../extension/lib/hooks.js");
+  const { subscribeHook, MAX_PROMPT_TEMPLATE_CHARS } = await import("../extension/lib/hooks.js");
   // an arbitrary/unknown recipeId must NOT create a fan-out row
   const bad = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "not-a-real-recipe-123" });
   assertEquals(bad.ok, false);
   assert((bad.error ?? "").includes("unknown skill"), "unknown recipeId must be rejected");
-  // dptw: a large prompt template is ACCEPTED (no size cap) — the fan-out
-  // guard is the known-recipe validation above, not a byte bound.
-  const huge = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain", promptTemplate: "x".repeat(70000) });
-  assertEquals(huge.ok, true, "a large template on a KNOWN recipe is accepted (dptw)");
+  // ACCEPTED CONSEQUENCE CHANGE (chrome-agent-platform-51cd). dptw held that a large template was ACCEPTED
+  // because the fan-out guard was the known-recipe check and not a byte bound. That premise died when the
+  // template turned out to be model-authorable AND unbounded: it runs verbatim in the INSTRUCTION position
+  // on every matching event, up to the 50-run fan-out cap, making it a storage-quota and token-cost
+  // amplifier. A single template bound now applies to EVERY caller, and the known-recipe guard still
+  // applies on top - a known recipe does not buy an unbounded template.
+  const big = await subscribeHook({
+    hookId: "runtime.onStartup",
+    recipeId: "auto-group-by-domain",
+    promptTemplate: "x".repeat(MAX_PROMPT_TEMPLATE_CHARS + 1),
+  });
+  assertEquals(big.ok, false, "a template past the bound is refused even on a KNOWN recipe");
+  assert(String(big.error).includes("too large"), `the refusal must name the bound: ${big.error}`);
+  // The known-recipe guard is untouched: a KNOWN recipe with no template still subscribes.
+  const fine = await subscribeHook({ hookId: "runtime.onStartup", recipeId: "auto-group-by-domain" });
+  assertEquals(fine.ok, true, "the known-recipe guard still admits a normal subscription");
 });
 
 // ---- preference percolation (the controlled down-channel) ----

@@ -449,8 +449,9 @@ is not imported by a route. `applyTabularDiff`, `rejectTabularDiff`,
   exact source kind, distinct namespaced capability token(s), backing optional
   permission names, product-grant scope kind, replay/trusted-replay class,
   owner-gesture requirement, mutation class and route family;
-- the table fails closed on missing/extra inventory. Management reads, hook
-  idempotents and mutations have distinct tokens; `management.route` no longer
+- the table fails closed on missing/extra inventory. Management reads and mutations
+  have distinct tokens (the hook rows are MUTATIONS: subscribe and unsubscribe are
+  owner-gated on every call, chrome-agent-platform-51cd); `management.route` no longer
   collapses all 29 descriptors. Replay rows are tested against the existing
   replay-safety authority;
 - only the existing `capabilitiesByTool` construction in the Settings shadow

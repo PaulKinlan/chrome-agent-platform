@@ -2,6 +2,7 @@
 
 ## [0.3.577] — 2026-10-05
 - Adds encrypted service secret management, origin-pinned proxy rules, live service-tool authorization, and request audit ledger to Settings → Web services.
+- Hook subscriptions now ask for your approval every time, first subscription to a hook included. A first-time subscription used to be written with only the deny-list check behind it, so an agent could start listening to a browser event and store its own text as the instruction a run re-executes on every matching event, up to 50 runs each time. Agents can no longer supply that text — the run uses the skill's own prompt plus the event payload — and a stored template is capped at 64 KiB, the limit this project used before the cap was removed and about 16,000 tokens of instruction.
 
 ## [0.3.576] — 2026-10-05
 - j5yz: eliminate the NTP thread-list heartbeat hydration storm, deduplicate terminal thread.get refreshes, show the thread surface immediately on click, and lazy-load offscreen artifact previews

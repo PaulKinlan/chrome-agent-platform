@@ -455,16 +455,15 @@ export function managementToolset({ callRoute }) {
     }),
     subscribe_hook: tool({
       description:
-        "Subscribe a background skill (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its install-granted permission cannot be verified. skillId may be omitted to subscribe the master agent.",
+        "Subscribe a background skill (or the master agent) to a system event, so the agent runs when it fires. Refused (fail-closed) if the hook is owner-denied or its install-granted permission cannot be verified. skillId may be omitted to subscribe the master agent. A prompt TEMPLATE is not settable here (chrome-agent-platform-51cd): template authorship belongs to the owner, and this path runs the skill's own prompt plus the fenced event payload.",
       inputSchema: z.object({
         hookId: z.string().describe("the hook id, e.g. tabs.onCreated"),
         skillId: z.string().optional().describe("a background skill id, or omit for the master agent"),
         recipeId: z.string().optional().describe("legacy alias for skillId"),
-        promptTemplate: z.string().optional().describe("a prompt template; {{payload}} is replaced with the event payload"),
       }),
-      execute: ({ hookId, skillId, recipeId, promptTemplate }) => {
+      execute: ({ hookId, skillId, recipeId }) => {
         const resolvedSkillId = skillId ?? recipeId;
-        return call("hooks.subscribe", { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId, promptTemplate });
+        return call("hooks.subscribe", { hookId, skillId: resolvedSkillId, recipeId: resolvedSkillId });
       },
     }),
     unsubscribe_hook: tool({
