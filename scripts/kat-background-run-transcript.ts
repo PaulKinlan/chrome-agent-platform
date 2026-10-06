@@ -76,9 +76,6 @@ const send = (
 try {
   const worker = await waitForServiceWorker(send, {
     timeoutMs: 15_000,
-    match: (target: any) =>
-      target.type === "service_worker" &&
-      String(target.url).includes("dist/background"),
   });
   if (!worker) throw new Error("service worker did not register");
   const extensionId = new URL(worker.url).host;

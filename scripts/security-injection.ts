@@ -101,7 +101,7 @@ async function boot() {
     const d = JSON.parse(e.data as string);
     if (d.id && pending.has(d.id)) { pending.get(d.id)!(d); pending.delete(d.id); }
   };
-  const sw = await waitForServiceWorker(send, { timeoutMs: 20000, match: (t: any) => t.type === "service_worker" && t.url.startsWith("chrome-extension://") });
+  const sw = await waitForServiceWorker(send, { timeoutMs: 20000 });
   if (!sw) throw new Error("no service worker");
   return new URL(sw.url).host;
 }

@@ -169,6 +169,10 @@ export const SOURCE_INSPECTING_GUARDS = [
   // invariant (the p1lp mixed-file split lesson). Cost: one `git grep` spawn over the tracked
   // tree, no browser, no build.
   "tests/requires-owner-gesture-column-allowlist.test.ts",
+  // chrome-agent-platform-mzd6: asserts that waitForServiceWorker defaults to SW_MATCH
+  // and no script declares private or ad-hoc duplicate service-worker match filters.
+  // It reads scripts/ as data without import edges, so it is registered in ALWAYS_ON.
+  "tests/kat-service-worker-match.test.ts",
 ];
 
 /**

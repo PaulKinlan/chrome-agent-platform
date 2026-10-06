@@ -166,9 +166,7 @@ async function main() {
   const cdp = new Cdp(ws);
 
   try {
-    const worker = await waitForServiceWorker(cdp.send.bind(cdp), {
-      match: (target: any) => target.type === "service_worker" && String(target.url).includes("dist/background"),
-    });
+    const worker = await waitForServiceWorker(cdp.send.bind(cdp));
     if (!worker) throw new Error("service worker did not register");
     const extensionId = new URL(worker.url).host;
 

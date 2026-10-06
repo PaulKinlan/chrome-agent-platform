@@ -67,7 +67,7 @@ try {
   const send = (m: string, p: any = {}, s?: string) => new Promise<any>((res) => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method: m, params: p, sessionId: s })); });
   const evalIn = async (s: string, expr: string) => { const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true }, s); if (r?.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description ?? "threw"); return r?.result?.result?.value; };
   const attach = async (t: string) => { const s = (await send("Target.attachToTarget", { targetId: t, flatten: true })).result.sessionId as string; await send("Runtime.enable", {}, s); return s; };
-  const sw = await waitForServiceWorker(send, { match: (t) => t.type === "service_worker" && t.url.startsWith("chrome-extension://") });
+  const sw = await waitForServiceWorker(send);
   const extId = new URL(sw.url).host;
   const optT = (await send("Target.createTarget", { url: `chrome-extension://${extId}/options/options.html` })).result.targetId;
   const optS = await attach(optT); await sleep(800);

@@ -18,7 +18,7 @@
 //   CAP_CHROMIUM=<binary> deno run -A scripts/kat-attention-badge.ts [<ext>] [<out-dir>]
 
 import { fileURLToPath } from "node:url";
-import { launchChrome, openCdp } from "./lib/chrome-launch.ts";
+import { launchChrome, openCdp, SW_MATCH } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 import { durableDir } from "./lib/durable-root.mjs";
 
@@ -85,7 +85,6 @@ check("staged extension: manifest permissions include notifications", manifest.p
 const targetExt = tempExt;
 const profile = chromeProfileDir("kat-attention-badge-profile");
 const expectedId = await unpackedExtensionId(targetExt);
-const SW_MATCH = (t: any) => t.type === "service_worker" && String(t.url).includes("dist/background");
 const chromeArgs = () => ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
   `--disable-extensions-except=${targetExt}`, `--load-extension=${targetExt}`,
   "--remote-allow-origins=*",

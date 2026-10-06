@@ -72,11 +72,7 @@ try {
     return wireValue<any>(response, "k.composer-slash-commands");
   };
 
-  const worker = await waitForServiceWorker(send, {
-    match: (target) =>
-      target.type === "service_worker" &&
-      target.url.includes("chrome-extension://"),
-  });
+  const worker = await waitForServiceWorker(send);
   if (!worker) throw new Error("extension service worker did not register");
   const extensionId = new URL(worker.url).host;
   const created = await send("Target.createTarget", {

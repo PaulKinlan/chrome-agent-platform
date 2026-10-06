@@ -768,7 +768,7 @@ export interface CdpClient {
   /** Safely capture a screenshot of a target without wedging on quiesced headless frames (f5lb). */
   screenshot(sessionId: string, opts?: ScreenshotOptions): Promise<Uint8Array | null>;
   /** Wait (bounded) for the extension's service-worker target; returns its info or null. */
-  serviceWorker(opts?: { timeoutMs?: number }): Promise<any | null>;
+  serviceWorker(opts?: { timeoutMs?: number; match?: (t: any) => boolean }): Promise<any | null>;
   /** Subscribe to a CDP event (e.g. Runtime.executionContextCreated). Returns an unsubscribe. */
   on(method: string, handler: (params: any, sessionId?: string) => void): () => void;
   close(): void;
@@ -859,6 +859,13 @@ export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}):
 }
 
 /**
+ * Predicate matching this extension's background service worker, distinguishing
+ * it from Chrome for Testing's internal component extension workers (such as thunk.js).
+ */
+export const SW_MATCH = (t: any): boolean =>
+  Boolean(t && t.type === "service_worker" && String(t.url ?? "").includes("dist/background"));
+
+/**
  * Wait for the loaded extension's service-worker target to appear.
  *
  * Harnesses used to call `Target.getTargets` once, immediately after the CDP
@@ -868,6 +875,9 @@ export async function openCdp(wsUrl: string, opts: { timeoutMs?: number } = {}):
  * has to be explicit — otherwise the harness reports "no service worker
  * target" for a browser that was merely still starting.
  *
+ * Defaults to `SW_MATCH` so harnesses target our extension's worker specifically
+ * rather than any component extension worker (e.g. thunk.js) Chrome might register first.
+ *
  * Returns the target info, or null if it never registered within the deadline.
  */
 export async function waitForServiceWorker(
@@ -875,7 +885,7 @@ export async function waitForServiceWorker(
   opts: { timeoutMs?: number; match?: (t: any) => boolean } = {},
 ): Promise<any | null> {
   const deadline = Date.now() + (opts.timeoutMs ?? 15000);
-  const match = opts.match ?? ((t: any) => t.type === "service_worker");
+  const match = opts.match ?? SW_MATCH;
   for (;;) {
     const res = await send("Target.getTargets");
     const found = (res?.result?.targetInfos ?? []).find(match);

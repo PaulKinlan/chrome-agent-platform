@@ -167,7 +167,7 @@ const THREAD_TEXT_EXPR = `(() => {
 try {
   chromeInstance = await launchChrome({ extension: EXT, profile: PROFILE, windowSize: "1400,1100" });
   cdp = await openCdp(chromeInstance.wsUrl, { timeoutMs: 60000 });
-  const sw = await waitForServiceWorker(cdp.send, { match: (t: any) => t.type === "service_worker" && t.url.endsWith("/dist/background/service-worker.js") });
+  const sw = await waitForServiceWorker(cdp.send);
   check("extension service worker registered", Boolean(sw));
   const extensionId = new URL(sw.url).host;
 
