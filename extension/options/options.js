@@ -4916,6 +4916,10 @@ let aboutRendered = false;
 async function renderAbout() {
   if (aboutRendered) return;
   aboutRendered = true;
+  try {
+    const licensesLink = document.getElementById("open-about-licenses");
+    if (licensesLink) licensesLink.setAttribute("href", chrome.runtime.getURL("about/about.html"));
+  } catch { /* non-extension context */ }
   // The full release notes link targets the bundled changelog (also reachable
   // as a packaged file) so it works offline and with no network dependency.
   try {

@@ -244,4 +244,11 @@ const { syncChangelog } = await import("./sync-changelog.mjs");
 await syncChangelog({ check: false });
 await syncChangelog({ check: true }); // verify — throws (nonzero) on drift
 
+// Keep the generated About page in lockstep with the version and inventory.
+const { syncAboutPage } = await import("./generate-about-page.mjs");
+await syncAboutPage({ check: false });
+try {
+  execSync("git add extension/about/about.html", { cwd: ROOT, stdio: "ignore" });
+} catch { /* best-effort staging */ }
+
 console.log(`Bumped ${current} → ${next}${message ? ` (changelog: ${message.slice(0, 60)})` : ""}`);
