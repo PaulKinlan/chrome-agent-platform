@@ -18,7 +18,7 @@
 //   deno run -A scripts/kat-bgagent-delete.ts <path-to-extension> [<out-dir>]
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, resolveChromiumBinaryReport, teardownChrome } from "./lib/chrome-launch.ts";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -62,17 +62,17 @@ try { await Deno.stat(`${EXT}/dist/background/service-worker.js`); } catch {
 // lane's browser answers on it just as happily — the harness then drives the
 // WRONG tree. The port is assigned by the kernel and read back from THIS
 // Chrome's stderr instead.
-let proc!: Deno.ChildProcess;
 let ws: WebSocket | null = null;
+let launched: Awaited<ReturnType<typeof launchChrome>> | null = null;
+const profile = chromeProfileDir("kat-bgagent-delete");
 try {
-  const launched = await launchChrome({
+  launched = await launchChrome({
     binary: CHROMIUM,
     args: ["--headless=new", "--no-sandbox", "--disable-gpu", "--silent-debugger-extension-api",
       `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`,
       "--remote-allow-origins=*",
-      `--user-data-dir=${chromeProfileDir("kat-bgagent-delete")}`, "about:blank"],
+      `--user-data-dir=${profile}`, "about:blank"],
   });
-  proc = launched.proc;
   ws = new WebSocket(launched.wsUrl);
   await new Promise((r) => ws!.onopen = r);
 } catch (e) {
@@ -323,6 +323,6 @@ check("journey: a focus successor is placed after re-render", focusAfter?.inList
 
 await send("Target.closeTarget", { targetId: ntp.targetId });
 ws!.close();
-proc.kill();
+await teardownChrome(launched, profile);
 console.log(`\n${pass} passed, ${fail} failed`);
 Deno.exit(fail === 0 ? 0 : 1);
