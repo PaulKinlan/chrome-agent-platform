@@ -9,11 +9,14 @@
 // a full Git-index inventory). A record is trusted only when (a) the live dist.complete validates
 // against the current tree (the same 2-4 s check `npm run note:dist` performs) and (b) its key
 // equals that live marker's key. So any change the repo's OWN staleness contract would catch — a new
-// commit, or any edited-and-staged source including the build and the scrub logic — produces a
+// commit, or any edit to an INDEXED source including the build and the scrub logic — produces a
 // different key, and a record can never stand in for a tree it did not build. SCOPE OF THE CLAIM,
-// stated rather than implied: this is exactly the authority dist.complete defines and no more — an
-// UNSTAGED working-tree edit is invisible to that authority, so it is invisible here too (the repo's
-// existing staleness check has the same property; a consumer that needs more must not rely on it).
+// stated rather than implied: this is exactly the authority dist.complete defines and no more. That
+// authority lists INDEXED files (git ls-files) but reads their LIVE contents, so an UNSTAGED edit to
+// a tracked file DOES change the digest and invalidates a record (the tamper gate in
+// tests/build-debug-mode.test.ts proves exactly that); what it cannot see is an UNTRACKED file, which
+// is the same blind spot the repo's own pre-test staleness check has — a consumer that needs more
+// must not rely on this.
 //
 // A FAILED build is never recorded: its output is evidence for the run that produced it, and
 // caching a failure could hide it later.
@@ -93,12 +96,22 @@ export async function storeBuildOnce({ root, timeoutMs = PRODUCTION_BUILD_TIMEOU
     stdout = `${e?.stdout ?? ""}${e?.stderr ?? ""}`;
   }
 
-  if (code === 0 && recordPath) {
-    try {
-      writeFileSync(recordPath, JSON.stringify({ code, stdout, at: new Date().toISOString() }));
-    } catch {
-      /* a record we cannot write is not fatal: the caller already has the output */
+  // kj9s review Finding 1 (P1): the key/recordPath computed BEFORE the build describe the OLD tree —
+  // or are null when dist.complete was absent. Writing the NEW build's stdout there either recorded
+  // nothing (a cold tree was never memoized) or filed a new tree's output under an OLD tree's key (a
+  // record that could later stand in for a tree it did not build). Key the record by the marker the
+  // build JUST wrote, not by the one it replaced.
+  if (code === 0) {
+    const built = readMarker(root);
+    const builtKey = built ? `${built.commit}-${built.digest}` : null;
+    if (builtKey) {
+      try {
+        writeFileSync(join(recordDir(), `${builtKey}.json`), JSON.stringify({ code, stdout, at: new Date().toISOString() }));
+      } catch {
+        /* a record we cannot write is not fatal: the caller already has the output */
+      }
     }
+    return { code, stdout, source: "build", key: builtKey };
   }
   return { code, stdout, source: "build", key };
 }

@@ -100,9 +100,9 @@ Deno.test("86gg: the SAME slow file is killed by the flat bound and survives the
 });
 
 // ── chrome-agent-platform-kj9s: per-file windows ──────────────────────────────
-// A per-file bound exists for files whose cost is set by BUILD COUNT (build-bootstrap: 5 production
-// builds; build-debug-mode: 2 mode builds + a steady-state build; build-tool-bundling: 12 generator
-// verifies + 2 regenerations). This pins that the map is CONSULTED for a listed file and that the
+// A per-file bound exists for files whose cost is set by BUILD COUNT (build-bootstrap: 3 production
+// builds; build-debug-mode: dev + store + a steady-state store). build-tool-bundling is NOT listed:
+// measured 10s, so it stays on the base window. This pins that the map is CONSULTED for a listed file and that the
 // base window still governs an unlisted one — the failure mode this must not have is "the override
 // silently does nothing and the file is still killed by the base".
 Deno.test("kj9s: a per-file bound overrides the base window for the files that need it, and only those", async () => {
