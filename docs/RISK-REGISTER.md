@@ -1,7 +1,11 @@
 # Architecture Risk Register — Chrome Agent Platform
 
 **Bead:** chrome-agent-platform-t4td (umbrella 9zw7; successor to afbb) · **Date:** 2026-09-11 ·  
-**Tree:** `origin/main@ba9f45d1` (v0.3.364).
+**Tree:** `origin/main@ba9f45d1` (v0.3.364) for R1–R21; entries added later carry their own pin.  
+**Threat model:** [`THREAT_MODEL.md`](../THREAT_MODEL.md) — an audit reads THAT first for
+what is trusted and what is hostile, and reads this register for what has already been
+decided. Class 5 holds the adjudicated-and-withheld decisions: an automated scan that
+re-reports one of them is re-reporting a decision, not finding a defect.
 
 Every risk entry records the strict four-field shape required by architecture governance:
 - **Risk:** what the hazard is and what fails when it triggers
@@ -115,9 +119,10 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 
 ### R16 (L). Broad `<all_urls>` host permissions create Store review exposure
 - **Risk:** The extension requests `host_permissions: ["<all_urls>"]` and injects content scripts across all web pages. While necessary for zero-configuration WebMCP discovery across the web, this triggers maximum Chrome Web Store review scrutiny and displays the prominent "Read and change all your data on all websites" install warning.
-- **Lives at:** `extension/manifest.json:20-25` (`host_permissions`).
-- **Mitigation:** Mutations and network fetches require secondary user grants; sensitive provider keys are isolated from content scripts; privacy statement published in `docs/PRIVACY.md`.
-- **Open question:** Could activeTab-based just-in-time permissions replace `<all_urls>` without breaking the core premise of ambient site sub-agent discovery?
+- **Lives at:** `extension/manifest.json:124-126` (`host_permissions`) and `extension/manifest.json:127-152` (the two content scripts). (Corrected 2026-10-06, chrome-agent-platform-oa3o: the previous `:20-25` was stale against the current manifest.)
+- **Mitigation:** Mutations and network fetches require secondary user grants; sensitive provider keys are isolated from content scripts; the privacy statement is published in the extension's OWN privacy page — `extension/privacy/privacy.html`, rendered from `extension/lib/privacy-statement.js` and pinned to the live code by `tests/privacy-statement.test.ts` (a new outbound host or storage class fails that test before it can go missing from the page). (Corrected 2026-10-06, chrome-agent-platform-oa3o: this entry cited a `docs/PRIVACY.md` that has never existed in this repository. The page is bundled, not a markdown document, so the honest fix is the corrected citation rather than a new document — see the entry's `Open question`.)
+- **Note on the Store half:** question Q11 was resolved on 2026-09-18 (no Store release; distribution is the unpacked developer demo), so the "Store review scrutiny" driver has no consumer today. The install-warning and fingerprint halves stand.
+- **Open question:** Could activeTab-based just-in-time permissions replace `<all_urls>` without breaking the core premise of ambient site sub-agent discovery? (Separately: should a repo-level `PRIVACY.md` exist at all, given the product's privacy statement is rendered from code — writing one would create a second source of truth that `tests/privacy-statement.test.ts` cannot pin.)
 
 ### R17 (L). Opaque-origin sandbox storage throws SecurityError by design
 - **Risk:** Sandboxed iframe scripts attempting to access `localStorage`, `IndexedDB`, or `navigator.storage` immediately throw `SecurityError` due to their `null` opaque origin. While intentional, naive agent-generated code frequently attempts storage calls and fails.
@@ -152,3 +157,20 @@ Ordered by architectural class; severity is marked H/M/L (likelihood $\times$ bl
 - **Lives at:** `extension/background/routes/agent-worker.js:575` (`reconcileAgentWorkers`), `extension/lib/agent-worker-host.js:60`.
 - **Mitigation:** Persistent active worker registry in `cap:agent-workers:alive` synchronized on worker boot; explicit `agent-worker.close` route.
 - **Open question:** Native SharedWorker lifecycle inspection APIs in Chromium.
+
+---
+
+## Class 5 — Adjudicated and Withheld (audit-stop entries)
+
+An entry in this class is a DECISION, not an open risk. Automated audits (the nightly
+software-factory project-audit in particular) keep re-reporting the item below as a new
+CRITICAL, each time forcing a coordinator to re-derive a decision that was already made
+and landed. That recurrence is the defect this class fixes: the adjudication now lives
+where the auditors read. Cite the entry; do not re-derive it. `THREAT_MODEL.md` §7 is the
+threat-model half of the same list.
+
+### R22 (M). The shared sender classifier's extension default is a WITHHELD hardening (lw6d)
+- **Risk:** `authorizeToolReport` (`extension/lib/pure.js:912`) returns `{ kind: "extension" }` for any sender that is not a browser-attested content script and carries no tab URL (`extension/lib/pure.js:934`). A synthetic sender — a foreign extension id with an `https://attacker.example/` url, `origin: "https://attacker.example"` and no `tab` — therefore classifies as an INTERNAL extension document, which would reach every route including the 31 unclassified mutations of R11 without a page-origin fence. No route-local principal check stands between that classification and those mutations.
+- **Lives at:** `extension/lib/pure.js:934` (the `{ kind: "extension" }` default), `extension/lib/pure.js:912` (`authorizeToolReport`), `extension/background/service-worker.js:11861` (the one listener that feeds it the browser-attested sender).
+- **Mitigation:** ADJUDICATED AND WITHHELD (`chrome-agent-platform-lw6d`; `docs/INTERNAL-SENDER-CONTRACT-AUDIT.md`, status line "hardening explicitly withheld"). There is no known producer for the browser-attested tabless/opaque sender shape: `chrome.runtime.onMessage` receives only messages dispatched by this extension's own execution contexts, the manifest declares no `externally_connectable`, and the service worker registers no `chrome.runtime.onMessageExternal` listener — `docs/INTERNAL-SENDER-CONTRACT-AUDIT.md` §3, pinned executably by `tests/internal-sender-contract-audit.test.ts:106-121`, with the synthetic fixture pinned at `:14-32`. Hardening is withheld precisely because it is not free: a naive exact-id or URL-prefix filter would break LEGITIMATE tabless internal frames (the offscreen document, the side panel, sandboxed iframes) — the census of legitimate senders is `docs/INTERNAL-SENDER-CONTRACT-AUDIT.md` §4. The control that remains in place is the closed page-route allowlist (`extension/lib/pure.js:1178-1187`) enforced at `extension/background/service-worker.js:11879`, which is what keeps a page sender off every privileged route. Threat-model cross-reference: `THREAT_MODEL.md` T3 (the threat) and §7 item 1 (the exclusion).
+- **Open question:** None open on the decision itself. **REOPEN TRIGGER — reopen this entry, and re-rate it, if ANY of the following lands:** (a) any NEW sender shape reaching `chrome.runtime.onMessage` — a new offscreen document, a new worker or SharedWorker class, a new extension document class, or a new page/iframe class — because the tabless/opaque shape is exactly what the classifier defaults on; (b) any manifest change adding `externally_connectable`, or any new `chrome.runtime.onMessageExternal` listener, because that is what would produce a real foreign sender rather than a synthetic one; (c) a real-browser delivery of a tabless/opaque sender whose URL is not `chrome-extension://`. Trigger (b) is executable, not a promise: `tests/internal-sender-contract-audit.test.ts:113-114` fails the moment either lands.
