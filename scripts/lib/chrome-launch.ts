@@ -65,6 +65,8 @@ export interface LaunchedChrome {
 }
 
 const TAIL_LIMIT = 8192;
+// Raw ChildProcess callers must retain their isolated group at teardown too.
+const procGroups = new WeakMap<Deno.ChildProcess, number>();
 
 /** The browser every harness drives. */
 export async function computeUnpackedExtensionId(path: string): Promise<string> {
@@ -650,6 +652,7 @@ export async function launchChrome(opts: {
   let group: number | undefined;
   try {
     group = await isolatedProcessGroup(proc);
+    if (group !== undefined) procGroups.set(proc, group);
   } catch (e) {
     await teardownChrome(proc, resolvedProfile);
     lock.release();
@@ -747,11 +750,12 @@ export async function launchChrome(opts: {
  * Cleanly tear down a launched Chrome process AND its entire process tree
  * (zygote, GPU, renderer, crashpad children) using killProcessTree().
  *
- * On this VM Chromium's zygote/renderer/GPU processes encode the full command
- * (including --user-data-dir) inside argv[0], not separate argv entries. Since
- * argv text is not a reliable tree identity, setsid isolates their process group
- * and teardown verifies both group and profile.
- * The profile match also catches descendants that leave the group.
+ * Chromium descendants can put --user-data-dir in argv[0]; that does NOT
+ * defeat pkill -f, which matches the joined cmdline (17/17 baseline and 11/11
+ * live group members matched). Group killing is defense in depth for a child
+ * that leaves the profile match or is born after it. The original confirmation
+ * miss remains unexplained; the full gate plus the user-data-dir monitor is
+ * the deciding evidence.
  *
  * `target` can be a `LaunchedChrome`, a `Deno.ChildProcess`, or an object with `{ proc }`.
  * If `profile` is not explicitly provided, it will be extracted from `target.profile`
@@ -766,7 +770,8 @@ export async function teardownChrome(
   if (!target && !profile) return;
   const proc = target ? ("proc" in target ? (target.proc ?? null) : (target instanceof Deno.ChildProcess ? target : null)) : null;
   const matchedProfile = profile ?? (target && "profile" in target ? target.profile : undefined);
-  const group = target && "processGroup" in target ? target.processGroup : undefined;
+  const group = (target && "processGroup" in target ? target.processGroup : undefined) ??
+    (proc ? procGroups.get(proc) : undefined);
   if (matchedProfile) {
     const raw = matchedProfile.replace(/^--/, "");
     const match = raw.startsWith("user-data-dir=") ? raw : `user-data-dir=${raw}`;

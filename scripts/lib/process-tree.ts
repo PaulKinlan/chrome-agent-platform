@@ -11,22 +11,29 @@ const PGREP = "/usr/bin/pgrep";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Linux /proc stat has a parenthesized comm (which may contain spaces or ')'). */
-function processGroup(pid: number): { group: number; state: string } | null {
+function processGroup(pid: number): { group: number; state: string; startTicks: string } | null {
   try {
     const stat = Deno.readTextFileSync(`/proc/${pid}/stat`);
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-    return { state: fields[0], group: Number(fields[2]) };
+    return { state: fields[0], group: Number(fields[2]), startTicks: fields[19] };
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) return null;
     throw e;
   }
 }
 
+// Bind a group to the exact leader observed after setsid exec, not just its PID:
+// Linux may reuse a reaped leader's PID for an unrelated process group.
+const leaderStartTicks = new WeakMap<Deno.ChildProcess, string>();
+
 /** The launcher waits for setsid to exec before recording the isolated group. */
 export async function isolatedProcessGroup(proc: Deno.ChildProcess): Promise<number | undefined> {
   for (let i = 0; i < 20; i++) {
     const stat = processGroup(proc.pid);
-    if (stat?.group === proc.pid) return proc.pid;
+    if (stat?.group === proc.pid) {
+      leaderStartTicks.set(proc, stat.startTicks);
+      return proc.pid;
+    }
     if (!stat || stat.state === "Z") return undefined; // exited before observation
     await sleep(25);
   }
@@ -52,8 +59,9 @@ async function runOut(bin: string, args: string[]) {
 
 /**
  * Kill `proc`, its isolated group when provided, and processes whose argv
- * contains `treeMatch`, then verify both group and profile have no live members. `treeMatch` must NOT start with "-" (pkill/pgrep would parse a
- * leading "--user-data-dir=…" as an OPTION and exit 2). Throws when survivors
+ * contains `treeMatch`, then verify both group and profile have no live
+ * members. `treeMatch` must NOT start with "-": pkill/pgrep would parse a
+ * leading "--user-data-dir=…" as an option and exit 2. Throws when survivors
  * or a pgrep failure make cleanup unconfirmable — never silently fails open.
  */
 export async function killProcessTree(
@@ -65,14 +73,17 @@ export async function killProcessTree(
     throw new Error("treeMatch must not start with '-' (pkill would parse it as an option)");
   }
   if (group !== undefined) {
-    if (!Number.isSafeInteger(group) || group <= 1 || group === Deno.pid ||
-      processGroup(Deno.pid)?.group === group || (proc && group !== proc.pid)) {
+    if (!proc || !Number.isSafeInteger(group) || group <= 1 || group === Deno.pid ||
+      processGroup(Deno.pid)?.group === group || group !== proc.pid) {
       throw new Error(`refusing unsafe process group ${group}`);
     }
-    // The launcher starts Chrome through setsid. Kill the isolated group BEFORE
-    // reaping the leader: children with rewritten argv still belong to it.
-    try { Deno.kill(-group, "SIGKILL"); } catch (e) {
-      if (!(e instanceof Deno.errors.NotFound)) throw e;
+    // Signal only the exact leader observed by isolatedProcessGroup. If it
+    // exited or its PID was reused, the profile match remains the fallback.
+    const current = processGroup(group);
+    if (current?.group === group && current.startTicks === leaderStartTicks.get(proc)) {
+      try { Deno.kill(-group, "SIGKILL"); } catch (e) {
+        if (!(e instanceof Deno.errors.NotFound)) throw e;
+      }
     }
   }
   try { proc?.kill("SIGKILL"); } catch { /* already gone */ }

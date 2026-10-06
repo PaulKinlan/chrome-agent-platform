@@ -81,6 +81,7 @@ const CHROME_ARGS = [
   `--user-data-dir=${profile}`, "--no-first-run", "--noerrdialogs", "--window-size=1400,1600", "about:blank",
 ];
 let proc: Deno.ChildProcess | null = null;
+let group: number | undefined;
 let ws: WebSocket | null = null;
 let id = 0;
 const pending = new Map<number, (v: any) => void>();
@@ -102,6 +103,7 @@ const redact = (s: string) => s.replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED]").rep
 async function boot() {
   const l = await launchChrome({ binary: CHROMIUM, args: CHROME_ARGS });
   proc = l.proc;
+  group = l.processGroup;
   ws = new WebSocket(l.wsUrl);
   await new Promise((r) => { ws!.onopen = r; });
   ws.onmessage = (e) => {
@@ -138,7 +140,7 @@ async function kill() {
   try { ws?.close(); } catch { /* closed */ }
   // NOTE: the match must not start with "-" (pkill would parse it as an
   // option); the unique profile path identifies this run's whole tree.
-  await killProcessTree(proc, `user-data-dir=${profile}`);
+  await killProcessTree(proc, `user-data-dir=${profile}`, { group });
   proc = null;
 }
 async function attach(url: string, waitMs = 1500) {
