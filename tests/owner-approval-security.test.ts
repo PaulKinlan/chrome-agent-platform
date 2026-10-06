@@ -108,7 +108,14 @@ Deno.test("owner-direct scope is exactly the audited action set (no silent widen
   // chrome-agent-platform-9mz1: asset.update joined the AUDITED set (the owner's
   // own artifact edit IS the approval) — the set is still exact, and every other
   // member is unchanged; widening it again still requires a review.
-  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "asset.update", "background-agent.delete", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "named-agent.update", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
+  // chrome-agent-platform-4h47 WIDENING (supervisor-approved): named-agent.create
+  // joins the audited set for the same reason as its sibling named-agent.update —
+  // the owner's own Create click in an extension UI document IS the owner gesture
+  // the approval gate exists to require, and the route now runs that gate for
+  // EVERY create. A MODEL create is not an extension-document principal, so it
+  // still pays the full pending-approval card (pinned in
+  // tests/named-agent-create-approval.test.ts).
+  assertEquals([...OWNER_DIRECT_ACTIONS].sort(), ["agent.delete", "asset.delete", "asset.restore", "asset.update", "background-agent.delete", "named-agent.create", "named-agent.delete", "named-agent.set-mcp-servers", "named-agent.set-schedule", "named-agent.update", "script.create", "script.run", "task.pause", "task.resume", "task.update"].sort());
   // Every owner-direct action passes the audit grammar; widening this set
   // requires a new permission-model review.
   for (const direct of OWNER_DIRECT_ACTIONS) {

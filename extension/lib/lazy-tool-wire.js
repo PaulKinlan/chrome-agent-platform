@@ -139,6 +139,7 @@ function capabilitySummary(result) {
       optionalPermissions: Object.freeze([]),
       productGrantScopeKind: "none",
       replayClass: "unknown",
+      // DEPRECATED, uniformly false, gates nothing (chrome-agent-platform-4h47).
       requiresOwnerGesture: false,
       mutationClass: "mutating",
       routeFamily: "catalog.unknown",

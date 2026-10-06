@@ -167,20 +167,38 @@ Deno.test("named agents: instance identity is non-reusable and revisions advance
   await deleteNamedAgent(id);
 });
 
-Deno.test("named agents: concurrent same-slug first creates cannot produce an ungated replacement", async () => {
+Deno.test("named agents: every create reaches the owner gate (no ungated create path) and concurrent same-slug creates stay serialized", async () => {
   const id = "approval-race-agent";
   await deleteNamedAgent(id);
   let gates = 0;
-  const gateOnReplace = async () => {
+  // chrome-agent-platform-4h47: EVERY create reaches this seam — the first-time
+  // create included, not only a replacement (this test used to pin the opposite:
+  // `gates === 1` because the first create skipped the gate and only the
+  // serialized second one saw a row). Each call now asserts the absent-row shape
+  // the caller's payload builder depends on.
+  const gateOnReplace = async ({ existing }) => {
     gates += 1;
+    assertEquals(existing, null, "a first-time create reaches the gate with a NULL existing row");
     return { ok: false, error: "owner approval required" };
   };
   const [a, b] = await Promise.all([
     createNamedAgent({ id, name: "First candidate", role: "one" }, { gateOnReplace }),
     createNamedAgent({ id, name: "Second candidate", role: "two" }, { gateOnReplace }),
   ]);
-  assertEquals([a.ok, b.ok].filter(Boolean).length, 1, "exactly one first create commits");
-  assertEquals(gates, 1, "the serialized second create observes replacement and is gated");
+  assertEquals([a.ok, b.ok].filter(Boolean).length, 0, "a denying gate commits NOTHING — the create path is gated");
+  assertEquals(gates, 2, "both concurrent creates reach the gate; no create can bypass it");
+  assertEquals(await getNamedAgent(id), null, "the denied creates wrote no row");
+
+  // ...and with an ALLOWING gate both land, serialized (the second replaces the
+  // first) — the property the lock still owes.
+  let allowed = 0;
+  const allow = async () => { allowed += 1; return { ok: true }; };
+  const [c, d] = await Promise.all([
+    createNamedAgent({ id, name: "First candidate", role: "one" }, { gateOnReplace: allow }),
+    createNamedAgent({ id, name: "Second candidate", role: "two" }, { gateOnReplace: allow }),
+  ]);
+  assertEquals([c.ok, d.ok].filter(Boolean).length, 2, "both creates land once the owner allows each");
+  assertEquals(allowed, 2, "each create asks the owner");
   const saved = await getNamedAgent(id);
   assert(["First candidate", "Second candidate"].includes(saved.name));
   await deleteNamedAgent(id);

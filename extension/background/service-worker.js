@@ -7974,7 +7974,23 @@ const handlers = mergeRouteMaps(
       {
         gateOnReplace: async ({ slug, existing, candidate }) => {
           let payload;
-          try { payload = namedBoundMutationPayload(namedCandidatePayload(candidate), existing); } catch { return { ok: false, error: "replacement payload is not approvable" }; }
+          try {
+            // chrome-agent-platform-4h47: `existing` is NULL on the create path
+            // (named-agents.js now runs this seam for EVERY create, not only a
+            // replacement). The payload builder must not dereference it: a throw
+            // here lands in the catch and REFUSES every create, which reads as
+            // "fixed" in a test that only checks nothing was written (51cd
+            // recorded exactly that trap). The absent-row form is an explicit,
+            // FIXED marker, so the digest stays deterministic and an approved
+            // retry re-sends byte-identical bytes — that is what the exact-retry
+            // consumption matches on.
+            payload = existing
+              ? namedBoundMutationPayload(namedCandidatePayload(candidate), existing)
+              : canonicalRecord(
+                canonicalField("request", namedCandidatePayload(candidate)),
+                canonicalField("existing", payloadFields([["present", "false"]])),
+              );
+          } catch { return { ok: false, error: "create payload is not approvable" }; }
           return await requireOwnerApproval(
             context,
             "named-agent.create",
@@ -10613,7 +10629,31 @@ const handlers = mergeRouteMaps(
     broadcastRegistryChanged();
     return { ok: true, skill: custom[idx] };
   },
-  async "background-agent.delete"({ id }) {
+  async "background-agent.delete"({ id }, context) {
+    // chrome-agent-platform-4h47: this handler took NO `context` at all, so the
+    // route could not call the approval seam its classification declares —
+    // `background-agent.delete` has been in OWNER_DIRECT_ACTIONS (owner-
+    // approval.js) since the census documented the discrepancy at §5.2, and the
+    // census classifies it OWNER_APPROVAL_DIRECT, but the code enforced neither.
+    // A model or any extension document without an owner gesture could delete a
+    // background agent outright. The gate is now the FIRST thing the route does,
+    // before the durable schedule teardown below.
+    //
+    // DISPOSITION (supervisor-approved, chrome-agent-platform-4h47): the action
+    // is NOT added to DESTRUCTIVE_ACTIONS, so an owner-direct caller is
+    // unchanged while a non-owner caller FAILS CLOSED with "operation is not
+    // approvable" — no pending card, the same strictly-owner-only disposition
+    // `named-agent.set-mcp-servers` carries (CAP-FB-20260908-MCP-APPROVAL-
+    // CONTRACT-01). There is no model tool surface for this route today. The
+    // policy list was deliberately NOT widened to make the census sentence
+    // true; the census was corrected instead.
+    const gate = await requireOwnerApproval(
+      context,
+      "background-agent.delete",
+      canonicalOperationTarget("background", { id: String(id ?? "") }),
+      payloadFields([["id", String(id ?? "")]]),
+    );
+    if (!gate.ok) return gate;
     // NON-BLOCKING schedule teardown FIRST (the instant-delete contract — the
     // same path background-agent disable uses): the payload is marked
     // cancelling (inert) DURABLY before this route responds, the live run

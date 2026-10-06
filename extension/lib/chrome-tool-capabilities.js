@@ -273,8 +273,30 @@ function derivePolicyClass(toolName, mutationClass) {
   return mutationClass === "read" ? "read" : "act";
 }
 
+/** One capability row. `requiresOwnerGesture` is POSITIONALLY 7th of 10 — keep
+ *  that in mind for anything below (see the deprecation note on the parameter). */
 function record(toolName, sourceKind, capabilityTokens, optionalPermissions,
-  productGrantScopeKind, replayClass, requiresOwnerGesture, mutationClass,
+  productGrantScopeKind, replayClass,
+  // DEPRECATED, UNIFORMLY FALSE, GATES NOTHING (chrome-agent-platform-4h47).
+  // Every one of the table's rows passes `false` and NO code reads the value to
+  // make a decision — the two places that touch it are this table's own boolean
+  // validator and the summary projections that copy it forward. It is therefore
+  // the exact class this bead exists to remove: an authority column that reads
+  // as declared coverage while enforcing nothing. Do NOT set it true to express
+  // a gate: a `true` here changes no behaviour and would make the table claim a
+  // protection it cannot provide. Wire the gate first (browser-tools.js /
+  // owner-approval.js), then come back and either make this column the single
+  // source of that gate or delete it.
+  // DELETION IS DEFERRED ON PURPOSE, OWNED BY chrome-agent-platform-yx2h: it is
+  // positionally 7th of 10, so removing it shifts `mutationClass`, `routeFamily`
+  // and `developerOnly` at every one of the 191 record() calls below — a 191-site
+  // positional shift is too large a review surface for this change, and the
+  // row-count pins (139/52/191) would not catch the shift, because the counts
+  // stay identical while the arguments move. Until yx2h removes it,
+  // tests/chrome-tool-capabilities.test.ts pins both halves instead: the column
+  // is uniformly false, AND every call's 8th argument is still a mutationClass,
+  // so the shift this note warns about cannot happen silently.
+  requiresOwnerGesture, mutationClass,
   routeFamily, developerOnly = false) {
   return {
     toolName,
@@ -599,6 +621,11 @@ function validateRow(row, seen) {
   if (!Array.isArray(row.optionalPermissions) || row.optionalPermissions.length > CHROME_TOOL_CAPABILITY_BOUNDS.maxPermissions || new Set(row.optionalPermissions).size !== row.optionalPermissions.length || row.optionalPermissions.some((permission) => typeof permission !== "string" || !PERMISSION.test(permission) || bytes(permission) > CHROME_TOOL_CAPABILITY_BOUNDS.maxPermissionBytes)) throw new Error("invalid_capability_permissions");
   if (!GRANT_SCOPES.has(row.productGrantScopeKind)) throw new Error("invalid_grant_scope");
   if (!REPLAY.has(row.replayClass) || row.trustedReplaySafety !== row.replayClass) throw new Error("invalid_replay_class");
+  // The DEPRECATED column's only reader: a boolean-shape check, NOT a gate
+  // (chrome-agent-platform-4h47; removal owned by chrome-agent-platform-yx2h).
+  // It stays so a future lane cannot set the value to a non-boolean and pretend
+  // it means something; the enforcement is the uniformly-false pin in
+  // tests/chrome-tool-capabilities.test.ts.
   if (typeof row.requiresOwnerGesture !== "boolean" || !MUTATION.has(row.mutationClass)) throw new Error("invalid_mutation_metadata");
   if (typeof row.routeFamily !== "string" || !ROUTE.test(row.routeFamily) || bytes(row.routeFamily) > CHROME_TOOL_CAPABILITY_BOUNDS.maxRouteFamilyBytes) throw new Error("invalid_route_family");
   if (typeof row.developerOnly !== "boolean") throw new Error("invalid_developer_only");
@@ -718,6 +745,9 @@ export function selectedCapabilitySummary(name, sourceKind, fallbackCapabilities
       optionalPermissions: row.optionalPermissions,
       productGrantScopeKind: row.productGrantScopeKind,
       replayClass: row.replayClass,
+      // DEPRECATED, uniformly false, gates nothing — copied forward only so this
+      // projection's shape is unchanged (chrome-agent-platform-4h47). Do not
+      // read it as coverage.
       requiresOwnerGesture: row.requiresOwnerGesture,
       mutationClass: row.mutationClass,
       routeFamily: row.routeFamily,
@@ -734,6 +764,7 @@ export function selectedCapabilitySummary(name, sourceKind, fallbackCapabilities
     optionalPermissions: Object.freeze([]),
     productGrantScopeKind: "none",
     replayClass: REPLAY.has(fallbackReplay) ? fallbackReplay : "unknown",
+    // DEPRECATED, uniformly false, gates nothing (chrome-agent-platform-4h47).
     requiresOwnerGesture: false,
     mutationClass: fallbackReplay === "read-only" ? "read" : fallbackReplay === "idempotent" ? "idempotent" : "mutating",
     routeFamily: sourceKind === "extension-builtin" ? "catalog.builtin" : "catalog.webmcp",
