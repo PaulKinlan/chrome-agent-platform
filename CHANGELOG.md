@@ -1,5 +1,8 @@
 # Changelog
 
+## [0.3.580] — 2026-10-06
+- Tabbing from the sidebar toggle now reaches its task and section controls instead of skipping straight to the composer.
+
 ## [0.3.579] — 2026-10-06
 - The privacy page now lists every kind of storage the extension uses and says where each kind of your data stays, so you can check the claim against the extension's own list.
 
