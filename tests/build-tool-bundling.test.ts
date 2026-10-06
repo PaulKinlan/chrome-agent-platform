@@ -148,10 +148,9 @@ export function reapOrphanedGenerators(): number[] {
   return reaped;
 }
 
-// At load: heal a previous kill's residue and reap stuck generator orphans
+// At load: heal a previous kill's residue (which reaps stuck generator orphans)
 // before any test in this file reads the shared tree.
 reconcileFixtureResidue();
-reapOrphanedGenerators();
 
 Deno.test("verify mode: the committed generated tree has zero drift", async () => {
   const r = await verify();
@@ -255,12 +254,21 @@ Deno.test("build wiring: the DEFAULT build fails closed on generated drift (prov
   assertEquals((await verify()).code, 0);
 });
 
-Deno.test("of6z: reapOrphanedGenerators sweeps ppid-1 generator orphans and ignores active non-orphans", () => {
+Deno.test("of6z: reapOrphanedGenerators sweeps ppid-1 generator orphans and ignores active non-orphans", async () => {
   // Spawning an active child matching the command line but with this process as parent (ppid === Deno.pid !== 1)
   const child = new Deno.Command("sh", {
-    args: ["-c", "sleep 10", "build-bundled-tool-packages.mjs"],
+    args: ["-c", "sleep 10; echo /scripts/build-bundled-tool-packages.mjs"],
   }).spawn();
   try {
+    let cmdline = "";
+    for (let i = 0; i < 20; i++) {
+      try {
+        cmdline = Deno.readTextFileSync(`/proc/${child.pid}/cmdline`);
+        if (cmdline.length > 0) break;
+      } catch { /* wait */ }
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert(cmdline.includes("build-bundled-tool-packages.mjs"), "negative control must carry the generator marker in argv");
     const reaped = reapOrphanedGenerators();
     // Must NOT reap child because child's PPID is Deno.pid, not 1
     assert(!reaped.includes(child.pid), "active non-orphan child matching cmdline must not be reaped");
@@ -270,16 +278,32 @@ Deno.test("of6z: reapOrphanedGenerators sweeps ppid-1 generator orphans and igno
 });
 
 Deno.test("of6z: reapOrphanedGenerators successfully reaps a real ppid-1 orphan in this worktree", async () => {
-  // Spawn a real detached grandchild reparented to init (ppid 1)
-  new Deno.Command("bash", {
-    args: ["-c", '(setsid sh -c "sleep 30" build-bundled-tool-packages.mjs) &'],
-    stdout: "null",
-    stderr: "null",
-  }).outputSync();
+  const pidFile = Deno.makeTempFileSync({ prefix: "of6z-orphan-pid-" });
+  let targetPid: number | null = null;
+  try {
+    // Spawn a real detached grandchild reparented to init (ppid 1)
+    new Deno.Command("bash", {
+      args: ["-c", `(setsid sh -c 'echo $$ > "${pidFile}"; sleep 30; echo /scripts/build-bundled-tool-packages.mjs' dummy) &`],
+      stdout: "null",
+      stderr: "null",
+    }).outputSync();
 
-  // Allow kernel a brief moment to complete reparenting to init
-  await new Promise((r) => setTimeout(r, 100));
+    // Allow kernel a brief moment to write PID and reparent to init
+    for (let i = 0; i < 20; i++) {
+      try {
+        const text = Deno.readTextFileSync(pidFile).trim();
+        if (text) { targetPid = Number(text); break; }
+      } catch { /* wait */ }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert(targetPid !== null && Number.isSafeInteger(targetPid), "orphan PID file must be populated");
 
-  const reaped = reapOrphanedGenerators();
-  assertEquals(reaped.length > 0, true, "orphan generator reparented to init must be detected and reaped");
+    const reaped = reapOrphanedGenerators();
+    assert(reaped.includes(targetPid), `orphan generator PID ${targetPid} reparented to init must be detected and reaped`);
+  } finally {
+    if (targetPid) {
+      try { Deno.kill(targetPid, "SIGKILL"); } catch { /* already reaped */ }
+    }
+    try { Deno.removeSync(pidFile); } catch { /* ignore */ }
+  }
 });

@@ -947,7 +947,8 @@ if (VERIFY) {
     console.error(`bundled-tool VERIFY FAILED — generated outputs drifted (${drift.length}):`);
     for (const d of drift) console.error(`  ${d}`);
     console.error("regenerate deliberately with: node build.mjs --target=store --regen-tools");
-    process.exit(1);
+    process.exitCode = 1;
+    return;
   }
   console.log(`VERIFY OK: ${emitted.size} generated files byte-identical to the committed tree`);
 }

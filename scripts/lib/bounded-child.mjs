@@ -29,7 +29,8 @@ function cleanActiveChildren() {
 }
 
 // chrome-agent-platform-of6z: ensure detached child process groups do not
-// linger as PPID=1 orphans when the parent process exits.
+// linger as PPID=1 orphans on a clean exit; a signal-killed parent is covered
+// by reapOrphanedGenerators() in tests/build-tool-bundling.test.ts.
 if (typeof process !== "undefined" && typeof process.on === "function") {
   process.on("exit", cleanActiveChildren);
 }
