@@ -2000,21 +2000,28 @@ Deno.test("guard: the attributed population and its documented exclusions", () =
   // DOCUMENTED EXCLUSIONS, exact on purpose: a change means someone started judging a
   // class this guard deliberately skips.
   // Owner ruling 2026-09-07: generated output is skipped because a guard whose verdict
-  // depends on whether someone ran `build:production` is not a guard. Two presence pins
-  // in build-debug-mode.test.ts read the generated service-worker bundle under dist.
+  // depends on whether someone ran `build:production` is not a guard. TWO presence pins in
+  // build-debug-mode.test.ts used to read the generated service-worker bundle under the built
+  // output directory. kj9s's consolidation (6a3adcf1: six builds -> three) REWRAPPED one of
+  // them rather than dropping it — `const storeHasVerbose = storeSw.includes('__CAP_BUILD_LOG_DEFAULT__')`
+  // became an inline negated assert, and a negated read is classed as an ABSENCE pin above
+  // (the `negated` branch), never as a build-artifact pin. The guarantee is intact: the store
+  // bundle must still not carry the default. So this class now holds ONE pin in that file,
+  // not two, and the total below moved 5 -> 4 for that reason alone — no class stopped being
+  // judged, and the leftover value is asserted EXACTLY, so a shape change cannot pass silently.
   // cc18 (2026-09-23) added THREE more, declared here rather than absorbed into a floor:
   // the wasm tree-shaking guard asserts `source.includes("WebAssembly")` against each of
   // the three built page bundles (options/ntp/sidepanel). That pin is a deliberate shape
   // check — those bundles carry the WORD five times as UI copy, and the guard counts API
   // CALLS via scripts/lib/wasm-call-scan.mjs — so it is exactly the class this ruling
-  // skips: its verdict would otherwise depend on whether a build had run. 2 + 3 = 5.
+  // skips: its verdict would otherwise depend on whether a build had run. 1 + 3 = 4.
   // (Since 8b8w reference-scoped the partition guard's driver inheritance, this
   // comment can name its subject: a PROSE mention of tests/wasm-tree-shaking.test.ts
   // is no longer a driver reference, so naming it inherits nothing. The dist
   // path itself is still built rather than spelled — the reads-dist detector
   // keys on that path as a LITERAL wherever it appears, and THIS file's text
   // must stay clean of it.)
-  assertEquals(stats.skippedBuildArtifact, 5,
+  assertEquals(stats.skippedBuildArtifact, 4,
     "build-artifact pins are skipped by owner ruling; a change here means dist is being judged");
   // The executable half of that ruling, and the proof behind this file's partition
   // exemption-by-assembly: no generated output is ever loaded and judged.
