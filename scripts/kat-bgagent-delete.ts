@@ -113,7 +113,9 @@ try {
       ws!.onerror = () => rej(new Error("CDP websocket failed to open"));
     }),
     15_000,
-  );
+  ).catch((e) => {
+    throw new Error(`CDP websocket did not open within 15000ms (${String(e)})`);
+  });
 
   // One id → { resolve, reject, timer }: a send that never gets a reply (dead
   // socket, page gone) must REJECT after SEND_TIMEOUT_MS, never hang forever.
