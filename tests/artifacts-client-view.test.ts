@@ -94,6 +94,20 @@ Deno.test("artifacts client view: F2 & F3 dynamic origin resolution and filter r
     "selectedAssetId must reset to null when param is absent");
 });
 
+Deno.test("artifacts search: final query debounced, filters immediate, pending work cancelled on navigation", () => {
+  const inputHandler = artifactsJs.split('searchInput?.addEventListener("input", (e) => {')[1]?.split("kindFilter?.addEventListener")[0];
+  assert(inputHandler?.includes("searchQuery = e.target.value.trim();"), "typing must update the query synchronously");
+  assert(inputHandler?.includes("pendingSearch?.();"), "typing must schedule only a trailing rebuild");
+  assert(!inputHandler?.includes("updateFilteredView()"), "typing must not rebuild the grid on each input");
+  assert(artifactsJs.includes("pendingSearch?.cancel(); // A discrete filter choice renders now"),
+    "kind selection must cancel a pending typing timer and render immediately");
+  assert(artifactsJs.includes("export function teardownArtifactsView()"), "the hub must have a teardown seam");
+  assert(ntpJs.includes("function hideViewInner() {\n  teardownArtifactsView();"),
+    "closing the hub view must cancel pending search work");
+  assert(ntpJs.includes("if (targetRoute !== VIEW_ROUTE.ARTIFACTS) teardownArtifactsView();"),
+    "switching directly from Artifacts to another view must cancel pending search work");
+});
+
 // 0iln: the live-preview reads used to be awaited one card at a time — up to
 // MAX_PREVIEWS = 24 sequential chrome.runtime -> SW -> OPFS round-trips, which is
 // the waterfall the perf-review station flagged. This pins the bounded-pool shape
