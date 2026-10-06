@@ -7,7 +7,7 @@ export function createAgentClickTarget(doc: any = (globalThis as any).document):
   const button = doc.querySelector("#new-agent");
   if (!button) return { ok: false, reason: "missing #new-agent" };
   const style = doc.defaultView!.getComputedStyle(button);
-  if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") {
+  if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) <= 0) {
     return { ok: false, reason: "hidden #new-agent" };
   }
   if (button.hasAttribute("disabled") || button.closest("[inert]")) {

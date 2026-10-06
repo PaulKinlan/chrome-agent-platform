@@ -5,15 +5,19 @@ import { fileURLToPath } from "node:url";
 import { clickVisibleCreateAgent, createAgentClickTarget } from "../scripts/lib/create-agent-click.ts";
 import { launchChrome, openCdp, resolveChromiumBinaryReport, teardownChrome } from "../scripts/lib/chrome-launch.ts";
 import { chromeProfileDir } from "../scripts/lib/chrome-profile-dir.ts";
+import { isUsableBinary } from "../scripts/lib/browser-refusal.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const EXT = fileURLToPath(new URL("../extension/", import.meta.url)).replace(/\/$/, "");
-const BINARY = resolveChromiumBinaryReport().binary;
-if (!BINARY) console.warn("w51r Create click: no Chrome resolvable; real-browser test IGNORED, not passed");
+const RESOLUTION = resolveChromiumBinaryReport();
+const BINARY = isUsableBinary(RESOLUTION.binary) ? RESOLUTION.binary : null;
+if (!BINARY) console.warn(`w51r Create click: no usable Chrome (${RESOLUTION.tried.join("; ")}); real-browser test IGNORED, not passed`);
 
 Deno.test("w51r: refusing a hidden button sends no CDP input; a visible button sends one real click", async () => {
-  const sent: string[] = [];
-  const cdp = { send: async (method: string, params: any) => { sent.push(`${method}:${params.type}`); } };
+  const sent: Array<{ method: string; type: string; x: number; y: number; session: string }> = [];
+  const cdp = { send: async (method: string, params: any, session: string) => {
+    sent.push({ method, type: params.type, x: params.x, y: params.y, session });
+  } };
   let error: Error | undefined;
   try {
     await clickVisibleCreateAgent(cdp, "test", async () => ({ ok: false, reason: "hidden #new-agent" }));
@@ -21,11 +25,25 @@ Deno.test("w51r: refusing a hidden button sends no CDP input; a visible button s
   assertEquals(error?.message, "Create dialog click refused: hidden #new-agent");
   assertEquals(sent, [], "a refusal must emit zero mouse events");
   await clickVisibleCreateAgent(cdp, "test", async () => ({ ok: true, x: 28, y: 80 }));
-  assertEquals(sent, ["Input.dispatchMouseEvent:mousePressed", "Input.dispatchMouseEvent:mouseReleased"]);
-  // A zero-sized, display:none button is a named refusal, not a (0,0) click.
-  const button = { hasAttribute: () => false, closest: () => null };
-  const fakeDoc = { querySelector: () => button, defaultView: { getComputedStyle: () => ({ display: "none", visibility: "visible" }) } };
-  assertEquals(createAgentClickTarget(fakeDoc), { ok: false, reason: "hidden #new-agent" });
+  assertEquals(sent, [
+    { method: "Input.dispatchMouseEvent", type: "mousePressed", x: 28, y: 80, session: "test" },
+    { method: "Input.dispatchMouseEvent", type: "mouseReleased", x: 28, y: 80, session: "test" },
+  ]);
+  // Exercise the REAL classifier at every refusal branch; none is a comment-only pin.
+  const button = { hasAttribute: () => false, closest: () => null,
+    scrollIntoView: () => {}, getBoundingClientRect: () => ({ x: 0, y: 0, width: 32, height: 32 }),
+    contains: () => false };
+  const doc = (b: any, style: any = { display: "block", visibility: "visible", opacity: "1" }, hit: any = b) => ({
+    querySelector: () => b, defaultView: { getComputedStyle: () => style }, elementFromPoint: () => hit,
+  });
+  assertEquals(createAgentClickTarget(doc(null)), { ok: false, reason: "missing #new-agent" });
+  assertEquals(createAgentClickTarget(doc(button, { display: "none", visibility: "visible", opacity: "1" })), { ok: false, reason: "hidden #new-agent" });
+  assertEquals(createAgentClickTarget(doc(button, { display: "block", visibility: "visible", opacity: "0" })), { ok: false, reason: "hidden #new-agent" });
+  assertEquals(createAgentClickTarget(doc({ ...button, hasAttribute: () => true })), { ok: false, reason: "disabled or inert #new-agent" });
+  assertEquals(createAgentClickTarget(doc({ ...button, closest: () => ({}) })), { ok: false, reason: "disabled or inert #new-agent" });
+  assertEquals(createAgentClickTarget(doc({ ...button, getBoundingClientRect: () => ({ x: 0, y: 0, width: 0, height: 0 }) })), { ok: false, reason: "zero-size #new-agent" });
+  assertEquals(createAgentClickTarget(doc(button, undefined, {})), { ok: false, reason: "occluded #new-agent" });
+  assertEquals(createAgentClickTarget(doc(button)), { ok: true, x: 16, y: 16 });
 });
 
 Deno.test({
