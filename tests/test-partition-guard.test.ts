@@ -172,7 +172,7 @@ Deno.test("partition guard: SERIAL membership is pinned with reasons and exists 
 // name — extend this list when a new wall-clock flake is declared, never remove an entry
 // without re-running that review.
 const WALL_CLOCK_FLAKE_SERIAL = [
-  "tests/serial-phase-timeout.test.ts", // 3vi7: 3.5 s fixture vs 2 s flat / 6 s scaled bounds
+  "tests/serial-phase-timeout.test.ts", // 3vi7 + cihz: declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds
   "tests/chrome-slot-semaphore-honesty.test.ts", // mee3: 1.5 s skip bound vs 2 s marker window
 ];
 

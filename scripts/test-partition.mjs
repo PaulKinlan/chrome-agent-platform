@@ -56,10 +56,12 @@ export const SERIAL_REASONS = {
   // queueing thresholds (a 1500 ms skip bound against a 2000 ms marker window),
   // which is exactly what the 32-worker parallel phase makes flaky.
   "tests/chrome-slot-semaphore-honesty.test.ts": "mutates CAP_CHROME_SLOT_DIR and makes wall-clock queueing assertions (races/flakes with other lock tests under the parallel phase)",
-  // 3vi7: tests/serial-phase-timeout.test.ts makes wall-clock queueing assertions
-  // (3.5 s fixture vs 2 s flat / 6 s scaled bounds) which race and flake under the
-  // 32-worker parallel phase on a heavily loaded fleet machine.
-  "tests/serial-phase-timeout.test.ts": "wall-clock bounds assertions (3.5 s fixture vs 2 s / 6 s bounds) race the parallel phase",
+  // 3vi7 + cihz: tests/serial-phase-timeout.test.ts makes wall-clock kill/survive assertions
+  // (a fixture that DECLARES 5000 ms of work, killed under a 4000 ms flat bound and surviving a
+  // 12000 ms scaled one) which race and flake under the 32-worker parallel phase on a heavily
+  // loaded fleet machine. cihz made the kill structural and the survive margin wide, but the
+  // assertions are still real elapsed time, so the declaration stands.
+  "tests/serial-phase-timeout.test.ts": "wall-clock kill/survive bounds assertions (declared 5000 ms work vs 4000 ms flat / 12000 ms scaled bounds) race the parallel phase",
 };
 export const SERIAL = new Set(Object.keys(SERIAL_REASONS));
 
