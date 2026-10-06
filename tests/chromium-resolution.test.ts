@@ -170,3 +170,38 @@ Deno.test("fyvc lock: an uncreatable parent fails with the REAL reason, not anot
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("s7wr review: a BARE override resolves through $PATH, is trimmed, and a directory names itself", async () => {
+  // (review finding 2) A bare name is NOT a filesystem path: a spawn resolves it through $PATH, so stat'ing
+  // it against the CWD would refuse a configuration that always worked - a false refusal introduced by the
+  // verification itself. The check follows the spawn's own rule and reports the absolute path it found.
+  const onPath = resolveChromiumBinaryReport({
+    envGet: envOf({ CAP_CHROMIUM: "chromium", PATH: "/one:/two" }),
+    usable: (p) => p === "/two/chromium",
+  });
+  assertEquals(onPath, {
+    binary: "/two/chromium",
+    tried: ["CAP_CHROMIUM=chromium (resolved on $PATH: /two/chromium)"],
+  });
+  const absent = resolveChromiumBinaryReport({
+    envGet: envOf({ CAP_CHROMIUM: "chromium", PATH: "/one:/two" }),
+    usable: () => false,
+  });
+  assertEquals(absent, { binary: null, tried: ["CAP_CHROMIUM=chromium (not found on $PATH)"] });
+
+  // (findings 3 and 4) Against the REAL filesystem, with no injection: a directory override is NAMED as a
+  // directory rather than "missing", and a trailing space in the value does not make a real browser look
+  // missing (the trimmed value is both checked and reported).
+  const dir = durableDir(`s7wr-review-${Deno.pid}-${tmpSeq++}`);
+  const runnable = `${dir}/runnable`;
+  Deno.writeTextFileSync(runnable, "#!/bin/sh\nexit 0\n");
+  Deno.chmodSync(runnable, 0o755);
+  try {
+    const asDirectory = resolveChromiumBinaryReport({ envGet: envOf({ CAP_CHROMIUM: dir }) });
+    assertEquals(asDirectory, { binary: null, tried: [`CAP_CHROMIUM=${dir} (a directory)`] });
+    const withSpace = resolveChromiumBinaryReport({ envGet: envOf({ CAP_CHROMIUM: `${runnable} ` }) });
+    assertEquals(withSpace, { binary: runnable, tried: [`CAP_CHROMIUM=${runnable}`] });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
