@@ -18,6 +18,9 @@
 import { fileURLToPath } from "node:url";
 import { assert, assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
+  BUILD_GATE,
+  BUILD_GATE_FILES,
+  BUILD_GATE_REASONS,
   classifyHazards,
   EXEMPTIONS,
   partition,
@@ -593,4 +596,21 @@ Deno.test("kj9s: every per-file serial bound names a SERIAL file, and no entry s
     Number.isSafeInteger(PRODUCTION_BUILD_TIMEOUT_MS) && PRODUCTION_BUILD_TIMEOUT_MS >= 180_000,
     `the child build bound must stay above the measured build cost, got ${PRODUCTION_BUILD_TIMEOUT_MS}`,
   );
+});
+
+Deno.test("h65e: every BUILD_GATE file is enumerated, exists in SERIAL_REASONS, and exists on disk", () => {
+  assert(BUILD_GATE_FILES.length >= 3, `BUILD_GATE_FILES must enumerate all build-behaviour tests, got ${BUILD_GATE_FILES.length}`);
+  const reasons = BUILD_GATE_REASONS as Record<string, string>;
+  for (const file of BUILD_GATE_FILES) {
+    assert(SERIAL.has(file), `${file} must be declared in SERIAL_REASONS`);
+    assert(typeof reasons[file] === "string" && reasons[file].length > 0, `${file} must have a non-empty reason in BUILD_GATE_REASONS`);
+    assert(Deno.statSync(`${ROOT}${file}`).isFile, `${file} must exist on disk`);
+  }
+});
+
+Deno.test("h65e: fast smoke assertion remains in SERIAL to catch broken builds in npm test", () => {
+  const smoke = "tests/build-smoke.test.ts";
+  assert(SERIAL.has(smoke), `${smoke} must be declared in SERIAL_REASONS`);
+  assert(!BUILD_GATE.has(smoke), `${smoke} must stay in npm test, not in BUILD_GATE`);
+  assert(Deno.statSync(`${ROOT}${smoke}`).isFile, `${smoke} must exist on disk`);
 });

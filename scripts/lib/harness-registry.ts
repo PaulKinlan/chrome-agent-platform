@@ -87,6 +87,11 @@ export const HARNESSES: Record<string, HarnessEntry> = {
   "component-gallery-smoke.ts": { class: "gate", npm: "test:components", reason: "does NOT take the fleet turn yet: same as a11y-audit — the components gate is not declared load-sensitive, and the turn is paired with that declaration on purpose (chrome-agent-platform-ryrr)" },
   "a11y-audit.ts": { class: "gate", npm: "test:a11y", reason: "does NOT take the fleet turn yet: a measurable, geometry-and-contrast gate whose load-sensitivity has no recorded run history, so making it wait for a quiet box would be a declaration without evidence (chrome-agent-platform-ryrr)" },
   "kat-runner.ts": { class: "gate", npm: "test:kat" },
+  "build-gate.ts": {
+    class: "gate",
+    npm: "test:build",
+    reason: "does NOT take the fleet turn: executes node build.mjs in-place through serial-phase runner with measured bounds (Option D / chrome-agent-platform-h65e)",
+  },
 
   // ── named (npm script, run on demand) ───────────────────────────────────
   "agent-access-journeys.ts": { class: "named", npm: "test:agent-access", reason: "81/7 at the re-inventory (seven agent-access checks red); 90 s; promote to a gate once green" },

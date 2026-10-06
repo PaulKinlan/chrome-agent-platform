@@ -16,9 +16,9 @@ Every landing on `origin/main` must follow this procedure. A merger lane does no
 
 3. **Two-Phase Suite Reporting (Serial + Parallel Breakdown)**
    - *Why*: The test suite operates in two fundamentally different phases:
-     - **Serial Phase (16 build/artifact files)**: Runs with process isolation; exercises builds, bundling, locks, and packaging.
+     - **Serial Phase (19 build/artifact files)**: Runs with process isolation; exercises builds, bundling, locks, and packaging.
      - **Parallel Phase (472+ files)**: Runs inside a shared `deno test --parallel` process; exercises unit tests and in-memory mocks.
-     A single headline count (e.g. "4404 passed") obscures whether the serial phase ran at all and masks phase-specific environmental failures. Every landing report must state: `16 serial files + N parallel files = Total files, X passed, Y failed, Z ignored, wall time Ts`.
+     A single headline count (e.g. "4404 passed") obscures whether the serial phase ran at all and masks phase-specific environmental failures. Every landing report must state: `19 serial files + N parallel files = Total files, X passed, Y failed, Z ignored, wall time Ts`.
 
 4. **Union Changelog Reconciliation & Monotonic Numbering**
    - *Why*: Every candidate branch generates a version bump from its commit message. Rebase collisions in `CHANGELOG.md` frequently lead careless mergers to overwrite another lane's release notes. Mergers must union-resolve changelog bodies: preserve all prior version sections, preserve all user-facing bullets, and place the new release block on top. Patch numbers in the `0.3.x` series must be strictly contiguous (no gaps, no duplicates); missing numbers fail `scripts/check-changelog.mjs`.
@@ -40,7 +40,7 @@ When a test run fails, never guess and never blame ambient load without mechanis
 
 | Name | Trigger / Symptom | Phase | Mechanism & Discriminator |
 |---|---|---|---|
-| **`fnmr` futex hang** | `build-bundled-tool-packages.mjs --verify` hangs > 120s (`futex_do_wait`) | Serial (`tests/build-tool-bundling.test.ts:136`) | Rare Node/Deno futex deadlock in child process. **Discriminator**: Runs in ~1–2s when executed in isolation (`npm run test:file -- tests/build-tool-bundling.test.ts`). |
+| **`fnmr` futex hang** | `build-bundled-tool-packages.mjs --verify` hangs > 120s (`futex_do_wait`) | Dedicated build gate / serial (`tests/build-tool-bundling.test.ts:136`) | Rare Node/Deno futex deadlock in child process. **Discriminator**: Runs in ~1–2s when executed in isolation (`npm run test:file -- tests/build-tool-bundling.test.ts`). |
 | **`m3a2` env race** | `ENOENT: mkdir '/proc/cap-chp-impossible/...'` | Parallel (`tests/dist-staleness-note.test.ts`) | `tests/durable-root.test.ts:69` mutates process-global `CAP_DURABLE_ROOT` in the shared parallel test process. **Discriminator**: Passes 100% in isolation; fails only when racing `durable-root.test.ts`. |
 | **`4vfj` stale selector** | 4 combobox checks fail on `#task-input` | Standalone (`npm run test:a11y`) | Pre-existing selector drift on unmodified main prior to composer-target migration. |
 
@@ -108,9 +108,12 @@ npm run note:dist   # NOTE (not a gate) — the real dist gate is npm test's ser
 npm run test:file -- tests/<relevant>.test.ts
 # (If UI/harness): deno run -A scripts/<harness>.ts
 
-# 8. Run full two-phase suite gate
+# 8. Run full two-phase suite gate and dedicated build gate (Option D: chrome-agent-platform-h65e)
 npm test > /tmp/npm-test-<bead>.log 2>&1
 # Verify exit 0, zero failures, record wall time and phase counts
+# Run dedicated heavy build-behaviour gate:
+npm run test:build > /tmp/npm-test-build-<bead>.log 2>&1
+# Verify exit 0, zero failures (runs build-bootstrap, build-debug-mode, build-tool-bundling)
 
 # 9. Push explicit SHA to main
 git push origin <commit-sha>:main
@@ -142,7 +145,7 @@ When work is divided into a base capability branch and one or more dependent fea
    - Does NOT duplicate changelog notes or version bump files.
    - Contains ONLY the delta of the dependent change.
 4. **Independent Numbering**: The dependent branch receives its own sequential version bump and its own distinct changelog bullet upon landing.
-5. **Full Gates on the Stacked Tip**: Run the full two-phase suite (`npm test`) on the final landed tree. Never assume that because the base was green and the dependent was green on its local parent, the union on main is green.
+5. **Full Gates on the Stacked Tip**: Run the full two-phase suite (`npm test`) and dedicated build gate (`npm run test:build`) on the final landed tree. Never assume that because the base was green and the dependent was green on its local parent, the union on main is green.
 
 ---
 
