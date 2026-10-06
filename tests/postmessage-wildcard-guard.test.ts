@@ -99,6 +99,58 @@ function splitTopLevel(args: string): string[] {
   return parts;
 }
 
+/**
+ * The RAW-source offset the character at `strippedOffset` of the COMMENT-STRIPPED text came from.
+ *
+ * WHY THIS EXISTS (bead 8jgs): the reported line used to be the line index in the STRIPPED text —
+ * `stripped.slice(0, m.index).split("\n").length` — so a violation message named a line that does not
+ * exist in the file. MEASURED: the live cap:go-home wildcard in extension/options/options.js is on
+ * RAW line 4614 and was reported as 4599, because stripComments() collapses each multi-line block
+ * comment above it to a single "\n"; the drift grows with a file's comment volume, and a line an
+ * operator cannot open is worse than no line. Matching stays comment-blind — that is what keeps a
+ * wildcard merely MENTIONED in a comment from counting — and only the REPORTED LINE becomes raw.
+ * (tests/chrome-lock-fixture-scope.test.ts, which strips comments with its own local stripper, keeps
+ * their newlines so "a reported line number is the file's real line"; this file matches on the shared
+ * stripper instead, so the offset is mapped back rather than the stripper duplicated.)
+ *
+ * stripCodeRange() copies every non-comment character verbatim and in order, so the two texts agree
+ * character for character until a comment region: raw keeps the region, stripped replaces it with
+ * exactly one character (" " for a line comment or a single-line block comment, "\n" when the block
+ * comment spanned lines). That is the whole walk — equal characters are the same character, and the
+ * one legitimate disagreement is a raw comment start, whose region is skipped in raw while its single
+ * replacement character is consumed in stripped. Anything else returns -1 so the caller fails closed
+ * instead of reporting a confident wrong line.
+ */
+export function rawOffsetForStrippedOffset(raw: string, stripped: string, strippedOffset: number): number {
+  let j = 0;
+  for (let k = 0; k < strippedOffset; k++) {
+    if (j >= raw.length) return -1;
+    if (raw[j] === stripped[k]) {
+      j++;
+      continue;
+    }
+    if (raw[j] === "/" && (raw[j + 1] === "/" || raw[j + 1] === "*")) {
+      j = endOfRawComment(raw, j);
+      continue; // the replacement stripCodeRange() pushed for this comment is stripped[k]
+    }
+    return -1;
+  }
+  return j;
+}
+
+const LINE_TERMINATORS = new Set(["\n", "\r", "\u2028", "\u2029"]);
+
+/** The offset just past the comment that starts at `i` — the same span stripCodeRange() drops. */
+function endOfRawComment(raw: string, i: number): number {
+  if (raw[i + 1] === "/") {
+    let j = i + 2;
+    while (j < raw.length && !LINE_TERMINATORS.has(raw[j])) j++;
+    return j;
+  }
+  const close = raw.indexOf("*/", i + 2);
+  return close < 0 ? raw.length : close + 2;
+}
+
 /** Every `postMessage(payload, target)` whose target is a wildcard, with balanced-paren parsing. */
 export function findWildcardPostMessages(files: Array<{ path: string; source: string }>) {
   const out: Array<{ file: string; line: number; payload: string; fingerprint: string }> = [];
@@ -130,7 +182,16 @@ export function findWildcardPostMessages(files: Array<{ path: string; source: st
       }
       const parts = splitTopLevel(source.slice(start, i - 1));
       if (!WILDCARD_RE.test(parts[1] ?? "")) continue;
-      const line = source.slice(0, m.index).split("\n").length;
+      // THE LINE AN OPERATOR CAN OPEN: the RAW source's line, not the stripped text's (bead 8jgs).
+      // The match itself was made on the stripped text; `m[0]` always starts with the literal
+      // `postMessage`, so the mapped offset is verified to hold it before a line is derived from it.
+      const rawOffset = rawOffsetForStrippedOffset(raw, source, m.index);
+      if (rawOffset < 0 || !raw.startsWith("postMessage", rawOffset)) {
+        throw new Error(
+          `${path}: the comment-stripped offset ${m.index} (${JSON.stringify(m[0])}) does not map back to the same call in the raw source (mapped to ${rawOffset}) — refusing to report a line that may not exist`,
+        );
+      }
+      const line = raw.slice(0, rawOffset).split("\n").length;
       out.push({
         file: path,
         line,
@@ -387,6 +448,87 @@ Deno.test("wfxe: the scanner can see a wildcard at all (it must not pass by meas
   assertEquals(found.length, 1, "exactly the wildcard call must be found, not the origin-scoped one");
   assertEquals(found[0].file, "extension/synthetic.js");
   assert(found[0].payload.includes("cap:edit-named-agent"), found[0].payload);
+});
+
+Deno.test("8jgs: a reported line holds the CALL ITSELF — the index comes from the RAW source", () => {
+  const files = scanTree();
+  const rawByFile = new Map(files.map((f) => [f.path, f.source] as const));
+  const found = findWildcardPostMessages(files);
+  assert(found.length >= 10, `expected at least 10 wildcard channels, measured ${found.length}`);
+
+  // Independent of the scanner's own mapping: the raw line it named must CARRY the matched token.
+  // The defect (bead 8jgs) reported a line index from the comment-stripped text, which lands on
+  // whatever raw line happens to sit that far into the file — measured today, options.js:4599, an
+  // unrelated `// avoid a double copy).` comment. No site can pass this in that state.
+  const wrong = found
+    .map((site) => [site, (rawByFile.get(site.file) ?? "").split("\n")[site.line - 1] ?? ""] as const)
+    .filter(([, rawLine]) => !rawLine.includes("postMessage"))
+    .map(([site, rawLine]) => `${site.file}:${site.line} does not hold the call — it is ${JSON.stringify(rawLine.slice(0, 80))}`);
+  assertEquals(wrong, [], `every reported line must be the raw line of its own call:\n  ${wrong.join("\n  ")}`);
+
+  // The measured case, pinned against the file rather than against a hardcoded number (the inventory
+  // is anchored by file + payload, never by line — bead s0o2). `lastIndexOf` before the payload
+  // literal is the call's own `postMessage` token, computed from the RAW text with no stripper at all.
+  const OPTIONS = "extension/options/options.js";
+  const raw = rawByFile.get(OPTIONS) ?? "";
+  const payloadAt = raw.indexOf('"cap:go-home"');
+  assert(payloadAt > 0, `${OPTIONS} must still carry the cap:go-home literal`);
+  assertEquals(
+    raw.indexOf('"cap:go-home"', payloadAt + 1),
+    -1,
+    `${OPTIONS} must carry exactly one cap:go-home literal for this pin to be unambiguous`,
+  );
+  const rawLineOfCall = raw.slice(0, raw.lastIndexOf("postMessage", payloadAt)).split("\n").length;
+  const site = found.find((s) => s.file === OPTIONS && s.payload === '{ type: "cap:go-home" }');
+  assert(site, `${OPTIONS} must still carry the cap:go-home wildcard channel`);
+  assertEquals(
+    site.line,
+    rawLineOfCall,
+    `${OPTIONS} cap:go-home: the guard reported line ${site.line}, its raw line is ${rawLineOfCall}`,
+  );
+  // ...and the pin must keep DISCRIMINATING: this site's stripped-text line is only different while
+  // multi-line block comments sit above it. If that stops being true, the comparison above proves
+  // nothing and this guard says so instead of passing quietly.
+  const strippedLine = stripComments(raw)
+    .split("\n")
+    .findIndex((l) => l.includes("postMessage") && l.includes("cap:go-home")) + 1;
+  assert(
+    strippedLine > 0 && strippedLine !== rawLineOfCall,
+    `${OPTIONS}: expected a stripped-text line different from the raw line (raw ${rawLineOfCall}, stripped ${strippedLine}) — the drift this pin exists for has gone away`,
+  );
+});
+
+Deno.test("8jgs: a comment block above a wildcard does not shift the reported line", () => {
+  // The FIXTURE case: one line comment plus a four-line block comment above a single wildcard. The
+  // stripper collapses that block's internal newlines to one, so the old computation indexed the
+  // stripped text (MEASURED here: line 4) while the call sits on raw line 6. The mapping must report
+  // the raw line, and the two must disagree for this fixture to prove anything.
+  const lines = [
+    "// a leading line comment",
+    "/* a block comment",
+    "   that spans",
+    "   several",
+    "   lines */",
+    `window.parent.postMessage({ type: "cap:fixture" }, "*");`,
+  ];
+  const source = lines.join("\n");
+  const found = findWildcardPostMessages([{ path: "extension/fixture.js", source }]);
+  assertEquals(found.length, 1, "exactly the fixture's one wildcard call must be found");
+  assertEquals(
+    found[0].line,
+    lines.length,
+    `the fixture's wildcard is on raw line ${lines.length}, reported ${found[0].line}`,
+  );
+  const strippedLine = stripComments(source)
+    .split("\n")
+    .findIndex((l) => l.includes("postMessage")) + 1;
+  assert(
+    strippedLine > 0 && strippedLine !== found[0].line,
+    `the fixture must exercise the drift (stripped line ${strippedLine}, raw line ${found[0].line})`,
+  );
+  // FAIL CLOSED: a stripped text that is not this raw text's stripping must yield -1, never an
+  // offset that would become a confident wrong line.
+  assertEquals(rawOffsetForStrippedOffset("const x = 1;", "const y = 2;", 8), -1);
 });
 
 Deno.test("wfxe: falsification — a synthetic secret-bearing wildcard is refused by the rule", () => {
