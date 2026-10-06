@@ -83,13 +83,27 @@ Deno.test("cap:fetch policy: hosts are extracted from URL literals; a computed f
 Deno.test("cap:fetch policy (v6ej): DNS-rebinding residual is formally registered in RISK-REGISTER and THREAT_MODEL", async () => {
   const root = fileURLToPath(new URL("..", import.meta.url));
   const riskRegister = await Deno.readTextFile(join(root, "docs/RISK-REGISTER.md"));
-  assert(riskRegister.includes("R23 (M)"), "RISK-REGISTER.md must define entry R23 for DNS-rebinding residual");
-  assert(riskRegister.includes("extension/lib/fetch-policy.js:21"), "R23 must cite fetch-policy.js:21");
-  assert(riskRegister.includes("v6ej"), "R23 must cite bead v6ej");
-  assert(riskRegister.includes("TM-104"), "R23 must cite software factory TM-104 finding");
+  const r23 = riskRegister.split("### R23")[1]?.split("\n### ")[0];
+  assert(r23 !== undefined, "RISK-REGISTER.md must define entry R23 for DNS-rebinding residual");
+  assert(r23.includes("- **Risk:**"), "R23 must contain - **Risk:**");
+  assert(r23.includes("- **Lives at:**"), "R23 must contain - **Lives at:**");
+  assert(r23.includes("- **Mitigation:**"), "R23 must contain - **Mitigation:**");
+  assert(r23.includes("- **Open question:**"), "R23 must contain - **Open question:**");
+  assert(r23.includes("ADJUDICATED AND WITHHELD"), "R23 must be marked ADJUDICATED AND WITHHELD");
+  assert(r23.includes("chrome-agent-platform-coord"), "R23 must name accepting decider");
+  assert(r23.includes("REOPEN TRIGGER"), "R23 must specify reopen trigger");
+  assert(r23.includes("extension/lib/fetch-policy.js:21"), "R23 must cite fetch-policy.js:21");
+  assert(r23.includes("extension/lib/python-network.js:183"), "R23 must cite python-network.js:183");
+  assert(r23.includes("extension/background/routes/enclave-proxy.js:348"), "R23 must cite enclave-proxy.js:348");
+  assert(r23.includes("v6ej"), "R23 must cite bead v6ej");
+  assert(r23.includes("TM-104"), "R23 must cite software factory TM-104 finding");
+
+  const fetchPolicy = await Deno.readTextFile(join(root, "extension/lib/fetch-policy.js"));
+  assert(fetchPolicy.includes("R23"), "fetch-policy.js must cite RISK-REGISTER.md R23 in header comment");
 
   const threatModel = await Deno.readTextFile(join(root, "THREAT_MODEL.md"));
   assert(threatModel.includes("Brokered fetch DNS rebinding (TM-104 / v6ej)"), "THREAT_MODEL.md must document DNS rebinding exclusion in §7");
+  assert(threatModel.includes("chrome-agent-platform-coord"), "THREAT_MODEL.md §7 item 9 must name accepting decider");
   assert(threatModel.includes("**Register:** R23"), "THREAT_MODEL.md T6 must cross-reference register R23");
 });
 

@@ -233,11 +233,13 @@ consequences are carried by the matching register entry where one exists.
 
 ### T6. SSRF and URL-channel exfiltration through the brokered fetch
 
-- **Boundary:** TB4. **Evidence:** `extension/lib/fetch-policy.js:92`
-  (`isPrivateOrLoopbackHost`), `:117` / `:135` (`checkFetchPolicy`), `:155`
-  (`extractFetchHosts`); the route at `extension/background/service-worker.js:6882`
-  (`credentials: "omit"`, no redirect following, per-run host allow-list, GET/HEAD only).
-  **Tests:** `tests/cap-fetch-deny.test.ts`; live SSRF probe at
+- **Boundary:** TB4. **Evidence:** `extension/lib/fetch-policy.js:93`
+  (`isPrivateOrLoopbackHost`), `:118` / `:136` (`checkFetchPolicy`), `:156`
+  (`extractFetchHosts`); shared by `checkPythonNetworkRequest`
+  (`extension/lib/python-network.js:183`) and the enclave proxy
+  (`extension/background/routes/enclave-proxy.js:348`); SW routes at
+  `extension/background/service-worker.js:6882` (`cap:fetch`) and `:6958`
+  (`python.fetch`). **Tests:** `tests/cap-fetch-deny.test.ts`; live SSRF probe at
   `scripts/security-suite.ts:389`. **Residual, stated in the source:** DNS rebinding of a
   listed host is not covered (`extension/lib/fetch-policy.js:21`). **Register:** R23
   (adjudicated and withheld in §7 item 9).
@@ -448,11 +450,14 @@ decision and, where one exists, the trigger that would reopen it.
    prohibition: `tests/chrome-tools-t12.test.ts` holds the removal guard and the journey
    suite asserts absence from the manifest (`docs/CONSTITUTION.md:107`).
 9. **Brokered fetch DNS rebinding (TM-104 / v6ej).** ADJUDICATED AND WITHHELD.
+   Accepted on 2026-10-05 by coordinator lane (`chrome-agent-platform-coord`) on
+   platform-limitation grounds (no MV3 DNS/IP primitive; owner ratification pending).
    The service worker fetch policy (`extension/lib/fetch-policy.js:21`) enforces the
    private/loopback deny list on the URL host string and cannot resolve DNS or pin
    socket destination IPs within the MV3 platform. Bounded by the owner-approved
-   per-run host allowlist (`checkFetchPolicy`). **Owning register entry: R23,
-   including its reopen trigger.**
+   per-run host allowlist (`checkFetchPolicy` for script fetch), per-origin grants
+   (`python.fetch`), and frozen service allowlists (enclave proxy). **Owning register
+   entry: R23, including its reopen trigger.**
 
 ---
 
