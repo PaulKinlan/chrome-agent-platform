@@ -25,6 +25,10 @@ import {
   validateDistCompleteMarker,
   INDEXED_SOURCE_EXCLUDED_PATHS,
 } from "../scripts/dist-complete.mjs";
+// chrome-agent-platform-kj9s: one MEASURED child bound shared by the build-heavy serial files,
+// instead of a per-file hard-coded number (see PRODUCTION_BUILD_TIMEOUT_MS). The file's window
+// (SERIAL_FILE_TIMEOUTS) still governs the whole file.
+import { PRODUCTION_BUILD_TIMEOUT_MS } from "../scripts/test-partition.mjs";
 const cpMod = "node:child_process";
 const { spawnSync } = await import(cpMod);
 
@@ -34,7 +38,7 @@ function build(args = []) {
   const r = spawnSync("node", ["build.mjs", ...args], {
     cwd: ROOT,
     encoding: "utf8",
-    timeout: 300_000,
+    timeout: PRODUCTION_BUILD_TIMEOUT_MS,
   });
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -52,73 +56,56 @@ async function marker() {
   return JSON.parse(await readFile(path.join(DIST, "dist.complete"), "utf8"));
 }
 
-Deno.test("build mode: the DEFAULT build is the debug (developer) bundle with sourcemaps", async () => {
-  const r = build(); // no args — the npm run build path
-  assertEquals(r.code, 0, r.stderr.slice(0, 2000));
-  const m = await marker();
-  assertEquals(m.target, "developer", "default build stamps the developer target");
+// ── chrome-agent-platform-kj9s: the mode assertions are regrouped onto TWO builds + one steady-state build ──
+// Each build below is a REAL build and every assertion keeps its own discriminating power: the
+// developer build's sourcemaps/define/marker are read from THAT build, the store build's absence of
+// sourcemaps and its marker from THIS one, and the dev-vs-store source-authority equality compares
+// the two markers THIS test made. The old file needed SIX builds and read the store bundle out of a
+// PREVIOUS test's build (a cross-test shared-state dependency); nothing here depends on another test.
+
+Deno.test("build mode: developer bundle emits sourcemaps; store bundle does not — markers, defines and source authority asserted on THIS test's own two builds", async () => {
+  // 1. DEVELOPER (the default build: `node build.mjs` / `npm run build`).
+  const devBuild = build();
+  assertEquals(devBuild.code, 0, devBuild.stderr.slice(0, 2000));
+  const devMarker = await marker();
+  assertEquals(devMarker.target, "developer", "default build stamps the developer target");
   assert(await exists("background/service-worker.js.map"), "debug build emits the SW sourcemap");
   assert(await exists("options.bundle.js.map"), "debug build emits the options sourcemap");
-  const sw = await readFile(path.join(DIST, "background/service-worker.js"), "utf8");
-  assertStringIncludes(sw, "sourceMappingURL=service-worker.js.map");
-  // The sourcemap is valid JSON with real source entries (DevTools resolves frames).
+  const devSw = await readFile(path.join(DIST, "background/service-worker.js"), "utf8");
+  assertStringIncludes(devSw, "sourceMappingURL=service-worker.js.map");
   const map = JSON.parse(await readFile(path.join(DIST, "background/service-worker.js.map"), "utf8"));
   assert(Array.isArray(map.sources) && map.sources.length > 10, "sourcemap names real sources");
   assert(
     map.sources.some((s) => String(s).includes("service-worker.js")),
     "sourcemap includes the SW entry source",
   );
-});
+  // The injected log-verbosity define is fully substituted in the DEBUG bundle.
+  assert(!devSw.includes("__CAP_BUILD_LOG_DEFAULT__"), "define substituted in debug bundle");
+  const devValidated = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "developer" });
+  assertEquals(devValidated.target, "developer");
 
-Deno.test("build mode: --target=store is the production bundle — store marker, no sourcemaps", async () => {
-  const r = build(["--target=store"]);
-  assertEquals(r.code, 0, r.stderr.slice(0, 2000));
-  const m = await marker();
-  assertEquals(m.target, "store", "store build stamps the store target");
+  // 2. STORE (`--target=store` / `npm run build:production`).
+  const storeBuild = build(["--target=store"]);
+  assertEquals(storeBuild.code, 0, storeBuild.stderr.slice(0, 2000));
+  const storeMarker = await marker();
+  assertEquals(storeMarker.target, "store", "store build stamps the store target");
   assert(!(await exists("background/service-worker.js.map")), "store build emits NO SW sourcemap");
   assert(!(await exists("options.bundle.js.map")), "store build emits NO options sourcemap");
-  const sw = await readFile(path.join(DIST, "background/service-worker.js"), "utf8");
-  assert(!sw.includes("sourceMappingURL="), "store bundle carries no sourcemap comment");
-});
-
-Deno.test("build mode: the injected log-verbosity default differs by mode (debug=verbose, store=off)", async () => {
-  // Store bundle (built last, above): the cap-log build default folds to "off".
   const storeSw = await readFile(path.join(DIST, "background/service-worker.js"), "utf8");
-  const storeHasVerbose = storeSw.includes('__CAP_BUILD_LOG_DEFAULT__');
-  assert(!storeHasVerbose, "the define identifier is fully substituted in the bundle");
-  // Debug bundle proves the other side.
-  const r = build(["--target=developer"]);
-  assertEquals(r.code, 0, r.stderr.slice(0, 2000));
-  const debugSw = await readFile(path.join(DIST, "background/service-worker.js"), "utf8");
-  assert(!debugSw.includes("__CAP_BUILD_LOG_DEFAULT__"), "define substituted in debug bundle too");
-  // Restore the production (store) dist as the steady state for packaging flows.
-  const restore = build(["--target=store"]);
-  assertEquals(restore.code, 0, restore.stderr.slice(0, 2000));
-  assertEquals((await marker()).target, "store");
-});
+  assert(!storeSw.includes("sourceMappingURL="), "store bundle carries no sourcemap comment");
+  // …and the same define is fully substituted in the STORE bundle (read from THIS build).
+  assert(!storeSw.includes("__CAP_BUILD_LOG_DEFAULT__"), "define substituted in store bundle");
+  const storeValidated = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "store" });
+  assertEquals(storeValidated.target, "store");
 
-Deno.test("build mode: developer/store alternation preserves valid indexed source authority", async () => {
-  // 1. Build developer target
-  const rDev = build(["--target=developer"]);
-  assertEquals(rDev.code, 0, rDev.stderr.slice(0, 2000));
-  const mDev = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "developer" });
-  assertEquals(mDev.target, "developer");
-
-  // 2. Build store target immediately after
-  const rStore = build(["--target=store"]);
-  assertEquals(rStore.code, 0, rStore.stderr.slice(0, 2000));
-  const mStore = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "store" });
-  assertEquals(mStore.target, "store");
-
-  // 3. Verify that circular generated bundle docs/diff-core.bundle.js is explicitly excluded from source authority
+  // 3. Source authority is IDENTICAL across targets for the same extension source, and the circular
+  //    generated bundle stays excluded from it.
   assertEquals(INDEXED_SOURCE_EXCLUDED_PATHS.size, 1, "exclusion set must contain exactly one member");
   assert(INDEXED_SOURCE_EXCLUDED_PATHS.has("docs/diff-core.bundle.js"), "docs/diff-core.bundle.js must be excluded from indexed source authority");
+  assertEquals(storeValidated.source.digest, devValidated.source.digest, "underlying indexed source authority must match between dev and store targets");
+  assertEquals(storeValidated.source.files, devValidated.source.files, "indexed source file count must match between dev and store targets");
 
-  // 4. Source authority digest must remain stable across targets for identical underlying extension source
-  assertEquals(mStore.source.digest, mDev.source.digest, "underlying indexed source authority must match between dev and store targets");
-  assertEquals(mStore.source.files, mDev.source.files, "indexed source file count must match between dev and store targets");
-
-  // 5. Tamper-evident gate: modifying any real indexed source file invalidates source authority
+  // 4. Tamper-evident gate (no build): modifying any real indexed source invalidates authority.
   const realFile = path.join(ROOT, "extension/lib/pure.js");
   const originalBytes = await readFile(realFile);
   try {
@@ -134,4 +121,14 @@ Deno.test("build mode: developer/store alternation preserves valid indexed sourc
   } finally {
     await writeFile(realFile, originalBytes);
   }
+});
+
+Deno.test("build mode: --target=store leaves the STORE dist as the steady state the following serial files read", async () => {
+  // The serial phase's later files (packaging, bundle-budget, tool-exec-preview) read a store dist;
+  // this test owns leaving the tree in that state, instead of relying on an earlier test's build.
+  const store = build(["--target=store"]);
+  assertEquals(store.code, 0, store.stderr.slice(0, 2000));
+  assertEquals((await marker()).target, "store");
+  const validated = await validateDistCompleteMarker({ root: ROOT, distRoot: DIST, expectedTarget: "store" });
+  assertEquals(validated.target, "store", "the steady-state store dist validates at its own target");
 });
