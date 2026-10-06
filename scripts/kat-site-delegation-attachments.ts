@@ -4,7 +4,7 @@
 
 import { wireValue } from "./lib/cdp-eval.ts";
 import { fileURLToPath } from "node:url";
-import { launchChrome, waitForServiceWorker } from "./lib/chrome-launch.ts";
+import { launchChrome, waitForServiceWorker, teardownChrome } from "./lib/chrome-launch.ts";
 import { textToDataUrl } from "../extension/lib/attachments.js";
 import { chromeProfileDir } from "./lib/chrome-profile-dir.ts";
 
@@ -23,9 +23,9 @@ const { proc, wsUrl } = await launchChrome({
 });
 
 const HARD_TIMEOUT_MS = 35_000;
-const hardTimer = setTimeout(() => {
+const hardTimer = setTimeout(async () => {
   console.error(`kat-site-delegation-attachments: timed out after ${HARD_TIMEOUT_MS} ms`);
-  try { proc.kill("SIGKILL"); } catch {}
+  await teardownChrome(proc, profile).catch(() => {});
   Deno.exit(1);
 }, HARD_TIMEOUT_MS);
 
@@ -151,7 +151,7 @@ try {
 } finally {
   clearTimeout(hardTimer);
   try { ws.close(); } catch {}
-  try { proc.kill("SIGKILL"); } catch {}
+  await teardownChrome(proc, profile);
   await Deno.remove(profile, { recursive: true }).catch(() => {});
 }
 

@@ -31,6 +31,7 @@ import { acquireHeavyGateSlot, HeavyGateSlotRefusedError, type HeavyGateLease } 
 import { resolveChromeForTesting } from "./chrome-for-testing.ts";
 import { isUsableBinary } from "./browser-refusal.ts";
 import { killProcessTree } from "./process-tree.ts";
+import { chromeProfileDir } from "./chrome-profile-dir.ts";
 
 export interface LaunchedChrome {
   /** The spawned Chrome. The caller owns killing it. */
@@ -591,9 +592,30 @@ export async function launchChrome(opts: {
         "The port is assigned by the kernel and read back from Chrome's own stderr.",
     );
   }
+  // Resolve the profile this launch runs under BEFORE building argv, so that
+  // close()/teardownChrome always have a unique marker to match the WHOLE
+  // Chromium process tree against (children inherit --user-data-dir in argv).
+  // chrome-agent-platform-jixr: a launch with no resolvable profile falls back
+  // to a parent-only kill in teardownChrome, which orphans zygote/renderer/GPU.
+  const USER_DATA_PREFIX = "--" + "user-data-dir=";
+  let resolvedProfile = opts.profile;
+  if (!resolvedProfile) {
+    for (const arg of extras) {
+      if (arg.startsWith(USER_DATA_PREFIX)) {
+        resolvedProfile = arg.slice(USER_DATA_PREFIX.length);
+        break;
+      }
+    }
+  }
+  // A real-browser launch that names neither profile nor --user-data-dir would
+  // otherwise share Chrome's default profile and leave no tree-kill marker.
+  // Assign a per-instance durable profile so the tree can always be reaped.
+  if (!resolvedProfile && opts.extension) {
+    resolvedProfile = chromeProfileDir("auto");
+  }
   const args = (opts.extension || opts.profile)
     ? [
-      ...chromeBaseArgs({ profile: opts.profile, extension: opts.extension, windowSize: opts.windowSize }),
+      ...chromeBaseArgs({ profile: resolvedProfile, extension: opts.extension, windowSize: opts.windowSize }),
       ...extras,
       ...(extras.some((a) => !a.startsWith("--")) ? [] : ["about:blank"]),
     ]
@@ -658,8 +680,7 @@ export async function launchChrome(opts: {
 
   if (!wsUrl) {
     try { reader.releaseLock(); } catch { /* already released */ }
-    try { proc.kill("SIGKILL"); } catch { /* already dead */ }
-    try { await proc.status; } catch { /* already reaped */ }
+    await teardownChrome(proc, resolvedProfile);
     lock.release();
     fleetLease?.release();
     // The browser never came up: give the FLEET turn back too. Without this, a
@@ -688,17 +709,6 @@ export async function launchChrome(opts: {
   if (fleetLease) {
     const lease = fleetLease;
     proc.status.then(() => lease.release(), () => lease.release());
-  }
-
-  const USER_DATA_PREFIX = "--" + "user-data-dir=";
-  let resolvedProfile = opts.profile;
-  if (!resolvedProfile && opts.args) {
-    for (const arg of opts.args) {
-      if (arg.startsWith(USER_DATA_PREFIX)) {
-        resolvedProfile = arg.slice(USER_DATA_PREFIX.length);
-        break;
-      }
-    }
   }
 
   const launched: LaunchedChrome = {
