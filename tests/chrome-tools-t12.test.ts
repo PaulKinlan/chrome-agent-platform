@@ -494,29 +494,10 @@ Deno.test("LEASE GUARD: a granted destructive tool is never refused because of a
   assertEquals(store.get(LEASE_KEY)?.surfaceId, "named:research", "the tool never touches the lease key");
 });
 
-Deno.test("LEASE GUARD: the browser-command lease module and its refusal string are gone from the extension", async () => {
-  const root = new URL("../extension/", import.meta.url);
-  let moduleExists = true;
-  try { await Deno.stat(new URL("lib/browser-command-lease.js", root)); } catch { moduleExists = false; }
-  assert(!moduleExists, "extension/lib/browser-command-lease.js must not exist");
-  const offenders = [];
-  async function walk(dir) {
-    for await (const e of Deno.readDir(dir)) {
-      const url = new URL(e.name + (e.isDirectory ? "/" : ""), dir);
-      if (e.isDirectory) {
-        if (e.name.startsWith("dist") || e.name === "node_modules" || e.name === "vendor") continue;
-        await walk(url);
-      } else if (e.name.endsWith(".js")) {
-        const text = await Deno.readTextFile(url);
-        if (text.includes(LEASE_REFUSAL) || text.includes(LEASE_KEY) || text.includes("browser-command-lease")) {
-          offenders.push(url.pathname.slice(url.pathname.indexOf("/extension/")));
-        }
-      }
-    }
-  }
-  await walk(root);
-  assertEquals(offenders, [], "no extension source references the single-driver lease");
-});
+// The STATIC half of the lease guard — the part that walks the extension tree reading tracked source —
+// moved to tests/chrome-tools-t12-static.test.ts (chrome-agent-platform-p1lp), which is in
+// SOURCE_INSPECTING_GUARDS. It has no import edges, so a subset gate could not see it in this file, and
+// the kz27 detector missed it because it walks a LOWERCASE alias of the extension root.
 
 // ──────────────────────────────────────────────────────────────────────────
 // CAP-FB-20260830-PRIVILEGED-URL-BLOCK-01: every destination-taking browser

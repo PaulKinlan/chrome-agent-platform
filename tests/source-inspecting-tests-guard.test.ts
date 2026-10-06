@@ -104,37 +104,70 @@ export function findUnclassifiedSourceScanners(
   // Anything else — a fixture dir, a temp dir, a DOM node, a parsed tree — is not a scanner
   // signal, which is what keeps a non-scanner out of the always-on set.
   const KNOWN_SOURCE_ROOTS = /^(?:ROOT|EXT|EXTENSION_DIR|TESTS|TESTS_DIR|SCRIPTS|SCRIPTS_DIR|ROOT_DIR|GUARD_ROOTS)$/;
-  // What counts is a walk ROOTED AT THE REPO TREE (or at a TOP-LEVEL source dir), because that is the
-  // shape that reads the repository as data. A walk of a SUB-root — extension/wasm/cas,
-  // extension/wasm/manifests, tests/fixtures — is a data or fixture read, and admitting those was the
-  // over-match that cost 23s a gate; if one of them should be always-on, the list is where that
-  // decision belongs. So the RHS must name a top-level dir as its LAST segment, or be the repo root:
-  //   new URL("../extension/", ...)          -> yes (top-level dir, nothing deeper)
-  //   `${ROOT}tests/`                        -> yes (interpolation stripped, then a top-level dir)
-  //   new URL("./", import.meta.url) in tests-> yes (the tests dir, judged against the file's location)
-  //   new URL("../extension/wasm/cas/", ...) -> NO (a sub-root)
-  //   `${ROOT}${root}` / join(ROOT, someVar) -> NO (the path is computed; a stated residual limit)
-  const REPO_ROOT_URL = /new URL\(\s*["']\.\.?\/?["']/;
-  const TOP_LEVEL_LAST_SEGMENT =
-    /(?:^|[^A-Za-z0-9_])(?:extension|scripts|tests|lib|packages)(?:\/(?![A-Za-z0-9_])|(?![\/A-Za-z0-9_]))/;
-  const stripsInterpolations = (rhs: string) => rhs.replace(/\$\{[^}]*\}/g, "");
+  const TOP_LEVEL_DIRS = "extension|scripts|tests|lib|packages";
+  // What counts is a walk ROOTED AT THE REPO TREE, or at a TOP-LEVEL source dir, because that is the
+  // shape that reads the repository as data. A walk of a SUB-root (extension/wasm/cas,
+  // extension/wasm/manifests, scripts/git-hooks, a probe dir inside extension/) is a data or fixture
+  // read, and admitting that class is how a 23s esbuild-spawning file entered the always-on set
+  // (chrome-agent-platform-fgik).
+  //
+  // The expression is judged by the SHAPES that genuinely denote such a root, listed explicitly, rather
+  // than by loosely matching a dir name anywhere in the text. Loose matching was tried first and it
+  // flagged `const probe = `${extension}/_emscripten_abi_probe`` (a temp probe dir INSIDE extension)
+  // and `path.join(..., "scripts", "git-hooks")` (a subdir) — both false positives of exactly the
+  // over-match class this bead exists to prevent.
+  const REPO_ROOT_URL = /new URL\(\s*["']\.\.\/?["']/;
+  const TOP_LEVEL_URL = new RegExp(`new URL\\(\\s*["']\\.\\.?\\/(?:${TOP_LEVEL_DIRS})\\/?["']`);
+  // path.join(..., "extension") — the LAST literal is a top-level dir and closes the call.
+  const JOIN_ENDS_AT_TOP_LEVEL = new RegExp(`["'](?:${TOP_LEVEL_DIRS})\\/?["']\\s*\\)`);
+  // `${ROOT}tests/` — an interpolation, then a top-level dir, then the end of the template.
+  const TEMPLATE_ENDS_AT_TOP_LEVEL = new RegExp("\\$\\{[^}]*\\}(?:" + TOP_LEVEL_DIRS + ")\\/?[`\"']?$");
+  const flatten = (src: string) => src.replace(/\s+/g, " ").trim();
+  const isTestsDirUrl = (flat: string, rel: string) =>
+    /new URL\(\s*["']\.\/["']/.test(flat) && /^tests\//.test(rel);
+  const denotesSourceRoot = (text: string, rel: string) => {
+    const flat = flatten(text);
+    if (REPO_ROOT_URL.test(flat)) return true;
+    if (TOP_LEVEL_URL.test(flat)) return true;
+    if (JOIN_ENDS_AT_TOP_LEVEL.test(flat)) return true;
+    if (TEMPLATE_ENDS_AT_TOP_LEVEL.test(flat)) return true;
+    return isTestsDirUrl(flat, rel);
+  };
   const identifierIsSourceRoot = (id: string, code: string, rel: string) => {
     if (KNOWN_SOURCE_ROOTS.test(id)) return true;
-    const m = new RegExp(`\\b(?:const|let|var)\\s+${id}\\s*=\\s*([^;\\n]+)`).exec(code);
-    if (!m) return false;
-    const rhs = m[1];
-    if (REPO_ROOT_URL.test(rhs)) return true;
-    // A module-relative "./" resolves to the tests dir for a file that lives there.
-    if (/new URL\(\s*["']\.\/["']/.test(rhs) && /^tests\//.test(rel)) return true;
-    return TOP_LEVEL_LAST_SEGMENT.test(stripsInterpolations(rhs));
+    // Capture the RHS ACROSS newlines: `[^;\n]+` stopped at the first newline, so a formatted
+    // multi-line `const root = new URL(\n "../extension/",\n import.meta.url,\n)` evaded the rule
+    // entirely (reviewer P1).
+    const m = new RegExp(`\\b(?:const|let|var)\\s+${id}\\s*=\\s*([^;]+)`).exec(code);
+    return m ? denotesSourceRoot(m[1], rel) : false;
   };
-  const walkOrReadRoots = (code: string, rel: string) => {
-    const ids = new Set<string>();
-    for (const m of code.matchAll(/\bwalk\(\s*([A-Za-z_$][\w$]*)\s*\)/g)) ids.add(m[1]);
-    for (const m of code.matchAll(/\b(?:Deno\.)?readDir(?:Sync)?\(\s*([A-Za-z_$][\w$]*)/g)) ids.add(m[1]);
-    return [...ids].filter((id) => identifierIsSourceRoot(id, code, rel));
+  /** The FIRST ARGUMENT of every call to `name(`, as source text. */
+  const firstArgs = (code: string, name: string): string[] => {
+    const out: string[] = [];
+    for (const m of code.matchAll(new RegExp(`\\b${name}\\(`, "g"))) {
+      let depth = 0;
+      let buf = "";
+      for (let i = m.index + m[0].length; i < code.length; i++) {
+        const c = code[i];
+        if (c === "(" || c === "[" || c === "{") depth++;
+        else if (c === ")" || c === "]" || c === "}") {
+          if (depth === 0) break;
+          depth--;
+        } else if (c === "," && depth === 0) break;
+        buf += c;
+      }
+      out.push(flatten(buf));
+    }
+    return out;
   };
-
+  // The argument counts when it is an identifier defined from a root, or an INLINE EXPRESSION naming
+  // one — two real guards walk `walk(path.join(ROOT, "extension"))` and
+  // `walk(fileURLToPath(new URL("../extension", import.meta.url)))`, and an identifier-only rule misses
+  // both. Argument extraction does not demand a closing paren either: `walk(root, opts)` and
+  // `walk(abs, rel)` are ordinary calls (reviewer P1/P2).
+  const walkOrReadRoots = (code: string, rel: string) =>
+    ["walk", "readDir", "readDirSync", "readdir"].flatMap((name) => firstArgs(code, name))
+      .filter((arg) => (/^[A-Za-z_$][\w$]*$/.test(arg) ? identifierIsSourceRoot(arg, code, rel) : denotesSourceRoot(arg, rel)));
   for (const { rel, code } of testFiles) {
     if (alwaysOnSet.has(rel)) continue;
     // chrome-agent-platform-kz27: a DECLARED exclusion is classified — it carries a reason and a bead,
@@ -207,7 +240,7 @@ Deno.test("qcfc: REAL-TREE falsification — an actual repo-walking guard is fla
 Deno.test("p1lp: REAL-TREE symmetry — a lowercase-alias source-root walk is flagged, a DOM walk is not", () => {
   // chrome-agent-platform-p1lp. The kz27 detector demanded an UPPERCASE identifier, which failed in
   // BOTH directions against files this repo actually ships:
-  //   MET   — tests/chrome-tools-t12.test.ts walks the extension root through a LOWERCASE alias
+  //   MET   — tests/chrome-tools-t12-static.test.ts walks the extension root through a LOWERCASE alias
   //           (`const root = new URL("../extension/", import.meta.url)`), so it escaped entirely.
   //   MISSED— a file that walks a DOM tree also calls `walk(root)`, and a name list cannot tell the
   //           two apart: the identifier's SHAPE carries no information, its DEFINITION does. Getting
@@ -219,8 +252,8 @@ Deno.test("p1lp: REAL-TREE symmetry — a lowercase-alias source-root walk is fl
   const unlisted = new Set(["tests/security.test.ts"]);
 
   assertEquals(
-    findUnclassifiedSourceScanners([read("tests/chrome-tools-t12.test.ts")], unlisted),
-    ["tests/chrome-tools-t12.test.ts"],
+    findUnclassifiedSourceScanners([read("tests/chrome-tools-t12-static.test.ts")], unlisted),
+    ["tests/chrome-tools-t12-static.test.ts"],
     "a walk over a LOWERCASE alias of a source root must be flagged when it is unlisted",
   );
 
