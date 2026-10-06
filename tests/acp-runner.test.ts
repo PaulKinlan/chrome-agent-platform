@@ -8,9 +8,16 @@ import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fromFileUrl } from "jsr:@std/path@1/from-file-url";
 import { acpEndpointWithHarness, acpEndpointWithToken, acpHealthUrl, acpPermissionMode, acpSessionKey, ACP_PERMISSION_TIMEOUT_MS, probeAcpBridgeHealth, requestAcpPermission, runAcpTaskTurn } from "../extension/lib/acp-runner.js";
 import { createAcpServer } from "../scripts/acp-bridge.ts";
+import { TEST_BRIDGE_TOKEN } from "./fixtures/acp-bridge-token.ts";
 import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 const FAKE_ADAPTER = fromFileUrl(new URL("./fixtures/acp-fake-adapter.mjs", import.meta.url));
+
+/** The bridge REQUIRES a shared secret on every upgrade (jsjy). Tests that hand the runner an ENDPOINT
+ *  rather than a settings reader carry the token ON the endpoint: acpEndpointWithToken passes a URL that
+ *  already has ?token= through untouched, and acpEndpointWithHarness appends &harness= when a query is
+ *  present. Tests that exercise the SETTINGS path instead answer acp.token (see the stubs below). */
+const authedEndpoint = (port: number | string) => `ws://127.0.0.1:${port}/acp?token=${TEST_BRIDGE_TOKEN}`;
 
 Deno.test("acpSessionKey: thread-scoped inside a persisted thread, per-harness otherwise", () => {
   // Inside a persisted task thread the key names the thread AND the harness —
@@ -133,7 +140,9 @@ async function freePort(): Promise<number> {
  * appended its own session/new to THIS file's frame log, so a resume that had
  * genuinely resumed counted two session/new). */
 function fixtureBridge(adapterEnv: Record<string, string> = {}, hostCwd = "") {
-  return createAcpServer(0, FAKE_ADAPTER, adapterEnv, hostCwd);
+  // jsjy: the bridge REQUIRES a shared secret on every upgrade, so the fixture hands it the one the
+  // test clients present (tests/fixtures/acp-bridge-token.ts). Without it createAcpServer throws.
+  return createAcpServer(0, FAKE_ADAPTER, adapterEnv, hostCwd, TEST_BRIDGE_TOKEN);
 }
 
 /** The fixture's frame log, or [] when no adapter lived long enough to write. */
@@ -184,7 +193,7 @@ async function continuityAttempt(
   // have ~/journal and failed everywhere else (chrome-agent-platform-5i9i).
   const hostCwd = await durableDir(`acp-runner-hostcwd-${Date.now()}-${run}`);
   const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, ...adapterEnv }, hostCwd);
-  const endpoint = `ws://127.0.0.1:${(bridge as any).addr.port}/acp`;
+  const endpoint = authedEndpoint((bridge as any).addr.port);
   const container = new MockContainer();
 
   try {
@@ -283,7 +292,7 @@ Deno.test("runAcpTaskTurn: a sessionStore hint resumes a session from a previous
   const logPath = `${durableDir("acp-fixture-logs")}/frames-store-${Date.now()}.jsonl`;
   const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath });
   const port = (bridge as any).addr.port;
-  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const endpoint = authedEndpoint(port);
   const container = new MockContainer();
   const stored = new Map<string, string>([["acp:pi-kv", "ses_from_kv"]]);
 
@@ -324,9 +333,9 @@ Deno.test("runAcpTaskTurn: a failed session/load is REPORTED, never a silent new
   // the new session by the fixture id the fallback returned and the store now
   // holds. cap-evidence/acp-resume-failure-probe.ts keeps the frame-level
   // observer in a standalone process.
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN);
   const port = (bridge as any).addr.port;
-  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const endpoint = authedEndpoint(port);
   const container = new MockContainer();
   const stored = new Map<string, string>([["acp:pi-stale", "ses_gone_forever"]]);
 
@@ -379,7 +388,7 @@ Deno.test("runAcpTaskTurn: two rapid sends for one conversation never prompt con
   const logPath = `${durableDir("acp-fixture-logs")}/frames-supersede-${Date.now()}.jsonl`;
   const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath });
   const port = (bridge as any).addr.port;
-  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const endpoint = authedEndpoint(port);
   const container = new MockContainer();
 
   try {
@@ -411,7 +420,7 @@ Deno.test("runAcpTaskTurn: two sends arriving while a turn is LIVE leave exactly
   const logPath = `${durableDir("acp-fixture-logs")}/frames-triple-${Date.now()}.jsonl`;
   const bridge = fixtureBridge({ CAP_ACP_FIXTURE_LOG: logPath, CAP_ACP_FIXTURE_HOLD_TEXT: "held first" });
   const port = (bridge as any).addr.port;
-  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const endpoint = authedEndpoint(port);
   const container = new MockContainer();
   const methods = async () => {
     try {
@@ -466,7 +475,7 @@ Deno.test("runAcpTaskTurn: a superseded turn renders NO error when its socket is
     CAP_ACP_FIXTURE_IGNORE_CANCEL: "1",
   });
   const port = (bridge as any).addr.port;
-  const endpoint = `ws://127.0.0.1:${port}/acp`;
+  const endpoint = authedEndpoint(port);
   const container = new MockContainer();
   const readMethods = async () => {
     try {
@@ -497,7 +506,7 @@ Deno.test("runAcpTaskTurn: a superseded turn renders NO error when its socket is
 });
 
 Deno.test("runAcpTaskTurn: a configured endpoint setting overrides the built-in default", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN);
   const port = (bridge as any).addr.port;
   const container = new MockContainer();
   try {
@@ -508,7 +517,11 @@ Deno.test("runAcpTaskTurn: a configured endpoint setting overrides the built-in 
       harnessId: "settings-probe",
       endpoint: "ws://127.0.0.1:1/unreachable",
       settings: {
-        get: (key: string) => Promise.resolve(key === "acp.endpoint" ? `ws://127.0.0.1:${port}/acp` : null),
+        // jsjy: the runner composes ?token= from acp.token, so every settings stub used against a
+        // token-requiring bridge must answer it; the endpoint alone is no longer enough.
+        get: (key: string) => Promise.resolve(
+          key === "acp.token" ? TEST_BRIDGE_TOKEN : key === "acp.endpoint" ? authedEndpoint(port) : null,
+        ),
       },
     });
     assertEquals(res.ok, true, String(res.error));
@@ -528,7 +541,7 @@ Deno.test("runAcpTaskTurn: tool updates settle one card instead of appending run
       container,
       task: "tool progress",
       harnessId: "pi",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
+      endpoint: authedEndpoint(port),
     });
     assertEquals(res.ok, true, String(res.error));
     // The fixture streams tool_call then tool_call_update for the SAME
@@ -679,7 +692,7 @@ Deno.test("runAcpTaskTurn: ask mode sends the OWNER's decision to the harness (d
       container,
       task: "do the risky thing",
       harnessId: "perm-probe",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
+      endpoint: authedEndpoint(port),
       // "ask" is the default (no acp.permissions setting), and the injection
       // stands in for the owner clicking Deny on the card.
       permissionPrompter: () => Promise.resolve({ optionId: "deny", answered: true, title: PROMPT.title }),
@@ -709,8 +722,12 @@ Deno.test("runAcpTaskTurn: auto mode is opt-in and still auto-grants", async () 
       container,
       task: "do the risky thing",
       harnessId: "perm-auto-probe",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
-      settings: { get: (key: string) => Promise.resolve(key === "acp.permissions" ? "auto" : null) },
+      endpoint: authedEndpoint(port),
+      settings: {
+        get: (key: string) => Promise.resolve(
+          key === "acp.token" ? TEST_BRIDGE_TOKEN : key === "acp.permissions" ? "auto" : null,
+        ),
+      },
     });
     assertEquals(res.ok, true, String(res.error));
     assert(String(res.result).includes("permission: allow_once"), `auto mode should allow: ${res.result}`);
@@ -739,7 +756,7 @@ Deno.test("runAcpTaskTurn: detects harness mismatch and reports requested vs sta
       container,
       task: "hello claude",
       harnessId: "claude-code",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
+      endpoint: authedEndpoint(port),
     });
     assertEquals(res.ok, false);
     assertEquals(res.requestedHarness, "claude-code");
@@ -757,7 +774,7 @@ Deno.test("runAcpTaskTurn: detects harness mismatch and reports requested vs sta
 });
 
 Deno.test("runAcpTaskTurn: requested harness is honoured and completes turn", async () => {
-  const bridge = createAcpServer(0, FAKE_ADAPTER);
+  const bridge = createAcpServer(0, FAKE_ADAPTER, {}, "", TEST_BRIDGE_TOKEN);
   const port = (bridge as any).addr.port;
   const container = new MockContainer();
 
@@ -766,7 +783,7 @@ Deno.test("runAcpTaskTurn: requested harness is honoured and completes turn", as
       container,
       task: "hello claude",
       harnessId: "claude-code",
-      endpoint: `ws://127.0.0.1:${port}/acp`,
+      endpoint: authedEndpoint(port),
     });
     assertEquals(res.ok, true, String(res.error));
     assertEquals(res.result, "fake reply");
