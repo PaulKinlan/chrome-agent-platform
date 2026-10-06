@@ -195,10 +195,12 @@ Actions that require an explicit owner approval card with a payload digest befor
 | `browser.destructive-action`| `service-worker.js` | Closes tabs/windows, wipes data, cookies | Forwarded destructive action |
 | `task.schedule-script` | `service-worker.js` | Schedules routine with scriptId | `task.schedule-script` |
 | `workflow.run` | `service-worker.js` | Runs saved workflow script in sandbox | `workflow.run` |
-| `hooks.subscribe` | `service-worker.js` | Subscribes to browser event hook | `hooks.subscribe` |
+| `hooks.subscribe` | `service-worker.js` | Subscribes to browser event hook; the card runs on EVERY subscribe, a first-time create included | `hooks.subscribe` |
 | `hooks.unsubscribe` | `service-worker.js` | Unsubscribes from browser hook | `hooks.unsubscribe` |
 | `fs-grant.write-file-approved` | `routes/fs-grants.js` | Model file write; verifies staged diff | `fs.write` |
 | `webmcp.use-tool` | `service-worker.js` | Invokes tool on "ask"-policy site | `webmcp.use-tool` |
+
+**Enforcement note — `hooks.subscribe` create path (chrome-agent-platform-51cd).** This route was classified here from the start and its handler did call `requireOwnerApproval`, but the seam in `subscribeHook` (`extension/lib/hooks.js`) ran only when a row for the exact `(hookId, skillId)` pair already existed (`if (existing && typeof gateOnReplace === "function")`). A FIRST-TIME pair therefore took the create path — `list.push(entry)` + `writeSubscriptions(list)` — with only the deny-list (and optional-permission) check in `checkHookAllowed`, so the one gate this census, `DESTRUCTIVE_ACTIONS` in `extension/lib/owner-approval.js` and the route's own call all declare was never reached on the common case. That was a declaration not enforced, not a policy choice: the sibling replace and `hooks.unsubscribe` paths both gated. chrome-agent-platform-51cd makes the seam unconditional and content-bound — it runs for EVERY subscribe and receives `{ existing: null }` on a create, whose digest form is the explicit `existing: {present: false}` marker so an approved retry still matches — and the persisted `promptTemplate` is no longer model-authorable (removed from the model-callable `subscribe_hook` schema, forced empty for a model principal) and is bounded at 64 KiB (`MAX_PROMPT_TEMPLATE_CHARS`). The classification, the route name and every count in this census are unchanged.
 
 ---
 

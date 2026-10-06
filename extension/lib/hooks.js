@@ -429,15 +429,21 @@ async function writeSubscriptions(list) {
 }
 
 /**
- * Idempotently migrate legacy `recipeId` fields in `cap:hooks` to `skillId`.
+ * Idempotently migrate legacy `recipeId` fields in `cap:hooks` to `skillId`, AND purge any prompt template
+ * a pre-fix run stored (chrome-agent-platform-51cd). The purge is not cosmetic: until this fix the CREATE
+ * path was ungated and a template was MODEL-AUTHORABLE, and there has never been an owner UI that authors
+ * one - so a stored non-empty template has no trusted provenance, and it runs verbatim in the INSTRUCTION
+ * position on every matching event. Clearing it degrades the hook to the safe default (the skill's own
+ * prompt plus the fenced event payload), which is exactly what a fresh subscription gets.
  * Runs under the hook mutex so concurrent subscribe/unsubscribe calls serialize.
  */
 export async function migrateHookSubscriptions() {
   return withHookLock(async () => {
     const stored = await kvGet(SUBSCRIPTIONS_KEY);
     const list = stored[SUBSCRIPTIONS_KEY];
-    if (!Array.isArray(list)) return { migrated: 0 };
+    if (!Array.isArray(list)) return { migrated: 0, clearedTemplates: 0 };
     let migrated = 0;
+    let clearedTemplates = 0;
     const next = [];
     for (const raw of list) {
       if (!raw || typeof raw !== "object") continue;
@@ -449,6 +455,11 @@ export async function migrateHookSubscriptions() {
         skillId: resolvedSkillId,
       };
       delete normalized.recipeId;
+      // 51cd: a template stored before the fix has no trusted provenance (see the JSDoc) - purge it.
+      if (typeof normalized.promptTemplate === "string" && normalized.promptTemplate !== "") {
+        clearedTemplates += 1;
+        normalized.promptTemplate = "";
+      }
       if (hadLegacyField || missingSkillId) migrated += 1;
       const dupIdx = next.findIndex(
         (s) => s.hookId === normalized.hookId && (s.skillId ?? null) === resolvedSkillId,
@@ -459,10 +470,10 @@ export async function migrateHookSubscriptions() {
         next.push(normalized);
       }
     }
-    if (migrated > 0 || next.length !== list.length) {
+    if (migrated > 0 || clearedTemplates > 0 || next.length !== list.length) {
       await writeSubscriptions(next);
     }
-    return { migrated };
+    return { migrated, clearedTemplates };
   });
 }
 
