@@ -17,7 +17,7 @@ import { hostname } from "node:os";
 import { acpToolChannel, createAcpTools } from "./lib/acp-tools.ts";
 
 const args = parseArgs(Deno.args, {
-  string: ["port", "adapter", "harness", "cwd", "token", "allow-origin", "host"],
+  string: ["port", "adapter", "harness", "cwd", "token", "token-file", "allow-origin", "host"],
   collect: ["allow-origin"],
   default: {
     port: "3210",
@@ -25,6 +25,7 @@ const args = parseArgs(Deno.args, {
     harness: "pi",
     cwd: "",
     token: "",
+    "token-file": "",
     "allow-origin": [],
     // Loopback by default: this process spawns a shell-capable agent, so it is
     // only exposed deliberately (--host 0.0.0.0 / a LAN address).
@@ -49,21 +50,67 @@ export function isLoopbackHost(host: string): boolean {
   return h === "127.0.0.1" || h === "::1" || h === "localhost" || h.startsWith("127.");
 }
 
-/** Shared-secret requirement (`--token`): when set, the upgrade URL must carry
- * `?token=…`, binding the bridge to one client even on a shared machine. A
- * NETWORK bind always has one: either the operator's or a generated one, so a
- * shell-capable agent is never left open to the LAN. */
-const TOKEN = String(args.token ?? "") || (isLoopbackHost(HOST) ? "" : crypto.randomUUID().replace(/-/g, ""));
+/** The persisted shared secret's default location: a per-user config dir, mode
+ * 0600. jsjy: the bridge REQUIRES authentication by default, so the token has to
+ * survive restarts — an ephemeral one per start would make the operator re-paste
+ * it every time and invite turning auth off instead. */
+function defaultTokenFile(): string {
+  const base = Deno.env.get("XDG_CONFIG_HOME")?.trim() || `${HOME}/.config`;
+  return `${base}/cap-acp/bridge-token`;
+}
 
-/** May this WebSocket Origin drive the harness? Browsers ALWAYS send Origin on
- * an upgrade, so an ABSENT one is a local script (deno/node test clients).
- * Default: extension pages only. `--allow-origin <origin>` admits others
- * explicitly by EXACT origin (a prefix would also admit
- * `https://trusted.example.evil.test`), and `--token` adds the shared-secret
- * requirement on top. The residual is documented: any INSTALLED extension
- * matches the extension scheme, so the token (or naming one exact extension
- * origin in --allow-origin) is how an operator binds the bridge to one
- * client. */
+/**
+ * Read the persisted token, generating and persisting one on FIRST USE.
+ *
+ * jsjy (2026-10-06): this is the default-auth fix. The bridge previously left
+ * TOKEN empty on a loopback bind, so the upgrade carried no authentication at
+ * all and any local process that reached the port first could impersonate the
+ * harness — on the surface that drives approvals. iadt's Origin guard stays (it
+ * refuses web origins), but Origin is not authentication: a local process sends
+ * no Origin at all, which that guard admits by design.
+ */
+export function readOrCreateToken(path: string): string {
+  try {
+    const existing = Deno.readTextFileSync(path).trim();
+    if (existing) return existing;
+  } catch {
+    // Missing or unreadable: fall through and create it.
+  }
+  const token = crypto.randomUUID().replace(/-/g, "");
+  try {
+    const dir = path.replace(/\/[^/]*$/, "");
+    if (dir) Deno.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    Deno.writeTextFileSync(path, `${token}\n`, { mode: 0o600 });
+    Deno.chmodSync(path, 0o600);
+  } catch (e) {
+    // A read-only HOME must not silently start an UNAUTHENTICATED bridge: the
+    // generated token still requires the connection to present it, so the
+    // operator reads it from this line instead of from the file.
+    console.log(
+      `[acp-bridge] could not persist the token to ${path} (${(e as Error).message}); ` +
+        `using this generated token for THIS run: ${token}`,
+    );
+  }
+  return token;
+}
+
+/** Shared-secret requirement (`--token`): the upgrade URL must carry `?token=…`.
+ * jsjy: there is NO unauthenticated mode — `--token` overrides, and otherwise
+ * the token is read from (or created in) the token file, INCLUDING on loopback. A
+ * NETWORK bind always had one; loopback now has one too, because "loopback" is
+ * not an authorization boundary between local processes. */
+const TOKEN_FILE = String(args["token-file"] ?? "").trim() || defaultTokenFile();
+const TOKEN = String(args.token ?? "") || readOrCreateToken(TOKEN_FILE);
+
+/**
+ * May this request drive the harness? Both guards run, in this order:
+ *  1. iadt's Origin guard (kept, not replaced): browsers ALWAYS send Origin on
+ *     an upgrade, so refusing non-extension origins stops a web page from
+ *     driving the harness. An ABSENT Origin is a local script client.
+ *  2. jsjy's shared secret: EVERY upgrade must carry `?token=…`, loopback
+ *     included, because a local process sends no Origin and would otherwise be
+ *     admitted by guard 1. There is no unauthenticated path.
+ */
 function originAllowed(origin: string | null): boolean {
   if (!origin) return true; // local script client
   const normalized = origin.replace(/\/$/, "");
@@ -571,6 +618,11 @@ export function createAcpServer(
    * no guess: "" means a session without a cwd gets none, and the adapter reports
    * it (chrome-agent-platform-7p7e / 5i9i). */
   hostCwdDefault: string = args.cwd,
+  /** jsjy: the shared secret this server requires. Defaults to the module-level
+   * TOKEN (CLI --token or the persisted file); a test passes its own so it never
+   * reads or writes the operator's real token file. There is no "" value: an
+   * empty override would be an unauthenticated bridge. */
+  tokenOverride: string = TOKEN,
 ) {
   const toolEndpoints = new Map<string, Awaited<ReturnType<typeof createAcpTools>>>();
   const server = Deno.serve({ port, hostname: HOST }, (req) => {
@@ -633,16 +685,20 @@ export function createAcpServer(
       return new Response("ACP Bridge: Connect via WebSocket at /acp", { status: 426 });
     }
 
-    // Origin guard: browsers ALWAYS send Origin on WebSocket upgrades. A web
-    // page (http/https) may not drive the local harness over loopback — that
-    // would let any site execute shell commands through the user's pi session.
-    // Extension pages and local scripts (no Origin header) are allowed; the
-    // optional --token binds the connection to a client that knows the secret.
+    // Origin guard (iadt, KEPT not replaced): browsers ALWAYS send Origin on
+    // WebSocket upgrades. A web page (http/https) may not drive the local
+    // harness over loopback — that would let any site execute shell commands
+    // through the user's pi session. Extension pages and local scripts (no
+    // Origin header) are allowed; the shared secret below binds the connection
+    // to a client that knows it.
     const clientOrigin = req.headers.get("origin");
     if (!originAllowed(clientOrigin)) {
       return new Response("ACP Bridge: web origins are not allowed to drive the harness", { status: 403 });
     }
-    if (TOKEN && url.searchParams.get("token") !== TOKEN) {
+    // jsjy: the shared secret is REQUIRED, always — including on loopback, where
+    // a local process sends no Origin and the guard above admits it by design.
+    // An unauthenticated upgrade is refused rather than served.
+    if (url.searchParams.get("token") !== tokenOverride) {
       return new Response("ACP Bridge: missing or wrong token", { status: 403 });
     }
 
@@ -848,9 +904,11 @@ export function createAcpServer(
 if (import.meta.main) {
   const server = createAcpServer(PORT);
   const bound = (server as any).addr?.port ?? PORT;
-  const q = TOKEN ? `?token=${TOKEN}` : "";
+  const q = `?token=${TOKEN}`;
   if (isLoopbackHost(HOST)) {
-    console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp${q}${TOKEN ? " (token required)" : ""}`);
+    console.log(`[acp-bridge] listening on ws://127.0.0.1:${bound}/acp${q} (token required)`);
+    console.log(`[acp-bridge] paste the endpoint into CAP: acp.endpoint and the token into acp.token`);
+    console.log(`[acp-bridge] token persisted at ${TOKEN_FILE} (mode 0600); --token overrides it for one run`);
   } else {
     const addrs = Deno.networkInterfaces()
       .filter((i) => i.family === "IPv4" && !i.address.startsWith("127."))
