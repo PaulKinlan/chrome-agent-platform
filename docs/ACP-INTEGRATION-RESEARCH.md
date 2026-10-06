@@ -307,12 +307,18 @@ Implemented and verified live (pi-acp 0.0.33 over `npm run acp:bridge`):
   are mapped to the `running`/`done`/`error` the card actually renders settled.
 - **Origin scope** — a web page cannot drive the bridge (browsers always send
   `Origin`; non-extension origins are refused). The residual is that the default
-  allowlist is the extension SCHEME, so any installed extension could connect;
-  `--token <secret>` (required in the upgrade URL) and `--allow-origin <exact
-  origin>` bind the bridge to one client when an operator needs that. The
-  extension CAN send a token and a custom endpoint today through kv
-  (`acp.endpoint`, `acp.token` — read by the runner and carried onto the upgrade
-  query); only the Settings UI for them is still pending (bead khkk).
+  allowlist is the extension SCHEME, so any installed extension could connect —
+  which is why the shared secret, not the origin, is the binding. **AUTHENTICATION
+  IS REQUIRED BY DEFAULT (jsjy, 2026-10-06):** every upgrade must carry
+  `?token=…`, loopback included, because a local process sends no `Origin` at all
+  and the origin guard admits that by design. The bridge GENERATES and PERSISTS a
+  token on first use (`$XDG_CONFIG_HOME/cap-acp/bridge-token`, mode 0600;
+  `--token <secret>` overrides it for one run, `--token-file` relocates it), and
+  prints the endpoint and token to paste into kv (`acp.endpoint`, `acp.token` —
+  read by the runner and carried onto the upgrade query). An upgrade without the
+  token is refused with 403 even on loopback. The extension side REFUSES a
+  non-loopback `acp.endpoint` rather than connecting to it, because the bridge
+  speaks plain `ws://`. The Settings UI for these is still pending (bead khkk).
 
 Deliberately NOT yet implemented (tracked as beads):
 
