@@ -15,6 +15,7 @@
 // UNKNOWN (4) instead of OK (0), failing this test.
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import { fileURLToPath } from "node:url";
+import { durableDir } from "../scripts/lib/durable-root.mjs";
 
 // fileURLToPath, NOT .pathname: a URL pathname is percent-encoded, so a checkout path containing a
 // space or a non-ASCII character would hand this a path that does not exist (bead e273's guard).
@@ -55,8 +56,12 @@ async function write(path: string, body: string): Promise<void> {
 }
 
 /** Classify captured output and return {code, out}. */
+let classifySeq = 0;
 async function classify(body: string, head?: string): Promise<Result> {
-  const dir = await Deno.makeTempDir({ prefix: "closing-block-classify-" });
+  // Durable, not a bare temp-dir factory: /tmp on this host is RAM-backed tmpfs and
+  // tests/durable-root.test.ts polices it (chrome-agent-platform-xnuu). Removed in the finally below,
+  // so the corpus stays clean — which is what that guard also polices.
+  const dir = durableDir(`closing-block-classify-${Deno.pid}-${classifySeq++}`);
   try {
     const file = `${dir}/captured.txt`;
     await write(file, body);
@@ -168,7 +173,9 @@ Deno.test("classify: without --head it must not claim the sha was checked (F4)",
 });
 
 Deno.test("live: five dry-run codes (0,2,3,4,5) stubbed + the two real-push codes (0,6)", async () => {
-  const root = await Deno.makeTempDir({ prefix: "closing-block-live-" });
+  // Durable temp root for the same reason as classify() above (chrome-agent-platform-xnuu); the
+  // finally below removes it, so this test leaves no residue behind.
+  const root = durableDir(`closing-block-live-${Deno.pid}`);
   const origin = `${root}/origin.git`;
   const work = `${root}/work`;
   try {
